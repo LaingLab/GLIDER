@@ -28,7 +28,15 @@
 ```pip install ".[pc]"```
 4. Launch GLIDER
 ```glider```
-
+### MacOS
+1. Create a Virtual Environment
+```python -m venv venv```
+2. Activate Virtual Environment
+```source venv/bin/activate```
+3. Install Dependencies
+```pip install ".[pc]"```
+4. Launch GLIDER
+```glider```
 ### Raspberry Pi
 1. Install PyQt6 Through apt
 ```sudo apt install python3-pyqt6```
@@ -40,3 +48,6 @@
 ```pip install -e .```
 4. Launch GLIDER
 ```glider```
+
+# To Dos
+1. Switch to uv package manager
