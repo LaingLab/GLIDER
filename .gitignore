@@ -179,3 +179,4 @@ pyrightconfig.json
 .claude/*
 *.cpython-313.pyc
 *.glider
+uv.lock
