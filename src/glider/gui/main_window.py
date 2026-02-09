@@ -2531,6 +2531,7 @@ class MainWindow(QMainWindow):
             cv_settings=self._core.cv_processor.settings,
             parent=self,
             view_manager=self._view_manager,
+            camera_manager=self._core.camera_manager,
         )
 
         # Connect signals for opening calibration and zones dialogs from Tools tab
