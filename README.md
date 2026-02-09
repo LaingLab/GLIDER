@@ -7,16 +7,17 @@
 ## Prerequisites
 
 1. Python 3.11, 3.12, or 3.13
+2. uv ```pip install uv```
 
 ## Getting Started
 
 ### Windows
 1. Create a Virtual Environment
-```python -m venv venv```
+```uv venv```
 2. Activate Virtual Environment
 ```venv/scripts/Activate```
 3. Install Dependencies
-```pip install ".[pc]"```
+```uv sync --extra pc```
 4. Launch GLIDER
 ```glider```
 ### Linux
@@ -48,6 +49,3 @@
 ```pip install -e .```
 4. Launch GLIDER
 ```glider```
-
-# To Dos
-1. Switch to uv package manager
