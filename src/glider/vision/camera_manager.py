@@ -600,6 +600,156 @@ def _apply_miniscope_hardware_controls(device_index: int, settings: "CameraSetti
     return success
 
 
+# =============================================================================
+# Windows Miniscope Control via OpenCV
+# =============================================================================
+# On Windows, miniscope I2C commands are sent by encoding them into
+# Contrast/Gamma/Sharpness camera properties. This matches the Bonsai.Miniscope
+# implementation and works with the Cypress FX3 USB controller.
+# =============================================================================
+
+
+def _create_miniscope_command(i2c_addr: int, *data_bytes: int) -> int:
+    """
+    Create a 64-bit command for miniscope firmware.
+
+    Format matches Bonsai.Miniscope Helpers.CreateCommand() exactly.
+
+    Args:
+        i2c_addr: I2C device address (e.g., 32 for MCU, 88 for pot, 238 for EWL)
+        data_bytes: Up to 5 data bytes to send
+
+    Returns:
+        64-bit command word
+    """
+    command = i2c_addr
+
+    if len(data_bytes) == 5:
+        # Full 6-byte package: set address LSB to 1
+        command |= 0x01
+        for i, byte in enumerate(data_bytes):
+            command |= (byte & 0xFF) << (8 * (i + 1))
+    else:
+        # Partial package: encode (length + 1) in second byte
+        command |= ((len(data_bytes) + 1) << 8)
+        for i, byte in enumerate(data_bytes):
+            command |= (byte & 0xFF) << (8 * (i + 2))
+
+    return command
+
+
+def _send_miniscope_config_opencv(cap: cv2.VideoCapture, command: int) -> bool:
+    """
+    Send command to miniscope by splitting across Contrast/Gamma/Sharpness.
+
+    This matches the Bonsai.Miniscope SendConfig implementation exactly.
+
+    Args:
+        cap: OpenCV VideoCapture object
+        command: 64-bit command word
+
+    Returns:
+        True if all properties were set successfully
+    """
+    # Split 64-bit command into three 16-bit values
+    # Bonsai order: Contrast (bits 0-15), Gamma (bits 16-31), Sharpness (bits 32-47)
+    contrast_val = command & 0xFFFF
+    gamma_val = (command >> 16) & 0xFFFF
+    sharpness_val = (command >> 32) & 0xFFFF
+
+    # Send via camera properties in correct order (Contrast, Gamma, Sharpness)
+    r1 = cap.set(cv2.CAP_PROP_CONTRAST, contrast_val)
+    r2 = cap.set(cv2.CAP_PROP_GAMMA, gamma_val)
+    r3 = cap.set(cv2.CAP_PROP_SHARPNESS, sharpness_val)
+
+    return r1 and r2 and r3
+
+
+def _set_miniscope_led_opencv(cap: cv2.VideoCapture, power_percent: int) -> bool:
+    """
+    Set Miniscope V4 LED power using OpenCV (Windows).
+
+    Args:
+        cap: OpenCV VideoCapture object
+        power_percent: LED power 0-100 (0=off, 100=max brightness)
+
+    Returns:
+        True if LED was set successfully
+    """
+    power_percent = max(0, min(100, power_percent))
+
+    # Convert to 0-255 and invert (miniscope uses inverted scale)
+    led_value = int(255 - (power_percent * 2.55))
+
+    logger.debug(f"Setting LED power: {power_percent}% -> hardware value {led_value}")
+
+    # Command 1: MCU (I2C address 32 = 0x20)
+    cmd1 = _create_miniscope_command(32, 1, led_value)
+    success1 = _send_miniscope_config_opencv(cap, cmd1)
+
+    # Command 2: Digital potentiometer (I2C address 88 = 0x58)
+    cmd2 = _create_miniscope_command(88, 0, 114, led_value)
+    success2 = _send_miniscope_config_opencv(cap, cmd2)
+
+    if success1 and success2:
+        logger.info(f"Miniscope LED set to {power_percent}%")
+    else:
+        logger.warning(f"Failed to set Miniscope LED (cmd1={success1}, cmd2={success2})")
+
+    return success1 and success2
+
+
+def _init_miniscope_ewl_opencv(cap: cv2.VideoCapture) -> bool:
+    """
+    Initialize the EWL (Electrowetting Lens) driver.
+
+    Must be called before set_ewl_focus().
+
+    Args:
+        cap: OpenCV VideoCapture object
+
+    Returns:
+        True if initialization was successful
+    """
+    # Initialize MAX14574 EWL driver (I2C address 238 = 0xEE)
+    cmd = _create_miniscope_command(238, 3, 3)
+    success = _send_miniscope_config_opencv(cap, cmd)
+
+    if success:
+        logger.debug("EWL driver initialized")
+    else:
+        logger.warning("Failed to initialize EWL driver")
+
+    return success
+
+
+def _set_miniscope_ewl_opencv(cap: cv2.VideoCapture, focus_value: int) -> bool:
+    """
+    Set Miniscope V4 EWL focus using OpenCV (Windows).
+
+    Args:
+        cap: OpenCV VideoCapture object
+        focus_value: Focus position 0-255 (128 is neutral)
+
+    Returns:
+        True if focus was set successfully
+    """
+    focus_value = max(0, min(255, focus_value))
+
+    logger.debug(f"Setting EWL focus to {focus_value}")
+
+    # EWL focus command: address 238 (0xEE), register 8, value, mode 2
+    cmd = _create_miniscope_command(238, 8, focus_value, 2)
+    success = _send_miniscope_config_opencv(cap, cmd)
+
+    if success:
+        logger.info(f"Miniscope EWL focus set to {focus_value}")
+    else:
+        logger.warning("Failed to set Miniscope EWL focus")
+
+    return success
+
+
 # Picamera2 is imported lazily to avoid crashes from numpy version conflicts
 _picamera2_available = None  # None = not checked yet, True/False = checked
 _Picamera2 = None  # Will hold the class if available
@@ -1535,7 +1685,14 @@ class CameraManager:
             if self._settings.miniscope_mode:
                 _apply_miniscope_controls(self._settings.camera_index, self._settings)
                 # Apply hardware controls (LED, EWL focus)
-                _apply_miniscope_hardware_controls(self._settings.camera_index, self._settings)
+                if sys.platform == "win32" and self._capture is not None:
+                    # Windows: Use OpenCV-based control
+                    _init_miniscope_ewl_opencv(self._capture)
+                    _set_miniscope_led_opencv(self._capture, self._settings.led_power)
+                    _set_miniscope_ewl_opencv(self._capture, self._settings.ewl_focus)
+                else:
+                    # Linux: Use v4l2-ctl based control
+                    _apply_miniscope_hardware_controls(self._settings.camera_index, self._settings)
 
             self._state = CameraState.CONNECTED
             logger.info(f"Connected to camera {self._settings.camera_index}")
@@ -1765,7 +1922,12 @@ class CameraManager:
             return False
 
         self._settings.led_power = power_percent
-        return _set_miniscope_led(self._settings.camera_index, power_percent)
+
+        # Use OpenCV method on Windows when capture is available
+        if sys.platform == "win32" and self._capture is not None:
+            return _set_miniscope_led_opencv(self._capture, power_percent)
+        else:
+            return _set_miniscope_led(self._settings.camera_index, power_percent)
 
     def set_ewl_focus(self, focus_value: int) -> bool:
         """
@@ -1784,7 +1946,33 @@ class CameraManager:
             return False
 
         self._settings.ewl_focus = focus_value
-        return _set_miniscope_ewl_focus(self._settings.camera_index, focus_value)
+
+        # Use OpenCV method on Windows when capture is available
+        if sys.platform == "win32" and self._capture is not None:
+            return _set_miniscope_ewl_opencv(self._capture, focus_value)
+        else:
+            return _set_miniscope_ewl_focus(self._settings.camera_index, focus_value)
+
+    def init_ewl(self) -> bool:
+        """
+        Initialize the EWL driver.
+
+        Should be called after connecting to the miniscope and before
+        adjusting EWL focus for the first time.
+
+        Returns:
+            True if initialization was successful
+        """
+        if not self._settings.miniscope_mode:
+            logger.warning("EWL init requires miniscope mode to be enabled")
+            return False
+
+        # Only available on Windows with OpenCV
+        if sys.platform == "win32" and self._capture is not None:
+            return _init_miniscope_ewl_opencv(self._capture)
+        else:
+            # Linux doesn't need explicit init
+            return True
 
     def _capture_loop(self) -> None:
         """Background thread for frame capture."""

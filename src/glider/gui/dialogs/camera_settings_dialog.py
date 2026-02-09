@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 
 if TYPE_CHECKING:
     from glider.gui.view_manager import ViewManager
+    from glider.vision.camera_manager import CameraManager
 
 from glider.vision.camera_manager import CameraSettings
 from glider.vision.cv_processor import CVSettings, DetectionBackend
@@ -56,11 +57,13 @@ class CameraSettingsDialog(QDialog):
         cv_settings: Optional[CVSettings] = None,
         parent=None,
         view_manager: Optional["ViewManager"] = None,
+        camera_manager: Optional["CameraManager"] = None,
     ):
         super().__init__(parent)
         self._camera_settings = camera_settings or CameraSettings()
         self._cv_settings = cv_settings or CVSettings()
         self._view_manager = view_manager
+        self._camera_manager = camera_manager  # For live LED/EWL control
         self._is_touch_mode = view_manager.is_runner_mode if view_manager else False
         self._setup_ui()
         self._load_settings()
@@ -435,9 +438,7 @@ class CameraSettingsDialog(QDialog):
         led_layout.addWidget(self._led_power_slider)
         self._led_power_label = QLabel("0%")
         self._led_power_label.setMinimumWidth(45 if self._is_touch_mode else 35)
-        self._led_power_slider.valueChanged.connect(
-            lambda v: self._led_power_label.setText(f"{v}%")
-        )
+        self._led_power_slider.valueChanged.connect(self._on_led_power_changed)
         led_layout.addWidget(self._led_power_label)
         miniscope_layout.addRow("LED Power:", led_layout)
 
@@ -452,7 +453,7 @@ class CameraSettingsDialog(QDialog):
         ewl_layout.addWidget(self._ewl_focus_slider)
         self._ewl_focus_label = QLabel("128")
         self._ewl_focus_label.setMinimumWidth(45 if self._is_touch_mode else 35)
-        self._ewl_focus_slider.valueChanged.connect(lambda v: self._ewl_focus_label.setText(str(v)))
+        self._ewl_focus_slider.valueChanged.connect(self._on_ewl_focus_changed)
         ewl_layout.addWidget(self._ewl_focus_label)
         miniscope_layout.addRow("EWL Focus:", ewl_layout)
 
@@ -1087,18 +1088,35 @@ class CameraSettingsDialog(QDialog):
                 if self._resolution_combo.itemData(i) == (608, 608):
                     self._resolution_combo.setCurrentIndex(i)
                     break
-            # Set pixel format to YUYV
+            # Set pixel format to YUY2/YUYV
+            import sys
+            pixel_format = "YUY2" if sys.platform == "win32" else "YUYV"
             for i in range(self._pixel_format_combo.count()):
-                if self._pixel_format_combo.itemData(i) == "YUYV":
+                if self._pixel_format_combo.itemData(i) == pixel_format:
                     self._pixel_format_combo.setCurrentIndex(i)
                     break
-            # Set backend to V4L2
+            # Set backend based on platform
+            backend = "dshow" if sys.platform == "win32" else "v4l2"
             for i in range(self._backend_camera_combo.count()):
-                if self._backend_camera_combo.itemData(i) == "v4l2":
+                if self._backend_camera_combo.itemData(i) == backend:
                     self._backend_camera_combo.setCurrentIndex(i)
                     break
             # Increase timeout
             self._timeout_spin.setValue(10.0)
+
+    def _on_led_power_changed(self, value: int):
+        """Handle LED power slider change - update label and apply live if streaming."""
+        self._led_power_label.setText(f"{value}%")
+        # Apply live if camera manager is available and connected
+        if self._camera_manager is not None and self._camera_manager.is_connected:
+            self._camera_manager.set_led_power(value)
+
+    def _on_ewl_focus_changed(self, value: int):
+        """Handle EWL focus slider change - update label and apply live if streaming."""
+        self._ewl_focus_label.setText(str(value))
+        # Apply live if camera manager is available and connected
+        if self._camera_manager is not None and self._camera_manager.is_connected:
+            self._camera_manager.set_ewl_focus(value)
 
     def _browse_model(self):
         """Browse for YOLO model file."""
