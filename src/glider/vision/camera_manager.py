@@ -1589,8 +1589,9 @@ class CameraManager:
             self._settings = settings
 
         try:
-            # Miniscope wake-up sequence (must happen BEFORE opening the camera)
-            if self._settings.miniscope_mode:
+            # Miniscope wake-up sequence (Linux only - must happen BEFORE opening the camera)
+            # On Windows, miniscope control is done via OpenCV properties after connection
+            if self._settings.miniscope_mode and sys.platform != "win32":
                 logger.info("Miniscope mode enabled - running wake-up sequence")
                 _wake_up_miniscope(self._settings.camera_index)
 
@@ -1684,15 +1685,14 @@ class CameraManager:
 
             # Apply miniscope controls after camera is open
             if self._settings.miniscope_mode:
-                _apply_miniscope_controls(self._settings.camera_index, self._settings)
-                # Apply hardware controls (LED, EWL focus)
                 if sys.platform == "win32" and self._capture is not None:
-                    # Windows: Use OpenCV-based control
+                    # Windows: Use OpenCV-based control (I2C via UVC property tunneling)
                     _init_miniscope_ewl_opencv(self._capture)
                     _set_miniscope_led_opencv(self._capture, self._settings.led_power)
                     _set_miniscope_ewl_opencv(self._capture, self._settings.ewl_focus)
                 else:
                     # Linux: Use v4l2-ctl based control
+                    _apply_miniscope_controls(self._settings.camera_index, self._settings)
                     _apply_miniscope_hardware_controls(self._settings.camera_index, self._settings)
 
             self._state = CameraState.CONNECTED
@@ -2050,8 +2050,9 @@ class CameraManager:
                 # Single channel with explicit dimension - squeeze and convert
                 frame = cv2.cvtColor(frame.squeeze(), cv2.COLOR_GRAY2BGR)
 
-            # Miniscope watchdog: kick LED if image goes dark
-            if self._settings.miniscope_mode:
+            # Miniscope watchdog: kick LED if image goes dark (Linux only)
+            # On Windows, LED is controlled via OpenCV properties, not v4l2-ctl
+            if self._settings.miniscope_mode and sys.platform != "win32":
                 miniscope_frame_count += 1
                 if miniscope_frame_count % miniscope_check_interval == 0:
                     mean_brightness = np.mean(frame)
