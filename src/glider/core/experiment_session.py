@@ -478,39 +478,6 @@ class ZoneConfig:
         )
 
 
-@dataclass
-class AudioConfig:
-    """Configuration for audio recording settings."""
-
-    enabled: bool = False
-    device_index: Optional[int] = None
-    device_name: str = ""
-    sample_rate: int = 44100
-    channels: int = 1
-    gain: float = 1.0
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "enabled": self.enabled,
-            "device_index": self.device_index,
-            "device_name": self.device_name,
-            "sample_rate": self.sample_rate,
-            "channels": self.channels,
-            "gain": self.gain,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "AudioConfig":
-        return cls(
-            enabled=data.get("enabled", False),
-            device_index=data.get("device_index"),
-            device_name=data.get("device_name", ""),
-            sample_rate=data.get("sample_rate", 44100),
-            channels=data.get("channels", 1),
-            gain=data.get("gain", 1.0),
-        )
-
-
 class ExperimentSession:
     """
     Represents the complete state of an experiment.
@@ -528,7 +495,6 @@ class ExperimentSession:
         self._dashboard = DashboardConfig()
         self._camera = CameraConfig()
         self._zones = ZoneConfig()
-        self._audio = AudioConfig()
         self._state = SessionState.IDLE
         self._dirty = False  # Has unsaved changes
         self._file_path: Optional[str] = None
@@ -570,11 +536,6 @@ class ExperimentSession:
     def zones(self) -> ZoneConfig:
         """Zone configuration."""
         return self._zones
-
-    @property
-    def audio(self) -> AudioConfig:
-        """Audio recording configuration."""
-        return self._audio
 
     @property
     def custom_device_definitions(self) -> dict[str, Any]:
@@ -823,7 +784,6 @@ class ExperimentSession:
             "dashboard": self._dashboard.to_dict(),
             "camera": self._camera.to_dict(),
             "zones": self._zones.to_dict(),
-            "audio": self._audio.to_dict(),
         }
         # Only include custom definitions if there are any
         if self._custom_device_definitions:
@@ -842,7 +802,6 @@ class ExperimentSession:
         session._dashboard = DashboardConfig.from_dict(data.get("dashboard", {}))
         session._camera = CameraConfig.from_dict(data.get("camera", {}))
         session._zones = ZoneConfig.from_dict(data.get("zones", {}))
-        session._audio = AudioConfig.from_dict(data.get("audio", {}))
         # Load custom definitions
         session._custom_device_definitions = data.get("custom_devices", {})
         session._flow_function_definitions = data.get("flow_functions", {})
@@ -908,7 +867,6 @@ class ExperimentSession:
         self._dashboard = DashboardConfig()
         self._camera = CameraConfig()
         self._zones = ZoneConfig()
-        self._audio = AudioConfig()
         self._custom_device_definitions = {}
         self._flow_function_definitions = {}
         self._state = SessionState.IDLE
