@@ -908,6 +908,7 @@ class CameraManager:
         self._fps_counter = 0
         self._fps_timer = time.time()
         self._current_fps = 0.0
+        self._target_frame_interval = 1.0 / max(self._settings.fps, 1)
 
     @property
     def state(self) -> CameraState:
@@ -1875,6 +1876,8 @@ class CameraManager:
 
         # FPS
         self._capture.set(cv2.CAP_PROP_FPS, self._settings.fps)
+        # Update software FPS throttle for cameras that ignore CAP_PROP_FPS
+        self._target_frame_interval = 1.0 / max(self._settings.fps, 1)
 
         # Exposure
         if self._settings.auto_exposure:
@@ -1981,6 +1984,8 @@ class CameraManager:
         max_failures_before_log = 30  # Only log every 30 failures to avoid spam
         miniscope_check_interval = 30  # Check brightness every N frames
         miniscope_frame_count = 0
+        self._target_frame_interval = 1.0 / max(self._settings.fps, 1)
+        last_frame_time = 0.0
 
         while self._running:
             frame = None
@@ -2056,7 +2061,16 @@ class CameraManager:
                         )
                         _wake_up_miniscope(self._settings.camera_index)
 
+            # Software FPS throttle - many USB cameras (especially miniscopes)
+            # ignore cv2.CAP_PROP_FPS, so we enforce the target frame rate here
+            now = time.time()
+            elapsed_since_last = now - last_frame_time
+            sleep_time = self._target_frame_interval - elapsed_since_last
+            if sleep_time > 0.001:
+                time.sleep(sleep_time)
+
             timestamp = time.time()
+            last_frame_time = timestamp
 
             # Update FPS counter
             self._fps_counter += 1
