@@ -1248,7 +1248,12 @@ class CameraManager:
             logger.info(f"Setting resolution to {width}x{height}...")
             self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
             self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            self._capture.set(cv2.CAP_PROP_FPS, self._settings.fps)
+
+            # Skip CAP_PROP_FPS on Windows - some DirectShow drivers (especially
+            # miniscopes) crash with heap corruption when this property is set.
+            # FPS is enforced via software throttle in the capture loop instead.
+            if sys.platform != "win32":
+                self._capture.set(cv2.CAP_PROP_FPS, self._settings.fps)
 
             # Try setting Y800/GREY format explicitly
             for fourcc_str in ["Y800", "GREY"]:
@@ -1838,8 +1843,10 @@ class CameraManager:
         self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._settings.resolution[0])
         self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._settings.resolution[1])
 
-        # FPS
-        self._capture.set(cv2.CAP_PROP_FPS, self._settings.fps)
+        # FPS - skip on Windows where DirectShow drivers can crash on this property
+        if sys.platform != "win32":
+            self._capture.set(cv2.CAP_PROP_FPS, self._settings.fps)
+        self._target_frame_interval = 1.0 / max(self._settings.fps, 1)
 
         # Verify resolution
         actual_w = int(self._capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -1874,9 +1881,10 @@ class CameraManager:
         self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._settings.resolution[0])
         self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._settings.resolution[1])
 
-        # FPS
-        self._capture.set(cv2.CAP_PROP_FPS, self._settings.fps)
-        # Update software FPS throttle for cameras that ignore CAP_PROP_FPS
+        # FPS - skip on Windows where DirectShow drivers can crash on this property
+        if sys.platform != "win32":
+            self._capture.set(cv2.CAP_PROP_FPS, self._settings.fps)
+        # Update software FPS throttle (enforces FPS on all platforms)
         self._target_frame_interval = 1.0 / max(self._settings.fps, 1)
 
         # Exposure
@@ -1980,6 +1988,16 @@ class CameraManager:
     def _capture_loop(self) -> None:
         """Background thread for frame capture."""
         logger.debug("Capture loop started")
+        try:
+            self._capture_loop_inner()
+        except Exception as e:
+            logger.critical(f"Capture loop crashed: {e}", exc_info=True)
+            self._state = CameraState.ERROR
+            self._running = False
+        logger.debug("Capture loop ended")
+
+    def _capture_loop_inner(self) -> None:
+        """Inner capture loop - separated so top-level exceptions are always caught."""
         consecutive_failures = 0
         max_failures_before_log = 30  # Only log every 30 failures to avoid spam
         miniscope_check_interval = 30  # Check brightness every N frames
