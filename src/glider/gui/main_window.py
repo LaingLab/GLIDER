@@ -2529,7 +2529,6 @@ class MainWindow(QMainWindow):
         dialog = CameraSettingsDialog(
             camera_settings=self._core.camera_manager.settings,
             cv_settings=self._core.cv_processor.settings,
-            audio_settings=self._core.audio_recorder.settings,
             parent=self,
             view_manager=self._view_manager,
             camera_manager=self._core.camera_manager,
@@ -2547,19 +2546,6 @@ class MainWindow(QMainWindow):
             # Apply CV settings
             cv_settings = dialog.get_cv_settings()
             self._core.cv_processor.update_settings(cv_settings)
-
-            # Apply audio settings
-            audio_settings = dialog.get_audio_settings()
-            self._core.audio_recorder.update_settings(audio_settings)
-
-            # Sync audio settings to session
-            if self._core.session:
-                self._core.session.audio.enabled = audio_settings.enabled
-                self._core.session.audio.device_index = audio_settings.device_index
-                self._core.session.audio.device_name = audio_settings.device_name
-                self._core.session.audio.sample_rate = audio_settings.sample_rate
-                self._core.session.audio.channels = audio_settings.channels
-                self._core.session.audio.gain = audio_settings.gain
 
             logger.info("Camera settings updated")
 
