@@ -21,7 +21,6 @@ from glider.vision.cv_processor import CVProcessor
 from glider.vision.multi_camera_manager import MultiCameraManager
 from glider.vision.multi_video_recorder import MultiVideoRecorder
 from glider.vision.tracking_logger import TrackingDataLogger
-from glider.audio.audio_recorder import AudioRecorder, AudioSettings
 from glider.vision.video_recorder import VideoRecorder
 
 if TYPE_CHECKING:
@@ -55,7 +54,6 @@ class GliderCore:
         self._cv_processor = CVProcessor()
         self._video_recorder = VideoRecorder(self._camera_manager)
         self._tracking_logger = TrackingDataLogger()
-        self._audio_recorder = AudioRecorder()
         self._calibration = CameraCalibration()
 
         # Multi-camera support
@@ -71,7 +69,6 @@ class GliderCore:
         self._recording_enabled = True  # Auto-record experiments by default
         self._video_recording_enabled = True  # Auto-record video when camera connected
         self._annotated_video_enabled = True  # Also save annotated video with tracking overlays
-        self._audio_recording_enabled = True  # Auto-record audio when enabled in settings
         self._cv_processing_enabled = True  # Enable CV processing by default
 
         # Callbacks
@@ -123,11 +120,6 @@ class GliderCore:
     def tracking_logger(self) -> TrackingDataLogger:
         """Tracking data logger instance."""
         return self._tracking_logger
-
-    @property
-    def audio_recorder(self) -> AudioRecorder:
-        """Audio recorder instance."""
-        return self._audio_recorder
 
     @property
     def calibration(self) -> CameraCalibration:
@@ -209,12 +201,11 @@ class GliderCore:
         self._recording_enabled = value
 
     def set_recording_directory(self, path: Path) -> None:
-        """Set the directory for recording data files (CSV, video, tracking, audio)."""
+        """Set the directory for recording data files (CSV, video, tracking)."""
         self._data_recorder._output_dir = path
         self._video_recorder.set_output_directory(path)
         self._multi_video_recorder.set_output_directory(path)
         self._tracking_logger.set_output_directory(path)
-        self._audio_recorder.set_output_directory(path)
 
     def set_recording_interval(self, interval: float) -> None:
         """Set the sampling interval for recording (in seconds)."""
@@ -317,14 +308,6 @@ class GliderCore:
                 logger.info(f"Tracking data saved to: {tracking_path}")
             except Exception as e:
                 logger.error(f"Failed to stop tracking logger: {e}")
-
-        # Stop audio recording
-        if self._audio_recorder.is_recording:
-            try:
-                audio_path = await self._audio_recorder.stop()
-                logger.info(f"Audio saved to: {audio_path}")
-            except Exception as e:
-                logger.error(f"Failed to stop audio recording: {e}")
 
         # Set all devices to safe state
         await self._set_all_devices_low()
@@ -643,25 +626,6 @@ class GliderCore:
                 except Exception as e:
                     logger.error(f"Failed to start video recording: {e}")
 
-        # Start audio recording if enabled
-        if self._audio_recording_enabled and self._audio_recorder.is_available:
-            audio_config = self._session.audio
-            if audio_config.enabled:
-                try:
-                    audio_settings = AudioSettings(
-                        enabled=audio_config.enabled,
-                        device_index=audio_config.device_index,
-                        device_name=audio_config.device_name,
-                        sample_rate=audio_config.sample_rate,
-                        channels=audio_config.channels,
-                        gain=audio_config.gain,
-                    )
-                    self._audio_recorder.update_settings(audio_settings)
-                    audio_path = await self._audio_recorder.start(experiment_name)
-                    logger.info(f"Recording audio to: {audio_path}")
-                except Exception as e:
-                    logger.error(f"Failed to start audio recording: {e}")
-
         # Start tracking logger if CV processing enabled and camera is connected
         # (separate from video recording so tracking works even if video recording is disabled)
         if self._cv_processing_enabled and self._camera_manager.is_connected:
@@ -715,14 +679,6 @@ class GliderCore:
                 logger.info(f"Tracking data saved to: {tracking_path}")
             except Exception as e:
                 logger.error(f"Failed to stop tracking logger: {e}")
-
-        # Stop audio recording
-        if self._audio_recorder.is_recording:
-            try:
-                audio_path = await self._audio_recorder.stop()
-                logger.info(f"Audio saved to: {audio_path}")
-            except Exception as e:
-                logger.error(f"Failed to stop audio recording: {e}")
 
         # Set all devices to LOW/safe state for safety
         await self._set_all_devices_low()
