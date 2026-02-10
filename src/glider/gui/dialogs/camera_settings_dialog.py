@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from glider.gui.view_manager import ViewManager
     from glider.vision.camera_manager import CameraManager
 
+from glider.audio.audio_recorder import AudioRecorder, AudioSettings
 from glider.vision.camera_manager import CameraSettings
 from glider.vision.cv_processor import CVSettings, DetectionBackend
 
@@ -55,6 +56,7 @@ class CameraSettingsDialog(QDialog):
         self,
         camera_settings: Optional[CameraSettings] = None,
         cv_settings: Optional[CVSettings] = None,
+        audio_settings: Optional[AudioSettings] = None,
         parent=None,
         view_manager: Optional["ViewManager"] = None,
         camera_manager: Optional["CameraManager"] = None,
@@ -62,6 +64,7 @@ class CameraSettingsDialog(QDialog):
         super().__init__(parent)
         self._camera_settings = camera_settings or CameraSettings()
         self._cv_settings = cv_settings or CVSettings()
+        self._audio_settings = audio_settings or AudioSettings()
         self._view_manager = view_manager
         self._camera_manager = camera_manager  # For live LED/EWL control
         self._is_touch_mode = view_manager.is_runner_mode if view_manager else False
@@ -126,6 +129,10 @@ class CameraSettingsDialog(QDialog):
         # Tools tab (wrapped in scroll area)
         self._tools_tab = self._create_scrollable_tab(self._create_tools_tab_content())
         self._tabs.addTab(self._tools_tab, "Tools")
+
+        # Audio tab (wrapped in scroll area)
+        self._audio_tab = self._create_scrollable_tab(self._create_audio_tab_content())
+        self._tabs.addTab(self._audio_tab, "Audio")
 
         # Dialog buttons - larger for touch
         button_box = QDialogButtonBox(
@@ -955,6 +962,152 @@ class CameraSettingsDialog(QDialog):
 
         return widget
 
+    def _create_audio_tab_content(self) -> QWidget:
+        """Create the audio recording settings tab content."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        if self._is_touch_mode:
+            layout.setContentsMargins(12, 12, 12, 12)
+            layout.setSpacing(16)
+
+        touch_style = self._get_touch_group_style()
+
+        # Enable audio recording - prominent checkbox at top
+        self._audio_enabled_cb = QCheckBox("Enable Audio Recording")
+        if self._is_touch_mode:
+            self._audio_enabled_cb.setStyleSheet("""
+                QCheckBox {
+                    font-size: 16px;
+                    font-weight: bold;
+                    padding: 8px;
+                    spacing: 12px;
+                }
+                QCheckBox::indicator {
+                    width: 32px;
+                    height: 32px;
+                }
+            """)
+        self._audio_enabled_cb.toggled.connect(self._on_audio_enabled_toggle)
+        layout.addWidget(self._audio_enabled_cb)
+
+        # Audio Device group
+        device_group = QGroupBox("Audio Device")
+        device_group.setStyleSheet(touch_style)
+        device_layout = QFormLayout(device_group)
+        if self._is_touch_mode:
+            device_layout.setSpacing(12)
+            device_layout.setContentsMargins(12, 20, 12, 12)
+
+        device_row = QHBoxLayout()
+        self._audio_device_combo = QComboBox()
+        device_row.addWidget(self._audio_device_combo)
+
+        self._audio_refresh_btn = QPushButton("Refresh")
+        if self._is_touch_mode:
+            self._audio_refresh_btn.setMinimumSize(80, 40)
+        self._audio_refresh_btn.clicked.connect(self._populate_audio_devices)
+        device_row.addWidget(self._audio_refresh_btn)
+
+        device_layout.addRow("Device:", device_row)
+        layout.addWidget(device_group)
+
+        # Recording Format group
+        format_group = QGroupBox("Recording Format")
+        format_group.setStyleSheet(touch_style)
+        format_layout = QFormLayout(format_group)
+        if self._is_touch_mode:
+            format_layout.setSpacing(12)
+            format_layout.setContentsMargins(12, 20, 12, 12)
+
+        self._audio_sample_rate_combo = QComboBox()
+        self._audio_sample_rate_combo.addItem("22050 Hz", 22050)
+        self._audio_sample_rate_combo.addItem("44100 Hz", 44100)
+        self._audio_sample_rate_combo.addItem("48000 Hz", 48000)
+        self._audio_sample_rate_combo.addItem("96000 Hz", 96000)
+        self._audio_sample_rate_combo.setCurrentIndex(1)  # Default 44100
+        format_layout.addRow("Sample Rate:", self._audio_sample_rate_combo)
+
+        self._audio_channels_combo = QComboBox()
+        self._audio_channels_combo.addItem("Mono", 1)
+        self._audio_channels_combo.addItem("Stereo", 2)
+        format_layout.addRow("Channels:", self._audio_channels_combo)
+
+        layout.addWidget(format_group)
+
+        # Input Gain group
+        gain_group = QGroupBox("Input Gain")
+        gain_group.setStyleSheet(touch_style)
+        gain_layout = QFormLayout(gain_group)
+        if self._is_touch_mode:
+            gain_layout.setSpacing(12)
+            gain_layout.setContentsMargins(12, 20, 12, 12)
+
+        gain_row = QHBoxLayout()
+        gain_row.setSpacing(8 if not self._is_touch_mode else 12)
+        self._audio_gain_slider = QSlider(Qt.Orientation.Horizontal)
+        self._audio_gain_slider.setRange(0, 500)
+        self._audio_gain_slider.setValue(100)  # 1.0x
+        if self._is_touch_mode:
+            self._audio_gain_slider.setMinimumHeight(40)
+        gain_row.addWidget(self._audio_gain_slider)
+
+        self._audio_gain_label = QLabel("1.0x")
+        self._audio_gain_label.setMinimumWidth(45 if self._is_touch_mode else 35)
+        self._audio_gain_slider.valueChanged.connect(self._on_audio_gain_changed)
+        gain_row.addWidget(self._audio_gain_label)
+
+        gain_layout.addRow("Gain:", gain_row)
+        layout.addWidget(gain_group)
+
+        # Status label
+        self._audio_status_label = QLabel()
+        self._audio_status_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(self._audio_status_label)
+
+        layout.addStretch()
+
+        # Populate devices
+        self._populate_audio_devices()
+
+        return widget
+
+    def _populate_audio_devices(self) -> None:
+        """Enumerate and fill the audio device combo box."""
+        self._audio_device_combo.clear()
+        self._audio_device_combo.addItem("System Default", None)
+
+        devices = AudioRecorder.get_available_devices()
+        for dev in devices:
+            label = f"{dev['name']} ({dev['channels']}ch)"
+            self._audio_device_combo.addItem(label, dev["index"])
+
+        self._update_audio_status_label()
+
+    def _on_audio_enabled_toggle(self, enabled: bool) -> None:
+        """Handle audio enabled toggle - enable/disable child controls."""
+        self._audio_device_combo.setEnabled(enabled)
+        self._audio_refresh_btn.setEnabled(enabled)
+        self._audio_sample_rate_combo.setEnabled(enabled)
+        self._audio_channels_combo.setEnabled(enabled)
+        self._audio_gain_slider.setEnabled(enabled)
+
+    def _on_audio_gain_changed(self, value: int) -> None:
+        """Handle gain slider change - update label text."""
+        gain = value / 100.0
+        self._audio_gain_label.setText(f"{gain:.1f}x")
+
+    def _update_audio_status_label(self) -> None:
+        """Show device count or error message."""
+        recorder = AudioRecorder()
+        if not recorder.is_available:
+            self._audio_status_label.setText(
+                "sounddevice library not available - audio recording disabled"
+            )
+        else:
+            count = self._audio_device_combo.count() - 1  # Subtract "System Default"
+            self._audio_status_label.setText(f"{count} audio input device(s) found")
+
     def _on_calibration_clicked(self) -> None:
         """Handle calibration button click."""
         self.calibration_requested.emit()
@@ -1040,11 +1193,37 @@ class CameraSettingsDialog(QDialog):
         self._freeze_duration_spin.setValue(self._cv_settings.freeze_duration)
         self._smoothing_window_spin.setValue(self._cv_settings.smoothing_window)
 
+        # Audio settings
+        self._audio_enabled_cb.setChecked(self._audio_settings.enabled)
+
+        # Set device selection
+        for i in range(self._audio_device_combo.count()):
+            if self._audio_device_combo.itemData(i) == self._audio_settings.device_index:
+                self._audio_device_combo.setCurrentIndex(i)
+                break
+
+        # Set sample rate
+        for i in range(self._audio_sample_rate_combo.count()):
+            if self._audio_sample_rate_combo.itemData(i) == self._audio_settings.sample_rate:
+                self._audio_sample_rate_combo.setCurrentIndex(i)
+                break
+
+        # Set channels
+        for i in range(self._audio_channels_combo.count()):
+            if self._audio_channels_combo.itemData(i) == self._audio_settings.channels:
+                self._audio_channels_combo.setCurrentIndex(i)
+                break
+
+        # Set gain slider
+        self._audio_gain_slider.setValue(int(self._audio_settings.gain * 100))
+        self._audio_gain_label.setText(f"{self._audio_settings.gain:.1f}x")
+
         # Update UI state
         self._on_cv_enabled_toggle(self._cv_settings.enabled)
         self._on_backend_changed(self._backend_combo.currentIndex())
         self._on_tracking_enabled_toggle(self._cv_settings.tracking_enabled)
         self._on_behavior_enabled_toggle(self._cv_settings.behavior_enabled)
+        self._on_audio_enabled_toggle(self._audio_settings.enabled)
 
     def _on_auto_exposure_toggle(self, checked: bool):
         """Handle auto exposure toggle."""
@@ -1181,6 +1360,14 @@ class CameraSettingsDialog(QDialog):
         self._cv_settings.freeze_duration = self._freeze_duration_spin.value()
         self._cv_settings.smoothing_window = self._smoothing_window_spin.value()
 
+        # Audio settings
+        self._audio_settings.enabled = self._audio_enabled_cb.isChecked()
+        self._audio_settings.device_index = self._audio_device_combo.currentData()
+        self._audio_settings.device_name = self._audio_device_combo.currentText()
+        self._audio_settings.sample_rate = self._audio_sample_rate_combo.currentData()
+        self._audio_settings.channels = self._audio_channels_combo.currentData()
+        self._audio_settings.gain = self._audio_gain_slider.value() / 100.0
+
     def accept(self):
         """Handle dialog acceptance."""
         self._save_settings()
@@ -1193,3 +1380,7 @@ class CameraSettingsDialog(QDialog):
     def get_cv_settings(self) -> CVSettings:
         """Get the CV settings."""
         return self._cv_settings
+
+    def get_audio_settings(self) -> AudioSettings:
+        """Get the audio settings."""
+        return self._audio_settings
