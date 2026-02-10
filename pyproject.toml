@@ -40,6 +40,7 @@ dependencies = [
     "ryvencore>=0.4.0",
     "ultralytics>=8.0.0",
     "pandas>=2.0.0",
+    "sounddevice>=0.4.6",
 ]
 
 [project.optional-dependencies]
