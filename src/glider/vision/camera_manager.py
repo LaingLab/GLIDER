@@ -665,6 +665,61 @@ def _send_miniscope_config_opencv(cap: cv2.VideoCapture, command: int) -> bool:
     return r1 and r2 and r3
 
 
+def _init_miniscope_v4_serdes(cap: cv2.VideoCapture) -> bool:
+    """
+    Initialize Miniscope V4 SERDES link, IMU, and DAQ.
+
+    This replicates Bonsai.Miniscope's IssueStartCommands() sequence exactly.
+    Must be called before LED/EWL commands will work, because these commands
+    configure the I2C pass-through on the deserializer/serializer so that
+    downstream I2C devices (MCU, potentiometer, EWL driver) are reachable.
+
+    I2C Address Map:
+        192 (0xC0) = MAX9271 Deserializer (on DAQ board)
+        176 (0xB0) = MAX9272 Serializer (on Miniscope head)
+         80 (0x50) = BNO055 IMU (on Miniscope head)
+        254 (0xFE) = DAQ internal config (not a real I2C device)
+        238 (0xEE) = MAX14574 EWL Driver (electrowetting lens)
+
+    Args:
+        cap: OpenCV VideoCapture object (must be opened)
+
+    Returns:
+        True if all commands were sent successfully
+    """
+    sc = _send_miniscope_config_opencv
+    cc = _create_miniscope_command
+    all_ok = True
+
+    # 1. SERDES configuration (deserializer + serializer)
+    all_ok &= sc(cap, cc(192, 31, 16))       # DES 0xC0: reg 0x1F = 0x10
+    all_ok &= sc(cap, cc(176, 5, 32))        # SER 0xB0: reg 0x05 = 0x20
+    all_ok &= sc(cap, cc(192, 34, 2))        # DES: reg 0x22 = 0x02
+    all_ok &= sc(cap, cc(192, 32, 10))       # DES: reg 0x20 = 0x0A
+    all_ok &= sc(cap, cc(192, 7, 176))       # DES: reg 0x07 = 0xB0
+    all_ok &= sc(cap, cc(176, 15, 2))        # SER: reg 0x0F = 0x02
+    all_ok &= sc(cap, cc(176, 30, 10))       # SER: reg 0x1E = 0x0A
+
+    # 2. DES I2C address translation tables (pass-through to downstream devices)
+    all_ok &= sc(cap, cc(192, 8, 32, 238, 160, 80))
+    all_ok &= sc(cap, cc(192, 16, 32, 238, 88, 80))
+
+    # 3. BNO055 IMU configuration (address 80 = 0x50)
+    all_ok &= sc(cap, cc(80, 65, 6, 7))      # Axis remap + sign
+    all_ok &= sc(cap, cc(80, 61, 12))         # Operation mode = NDOF
+
+    # 4. DAQ config + EWL driver init
+    all_ok &= sc(cap, cc(254, 0))             # DAQ: enable BNO
+    all_ok &= sc(cap, cc(238, 3, 3))          # EWL MAX14574: enable
+
+    if all_ok:
+        logger.info("Miniscope V4 SERDES/DAQ initialization complete")
+    else:
+        logger.warning("Some Miniscope V4 init commands failed (may still work)")
+
+    return all_ok
+
+
 def _set_miniscope_led_opencv(cap: cv2.VideoCapture, power_percent: int) -> bool:
     """
     Set Miniscope V4 LED power using OpenCV (Windows).
@@ -936,7 +991,7 @@ class CameraManager:
         return self._current_fps
 
     @staticmethod
-    def enumerate_cameras(max_cameras: int = 10) -> list[CameraInfo]:
+    def enumerate_cameras(max_cameras: int = 4) -> list[CameraInfo]:
         """
         Enumerate all available camera devices.
 
@@ -968,11 +1023,11 @@ class CameraManager:
             # Get camera names on Windows
             camera_names = _get_windows_camera_names() if sys.platform == "win32" else []
 
-            # On Windows, try multiple backends to find all cameras
+            # On Windows, use DirectShow only for enumeration
+            # CAP_ANY triggers multiple backends (MSMF, obsensor, etc.) that can
+            # leave cameras in a bad state and cause extremely slow enumeration
             if sys.platform == "win32":
-                # Use DirectShow first - it's more stable than MSMF for enumeration
-                # MSMF can cause obsensor errors and crashes with some cameras
-                backends_to_try = [cv2.CAP_DSHOW, cv2.CAP_ANY]
+                backends_to_try = [cv2.CAP_DSHOW]
             else:
                 backends_to_try = [_get_camera_backend()]
 
@@ -1052,25 +1107,33 @@ class CameraManager:
                 logger.debug(f"Failed to open camera with backend {backend}")
                 return False
 
-            # Set buffer size (must be set early, before reading frames)
-            buffer_size = self._settings.buffer_size
-            self._capture.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)
+            # Miniscope on Windows: skip ALL capture.set() calls to avoid native
+            # DirectShow crashes (access violations / heap corruption).
+            _skip_props = self._settings.miniscope_mode and sys.platform == "win32"
 
-            # Try the specified pixel format if provided (overrides settings)
-            format_to_use = pixel_format if pixel_format else self._settings.pixel_format
-            if format_to_use:
-                try:
-                    fourcc = cv2.VideoWriter_fourcc(*format_to_use[:4])
-                    self._capture.set(cv2.CAP_PROP_FOURCC, fourcc)
+            if not _skip_props:
+                # Set buffer size (must be set early, before reading frames)
+                buffer_size = self._settings.buffer_size
+                self._capture.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)
 
-                    # For grayscale formats, disable RGB conversion
-                    if format_to_use in ("Y800", "GREY", "Y8  ", "Y16 "):
-                        self._capture.set(cv2.CAP_PROP_CONVERT_RGB, 0)
-                except Exception as e:
-                    logger.debug(f"Failed to set pixel format {format_to_use}: {e}")
+                # Try the specified pixel format if provided (overrides settings)
+                format_to_use = pixel_format if pixel_format else self._settings.pixel_format
+                if format_to_use:
+                    try:
+                        fourcc = cv2.VideoWriter_fourcc(*format_to_use[:4])
+                        self._capture.set(cv2.CAP_PROP_FOURCC, fourcc)
 
-            # Apply settings (resolution, etc.)
-            self._apply_camera_settings_basic()
+                        # For grayscale formats, disable RGB conversion
+                        if format_to_use in ("Y800", "GREY", "Y8  ", "Y16 "):
+                            self._capture.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+                    except Exception as e:
+                        logger.debug(f"Failed to set pixel format {format_to_use}: {e}")
+
+                # Apply settings (resolution, etc.)
+                self._apply_camera_settings_basic()
+            else:
+                logger.info("Miniscope on Windows - skipping property configuration")
+                self._target_frame_interval = 1.0 / max(self._settings.fps, 1)
 
             # Use shorter timeout for quick tests during fallback iteration
             if quick_test:
@@ -1236,6 +1299,45 @@ class CameraManager:
                 return False
 
             logger.info(f"Camera opened with {backend_name}, configuring...")
+
+            # Miniscope on Windows: use the exact Bonsai.Miniscope initialization
+            # sequence. Only set the properties Bonsai sets (FrameWidth, FrameHeight,
+            # Saturation) and skip everything else (FPS, FOURCC, BUFFERSIZE,
+            # CONVERT_RGB, HW_ACCELERATION) which can cause DirectShow crashes.
+            if self._settings.miniscope_mode and sys.platform == "win32":
+                logger.info("Miniscope on Windows - using Bonsai initialization sequence")
+
+                # Step 1: SERDES + DAQ + EWL initialization (I2C via Contrast/Gamma/Sharpness)
+                _init_miniscope_v4_serdes(self._capture)
+
+                # Step 2: Set resolution (Bonsai uses 608x608 for V4)
+                width, height = self._settings.resolution
+                self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+                # Step 3: Start acquisition (Saturation=1 triggers the camera)
+                self._capture.set(cv2.CAP_PROP_SATURATION, 1)
+
+                time.sleep(0.5)
+
+                # Step 4: Verify frames
+                for attempt in range(15):
+                    try:
+                        ret, frame = self._capture.read()
+                        if ret and frame is not None and frame.size > 0:
+                            logger.info(
+                                f"Miniscope frame OK (attempt {attempt + 1}): "
+                                f"shape={frame.shape}, dtype={frame.dtype}"
+                            )
+                            return True
+                    except Exception as e:
+                        logger.debug(f"Miniscope read attempt {attempt + 1}: {e}")
+                    time.sleep(0.1)
+
+                logger.info("Miniscope initialization failed - no frames")
+                self._capture.release()
+                self._capture = None
+                return False
 
             # Disable hardware acceleration first (MSMF issue workaround)
             try:
@@ -1446,6 +1548,11 @@ class CameraManager:
         Returns:
             True if connection successful
         """
+        # Miniscope on Windows: this method relies on capture.set() which can
+        # crash the DirectShow driver with native access violations. Skip it.
+        if self._settings.miniscope_mode and sys.platform == "win32":
+            return False
+
         try:
             if self._capture is not None:
                 self._capture.release()
@@ -1594,8 +1701,9 @@ class CameraManager:
             self._settings = settings
 
         try:
-            # Miniscope wake-up sequence (must happen BEFORE opening the camera)
-            if self._settings.miniscope_mode:
+            # Miniscope wake-up sequence (Linux only - v4l2-ctl doesn't exist on Windows)
+            # On Windows, miniscope control is done via OpenCV properties after connection
+            if self._settings.miniscope_mode and sys.platform != "win32":
                 logger.info("Miniscope mode enabled - running wake-up sequence")
                 _wake_up_miniscope(self._settings.camera_index)
 
@@ -1635,13 +1743,6 @@ class CameraManager:
                     connected = True
                 elif self._try_connect_with_backend(backend):
                     logger.info(f"Connected via {force_backend.upper()} standard method")
-                    connected = True
-                # Fallback: try CAP_ANY
-                elif self._try_connect_grayscale_camera(cv2.CAP_ANY):
-                    logger.info("Connected via auto-detect grayscale method")
-                    connected = True
-                elif self._try_connect_with_backend(cv2.CAP_ANY):
-                    logger.info("Connected via auto-detect standard method")
                     connected = True
 
                 if connected:
@@ -1689,15 +1790,20 @@ class CameraManager:
 
             # Apply miniscope controls after camera is open
             if self._settings.miniscope_mode:
-                _apply_miniscope_controls(self._settings.camera_index, self._settings)
-                # Apply hardware controls (LED, EWL focus)
                 if sys.platform == "win32" and self._capture is not None:
-                    # Windows: Use OpenCV-based control
-                    _init_miniscope_ewl_opencv(self._capture)
-                    _set_miniscope_led_opencv(self._capture, self._settings.led_power)
-                    _set_miniscope_ewl_opencv(self._capture, self._settings.ewl_focus)
+                    # Windows: SERDES/EWL init already done during connection.
+                    # Just set LED and EWL focus to user-configured values.
+                    try:
+                        _set_miniscope_led_opencv(self._capture, self._settings.led_power)
+                    except Exception as e:
+                        logger.warning(f"Miniscope LED set failed: {e}")
+                    try:
+                        _set_miniscope_ewl_opencv(self._capture, self._settings.ewl_focus)
+                    except Exception as e:
+                        logger.warning(f"Miniscope EWL focus set failed: {e}")
                 else:
                     # Linux: Use v4l2-ctl based control
+                    _apply_miniscope_controls(self._settings.camera_index, self._settings)
                     _apply_miniscope_hardware_controls(self._settings.camera_index, self._settings)
 
             self._state = CameraState.CONNECTED
@@ -1839,6 +1945,14 @@ class CameraManager:
         if self._capture is None:
             return
 
+        # Always update software FPS throttle
+        self._target_frame_interval = 1.0 / max(self._settings.fps, 1)
+
+        # Miniscope on Windows: skip capture.set() calls to avoid native
+        # DirectShow crashes (access violations / heap corruption).
+        if self._settings.miniscope_mode and sys.platform == "win32":
+            return
+
         # Resolution
         self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._settings.resolution[0])
         self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._settings.resolution[1])
@@ -1846,7 +1960,6 @@ class CameraManager:
         # FPS - skip on Windows where DirectShow drivers can crash on this property
         if sys.platform != "win32":
             self._capture.set(cv2.CAP_PROP_FPS, self._settings.fps)
-        self._target_frame_interval = 1.0 / max(self._settings.fps, 1)
 
         # Verify resolution
         actual_w = int(self._capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -1858,6 +1971,14 @@ class CameraManager:
     def _apply_camera_settings(self) -> None:
         """Apply current settings to the camera."""
         if self._capture is None:
+            return
+
+        # Always update software FPS throttle
+        self._target_frame_interval = 1.0 / max(self._settings.fps, 1)
+
+        # Miniscope on Windows: skip capture.set() calls to avoid native
+        # DirectShow crashes (access violations / heap corruption).
+        if self._settings.miniscope_mode and sys.platform == "win32":
             return
 
         # Set pixel format FIRST (before resolution) - important for miniscopes
@@ -2061,15 +2182,18 @@ class CameraManager:
             # Normalize frame format for grayscale cameras (Y800/GREY)
             # These cameras output 2D frames (height, width) instead of 3D (height, width, 3)
             # Convert to 3-channel BGR for consistency with the rest of the pipeline
-            if len(frame.shape) == 2:
-                # Single channel grayscale - convert to 3-channel BGR
-                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-            elif len(frame.shape) == 3 and frame.shape[2] == 1:
-                # Single channel with explicit dimension - squeeze and convert
-                frame = cv2.cvtColor(frame.squeeze(), cv2.COLOR_GRAY2BGR)
+            try:
+                if len(frame.shape) == 2:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                elif len(frame.shape) == 3 and frame.shape[2] == 1:
+                    frame = cv2.cvtColor(frame.squeeze(), cv2.COLOR_GRAY2BGR)
+            except Exception as e:
+                logger.warning(f"Frame conversion failed: {e}")
+                continue
 
-            # Miniscope watchdog: kick LED if image goes dark
-            if self._settings.miniscope_mode:
+            # Miniscope watchdog: kick LED if image goes dark (Linux only)
+            # On Windows, LED is controlled via OpenCV properties, not v4l2-ctl
+            if self._settings.miniscope_mode and sys.platform != "win32":
                 miniscope_frame_count += 1
                 if miniscope_frame_count % miniscope_check_interval == 0:
                     mean_brightness = np.mean(frame)
