@@ -1879,8 +1879,8 @@ class MainWindow(QMainWindow):
         id_edit.setPlaceholderText("e.g., arduino_1")
         layout.addRow("Board ID:", id_edit)
 
-        # Port selection with refresh button
-        port_layout = QHBoxLayout()
+        # Serial port selection (for Arduino/telemetrix)
+        serial_port_layout = QHBoxLayout()
         port_combo = QComboBox()
         port_combo.setMinimumWidth(200)
 
@@ -1901,14 +1901,40 @@ class MainWindow(QMainWindow):
                 pass
 
         refresh_ports()
-        port_layout.addWidget(port_combo)
+        serial_port_layout.addWidget(port_combo)
 
         refresh_btn = QPushButton("↻")
         refresh_btn.setMaximumWidth(30)
         refresh_btn.clicked.connect(refresh_ports)
-        port_layout.addWidget(refresh_btn)
+        serial_port_layout.addWidget(refresh_btn)
 
-        layout.addRow("Serial Port:", port_layout)
+        serial_port_label = QLabel("Serial Port:")
+        layout.addRow(serial_port_label, serial_port_layout)
+
+        # Hostname input (for Raspberry Pi/pigpio)
+        host_edit = QLineEdit()
+        host_edit.setPlaceholderText("e.g., 192.168.1.100 or raspberrypi.local")
+        host_label = QLabel("Pi Hostname/IP:")
+        layout.addRow(host_label, host_edit)
+
+        # Show/hide port fields based on board type
+        def on_board_type_changed(board_type_text: str):
+            is_pi = board_type_text == "pigpio"
+            # Toggle visibility of serial port vs hostname fields
+            serial_port_label.setVisible(not is_pi)
+            port_combo.setVisible(not is_pi)
+            refresh_btn.setVisible(not is_pi)
+            host_label.setVisible(is_pi)
+            host_edit.setVisible(is_pi)
+            # Update placeholder for board ID
+            if is_pi:
+                id_edit.setPlaceholderText("e.g., rpi_1")
+            else:
+                id_edit.setPlaceholderText("e.g., arduino_1")
+
+        type_combo.currentTextChanged.connect(on_board_type_changed)
+        # Initialize visibility for the default selection
+        on_board_type_changed(type_combo.currentText())
 
         # Buttons
         buttons = QDialogButtonBox(
@@ -1923,10 +1949,14 @@ class MainWindow(QMainWindow):
 
             board_id = id_edit.text().strip() or f"board_{len(self._core.hardware_manager.boards)}"
             board_type = type_combo.currentText()
-            port = port_combo.currentData()  # Get the actual port device path
 
-            # Map UI type to driver type
-            driver_type = "arduino" if board_type == "telemetrix" else "raspberry_pi"
+            # Get port based on board type
+            if board_type == "pigpio":
+                port = host_edit.text().strip() or None
+                driver_type = "raspberry_pi"
+            else:
+                port = port_combo.currentData()  # Get the actual port device path
+                driver_type = "arduino"
 
             try:
                 # Add to hardware manager for runtime use
