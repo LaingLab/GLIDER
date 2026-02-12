@@ -170,7 +170,7 @@ class ExperimentDialog(QDialog):
         self._save_dir_edit.setReadOnly(True)
         self._save_dir_edit.setPlaceholderText("Default (current directory)")
         save_dir_layout.addWidget(self._save_dir_edit)
-        self._browse_dir_btn = QPushButton("Browse...")
+        self._browse_dir_btn = QPushButton("Browse")
         self._browse_dir_btn.setFixedWidth(80)
         save_dir_layout.addWidget(self._browse_dir_btn)
         info_layout.addRow("Save Dir:", save_dir_layout)
