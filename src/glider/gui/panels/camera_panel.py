@@ -334,7 +334,7 @@ class CameraPanel(QWidget):
         camera_layout.addWidget(camera_label)
 
         self._camera_combo = QComboBox()
-        self._camera_combo.setMinimumWidth(150)
+        self._camera_combo.setMinimumWidth(120)
         camera_layout.addWidget(self._camera_combo, 1)
 
         self._refresh_btn = QPushButton("Refresh")
@@ -351,7 +351,7 @@ class CameraPanel(QWidget):
         self._preview_btn.clicked.connect(self._toggle_preview)
         control_layout.addWidget(self._preview_btn)
 
-        self._settings_btn = QPushButton("Settings...")
+        self._settings_btn = QPushButton("Settings")
         self._settings_btn.clicked.connect(self.settings_requested.emit)
         control_layout.addWidget(self._settings_btn)
 
@@ -360,12 +360,13 @@ class CameraPanel(QWidget):
         # CV options
         cv_layout = QHBoxLayout()
 
-        self._cv_enabled_cb = QCheckBox("CV")
+        self._cv_enabled_cb = QCheckBox("Computer Vision")
         self._cv_enabled_cb.setChecked(True)
+        self._cv_enabled_cb.setFixedWidth(150)
         self._cv_enabled_cb.toggled.connect(self._on_cv_toggle)
         cv_layout.addWidget(self._cv_enabled_cb)
 
-        self._overlay_cb = QCheckBox("Show Overlays")
+        self._overlay_cb = QCheckBox("Overlays")
         self._overlay_cb.setChecked(True)
         self._overlay_cb.toggled.connect(self._on_overlay_toggle)
         cv_layout.addWidget(self._overlay_cb)

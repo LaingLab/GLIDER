@@ -197,8 +197,8 @@ class AnalysisDialog(QDialog):
                 border: 1px solid #444;
                 border-radius: 4px;
             }
-            QListWidget::item {
-                padding: 4px;
+            QPushButton {
+                padding: 2px 4px;
             }
             QListWidget::item:selected {
                 background-color: #3c3c3c;
