@@ -113,6 +113,7 @@ class SessionMetadata:
     lab: str = ""
     project: str = ""
     notes: str = ""
+    recording_directory: str = ""  # Save directory for experiment data (empty = cwd)
 
     # Subject management
     subjects: list[Subject] = field(default_factory=list)
@@ -134,6 +135,7 @@ class SessionMetadata:
             "lab": self.lab,
             "project": self.project,
             "notes": self.notes,
+            "recording_directory": self.recording_directory,
             "subjects": [s.to_dict() for s in self.subjects],
             "active_subject_id": self.active_subject_id,
         }
@@ -158,6 +160,7 @@ class SessionMetadata:
             lab=data.get("lab", ""),
             project=data.get("project", ""),
             notes=data.get("notes", ""),
+            recording_directory=data.get("recording_directory", ""),
             subjects=subjects,
             active_subject_id=data.get("active_subject_id"),
         )

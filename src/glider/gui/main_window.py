@@ -7,6 +7,7 @@ Desktop (Builder) and Runner modes.
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from PyQt6.QtCore import QMimeData, Qt, QTimer, pyqtSignal, pyqtSlot
@@ -1641,6 +1642,10 @@ class MainWindow(QMainWindow):
                 self._refresh_zones()
                 if self._experiment_dialog:
                     self._experiment_dialog.set_session(self._core.session)
+                # Apply recording directory from loaded session
+                rec_dir = self._core.session.metadata.recording_directory
+                if rec_dir:
+                    self._core.set_recording_directory(Path(rec_dir))
                 self.statusBar().showMessage(f"Opened: {file_path}")
             except Exception as e:
                 logger.exception(f"Failed to open file: {e}")
@@ -2601,6 +2606,12 @@ class MainWindow(QMainWindow):
         self._core.session._dirty = True
         logger.debug("Experiment metadata changed")
 
+    def _on_recording_directory_changed(self, directory: str) -> None:
+        """Handle recording directory changes from the experiment dialog."""
+        if directory:
+            self._core.set_recording_directory(Path(directory))
+            logger.info(f"Recording directory changed to: {directory}")
+
     def _on_open_experiment_dialog(self) -> None:
         """Open the experiment settings dialog."""
         if self._experiment_dialog is None:
@@ -2611,6 +2622,9 @@ class MainWindow(QMainWindow):
             )
             self._experiment_dialog.metadata_changed.connect(self._on_experiment_metadata_changed)
             self._experiment_dialog.edit_subject_requested.connect(self._on_edit_subject)
+            self._experiment_dialog.recording_directory_changed.connect(
+                self._on_recording_directory_changed
+            )
         else:
             # Refresh dialog with current session
             self._experiment_dialog.set_session(self._core.session)
@@ -2712,6 +2726,10 @@ class MainWindow(QMainWindow):
     async def _start_async(self) -> None:
         """Async start."""
         try:
+            # Apply recording directory from session metadata before starting
+            rec_dir = self._core.session.metadata.recording_directory
+            if rec_dir:
+                self._core.set_recording_directory(Path(rec_dir))
             await self._core.start_experiment()
         except Exception as e:
             QMessageBox.critical(self, "Start Error", str(e))

@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGroupBox,
@@ -78,6 +79,7 @@ class ExperimentDialog(QDialog):
     subject_added = pyqtSignal(object)  # Subject
     subject_removed = pyqtSignal(str)  # subject_id
     edit_subject_requested = pyqtSignal(str)  # subject_id
+    recording_directory_changed = pyqtSignal(str)  # directory path
 
     def __init__(
         self,
@@ -161,6 +163,17 @@ class ExperimentDialog(QDialog):
         self._notes_edit.setMaximumHeight(80)
         self._notes_edit.setPlaceholderText("Experiment notes...")
         info_layout.addRow("Notes:", self._notes_edit)
+
+        # Save Directory
+        save_dir_layout = QHBoxLayout()
+        self._save_dir_edit = QLineEdit()
+        self._save_dir_edit.setReadOnly(True)
+        self._save_dir_edit.setPlaceholderText("Default (current directory)")
+        save_dir_layout.addWidget(self._save_dir_edit)
+        self._browse_dir_btn = QPushButton("Browse...")
+        self._browse_dir_btn.setFixedWidth(80)
+        save_dir_layout.addWidget(self._browse_dir_btn)
+        info_layout.addRow("Save Dir:", save_dir_layout)
 
         layout.addWidget(self._info_group)
 
@@ -274,6 +287,9 @@ class ExperimentDialog(QDialog):
         self._project_edit.textChanged.connect(self._on_info_changed)
         self._notes_edit.textChanged.connect(self._on_info_changed)
 
+        # Save directory
+        self._browse_dir_btn.clicked.connect(self._on_browse_directory)
+
         # Subject table
         self._subject_table.itemSelectionChanged.connect(self._on_selection_changed)
         self._subject_table.doubleClicked.connect(self._on_edit_subject)
@@ -304,6 +320,7 @@ class ExperimentDialog(QDialog):
             self._lab_edit.setText(metadata.lab)
             self._project_edit.setText(metadata.project)
             self._notes_edit.setPlainText(metadata.notes)
+            self._save_dir_edit.setText(metadata.recording_directory)
 
             self._refresh_subject_table()
             self._update_active_display()
@@ -362,6 +379,19 @@ class ExperimentDialog(QDialog):
 
         self._session._dirty = True
         self.metadata_changed.emit()
+
+    def _on_browse_directory(self) -> None:
+        """Handle browse directory button."""
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Select Save Directory",
+            self._save_dir_edit.text(),
+        )
+        if directory:
+            self._save_dir_edit.setText(directory)
+            self._session.metadata.recording_directory = directory
+            self._session._dirty = True
+            self.recording_directory_changed.emit(directory)
 
     def _on_selection_changed(self) -> None:
         """Handle subject table selection changes."""
