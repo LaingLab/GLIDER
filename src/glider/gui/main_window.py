@@ -584,8 +584,10 @@ class MainWindow(QMainWindow):
         self._control_group_layout.setContentsMargins(8, 12, 8, 8)
         self._control_group_layout.setSpacing(8)
 
-        # Digital output controls - evenly spaced buttons
-        digital_layout = QHBoxLayout()
+        # Digital output controls (container widget for show/hide)
+        self._digital_widget = QWidget()
+        digital_layout = QHBoxLayout(self._digital_widget)
+        digital_layout.setContentsMargins(0, 0, 0, 0)
         digital_layout.setSpacing(4)
         self._on_btn = QPushButton("ON")
         self._on_btn.setMinimumHeight(32)
@@ -602,10 +604,12 @@ class MainWindow(QMainWindow):
         digital_layout.addWidget(self._on_btn)
         digital_layout.addWidget(self._off_btn)
         digital_layout.addWidget(self._toggle_btn)
-        self._control_group_layout.addLayout(digital_layout)
+        self._control_group_layout.addWidget(self._digital_widget)
 
-        # PWM control row
-        pwm_layout = QHBoxLayout()
+        # PWM control row (container widget for show/hide)
+        self._pwm_widget = QWidget()
+        pwm_layout = QHBoxLayout(self._pwm_widget)
+        pwm_layout.setContentsMargins(0, 0, 0, 0)
         pwm_layout.setSpacing(6)
         pwm_label = QLabel("PWM:")
         pwm_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -622,7 +626,8 @@ class MainWindow(QMainWindow):
         self._pwm_slider.valueChanged.connect(self._pwm_spinbox.setValue)
         pwm_layout.addWidget(pwm_label)
         pwm_layout.addWidget(self._pwm_spinbox, 1)
-        self._control_group_layout.addLayout(pwm_layout)
+        self._control_group_layout.addWidget(self._pwm_widget)
+        self._pwm_widget.hide()
 
         self._control_layout.addWidget(self._control_group)
 
@@ -4020,34 +4025,55 @@ class MainWindow(QMainWindow):
             info_label.setStyleSheet("color: #888; font-size: 10px;")
             props_layout.addRow(info_label)
 
-        # Add HIGH/LOW selector for Output node
+        # Add value control for Output node (PWM spinbox or HIGH/LOW radios)
         if node_type == "Output":
-            from PyQt6.QtWidgets import QHBoxLayout, QRadioButton
+            # Determine if the bound device is a PWM output
+            bound_device_type = None
+            if node_config and node_config.device_id:
+                bound_device = self._core.hardware_manager.get_device(node_config.device_id)
+                if bound_device:
+                    bound_device_type = getattr(bound_device, "device_type", None)
 
-            value_layout = QHBoxLayout()
-            high_radio = QRadioButton("HIGH")
-            low_radio = QRadioButton("LOW")
-
-            # Load saved value from session (1=HIGH, 0=LOW)
-            saved_value = 1  # Default to HIGH
-            if node_config and node_config.state:
-                saved_value = node_config.state.get("value", 1)
-
-            if saved_value:
-                high_radio.setChecked(True)
-            else:
-                low_radio.setChecked(True)
-
-            value_layout.addWidget(high_radio)
-            value_layout.addWidget(low_radio)
-            high_radio.toggled.connect(
-                lambda checked, nid=node_id: self._on_node_property_changed(
-                    nid, "value", 1 if checked else 0
+            if bound_device_type == "PWMOutput":
+                # PWM device: show 0-255 spinbox
+                pwm_spin = QSpinBox()
+                pwm_spin.setRange(0, 255)
+                saved_value = 0
+                if node_config and node_config.state:
+                    saved_value = node_config.state.get("value", 0)
+                pwm_spin.setValue(int(saved_value))
+                pwm_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(nid, "value", val)
                 )
-            )
-            value_widget = QWidget()
-            value_widget.setLayout(value_layout)
-            props_layout.addRow("Value:", value_widget)
+                props_layout.addRow("PWM Value (0-255):", pwm_spin)
+            else:
+                # Digital device: show HIGH/LOW radios
+                from PyQt6.QtWidgets import QHBoxLayout, QRadioButton
+
+                value_layout = QHBoxLayout()
+                high_radio = QRadioButton("HIGH")
+                low_radio = QRadioButton("LOW")
+
+                # Load saved value from session (1=HIGH, 0=LOW)
+                saved_value = 1  # Default to HIGH
+                if node_config and node_config.state:
+                    saved_value = node_config.state.get("value", 1)
+
+                if saved_value:
+                    high_radio.setChecked(True)
+                else:
+                    low_radio.setChecked(True)
+
+                value_layout.addWidget(high_radio)
+                value_layout.addWidget(low_radio)
+                high_radio.toggled.connect(
+                    lambda checked, nid=node_id: self._on_node_property_changed(
+                        nid, "value", 1 if checked else 0
+                    )
+                )
+                value_widget = QWidget()
+                value_widget.setLayout(value_layout)
+                props_layout.addRow("Value:", value_widget)
 
         # Add action selector for MotorGovernor node
         elif node_type == "MotorGovernor":
@@ -4409,6 +4435,10 @@ class MainWindow(QMainWindow):
                             runtime_node.bind_device(device)
                             logger.info(f"Bound device '{device_id}' to runtime node {node_id}")
 
+                # Refresh properties panel to update value controls
+                # (e.g., switching between HIGH/LOW and PWM spinbox)
+                self._update_properties_panel(node_id)
+
     def _on_node_property_changed(self, node_id: str, prop_name: str, value) -> None:
         """Handle property change for a node."""
         if self._core.session:
@@ -4578,6 +4608,18 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_input_group"):
             is_input_device = device_type in ("DigitalInput", "AnalogInput", "ADS1115")
             self._input_group.setEnabled(is_input_device)
+
+        # Show/hide appropriate output controls based on device type
+        is_digital_output = device_type == "DigitalOutput"
+        is_pwm_output = device_type == "PWMOutput"
+        is_output = is_digital_output or is_pwm_output
+
+        if hasattr(self, "_control_group"):
+            self._control_group.setVisible(is_output)
+        if hasattr(self, "_digital_widget"):
+            self._digital_widget.setVisible(is_digital_output)
+        if hasattr(self, "_pwm_widget"):
+            self._pwm_widget.setVisible(is_pwm_output)
 
     def _get_selected_device(self):
         """Get the currently selected device."""

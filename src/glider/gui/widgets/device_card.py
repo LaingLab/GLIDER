@@ -43,6 +43,8 @@ def get_device_state_info(device) -> DeviceStateInfo:
     device_type = DeviceType.from_string_safe(device_type_str)
     is_analog_input = device_type == DeviceType.ANALOG_INPUT
 
+    is_pwm_output = device_type == DeviceType.PWM_OUTPUT
+
     if is_analog_input:
         last_value = getattr(device, "_last_value", None)
         if last_value is not None:
@@ -55,6 +57,16 @@ def get_device_state_info(device) -> DeviceStateInfo:
             state_text = "---"
             state_color = "#444"
         font_size = "11px"
+    elif is_pwm_output:
+        state = getattr(device, "_state", None)
+        if state is not None:
+            pwm_val = int(state) if not isinstance(state, bool) else (255 if state else 0)
+            state_text = str(pwm_val)
+            state_color = "#3498db" if pwm_val > 0 else "#7f8c8d"
+        else:
+            state_text = "---"
+            state_color = "#444"
+        font_size = "14px"
     else:
         state = getattr(device, "_state", None)
         if state is not None:

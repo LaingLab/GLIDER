@@ -92,8 +92,10 @@ class DeviceControlController(QWidget):
         control_group_layout.setContentsMargins(8, 12, 8, 8)
         control_group_layout.setSpacing(8)
 
-        # Digital output controls
-        digital_layout = QHBoxLayout()
+        # Digital output controls (container widget for show/hide)
+        self._digital_widget = QWidget()
+        digital_layout = QHBoxLayout(self._digital_widget)
+        digital_layout.setContentsMargins(0, 0, 0, 0)
         digital_layout.setSpacing(4)
         self._on_btn = QPushButton("ON")
         self._on_btn.setMinimumHeight(32)
@@ -110,10 +112,12 @@ class DeviceControlController(QWidget):
         digital_layout.addWidget(self._on_btn)
         digital_layout.addWidget(self._off_btn)
         digital_layout.addWidget(self._toggle_btn)
-        control_group_layout.addLayout(digital_layout)
+        control_group_layout.addWidget(self._digital_widget)
 
-        # PWM control
-        pwm_layout = QHBoxLayout()
+        # PWM control (container widget for show/hide)
+        self._pwm_widget = QWidget()
+        pwm_layout = QHBoxLayout(self._pwm_widget)
+        pwm_layout.setContentsMargins(0, 0, 0, 0)
         pwm_layout.setSpacing(6)
         pwm_label = QLabel("PWM:")
         pwm_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -124,10 +128,13 @@ class DeviceControlController(QWidget):
         self._pwm_spinbox.valueChanged.connect(self._on_pwm_changed)
         pwm_layout.addWidget(pwm_label)
         pwm_layout.addWidget(self._pwm_spinbox, 1)
-        control_group_layout.addLayout(pwm_layout)
+        control_group_layout.addWidget(self._pwm_widget)
+        self._pwm_widget.hide()
 
-        # Servo control
-        servo_layout = QHBoxLayout()
+        # Servo control (container widget for show/hide)
+        self._servo_widget = QWidget()
+        servo_layout = QHBoxLayout(self._servo_widget)
+        servo_layout.setContentsMargins(0, 0, 0, 0)
         servo_layout.setSpacing(6)
         servo_label = QLabel("Servo:")
         servo_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -142,7 +149,8 @@ class DeviceControlController(QWidget):
         self._servo_spinbox.valueChanged.connect(self._on_servo_changed)
         servo_layout.addWidget(servo_label)
         servo_layout.addWidget(self._servo_spinbox, 1)
-        control_group_layout.addLayout(servo_layout)
+        control_group_layout.addWidget(self._servo_widget)
+        self._servo_widget.hide()
 
         layout.addWidget(self._control_group)
 
@@ -248,6 +256,17 @@ class DeviceControlController(QWidget):
         device_type = DeviceType.from_string_safe(device_type_str)
         is_input = device_type is not None and device_type.is_input
         self._input_group.setEnabled(is_input or device_type_str == "ADS1115")
+
+        # Show/hide appropriate output controls based on device type
+        is_digital_output = device_type_str == "DigitalOutput"
+        is_pwm_output = device_type_str == "PWMOutput"
+        is_servo = device_type_str == "Servo"
+        is_output = is_digital_output or is_pwm_output or is_servo
+
+        self._control_group.setVisible(is_output)
+        self._digital_widget.setVisible(is_digital_output)
+        self._pwm_widget.setVisible(is_pwm_output)
+        self._servo_widget.setVisible(is_servo)
 
         # Emit signal
         self.device_selected.emit(device_id)
