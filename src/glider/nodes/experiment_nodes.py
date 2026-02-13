@@ -130,15 +130,15 @@ class DelayNode(GliderNode):
 
 
 class OutputNode(GliderNode):
-    """Write HIGH/LOW to a device."""
+    """Write a value to a device (digital HIGH/LOW or PWM 0-255)."""
 
     definition = NodeDefinition(
         name="Output",
         category=NodeCategory.HARDWARE,
-        description="Write HIGH/LOW to a device",
+        description="Write to a device (digital HIGH/LOW or PWM 0-255)",
         inputs=[
             PortDefinition("exec", PortType.EXEC, description="Execution input"),
-            PortDefinition("value", PortType.DATA, bool, True, "HIGH (1) or LOW (0)"),
+            PortDefinition("value", PortType.DATA, description="Value to write"),
         ],
         outputs=[
             PortDefinition("next", PortType.EXEC, description="Triggers after write"),
@@ -155,7 +155,7 @@ class OutputNode(GliderNode):
         logger.info(f"  Node state: {self._state}")
 
         # Priority: 1) Saved state, 2) Default (1 = HIGH)
-        # The state is set by the properties panel when user selects HIGH/LOW
+        # The state is set by the properties panel when user selects HIGH/LOW or PWM value
         if "value" in self._state:
             value = self._state["value"]
             logger.info(f"  Using value from state: {value}")
@@ -164,20 +164,29 @@ class OutputNode(GliderNode):
             value = 1
             logger.info(f"  Using default value: {value}")
 
-        # Convert to bool
-        value = bool(value)
-        logger.info(f"  Final value (bool): {value}")
-
         if self._device is not None:
             try:
-                logger.info(f"Output: setting device to {'HIGH' if value else 'LOW'}")
-                if hasattr(self._device, "set_state"):
-                    await self._device.set_state(value)
-                elif hasattr(self._device, "turn_on") and hasattr(self._device, "turn_off"):
-                    if value:
-                        await self._device.turn_on()
-                    else:
-                        await self._device.turn_off()
+                device_type = getattr(self._device, "device_type", "")
+                if device_type == "PWMOutput":
+                    # PWM device: send integer value 0-255
+                    pwm_value = max(0, min(255, int(value)))
+                    logger.info(f"Output: setting PWM device to {pwm_value}")
+                    if hasattr(self._device, "set_value"):
+                        await self._device.set_value(pwm_value)
+                    elif hasattr(self._device, "board"):
+                        pin = list(self._device.pins.values())[0] if self._device.pins else 0
+                        await self._device.board.write_analog(pin, pwm_value)
+                else:
+                    # Digital device: send bool HIGH/LOW
+                    bool_value = bool(value)
+                    logger.info(f"Output: setting device to {'HIGH' if bool_value else 'LOW'}")
+                    if hasattr(self._device, "set_state"):
+                        await self._device.set_state(bool_value)
+                    elif hasattr(self._device, "turn_on") and hasattr(self._device, "turn_off"):
+                        if bool_value:
+                            await self._device.turn_on()
+                        else:
+                            await self._device.turn_off()
             except Exception as e:
                 logger.error(f"Output error: {e}")
                 self._error = str(e)
