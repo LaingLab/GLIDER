@@ -1,0 +1,276 @@
+{
+  "metadata": {
+    "id": "aff25b70-e7a8-4186-b61b-a404019f41c4",
+    "name": "Untitled Experiment",
+    "description": "",
+    "author": "",
+    "version": "1.0.0",
+    "created_at": "2026-02-13T11:02:34.210019",
+    "modified_at": "2026-02-13T11:14:15.139913",
+    "glider_version": "1.0.0",
+    "protocol": "",
+    "experiment_type": "",
+    "experimenter": "",
+    "lab": "",
+    "project": "",
+    "notes": "",
+    "recording_directory": "",
+    "subjects": [],
+    "active_subject_id": null
+  },
+  "hardware": {
+    "boards": [
+      {
+        "id": "ard",
+        "driver_type": "arduino",
+        "port": null,
+        "board_type": "uno",
+        "auto_reconnect": false,
+        "settings": {}
+      },
+      {
+        "id": "pi",
+        "driver_type": "raspberry_pi",
+        "port": null,
+        "board_type": "uno",
+        "auto_reconnect": false,
+        "settings": {}
+      }
+    ],
+    "devices": [
+      {
+        "id": "ard_pump",
+        "device_type": "PWMOutput",
+        "name": "ard_pump",
+        "board_id": "ard",
+        "pins": {
+          "output": 10
+        },
+        "settings": {}
+      },
+      {
+        "id": "ard_atom",
+        "device_type": "PWMOutput",
+        "name": "ard_atom",
+        "board_id": "ard",
+        "pins": {
+          "output": 11
+        },
+        "settings": {}
+      },
+      {
+        "id": "pi_pump",
+        "device_type": "PWMOutput",
+        "name": "pi_pump",
+        "board_id": "pi",
+        "pins": {
+          "output": 20
+        },
+        "settings": {}
+      },
+      {
+        "id": "pi_atom",
+        "device_type": "PWMOutput",
+        "name": "pi_atom",
+        "board_id": "pi",
+        "pins": {
+          "output": 21
+        },
+        "settings": {}
+      }
+    ]
+  },
+  "flow": {
+    "nodes": [
+      {
+        "id": "endexperiment_16090d0c",
+        "node_type": "EndExperiment",
+        "position": [
+          -625.0,
+          -185.0
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "startexperiment_0faa1f31",
+        "node_type": "StartExperiment",
+        "position": [
+          -1057.0,
+          -298.0
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_84faea22",
+        "node_type": "Delay",
+        "position": [
+          -422.0,
+          -364.0
+        ],
+        "state": {
+          "duration": 2
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_54120a47",
+        "node_type": "Output",
+        "position": [
+          -623.0,
+          -428.0
+        ],
+        "state": {
+          "value": 255
+        },
+        "device_id": "pi_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_ea51037f",
+        "node_type": "Output",
+        "position": [
+          -214.0,
+          -292.0
+        ],
+        "state": {},
+        "device_id": "ard_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_3d071ab7",
+        "node_type": "Output",
+        "position": [
+          -223.0,
+          -429.0
+        ],
+        "state": {},
+        "device_id": "pi_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_58a4a723",
+        "node_type": "Output",
+        "position": [
+          -624.0,
+          -312.0
+        ],
+        "state": {
+          "value": 255
+        },
+        "device_id": "ard_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "loop_8fc26647",
+        "node_type": "Loop",
+        "position": [
+          -858.0,
+          -395.0
+        ],
+        "state": {
+          "count": 3
+        },
+        "device_id": null,
+        "visible_in_runner": true
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn_f60f4791",
+        "from_node": "output_54120a47",
+        "from_output": 0,
+        "to_node": "delay_84faea22",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_7f05d259",
+        "from_node": "output_58a4a723",
+        "from_output": 0,
+        "to_node": "delay_84faea22",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_319b4a93",
+        "from_node": "startexperiment_0faa1f31",
+        "from_output": 0,
+        "to_node": "loop_8fc26647",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_bf3253e1",
+        "from_node": "loop_8fc26647",
+        "from_output": 1,
+        "to_node": "endexperiment_16090d0c",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_539c71b6",
+        "from_node": "loop_8fc26647",
+        "from_output": 0,
+        "to_node": "output_54120a47",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_433c5a9b",
+        "from_node": "loop_8fc26647",
+        "from_output": 0,
+        "to_node": "output_58a4a723",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_cfa0b5a3",
+        "from_node": "delay_84faea22",
+        "from_output": 0,
+        "to_node": "output_3d071ab7",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_6429fede",
+        "from_node": "delay_84faea22",
+        "from_output": 0,
+        "to_node": "output_ea51037f",
+        "to_input": 0,
+        "connection_type": "exec"
+      }
+    ]
+  },
+  "dashboard": {
+    "widgets": [],
+    "layout": "vertical",
+    "columns": 1
+  },
+  "camera": {
+    "camera_index": 0,
+    "resolution": [
+      640,
+      480
+    ],
+    "fps": 30,
+    "exposure": -1,
+    "brightness": 128,
+    "contrast": 128,
+    "cv_enabled": true,
+    "cv_backend": "background_subtraction",
+    "confidence_threshold": 0.5,
+    "tracking_enabled": true,
+    "max_disappeared": 50,
+    "video_recording_enabled": true
+  },
+  "zones": {
+    "zones": [],
+    "config_width": 0,
+    "config_height": 0
+  }
+}
