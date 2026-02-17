@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Optional
 import cv2
 import numpy as np
 
+from glider.vision.frame_writer import FrameWriterThread
 from glider.vision.video_recorder import RecordingState, VideoFormat
 
 if TYPE_CHECKING:
@@ -46,10 +47,13 @@ class MultiVideoRecorder:
         """
         self._multi_cam = multi_camera_manager
         self._writers: dict[str, cv2.VideoWriter] = {}
+        self._writer_threads: dict[str, FrameWriterThread] = {}
         self._annotated_writer: Optional[cv2.VideoWriter] = None
+        self._annotated_writer_thread: Optional[FrameWriterThread] = None
         self._file_paths: dict[str, Path] = {}
         self._annotated_file_path: Optional[Path] = None
         self._frame_counts: dict[str, int] = {}
+        self._frames_dropped: dict[str, int] = {}
         self._annotated_frame_count = 0
         self._state = RecordingState.IDLE
         self._output_dir: Path = Path.cwd()
@@ -59,6 +63,7 @@ class MultiVideoRecorder:
         self._frame_callbacks_registered: dict[str, bool] = {}
         self._record_annotated = False
         self._recording_fps: dict[str, float] = {}
+        self._buffer_size: Optional[int] = None
 
     @property
     def is_recording(self) -> bool:
@@ -149,9 +154,15 @@ class MultiVideoRecorder:
         self._start_time = datetime.now()
         self._file_paths.clear()
         self._frame_counts.clear()
+        self._frames_dropped.clear()
         self._annotated_frame_count = 0
 
         fourcc = cv2.VideoWriter_fourcc(*self._video_format.codec)
+
+        # Build FrameWriterThread kwargs
+        fwt_kwargs = {}
+        if self._buffer_size is not None:
+            fwt_kwargs["max_queue_size"] = self._buffer_size
 
         with self._lock:
             # Create writer for each camera
@@ -179,6 +190,12 @@ class MultiVideoRecorder:
                 self._writers[camera_id] = writer
                 self._file_paths[camera_id] = file_path
                 self._frame_counts[camera_id] = 0
+                self._frames_dropped[camera_id] = 0
+
+                # Wrap in FrameWriterThread
+                fwt = FrameWriterThread(writer, **fwt_kwargs)
+                fwt.start()
+                self._writer_threads[camera_id] = fwt
 
                 # Register frame callback
                 if not self._frame_callbacks_registered.get(camera_id, False):
@@ -206,6 +223,10 @@ class MultiVideoRecorder:
                     )
 
                     if self._annotated_writer.isOpened():
+                        self._annotated_writer_thread = FrameWriterThread(
+                            self._annotated_writer, **fwt_kwargs
+                        )
+                        self._annotated_writer_thread.start()
                         logger.info(f"Recording annotated video to {self._annotated_file_path}")
                     else:
                         logger.warning("Failed to create annotated video writer")
@@ -219,6 +240,8 @@ class MultiVideoRecorder:
         """
         Handle incoming frame for recording.
 
+        Enqueues the frame for async writing by the per-camera FrameWriterThread.
+
         Args:
             camera_id: ID of camera that sent frame
             frame: Frame from camera
@@ -227,11 +250,18 @@ class MultiVideoRecorder:
         if self._state != RecordingState.RECORDING:
             return
 
-        with self._lock:
-            writer = self._writers.get(camera_id)
-            if writer is not None and writer.isOpened():
-                writer.write(frame)
+        fwt = self._writer_threads.get(camera_id)
+        if fwt is not None:
+            if fwt.enqueue(frame.copy()):
                 self._frame_counts[camera_id] = self._frame_counts.get(camera_id, 0) + 1
+            else:
+                self._frames_dropped[camera_id] = self._frames_dropped.get(camera_id, 0) + 1
+                dropped = self._frames_dropped[camera_id]
+                if dropped == 1 or dropped % 100 == 0:
+                    logger.warning(
+                        f"MultiVideoRecorder: {camera_id} frame dropped "
+                        f"(total dropped: {dropped})"
+                    )
 
     def write_annotated_frame(self, frame: np.ndarray) -> bool:
         """
@@ -244,7 +274,7 @@ class MultiVideoRecorder:
             frame: Annotated frame with overlays
 
         Returns:
-            True if frame was written
+            True if frame was written (enqueued)
         """
         if self._state != RecordingState.RECORDING:
             return False
@@ -252,9 +282,8 @@ class MultiVideoRecorder:
         if not self._record_annotated:
             return False
 
-        with self._lock:
-            if self._annotated_writer is not None and self._annotated_writer.isOpened():
-                self._annotated_writer.write(frame)
+        if self._annotated_writer_thread is not None:
+            if self._annotated_writer_thread.enqueue(frame.copy()):
                 self._annotated_frame_count += 1
                 return True
         return False
@@ -270,6 +299,18 @@ class MultiVideoRecorder:
             return {}
 
         self._state = RecordingState.FINALIZING
+
+        # Drain all per-camera writer threads before releasing writers
+        for camera_id, fwt in self._writer_threads.items():
+            fwt.stop(timeout=30.0)
+            dropped = self._frames_dropped.get(camera_id, 0)
+            if dropped > 0:
+                logger.warning(f"MultiVideoRecorder: {camera_id} total frames dropped: {dropped}")
+        self._writer_threads.clear()
+
+        if self._annotated_writer_thread is not None:
+            self._annotated_writer_thread.stop(timeout=30.0)
+            self._annotated_writer_thread = None
 
         with self._lock:
             # Release all writers
@@ -326,8 +367,25 @@ class MultiVideoRecorder:
             return 0.0
         return (datetime.now() - self._start_time).total_seconds()
 
+    def set_buffer_size(self, max_frames: int) -> None:
+        """
+        Set the frame buffer size for writer threads.
+
+        Must be called before start(). Has no effect on an active recording.
+
+        Args:
+            max_frames: Maximum number of frames to buffer per camera.
+        """
+        self._buffer_size = max_frames
+
     def get_recording_info(self) -> dict:
         """Get information about the current recording."""
+        buffer_depths = {}
+        buffer_maxes = {}
+        for camera_id, fwt in self._writer_threads.items():
+            buffer_depths[camera_id] = fwt.queue_depth
+            buffer_maxes[camera_id] = fwt.max_queue_size
+
         return {
             "state": self._state.name,
             "cameras": list(self._file_paths.keys()),
@@ -336,9 +394,12 @@ class MultiVideoRecorder:
                 str(self._annotated_file_path) if self._annotated_file_path else None
             ),
             "frame_counts": self._frame_counts.copy(),
+            "frames_dropped": self._frames_dropped.copy(),
             "annotated_frame_count": self._annotated_frame_count,
             "record_annotated": self._record_annotated,
             "duration": self.duration,
             "start_time": self._start_time.isoformat() if self._start_time else None,
             "format": self._video_format.to_dict(),
+            "buffer_depths": buffer_depths,
+            "buffer_maxes": buffer_maxes,
         }
