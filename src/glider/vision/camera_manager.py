@@ -631,7 +631,7 @@ def _create_miniscope_command(i2c_addr: int, *data_bytes: int) -> int:
             command |= (byte & 0xFF) << (8 * (i + 1))
     else:
         # Partial package: encode (length + 1) in second byte
-        command |= ((len(data_bytes) + 1) << 8)
+        command |= (len(data_bytes) + 1) << 8
         for i, byte in enumerate(data_bytes):
             command |= (byte & 0xFF) << (8 * (i + 2))
 
@@ -692,25 +692,25 @@ def _init_miniscope_v4_serdes(cap: cv2.VideoCapture) -> bool:
     all_ok = True
 
     # 1. SERDES configuration (deserializer + serializer)
-    all_ok &= sc(cap, cc(192, 31, 16))       # DES 0xC0: reg 0x1F = 0x10
-    all_ok &= sc(cap, cc(176, 5, 32))        # SER 0xB0: reg 0x05 = 0x20
-    all_ok &= sc(cap, cc(192, 34, 2))        # DES: reg 0x22 = 0x02
-    all_ok &= sc(cap, cc(192, 32, 10))       # DES: reg 0x20 = 0x0A
-    all_ok &= sc(cap, cc(192, 7, 176))       # DES: reg 0x07 = 0xB0
-    all_ok &= sc(cap, cc(176, 15, 2))        # SER: reg 0x0F = 0x02
-    all_ok &= sc(cap, cc(176, 30, 10))       # SER: reg 0x1E = 0x0A
+    all_ok &= sc(cap, cc(192, 31, 16))  # DES 0xC0: reg 0x1F = 0x10
+    all_ok &= sc(cap, cc(176, 5, 32))  # SER 0xB0: reg 0x05 = 0x20
+    all_ok &= sc(cap, cc(192, 34, 2))  # DES: reg 0x22 = 0x02
+    all_ok &= sc(cap, cc(192, 32, 10))  # DES: reg 0x20 = 0x0A
+    all_ok &= sc(cap, cc(192, 7, 176))  # DES: reg 0x07 = 0xB0
+    all_ok &= sc(cap, cc(176, 15, 2))  # SER: reg 0x0F = 0x02
+    all_ok &= sc(cap, cc(176, 30, 10))  # SER: reg 0x1E = 0x0A
 
     # 2. DES I2C address translation tables (pass-through to downstream devices)
     all_ok &= sc(cap, cc(192, 8, 32, 238, 160, 80))
     all_ok &= sc(cap, cc(192, 16, 32, 238, 88, 80))
 
     # 3. BNO055 IMU configuration (address 80 = 0x50)
-    all_ok &= sc(cap, cc(80, 65, 6, 7))      # Axis remap + sign
-    all_ok &= sc(cap, cc(80, 61, 12))         # Operation mode = NDOF
+    all_ok &= sc(cap, cc(80, 65, 6, 7))  # Axis remap + sign
+    all_ok &= sc(cap, cc(80, 61, 12))  # Operation mode = NDOF
 
     # 4. DAQ config + EWL driver init
-    all_ok &= sc(cap, cc(254, 0))             # DAQ: enable BNO
-    all_ok &= sc(cap, cc(238, 3, 3))          # EWL MAX14574: enable
+    all_ok &= sc(cap, cc(254, 0))  # DAQ: enable BNO
+    all_ok &= sc(cap, cc(238, 3, 3))  # EWL MAX14574: enable
 
     if all_ok:
         logger.info("Miniscope V4 SERDES/DAQ initialization complete")

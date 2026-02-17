@@ -26,9 +26,7 @@ import sys
 import time
 
 
-async def measure_pi_gpio_latency(
-    num_trials: int, output_pin: int, input_pin: int
-) -> list[float]:
+async def measure_pi_gpio_latency(num_trials: int, output_pin: int, input_pin: int) -> list[float]:
     """Measure Pi GPIO output latency through the GLIDER HAL.
 
     Uses PiGPIOBoard (HAL) for the output side and raw gpiozero
@@ -61,7 +59,9 @@ async def measure_pi_gpio_latency(
         await board.write_digital(output_pin, False)
         time.sleep(0.05)
 
-        print(f"Running {num_trials} Pi GPIO trials (output=GPIO{output_pin}, input=GPIO{input_pin})...")
+        print(
+            f"Running {num_trials} Pi GPIO trials (output=GPIO{output_pin}, input=GPIO{input_pin})..."
+        )
 
         for i in range(num_trials):
             # Ensure LOW and settled
@@ -215,9 +215,7 @@ def save_csv(
         for i in range(max_len):
             pi_val = f"{pi_results[i]:.6f}" if pi_results and i < len(pi_results) else ""
             ard_val = (
-                f"{arduino_results[i]:.6f}"
-                if arduino_results and i < len(arduino_results)
-                else ""
+                f"{arduino_results[i]:.6f}" if arduino_results and i < len(arduino_results) else ""
             )
             writer.writerow([i + 1, pi_val, ard_val])
 

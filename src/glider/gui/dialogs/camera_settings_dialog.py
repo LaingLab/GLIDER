@@ -1090,6 +1090,7 @@ class CameraSettingsDialog(QDialog):
                     break
             # Set pixel format to YUY2/YUYV
             import sys
+
             pixel_format = "YUY2" if sys.platform == "win32" else "YUYV"
             for i in range(self._pixel_format_combo.count()):
                 if self._pixel_format_combo.itemData(i) == pixel_format:
