@@ -177,6 +177,7 @@ pyrightconfig.json
 # End of https://www.toptal.com/developers/gitignore/api/python
 
 .claude/*
+CLAUDE.md
 *.cpython-313.pyc
 *.glider
 uv.lock
