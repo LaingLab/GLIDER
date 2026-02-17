@@ -40,6 +40,7 @@ dependencies = [
     "ryvencore>=0.4.0",
     "ultralytics>=8.0.0",
     "pandas>=2.0.0",
+    "gpiozero>=2.0",
 ]
 
 [project.optional-dependencies]
