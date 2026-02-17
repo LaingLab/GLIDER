@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Optional
 import cv2
 import numpy as np
 
+from glider.vision.frame_writer import FrameWriterThread
+
 if TYPE_CHECKING:
     from glider.vision.camera_manager import CameraManager
 
@@ -76,6 +78,8 @@ class VideoRecorder:
         self._camera = camera_manager
         self._writer: Optional[cv2.VideoWriter] = None
         self._annotated_writer: Optional[cv2.VideoWriter] = None
+        self._writer_thread: Optional[FrameWriterThread] = None
+        self._annotated_writer_thread: Optional[FrameWriterThread] = None
         self._state = RecordingState.IDLE
         self._output_dir: Path = Path.cwd()
         self._file_path: Optional[Path] = None
@@ -88,6 +92,7 @@ class VideoRecorder:
         self._lock = threading.Lock()
         self._frame_callback_registered = False
         self._record_annotated = False  # Whether to also record annotated video
+        self._buffer_size: Optional[int] = None  # None = use default
 
     @property
     def is_recording(self) -> bool:
@@ -213,6 +218,11 @@ class VideoRecorder:
             f"Recording at {recording_fps:.1f} fps (measured: {actual_fps:.1f}, configured: {settings.fps})"
         )
 
+        # Build FrameWriterThread kwargs
+        fwt_kwargs = {}
+        if self._buffer_size is not None:
+            fwt_kwargs["max_queue_size"] = self._buffer_size
+
         with self._lock:
             # Create raw video writer
             self._writer = cv2.VideoWriter(
@@ -223,6 +233,9 @@ class VideoRecorder:
                 logger.error(f"Failed to create video writer: {self._file_path}")
                 self._writer = None
                 raise RuntimeError(f"Failed to create video file: {self._file_path}")
+
+            self._writer_thread = FrameWriterThread(self._writer, **fwt_kwargs)
+            self._writer_thread.start()
 
             # Create annotated video writer if requested
             if self._record_annotated:
@@ -237,6 +250,10 @@ class VideoRecorder:
                     )
                     self._annotated_writer = None
                 else:
+                    self._annotated_writer_thread = FrameWriterThread(
+                        self._annotated_writer, **fwt_kwargs
+                    )
+                    self._annotated_writer_thread.start()
                     logger.info(f"Recording annotated video to {self._annotated_file_path}")
 
         # Register frame callback
@@ -252,6 +269,8 @@ class VideoRecorder:
         """
         Handle incoming frame for recording (raw video).
 
+        Enqueues the frame for async writing by the FrameWriterThread.
+
         Args:
             frame: Frame from camera
             timestamp: Frame timestamp
@@ -259,10 +278,13 @@ class VideoRecorder:
         if self._state != RecordingState.RECORDING:
             return
 
-        with self._lock:
-            if self._writer is not None and self._writer.isOpened():
-                self._writer.write(frame)
+        if self._writer_thread is not None:
+            if self._writer_thread.enqueue(frame.copy()):
                 self._frame_count += 1
+            else:
+                dropped = self._writer_thread.frames_dropped
+                if dropped == 1 or dropped % 100 == 0:
+                    logger.warning(f"VideoRecorder: frame dropped (total dropped: {dropped})")
 
     def write_annotated_frame(self, frame: np.ndarray) -> bool:
         """
@@ -275,7 +297,7 @@ class VideoRecorder:
             frame: Annotated frame with overlays
 
         Returns:
-            True if frame was written
+            True if frame was written (enqueued)
         """
         if self._state != RecordingState.RECORDING:
             return False
@@ -283,11 +305,16 @@ class VideoRecorder:
         if not self._record_annotated:
             return False
 
-        with self._lock:
-            if self._annotated_writer is not None and self._annotated_writer.isOpened():
-                self._annotated_writer.write(frame)
+        if self._annotated_writer_thread is not None:
+            if self._annotated_writer_thread.enqueue(frame.copy()):
                 self._annotated_frame_count += 1
                 return True
+            else:
+                dropped = self._annotated_writer_thread.frames_dropped
+                if dropped == 1 or dropped % 100 == 0:
+                    logger.warning(
+                        f"VideoRecorder: annotated frame dropped (total dropped: {dropped})"
+                    )
         return False
 
     async def stop(self) -> Optional[Path]:
@@ -301,6 +328,15 @@ class VideoRecorder:
             return None
 
         self._state = RecordingState.FINALIZING
+
+        # Drain writer threads (flushes buffered frames) before releasing writers
+        if self._writer_thread is not None:
+            self._writer_thread.stop(timeout=30.0)
+            self._writer_thread = None
+
+        if self._annotated_writer_thread is not None:
+            self._annotated_writer_thread.stop(timeout=30.0)
+            self._annotated_writer_thread = None
 
         with self._lock:
             if self._writer is not None:
@@ -418,17 +454,27 @@ class VideoRecorder:
             frame: Frame to write
 
         Returns:
-            True if frame was written
+            True if frame was written (enqueued)
         """
         if self._state != RecordingState.RECORDING:
             return False
 
-        with self._lock:
-            if self._writer is not None and self._writer.isOpened():
-                self._writer.write(frame)
+        if self._writer_thread is not None:
+            if self._writer_thread.enqueue(frame.copy()):
                 self._frame_count += 1
                 return True
         return False
+
+    def set_buffer_size(self, max_frames: int) -> None:
+        """
+        Set the frame buffer size for the writer thread.
+
+        Must be called before start(). Has no effect on an active recording.
+
+        Args:
+            max_frames: Maximum number of frames to buffer.
+        """
+        self._buffer_size = max_frames
 
     def get_recording_info(self) -> dict:
         """
@@ -437,7 +483,7 @@ class VideoRecorder:
         Returns:
             Dictionary with recording details
         """
-        return {
+        info = {
             "state": self._state.name,
             "file_path": str(self._file_path) if self._file_path else None,
             "annotated_file_path": (
@@ -449,4 +495,12 @@ class VideoRecorder:
             "duration": self.duration,
             "start_time": self._start_time.isoformat() if self._start_time else None,
             "format": self._video_format.to_dict(),
+            "frames_dropped": 0,
+            "buffer_depth": 0,
+            "buffer_max": 0,
         }
+        if self._writer_thread is not None:
+            info["frames_dropped"] = self._writer_thread.frames_dropped
+            info["buffer_depth"] = self._writer_thread.queue_depth
+            info["buffer_max"] = self._writer_thread.max_queue_size
+        return info
