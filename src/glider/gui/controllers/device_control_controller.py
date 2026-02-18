@@ -327,10 +327,25 @@ class DeviceControlController(QWidget):
         self._run_async(toggle())
 
     def _on_pwm_changed(self, value: int) -> None:
-        """Handle PWM value change."""
+        """Handle PWM value change (debounced to avoid overwhelming serial)."""
         device = self._get_selected_device()
         if device is None:
             return
+
+        self._pending_pwm_value = value
+        self._pending_pwm_device = device
+
+        if not hasattr(self, "_pwm_debounce_timer") or self._pwm_debounce_timer is None:
+            self._pwm_debounce_timer = QTimer()
+            self._pwm_debounce_timer.setSingleShot(True)
+            self._pwm_debounce_timer.timeout.connect(self._send_pending_pwm)
+
+        self._pwm_debounce_timer.start(50)
+
+    def _send_pending_pwm(self) -> None:
+        """Send the most recent pending PWM value."""
+        device = self._pending_pwm_device
+        value = self._pending_pwm_value
 
         async def set_pwm():
             try:
