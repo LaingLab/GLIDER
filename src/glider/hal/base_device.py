@@ -659,6 +659,7 @@ class ADS1115Device(BaseDevice):
     async def shutdown(self) -> None:
         """Shutdown the ADS1115."""
         self._ads = None
+        self._initialized = False
 
     async def read(self, channel: int = 0) -> int:
         """
