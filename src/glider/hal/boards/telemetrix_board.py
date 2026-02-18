@@ -500,7 +500,7 @@ class TelemetrixBoard(BaseBoard):
             raise RuntimeError("Board not connected")
 
         value = max(0, min(255, value))
-        self._call_telemetrix("analog_write", pin, value)
+        await asyncio.to_thread(self._call_telemetrix, "analog_write", pin, value)
         self._pin_values[pin] = value
 
     async def read_analog(self, pin: int) -> int:
