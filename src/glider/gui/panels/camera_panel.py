@@ -361,13 +361,13 @@ class CameraPanel(QWidget):
         cv_layout = QHBoxLayout()
 
         self._cv_enabled_cb = QCheckBox("Computer Vision")
-        self._cv_enabled_cb.setChecked(True)
+        # self._cv_enabled_cb.setChecked(True)
         self._cv_enabled_cb.setFixedWidth(150)
         self._cv_enabled_cb.toggled.connect(self._on_cv_toggle)
         cv_layout.addWidget(self._cv_enabled_cb)
 
         self._overlay_cb = QCheckBox("Overlays")
-        self._overlay_cb.setChecked(True)
+        # self._overlay_cb.setChecked(True)
         self._overlay_cb.toggled.connect(self._on_overlay_toggle)
         cv_layout.addWidget(self._overlay_cb)
 
