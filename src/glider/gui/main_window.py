@@ -615,7 +615,7 @@ class MainWindow(QMainWindow):
         pwm_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._pwm_spinbox = QSpinBox()
         self._pwm_spinbox.setRange(0, 255)
-        self._pwm_spinbox.setMinimumHeight(28)
+        self._pwm_spinbox.setMinimumHeight(35)
         self._pwm_spinbox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._pwm_spinbox.valueChanged.connect(self._on_pwm_changed)
         # Hidden slider for compatibility
@@ -652,7 +652,7 @@ class MainWindow(QMainWindow):
 
         # Read controls row
         input_row = QHBoxLayout()
-        input_row.setSpacing(6)
+        input_row.setSpacing(4)
         self._read_btn = QPushButton("Read")
         self._read_btn.setMinimumHeight(32)
         self._read_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -660,6 +660,7 @@ class MainWindow(QMainWindow):
         input_row.addWidget(self._read_btn)
 
         self._continuous_checkbox = QCheckBox("Auto")
+        self._continuous_checkbox.setMinimumWidth(35)
         self._continuous_checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._continuous_checkbox.stateChanged.connect(self._on_continuous_changed)
         input_row.addWidget(self._continuous_checkbox)
