@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-02-13T11:02:34.210019",
-    "modified_at": "2026-02-18T10:16:49.368312",
+    "modified_at": "2026-02-18T10:30:48.045538",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -98,8 +98,8 @@
         "id": "endexperiment_16090d0c",
         "node_type": "EndExperiment",
         "position": [
-          -705.8999999999999,
-          -96.15000000000002
+          78.52930312499973,
+          -198.72921656249994
         ],
         "state": {},
         "device_id": null,
@@ -109,25 +109,12 @@
         "id": "startexperiment_0faa1f31",
         "node_type": "StartExperiment",
         "position": [
-          -1112.0,
-          -325.0
+          -900.6252125000001,
+          -203.07155000000006
         ],
         "state": {},
         "device_id": null,
         "visible_in_runner": false
-      },
-      {
-        "id": "loop_4b16eba1",
-        "node_type": "Loop",
-        "position": [
-          -911.0,
-          -204.0
-        ],
-        "state": {
-          "count": 3
-        },
-        "device_id": null,
-        "visible_in_runner": true
       },
       {
         "id": "output_5df2039a",
@@ -184,30 +171,6 @@
     ],
     "connections": [
       {
-        "id": "conn_be4ab432",
-        "from_node": "startexperiment_0faa1f31",
-        "from_output": 0,
-        "to_node": "loop_4b16eba1",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_e738e660",
-        "from_node": "loop_4b16eba1",
-        "from_output": 0,
-        "to_node": "waitforinput_4a923d51",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_651c8dd6",
-        "from_node": "loop_4b16eba1",
-        "from_output": 1,
-        "to_node": "endexperiment_16090d0c",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
         "id": "conn_f1f4a40b",
         "from_node": "waitforinput_4a923d51",
         "from_output": 0,
@@ -228,6 +191,22 @@
         "from_node": "delay_b6919c6b",
         "from_output": 0,
         "to_node": "output_2c180de9",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_60e05686",
+        "from_node": "startexperiment_0faa1f31",
+        "from_output": 0,
+        "to_node": "waitforinput_4a923d51",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_b8fa48bf",
+        "from_node": "output_2c180de9",
+        "from_output": 0,
+        "to_node": "endexperiment_16090d0c",
         "to_input": 0,
         "connection_type": "exec"
       }
