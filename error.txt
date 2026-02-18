@@ -1,0 +1,43 @@
+2026-02-18 13:34:49,516 - glider.core.hardware_manager - INFO - Initializing device: ard_atom
+2026-02-18 13:34:49,569 - glider.core.hardware_manager - INFO - Initializing device: ard_beam
+2026-02-18 13:34:49,620 - glider.hal.boards.telemetrix_board - INFO - Registered analog callback for pin 14 (analog pin 0), board_id=ard
+2026-02-18 13:35:33,269 - glider.gui.main_window - ERROR - PWM error: 
+2026-02-18 13:35:38,272 - glider.gui.main_window - ERROR - PWM error: 
+2026-02-18 13:35:46,054 - glider.gui.main_window - ERROR - PWM error: 
+2026-02-18 13:35:51,067 - glider.gui.main_window - ERROR - PWM error: 
+2026-02-18 13:36:00,966 - glider.gui.main_window - ERROR - PWM error: 
+2026-02-18 13:36:05,969 - glider.gui.main_window - ERROR - PWM error: 
+/usr/lib/python3.11/asyncio/base_events.py:678: RuntimeWarning: coroutine 'TelemetrixThread.call_method.<locals>._call' was never awaited
+  self._ready.clear()
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+2026-02-18 13:36:10,969 - glider.gui.main_window - ERROR - PWM error: 
+2026-02-18 13:36:10,973 - glider.hal.boards.telemetrix_board - WARNING - Telemetrix thread died unexpectedly - marking as disconnected
+2026-02-18 13:36:10,973 - glider.gui.main_window - ERROR - PWM error: Board not connected
+2026-02-18 13:36:10,973 - glider.gui.main_window - ERROR - PWM error: Board not connected
+nected (state: ERROR)
+qt.gui.imageio: libpng warning: iCCP: known incorrect sRGB profile
+2026-02-18 13:37:35,556 - glider.core.hardware_manager - INFO - Disconnecting board: ard
+2026-02-18 13:37:35,556 - glider.hal.boards.telemetrix_board - INFO - Disconnected from Arduino Uno
+2026-02-18 13:37:35,556 - glider.gui.main_window - WARNING - Board ard disconnected (state: DISCONNECTED)
+2026-02-18 13:37:46,843 - glider.core.hardware_manager - INFO - Connecting to board: ard
+2026-02-18 13:37:46,844 - glider.hal.boards.telemetrix_board - INFO - Connecting to Arduino Uno on port auto...
+2026-02-18 13:37:51,559 - glider.hal.boards.telemetrix_board - INFO - Successfully connected to Arduino Uno
+2026-02-18 13:37:51,560 - glider.core.hardware_manager - INFO - Initializing device: ard_pump
+2026-02-18 13:37:51,611 - glider.core.hardware_manager - INFO - Initializing device: ard_atom
+2026-02-18 13:37:51,663 - glider.core.hardware_manager - INFO - Initializing device: ard_beam
+2026-02-18 13:37:51,714 - glider.hal.boards.telemetrix_board - INFO - Registered analog callback for pin 14 (analog pin 0), board_id=ard
+2026-02-18 13:38:38,357 - glider.gui.main_window - ERROR - PWM error: 
+2026-02-18 13:38:43,361 - glider.gui.main_window - ERROR - PWM error: 
+^T2026-02-18 13:38:48,362 - glider.gui.main_window - ERROR - PWM error: 
+2026-02-18 13:38:53,362 - glider.gui.main_window - ERROR - PWM error: 
+2026-02-18 13:38:58,363 - glider.gui.main_window - ERROR - PWM error: 
+2026-02-18 13:39:03,363 - glider.gui.main_window - ERROR - PWM error: 
+2026-02-18 13:39:08,363 - glider.gui.main_window - ERROR - PWM error: 
+/usr/lib/python3.11/asyncio/base_events.py:678: RuntimeWarning: coroutine 'TelemetrixThread.call_method.<locals>._call' was never awaited
+  self._ready.clear()
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+2026-02-18 13:39:13,364 - glider.gui.main_window - ERROR - PWM error: 
+2026-02-18 13:39:13,364 - glider.hal.boards.telemetrix_board - WARNING - Telemetrix thread died unexpectedly - marking as disconnected
+2026-02-18 13:39:13,364 - glider.gui.main_window - ERROR - PWM error: Board not connected
+
+
