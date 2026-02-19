@@ -3,26 +3,27 @@
 GLIDER Hardware Latency Test
 
 Measures end-to-end latency of the GLIDER hardware stack using a loopback
-wiring approach. Compares Pi GPIO baseline latency against Arduino (telemetrix)
-serial stack latency.
+wiring approach. Compares Pi GPIO baseline, Arduino-to-Pi, and Pi-to-Arduino
+latencies through the GLIDER HAL.
 
 Wiring required:
-  Pi GPIO baseline:  Pi GPIO17 (output) --> wire --> Pi GPIO27 (input)
-  Arduino loopback:  Arduino D7 (output) --> wire --> Pi GPIO22 (input)
+  Pi-to-Pi:         Pi GPIO19 (output) --> wire --> Pi GPIO26 (input)
+  Arduino-to-Pi:    Arduino D7 (output) --> wire --> Pi GPIO13 (input)
+  Pi-to-Arduino:    Pi GPIO6 (output)  --> wire --> Arduino D8 (input)
   Common ground between Pi and Arduino.
 
 Usage:
   python tests/latency_test.py
   python tests/latency_test.py --trials 500 --arduino-port /dev/ttyUSB0
-  python tests/latency_test.py --pi-only
-  python tests/latency_test.py --arduino-only
+  python tests/latency_test.py --tests pi-to-pi arduino-to-pi
+  python tests/latency_test.py --tests pi-to-arduino
 """
 
 import argparse
 import asyncio
 import csv
 import statistics
-import sys
+import threading
 import time
 
 
@@ -121,8 +122,10 @@ def find_arduino_port() -> str | None:
         # Match by vendor ID (any product from that vendor)
         for vid, pid in arduino_ids:
             if port_info.vid == vid and (pid is None or port_info.pid == pid):
-                print(f"Auto-detected Arduino on {port_info.device} "
-                      f"(VID:0x{port_info.vid:04X} PID:0x{port_info.pid:04X})")
+                print(
+                    f"Auto-detected Arduino on {port_info.device} "
+                    f"(VID:0x{port_info.vid:04X} PID:0x{port_info.pid:04X})"
+                )
                 return port_info.device
         # Fallback: match common Arduino descriptions
         desc = (port_info.description or "").lower()
@@ -153,8 +156,10 @@ async def measure_arduino_latency(
     if port is None:
         port = find_arduino_port()
         if port is None:
-            print("ERROR: Could not auto-detect Arduino port. "
-                  "Use --arduino-port to specify it manually.")
+            print(
+                "ERROR: Could not auto-detect Arduino port. "
+                "Use --arduino-port to specify it manually."
+            )
             return []
 
     board = TelemetrixBoard(port=port)
@@ -218,6 +223,107 @@ async def measure_arduino_latency(
     return results
 
 
+async def measure_pi_to_arduino_latency(
+    num_trials: int, pi_output_pin: int, arduino_input_pin: int, port: str | None
+) -> list[float]:
+    """Measure Pi GPIO -> Arduino input latency through the GLIDER HAL.
+
+    Uses PiGPIOBoard (HAL) for the Pi output side and TelemetrixBoard (HAL)
+    for Arduino input detection via digital callback.
+
+    Returns list of latencies in milliseconds.
+    """
+    from glider.hal.base_board import PinMode, PinType
+    from glider.hal.boards.pi_gpio_board import PiGPIOBoard
+    from glider.hal.boards.telemetrix_board import TelemetrixBoard
+
+    if port is None:
+        port = find_arduino_port()
+        if port is None:
+            print(
+                "ERROR: Could not auto-detect Arduino port. "
+                "Use --arduino-port to specify it manually."
+            )
+            return []
+
+    pi_board = PiGPIOBoard()
+    arduino_board = TelemetrixBoard(port=port)
+    results = []
+
+    try:
+        # Connect both boards
+        if not await pi_board.connect():
+            print("ERROR: Failed to connect PiGPIOBoard")
+            return []
+        if not await arduino_board.connect():
+            print("ERROR: Failed to connect TelemetrixBoard")
+            await pi_board.disconnect()
+            return []
+
+        # Configure pins
+        await pi_board.set_pin_mode(pi_output_pin, PinMode.OUTPUT, PinType.DIGITAL)
+        await arduino_board.set_pin_mode(arduino_input_pin, PinMode.INPUT, PinType.DIGITAL)
+
+        # Thread-safe event for detecting Arduino callback
+        # (telemetrix runs in a separate thread)
+        detected = threading.Event()
+
+        def on_change(pin, value):
+            if value:
+                detected.set()
+
+        arduino_board.register_callback(arduino_input_pin, on_change)
+
+        # Ensure output starts LOW
+        await pi_board.write_digital(pi_output_pin, False)
+        time.sleep(0.05)
+
+        print(
+            f"Running {num_trials} Pi->Arduino trials "
+            f"(Pi GPIO{pi_output_pin} -> Arduino D{arduino_input_pin})..."
+        )
+
+        for i in range(num_trials):
+            # Ensure LOW and settled
+            await pi_board.write_digital(pi_output_pin, False)
+            time.sleep(0.005)
+            detected.clear()
+
+            # Measure: write HIGH on Pi, wait for Arduino to report the change
+            start_ns = time.perf_counter_ns()
+            await pi_board.write_digital(pi_output_pin, True)
+
+            if not detected.wait(timeout=1.0):
+                print(f"  WARNING: Trial {i + 1} timed out waiting for Arduino callback")
+                continue
+
+            end_ns = time.perf_counter_ns()
+
+            delta_ms = (end_ns - start_ns) / 1_000_000
+            results.append(delta_ms)
+
+            # Brief pause between trials
+            time.sleep(0.005)
+
+            if (i + 1) % 100 == 0:
+                print(f"  {i + 1}/{num_trials} trials complete")
+
+    finally:
+        # Cleanup
+        try:
+            await pi_board.write_digital(pi_output_pin, False)
+        except Exception:
+            pass
+        try:
+            arduino_board.unregister_callback(arduino_input_pin, on_change)
+        except Exception:
+            pass
+        await arduino_board.disconnect()
+        await pi_board.disconnect()
+
+    return results
+
+
 def print_statistics(results: list[float], label: str) -> None:
     """Print summary statistics for a set of latency measurements."""
     if not results:
@@ -243,24 +349,36 @@ def print_statistics(results: list[float], label: str) -> None:
 
 def save_csv(
     pi_results: list[float] | None,
-    arduino_results: list[float] | None,
+    arduino_to_pi_results: list[float] | None,
+    pi_to_arduino_results: list[float] | None,
     path: str,
 ) -> None:
     """Save raw trial data to CSV for external analysis."""
-    max_len = max(len(pi_results or []), len(arduino_results or []))
+    max_len = max(
+        len(pi_results or []),
+        len(arduino_to_pi_results or []),
+        len(pi_to_arduino_results or []),
+    )
     if max_len == 0:
         print("No data to save.")
         return
 
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["trial", "pi_gpio_ms", "arduino_ms"])
+        writer.writerow(["trial", "pi_to_pi_ms", "arduino_to_pi_ms", "pi_to_arduino_ms"])
         for i in range(max_len):
             pi_val = f"{pi_results[i]:.6f}" if pi_results and i < len(pi_results) else ""
-            ard_val = (
-                f"{arduino_results[i]:.6f}" if arduino_results and i < len(arduino_results) else ""
+            atp_val = (
+                f"{arduino_to_pi_results[i]:.6f}"
+                if arduino_to_pi_results and i < len(arduino_to_pi_results)
+                else ""
             )
-            writer.writerow([i + 1, pi_val, ard_val])
+            pta_val = (
+                f"{pi_to_arduino_results[i]:.6f}"
+                if pi_to_arduino_results and i < len(pi_to_arduino_results)
+                else ""
+            )
+            writer.writerow([i + 1, pi_val, atp_val, pta_val])
 
     print(f"\nResults saved to {path}")
 
@@ -280,67 +398,103 @@ async def main() -> None:
         default=None,
         help="Arduino serial port (default: auto-detect)",
     )
-    parser.add_argument("--pi-only", action="store_true", help="Skip Arduino test")
-    parser.add_argument("--arduino-only", action="store_true", help="Skip Pi GPIO test")
+    parser.add_argument(
+        "--tests",
+        nargs="+",
+        choices=["pi-to-pi", "arduino-to-pi", "pi-to-arduino"],
+        default=None,
+        help="Tests to run (default: all). Options: pi-to-pi, arduino-to-pi, pi-to-arduino",
+    )
     parser.add_argument(
         "--output",
         type=str,
         default="latency_results.csv",
         help="CSV output path (default: latency_results.csv)",
     )
+    # Pi-to-Pi pins
     parser.add_argument(
-        "--pi-output-pin", type=int, default=19, help="Pi GPIO output pin (default: 19)"
+        "--pi-output-pin",
+        type=int,
+        default=19,
+        help="Pi GPIO output pin for Pi-to-Pi (default: 19)",
     )
     parser.add_argument(
-        "--pi-input-pin", type=int, default=26, help="Pi GPIO input pin (default: 26)"
+        "--pi-input-pin", type=int, default=26, help="Pi GPIO input pin for Pi-to-Pi (default: 26)"
     )
+    # Arduino-to-Pi pins
     parser.add_argument(
         "--arduino-output-pin",
         type=int,
         default=7,
-        help="Arduino digital output pin (default: 7)",
+        help="Arduino digital output pin for Arduino-to-Pi (default: 7)",
     )
     parser.add_argument(
-        "--arduino-input-pin",
+        "--atp-input-pin",
         type=int,
         default=13,
-        help="Pi GPIO input pin for Arduino loopback (default: 22)",
+        help="Pi GPIO input pin for Arduino-to-Pi (default: 13)",
+    )
+    # Pi-to-Arduino pins
+    parser.add_argument(
+        "--pta-output-pin",
+        type=int,
+        default=6,
+        help="Pi GPIO output pin for Pi-to-Arduino (default: 6)",
+    )
+    parser.add_argument(
+        "--pta-input-pin",
+        type=int,
+        default=8,
+        help="Arduino digital input pin for Pi-to-Arduino (default: 8)",
     )
     args = parser.parse_args()
 
-    if args.pi_only and args.arduino_only:
-        print("ERROR: Cannot specify both --pi-only and --arduino-only")
-        sys.exit(1)
+    all_tests = {"pi-to-pi", "arduino-to-pi", "pi-to-arduino"}
+    tests_to_run = set(args.tests) if args.tests else all_tests
 
     pi_results = None
-    arduino_results = None
+    arduino_to_pi_results = None
+    pi_to_arduino_results = None
 
-    # Pi GPIO baseline test
-    if not args.arduino_only:
+    # Pi-to-Pi baseline test
+    if "pi-to-pi" in tests_to_run:
         try:
             pi_results = await measure_pi_gpio_latency(
                 args.trials, args.pi_output_pin, args.pi_input_pin
             )
-            print_statistics(pi_results, "Pi GPIO Latency (GLIDER HAL)")
+            print_statistics(pi_results, "Pi-to-Pi Latency (GLIDER HAL)")
         except Exception as e:
-            print(f"\nPi GPIO test failed: {e}")
+            print(f"\nPi-to-Pi test failed: {e}")
 
-    # Arduino loopback test
-    if not args.pi_only:
+    # Arduino-to-Pi test
+    if "arduino-to-pi" in tests_to_run:
         try:
-            arduino_results = await measure_arduino_latency(
-                args.trials, args.arduino_output_pin, args.arduino_input_pin, args.arduino_port
+            arduino_to_pi_results = await measure_arduino_latency(
+                args.trials, args.arduino_output_pin, args.atp_input_pin, args.arduino_port
             )
             print_statistics(
-                arduino_results,
-                "Arduino Loopback Latency (GLIDER HAL -> Telemetrix -> USB)",
+                arduino_to_pi_results,
+                "Arduino-to-Pi Latency (GLIDER HAL -> Telemetrix -> USB -> Pi GPIO)",
             )
         except Exception as e:
-            print(f"\nArduino test failed: {e}")
+            print(f"\nArduino-to-Pi test failed: {e}")
+
+    # Pi-to-Arduino test
+    if "pi-to-arduino" in tests_to_run:
+        try:
+            pi_to_arduino_results = await measure_pi_to_arduino_latency(
+                args.trials, args.pta_output_pin, args.pta_input_pin, args.arduino_port
+            )
+            print_statistics(
+                pi_to_arduino_results,
+                "Pi-to-Arduino Latency (Pi GPIO -> wire -> Telemetrix callback)",
+            )
+        except Exception as e:
+            print(f"\nPi-to-Arduino test failed: {e}")
 
     # Save CSV
-    if pi_results or arduino_results:
-        save_csv(pi_results, arduino_results, args.output)
+    if pi_results or arduino_to_pi_results or pi_to_arduino_results:
+        save_csv(pi_results, arduino_to_pi_results, pi_to_arduino_results, args.output)
 
 
 if __name__ == "__main__":
