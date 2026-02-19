@@ -136,65 +136,46 @@ def find_arduino_port() -> str | None:
     return None
 
 
-async def measure_arduino_latency(
-    num_trials: int, arduino_pin: int, input_pin: int, port: str | None
+async def measure_arduino_to_pi_latency(
+    num_trials: int, arduino_pin: int, input_pin: int, arduino_board
 ) -> list[float]:
     """Measure Arduino output latency through the GLIDER HAL (telemetrix).
 
-    Uses TelemetrixBoard (HAL) for the Arduino output side and raw gpiozero
-    DigitalInputDevice on the Pi for detection.
+    Uses a pre-connected TelemetrixBoard for the Arduino output side and raw
+    gpiozero DigitalInputDevice on the Pi for detection.
 
     Returns list of latencies in milliseconds.
     """
     from gpiozero import DigitalInputDevice
 
     from glider.hal.base_board import PinMode, PinType
-    from glider.hal.boards.telemetrix_board import TelemetrixBoard
 
-    # Auto-detect port if not specified to avoid telemetrix's _find_arduino
-    # which can hang indefinitely on non-Arduino serial devices
-    if port is None:
-        port = find_arduino_port()
-        if port is None:
-            print(
-                "ERROR: Could not auto-detect Arduino port. "
-                "Use --arduino-port to specify it manually."
-            )
-            return []
-
-    board = TelemetrixBoard(port=port)
     detector = None
     results = []
 
     try:
-        # Connect to Arduino via telemetrix
-        connected = await board.connect()
-        if not connected:
-            print("ERROR: Failed to connect TelemetrixBoard")
-            return []
-
-        await board.set_pin_mode(arduino_pin, PinMode.OUTPUT, PinType.DIGITAL)
+        await arduino_board.set_pin_mode(arduino_pin, PinMode.OUTPUT, PinType.DIGITAL)
 
         # Raw gpiozero input for detection on Pi side
         detector = DigitalInputDevice(input_pin, pull_up=False)
 
         # Ensure output starts LOW
-        await board.write_digital(arduino_pin, False)
+        await arduino_board.write_digital(arduino_pin, False)
         time.sleep(0.05)
 
         print(
-            f"Running {num_trials} Arduino trials "
+            f"Running {num_trials} Arduino->Pi trials "
             f"(Arduino D{arduino_pin} -> Pi GPIO{input_pin})..."
         )
 
         for i in range(num_trials):
             # Ensure LOW and settled
-            await board.write_digital(arduino_pin, False)
+            await arduino_board.write_digital(arduino_pin, False)
             time.sleep(0.005)
 
             # Measure: write HIGH through HAL, poll until detected on Pi
             start_ns = time.perf_counter_ns()
-            await board.write_digital(arduino_pin, True)
+            await arduino_board.write_digital(arduino_pin, True)
 
             while not detector.value:
                 pass
@@ -211,53 +192,36 @@ async def measure_arduino_latency(
                 print(f"  {i + 1}/{num_trials} trials complete")
 
     finally:
-        # Cleanup
+        # Cleanup pin state (don't disconnect - shared board)
         try:
-            await board.write_digital(arduino_pin, False)
+            await arduino_board.write_digital(arduino_pin, False)
         except Exception:
             pass
         if detector is not None:
             detector.close()
-        await board.disconnect()
 
     return results
 
 
 async def measure_pi_to_arduino_latency(
-    num_trials: int, pi_output_pin: int, arduino_input_pin: int, port: str | None
+    num_trials: int, pi_output_pin: int, arduino_input_pin: int, arduino_board
 ) -> list[float]:
     """Measure Pi GPIO -> Arduino input latency through the GLIDER HAL.
 
-    Uses PiGPIOBoard (HAL) for the Pi output side and TelemetrixBoard (HAL)
-    for Arduino input detection via digital callback.
+    Uses PiGPIOBoard (HAL) for the Pi output side and a pre-connected
+    TelemetrixBoard for Arduino input detection via digital callback.
 
     Returns list of latencies in milliseconds.
     """
     from glider.hal.base_board import PinMode, PinType
     from glider.hal.boards.pi_gpio_board import PiGPIOBoard
-    from glider.hal.boards.telemetrix_board import TelemetrixBoard
-
-    if port is None:
-        port = find_arduino_port()
-        if port is None:
-            print(
-                "ERROR: Could not auto-detect Arduino port. "
-                "Use --arduino-port to specify it manually."
-            )
-            return []
 
     pi_board = PiGPIOBoard()
-    arduino_board = TelemetrixBoard(port=port)
     results = []
 
     try:
-        # Connect both boards
         if not await pi_board.connect():
             print("ERROR: Failed to connect PiGPIOBoard")
-            return []
-        if not await arduino_board.connect():
-            print("ERROR: Failed to connect TelemetrixBoard")
-            await pi_board.disconnect()
             return []
 
         # Configure pins
@@ -309,7 +273,7 @@ async def measure_pi_to_arduino_latency(
                 print(f"  {i + 1}/{num_trials} trials complete")
 
     finally:
-        # Cleanup
+        # Cleanup (don't disconnect arduino_board - shared)
         try:
             await pi_board.write_digital(pi_output_pin, False)
         except Exception:
@@ -318,7 +282,6 @@ async def measure_pi_to_arduino_latency(
             arduino_board.unregister_callback(arduino_input_pin, on_change)
         except Exception:
             pass
-        await arduino_board.disconnect()
         await pi_board.disconnect()
 
     return results
@@ -456,41 +419,72 @@ async def main() -> None:
     arduino_to_pi_results = None
     pi_to_arduino_results = None
 
-    # Pi-to-Pi baseline test
-    if "pi-to-pi" in tests_to_run:
-        try:
-            pi_results = await measure_pi_gpio_latency(
-                args.trials, args.pi_output_pin, args.pi_input_pin
-            )
-            print_statistics(pi_results, "Pi-to-Pi Latency (GLIDER HAL)")
-        except Exception as e:
-            print(f"\nPi-to-Pi test failed: {e}")
+    # Create a shared Arduino connection if any Arduino test is selected
+    needs_arduino = tests_to_run & {"arduino-to-pi", "pi-to-arduino"}
+    arduino_board = None
 
-    # Arduino-to-Pi test
-    if "arduino-to-pi" in tests_to_run:
-        try:
-            arduino_to_pi_results = await measure_arduino_latency(
-                args.trials, args.arduino_output_pin, args.atp_input_pin, args.arduino_port
-            )
-            print_statistics(
-                arduino_to_pi_results,
-                "Arduino-to-Pi Latency (GLIDER HAL -> Telemetrix -> USB -> Pi GPIO)",
-            )
-        except Exception as e:
-            print(f"\nArduino-to-Pi test failed: {e}")
+    if needs_arduino:
+        from glider.hal.boards.telemetrix_board import TelemetrixBoard
 
-    # Pi-to-Arduino test
-    if "pi-to-arduino" in tests_to_run:
-        try:
-            pi_to_arduino_results = await measure_pi_to_arduino_latency(
-                args.trials, args.pta_output_pin, args.pta_input_pin, args.arduino_port
+        port = args.arduino_port
+        if port is None:
+            port = find_arduino_port()
+        if port is None:
+            print(
+                "ERROR: Could not auto-detect Arduino port. "
+                "Use --arduino-port to specify it manually."
             )
-            print_statistics(
-                pi_to_arduino_results,
-                "Pi-to-Arduino Latency (Pi GPIO -> wire -> Telemetrix callback)",
-            )
-        except Exception as e:
-            print(f"\nPi-to-Arduino test failed: {e}")
+            # Remove Arduino tests from the run list
+            tests_to_run -= {"arduino-to-pi", "pi-to-arduino"}
+        else:
+            arduino_board = TelemetrixBoard(port=port)
+            connected = await arduino_board.connect()
+            if not connected:
+                print("ERROR: Failed to connect TelemetrixBoard")
+                tests_to_run -= {"arduino-to-pi", "pi-to-arduino"}
+                arduino_board = None
+
+    try:
+        # Pi-to-Pi baseline test
+        if "pi-to-pi" in tests_to_run:
+            try:
+                pi_results = await measure_pi_gpio_latency(
+                    args.trials, args.pi_output_pin, args.pi_input_pin
+                )
+                print_statistics(pi_results, "Pi-to-Pi Latency (GLIDER HAL)")
+            except Exception as e:
+                print(f"\nPi-to-Pi test failed: {e}")
+
+        # Arduino-to-Pi test
+        if "arduino-to-pi" in tests_to_run and arduino_board:
+            try:
+                arduino_to_pi_results = await measure_arduino_to_pi_latency(
+                    args.trials, args.arduino_output_pin, args.atp_input_pin, arduino_board
+                )
+                print_statistics(
+                    arduino_to_pi_results,
+                    "Arduino-to-Pi Latency (GLIDER HAL -> Telemetrix -> USB -> Pi GPIO)",
+                )
+            except Exception as e:
+                print(f"\nArduino-to-Pi test failed: {e}")
+
+        # Pi-to-Arduino test
+        if "pi-to-arduino" in tests_to_run and arduino_board:
+            try:
+                pi_to_arduino_results = await measure_pi_to_arduino_latency(
+                    args.trials, args.pta_output_pin, args.pta_input_pin, arduino_board
+                )
+                print_statistics(
+                    pi_to_arduino_results,
+                    "Pi-to-Arduino Latency (Pi GPIO -> wire -> Telemetrix callback)",
+                )
+            except Exception as e:
+                print(f"\nPi-to-Arduino test failed: {e}")
+
+    finally:
+        # Disconnect shared Arduino board
+        if arduino_board:
+            await arduino_board.disconnect()
 
     # Save CSV
     if pi_results or arduino_to_pi_results or pi_to_arduino_results:
