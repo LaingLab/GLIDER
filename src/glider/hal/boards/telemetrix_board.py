@@ -121,11 +121,13 @@ class TelemetrixThread:
                 com_port=port,
                 autostart=False,
                 sleep_tune=sleep_tune,
+                close_loop_on_shutdown=False,
             )
         else:
             self._telemetrix = telemetrix_aio.TelemetrixAIO(
                 autostart=False,
                 sleep_tune=sleep_tune,
+                close_loop_on_shutdown=False,
             )
         await self._telemetrix.start_aio()
 
@@ -470,7 +472,7 @@ class TelemetrixBoard(BaseBoard):
         if not self.is_connected or self._telemetrix_thread is None:
             raise RuntimeError("Board not connected")
 
-        self._call_telemetrix("digital_write", pin, 1 if value else 0)
+        await asyncio.to_thread(self._call_telemetrix, "digital_write", pin, 1 if value else 0)
         self._pin_values[pin] = value
 
     async def read_digital(self, pin: int) -> bool:

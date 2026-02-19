@@ -99,6 +99,40 @@ async def measure_pi_gpio_latency(num_trials: int, output_pin: int, input_pin: i
     return results
 
 
+def find_arduino_port() -> str | None:
+    """Auto-detect Arduino serial port by scanning USB devices.
+
+    This avoids telemetrix-aio's _find_arduino which has no read timeout
+    and can hang indefinitely on non-Arduino serial devices.
+    """
+    from serial.tools import list_ports
+
+    arduino_ids = {
+        (0x2341, None),  # Arduino SA
+        (0x2A03, None),  # Arduino.org
+        (0x1A86, 0x7523),  # CH340 (common Arduino clone chip)
+        (0x0403, 0x6001),  # FTDI FT232
+        (0x10C4, 0xEA60),  # CP210x (common Arduino clone chip)
+    }
+
+    for port_info in list_ports.comports():
+        if port_info.vid is None:
+            continue
+        # Match by vendor ID (any product from that vendor)
+        for vid, pid in arduino_ids:
+            if port_info.vid == vid and (pid is None or port_info.pid == pid):
+                print(f"Auto-detected Arduino on {port_info.device} "
+                      f"(VID:0x{port_info.vid:04X} PID:0x{port_info.pid:04X})")
+                return port_info.device
+        # Fallback: match common Arduino descriptions
+        desc = (port_info.description or "").lower()
+        if "arduino" in desc or "ch340" in desc or "cp210" in desc or "ft232" in desc:
+            print(f"Auto-detected Arduino on {port_info.device} ({port_info.description})")
+            return port_info.device
+
+    return None
+
+
 async def measure_arduino_latency(
     num_trials: int, arduino_pin: int, input_pin: int, port: str | None
 ) -> list[float]:
@@ -113,6 +147,15 @@ async def measure_arduino_latency(
 
     from glider.hal.base_board import PinMode, PinType
     from glider.hal.boards.telemetrix_board import TelemetrixBoard
+
+    # Auto-detect port if not specified to avoid telemetrix's _find_arduino
+    # which can hang indefinitely on non-Arduino serial devices
+    if port is None:
+        port = find_arduino_port()
+        if port is None:
+            print("ERROR: Could not auto-detect Arduino port. "
+                  "Use --arduino-port to specify it manually.")
+            return []
 
     board = TelemetrixBoard(port=port)
     detector = None
@@ -246,10 +289,10 @@ async def main() -> None:
         help="CSV output path (default: latency_results.csv)",
     )
     parser.add_argument(
-        "--pi-output-pin", type=int, default=17, help="Pi GPIO output pin (default: 17)"
+        "--pi-output-pin", type=int, default=19, help="Pi GPIO output pin (default: 19)"
     )
     parser.add_argument(
-        "--pi-input-pin", type=int, default=27, help="Pi GPIO input pin (default: 27)"
+        "--pi-input-pin", type=int, default=26, help="Pi GPIO input pin (default: 26)"
     )
     parser.add_argument(
         "--arduino-output-pin",
@@ -260,7 +303,7 @@ async def main() -> None:
     parser.add_argument(
         "--arduino-input-pin",
         type=int,
-        default=22,
+        default=13,
         help="Pi GPIO input pin for Arduino loopback (default: 22)",
     )
     args = parser.parse_args()
