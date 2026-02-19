@@ -181,3 +181,4 @@ CLAUDE.md
 *.cpython-313.pyc
 *.glider
 uv.lock
+*.ipynb
