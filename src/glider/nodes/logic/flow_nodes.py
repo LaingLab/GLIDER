@@ -34,7 +34,7 @@ class SequenceNode(ExecNode):
     )
 
     async def execute(self) -> None:
-        for i, output_def in enumerate(self.definition.outputs):
+        for _i, output_def in enumerate(self.definition.outputs):
             await self._fire_exec_output(output_def.name)
 
 

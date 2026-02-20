@@ -73,8 +73,15 @@ class LoopNode(GliderNode):
 
             logger.info(f"  Loop iteration {iteration}")
 
-            # Trigger body execution and AWAIT completion
-            await self._exec_body_async()
+            try:
+                # Trigger body execution and AWAIT completion
+                await self._exec_body_async()
+            except Exception as e:
+                logger.error(f"Error in Loop body (iteration {iteration}): {e}", exc_info=True)
+                # We could break here, but usually it's better to continue or stop based on severity
+                # For now, let's keep looping unless it's a critical error
+                if not self._running:
+                    break
 
             iteration += 1
 
@@ -85,21 +92,30 @@ class LoopNode(GliderNode):
         logger.info(f"  Loop completed after {iteration} iterations")
 
         # Trigger done output
-        await self._exec_done_async()
+        try:
+            await self._exec_done_async()
+        except Exception as e:
+            logger.error(f"Error in Loop done execution: {e}", exc_info=True)
 
     async def _exec_body_async(self) -> None:
         """Trigger the body execution output and await completion."""
         tasks = []
         for callback in self._update_callbacks:
-            result = callback("body", True)
-            # Callbacks may return tasks that we should await
-            if result is not None and asyncio.isfuture(result):
-                tasks.append(result)
+            try:
+                result = callback("body", True)
+                # Callbacks may return tasks that we should await
+                if result is not None and asyncio.isfuture(result):
+                    tasks.append(result)
+            except Exception as e:
+                logger.error(f"Error triggering body callback: {e}", exc_info=True)
 
         # Wait for all body tasks to complete
         if tasks:
             logger.info(f"  Awaiting {len(tasks)} body task(s)...")
-            await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.error(f"Error in body task {i}: {result}", exc_info=True)
             logger.info("  Body execution complete")
 
     async def _exec_done_async(self) -> None:
