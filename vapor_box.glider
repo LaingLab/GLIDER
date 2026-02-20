@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-02-13T11:02:34.210019",
-    "modified_at": "2026-02-20T12:54:28.330645",
+    "modified_at": "2026-02-20T13:10:08.403956",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -119,8 +119,8 @@
         "id": "endexperiment_235288fe",
         "node_type": "EndExperiment",
         "position": [
-          -612.9664999999995,
-          78.30662499999983
+          -613.0969347826081,
+          451.2631467391302
         ],
         "state": {},
         "device_id": null,
@@ -145,7 +145,7 @@
         "id": "output_b4ae95ae",
         "node_type": "Output",
         "position": [
-          -409.0,
+          -411.0,
           12.0
         ],
         "state": {
@@ -158,8 +158,8 @@
         "id": "waitforinput_80b61e8f",
         "node_type": "WaitForInput",
         "position": [
-          -618.0,
-          173.0
+          -613.0,
+          159.0
         ],
         "state": {
           "threshold_mode": "analog",
@@ -173,7 +173,7 @@
         "id": "output_0ee2523b",
         "node_type": "Output",
         "position": [
-          -415.0,
+          -418.0,
           209.0
         ],
         "state": {
@@ -234,8 +234,8 @@
         "id": "output_86b65529",
         "node_type": "Output",
         "position": [
-          154.0,
-          22.0
+          151.39130434782606,
+          18.52173913043478
         ],
         "state": {
           "value": 100
@@ -308,8 +308,8 @@
         "id": "loop_28ebba38",
         "node_type": "Loop",
         "position": [
-          -833.7499999999999,
-          -25.299999999999976
+          -836.0184310018902,
+          -24.543856332703193
         ],
         "state": {},
         "device_id": null,
@@ -332,8 +332,8 @@
         "id": "delay_67229c9d",
         "node_type": "Delay",
         "position": [
-          -831.0,
-          85.0
+          -858.2608695652175,
+          379.13043478260875
         ],
         "state": {
           "duration": 60
