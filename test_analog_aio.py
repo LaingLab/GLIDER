@@ -6,7 +6,6 @@ Run: python test_analog_aio.py
 """
 
 import asyncio
-import time
 
 
 async def analog_callback(data):

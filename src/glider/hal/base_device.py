@@ -609,7 +609,9 @@ class ADS1115Device(BaseDevice):
         self._gain = config.settings.get("gain", 1)
         self._data_rate = config.settings.get("data_rate", 128)
         self._ads = None  # Will hold the ADS1115 object
+        self._channels: dict[int, Any] = {}  # Cache for AnalogIn objects
         self._last_values: dict[int, int] = {}  # Channel -> raw value
+        self._lock = asyncio.Lock()  # Async lock to serialize hardware access
 
     @property
     def i2c_address(self) -> int:
@@ -645,20 +647,29 @@ class ADS1115Device(BaseDevice):
                 ads.gain = self._gain
                 ads.data_rate = self._data_rate
 
-                return ads
+                # Pre-create AnalogIn objects for all 4 channels
+                channels = {}
+                for i in range(4):
+                    channels[i] = AnalogIn(ads, i)
+
+                return ads, channels
             except ImportError as e:
                 raise RuntimeError(
                     "ADS1115 libraries not installed. Run: "
                     "pip install adafruit-circuitpython-ads1x15"
                 ) from e
+            except Exception as e:
+                logger.error(f"Failed to initialize ADS1115: {e}")
+                raise
 
-        self._ads = await asyncio.to_thread(_init_ads)
+        self._ads, self._channels = await asyncio.to_thread(_init_ads)
         self._initialized = True
         logger.info(f"ADS1115 initialized at address 0x{self._i2c_address:02X}")
 
     async def shutdown(self) -> None:
         """Shutdown the ADS1115."""
         self._ads = None
+        self._channels = {}
         self._initialized = False
 
     async def read(self, channel: int = 0) -> int:
@@ -692,16 +703,16 @@ class ADS1115Device(BaseDevice):
         if channel < 0 or channel > 3:
             raise ValueError(f"Invalid channel {channel}. Must be 0-3.")
 
-        def _read():
-            from adafruit_ads1x15.analog_in import AnalogIn
+        chan = self._channels.get(channel)
+        if chan is None:
+            raise RuntimeError(f"Channel {channel} not initialized")
 
-            # Channel is just the integer 0-3
-            chan = AnalogIn(self._ads, channel)
-            return chan.value
-
-        value = await asyncio.to_thread(_read)
-        self._last_values[channel] = value
-        return value
+        # Use board-level I2C lock if available, otherwise device-level lock
+        lock = getattr(self._board, "i2c_lock", self._lock)
+        async with lock:
+            value = await asyncio.to_thread(lambda: chan.value)
+            self._last_values[channel] = value
+            return value
 
     async def read_voltage(self, channel: int = 0) -> float:
         """
@@ -721,14 +732,13 @@ class ADS1115Device(BaseDevice):
         if channel < 0 or channel > 3:
             raise ValueError(f"Invalid channel {channel}. Must be 0-3.")
 
-        def _read_voltage():
-            from adafruit_ads1x15.analog_in import AnalogIn
+        chan = self._channels.get(channel)
+        if chan is None:
+            raise RuntimeError(f"Channel {channel} not initialized")
 
-            # Channel is just the integer 0-3
-            chan = AnalogIn(self._ads, channel)
-            return chan.voltage
-
-        return await asyncio.to_thread(_read_voltage)
+        lock = getattr(self._board, "i2c_lock", self._lock)
+        async with lock:
+            return await asyncio.to_thread(lambda: chan.voltage)
 
     async def read_all(self) -> dict[int, int]:
         """
