@@ -206,11 +206,15 @@ class WaitForInputNode(GliderNode):
             # Set output value
             if len(self._outputs) > 0:
                 self._outputs[0] = self._trigger_value
-            self._exec_triggered()
+            # Fire value callbacks (non-exec notification)
+            for callback in self._update_callbacks:
+                callback("value", self._trigger_value)
+            # Fire triggered exec output and await downstream chain
+            await self._fire_exec_output("triggered")
 
         except asyncio.TimeoutError:
             logger.info("  Timeout waiting for input")
-            self._exec_timeout()
+            await self._fire_exec_output("timeout")
 
         finally:
             self._waiting = False

@@ -45,7 +45,7 @@ class StartExperimentNode(GliderNode):
         """Called when experiment starts - triggers the flow."""
         logger.info(f"StartExperiment.start() called, node ID: {self._glider_id}")
         logger.info(f"  Registered callbacks: {len(self._update_callbacks)}")
-        self.exec_output(0)
+        await self._fire_exec_output("next")
 
     def exec_output(self, index: int = 0) -> None:
         """Trigger execution output."""
@@ -118,7 +118,7 @@ class DelayNode(GliderNode):
         logger.info(f"Delay: waiting {duration} seconds")
         await asyncio.sleep(duration)
         logger.info("Delay: complete")
-        self.exec_output(0)
+        await self._fire_exec_output("next")
 
     def exec_output(self, index: int = 0) -> None:
         """Trigger execution output."""
@@ -193,7 +193,7 @@ class OutputNode(GliderNode):
         else:
             logger.warning("Output: no device bound")
 
-        self.exec_output(0)
+        await self._fire_exec_output("next")
 
     def exec_output(self, index: int = 0) -> None:
         """Trigger execution output."""
@@ -249,7 +249,7 @@ class InputNode(GliderNode):
         for callback in self._update_callbacks:
             callback("value", value)
 
-        self.exec_output(1)
+        await self._fire_exec_output("next")
 
     def exec_output(self, index: int = 0) -> None:
         """Trigger execution output."""
@@ -307,7 +307,7 @@ class MotorGovernorNode(GliderNode):
         else:
             logger.warning("MotorGovernor: no device bound")
 
-        self.exec_output(0)
+        await self._fire_exec_output("next")
 
     def exec_output(self, index: int = 0) -> None:
         """Trigger execution output."""
@@ -392,7 +392,7 @@ class CustomDeviceNode(GliderNode):
         else:
             logger.warning("CustomDeviceNode: no device runner bound")
 
-        self.exec_output(0)
+        await self._fire_exec_output("next")
 
     def exec_output(self, index: int = 0) -> None:
         """Trigger execution output."""

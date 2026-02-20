@@ -88,8 +88,8 @@ class DeviceActionNode(HardwareNode):
         result = await self._device.execute_action(self._action_name, *args)
         self.set_output(1, result)
 
-        # Trigger exec output
-        self.exec_output(0)
+        # Trigger exec output and await downstream
+        await self._fire_exec_output("exec")
 
     def get_state(self) -> dict[str, Any]:
         state = super().get_state()
@@ -151,8 +151,8 @@ class DeviceReadNode(HardwareNode):
         value = await self._device.execute_action(self._read_action)
         self.set_output(1, value)
 
-        # Trigger exec output
-        self.exec_output(0)
+        # Trigger exec output and await downstream
+        await self._fire_exec_output("exec")
 
     def get_state(self) -> dict[str, Any]:
         state = super().get_state()

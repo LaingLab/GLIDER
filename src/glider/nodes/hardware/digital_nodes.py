@@ -69,8 +69,8 @@ class DigitalWriteNode(HardwareNode):
             self.set_error("No device bound")
             return
 
-        # Trigger exec output
-        self.exec_output(0)
+        # Trigger exec output and await downstream
+        await self._fire_exec_output("exec")
 
     def get_state(self) -> dict[str, Any]:
         state = super().get_state()
@@ -145,8 +145,8 @@ class DigitalReadNode(HardwareNode):
             self.set_error("No device bound")
             return
 
-        # Trigger exec output
-        self.exec_output(0)
+        # Trigger exec output and await downstream
+        await self._fire_exec_output("exec")
 
     async def start(self) -> None:
         """Start continuous polling if enabled."""

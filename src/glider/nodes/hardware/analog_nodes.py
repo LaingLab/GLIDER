@@ -98,8 +98,8 @@ class AnalogReadNode(HardwareNode):
             self.set_error("No device bound")
             return
 
-        # Trigger exec output
-        self.exec_output(0)
+        # Trigger exec output and await downstream
+        await self._fire_exec_output("exec")
 
     def get_display_value(self) -> str:
         """Get formatted value for display in dashboard."""
@@ -216,8 +216,8 @@ class PWMWriteNode(HardwareNode):
             self.set_error("No device bound")
             return
 
-        # Trigger exec output
-        self.exec_output(0)
+        # Trigger exec output and await downstream
+        await self._fire_exec_output("exec")
 
     def get_state(self) -> dict[str, Any]:
         state = super().get_state()
