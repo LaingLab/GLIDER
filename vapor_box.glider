@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-02-13T11:02:34.210019",
-    "modified_at": "2026-02-20T12:36:08.375339",
+    "modified_at": "2026-02-20T12:54:28.330645",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -135,7 +135,7 @@
         ],
         "state": {
           "threshold_mode": "analog",
-          "threshold": 40,
+          "threshold": 2,
           "threshold_direction": "below"
         },
         "device_id": "ard_beam",
