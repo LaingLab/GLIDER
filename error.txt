@@ -1,43 +1,138 @@
-2026-02-18 13:34:49,516 - glider.core.hardware_manager - INFO - Initializing device: ard_atom
-2026-02-18 13:34:49,569 - glider.core.hardware_manager - INFO - Initializing device: ard_beam
-2026-02-18 13:34:49,620 - glider.hal.boards.telemetrix_board - INFO - Registered analog callback for pin 14 (analog pin 0), board_id=ard
-2026-02-18 13:35:33,269 - glider.gui.main_window - ERROR - PWM error: 
-2026-02-18 13:35:38,272 - glider.gui.main_window - ERROR - PWM error: 
-2026-02-18 13:35:46,054 - glider.gui.main_window - ERROR - PWM error: 
-2026-02-18 13:35:51,067 - glider.gui.main_window - ERROR - PWM error: 
-2026-02-18 13:36:00,966 - glider.gui.main_window - ERROR - PWM error: 
-2026-02-18 13:36:05,969 - glider.gui.main_window - ERROR - PWM error: 
-/usr/lib/python3.11/asyncio/base_events.py:678: RuntimeWarning: coroutine 'TelemetrixThread.call_method.<locals>._call' was never awaited
-  self._ready.clear()
-RuntimeWarning: Enable tracemalloc to get the object allocation traceback
-2026-02-18 13:36:10,969 - glider.gui.main_window - ERROR - PWM error: 
-2026-02-18 13:36:10,973 - glider.hal.boards.telemetrix_board - WARNING - Telemetrix thread died unexpectedly - marking as disconnected
-2026-02-18 13:36:10,973 - glider.gui.main_window - ERROR - PWM error: Board not connected
-2026-02-18 13:36:10,973 - glider.gui.main_window - ERROR - PWM error: Board not connected
-nected (state: ERROR)
-qt.gui.imageio: libpng warning: iCCP: known incorrect sRGB profile
-2026-02-18 13:37:35,556 - glider.core.hardware_manager - INFO - Disconnecting board: ard
-2026-02-18 13:37:35,556 - glider.hal.boards.telemetrix_board - INFO - Disconnected from Arduino Uno
-2026-02-18 13:37:35,556 - glider.gui.main_window - WARNING - Board ard disconnected (state: DISCONNECTED)
-2026-02-18 13:37:46,843 - glider.core.hardware_manager - INFO - Connecting to board: ard
-2026-02-18 13:37:46,844 - glider.hal.boards.telemetrix_board - INFO - Connecting to Arduino Uno on port auto...
-2026-02-18 13:37:51,559 - glider.hal.boards.telemetrix_board - INFO - Successfully connected to Arduino Uno
-2026-02-18 13:37:51,560 - glider.core.hardware_manager - INFO - Initializing device: ard_pump
-2026-02-18 13:37:51,611 - glider.core.hardware_manager - INFO - Initializing device: ard_atom
-2026-02-18 13:37:51,663 - glider.core.hardware_manager - INFO - Initializing device: ard_beam
-2026-02-18 13:37:51,714 - glider.hal.boards.telemetrix_board - INFO - Registered analog callback for pin 14 (analog pin 0), board_id=ard
-2026-02-18 13:38:38,357 - glider.gui.main_window - ERROR - PWM error: 
-2026-02-18 13:38:43,361 - glider.gui.main_window - ERROR - PWM error: 
-^T2026-02-18 13:38:48,362 - glider.gui.main_window - ERROR - PWM error: 
-2026-02-18 13:38:53,362 - glider.gui.main_window - ERROR - PWM error: 
-2026-02-18 13:38:58,363 - glider.gui.main_window - ERROR - PWM error: 
-2026-02-18 13:39:03,363 - glider.gui.main_window - ERROR - PWM error: 
-2026-02-18 13:39:08,363 - glider.gui.main_window - ERROR - PWM error: 
-/usr/lib/python3.11/asyncio/base_events.py:678: RuntimeWarning: coroutine 'TelemetrixThread.call_method.<locals>._call' was never awaited
-  self._ready.clear()
-RuntimeWarning: Enable tracemalloc to get the object allocation traceback
-2026-02-18 13:39:13,364 - glider.gui.main_window - ERROR - PWM error: 
-2026-02-18 13:39:13,364 - glider.hal.boards.telemetrix_board - WARNING - Telemetrix thread died unexpectedly - marking as disconnected
-2026-02-18 13:39:13,364 - glider.gui.main_window - ERROR - PWM error: Board not connected
-
+2026-02-20 13:00:54,084 - glider.nodes.control_nodes - INFO -   Awaiting 1 body task(s)...
+2026-02-20 13:00:54,084 - glider.core.flow_engine - INFO - _propagate_execution called: loop_28ebba38:0 -> waitforinput_b4d046ae
+2026-02-20 13:00:54,084 - glider.core.flow_engine - INFO - Executing node: waitforinput_b4d046ae (type: WaitForInputNode)
+2026-02-20 13:00:54,084 - glider.nodes.control_nodes - INFO - WaitForInputNode.execute() called, node ID: waitforinput_b4d046ae
+2026-02-20 13:00:54,084 - glider.nodes.control_nodes - INFO -   Waiting for input (timeout: 0.0s, mode: analog)
+2026-02-20 13:00:54,084 - glider.nodes.control_nodes - INFO -   Threshold: below 2
+2026-02-20 13:00:54,084 - glider.nodes.control_nodes - INFO -   Starting device poll loop, device type: AnalogInputDevice
+2026-02-20 13:00:54,084 - glider.nodes.control_nodes - INFO -   Poll #1: value = 892
+2026-02-20 13:00:54,085 - glider.nodes.experiment_nodes - INFO - Delay: complete
+2026-02-20 13:00:54,085 - glider.nodes.experiment_nodes - INFO - DelayNode.exec_output(0) called, callbacks: 2
+2026-02-20 13:00:54,085 - glider.core.flow_engine - INFO - Propagating execution: delay_eff332ea -> output_f59afe4d
+2026-02-20 13:00:54,085 - glider.core.flow_engine - INFO - Node delay_eff332ea execution complete
+2026-02-20 13:00:54,085 - glider.core.flow_engine - INFO - _propagate_execution called: delay_eff332ea:0 -> output_f59afe4d
+2026-02-20 13:00:54,085 - glider.core.flow_engine - INFO - Executing node: output_f59afe4d (type: OutputNode)
+2026-02-20 13:00:54,085 - glider.nodes.experiment_nodes - INFO - OutputNode.execute() called, node ID: output_f59afe4d
+2026-02-20 13:00:54,085 - glider.nodes.experiment_nodes - INFO -   Node state: {}
+2026-02-20 13:00:54,085 - glider.nodes.experiment_nodes - INFO -   Using default value: 1
+2026-02-20 13:00:54,085 - glider.nodes.experiment_nodes - INFO - Output: setting PWM device to 1
+2026-02-20 13:00:54,086 - glider.nodes.experiment_nodes - INFO - OutputNode.exec_output(0) called, callbacks: 2
+2026-02-20 13:00:54,086 - glider.core.flow_engine - INFO - Propagating execution: output_f59afe4d -> output_86b65529
+2026-02-20 13:00:54,086 - glider.core.flow_engine - INFO - Node output_f59afe4d execution complete
+2026-02-20 13:00:54,086 - glider.core.flow_engine - INFO - _propagate_execution called: output_f59afe4d:0 -> output_86b65529
+2026-02-20 13:00:54,087 - glider.core.flow_engine - INFO - Executing node: output_86b65529 (type: OutputNode)
+2026-02-20 13:00:54,087 - glider.nodes.experiment_nodes - INFO - OutputNode.execute() called, node ID: output_86b65529
+2026-02-20 13:00:54,087 - glider.nodes.experiment_nodes - INFO -   Node state: {'value': 100}
+2026-02-20 13:00:54,087 - glider.nodes.experiment_nodes - INFO -   Using value from state: 100
+2026-02-20 13:00:54,087 - glider.nodes.experiment_nodes - INFO - Output: setting PWM device to 100
+2026-02-20 13:00:54,088 - glider.nodes.experiment_nodes - INFO - OutputNode.exec_output(0) called, callbacks: 2
+2026-02-20 13:00:54,088 - glider.core.flow_engine - INFO - Propagating execution: output_86b65529 -> delay_ce932b7e
+2026-02-20 13:00:54,088 - glider.core.flow_engine - INFO - Node output_86b65529 execution complete
+2026-02-20 13:00:54,088 - glider.core.flow_engine - INFO - _propagate_execution called: output_86b65529:0 -> delay_ce932b7e
+2026-02-20 13:00:54,089 - glider.core.flow_engine - INFO - Executing node: delay_ce932b7e (type: DelayNode)
+2026-02-20 13:00:54,089 - glider.nodes.experiment_nodes - INFO - DelayNode.execute() called, node ID: delay_ce932b7e
+2026-02-20 13:00:54,089 - glider.nodes.experiment_nodes - INFO -   Node state: {'duration': 3}
+2026-02-20 13:00:54,089 - glider.nodes.experiment_nodes - INFO -   Using duration from state: 3.0
+2026-02-20 13:00:54,089 - glider.nodes.experiment_nodes - INFO - Delay: waiting 3.0 seconds
+2026-02-20 13:00:55,081 - glider.nodes.control_nodes - INFO -   Poll #21: value = 887
+2026-02-20 13:00:56,080 - glider.nodes.experiment_nodes - INFO - Delay: complete
+2026-02-20 13:00:56,080 - glider.nodes.experiment_nodes - INFO - DelayNode.exec_output(0) called, callbacks: 2
+2026-02-20 13:00:56,080 - glider.core.flow_engine - INFO - Propagating execution: delay_ce932b7e -> output_537adc8c
+2026-02-20 13:00:56,081 - glider.core.flow_engine - INFO - Node delay_ce932b7e execution complete
+2026-02-20 13:00:56,081 - glider.nodes.control_nodes - INFO -   Poll #41: value = 847
+2026-02-20 13:00:56,081 - glider.core.flow_engine - INFO - _propagate_execution called: delay_ce932b7e:0 -> output_537adc8c
+2026-02-20 13:00:56,081 - glider.core.flow_engine - INFO - Executing node: output_537adc8c (type: OutputNode)
+2026-02-20 13:00:56,081 - glider.nodes.experiment_nodes - INFO - OutputNode.execute() called, node ID: output_537adc8c
+2026-02-20 13:00:56,081 - glider.nodes.experiment_nodes - INFO -   Node state: {}
+2026-02-20 13:00:56,081 - glider.nodes.experiment_nodes - INFO -   Using default value: 1
+2026-02-20 13:00:56,081 - glider.nodes.experiment_nodes - INFO - Output: setting PWM device to 1
+2026-02-20 13:00:56,082 - glider.nodes.experiment_nodes - INFO - OutputNode.exec_output(0) called, callbacks: 1
+2026-02-20 13:00:56,082 - glider.core.flow_engine - INFO - Node output_537adc8c execution complete
+2026-02-20 13:00:56,227 - glider.nodes.control_nodes - INFO -   TRIGGERED! Value 0 < threshold 2
+2026-02-20 13:00:56,227 - glider.nodes.control_nodes - INFO -   Input received: 0
+2026-02-20 13:00:56,227 - glider.core.flow_engine - INFO - Propagating execution: waitforinput_b4d046ae -> output_b4ae95ae
+2026-02-20 13:00:56,227 - glider.core.flow_engine - INFO - Node waitforinput_b4d046ae execution complete
+2026-02-20 13:00:56,227 - glider.core.flow_engine - INFO - _propagate_execution called: waitforinput_b4d046ae:0 -> output_b4ae95ae
+2026-02-20 13:00:56,227 - glider.core.flow_engine - INFO - Executing node: output_b4ae95ae (type: OutputNode)
+2026-02-20 13:00:56,227 - glider.nodes.experiment_nodes - INFO - OutputNode.execute() called, node ID: output_b4ae95ae
+2026-02-20 13:00:56,228 - glider.nodes.experiment_nodes - INFO -   Node state: {'value': 100}
+2026-02-20 13:00:56,228 - glider.nodes.experiment_nodes - INFO -   Using value from state: 100
+2026-02-20 13:00:56,228 - glider.nodes.experiment_nodes - INFO - Output: setting PWM device to 100
+2026-02-20 13:00:56,228 - glider.nodes.control_nodes - INFO -   Body execution complete
+2026-02-20 13:00:56,229 - glider.nodes.experiment_nodes - INFO - OutputNode.exec_output(0) called, callbacks: 2
+2026-02-20 13:00:56,229 - glider.core.flow_engine - INFO - Propagating execution: output_b4ae95ae -> delay_eff332ea
+2026-02-20 13:00:56,230 - glider.core.flow_engine - INFO - Node output_b4ae95ae execution complete
+2026-02-20 13:00:56,230 - glider.core.flow_engine - INFO - _propagate_execution called: output_b4ae95ae:0 -> delay_eff332ea
+2026-02-20 13:00:56,230 - glider.core.flow_engine - INFO - Executing node: delay_eff332ea (type: DelayNode)
+2026-02-20 13:00:56,230 - glider.nodes.experiment_nodes - INFO - DelayNode.execute() called, node ID: delay_eff332ea
+2026-02-20 13:00:56,230 - glider.nodes.experiment_nodes - INFO -   Node state: {'duration': 1}
+2026-02-20 13:00:56,230 - glider.nodes.experiment_nodes - INFO -   Using duration from state: 1.0
+2026-02-20 13:00:56,230 - glider.nodes.experiment_nodes - INFO - Delay: waiting 1.0 seconds
+2026-02-20 13:00:57,081 - glider.nodes.experiment_nodes - INFO - Delay: complete
+2026-02-20 13:00:57,081 - glider.nodes.experiment_nodes - INFO - DelayNode.exec_output(0) called, callbacks: 2
+2026-02-20 13:00:57,081 - glider.core.flow_engine - INFO - Propagating execution: delay_ce932b7e -> output_537adc8c
+2026-02-20 13:00:57,081 - glider.core.flow_engine - INFO - Node delay_ce932b7e execution complete
+2026-02-20 13:00:57,081 - glider.core.flow_engine - INFO - _propagate_execution called: delay_ce932b7e:0 -> output_537adc8c
+2026-02-20 13:00:57,081 - glider.core.flow_engine - INFO - Executing node: output_537adc8c (type: OutputNode)
+2026-02-20 13:00:57,081 - glider.nodes.experiment_nodes - INFO - OutputNode.execute() called, node ID: output_537adc8c
+2026-02-20 13:00:57,082 - glider.nodes.experiment_nodes - INFO -   Node state: {}
+2026-02-20 13:00:57,082 - glider.nodes.experiment_nodes - INFO -   Using default value: 1
+2026-02-20 13:00:57,082 - glider.nodes.experiment_nodes - INFO - Output: setting PWM device to 1
+2026-02-20 13:00:57,082 - glider.nodes.experiment_nodes - INFO - OutputNode.exec_output(0) called, callbacks: 1
+2026-02-20 13:00:57,082 - glider.core.flow_engine - INFO - Node output_537adc8c execution complete
+2026-02-20 13:00:57,179 - glider.nodes.control_nodes - INFO -   Loop iteration 6
+2026-02-20 13:00:57,179 - glider.core.flow_engine - INFO - Propagating execution: loop_28ebba38 -> waitforinput_b4d046ae
+2026-02-20 13:00:57,179 - glider.nodes.control_nodes - INFO -   Awaiting 1 body task(s)...
+2026-02-20 13:00:57,179 - glider.core.flow_engine - INFO - _propagate_execution called: loop_28ebba38:0 -> waitforinput_b4d046ae
+2026-02-20 13:00:57,179 - glider.core.flow_engine - INFO - Executing node: waitforinput_b4d046ae (type: WaitForInputNode)
+2026-02-20 13:00:57,179 - glider.nodes.control_nodes - INFO - WaitForInputNode.execute() called, node ID: waitforinput_b4d046ae
+2026-02-20 13:00:57,179 - glider.nodes.control_nodes - INFO -   Waiting for input (timeout: 0.0s, mode: analog)
+2026-02-20 13:00:57,179 - glider.nodes.control_nodes - INFO -   Threshold: below 2
+2026-02-20 13:00:57,179 - glider.nodes.control_nodes - INFO -   Starting device poll loop, device type: AnalogInputDevice
+2026-02-20 13:00:57,179 - glider.nodes.control_nodes - INFO -   Poll #1: value = 723
+2026-02-20 13:00:57,180 - glider.nodes.experiment_nodes - INFO - Delay: complete
+2026-02-20 13:00:57,181 - glider.nodes.experiment_nodes - INFO - DelayNode.exec_output(0) called, callbacks: 2
+2026-02-20 13:00:57,181 - glider.core.flow_engine - INFO - Propagating execution: delay_eff332ea -> output_f59afe4d
+2026-02-20 13:00:57,181 - glider.core.flow_engine - INFO - Node delay_eff332ea execution complete
+2026-02-20 13:00:57,181 - glider.core.flow_engine - INFO - _propagate_execution called: delay_eff332ea:0 -> output_f59afe4d
+2026-02-20 13:00:57,181 - glider.core.flow_engine - INFO - Executing node: output_f59afe4d (type: OutputNode)
+2026-02-20 13:00:57,181 - glider.nodes.experiment_nodes - INFO - OutputNode.execute() called, node ID: output_f59afe4d
+2026-02-20 13:00:57,181 - glider.nodes.experiment_nodes - INFO -   Node state: {}
+2026-02-20 13:00:57,181 - glider.nodes.experiment_nodes - INFO -   Using default value: 1
+2026-02-20 13:00:57,181 - glider.nodes.experiment_nodes - INFO - Output: setting PWM device to 1
+2026-02-20 13:00:57,182 - glider.nodes.experiment_nodes - INFO - OutputNode.exec_output(0) called, callbacks: 2
+2026-02-20 13:00:57,182 - glider.core.flow_engine - INFO - Propagating execution: output_f59afe4d -> output_86b65529
+2026-02-20 13:00:57,183 - glider.core.flow_engine - INFO - Node output_f59afe4d execution complete
+2026-02-20 13:00:57,183 - glider.core.flow_engine - INFO - _propagate_execution called: output_f59afe4d:0 -> output_86b65529
+2026-02-20 13:00:57,183 - glider.core.flow_engine - INFO - Executing node: output_86b65529 (type: OutputNode)
+2026-02-20 13:00:57,183 - glider.nodes.experiment_nodes - INFO - OutputNode.execute() called, node ID: output_86b65529
+2026-02-20 13:00:57,183 - glider.nodes.experiment_nodes - INFO -   Node state: {'value': 100}
+2026-02-20 13:00:57,183 - glider.nodes.experiment_nodes - INFO -   Using value from state: 100
+2026-02-20 13:00:57,183 - glider.nodes.experiment_nodes - INFO - Output: setting PWM device to 100
+2026-02-20 13:00:57,183 - glider.nodes.experiment_nodes - INFO - OutputNode.exec_output(0) called, callbacks: 2
+2026-02-20 13:00:57,184 - glider.core.flow_engine - INFO - Propagating execution: output_86b65529 -> delay_ce932b7e
+2026-02-20 13:00:57,184 - glider.core.flow_engine - INFO - Node output_86b65529 execution complete
+2026-02-20 13:00:57,184 - glider.core.flow_engine - INFO - _propagate_execution called: output_86b65529:0 -> delay_ce932b7e
+2026-02-20 13:00:57,184 - glider.core.flow_engine - INFO - Executing node: delay_ce932b7e (type: DelayNode)
+2026-02-20 13:00:57,184 - glider.nodes.experiment_nodes - INFO - DelayNode.execute() called, node ID: delay_ce932b7e
+2026-02-20 13:00:57,184 - glider.nodes.experiment_nodes - INFO -   Node state: {'duration': 3}
+2026-02-20 13:00:57,184 - glider.nodes.experiment_nodes - INFO -   Using duration from state: 3.0
+2026-02-20 13:00:57,184 - glider.nodes.experiment_nodes - INFO - Delay: waiting 3.0 seconds
+2026-02-20 13:00:58,178 - glider.nodes.control_nodes - INFO -   Poll #21: value = 553
+2026-02-20 13:00:58,962 - glider.core.glider_core - INFO - Stopping experiment
+2026-02-20 13:00:58,966 - glider.core.flow_engine - INFO - Stopping flow execution
+2026-02-20 13:00:58,966 - glider.nodes.control_nodes - INFO - LoopNode.stop() called, node ID: loop_28ebba38
+2026-02-20 13:00:58,966 - glider.nodes.control_nodes - INFO - LoopNode.stop() called, node ID: loop_dac86a8a
+2026-02-20 13:00:58,970 - glider.core.data_recorder - INFO - Stopped recording. Data saved to /home/RP5/glider/Untitled_Experiment_20260220_130044.csv
+2026-02-20 13:00:58,970 - glider.core.glider_core - INFO - Recording saved to: /home/RP5/glider/Untitled_Experiment_20260220_130044.csv
+2026-02-20 13:00:58,977 - glider.nodes.control_nodes - INFO -   Input received: None
+2026-02-20 13:00:58,978 - glider.core.flow_engine - WARNING - Skipping propagation - flow not running (state: FlowState.STOPPED)
+2026-02-20 13:00:58,978 - glider.core.flow_engine - INFO - Node waitforinput_b4d046ae execution complete
+2026-02-20 13:00:58,978 - glider.nodes.control_nodes - INFO -   Body execution complete
+2026-02-20 13:00:58,978 - glider.nodes.control_nodes - INFO -   Loop completed after 7 iterations
+2026-02-20 13:00:58,979 - glider.core.flow_engine - INFO - Node loop_28ebba38 execution complete
+2026-02-20 13:01:00,078 - glider.nodes.experiment_nodes - INFO - Delay: complete
+2026-02-20 13:01:00,078 - glider.nodes.experiment_nodes - INFO - DelayNode.exec_output(0) called, callbacks: 2
+2026-02-20 13:01:00,078 - glider.core.flow_engine - WARNING - Skipping propagation - flow not running (state: FlowState.STOPPED)
+2026-02-20 13:01:00,078 - glider.core.flow_engine - INFO - Node delay_ce932b7e execution complete
 
