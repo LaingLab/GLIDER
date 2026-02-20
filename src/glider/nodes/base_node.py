@@ -8,6 +8,7 @@ Extends ryvencore.Node with GLIDER-specific functionality:
 - Async operation support
 """
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -211,6 +212,22 @@ class GliderNode(ABC):
         Override in subclasses that support execution flow.
         """
         pass
+
+    async def _fire_exec_output(self, output_name: str, value=True):
+        """
+        Fire callbacks for an exec output and await downstream propagation tasks.
+
+        Unlike the synchronous exec_output(), this method collects any asyncio tasks
+        returned by callbacks and awaits them, ensuring the full downstream execution
+        chain completes before returning.
+        """
+        tasks = []
+        for callback in self._update_callbacks:
+            result = callback(output_name, value)
+            if result is not None and asyncio.isfuture(result):
+                tasks.append(result)
+        if tasks:
+            await asyncio.gather(*tasks)
 
     def bind_device(self, device: "BaseDevice") -> None:
         """
