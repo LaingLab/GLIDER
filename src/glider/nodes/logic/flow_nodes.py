@@ -34,8 +34,8 @@ class SequenceNode(ExecNode):
     )
 
     async def execute(self) -> None:
-        for i in range(4):
-            self.exec_output(i)
+        for i, output_def in enumerate(self.definition.outputs):
+            await self._fire_exec_output(output_def.name)
 
 
 class DelayNode(ExecNode):
@@ -64,7 +64,7 @@ class DelayNode(ExecNode):
         duration = max(0, duration)
 
         await asyncio.sleep(duration)
-        self.exec_output(0)
+        await self._fire_exec_output("Completed")
 
     async def stop(self) -> None:
         if self._delay_task:

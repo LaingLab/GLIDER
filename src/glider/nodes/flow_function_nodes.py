@@ -154,12 +154,12 @@ class StartFunctionNode(GliderNode):
     async def start(self) -> None:
         """Called when this function is invoked."""
         logger.info(f"StartFunction '{self.get_function_name()}' triggered")
-        self.exec_output(0)
+        await self._fire_exec_output("next")
 
     async def execute(self) -> None:
         """Execute the function start."""
         logger.info(f"StartFunction '{self.get_function_name()}' executing")
-        self.exec_output(0)
+        await self._fire_exec_output("next")
 
     def exec_output(self, index: int = 0) -> None:
         """Trigger execution output."""
@@ -251,7 +251,7 @@ class FunctionCallNode(GliderNode):
         else:
             logger.warning(f"FunctionCall: no runner for function '{function_name}'")
 
-        self.exec_output(0)
+        await self._fire_exec_output("next")
 
     def exec_output(self, index: int = 0) -> None:
         """Trigger execution output."""
