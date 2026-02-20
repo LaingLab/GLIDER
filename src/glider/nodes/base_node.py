@@ -223,11 +223,19 @@ class GliderNode(ABC):
         """
         tasks = []
         for callback in self._update_callbacks:
-            result = callback(output_name, value)
-            if result is not None and asyncio.isfuture(result):
-                tasks.append(result)
+            try:
+                result = callback(output_name, value)
+                if result is not None and asyncio.isfuture(result):
+                    tasks.append(result)
+            except Exception as e:
+                logger.error(f"Error triggering callback for {output_name}: {e}", exc_info=True)
+
         if tasks:
-            await asyncio.gather(*tasks)
+            # Use return_exceptions=True so that one failing branch doesn't crash the others
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.error(f"Error in downstream execution branch {i} from {output_name}: {result}", exc_info=True)
 
     def bind_device(self, device: "BaseDevice") -> None:
         """

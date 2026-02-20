@@ -97,6 +97,12 @@ class BaseBoard(ABC):
         self._state_callbacks: list[Callable[[BoardConnectionState], None]] = []
         self._reconnect_task: Optional[asyncio.Task] = None
         self._reconnect_interval = 5.0  # seconds (increased to reduce spam)
+        self._i2c_lock = asyncio.Lock()  # Shared lock for I2C operations
+
+    @property
+    def i2c_lock(self) -> asyncio.Lock:
+        """Shared lock for I2C operations on this board."""
+        return self._i2c_lock
 
     @property
     def id(self) -> str:
