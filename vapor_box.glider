@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-02-13T11:02:34.210019",
-    "modified_at": "2026-02-18T10:52:55.697916",
+    "modified_at": "2026-02-20T12:36:08.375339",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -89,125 +89,401 @@
           "channel": 0,
           "gain": 1
         }
+      },
+      {
+        "id": "ard_beam",
+        "device_type": "AnalogInput",
+        "name": "ard_beam",
+        "board_id": "ard",
+        "pins": {
+          "input": 14
+        },
+        "settings": {}
       }
     ]
   },
   "flow": {
     "nodes": [
       {
-        "id": "endexperiment_16090d0c",
-        "node_type": "EndExperiment",
-        "position": [
-          78.52930312499973,
-          -198.72921656249994
-        ],
-        "state": {},
-        "device_id": null,
-        "visible_in_runner": false
-      },
-      {
-        "id": "startexperiment_0faa1f31",
+        "id": "startexperiment_1c23522e",
         "node_type": "StartExperiment",
         "position": [
-          -900.6252125000001,
-          -203.07155000000006
+          -1069.1949999999997,
+          26.614999999999917
         ],
         "state": {},
         "device_id": null,
         "visible_in_runner": false
       },
       {
-        "id": "output_5df2039a",
-        "node_type": "Output",
+        "id": "endexperiment_235288fe",
+        "node_type": "EndExperiment",
         "position": [
-          -511.69999999999993,
-          -201.85000000000002
-        ],
-        "state": {
-          "value": 255
-        },
-        "device_id": "pi_atom",
-        "visible_in_runner": false
-      },
-      {
-        "id": "output_2c180de9",
-        "node_type": "Output",
-        "position": [
-          -114.70000000000005,
-          -199.45000000000005
+          -612.9664999999995,
+          78.30662499999983
         ],
         "state": {},
-        "device_id": "pi_atom",
-        "visible_in_runner": false
-      },
-      {
-        "id": "delay_b6919c6b",
-        "node_type": "Delay",
-        "position": [
-          -322.0,
-          -200.55
-        ],
-        "state": {
-          "duration": 2
-        },
         "device_id": null,
         "visible_in_runner": false
       },
       {
-        "id": "waitforinput_4a923d51",
+        "id": "waitforinput_b4d046ae",
         "node_type": "WaitForInput",
         "position": [
-          -707.2500000000001,
-          -203.54999999999995
+          -613.0,
+          -47.0
         ],
         "state": {
           "threshold_mode": "analog",
-          "threshold_direction": "below",
-          "timeout": 0.0,
-          "threshold": 500
+          "threshold": 40,
+          "threshold_direction": "below"
+        },
+        "device_id": "ard_beam",
+        "visible_in_runner": true
+      },
+      {
+        "id": "output_b4ae95ae",
+        "node_type": "Output",
+        "position": [
+          -409.0,
+          12.0
+        ],
+        "state": {
+          "value": 100
+        },
+        "device_id": "ard_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "waitforinput_80b61e8f",
+        "node_type": "WaitForInput",
+        "position": [
+          -618.0,
+          173.0
+        ],
+        "state": {
+          "threshold_mode": "analog",
+          "threshold": 50,
+          "threshold_direction": "below"
         },
         "device_id": "pi_adc",
         "visible_in_runner": true
+      },
+      {
+        "id": "output_0ee2523b",
+        "node_type": "Output",
+        "position": [
+          -415.0,
+          209.0
+        ],
+        "state": {
+          "value": 100
+        },
+        "device_id": "pi_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_eff332ea",
+        "node_type": "Delay",
+        "position": [
+          -222.0,
+          17.0
+        ],
+        "state": {
+          "duration": 1
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_25cf3b22",
+        "node_type": "Delay",
+        "position": [
+          -220.95825000000002,
+          210.0
+        ],
+        "state": {
+          "duration": 1
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_f59afe4d",
+        "node_type": "Output",
+        "position": [
+          -34.0,
+          22.0
+        ],
+        "state": {},
+        "device_id": "ard_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_dae4d30b",
+        "node_type": "Output",
+        "position": [
+          -37.0,
+          215.0
+        ],
+        "state": {},
+        "device_id": "pi_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_86b65529",
+        "node_type": "Output",
+        "position": [
+          154.0,
+          22.0
+        ],
+        "state": {
+          "value": 100
+        },
+        "device_id": "ard_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_ce932b7e",
+        "node_type": "Delay",
+        "position": [
+          341.0,
+          26.0
+        ],
+        "state": {
+          "duration": 3
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_57067908",
+        "node_type": "Delay",
+        "position": [
+          346.0,
+          217.0
+        ],
+        "state": {
+          "duration": 3
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_3ab0391a",
+        "node_type": "Output",
+        "position": [
+          155.0,
+          219.0
+        ],
+        "state": {
+          "value": 100
+        },
+        "device_id": "pi_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_21aba60e",
+        "node_type": "Output",
+        "position": [
+          539.0,
+          223.0
+        ],
+        "state": {},
+        "device_id": "pi_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_537adc8c",
+        "node_type": "Output",
+        "position": [
+          538.0,
+          33.0
+        ],
+        "state": {},
+        "device_id": "ard_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "loop_28ebba38",
+        "node_type": "Loop",
+        "position": [
+          -833.7499999999999,
+          -25.299999999999976
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": true
+      },
+      {
+        "id": "loop_dac86a8a",
+        "node_type": "Loop",
+        "position": [
+          -835.9000000000001,
+          173.64999999999998
+        ],
+        "state": {
+          "delay": 1.0
+        },
+        "device_id": null,
+        "visible_in_runner": true
+      },
+      {
+        "id": "delay_67229c9d",
+        "node_type": "Delay",
+        "position": [
+          -831.0,
+          85.0
+        ],
+        "state": {
+          "duration": 60
+        },
+        "device_id": null,
+        "visible_in_runner": false
       }
     ],
     "connections": [
       {
-        "id": "conn_f1f4a40b",
-        "from_node": "waitforinput_4a923d51",
+        "id": "conn_0be6391d",
+        "from_node": "waitforinput_b4d046ae",
         "from_output": 0,
-        "to_node": "output_5df2039a",
+        "to_node": "output_b4ae95ae",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_af02eea3",
-        "from_node": "output_5df2039a",
+        "id": "conn_923f692b",
+        "from_node": "waitforinput_80b61e8f",
         "from_output": 0,
-        "to_node": "delay_b6919c6b",
+        "to_node": "output_0ee2523b",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_5b7a1f24",
-        "from_node": "delay_b6919c6b",
+        "id": "conn_4dddf56a",
+        "from_node": "output_b4ae95ae",
         "from_output": 0,
-        "to_node": "output_2c180de9",
+        "to_node": "delay_eff332ea",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_60e05686",
-        "from_node": "startexperiment_0faa1f31",
+        "id": "conn_71b4156b",
+        "from_node": "output_0ee2523b",
         "from_output": 0,
-        "to_node": "waitforinput_4a923d51",
+        "to_node": "delay_25cf3b22",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_b8fa48bf",
-        "from_node": "output_2c180de9",
+        "id": "conn_e51f94dd",
+        "from_node": "delay_eff332ea",
         "from_output": 0,
-        "to_node": "endexperiment_16090d0c",
+        "to_node": "output_f59afe4d",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_22dff3b5",
+        "from_node": "delay_25cf3b22",
+        "from_output": 0,
+        "to_node": "output_dae4d30b",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_860e0e33",
+        "from_node": "output_f59afe4d",
+        "from_output": 0,
+        "to_node": "output_86b65529",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_2a30300d",
+        "from_node": "output_dae4d30b",
+        "from_output": 0,
+        "to_node": "output_3ab0391a",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_46876c86",
+        "from_node": "output_86b65529",
+        "from_output": 0,
+        "to_node": "delay_ce932b7e",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_ba342d20",
+        "from_node": "output_3ab0391a",
+        "from_output": 0,
+        "to_node": "delay_57067908",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_eb164799",
+        "from_node": "delay_ce932b7e",
+        "from_output": 0,
+        "to_node": "output_537adc8c",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_683afa86",
+        "from_node": "delay_57067908",
+        "from_output": 0,
+        "to_node": "output_21aba60e",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_e3bd7b49",
+        "from_node": "loop_28ebba38",
+        "from_output": 0,
+        "to_node": "waitforinput_b4d046ae",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_a350e774",
+        "from_node": "loop_dac86a8a",
+        "from_output": 0,
+        "to_node": "waitforinput_80b61e8f",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_f37b9988",
+        "from_node": "startexperiment_1c23522e",
+        "from_output": 0,
+        "to_node": "loop_28ebba38",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_a72bba62",
+        "from_node": "startexperiment_1c23522e",
+        "from_output": 0,
+        "to_node": "loop_dac86a8a",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_7aab9660",
+        "from_node": "startexperiment_1c23522e",
+        "from_output": 0,
+        "to_node": "delay_67229c9d",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_96707c25",
+        "from_node": "delay_67229c9d",
+        "from_output": 0,
+        "to_node": "endexperiment_235288fe",
         "to_input": 0,
         "connection_type": "exec"
       }
