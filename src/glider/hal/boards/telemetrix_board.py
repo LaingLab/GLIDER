@@ -365,6 +365,15 @@ class TelemetrixBoard(BaseBoard):
         """Disconnect from the Arduino."""
         self.stop_reconnect()
 
+        # Disable analog reporting before shutdown to prevent KeyError
+        # in telemetrix's _analog_message when callbacks are torn down
+        if self._telemetrix_thread is not None:
+            for actual_pin, analog_pin in self._analog_map.items():
+                try:
+                    self._call_telemetrix("disable_analog_reporting", analog_pin)
+                except Exception:
+                    pass
+
         if self._telemetrix_thread is not None:
             try:
                 self._telemetrix_thread.stop()
@@ -372,6 +381,7 @@ class TelemetrixBoard(BaseBoard):
                 logger.warning(f"Error during disconnect: {e}")
             finally:
                 self._telemetrix_thread = None
+        self._analog_map.clear()
         self._set_state(BoardConnectionState.DISCONNECTED)
         logger.info(f"Disconnected from {self.name}")
 
@@ -413,7 +423,7 @@ class TelemetrixBoard(BaseBoard):
                     self._call_telemetrix(
                         "set_pin_mode_analog_input",
                         analog_pin,
-                        differential=1,
+                        differential=5,
                         callback=self._analog_callback,
                     )
                     logger.info(
