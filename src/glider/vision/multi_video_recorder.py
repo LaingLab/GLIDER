@@ -10,7 +10,7 @@ import logging
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -48,22 +48,22 @@ class MultiVideoRecorder:
         self._multi_cam = multi_camera_manager
         self._writers: dict[str, cv2.VideoWriter] = {}
         self._writer_threads: dict[str, FrameWriterThread] = {}
-        self._annotated_writer: Optional[cv2.VideoWriter] = None
-        self._annotated_writer_thread: Optional[FrameWriterThread] = None
+        self._annotated_writer: cv2.VideoWriter | None = None
+        self._annotated_writer_thread: FrameWriterThread | None = None
         self._file_paths: dict[str, Path] = {}
-        self._annotated_file_path: Optional[Path] = None
+        self._annotated_file_path: Path | None = None
         self._frame_counts: dict[str, int] = {}
         self._frames_dropped: dict[str, int] = {}
         self._annotated_frame_count = 0
         self._state = RecordingState.IDLE
         self._output_dir: Path = Path.cwd()
-        self._start_time: Optional[datetime] = None
+        self._start_time: datetime | None = None
         self._video_format = VideoFormat()
         self._lock = threading.Lock()
         self._frame_callbacks_registered: dict[str, bool] = {}
         self._record_annotated = False
         self._recording_fps: dict[str, float] = {}
-        self._buffer_size: Optional[int] = None
+        self._buffer_size: int | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -81,12 +81,12 @@ class MultiVideoRecorder:
         return self._file_paths.copy()
 
     @property
-    def annotated_file_path(self) -> Optional[Path]:
+    def annotated_file_path(self) -> Path | None:
         """Path to the annotated video file (primary camera only)."""
         return self._annotated_file_path
 
     @property
-    def primary_file_path(self) -> Optional[Path]:
+    def primary_file_path(self) -> Path | None:
         """Path to the primary camera's video file."""
         primary_id = self._multi_cam.primary_camera_id
         if primary_id and primary_id in self._file_paths:

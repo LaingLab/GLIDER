@@ -8,8 +8,9 @@ and flow execution.
 
 import asyncio
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 from glider.core.data_recorder import DataRecorder
 from glider.core.experiment_session import ExperimentSession, SessionState
@@ -43,10 +44,10 @@ class GliderCore:
 
     def __init__(self):
         """Initialize the GLIDER core."""
-        self._session: Optional[ExperimentSession] = None
+        self._session: ExperimentSession | None = None
         self._hardware_manager = HardwareManager()
         self._flow_engine = FlowEngine(self._hardware_manager)
-        self._plugin_manager: Optional[PluginManager] = None
+        self._plugin_manager: PluginManager | None = None
         self._data_recorder = DataRecorder(self._hardware_manager)
 
         # Vision components
@@ -62,7 +63,7 @@ class GliderCore:
         self._multi_camera_enabled = False
 
         # Agent (lazy initialization)
-        self._agent_controller: Optional[AgentController] = None
+        self._agent_controller: AgentController | None = None
 
         self._initialized = False
         self._shutting_down = False
@@ -82,7 +83,7 @@ class GliderCore:
         self._flow_engine.on_flow_complete(self._on_flow_complete)
 
     @property
-    def session(self) -> Optional[ExperimentSession]:
+    def session(self) -> ExperimentSession | None:
         """Current experiment session."""
         return self._session
 
@@ -476,7 +477,7 @@ class GliderCore:
         )
         logger.info(f"Saved experiment to {file_path}")
 
-    def save_session(self, file_path: Optional[str] = None) -> str:
+    def save_session(self, file_path: str | None = None) -> str:
         """
         Save the current session to file.
 

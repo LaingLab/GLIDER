@@ -8,7 +8,7 @@ standalone files for sharing and reuse across projects.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from glider.core.custom_device import CustomDeviceDefinition
 from glider.core.flow_function import FlowFunctionDefinition
@@ -32,7 +32,7 @@ class DeviceLibrary:
     - Managing a library of definitions in a directory
     """
 
-    def __init__(self, library_path: Optional[Path] = None):
+    def __init__(self, library_path: Path | None = None):
         """
         Initialize the device library.
 
@@ -59,9 +59,7 @@ class DeviceLibrary:
     # Custom Device Import/Export
     # =========================================================================
 
-    def export_device(
-        self, definition: CustomDeviceDefinition, path: Optional[Path] = None
-    ) -> Path:
+    def export_device(self, definition: CustomDeviceDefinition, path: Path | None = None) -> Path:
         """
         Export a custom device definition to a file.
 
@@ -145,7 +143,7 @@ class DeviceLibrary:
     # =========================================================================
 
     def export_flow_function(
-        self, definition: FlowFunctionDefinition, path: Optional[Path] = None
+        self, definition: FlowFunctionDefinition, path: Path | None = None
     ) -> Path:
         """
         Export a flow function definition to a file.
@@ -365,7 +363,7 @@ class DeviceLibrary:
 
 
 # Global library instance
-_default_library: Optional[DeviceLibrary] = None
+_default_library: DeviceLibrary | None = None
 
 
 def get_default_library() -> DeviceLibrary:

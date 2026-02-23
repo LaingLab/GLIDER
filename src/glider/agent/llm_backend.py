@@ -8,7 +8,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -23,9 +23,9 @@ class Message:
 
     role: str  # "system", "user", "assistant", "tool"
     content: str
-    tool_calls: Optional[list[dict[str, Any]]] = None
-    tool_call_id: Optional[str] = None
-    name: Optional[str] = None  # Tool name for tool responses
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
+    name: str | None = None  # Tool name for tool responses
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to API format."""
@@ -86,7 +86,7 @@ class ChatResponse:
     content: str
     tool_calls: list[ToolCall]
     finish_reason: str  # "stop", "tool_calls", "length"
-    usage: Optional[dict[str, int]] = None
+    usage: dict[str, int] | None = None
 
 
 @dataclass
@@ -94,9 +94,9 @@ class ChatChunk:
     """A streaming chunk from the LLM."""
 
     content: str = ""
-    tool_calls: Optional[list[dict[str, Any]]] = None
+    tool_calls: list[dict[str, Any]] | None = None
     is_final: bool = False
-    finish_reason: Optional[str] = None
+    finish_reason: str | None = None
 
 
 class LLMBackend:
@@ -112,7 +112,7 @@ class LLMBackend:
     def __init__(self, config: AgentConfig):
         """Initialize the LLM backend."""
         self._config = config
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create the HTTP client."""
@@ -129,9 +129,9 @@ class LLMBackend:
     async def chat(
         self,
         messages: list[Message],
-        tools: Optional[list[ToolDefinition]] = None,
+        tools: list[ToolDefinition] | None = None,
         stream: bool = True,
-    ) -> Union[ChatResponse, AsyncIterator[ChatChunk]]:
+    ) -> ChatResponse | AsyncIterator[ChatChunk]:
         """
         Send a chat request to the LLM.
 
@@ -168,7 +168,7 @@ class LLMBackend:
     async def _ollama_chat(
         self,
         messages: list[Message],
-        tools: Optional[list[ToolDefinition]] = None,
+        tools: list[ToolDefinition] | None = None,
     ) -> ChatResponse:
         """Non-streaming Ollama chat."""
         client = await self._get_client()
@@ -202,7 +202,7 @@ class LLMBackend:
     async def _ollama_chat_stream(
         self,
         messages: list[Message],
-        tools: Optional[list[ToolDefinition]] = None,
+        tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[ChatChunk]:
         """Streaming Ollama chat."""
         client = await self._get_client()
@@ -306,7 +306,7 @@ class LLMBackend:
     async def _openai_chat(
         self,
         messages: list[Message],
-        tools: Optional[list[ToolDefinition]] = None,
+        tools: list[ToolDefinition] | None = None,
     ) -> ChatResponse:
         """Non-streaming OpenAI chat."""
         client = await self._get_client()
@@ -343,7 +343,7 @@ class LLMBackend:
     async def _openai_chat_stream(
         self,
         messages: list[Message],
-        tools: Optional[list[ToolDefinition]] = None,
+        tools: list[ToolDefinition] | None = None,
     ) -> AsyncIterator[ChatChunk]:
         """Streaming OpenAI chat."""
         client = await self._get_client()

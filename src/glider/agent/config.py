@@ -10,7 +10,6 @@ import os
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,7 @@ class AgentConfig:
     # LLM Provider settings
     provider: LLMProvider = LLMProvider.OLLAMA
     model: str = "llama3.2:latest"  # Change to your installed model
-    api_key: Optional[str] = None
+    api_key: str | None = None
     base_url: str = "http://localhost:11434"
 
     # Generation settings
@@ -107,7 +106,7 @@ class AgentConfig:
         except Exception as e:
             logger.error(f"Failed to save agent config: {e}")
 
-    def get_api_key(self) -> Optional[str]:
+    def get_api_key(self) -> str | None:
         """Get API key from config or environment."""
         if self.api_key:
             return self.api_key

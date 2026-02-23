@@ -6,7 +6,6 @@ Configure AI agent settings including LLM provider and behavior.
 
 import asyncio
 import logging
-from typing import Optional
 
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -35,7 +34,7 @@ logger = logging.getLogger(__name__)
 class AgentSettingsDialog(QDialog):
     """Dialog for configuring AI agent settings."""
 
-    def __init__(self, config: AgentConfig, parent: Optional[QWidget] = None):
+    def __init__(self, config: AgentConfig, parent: QWidget | None = None):
         super().__init__(parent)
         self._config = config
         self._available_models: list[str] = []

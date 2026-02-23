@@ -75,7 +75,7 @@ class PiGPIOBoard(BaseBoard):
 
     def __init__(
         self,
-        port: Optional[str] = None,
+        port: str | None = None,
         auto_reconnect: bool = True,
     ):
         """
@@ -92,7 +92,7 @@ class PiGPIOBoard(BaseBoard):
         self._pin_modes: dict[int, PinMode] = {}
         self._pin_types: dict[int, PinType] = {}
         self._pin_values: dict[int, Any] = {}
-        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def name(self) -> str:

@@ -12,7 +12,6 @@ import logging
 import math
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +80,7 @@ class BehaviorAnalyzer:
     behavior based on configurable thresholds.
     """
 
-    def __init__(self, settings: Optional[BehaviorSettings] = None):
+    def __init__(self, settings: BehaviorSettings | None = None):
         """
         Initialize the behavior analyzer.
 

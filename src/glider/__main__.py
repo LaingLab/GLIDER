@@ -16,7 +16,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt
 
@@ -133,7 +133,7 @@ async def init_glider(
 def create_main_window(
     app: QApplication,
     core: "GliderCore",
-    force_mode: Optional[str] = None,
+    force_mode: str | None = None,
 ) -> "MainWindow":
     """
     Create the main application window.

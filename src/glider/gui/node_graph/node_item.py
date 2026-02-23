@@ -6,7 +6,6 @@ QGraphicsProxyWidget.
 """
 
 import sys
-from typing import Optional
 
 from PyQt6.QtCore import QObject, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPen
@@ -84,7 +83,7 @@ class NodeItem(QGraphicsRectItem):
         self._output_ports: list[PortItem] = []
 
         # Embedded widget
-        self._widget_proxy: Optional[QGraphicsProxyWidget] = None
+        self._widget_proxy: QGraphicsProxyWidget | None = None
         self._widget_height = 0
 
         # Appearance

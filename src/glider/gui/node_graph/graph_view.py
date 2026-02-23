@@ -6,7 +6,7 @@ of nodes, connections, and interactive editing.
 """
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import (
@@ -117,7 +117,7 @@ class NodeGraphView(QGraphicsView):
     )  # from_node, from_port, to_node, to_port, conn_type
     connection_deleted = pyqtSignal(str)  # connection_id
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
         # Create scene
@@ -130,7 +130,7 @@ class NodeGraphView(QGraphicsView):
         # State
         self._nodes: dict[str, NodeItem] = {}
         self._connections: dict[str, ConnectionItem] = {}
-        self._flow_engine: Optional[FlowEngine] = None
+        self._flow_engine: FlowEngine | None = None
 
         # Interaction state
         self._panning = False

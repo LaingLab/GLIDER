@@ -47,7 +47,7 @@ class SubjectDialog(QDialog):
     def __init__(
         self,
         subject: Optional["Subject"] = None,
-        parent: Optional[QWidget] = None,
+        parent: QWidget | None = None,
         is_touch_mode: bool = False,
     ):
         super().__init__(parent)

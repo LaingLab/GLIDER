@@ -7,7 +7,7 @@ real-world measurements for pixel-to-distance calibration.
 
 import logging
 import math
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -63,11 +63,11 @@ class CalibrationPreviewWidget(QLabel):
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        self._frame: Optional[np.ndarray] = None
-        self._calibration: Optional[CameraCalibration] = None
+        self._frame: np.ndarray | None = None
+        self._calibration: CameraCalibration | None = None
         self._drawing_mode = False
-        self._start_point: Optional[QPoint] = None
-        self._current_point: Optional[QPoint] = None
+        self._start_point: QPoint | None = None
+        self._current_point: QPoint | None = None
         self._image_rect = None  # Actual image area within widget
         self._snap_threshold = 15  # Pixels - snap to endpoint if within this distance
 
@@ -167,7 +167,7 @@ class CalibrationPreviewWidget(QLabel):
         self.setPixmap(scaled)
         self.update()
 
-    def _widget_to_image_coords(self, pos: QPoint) -> Optional[tuple[int, int]]:
+    def _widget_to_image_coords(self, pos: QPoint) -> tuple[int, int] | None:
         """Convert widget coordinates to image coordinates."""
         if self._image_rect is None or self._frame is None:
             return None
@@ -188,7 +188,7 @@ class CalibrationPreviewWidget(QLabel):
 
         return (img_x, img_y)
 
-    def _find_nearest_endpoint(self, x: int, y: int) -> Optional[tuple[int, int]]:
+    def _find_nearest_endpoint(self, x: int, y: int) -> tuple[int, int] | None:
         """
         Find the nearest existing line endpoint within snap threshold.
 
@@ -344,7 +344,7 @@ class CalibrationDialog(QDialog):
         super().__init__(parent)
         self._camera = camera_manager
         self._calibration = calibration
-        self._pending_line: Optional[tuple[tuple[int, int], tuple[int, int]]] = None
+        self._pending_line: tuple[tuple[int, int], tuple[int, int]] | None = None
 
         self._setup_ui()
         self._update_table()

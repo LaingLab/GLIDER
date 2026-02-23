@@ -30,17 +30,17 @@ class TelemetrixThread:
     """
 
     def __init__(self):
-        self._thread: Optional[threading.Thread] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._telemetrix = None
         self._ready = threading.Event()
         self._stop_event = threading.Event()
 
-    def start(self, port: Optional[str], sleep_tune: float = 0.0001):
+    def start(self, port: str | None, sleep_tune: float = 0.0001):
         """Start the telemetrix thread and connect to the board."""
         self._stop_event.clear()
         self._ready.clear()
-        self._error: Optional[Exception] = None
+        self._error: Exception | None = None
         self._thread = threading.Thread(target=self._run, args=(port, sleep_tune), daemon=True)
         self._thread.start()
         # Wait for connection to complete
@@ -51,7 +51,7 @@ class TelemetrixThread:
         if self._telemetrix is None:
             raise RuntimeError("Failed to connect to Arduino")
 
-    def _run(self, port: Optional[str], sleep_tune: float):
+    def _run(self, port: str | None, sleep_tune: float):
         """Thread entry point - creates its own event loop."""
         import sys
 
@@ -90,7 +90,7 @@ class TelemetrixThread:
             if self._loop is not None:
                 self._loop.close()
 
-    async def _connect(self, port: Optional[str], sleep_tune: float):
+    async def _connect(self, port: str | None, sleep_tune: float):
         """Connect to telemetrix within the thread's event loop."""
         from telemetrix_aio import telemetrix_aio
 
@@ -242,7 +242,7 @@ class TelemetrixBoard(BaseBoard):
 
     def __init__(
         self,
-        port: Optional[str] = None,
+        port: str | None = None,
         board_type: str = "uno",
         auto_reconnect: bool = False,
     ):
@@ -257,14 +257,14 @@ class TelemetrixBoard(BaseBoard):
         super().__init__(port, auto_reconnect)
         self._board_type = board_type
         self._board_config = self.BOARD_CONFIGS.get(board_type, self.BOARD_CONFIGS["uno"])
-        self._telemetrix_thread: Optional[TelemetrixThread] = None
+        self._telemetrix_thread: TelemetrixThread | None = None
         self._pin_modes: dict[int, PinMode] = {}
         self._pin_values: dict[int, Any] = {}
         self._pin_values_lock = threading.Lock()  # Thread-safe access to _pin_values
         self._analog_map: dict[int, int] = {}  # Maps actual pin to Arduino analog number
         # Store main event loop for marshalling callbacks from telemetrix thread
         try:
-            self._main_loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_event_loop()
+            self._main_loop: asyncio.AbstractEventLoop | None = asyncio.get_event_loop()
         except RuntimeError:
             self._main_loop = None
 

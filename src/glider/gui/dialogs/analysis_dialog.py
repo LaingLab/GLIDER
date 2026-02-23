@@ -7,7 +7,6 @@ Provides a dialog for analyzing tracking CSV data using natural language queries
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
@@ -37,11 +36,11 @@ logger = logging.getLogger(__name__)
 class MessageBubble(QFrame):
     """A single message bubble in the chat."""
 
-    def __init__(self, role: str, content: str, parent: Optional[QWidget] = None):
+    def __init__(self, role: str, content: str, parent: QWidget | None = None):
         super().__init__(parent)
         self._role = role
         self._content = content
-        self._content_label: Optional[QLabel] = None
+        self._content_label: QLabel | None = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -104,10 +103,10 @@ class AnalysisDialog(QDialog):
     questions about the data.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self._controller: Optional[AnalysisController] = None
-        self._current_response_bubble: Optional[MessageBubble] = None
+        self._controller: AnalysisController | None = None
+        self._current_response_bubble: MessageBubble | None = None
         self._loaded_file_ids: dict[str, str] = {}  # file_path -> file_id
         self._setup_ui()
         self._initialize_controller()

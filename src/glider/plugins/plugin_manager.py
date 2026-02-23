@@ -21,7 +21,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +39,9 @@ class PluginInfo:
     requirements: list[str] = field(default_factory=list)
     enabled: bool = True
     loaded: bool = False
-    module: Optional[Any] = None
-    error: Optional[str] = None
-    path: Optional[str] = None
+    module: Any | None = None
+    error: str | None = None
+    path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -94,7 +94,7 @@ class PluginManager:
 
     def __init__(
         self,
-        plugin_dirs: Optional[list[Path]] = None,
+        plugin_dirs: list[Path] | None = None,
         enable_directory_plugins: bool = False,
     ):
         """
@@ -125,7 +125,7 @@ class PluginManager:
         """Dictionary of loaded plugins."""
         return {k: v for k, v in self._plugins.items() if v.loaded}
 
-    def get_plugin(self, name: str) -> Optional[PluginInfo]:
+    def get_plugin(self, name: str) -> PluginInfo | None:
         """Get a plugin by name."""
         return self._plugins.get(name)
 

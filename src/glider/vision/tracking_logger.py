@@ -11,7 +11,7 @@ import logging
 import math
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from glider.core.experiment_session import ExperimentSession
@@ -32,7 +32,7 @@ class TrackingDataLogger:
     behavioral_state, velocity_px_frame
     """
 
-    def __init__(self, output_dir: Optional[Path] = None):
+    def __init__(self, output_dir: Path | None = None):
         """
         Initialize the tracking logger.
 
@@ -42,13 +42,13 @@ class TrackingDataLogger:
         self._output_dir = Path(output_dir) if output_dir else Path.cwd()
         self._file = None
         self._writer = None
-        self._file_path: Optional[Path] = None
-        self._start_time: Optional[datetime] = None
+        self._file_path: Path | None = None
+        self._start_time: datetime | None = None
         self._start_timestamp: float = 0.0
         self._frame_count = 0
         self._recording = False
-        self._calibration: Optional[CameraCalibration] = None
-        self._zone_config: Optional[ZoneConfiguration] = None
+        self._calibration: CameraCalibration | None = None
+        self._zone_config: ZoneConfiguration | None = None
         self._frame_width: int = 0
         self._frame_height: int = 0
         # Track previous positions and cumulative distances for each object
@@ -61,7 +61,7 @@ class TrackingDataLogger:
         return self._recording
 
     @property
-    def file_path(self) -> Optional[Path]:
+    def file_path(self) -> Path | None:
         """Path to the current/last log file."""
         return self._file_path
 
@@ -456,7 +456,7 @@ class TrackingDataLogger:
         )
         self._file.flush()
 
-    async def stop(self) -> Optional[Path]:
+    async def stop(self) -> Path | None:
         """
         Stop logging and close file.
 
