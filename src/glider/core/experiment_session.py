@@ -8,10 +8,11 @@ Represents the current state of an experiment: the Hardware Map
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     pass
@@ -117,7 +118,7 @@ class SessionMetadata:
 
     # Subject management
     subjects: list[Subject] = field(default_factory=list)
-    active_subject_id: Optional[str] = None
+    active_subject_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -165,7 +166,7 @@ class SessionMetadata:
             active_subject_id=data.get("active_subject_id"),
         )
 
-    def get_active_subject(self) -> Optional[Subject]:
+    def get_active_subject(self) -> Subject | None:
         """Get the currently active subject."""
         if not self.active_subject_id:
             return None
@@ -192,7 +193,7 @@ class SessionMetadata:
                 return True
         return False
 
-    def get_subject(self, subject_id: str) -> Optional[Subject]:
+    def get_subject(self, subject_id: str) -> Subject | None:
         """Get a subject by ID."""
         for subject in self.subjects:
             if subject.id == subject_id:
@@ -214,8 +215,8 @@ class BoardConfig:
 
     id: str
     driver_type: str  # e.g., "arduino", "raspberry_pi"
-    port: Optional[str] = None
-    board_type: Optional[str] = None  # e.g., "uno", "mega"
+    port: str | None = None
+    board_type: str | None = None  # e.g., "uno", "mega"
     auto_reconnect: bool = False
     settings: dict[str, Any] = field(default_factory=dict)
 
@@ -354,7 +355,7 @@ class NodeConfig:
     node_type: str
     position: tuple = (0, 0)
     state: dict[str, Any] = field(default_factory=dict)
-    device_id: Optional[str] = None  # For hardware nodes
+    device_id: str | None = None  # For hardware nodes
     visible_in_runner: bool = False  # Show in dashboard
 
     def to_dict(self) -> dict[str, Any]:
@@ -500,7 +501,7 @@ class ExperimentSession:
         self._zones = ZoneConfig()
         self._state = SessionState.IDLE
         self._dirty = False  # Has unsaved changes
-        self._file_path: Optional[str] = None
+        self._file_path: str | None = None
 
         # Custom devices and flow functions
         self._custom_device_definitions: dict[str, Any] = {}  # id -> definition dict
@@ -573,7 +574,7 @@ class ExperimentSession:
         return self._dirty
 
     @property
-    def file_path(self) -> Optional[str]:
+    def file_path(self) -> str | None:
         """Path to the session file, if saved."""
         return self._file_path
 
@@ -621,7 +622,7 @@ class ExperimentSession:
         self._hardware.devices = [d for d in self._hardware.devices if d.board_id != board_id]
         self._mark_dirty()
 
-    def get_board(self, board_id: str) -> Optional[BoardConfig]:
+    def get_board(self, board_id: str) -> BoardConfig | None:
         """Get a board by ID."""
         for board in self._hardware.boards:
             if board.id == board_id:
@@ -631,9 +632,9 @@ class ExperimentSession:
     def update_board(
         self,
         board_id: str,
-        port: Optional[str] = None,
-        board_type: Optional[str] = None,
-        settings: Optional[dict[str, Any]] = None,
+        port: str | None = None,
+        board_type: str | None = None,
+        settings: dict[str, Any] | None = None,
     ) -> bool:
         """Update a board's configuration."""
         board = self.get_board(board_id)
@@ -661,7 +662,7 @@ class ExperimentSession:
         self._flow.nodes = [n for n in self._flow.nodes if n.device_id != device_id]
         self._mark_dirty()
 
-    def get_device(self, device_id: str) -> Optional[DeviceConfig]:
+    def get_device(self, device_id: str) -> DeviceConfig | None:
         """Get a device by ID."""
         for device in self._hardware.devices:
             if device.id == device_id:
@@ -671,9 +672,9 @@ class ExperimentSession:
     def update_device(
         self,
         device_id: str,
-        name: Optional[str] = None,
-        pins: Optional[dict[str, int]] = None,
-        settings: Optional[dict[str, Any]] = None,
+        name: str | None = None,
+        pins: dict[str, int] | None = None,
+        settings: dict[str, Any] | None = None,
     ) -> bool:
         """Update a device's configuration."""
         device = self.get_device(device_id)
@@ -702,7 +703,7 @@ class ExperimentSession:
         ]
         self._mark_dirty()
 
-    def get_node(self, node_id: str) -> Optional[NodeConfig]:
+    def get_node(self, node_id: str) -> NodeConfig | None:
         """Get a node by ID."""
         for node in self._flow.nodes:
             if node.id == node_id:
@@ -734,7 +735,7 @@ class ExperimentSession:
         self._flow.connections = [c for c in self._flow.connections if c.id != connection_id]
         self._mark_dirty()
 
-    def get_connection(self, connection_id: str) -> Optional[ConnectionConfig]:
+    def get_connection(self, connection_id: str) -> ConnectionConfig | None:
         """Get a connection by ID."""
         for conn in self._flow.connections:
             if conn.id == connection_id:
@@ -755,7 +756,7 @@ class ExperimentSession:
             del self._custom_device_definitions[definition_id]
             self._mark_dirty()
 
-    def get_custom_device_definition(self, definition_id: str) -> Optional[dict[str, Any]]:
+    def get_custom_device_definition(self, definition_id: str) -> dict[str, Any] | None:
         """Get a custom device definition by ID."""
         return self._custom_device_definitions.get(definition_id)
 
@@ -773,7 +774,7 @@ class ExperimentSession:
             del self._flow_function_definitions[definition_id]
             self._mark_dirty()
 
-    def get_flow_function_definition(self, definition_id: str) -> Optional[dict[str, Any]]:
+    def get_flow_function_definition(self, definition_id: str) -> dict[str, Any] | None:
         """Get a flow function definition by ID."""
         return self._flow_function_definitions.get(definition_id)
 
@@ -820,7 +821,7 @@ class ExperimentSession:
         data = json.loads(json_str)
         return cls.from_dict(data)
 
-    def save(self, file_path: Optional[str] = None) -> str:
+    def save(self, file_path: str | None = None) -> str:
         """
         Save session to file.
 

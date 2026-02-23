@@ -46,7 +46,7 @@ class FrameData:
 
     frame: np.ndarray
     timestamp: float
-    camera_id: Optional[str] = None  # For multi-camera mode
+    camera_id: str | None = None  # For multi-camera mode
 
 
 class CVWorker(QObject):
@@ -101,7 +101,7 @@ class CameraPreviewWidget(QLabel):
         self._placeholder = True
         self._calibration = None
         self._show_calibration = True
-        self._zone_config: Optional[ZoneConfiguration] = None
+        self._zone_config: ZoneConfiguration | None = None
         self._show_zones = True
         self.setText("No Camera")
         # Prevent the widget from resizing based on pixmap content
@@ -232,11 +232,11 @@ class CameraPanel(QWidget):
         self._camera = camera_manager
         self._cv_processor = cv_processor
         self._multi_cam = multi_camera_manager
-        self._video_recorder: Optional[VideoRecorder] = None
-        self._multi_video_recorder: Optional[MultiVideoRecorder] = None
-        self._tracking_logger: Optional[TrackingDataLogger] = None
-        self._calibration: Optional[CameraCalibration] = None
-        self._zone_config: Optional[ZoneConfiguration] = None
+        self._video_recorder: VideoRecorder | None = None
+        self._multi_video_recorder: MultiVideoRecorder | None = None
+        self._tracking_logger: TrackingDataLogger | None = None
+        self._calibration: CameraCalibration | None = None
+        self._zone_config: ZoneConfiguration | None = None
         self._preview_active = False
         self._multi_camera_mode = False
         self._last_frame = None
@@ -516,9 +516,9 @@ class CameraPanel(QWidget):
     def _process_frame_on_main_thread(
         self,
         frame_data: FrameData,
-        detections: Optional[list] = None,
-        tracked: Optional[list] = None,
-        motion: Optional[Any] = None,
+        detections: list | None = None,
+        tracked: list | None = None,
+        motion: Any | None = None,
     ) -> None:
         """
         Update UI with frame and CV results (called on main thread).
@@ -743,9 +743,9 @@ class CameraPanel(QWidget):
     def _process_multi_frame_on_main_thread(
         self,
         frame_data: FrameData,
-        detections: Optional[list] = None,
-        tracked: Optional[list] = None,
-        motion: Optional[Any] = None,
+        detections: list | None = None,
+        tracked: list | None = None,
+        motion: Any | None = None,
     ) -> None:
         """
         Process multi-camera frame and update UI (called on main thread via signal).
@@ -867,7 +867,7 @@ class CameraPanel(QWidget):
         if self._multi_camera_mode:
             self._multi_preview.set_recording(recording)
 
-    def get_current_frame(self) -> Optional[np.ndarray]:
+    def get_current_frame(self) -> np.ndarray | None:
         """Get the current frame (for snapshots)."""
         return self._last_frame.copy() if self._last_frame is not None else None
 

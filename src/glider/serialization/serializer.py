@@ -462,7 +462,7 @@ class ExperimentSerializer:
 
 
 # Global serializer instance
-_serializer: Optional[ExperimentSerializer] = None
+_serializer: ExperimentSerializer | None = None
 
 
 def get_serializer() -> ExperimentSerializer:

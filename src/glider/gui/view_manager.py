@@ -8,7 +8,7 @@ for either Desktop (Builder) or Runner (Raspberry Pi) mode.
 import logging
 from enum import Enum, auto
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from PyQt6.QtCore import QSize
@@ -48,8 +48,8 @@ class ViewManager:
         """
         self._app = app
         self._mode = ViewMode.AUTO
-        self._detected_mode: Optional[ViewMode] = None
-        self._screen_size: Optional[QSize] = None
+        self._detected_mode: ViewMode | None = None
+        self._screen_size: QSize | None = None
         self._style_path = Path(__file__).parent / "styles"
 
     @property

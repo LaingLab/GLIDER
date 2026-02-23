@@ -10,9 +10,10 @@ import asyncio
 import logging
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Callable, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ class BaseBoard(ABC):
     compatible with GLIDER's asyncio-based event loop.
     """
 
-    def __init__(self, port: Optional[str] = None, auto_reconnect: bool = False):
+    def __init__(self, port: str | None = None, auto_reconnect: bool = False):
         """
         Initialize the board interface.
 
@@ -95,7 +96,7 @@ class BaseBoard(ABC):
         self._callbacks: dict[int, list[Callable]] = {}
         self._error_callbacks: list[Callable] = []
         self._state_callbacks: list[Callable[[BoardConnectionState], None]] = []
-        self._reconnect_task: Optional[asyncio.Task] = None
+        self._reconnect_task: asyncio.Task | None = None
         self._reconnect_interval = 5.0  # seconds (increased to reduce spam)
         self._i2c_lock = asyncio.Lock()  # Shared lock for I2C operations
 
@@ -122,7 +123,7 @@ class BaseBoard(ABC):
         ...
 
     @property
-    def port(self) -> Optional[str]:
+    def port(self) -> str | None:
         """Connection port for the board."""
         return self._port
 

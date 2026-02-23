@@ -3,7 +3,7 @@ Flow Control Nodes - Execution flow control, delays, and timers.
 """
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 from glider.nodes.base_node import (
     ExecNode,
@@ -57,7 +57,7 @@ class DelayNode(ExecNode):
 
     def __init__(self):
         super().__init__()
-        self._delay_task: Optional[asyncio.Task] = None
+        self._delay_task: asyncio.Task | None = None
 
     async def execute(self) -> None:
         duration = float(self.get_input(1) or 1.0)
@@ -96,7 +96,7 @@ class TimerNode(ExecNode):
 
     def __init__(self):
         super().__init__()
-        self._timer_task: Optional[asyncio.Task] = None
+        self._timer_task: asyncio.Task | None = None
         self._count = 0
         self._paused = False
 

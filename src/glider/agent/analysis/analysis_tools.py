@@ -8,7 +8,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -344,15 +344,15 @@ class AnalysisToolExecutor:
             logger.exception(f"Tool execution failed: {e}")
             return {"error": f"Tool execution failed: {str(e)}"}
 
-    def _get_file(self, file_id: str) -> Optional[LoadedFile]:
+    def _get_file(self, file_id: str) -> LoadedFile | None:
         """Get a loaded file by ID."""
         return self._loaded_files.get(file_id)
 
     def _filter_by_time(
         self,
         df: pd.DataFrame,
-        start_ms: Optional[float] = None,
-        end_ms: Optional[float] = None,
+        start_ms: float | None = None,
+        end_ms: float | None = None,
     ) -> pd.DataFrame:
         """Filter dataframe by time range."""
         if "elapsed_ms" not in df.columns:
@@ -406,8 +406,8 @@ class AnalysisToolExecutor:
         self,
         file_id: str,
         column: str,
-        start_ms: Optional[float] = None,
-        end_ms: Optional[float] = None,
+        start_ms: float | None = None,
+        end_ms: float | None = None,
     ) -> dict[str, Any]:
         """Calculate statistics for a column."""
         loaded = self._get_file(file_id)
@@ -445,8 +445,8 @@ class AnalysisToolExecutor:
     def _tool_analyze_zone_occupancy(
         self,
         file_id: str,
-        start_ms: Optional[float] = None,
-        end_ms: Optional[float] = None,
+        start_ms: float | None = None,
+        end_ms: float | None = None,
     ) -> dict[str, Any]:
         """Analyze time spent in each zone."""
         loaded = self._get_file(file_id)
@@ -510,8 +510,8 @@ class AnalysisToolExecutor:
     def _tool_analyze_behavioral_states(
         self,
         file_id: str,
-        start_ms: Optional[float] = None,
-        end_ms: Optional[float] = None,
+        start_ms: float | None = None,
+        end_ms: float | None = None,
     ) -> dict[str, Any]:
         """Analyze behavioral state distribution."""
         loaded = self._get_file(file_id)
@@ -560,8 +560,8 @@ class AnalysisToolExecutor:
     def _tool_calculate_distance_metrics(
         self,
         file_id: str,
-        start_ms: Optional[float] = None,
-        end_ms: Optional[float] = None,
+        start_ms: float | None = None,
+        end_ms: float | None = None,
     ) -> dict[str, Any]:
         """Calculate distance and movement metrics."""
         loaded = self._get_file(file_id)
@@ -668,7 +668,7 @@ class AnalysisToolExecutor:
         file_id: str,
         start_row: int = 0,
         count: int = 10,
-        columns: Optional[list[str]] = None,
+        columns: list[str] | None = None,
     ) -> dict[str, Any]:
         """Get sample rows from the data."""
         loaded = self._get_file(file_id)

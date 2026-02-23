@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import cv2
 import numpy as np
@@ -232,14 +232,14 @@ class ZoneConfiguration:
                 return True
         return False
 
-    def get_zone(self, zone_id: str) -> Optional[Zone]:
+    def get_zone(self, zone_id: str) -> Zone | None:
         """Get a zone by ID."""
         for zone in self.zones:
             if zone.id == zone_id:
                 return zone
         return None
 
-    def get_zone_by_name(self, name: str) -> Optional[Zone]:
+    def get_zone_by_name(self, name: str) -> Zone | None:
         """Get a zone by name."""
         for zone in self.zones:
             if zone.name == name:
@@ -348,7 +348,7 @@ class ZoneTracker:
 
     def __init__(self):
         """Initialize the zone tracker."""
-        self._zone_config: Optional[ZoneConfiguration] = None
+        self._zone_config: ZoneConfiguration | None = None
         self._zone_states: dict[str, ZoneState] = {}
         self._prev_zone_objects: dict[str, set[int]] = {}  # zone_id -> object IDs
 
@@ -437,7 +437,7 @@ class ZoneTracker:
         """Get current zone states."""
         return self._zone_states.copy()
 
-    def get_zone_state(self, zone_id: str) -> Optional[ZoneState]:
+    def get_zone_state(self, zone_id: str) -> ZoneState | None:
         """Get state for a specific zone."""
         return self._zone_states.get(zone_id)
 

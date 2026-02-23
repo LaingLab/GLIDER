@@ -32,7 +32,7 @@ class DataRecorder:
     def __init__(
         self,
         hardware_manager: "HardwareManager",
-        output_dir: Optional[Path] = None,
+        output_dir: Path | None = None,
         sample_interval: float = DEFAULT_SAMPLE_INTERVAL,
     ):
         """
@@ -48,15 +48,15 @@ class DataRecorder:
         self._sample_interval = sample_interval
 
         self._recording = False
-        self._file: Optional[Any] = None
-        self._writer: Optional[csv.writer] = None
-        self._file_path: Optional[Path] = None
-        self._start_time: Optional[datetime] = None
-        self._sample_task: Optional[asyncio.Task] = None
+        self._file: Any | None = None
+        self._writer: csv.writer | None = None
+        self._file_path: Path | None = None
+        self._start_time: datetime | None = None
+        self._sample_task: asyncio.Task | None = None
         self._device_columns: list[str] = []
         self._zone_columns: list[str] = []
-        self._zone_config: Optional[ZoneConfiguration] = None
-        self._cv_processor: Optional[CVProcessor] = None
+        self._zone_config: ZoneConfiguration | None = None
+        self._cv_processor: CVProcessor | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -64,7 +64,7 @@ class DataRecorder:
         return self._recording
 
     @property
-    def file_path(self) -> Optional[Path]:
+    def file_path(self) -> Path | None:
         """Path to the current recording file."""
         return self._file_path
 
@@ -321,7 +321,7 @@ class DataRecorder:
         self._writer.writerow(row)
         self._file.flush()
 
-    async def stop(self) -> Optional[Path]:
+    async def stop(self) -> Path | None:
         """
         Stop recording and close the file.
 

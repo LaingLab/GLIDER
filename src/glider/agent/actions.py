@@ -7,7 +7,7 @@ Defines action types and their validation/execution states.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
-from typing import Any, Optional
+from typing import Any
 
 
 class ActionType(Enum):
@@ -77,8 +77,8 @@ class AgentAction:
 
     # State
     status: ActionStatus = ActionStatus.PENDING
-    result: Optional[Any] = None
-    error: Optional[str] = None
+    result: Any | None = None
+    error: str | None = None
 
     # Metadata
     id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d%H%M%S%f"))

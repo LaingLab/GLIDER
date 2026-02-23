@@ -5,10 +5,10 @@ Main orchestrator for AI agent interactions.
 """
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 from glider.agent.actions import ActionBatch, AgentAction
 from glider.agent.config import AgentConfig
@@ -29,7 +29,7 @@ class AgentResponse:
     content: str = ""
     actions: list[AgentAction] = field(default_factory=list)
     is_complete: bool = False
-    error: Optional[str] = None
+    error: str | None = None
 
     @property
     def has_actions(self) -> bool:
@@ -53,7 +53,7 @@ class AgentController:
     - Streaming responses
     """
 
-    def __init__(self, core: "GliderCore", config: Optional[AgentConfig] = None):
+    def __init__(self, core: "GliderCore", config: AgentConfig | None = None):
         """
         Initialize the agent controller.
 
@@ -66,7 +66,7 @@ class AgentController:
         self._llm = LLMBackend(self._config)
         self._toolkit = AgentToolkit(core)
         self._conversation: list[Message] = []
-        self._pending_batch: Optional[ActionBatch] = None
+        self._pending_batch: ActionBatch | None = None
         self._is_processing = False
         self._recent_errors: list[str] = []
 
@@ -91,7 +91,7 @@ class AgentController:
         return self._is_processing
 
     @property
-    def pending_batch(self) -> Optional[ActionBatch]:
+    def pending_batch(self) -> ActionBatch | None:
         """Get pending action batch."""
         return self._pending_batch
 
@@ -344,7 +344,7 @@ class AgentController:
 
         return calls
 
-    async def confirm_actions(self, action_ids: Optional[list[str]] = None) -> AgentResponse:
+    async def confirm_actions(self, action_ids: list[str] | None = None) -> AgentResponse:
         """
         Confirm and execute pending actions.
 
@@ -372,7 +372,7 @@ class AgentController:
 
         return AgentResponse(content=content, is_complete=True)
 
-    async def reject_actions(self, action_ids: Optional[list[str]] = None) -> AgentResponse:
+    async def reject_actions(self, action_ids: list[str] | None = None) -> AgentResponse:
         """
         Reject pending actions.
 

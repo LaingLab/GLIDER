@@ -6,7 +6,8 @@ extracted from MainWindow to improve modularity.
 """
 
 import logging
-from typing import TYPE_CHECKING, Callable, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -47,7 +48,7 @@ class DeviceControlController(QWidget):
     device_selected = pyqtSignal(str)
     value_read = pyqtSignal(str, object)
 
-    def __init__(self, core: "GliderCore", run_async: Callable, parent: Optional[QWidget] = None):
+    def __init__(self, core: "GliderCore", run_async: Callable, parent: QWidget | None = None):
         """
         Initialize the device control controller.
 

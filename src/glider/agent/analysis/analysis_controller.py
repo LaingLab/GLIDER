@@ -9,7 +9,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from glider.agent.analysis.analysis_prompts import get_analysis_system_prompt
 from glider.agent.analysis.analysis_tools import ANALYSIS_TOOLS, AnalysisToolExecutor
@@ -25,8 +25,8 @@ class AnalysisResponse:
 
     content: str = ""
     is_complete: bool = False
-    error: Optional[str] = None
-    tool_used: Optional[str] = None
+    error: str | None = None
+    tool_used: str | None = None
 
 
 class AnalysisController:
@@ -39,7 +39,7 @@ class AnalysisController:
 
     MAX_TOOL_ITERATIONS = 10  # Prevent infinite loops
 
-    def __init__(self, config: Optional[AgentConfig] = None):
+    def __init__(self, config: AgentConfig | None = None):
         """
         Initialize the analysis controller.
 

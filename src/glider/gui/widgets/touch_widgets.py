@@ -7,7 +7,7 @@ large touch targets (min 80px height) and high-contrast visuals.
 
 import sys
 from collections import deque
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
@@ -43,9 +43,9 @@ class TouchWidgetBase(QWidget):
     # Minimum touch target height (80px per design doc)
     MIN_HEIGHT = 80
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self._node: Optional[GliderNode] = None
+        self._node: GliderNode | None = None
         self._label_text = ""
 
         self.setMinimumHeight(self.MIN_HEIGHT)
@@ -77,7 +77,7 @@ class TouchLabel(TouchWidgetBase):
     Features large 24pt font with high contrast.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
         self._value = ""
@@ -120,7 +120,7 @@ class TouchButton(TouchWidgetBase):
     Emits value_changed(True) on press, value_changed(False) on release.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._setup_ui()
 
@@ -168,7 +168,7 @@ class TouchToggle(TouchWidgetBase):
     Large sliding toggle for on/off states.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
         self._checked = False
@@ -243,7 +243,7 @@ class TouchSlider(TouchWidgetBase):
     Includes value display and optional min/max labels.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
         self._min_value = 0
@@ -344,7 +344,7 @@ class TouchGauge(TouchWidgetBase):
     Circular gauge with value and unit display.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
         self._value = 0.0
@@ -393,7 +393,7 @@ class TouchGauge(TouchWidgetBase):
 class GaugeCanvas(QWidget):
     """Canvas widget for drawing the gauge arc."""
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
         self._value = 0.0
@@ -464,7 +464,7 @@ class TouchChart(TouchWidgetBase):
     Rolling line chart with configurable buffer size.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
         self._buffer_size = 100
@@ -512,7 +512,7 @@ class TouchChart(TouchWidgetBase):
 class ChartCanvas(QWidget):
     """Canvas widget for drawing the chart."""
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
         self._data: list[float] = []
@@ -580,7 +580,7 @@ class TouchLED(TouchWidgetBase):
     Large colored circle that changes based on state.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
         self._on = False
@@ -629,7 +629,7 @@ class TouchLED(TouchWidgetBase):
 class LEDCanvas(QWidget):
     """Canvas widget for drawing the LED."""
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
         self._on = False
@@ -690,7 +690,7 @@ class TouchNumericInput(TouchWidgetBase):
     Large +/- buttons for easy touch input.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
         self._value = 0.0

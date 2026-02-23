@@ -3,7 +3,7 @@ Runner Dashboard - Main dashboard view for experiment execution.
 """
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -33,10 +33,10 @@ class RunnerDashboard(QWidget):
     # Signals
     widget_value_changed = pyqtSignal(str, object)  # node_id, value
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
 
-        self._flow_engine: Optional[FlowEngine] = None
+        self._flow_engine: FlowEngine | None = None
         self._widgets: dict[str, QWidget] = {}
         self._layout_mode = "vertical"  # "vertical", "horizontal", "grid"
         self._columns = 1
@@ -177,6 +177,6 @@ class RunnerDashboard(QWidget):
         if widget and hasattr(widget, "set_value"):
             widget.set_value(value)
 
-    def get_widget(self, node_id: str) -> Optional[QWidget]:
+    def get_widget(self, node_id: str) -> QWidget | None:
         """Get a widget by node ID."""
         return self._widgets.get(node_id)

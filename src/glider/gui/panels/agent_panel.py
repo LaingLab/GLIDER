@@ -30,11 +30,11 @@ logger = logging.getLogger(__name__)
 class MessageBubble(QFrame):
     """A single message bubble in the chat."""
 
-    def __init__(self, role: str, content: str, parent: Optional[QWidget] = None):
+    def __init__(self, role: str, content: str, parent: QWidget | None = None):
         super().__init__(parent)
         self._role = role
         self._content = content
-        self._content_label: Optional[QLabel] = None
+        self._content_label: QLabel | None = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -97,7 +97,7 @@ class ActionConfirmWidget(QFrame):
     confirmed = pyqtSignal()
     rejected = pyqtSignal()
 
-    def __init__(self, actions: list, parent: Optional[QWidget] = None):
+    def __init__(self, actions: list, parent: QWidget | None = None):
         super().__init__(parent)
         self._actions = actions
         self._setup_ui()
@@ -171,7 +171,7 @@ class ChatInput(QLineEdit):
 
     submitted = pyqtSignal(str)
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setPlaceholderText("Type a message...")
         self.returnPressed.connect(self._on_submit)
@@ -198,12 +198,12 @@ class AgentPanel(QWidget):
     settings_requested = pyqtSignal()
 
     def __init__(
-        self, controller: Optional["AgentController"] = None, parent: Optional[QWidget] = None
+        self, controller: Optional["AgentController"] = None, parent: QWidget | None = None
     ):
         super().__init__(parent)
         self._controller = controller
-        self._current_response_bubble: Optional[MessageBubble] = None
-        self._action_widget: Optional[ActionConfirmWidget] = None
+        self._current_response_bubble: MessageBubble | None = None
+        self._action_widget: ActionConfirmWidget | None = None
         self._setup_ui()
 
         if controller:

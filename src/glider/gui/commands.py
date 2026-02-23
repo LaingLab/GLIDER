@@ -5,7 +5,7 @@ This module contains command classes for undoable operations in the
 node graph editor.
 """
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from glider.gui.main_window import MainWindow
@@ -241,7 +241,7 @@ class UndoStack:
         if len(self._undo_stack) > self._max_size:
             self._undo_stack.pop(0)
 
-    def undo(self) -> Optional[Command]:
+    def undo(self) -> Command | None:
         """Undo the last command."""
         if not self._undo_stack:
             return None
@@ -250,7 +250,7 @@ class UndoStack:
         self._redo_stack.append(command)
         return command
 
-    def redo(self) -> Optional[Command]:
+    def redo(self) -> Command | None:
         """Redo the last undone command."""
         if not self._redo_stack:
             return None

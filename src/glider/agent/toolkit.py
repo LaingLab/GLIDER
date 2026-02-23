@@ -6,7 +6,7 @@ Aggregates all tools available to the AI agent.
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from glider.agent.actions import AgentAction
 from glider.agent.llm_backend import ToolDefinition
@@ -25,8 +25,8 @@ class ToolResult:
     """Result of a tool execution."""
 
     success: bool
-    result: Optional[Any] = None
-    error: Optional[str] = None
+    result: Any | None = None
+    error: str | None = None
 
     def to_message(self) -> str:
         """Convert to a message string for the LLM."""
@@ -79,11 +79,11 @@ class AgentToolkit:
         """Get all tool definitions for the LLM."""
         return list(self._tools.values())
 
-    def get_tool(self, name: str) -> Optional[ToolDefinition]:
+    def get_tool(self, name: str) -> ToolDefinition | None:
         """Get a specific tool definition."""
         return self._tools.get(name)
 
-    def create_action(self, tool_name: str, args: dict[str, Any]) -> Optional[AgentAction]:
+    def create_action(self, tool_name: str, args: dict[str, Any]) -> AgentAction | None:
         """Create an action for a tool call."""
         executor = self._tool_executors.get(tool_name)
         if executor is None:

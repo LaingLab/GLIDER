@@ -2,7 +2,7 @@
 Widget Factory - Creates dashboard widgets for interface nodes.
 """
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from PyQt6.QtWidgets import QWidget
 
@@ -14,7 +14,7 @@ class WidgetFactory:
     """Factory for creating dashboard widgets from interface nodes."""
 
     @staticmethod
-    def create_widget(node: "GliderNode") -> Optional[QWidget]:
+    def create_widget(node: "GliderNode") -> QWidget | None:
         """
         Create a dashboard widget for a node.
 

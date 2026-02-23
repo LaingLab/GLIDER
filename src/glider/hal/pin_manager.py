@@ -6,7 +6,7 @@ and ensuring no duplicate assignments.
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from glider.hal.base_board import BaseBoard, PinType
@@ -82,7 +82,7 @@ class PinManager:
         all_pins = set(self._board.capabilities.pins.keys())
         return all_pins - self.allocated_pins
 
-    def get_allocation(self, pin: int) -> Optional[PinAllocation]:
+    def get_allocation(self, pin: int) -> PinAllocation | None:
         """Get the allocation info for a pin, if any."""
         return self._allocations.get(pin)
 
@@ -203,7 +203,7 @@ class PinManager:
 
         return allocations
 
-    def release_pin(self, pin: int) -> Optional[PinAllocation]:
+    def release_pin(self, pin: int) -> PinAllocation | None:
         """
         Release a pin allocation.
 

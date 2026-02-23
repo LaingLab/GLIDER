@@ -9,7 +9,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from glider.hal.base_board import BaseBoard
@@ -33,7 +33,7 @@ class PinDefinition:
 
     name: str
     pin_type: PinType
-    pin_number: Optional[int] = None  # Physical pin number on the board
+    pin_number: int | None = None  # Physical pin number on the board
     default_value: Any = None
     description: str = ""
 
@@ -83,7 +83,7 @@ class CustomDeviceDefinition:
             pins=[PinDefinition.from_dict(p) for p in data.get("pins", [])],
         )
 
-    def get_pin(self, name: str) -> Optional[PinDefinition]:
+    def get_pin(self, name: str) -> PinDefinition | None:
         """Get a pin definition by name."""
         for pin in self.pins:
             if pin.name == name:
@@ -103,8 +103,8 @@ class CustomDeviceRunner:
         self,
         definition: CustomDeviceDefinition,
         board: "BaseBoard",
-        pin_assignments: Optional[dict[str, int]] = None,
-        name: Optional[str] = None,
+        pin_assignments: dict[str, int] | None = None,
+        name: str | None = None,
     ):
         """
         Initialize the custom device runner.

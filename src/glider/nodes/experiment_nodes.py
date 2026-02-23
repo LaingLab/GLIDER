@@ -11,7 +11,6 @@ These nodes provide the core functionality for running experiments:
 
 import asyncio
 import logging
-from typing import Optional
 
 from glider.nodes.base_node import (
     GliderNode,
@@ -340,7 +339,7 @@ class CustomDeviceNode(GliderNode):
     def __init__(self):
         super().__init__()
         self._custom_device_runner = None
-        self._definition_id: Optional[str] = None
+        self._definition_id: str | None = None
 
     def update_event(self) -> None:
         """Called when inputs change."""

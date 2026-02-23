@@ -10,7 +10,8 @@ Each zone can have its own ZoneInputNode that outputs:
 
 import asyncio
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from glider.nodes.base_node import (
     InterfaceNode,
