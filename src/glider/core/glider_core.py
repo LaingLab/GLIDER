@@ -271,7 +271,17 @@ class GliderCore:
         """Handle flow completion (EndExperiment reached)."""
         logger.info("Flow completed - transitioning to READY state")
         # Schedule the async completion handler
-        asyncio.create_task(self._handle_flow_complete())
+        task = asyncio.create_task(self._handle_flow_complete())
+        task.add_done_callback(self._log_task_exception)
+
+    @staticmethod
+    def _log_task_exception(task: asyncio.Task) -> None:
+        """Log exceptions from fire-and-forget tasks."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(f"Unhandled error in background task: {exc}", exc_info=exc)
 
     async def _handle_flow_complete(self) -> None:
         """Async handler for flow completion."""
@@ -753,7 +763,7 @@ class GliderCore:
         self._multi_camera_manager.shutdown()
 
         # Shutdown flow engine
-        self._flow_engine.shutdown()
+        await self._flow_engine.shutdown()
 
         # Shutdown hardware
         await self._hardware_manager.shutdown()

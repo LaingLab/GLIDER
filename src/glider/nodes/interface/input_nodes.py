@@ -83,7 +83,7 @@ class ToggleSwitchNode(InterfaceNode):
     def __init__(self):
         super().__init__()
         self._label = "Switch"
-        self._state = False
+        self._switch_state = False
 
     @property
     def label(self) -> str:
@@ -95,21 +95,21 @@ class ToggleSwitchNode(InterfaceNode):
 
     @property
     def state(self) -> bool:
-        return self._state
+        return self._switch_state
 
     def toggle(self) -> None:
         """Toggle the switch state."""
-        self._state = not self._state
-        self.set_output(0, self._state)
+        self._switch_state = not self._switch_state
+        self.set_output(0, self._switch_state)
         # Trigger changed exec output
         for callback in getattr(self, "_exec_callbacks", []):
             callback(1)
 
     def set_state_value(self, value: bool) -> None:
         """Set the switch state directly."""
-        if value != self._state:
-            self._state = value
-            self.set_output(0, self._state)
+        if value != self._switch_state:
+            self._switch_state = value
+            self.set_output(0, self._switch_state)
 
     def update_event(self) -> None:
         """Toggle switches update from UI interactions, not inputs."""
@@ -118,13 +118,13 @@ class ToggleSwitchNode(InterfaceNode):
     def get_state(self) -> dict[str, Any]:
         state = super().get_state()
         state["label"] = self._label
-        state["switch_state"] = self._state
+        state["switch_state"] = self._switch_state
         return state
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
         self._label = state.get("label", "Switch")
-        self._state = state.get("switch_state", False)
+        self._switch_state = state.get("switch_state", False)
 
 
 class SliderNode(InterfaceNode):

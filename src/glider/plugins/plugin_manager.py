@@ -17,6 +17,7 @@ import importlib
 import importlib.util
 import json
 import logging
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -84,14 +85,28 @@ class PluginManager:
     # Default plugin directory
     DEFAULT_PLUGIN_DIR = Path.home() / ".glider" / "plugins"
 
-    def __init__(self, plugin_dirs: Optional[list[Path]] = None):
+    # Regex for validating pip requirement strings (PEP 508 subset).
+    # Allows package names with optional extras, version specifiers, and environment markers.
+    _REQUIREMENT_PATTERN = re.compile(
+        r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?(\[[A-Za-z0-9,._-]+\])?"
+        r"(\s*(~=|==|!=|<=?|>=?|===)\s*[A-Za-z0-9.*+!_-]+)*$"
+    )
+
+    def __init__(
+        self,
+        plugin_dirs: Optional[list[Path]] = None,
+        enable_directory_plugins: bool = False,
+    ):
         """
         Initialize the plugin manager.
 
         Args:
             plugin_dirs: Additional directories to search for plugins
+            enable_directory_plugins: Whether to load plugins from the directory.
+                Disabled by default because directory plugins execute arbitrary code.
         """
         self._plugins: dict[str, PluginInfo] = {}
+        self._directory_plugins_enabled = enable_directory_plugins
         self._plugin_dirs = [self.DEFAULT_PLUGIN_DIR]
         if plugin_dirs:
             self._plugin_dirs.extend(plugin_dirs)
@@ -128,9 +143,17 @@ class PluginManager:
         # Discover from entry points
         discovered.extend(await self._discover_from_entry_points())
 
-        # Discover from plugin directories
-        for plugin_dir in self._plugin_dirs:
-            discovered.extend(await self._discover_from_directory(plugin_dir))
+        # Discover from plugin directories (disabled by default — executes arbitrary code)
+        if self._directory_plugins_enabled:
+            logger.warning(
+                "Directory plugin loading is enabled. Plugins in %s can execute "
+                "arbitrary code. Only enable this if you trust the plugin source.",
+                [str(d) for d in self._plugin_dirs],
+            )
+            for plugin_dir in self._plugin_dirs:
+                discovered.extend(await self._discover_from_directory(plugin_dir))
+        else:
+            logger.debug("Directory plugin loading is disabled")
 
         # Update registry
         for plugin in discovered:
@@ -479,6 +502,12 @@ class PluginManager:
 
         if not info.requirements:
             return True
+
+        # Validate each requirement string to prevent command injection
+        for req in info.requirements:
+            if not self._REQUIREMENT_PATTERN.match(req):
+                logger.error(f"Invalid requirement string for plugin {name}: {req!r}")
+                return False
 
         logger.info(f"Installing requirements for plugin {name}: {info.requirements}")
 

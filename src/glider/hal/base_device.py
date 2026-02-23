@@ -6,6 +6,7 @@ Devices represent higher-level components attached to boards
 methods into semantic actions.
 """
 
+import asyncio
 import logging
 import uuid
 from abc import ABC, abstractmethod
@@ -630,7 +631,6 @@ class ADS1115Device(BaseDevice):
 
     async def initialize(self) -> None:
         """Initialize the ADS1115 via I2C."""
-        import asyncio
 
         def _init_ads():
             try:
@@ -695,8 +695,6 @@ class ADS1115Device(BaseDevice):
         Returns:
             Raw ADC value
         """
-        import asyncio
-
         if not self._initialized or self._ads is None:
             raise RuntimeError("ADS1115 not initialized")
 
@@ -724,8 +722,6 @@ class ADS1115Device(BaseDevice):
         Returns:
             Voltage reading
         """
-        import asyncio
-
         if not self._initialized or self._ads is None:
             raise RuntimeError("ADS1115 not initialized")
 

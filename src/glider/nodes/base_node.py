@@ -235,7 +235,10 @@ class GliderNode(ABC):
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    logger.error(f"Error in downstream execution branch {i} from {output_name}: {result}", exc_info=True)
+                    logger.error(
+                        f"Error in downstream execution branch {i} from {output_name}: {result}",
+                        exc_info=True,
+                    )
 
     def bind_device(self, device: "BaseDevice") -> None:
         """

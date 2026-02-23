@@ -140,7 +140,7 @@ class TimerNode(ExecNode):
                 if enabled and not self._paused:
                     self._count += 1
                     self.set_output(1, self._count)
-                    self.exec_output(0)
+                    await self._fire_exec_output("Tick")
 
             except asyncio.CancelledError:
                 break

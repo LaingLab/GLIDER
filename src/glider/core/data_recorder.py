@@ -331,8 +331,6 @@ class DataRecorder:
         if not self._recording:
             return None
 
-        self._recording = False
-
         # Cancel sampling task
         if self._sample_task:
             self._sample_task.cancel()
@@ -342,11 +340,13 @@ class DataRecorder:
                 pass
             self._sample_task = None
 
-        # Write final sample
+        # Write final sample while _recording is still True
         try:
             await self._record_sample()
         except Exception:
             pass
+
+        self._recording = False
 
         # Write footer
         if self._writer:

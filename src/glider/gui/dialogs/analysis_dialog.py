@@ -351,7 +351,10 @@ class AnalysisDialog(QDialog):
         self._controller = AnalysisController()
 
         # Check connection
-        asyncio.create_task(self._check_connection())
+        try:
+            asyncio.create_task(self._check_connection())
+        except RuntimeError:
+            logger.debug("No event loop available for async task")
 
     async def _check_connection(self) -> None:
         """Check connection to LLM backend."""
@@ -403,7 +406,10 @@ class AnalysisDialog(QDialog):
         )
 
         if file_path:
-            asyncio.create_task(self._load_file(file_path))
+            try:
+                asyncio.create_task(self._load_file(file_path))
+            except RuntimeError:
+                logger.debug("No event loop available for async task")
 
     async def _load_file(self, file_path: str) -> None:
         """Load a CSV file."""
@@ -502,7 +508,10 @@ class AnalysisDialog(QDialog):
         # Create response bubble for streaming
         self._current_response_bubble = self._add_message("assistant", "...")
 
-        asyncio.create_task(self._process_message(text))
+        try:
+            asyncio.create_task(self._process_message(text))
+        except RuntimeError:
+            logger.debug("No event loop available for async task")
 
     async def _process_message(self, text: str) -> None:
         """Process a message through the controller."""
@@ -563,5 +572,17 @@ class AnalysisDialog(QDialog):
     def closeEvent(self, event) -> None:
         """Handle dialog close."""
         if self._controller:
-            asyncio.create_task(self._controller.shutdown())
+            try:
+                task = asyncio.create_task(self._controller.shutdown())
+                task.add_done_callback(self._on_shutdown_done)
+            except RuntimeError:
+                logger.debug("No event loop available for async task")
         super().closeEvent(event)
+
+    def _on_shutdown_done(self, task: asyncio.Task) -> None:
+        """Log errors from the shutdown task."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Error during analysis controller shutdown: %s", exc)

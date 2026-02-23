@@ -35,6 +35,10 @@ class MockBoard(BaseBoard):
         self._set_state(BoardConnectionState.CONNECTED)
 
     @property
+    def board_type(self) -> str:
+        return "mock"
+
+    @property
     def name(self) -> str:
         return "Mock Board"
 
