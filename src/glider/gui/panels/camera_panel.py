@@ -167,7 +167,7 @@ class CameraPreviewWidget(QLabel):
         h, w, ch = rgb_frame.shape
         bytes_per_line = ch * w
 
-        q_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        q_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
 
         # Scale to fit widget while maintaining aspect ratio
         pixmap = QPixmap.fromImage(q_image)
@@ -406,6 +406,9 @@ class CameraPanel(QWidget):
         # Connect CV worker signals
         self._cv_worker.results_ready.connect(self._process_cv_results_on_main_thread)
 
+        # Ensure CV thread cleanup on widget destruction
+        self.destroyed.connect(self._cleanup_cv_thread)
+
     def _handle_frame_input(self, frame_data: FrameData) -> None:
         """Decide whether to process frame with CV or update UI immediately."""
         if self._cv_enabled_cb.isChecked() and self._cv_processor.is_initialized:
@@ -530,13 +533,14 @@ class CameraPanel(QWidget):
         display_frame = frame
         annotated_frame = None
 
-        # Use provided results or process locally if not provided but enabled
+        # Use provided results (from CVWorker) or skip if not provided
         if (
             detections is None
             and self._cv_enabled_cb.isChecked()
             and self._cv_processor.is_initialized
         ):
-            detections, tracked, motion = self._cv_processor.process_frame(frame, timestamp)
+            # Skip CV processing on main thread — should be handled by CVWorker
+            logger.debug("Skipping main-thread CV processing (should use CVWorker)")
 
         if detections is not None:
             if self._overlay_cb.isChecked():
@@ -767,13 +771,16 @@ class CameraPanel(QWidget):
             display_frame = frame
             annotated_frame = None
 
-            # Use provided results or process locally if enabled
+            # Use provided results (from CVWorker) or skip if not provided
             if (
                 detections is None
                 and self._cv_enabled_cb.isChecked()
                 and self._cv_processor.is_initialized
             ):
-                detections, tracked, motion = self._cv_processor.process_frame(frame, timestamp)
+                # Skip CV processing on main thread — should be handled by CVWorker
+                logger.debug(
+                    "Skipping main-thread CV processing for multi-cam (should use CVWorker)"
+                )
 
             if detections is not None:
                 if self._overlay_cb.isChecked():
@@ -863,6 +870,12 @@ class CameraPanel(QWidget):
     def get_current_frame(self) -> Optional[np.ndarray]:
         """Get the current frame (for snapshots)."""
         return self._last_frame.copy() if self._last_frame is not None else None
+
+    def _cleanup_cv_thread(self) -> None:
+        """Ensure CV thread is stopped on destruction."""
+        if self._cv_thread.isRunning():
+            self._cv_thread.quit()
+            self._cv_thread.wait(2000)
 
     def closeEvent(self, event):
         """Clean up on close."""

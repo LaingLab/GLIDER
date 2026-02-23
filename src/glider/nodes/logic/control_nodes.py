@@ -130,34 +130,34 @@ class ToggleNode(ExecNode):
 
     def __init__(self):
         super().__init__()
-        self._state = False
+        self._toggle_state = False
 
     @property
     def state(self) -> bool:
-        return self._state
+        return self._toggle_state
 
-    def toggle(self) -> None:
+    async def toggle(self) -> None:
         """Toggle the state."""
-        self._state = not self._state
-        self._update_outputs()
+        self._toggle_state = not self._toggle_state
+        await self._update_outputs()
 
-    def set_on(self) -> None:
+    async def set_on(self) -> None:
         """Set state to on."""
-        self._state = True
-        self._update_outputs()
+        self._toggle_state = True
+        await self._update_outputs()
 
-    def set_off(self) -> None:
+    async def set_off(self) -> None:
         """Set state to off."""
-        self._state = False
-        self._update_outputs()
+        self._toggle_state = False
+        await self._update_outputs()
 
-    def _update_outputs(self) -> None:
+    async def _update_outputs(self) -> None:
         """Update outputs based on current state."""
-        self.set_output(0, self._state)
-        if self._state:
-            self.exec_output(1)  # On
+        self.set_output(0, self._toggle_state)
+        if self._toggle_state:
+            await self._fire_exec_output("On")
         else:
-            self.exec_output(2)  # Off
+            await self._fire_exec_output("Off")
 
     async def execute(self) -> None:
         """Execute based on which input was triggered."""
@@ -165,9 +165,9 @@ class ToggleNode(ExecNode):
 
     def get_state(self) -> dict[str, Any]:
         state = super().get_state()
-        state["toggle_state"] = self._state
+        state["toggle_state"] = self._toggle_state
         return state
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._state = state.get("toggle_state", False)
+        self._toggle_state = state.get("toggle_state", False)

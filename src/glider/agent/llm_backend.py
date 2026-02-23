@@ -153,6 +153,11 @@ class LLMBackend:
                 return self._openai_chat_stream(messages, tools)
             else:
                 return await self._openai_chat(messages, tools)
+        elif self._config.provider == LLMProvider.ANTHROPIC:
+            raise NotImplementedError(
+                "Anthropic provider is not yet implemented. "
+                "Use Ollama (local) or OpenAI instead, or set provider in agent settings."
+            )
         else:
             raise ValueError(f"Unsupported provider: {self._config.provider}")
 

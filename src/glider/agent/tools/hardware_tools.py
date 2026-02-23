@@ -397,6 +397,29 @@ class HardwareToolExecutor:
         else:
             raise ValueError(f"Device not found: {device_id}")
 
+    # Properties that can be set on devices via the agent tool.
+    _CONFIGURABLE_PROPERTIES = frozenset(
+        {
+            "name",
+            "pin",
+            "enabled",
+            "inverted",
+            "pull_up",
+            "debounce_ms",
+            "frequency",
+            "duty_cycle",
+            "min_angle",
+            "max_angle",
+            "initial_value",
+            "min_value",
+            "max_value",
+            "smoothing",
+            "sample_rate",
+            "threshold",
+            "settings",
+        }
+    )
+
     async def _execute_configure_device(self, args: dict[str, Any]) -> dict[str, Any]:
         """Configure a device."""
         device_id = args["device_id"]
@@ -408,14 +431,22 @@ class HardwareToolExecutor:
         if device is None:
             raise ValueError(f"Device not found: {device_id}")
 
-        # Apply settings
+        # Apply settings (reject private attributes and non-allowlisted properties)
+        applied = {}
         for key, value in settings.items():
+            if key.startswith("_"):
+                logger.warning(f"Rejected private property '{key}' on device {device_id}")
+                continue
+            if key not in self._CONFIGURABLE_PROPERTIES:
+                logger.warning(f"Rejected unknown property '{key}' on device {device_id}")
+                continue
             if hasattr(device, key):
                 setattr(device, key, value)
+                applied[key] = value
 
-        logger.info(f"Configured device: {device_id} with {settings}")
+        logger.info(f"Configured device: {device_id} with {applied}")
 
-        return {"configured": device_id, "settings": settings}
+        return {"configured": device_id, "settings": applied}
 
     async def _execute_scan_ports(self, args: dict[str, Any]) -> dict[str, Any]:
         """Scan for serial ports."""

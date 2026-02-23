@@ -4,7 +4,6 @@ GLIDER Test Configuration and Fixtures.
 Provides shared fixtures for unit and integration tests.
 """
 
-import asyncio
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -12,19 +11,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
-
-# =============================================================================
-# Async Event Loop Fixtures
-# =============================================================================
-
-
-@pytest.fixture
-def event_loop():
-    """Create an instance of the default event loop for each test case."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
 
 # =============================================================================
 # Temporary Directory Fixtures

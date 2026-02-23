@@ -34,7 +34,8 @@ class FlowEngine:
     - Execution Flow: Imperative sequence of actions
     """
 
-    # Registry of available node types
+    # Registry of available node types (intentionally class-level: shared across all
+    # FlowEngine instances so that node registration is global and persistent)
     _node_registry: dict[str, type] = {}
 
     def __init__(self, hardware_manager=None):
@@ -679,10 +680,10 @@ class FlowEngine:
 
         logger.info("Flow cleared")
 
-    def shutdown(self) -> None:
+    async def shutdown(self) -> None:
         """Shutdown the flow engine."""
         logger.info("Shutting down flow engine")
-        asyncio.create_task(self.stop())
+        await self.stop()
         self._nodes.clear()
         self._session = None
         self._flow = None
@@ -825,6 +826,11 @@ class FlowEngine:
 
         node = self._nodes.get(node_id)
         if node is None:
+            return False
+
+        # Reject private/internal property names for safety
+        if property_name.startswith("_"):
+            logger.warning(f"Rejected attempt to set private property '{property_name}'")
             return False
 
         # Try different ways to set property

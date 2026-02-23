@@ -110,6 +110,14 @@ class FFmpegCapture:
                 self._process = None
                 return False
 
+            # Close stderr now that startup check passed — leaving it open
+            # can cause a deadlock if FFmpeg fills the pipe buffer.
+            if self._process.stderr:
+                try:
+                    self._process.stderr.close()
+                except Exception:
+                    pass
+
             self._is_open = True
             logger.info("FFmpeg capture started successfully")
             return True
@@ -2235,10 +2243,11 @@ class CameraManager:
                     pass
             self._frame_queue.put((frame, timestamp))
 
-            # Notify callbacks
+            # Notify callbacks (each gets its own copy so one callback
+            # cannot mutate the frame seen by subsequent callbacks)
             for callback in self._frame_callbacks:
                 try:
-                    callback(frame, timestamp)
+                    callback(frame.copy(), timestamp)
                 except Exception as e:
                     logger.error(f"Frame callback error: {e}")
 

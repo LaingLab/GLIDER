@@ -156,6 +156,12 @@ class RunnerDashboard(QWidget):
                 grid_layout.addWidget(widget, row, col)
                 self._widgets[node.id] = widget
 
+                # Connect widget value changes
+                if hasattr(widget, "value_changed"):
+                    widget.value_changed.connect(
+                        lambda v, n=node: self.widget_value_changed.emit(n.id, v)
+                    )
+
         self._content_layout.insertWidget(0, grid_container)
 
     def clear_widgets(self) -> None:

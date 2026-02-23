@@ -8,6 +8,7 @@ Each zone can have its own ZoneInputNode that outputs:
 - On Exit: exec triggered when an object exits the zone
 """
 
+import asyncio
 import logging
 from typing import Any, Callable
 
@@ -131,13 +132,21 @@ class ZoneInputNode(InterfaceNode):
         self.set_output(0, occupied)  # Occupied
         self.set_output(1, object_count)  # Object Count
 
-        # Trigger exec outputs on events
+        # Trigger exec outputs on events (use _fire_exec_output to reach flow engine
+        # callbacks registered on _update_callbacks; wrap in create_task since
+        # update_zone_state is called synchronously from the CV thread)
         if entered:
-            self.exec_output(2)  # On Enter
+            try:
+                asyncio.create_task(self._fire_exec_output("On Enter"))
+            except RuntimeError:
+                logger.debug("No event loop for On Enter exec output")
             logger.debug(f"Zone '{self._zone_name}': On Enter triggered")
 
         if exited:
-            self.exec_output(3)  # On Exit
+            try:
+                asyncio.create_task(self._fire_exec_output("On Exit"))
+            except RuntimeError:
+                logger.debug("No event loop for On Exit exec output")
             logger.debug(f"Zone '{self._zone_name}': On Exit triggered")
 
     def update_event(self) -> None:

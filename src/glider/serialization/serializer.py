@@ -7,6 +7,8 @@ JSON-serializable schema objects.
 
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -84,9 +86,19 @@ class ExperimentSerializer:
         if not path.suffix == self.FILE_EXTENSION:
             path = path.with_suffix(self.FILE_EXTENSION)
 
-        # Write JSON file
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(schema.to_json(indent=2))
+        # Write atomically via temp file + rename to prevent corruption
+        fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp", prefix=".glider_")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(schema.to_json(indent=2))
+            os.replace(tmp_path, path)
+        except BaseException:
+            # Clean up temp file on any failure
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
         logger.info(f"Saved experiment to {path}")
 
@@ -174,9 +186,8 @@ class ExperimentSerializer:
         """
         # Apply metadata
         session.name = schema.metadata.name
-        session.description = schema.metadata.description
-        session.author = schema.metadata.author
-        session.tags = schema.metadata.tags.copy()
+        session.metadata.description = schema.metadata.description
+        session.metadata.author = schema.metadata.author
 
         # Apply hardware config
         if hardware_manager:
@@ -187,7 +198,11 @@ class ExperimentSerializer:
             self._apply_flow_config(schema.flow, flow_engine)
 
         # Apply dashboard config
-        session.dashboard_config = schema.dashboard.to_dict()
+        dashboard_dict = schema.dashboard.to_dict()
+        dashboard = session.dashboard
+        for key, value in dashboard_dict.items():
+            if hasattr(dashboard, key):
+                setattr(dashboard, key, value)
 
         logger.info(f"Applied schema to session: {session.name}")
 
@@ -201,9 +216,8 @@ class ExperimentSerializer:
         # Build metadata
         metadata = MetadataSchema(
             name=session.name,
-            description=session.description,
-            author=session.author,
-            tags=session.tags.copy(),
+            description=session.metadata.description,
+            author=session.metadata.author,
         )
 
         # Build hardware config
@@ -217,7 +231,7 @@ class ExperimentSerializer:
             flow = self._extract_flow_config(flow_engine)
 
         # Build dashboard config
-        dashboard = DashboardConfigSchema.from_dict(session.dashboard_config)
+        dashboard = DashboardConfigSchema.from_dict(session.dashboard.to_dict())
 
         return ExperimentSchema(
             metadata=metadata,
@@ -360,7 +374,8 @@ class ExperimentSerializer:
         # Clear existing flow
         flow_engine.clear()
 
-        # Create nodes
+        # Create nodes, tracking which ones succeeded
+        created_node_ids: set[str] = set()
         for node_schema in config.nodes:
             node_class = self._node_registry.get(node_schema.type)
             if node_class:
@@ -372,11 +387,22 @@ class ExperimentSerializer:
                 # Set position for GUI
                 if node:
                     node.gui_position = node_schema.position
+                    created_node_ids.add(node_schema.id)
             else:
                 logger.warning(f"Unknown node type: {node_schema.type}")
 
-        # Create connections
+        # Create connections, skipping any that reference missing nodes
         for conn_schema in config.connections:
+            if conn_schema.from_node not in created_node_ids:
+                logger.warning(
+                    f"Skipping connection: source node '{conn_schema.from_node}' was not created"
+                )
+                continue
+            if conn_schema.to_node not in created_node_ids:
+                logger.warning(
+                    f"Skipping connection: target node '{conn_schema.to_node}' was not created"
+                )
+                continue
             flow_engine.connect(
                 from_node_id=conn_schema.from_node,
                 from_port=conn_schema.from_port,

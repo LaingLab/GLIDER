@@ -493,8 +493,17 @@ class CVProcessor:
             return self._last_detections, self._last_tracked, self._last_motion
 
         with self._lock:
+            # Apply background subtractor once per frame (it is stateful —
+            # calling apply() twice corrupts the internal model).
+            fg_mask = None
+            if self._bg_subtractor is not None and self._settings.backend in (
+                DetectionBackend.BACKGROUND_SUBTRACTION,
+                DetectionBackend.MOTION_ONLY,
+            ):
+                fg_mask = self._bg_subtractor.apply(frame)
+
             # Run detection
-            detections = self._detect(frame)
+            detections = self._detect(frame, fg_mask)
 
             # Run tracking
             tracked = []
@@ -512,8 +521,8 @@ class CVProcessor:
                 # Analyze behavioral states
                 self._analyze_behavior(tracked)
 
-            # Run motion detection
-            motion = self._detect_motion(frame)
+            # Run motion detection (reuse fg_mask to avoid double-apply)
+            motion = self._detect_motion(fg_mask)
 
             # Update zone tracking
             zone_states = {}
@@ -555,7 +564,7 @@ class CVProcessor:
 
         return detections, tracked, motion
 
-    def _detect(self, frame: np.ndarray) -> list[Detection]:
+    def _detect(self, frame: np.ndarray, fg_mask: Optional[np.ndarray] = None) -> list[Detection]:
         """Run detection on frame."""
         if self._settings.backend == DetectionBackend.YOLO_V8 and self._yolo_model:
             return self._detect_yolo(frame)
@@ -564,7 +573,7 @@ class CVProcessor:
         elif self._settings.backend == DetectionBackend.MOTION_ONLY:
             return []  # Motion-only mode, no object detection
         else:
-            return self._detect_background_subtraction(frame)
+            return self._detect_background_subtraction(frame, fg_mask)
 
     def _detect_yolo(self, frame: np.ndarray) -> list[Detection]:
         """YOLO-based detection."""
@@ -659,13 +668,16 @@ class CVProcessor:
 
         return detections
 
-    def _detect_background_subtraction(self, frame: np.ndarray) -> list[Detection]:
+    def _detect_background_subtraction(
+        self, frame: np.ndarray, fg_mask: Optional[np.ndarray] = None
+    ) -> list[Detection]:
         """Background subtraction based detection."""
         if self._bg_subtractor is None:
             return []
 
-        # Apply background subtraction
-        fg_mask = self._bg_subtractor.apply(frame)
+        # Use pre-computed fg_mask if available (avoids double-apply)
+        if fg_mask is None:
+            fg_mask = self._bg_subtractor.apply(frame)
 
         # Threshold to remove shadows (shadows are gray, foreground is white)
         _, thresh = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY)
@@ -693,13 +705,10 @@ class CVProcessor:
 
         return detections
 
-    def _detect_motion(self, frame: np.ndarray) -> MotionResult:
-        """Detect motion in frame."""
-        if self._bg_subtractor is None:
+    def _detect_motion(self, fg_mask: Optional[np.ndarray]) -> MotionResult:
+        """Detect motion in frame using pre-computed foreground mask."""
+        if fg_mask is None:
             return MotionResult(False, 0.0)
-
-        # Get foreground mask
-        fg_mask = self._bg_subtractor.apply(frame)
 
         # Calculate motion area
         motion_pixels = np.sum(fg_mask > 200)

@@ -290,10 +290,13 @@ def main() -> int:
             # Now run the Qt event loop via qasync
             loop.run_forever()
 
-        # Cleanup
-        if hasattr(app, "_glider_core"):
-            # Run cleanup synchronously since loop is closing
-            pass
+        # Cleanup — shutdown may already have been called during closeEvent,
+        # and the event loop may already be closed, so guard both conditions.
+        if hasattr(app, "_glider_core") and not loop.is_closed():
+            try:
+                loop.run_until_complete(app._glider_core.shutdown())
+            except RuntimeError:
+                pass  # Loop closed or shutdown already completed
 
         return 0
 
