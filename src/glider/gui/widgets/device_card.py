@@ -6,7 +6,6 @@ Reduces code duplication between creation and update methods.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
@@ -134,7 +133,7 @@ class DeviceCard(QWidget):
 
     CARD_HEIGHT = 80
 
-    def __init__(self, device_id: str, device, parent: Optional[QWidget] = None):
+    def __init__(self, device_id: str, device, parent: QWidget | None = None):
         """
         Initialize the device card.
 

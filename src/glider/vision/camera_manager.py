@@ -19,10 +19,11 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from queue import Empty, Queue
-from typing import Any, Callable, Optional
+from typing import Any
 
 import cv2
 import numpy as np
@@ -52,7 +53,7 @@ class FFmpegCapture:
         self._width = width
         self._height = height
         self._fps = fps
-        self._process: Optional[subprocess.Popen] = None
+        self._process: subprocess.Popen | None = None
         self._frame_size = width * height * 3  # BGR output
         self._is_open = False
 
@@ -131,7 +132,7 @@ class FFmpegCapture:
         """Check if capture is open."""
         return self._is_open and self._process is not None and self._process.poll() is None
 
-    def read(self) -> tuple[bool, Optional[np.ndarray]]:
+    def read(self) -> tuple[bool, np.ndarray | None]:
         """Read a frame from FFmpeg."""
         if not self.isOpened():
             return False, None
@@ -158,7 +159,7 @@ class FFmpegCapture:
         ret, self._last_frame = self.read()
         return ret
 
-    def retrieve(self) -> tuple[bool, Optional[np.ndarray]]:
+    def retrieve(self) -> tuple[bool, np.ndarray | None]:
         """Retrieve the last grabbed frame."""
         if hasattr(self, "_last_frame") and self._last_frame is not None:
             return True, self._last_frame
@@ -846,8 +847,8 @@ class CameraSettings:
     auto_focus: bool = True
     auto_exposure: bool = True
     connection_timeout: float = 5.0  # Seconds to wait for camera connection
-    force_backend: Optional[str] = None  # "v4l2", "picamera2", or None for auto
-    pixel_format: Optional[str] = None  # "YUYV", "MJPG", or None for auto
+    force_backend: str | None = None  # "v4l2", "picamera2", or None for auto
+    pixel_format: str | None = None  # "YUYV", "MJPG", or None for auto
     miniscope_mode: bool = False  # Enable miniscope-specific initialization
     buffer_size: int = 1  # Frame buffer size (1 = lowest latency)
     # Miniscope-specific controls (v4l2-ctl)
@@ -955,18 +956,18 @@ class CameraManager:
 
     def __init__(self):
         """Initialize the camera manager."""
-        self._capture: Optional[cv2.VideoCapture] = None
+        self._capture: cv2.VideoCapture | None = None
         self._picamera2 = None  # Picamera2 instance for Pi cameras
         self._using_picamera2 = False
         self._using_ffmpeg = False  # FFmpeg fallback for Y800 cameras
         self._settings = CameraSettings()
         self._state = CameraState.DISCONNECTED
-        self._capture_thread: Optional[threading.Thread] = None
+        self._capture_thread: threading.Thread | None = None
         self._frame_queue: Queue = Queue(maxsize=2)  # Double buffer
         self._running = False
         self._frame_callbacks: list[Callable[[np.ndarray, float], None]] = []
         self._lock = threading.Lock()
-        self._last_frame: Optional[np.ndarray] = None
+        self._last_frame: np.ndarray | None = None
         self._last_timestamp: float = 0.0
         self._fps_counter = 0
         self._fps_timer = time.time()
@@ -1091,7 +1092,7 @@ class CameraManager:
         return cameras
 
     def _try_connect_with_backend(
-        self, backend: int, pixel_format: Optional[str] = None, quick_test: bool = False
+        self, backend: int, pixel_format: str | None = None, quick_test: bool = False
     ) -> bool:
         """
         Try to connect to the camera with a specific backend and pixel format.
@@ -1687,7 +1688,7 @@ class CameraManager:
                 self._picamera2 = None
             return False
 
-    def connect(self, settings: Optional[CameraSettings] = None) -> bool:
+    def connect(self, settings: CameraSettings | None = None) -> bool:
         """
         Connect to a camera with given settings.
 
@@ -1899,7 +1900,7 @@ class CameraManager:
 
         logger.info("Camera streaming stopped")
 
-    def get_frame(self) -> Optional[tuple[np.ndarray, float]]:
+    def get_frame(self) -> tuple[np.ndarray, float] | None:
         """
         Get the latest frame (non-blocking).
 
@@ -2253,7 +2254,7 @@ class CameraManager:
 
         logger.debug("Capture loop ended")
 
-    def capture_single_frame(self) -> Optional[np.ndarray]:
+    def capture_single_frame(self) -> np.ndarray | None:
         """
         Capture a single frame (blocking).
 

@@ -8,7 +8,7 @@ Desktop (Builder) and Runner modes.
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QMimeData, Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction, QDrag, QKeySequence
@@ -187,7 +187,7 @@ class MainWindow(QMainWindow):
     def __init__(
         self,
         core: "GliderCore",
-        view_manager: Optional[ViewManager] = None,
+        view_manager: ViewManager | None = None,
         view_mode: ViewMode = ViewMode.AUTO,
     ):
         """
@@ -214,11 +214,11 @@ class MainWindow(QMainWindow):
         self._pending_tasks: set = set()
 
         # UI components
-        self._stack: Optional[QStackedWidget] = None
-        self._builder_view: Optional[QWidget] = None
-        self._runner_view: Optional[QWidget] = None
-        self._node_library_dock: Optional[QDockWidget] = None
-        self._properties_dock: Optional[QDockWidget] = None
+        self._stack: QStackedWidget | None = None
+        self._builder_view: QWidget | None = None
+        self._runner_view: QWidget | None = None
+        self._node_library_dock: QDockWidget | None = None
+        self._properties_dock: QDockWidget | None = None
 
         # Zone configuration
         self._zone_config = ZoneConfiguration()
@@ -492,7 +492,7 @@ class MainWindow(QMainWindow):
         self._device_refresh_timer.timeout.connect(self._update_runner_device_states)
 
         # Timer for elapsed time display
-        self._experiment_start_time: Optional[float] = None
+        self._experiment_start_time: float | None = None
         self._elapsed_timer = QTimer()
         self._elapsed_timer.setInterval(config.timing.elapsed_timer_interval_ms)
         self._elapsed_timer.timeout.connect(self._update_elapsed_time)

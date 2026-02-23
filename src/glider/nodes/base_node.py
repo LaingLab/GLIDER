@@ -11,9 +11,10 @@ Extends ryvencore.Node with GLIDER-specific functionality:
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from glider.hal.base_device import BaseDevice
@@ -84,8 +85,8 @@ class GliderNode(ABC):
         self._inputs: list[Any] = []
         self._outputs: list[Any] = []
         self._state: dict[str, Any] = {}
-        self._device: Optional[BaseDevice] = None
-        self._error: Optional[str] = None
+        self._device: BaseDevice | None = None
+        self._error: str | None = None
         self._enabled = True
         self._visible_in_runner = False
 
@@ -134,7 +135,7 @@ class GliderNode(ABC):
         return self._device
 
     @property
-    def error(self) -> Optional[str]:
+    def error(self) -> str | None:
         """Current error message, if any."""
         return self._error
 
@@ -261,7 +262,7 @@ class GliderNode(ABC):
         """Disable the node."""
         self._enabled = False
 
-    def set_error(self, error: Optional[str]) -> None:
+    def set_error(self, error: str | None) -> None:
         """Set error state."""
         self._error = error
         if error:

@@ -6,7 +6,7 @@ and managing subjects/animals for recording sessions.
 """
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -84,7 +84,7 @@ class ExperimentDialog(QDialog):
     def __init__(
         self,
         session: "ExperimentSession",
-        parent: Optional[QWidget] = None,
+        parent: QWidget | None = None,
         is_touch_mode: bool = False,
     ):
         super().__init__(parent)

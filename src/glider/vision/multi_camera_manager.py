@@ -8,7 +8,7 @@ camera for CV processing.
 
 import logging
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import numpy as np
 
@@ -32,7 +32,7 @@ class MultiCameraManager:
         """Initialize the multi-camera manager."""
         self._cameras: dict[str, CameraManager] = {}
         self._camera_settings: dict[str, CameraSettings] = {}
-        self._primary_camera_id: Optional[str] = None
+        self._primary_camera_id: str | None = None
         self._enabled = False
         self._lock = threading.Lock()
 
@@ -50,12 +50,12 @@ class MultiCameraManager:
         self._enabled = value
 
     @property
-    def primary_camera_id(self) -> Optional[str]:
+    def primary_camera_id(self) -> str | None:
         """ID of the primary camera for CV processing."""
         return self._primary_camera_id
 
     @property
-    def primary_camera(self) -> Optional[CameraManager]:
+    def primary_camera(self) -> CameraManager | None:
         """Get the primary camera instance."""
         if self._primary_camera_id and self._primary_camera_id in self._cameras:
             return self._cameras[self._primary_camera_id]
@@ -71,11 +71,11 @@ class MultiCameraManager:
         """Number of connected cameras."""
         return len(self._cameras)
 
-    def get_camera(self, camera_id: str) -> Optional[CameraManager]:
+    def get_camera(self, camera_id: str) -> CameraManager | None:
         """Get a specific camera by ID."""
         return self._cameras.get(camera_id)
 
-    def get_camera_settings(self, camera_id: str) -> Optional[CameraSettings]:
+    def get_camera_settings(self, camera_id: str) -> CameraSettings | None:
         """Get settings for a specific camera."""
         return self._camera_settings.get(camera_id)
 
@@ -294,7 +294,7 @@ class MultiCameraManager:
             except Exception as e:
                 logger.error(f"Primary frame callback error: {e}")
 
-    def get_frame(self, camera_id: str) -> Optional[tuple[np.ndarray, float]]:
+    def get_frame(self, camera_id: str) -> tuple[np.ndarray, float] | None:
         """
         Get the latest frame from a specific camera.
 
@@ -326,7 +326,7 @@ class MultiCameraManager:
         camera = self._cameras.get(camera_id)
         return camera.current_fps if camera else 0.0
 
-    def get_camera_resolution(self, camera_id: str) -> Optional[tuple[int, int]]:
+    def get_camera_resolution(self, camera_id: str) -> tuple[int, int] | None:
         """Get resolution for a specific camera."""
         settings = self._camera_settings.get(camera_id)
         return settings.resolution if settings else None

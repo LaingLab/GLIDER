@@ -8,7 +8,7 @@ structure specified in the design document.
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 # Current schema version
 SCHEMA_VERSION = "1.0.0"
@@ -17,7 +17,7 @@ SCHEMA_VERSION = "1.0.0"
 class SchemaValidationError(Exception):
     """Raised when schema validation fails."""
 
-    def __init__(self, message: str, path: str = "", details: Optional[dict[str, Any]] = None):
+    def __init__(self, message: str, path: str = "", details: dict[str, Any] | None = None):
         self.path = path
         self.details = details or {}
         full_message = f"{path}: {message}" if path else message
@@ -49,7 +49,7 @@ class PortSchema:
 
     name: str
     type: str  # "data" or "exec"
-    data_type: Optional[str] = None  # e.g., "int", "float", "bool", "any"
+    data_type: str | None = None  # e.g., "int", "float", "bool", "any"
 
 
 @dataclass
@@ -166,7 +166,7 @@ class BoardConfigSchema:
 
     id: str
     type: str  # e.g., "telemetrix", "pigpio"
-    port: Optional[str] = None  # Serial port for Arduino
+    port: str | None = None  # Serial port for Arduino
     settings: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -211,7 +211,7 @@ class DeviceConfigSchema:
     type: str  # e.g., "digital_output", "analog_input", "servo"
     board_id: str
     pin: int
-    name: Optional[str] = None
+    name: str | None = None
     settings: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

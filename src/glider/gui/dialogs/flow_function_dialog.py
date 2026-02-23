@@ -7,7 +7,7 @@ with a visual graph editor for the internal node graph.
 
 import logging
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QPen
@@ -443,7 +443,7 @@ class FlowFunctionDialog(QDialog):
 
     def __init__(
         self,
-        definition: Optional[FlowFunctionDefinition] = None,
+        definition: FlowFunctionDefinition | None = None,
         available_node_types: list[str] = None,
         parent=None,
     ):

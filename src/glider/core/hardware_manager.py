@@ -6,7 +6,8 @@ connection/disconnection, device initialization, and error recovery.
 """
 
 import logging
-from typing import TYPE_CHECKING, Callable, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from glider.hal.base_board import BaseBoard, BoardConnectionState
 from glider.hal.base_device import BaseDevice, create_device_from_dict
@@ -79,7 +80,7 @@ class HardwareManager:
         return list(cls._driver_registry.keys())
 
     @classmethod
-    def get_driver_class(cls, name: str) -> Optional[type[BaseBoard]]:
+    def get_driver_class(cls, name: str) -> type[BaseBoard] | None:
         """Get a driver class by name."""
         return cls._driver_registry.get(name)
 
@@ -93,15 +94,15 @@ class HardwareManager:
         """Dictionary of active device instances."""
         return self._devices.copy()
 
-    def get_board(self, board_id: str) -> Optional[BaseBoard]:
+    def get_board(self, board_id: str) -> BaseBoard | None:
         """Get a board by ID."""
         return self._boards.get(board_id)
 
-    def get_device(self, device_id: str) -> Optional[BaseDevice]:
+    def get_device(self, device_id: str) -> BaseDevice | None:
         """Get a device by ID."""
         return self._devices.get(device_id)
 
-    def get_pin_manager(self, board_id: str) -> Optional[PinManager]:
+    def get_pin_manager(self, board_id: str) -> PinManager | None:
         """Get the pin manager for a board."""
         return self._pin_managers.get(board_id)
 
@@ -340,9 +341,7 @@ class HardwareManager:
         del self._devices[device_id]
         logger.info(f"Removed device: {device_id}")
 
-    def add_board(
-        self, board_id: str, driver_type: str, port: Optional[str] = None, **kwargs
-    ) -> None:
+    def add_board(self, board_id: str, driver_type: str, port: str | None = None, **kwargs) -> None:
         """
         Add a board to the manager (simplified API).
 
@@ -382,8 +381,8 @@ class HardwareManager:
         device_type: str,
         board_id: str,
         pin: int,
-        name: Optional[str] = None,
-        pin_name: Optional[str] = None,
+        name: str | None = None,
+        pin_name: str | None = None,
         **kwargs,
     ) -> None:
         """
@@ -448,7 +447,7 @@ class HardwareManager:
         device_type: str,
         board_id: str,
         pins: dict[str, int],
-        name: Optional[str] = None,
+        name: str | None = None,
         **kwargs,
     ) -> None:
         """

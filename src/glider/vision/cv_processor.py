@@ -10,9 +10,10 @@ Provides configurable CV processing including:
 import logging
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
@@ -44,7 +45,7 @@ class Detection:
     confidence: float
     bbox: tuple[int, int, int, int]  # x, y, w, h
     centroid: tuple[int, int] = field(default=(0, 0))
-    track_id: Optional[int] = None  # ByteTrack assigned ID
+    track_id: int | None = None  # ByteTrack assigned ID
 
     def __post_init__(self):
         # Calculate centroid from bbox
@@ -86,7 +87,7 @@ class MotionResult:
     motion_detected: bool
     motion_area: float  # Percentage of frame with motion (0.0 to 1.0)
     motion_contours: list[np.ndarray] = field(default_factory=list)
-    motion_mask: Optional[np.ndarray] = None
+    motion_mask: np.ndarray | None = None
 
 
 @dataclass
@@ -95,7 +96,7 @@ class CVSettings:
 
     enabled: bool = True
     backend: DetectionBackend = DetectionBackend.BACKGROUND_SUBTRACTION
-    model_path: Optional[str] = None  # For YOLO
+    model_path: str | None = None  # For YOLO
     confidence_threshold: float = 0.5
     min_detection_area: int = 500  # Minimum contour area for detection
     motion_threshold: float = 25.0  # Threshold for motion detection
@@ -259,7 +260,7 @@ class ObjectTracker:
         used_rows = set()
         used_cols = set()
 
-        for row, col in zip(rows, cols):
+        for row, col in zip(rows, cols, strict=False):
             if row in used_rows or col in used_cols:
                 continue
 
@@ -305,7 +306,7 @@ class CVProcessor:
     Can be toggled on/off for performance.
     """
 
-    def __init__(self, settings: Optional[CVSettings] = None):
+    def __init__(self, settings: CVSettings | None = None):
         """
         Initialize the CV processor.
 
@@ -313,9 +314,9 @@ class CVProcessor:
             settings: CV settings, or None for defaults
         """
         self._settings = settings or CVSettings()
-        self._bg_subtractor: Optional[cv2.BackgroundSubtractor] = None
+        self._bg_subtractor: cv2.BackgroundSubtractor | None = None
         self._yolo_model = None
-        self._tracker: Optional[ObjectTracker] = None
+        self._tracker: ObjectTracker | None = None
         self._initialized = False
         self._lock = threading.Lock()
 
@@ -338,8 +339,8 @@ class CVProcessor:
         self._last_motion: MotionResult = MotionResult(False, 0.0)
 
         # Zone tracking
-        self._zone_tracker: Optional[ZoneTracker] = None
-        self._zone_config: Optional[ZoneConfiguration] = None
+        self._zone_tracker: ZoneTracker | None = None
+        self._zone_config: ZoneConfiguration | None = None
         self._zone_callbacks: list[Callable[[dict[str, ZoneState]], None]] = []
 
         # Behavior analysis
@@ -564,7 +565,7 @@ class CVProcessor:
 
         return detections, tracked, motion
 
-    def _detect(self, frame: np.ndarray, fg_mask: Optional[np.ndarray] = None) -> list[Detection]:
+    def _detect(self, frame: np.ndarray, fg_mask: np.ndarray | None = None) -> list[Detection]:
         """Run detection on frame."""
         if self._settings.backend == DetectionBackend.YOLO_V8 and self._yolo_model:
             return self._detect_yolo(frame)
@@ -669,7 +670,7 @@ class CVProcessor:
         return detections
 
     def _detect_background_subtraction(
-        self, frame: np.ndarray, fg_mask: Optional[np.ndarray] = None
+        self, frame: np.ndarray, fg_mask: np.ndarray | None = None
     ) -> list[Detection]:
         """Background subtraction based detection."""
         if self._bg_subtractor is None:
@@ -705,7 +706,7 @@ class CVProcessor:
 
         return detections
 
-    def _detect_motion(self, fg_mask: Optional[np.ndarray]) -> MotionResult:
+    def _detect_motion(self, fg_mask: np.ndarray | None) -> MotionResult:
         """Detect motion in frame using pre-computed foreground mask."""
         if fg_mask is None:
             return MotionResult(False, 0.0)
@@ -758,7 +759,7 @@ class CVProcessor:
         frame: np.ndarray,
         detections: list[Detection],
         tracked: list[TrackedObject],
-        motion: Optional[MotionResult] = None,
+        motion: MotionResult | None = None,
     ) -> np.ndarray:
         """
         Draw detection/tracking overlays on frame.

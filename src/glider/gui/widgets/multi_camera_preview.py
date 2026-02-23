@@ -6,7 +6,6 @@ with visual indicators for the primary camera and recording status.
 """
 
 import logging
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -211,7 +210,7 @@ class MultiCameraPreviewWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._tiles: dict[str, CameraPreviewTile] = {}
-        self._primary_id: Optional[str] = None
+        self._primary_id: str | None = None
 
         self._setup_ui()
 
@@ -375,10 +374,10 @@ class MultiCameraPreviewWidget(QWidget):
         return len(self._tiles)
 
     @property
-    def primary_camera_id(self) -> Optional[str]:
+    def primary_camera_id(self) -> str | None:
         """ID of the primary camera."""
         return self._primary_id
 
-    def get_tile(self, camera_id: str) -> Optional[CameraPreviewTile]:
+    def get_tile(self, camera_id: str) -> CameraPreviewTile | None:
         """Get a specific camera tile."""
         return self._tiles.get(camera_id)

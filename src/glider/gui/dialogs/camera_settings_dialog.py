@@ -53,8 +53,8 @@ class CameraSettingsDialog(QDialog):
 
     def __init__(
         self,
-        camera_settings: Optional[CameraSettings] = None,
-        cv_settings: Optional[CVSettings] = None,
+        camera_settings: CameraSettings | None = None,
+        cv_settings: CVSettings | None = None,
         parent=None,
         view_manager: Optional["ViewManager"] = None,
         camera_manager: Optional["CameraManager"] = None,

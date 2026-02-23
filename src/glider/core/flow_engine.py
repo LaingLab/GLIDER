@@ -7,8 +7,9 @@ flow. Supports both Data Flow (reactive) and Execution Flow (imperative).
 
 import asyncio
 import logging
+from collections.abc import Callable
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     pass
@@ -81,7 +82,7 @@ class FlowEngine:
         return list(cls._node_registry.keys())
 
     @classmethod
-    def get_node_class(cls, node_type: str) -> Optional[type]:
+    def get_node_class(cls, node_type: str) -> type | None:
         """Get a node class by type name."""
         return cls._node_registry.get(node_type)
 
@@ -265,8 +266,8 @@ class FlowEngine:
         node_id: str,
         node_type: str,
         position: tuple = (0, 0),
-        state: Optional[dict[str, Any]] = None,
-        device_id: Optional[str] = None,
+        state: dict[str, Any] | None = None,
+        device_id: str | None = None,
         session=None,
     ) -> Any:
         """
@@ -508,7 +509,7 @@ class FlowEngine:
         # Connection removal is handled by ryvencore when nodes are connected
         logger.debug(f"Removed connection: {connection_id}")
 
-    def get_node(self, node_id: str) -> Optional[Any]:
+    def get_node(self, node_id: str) -> Any | None:
         """Get a node by ID."""
         return self._nodes.get(node_id)
 
@@ -877,7 +878,7 @@ class FlowEngine:
 
         return errors
 
-    def _resolve_node_id(self, node_ref: str) -> Optional[str]:
+    def _resolve_node_id(self, node_ref: str) -> str | None:
         """Resolve a node reference (ID or name) to node ID."""
         # Direct ID match
         if node_ref in self._nodes:
@@ -890,7 +891,7 @@ class FlowEngine:
 
         return None
 
-    def _get_output_index(self, node_id: str, port_name: str) -> Optional[int]:
+    def _get_output_index(self, node_id: str, port_name: str) -> int | None:
         """Get output port index by name."""
         node = self._nodes.get(node_id)
         if node is None:
@@ -906,7 +907,7 @@ class FlowEngine:
 
         return port_map.get(port_name, 0)
 
-    def _get_input_index(self, node_id: str, port_name: str) -> Optional[int]:
+    def _get_input_index(self, node_id: str, port_name: str) -> int | None:
         """Get input port index by name."""
         node = self._nodes.get(node_id)
         if node is None:

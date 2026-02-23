@@ -10,7 +10,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from glider.core.flow_engine import FlowEngine
@@ -101,7 +101,7 @@ class InternalNodeConfig:
     node_type: str
     position: tuple = (0, 0)
     state: dict[str, Any] = field(default_factory=dict)
-    device_id: Optional[str] = None
+    device_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -167,7 +167,7 @@ class FlowFunctionDefinition:
     outputs: list[FlowFunctionOutput] = field(default_factory=list)
     nodes: list[InternalNodeConfig] = field(default_factory=list)
     connections: list[InternalConnectionConfig] = field(default_factory=list)
-    entry_node_id: Optional[str] = None
+    entry_node_id: str | None = None
     exit_node_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -199,7 +199,7 @@ class FlowFunctionDefinition:
             exit_node_ids=data.get("exit_node_ids", []),
         )
 
-    def get_parameter(self, name: str) -> Optional[FlowFunctionParameter]:
+    def get_parameter(self, name: str) -> FlowFunctionParameter | None:
         """Get a parameter by name."""
         for param in self.parameters:
             if param.name == name:
@@ -233,7 +233,7 @@ class FlowFunctionRunner:
         self._flow_engine = flow_engine
         self._hardware_manager = hardware_manager
         self._internal_nodes: dict[str, Any] = {}
-        self._completion_event: Optional[asyncio.Event] = None
+        self._completion_event: asyncio.Event | None = None
         self._output_values: dict[str, Any] = {}
 
     @property
@@ -523,7 +523,7 @@ def create_flow_function_node_class(definition: FlowFunctionDefinition) -> type[
 
         def __init__(self):
             super().__init__()
-            self._runner: Optional[FlowFunctionRunner] = None
+            self._runner: FlowFunctionRunner | None = None
             self._flow_engine = None
             self._hardware_manager = None
 

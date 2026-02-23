@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -76,15 +76,15 @@ class VideoRecorder:
             camera_manager: CameraManager instance to capture frames from
         """
         self._camera = camera_manager
-        self._writer: Optional[cv2.VideoWriter] = None
-        self._annotated_writer: Optional[cv2.VideoWriter] = None
-        self._writer_thread: Optional[FrameWriterThread] = None
-        self._annotated_writer_thread: Optional[FrameWriterThread] = None
+        self._writer: cv2.VideoWriter | None = None
+        self._annotated_writer: cv2.VideoWriter | None = None
+        self._writer_thread: FrameWriterThread | None = None
+        self._annotated_writer_thread: FrameWriterThread | None = None
         self._state = RecordingState.IDLE
         self._output_dir: Path = Path.cwd()
-        self._file_path: Optional[Path] = None
-        self._annotated_file_path: Optional[Path] = None
-        self._start_time: Optional[datetime] = None
+        self._file_path: Path | None = None
+        self._annotated_file_path: Path | None = None
+        self._start_time: datetime | None = None
         self._frame_count = 0
         self._annotated_frame_count = 0
         self._recording_fps = 30.0  # Actual FPS used for recording
@@ -92,7 +92,7 @@ class VideoRecorder:
         self._lock = threading.Lock()
         self._frame_callback_registered = False
         self._record_annotated = False  # Whether to also record annotated video
-        self._buffer_size: Optional[int] = None  # None = use default
+        self._buffer_size: int | None = None  # None = use default
 
     @property
     def is_recording(self) -> bool:
@@ -110,12 +110,12 @@ class VideoRecorder:
         return self._state
 
     @property
-    def file_path(self) -> Optional[Path]:
+    def file_path(self) -> Path | None:
         """Path to the current/last raw video file."""
         return self._file_path
 
     @property
-    def annotated_file_path(self) -> Optional[Path]:
+    def annotated_file_path(self) -> Path | None:
         """Path to the current/last annotated video file."""
         return self._annotated_file_path
 
@@ -317,7 +317,7 @@ class VideoRecorder:
                     )
         return False
 
-    async def stop(self) -> Optional[Path]:
+    async def stop(self) -> Path | None:
         """
         Stop recording and finalize video files.
 

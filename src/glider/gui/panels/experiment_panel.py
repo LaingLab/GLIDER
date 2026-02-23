@@ -6,7 +6,7 @@ and managing subjects/animals for recording sessions.
 """
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -79,7 +79,7 @@ class ExperimentPanel(QWidget):
     edit_subject_requested = pyqtSignal(str)  # subject_id
     recording_directory_changed = pyqtSignal(str)  # directory path
 
-    def __init__(self, session: "ExperimentSession", parent: Optional[QWidget] = None):
+    def __init__(self, session: "ExperimentSession", parent: QWidget | None = None):
         super().__init__(parent)
         self._session = session
         self._updating = False  # Prevent recursive updates

@@ -6,7 +6,6 @@ including pin configuration. Flow logic is created via the node graph.
 """
 
 import logging
-from typing import Optional
 
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
@@ -185,7 +184,7 @@ class PinEditorWidget(QWidget):
 class CustomDeviceDialog(QDialog):
     """Dialog for creating/editing custom device definitions."""
 
-    def __init__(self, definition: Optional[CustomDeviceDefinition] = None, parent=None):
+    def __init__(self, definition: CustomDeviceDefinition | None = None, parent=None):
         super().__init__(parent)
         self._definition = definition or CustomDeviceDefinition()
         self._setup_ui()

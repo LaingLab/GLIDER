@@ -3,7 +3,6 @@ Port Item - Visual representation of node input/output ports.
 """
 
 from enum import Enum, auto
-from typing import Optional
 
 from PyQt6.QtCore import QObject, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPen
@@ -45,7 +44,7 @@ class PortItem(QGraphicsEllipseItem):
         name: str,
         port_type: PortType = PortType.DATA,
         is_output: bool = False,
-        parent: Optional[QGraphicsItem] = None,
+        parent: QGraphicsItem | None = None,
     ):
         super().__init__(parent)
 

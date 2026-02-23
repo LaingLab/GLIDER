@@ -9,7 +9,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +174,7 @@ class GliderConfig:
 
         return config
 
-    def save(self, path: Optional[Path] = None) -> None:
+    def save(self, path: Path | None = None) -> None:
         """Save configuration to file."""
         if path is None:
             path = self.paths.user_config_dir / "config.json"
@@ -186,7 +186,7 @@ class GliderConfig:
         logger.info(f"Configuration saved to {path}")
 
     @classmethod
-    def load(cls, path: Optional[Path] = None) -> "GliderConfig":
+    def load(cls, path: Path | None = None) -> "GliderConfig":
         """Load configuration from file, using defaults if not found."""
         config = cls()
 
@@ -207,7 +207,7 @@ class GliderConfig:
 
 
 # Global configuration instance - lazy loaded
-_config: Optional[GliderConfig] = None
+_config: GliderConfig | None = None
 
 
 def get_config() -> GliderConfig:

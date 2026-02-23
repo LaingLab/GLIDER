@@ -10,8 +10,9 @@ import asyncio
 import logging
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class BaseDevice(ABC):
         self,
         board: "BaseBoard",
         config: DeviceConfig,
-        name: Optional[str] = None,
+        name: str | None = None,
     ):
         """
         Initialize the device.
@@ -226,7 +227,7 @@ class DigitalOutputDevice(BaseDevice):
             "set": self.set_state,
         }
 
-    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: Optional[str] = None):
+    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
         self._state = False
 
@@ -304,13 +305,13 @@ class DigitalInputDevice(BaseDevice):
             "read": self.read,
         }
 
-    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: Optional[str] = None):
+    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
-        self._last_value: Optional[bool] = None
+        self._last_value: bool | None = None
         self._on_change_callbacks: list[Callable[[bool], None]] = []
 
     @property
-    def last_value(self) -> Optional[bool]:
+    def last_value(self) -> bool | None:
         """Last read value."""
         return self._last_value
 
@@ -372,9 +373,9 @@ class AnalogInputDevice(BaseDevice):
             "read_voltage": self.read_voltage,
         }
 
-    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: Optional[str] = None):
+    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
-        self._last_value: Optional[int] = None
+        self._last_value: int | None = None
         self._reference_voltage = config.settings.get("reference_voltage", 5.0)
 
     async def initialize(self) -> None:
@@ -441,7 +442,7 @@ class PWMOutputDevice(BaseDevice):
             "off": self.off,
         }
 
-    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: Optional[str] = None):
+    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
         self._value = 0
 
@@ -510,7 +511,7 @@ class ServoDevice(BaseDevice):
             "center": self.center,
         }
 
-    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: Optional[str] = None):
+    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
         self._angle = 90
         self._min_angle = config.settings.get("min_angle", 0)
@@ -604,7 +605,7 @@ class ADS1115Device(BaseDevice):
             "read_all": self.read_all,
         }
 
-    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: Optional[str] = None):
+    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
         self._i2c_address = config.settings.get("i2c_address", 0x48)
         self._gain = config.settings.get("gain", 1)
@@ -786,12 +787,12 @@ class MotorGovernorDevice(BaseDevice):
             "read_position": self.read_position,
         }
 
-    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: Optional[str] = None):
+    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
-        self._position: Optional[int] = None
+        self._position: int | None = None
 
     @property
-    def position(self) -> Optional[int]:
+    def position(self) -> int | None:
         """Last read position value from signal pin."""
         return self._position
 
