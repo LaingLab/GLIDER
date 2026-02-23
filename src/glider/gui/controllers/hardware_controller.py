@@ -40,6 +40,7 @@ class HardwareTreeController(QWidget):
 
     hardware_changed = pyqtSignal()
     device_selected = pyqtSignal(str)
+    _connection_changed_signal = pyqtSignal(str, object)
 
     def __init__(self, core: "GliderCore", run_async: Callable, parent: Optional[QWidget] = None):
         """
@@ -86,6 +87,7 @@ class HardwareTreeController(QWidget):
         """Connect internal signals."""
         # Listen for hardware connection changes
         self._core.hardware_manager.on_connection_change(self._on_connection_change)
+        self._connection_changed_signal.connect(self._handle_connection_change)
 
     @property
     def tree(self) -> QTreeWidget:
@@ -136,7 +138,11 @@ class HardwareTreeController(QWidget):
         self.hardware_changed.emit()
 
     def _on_connection_change(self, board_id: str, state) -> None:
-        """Handle board connection state changes."""
+        """Handle board connection state changes (may be called from non-GUI thread)."""
+        self._connection_changed_signal.emit(board_id, state)
+
+    def _handle_connection_change(self, board_id: str, state) -> None:
+        """Handle board connection state changes (main thread)."""
         self.refresh()
 
     def _on_selection_changed(self) -> None:

@@ -59,21 +59,25 @@ class TelemetrixThread:
         logging.getLogger("telemetrix_aio").setLevel(logging.WARNING)
         logging.getLogger("telemetrix_aio.telemetrix_aio").setLevel(logging.WARNING)
 
-        # Suppress print statements from telemetrix for this entire thread
-        class NullWriter:
-            def write(self, s):
-                pass
-
-            def flush(self):
-                pass
-
-        sys.stdout = NullWriter()
-
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
 
         try:
-            self._loop.run_until_complete(self._connect(port, sleep_tune))
+            # Suppress print statements from telemetrix only during connect
+            class NullWriter:
+                def write(self, s):
+                    pass
+
+                def flush(self):
+                    pass
+
+            original_stdout = sys.stdout
+            sys.stdout = NullWriter()
+            try:
+                self._loop.run_until_complete(self._connect(port, sleep_tune))
+            finally:
+                sys.stdout = original_stdout
+
             self._ready.set()
             # Run the event loop to process tasks
             self._loop.run_forever()
@@ -258,6 +262,11 @@ class TelemetrixBoard(BaseBoard):
         self._pin_values: dict[int, Any] = {}
         self._pin_values_lock = threading.Lock()  # Thread-safe access to _pin_values
         self._analog_map: dict[int, int] = {}  # Maps actual pin to Arduino analog number
+        # Store main event loop for marshalling callbacks from telemetrix thread
+        try:
+            self._main_loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_event_loop()
+        except RuntimeError:
+            self._main_loop = None
 
     @property
     def _telemetrix(self):
@@ -397,7 +406,8 @@ class TelemetrixBoard(BaseBoard):
                 analog_pin = pin - 14 if pin >= 14 else pin
                 self._analog_map[pin] = analog_pin
                 # Initialize pin value to 0 to prevent None values
-                self._pin_values[pin] = 0
+                with self._pin_values_lock:
+                    self._pin_values[pin] = 0
 
                 try:
                     self._call_telemetrix(
@@ -432,7 +442,8 @@ class TelemetrixBoard(BaseBoard):
             raise RuntimeError("Board not connected")
 
         await asyncio.to_thread(self._call_telemetrix, "digital_write", pin, 1 if value else 0)
-        self._pin_values[pin] = value
+        with self._pin_values_lock:
+            self._pin_values[pin] = value
 
     async def read_digital(self, pin: int) -> bool:
         """Read a digital value from a pin."""
@@ -445,15 +456,18 @@ class TelemetrixBoard(BaseBoard):
             result = self._call_telemetrix("digital_read", pin)
             if result and len(result) > 1:
                 value = bool(result[1])
-                self._pin_values[pin] = value  # Update cache
+                with self._pin_values_lock:
+                    self._pin_values[pin] = value  # Update cache
                 return value
         except Exception as e:
             logger.error(f"Error during live digital read on pin {pin}: {e}")
             # Fallback to cached value on error
-            return bool(self._pin_values.get(pin, False))
+            with self._pin_values_lock:
+                return bool(self._pin_values.get(pin, False))
 
         # Fallback to cached value if live read fails
-        return bool(self._pin_values.get(pin, False))
+        with self._pin_values_lock:
+            return bool(self._pin_values.get(pin, False))
 
     async def write_analog(self, pin: int, value: int) -> None:
         """Write a PWM value to a pin."""
@@ -462,7 +476,8 @@ class TelemetrixBoard(BaseBoard):
 
         value = max(0, min(255, value))
         await asyncio.to_thread(self._call_telemetrix, "analog_write", pin, value)
-        self._pin_values[pin] = value
+        with self._pin_values_lock:
+            self._pin_values[pin] = value
 
     async def read_analog(self, pin: int) -> int:
         """Read an analog value from a pin.
@@ -489,22 +504,28 @@ class TelemetrixBoard(BaseBoard):
             raise RuntimeError("Board not connected")
 
         angle = max(0, min(180, angle))
-        self._call_telemetrix("servo_write", pin, angle)
-        self._pin_values[pin] = angle
+        await asyncio.to_thread(self._call_telemetrix, "servo_write", pin, angle)
+        with self._pin_values_lock:
+            self._pin_values[pin] = angle
 
     async def _debug_callback_silent(self, data: list) -> None:
         """Silent callback to suppress debug output from telemetrix."""
         pass
 
     async def _digital_callback(self, data: list) -> None:
-        """Callback for digital pin value changes."""
+        """Callback for digital pin value changes (called from telemetrix thread)."""
         pin = data[1]
         value = bool(data[2])
-        self._pin_values[pin] = value
-        self._notify_callbacks(pin, value)
+        with self._pin_values_lock:
+            self._pin_values[pin] = value
+        # Marshal callback notification to main event loop
+        if self._main_loop is not None and not self._main_loop.is_closed():
+            self._main_loop.call_soon_threadsafe(self._notify_callbacks, pin, value)
+        else:
+            self._notify_callbacks(pin, value)
 
     async def _analog_callback(self, data: list) -> None:
-        """Callback for analog pin value changes.
+        """Callback for analog pin value changes (called from telemetrix thread).
 
         telemetrix-aio callback format: [AT_ANALOG (3), pin, value, timestamp]
         """
@@ -518,7 +539,13 @@ class TelemetrixBoard(BaseBoard):
                 if analog_pin == pin:
                     with self._pin_values_lock:
                         self._pin_values[actual_pin] = value
-                    self._notify_callbacks(actual_pin, value)
+                    # Marshal callback notification to main event loop
+                    if self._main_loop is not None and not self._main_loop.is_closed():
+                        self._main_loop.call_soon_threadsafe(
+                            self._notify_callbacks, actual_pin, value
+                        )
+                    else:
+                        self._notify_callbacks(actual_pin, value)
                     break
         except Exception as e:
             logger.error(f"Error in analog callback: {e}, data={data}", exc_info=True)
@@ -534,9 +561,9 @@ class TelemetrixBoard(BaseBoard):
                 if mode == PinMode.OUTPUT:
                     cap = self._board_config["pins"].get(pin)
                     if cap and PinType.PWM in cap.supported_types:
-                        self._call_telemetrix("analog_write", pin, 0)
+                        await asyncio.to_thread(self._call_telemetrix, "analog_write", pin, 0)
                     else:
-                        self._call_telemetrix("digital_write", pin, 0)
+                        await asyncio.to_thread(self._call_telemetrix, "digital_write", pin, 0)
         except Exception as e:
             logger.error(f"Error during emergency stop: {e}")
 

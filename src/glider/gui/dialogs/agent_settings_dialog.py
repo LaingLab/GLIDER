@@ -306,7 +306,10 @@ class AgentSettingsDialog(QDialog):
 
     def _refresh_models(self) -> None:
         """Refresh available models from provider."""
-        asyncio.create_task(self._async_refresh_models())
+        try:
+            asyncio.create_task(self._async_refresh_models())
+        except RuntimeError:
+            logger.debug("No event loop available for async task")
 
     async def _async_refresh_models(self) -> None:
         """Async model refresh."""
@@ -336,7 +339,10 @@ class AgentSettingsDialog(QDialog):
 
     def _test_connection(self) -> None:
         """Test connection to the LLM provider."""
-        asyncio.create_task(self._async_test_connection())
+        try:
+            asyncio.create_task(self._async_test_connection())
+        except RuntimeError:
+            logger.debug("No event loop available for async task")
 
     async def _async_test_connection(self) -> None:
         """Async connection test."""

@@ -380,7 +380,10 @@ class AgentPanel(QWidget):
         self._current_response_bubble = self._add_message("assistant", "...")
 
         # Process asynchronously
-        asyncio.create_task(self._async_process(text))
+        try:
+            asyncio.create_task(self._async_process(text))
+        except RuntimeError:
+            logger.debug("No event loop available for async task")
 
     async def _async_process(self, text: str) -> None:
         """Async message processing."""
@@ -448,7 +451,10 @@ class AgentPanel(QWidget):
             self._action_widget = None
 
         if self._controller:
-            asyncio.create_task(self._execute_confirmed())
+            try:
+                asyncio.create_task(self._execute_confirmed())
+            except RuntimeError:
+                logger.debug("No event loop available for async task")
 
     async def _execute_confirmed(self) -> None:
         """Execute confirmed actions."""
@@ -469,7 +475,10 @@ class AgentPanel(QWidget):
             self._action_widget = None
 
         if self._controller:
-            asyncio.create_task(self._execute_rejected())
+            try:
+                asyncio.create_task(self._execute_rejected())
+            except RuntimeError:
+                logger.debug("No event loop available for async task")
 
     async def _execute_rejected(self) -> None:
         """Handle rejected actions."""

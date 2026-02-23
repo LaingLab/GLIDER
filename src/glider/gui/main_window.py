@@ -60,6 +60,7 @@ from glider.gui.commands import (
 from glider.gui.dialogs.calibration_dialog import CalibrationDialog
 from glider.gui.dialogs.camera_settings_dialog import CameraSettingsDialog
 from glider.gui.dialogs.experiment_dialog import ExperimentDialog
+from glider.gui.dialogs.help_dialog import HelpDialog
 from glider.gui.dialogs.subject_dialog import SubjectDialog
 from glider.gui.dialogs.zone_dialog import ZoneDialog
 from glider.gui.node_graph.graph_view import NodeGraphView
@@ -221,6 +222,10 @@ class MainWindow(QMainWindow):
 
         # Zone configuration
         self._zone_config = ZoneConfiguration()
+
+        # Reconnection retry tracking: board_id -> retry count
+        self._reconnect_retries: dict[str, int] = {}
+        self._max_reconnect_retries = 3
 
         # Setup UI
         self._setup_window()
@@ -618,12 +623,11 @@ class MainWindow(QMainWindow):
         self._pwm_spinbox.setMinimumHeight(35)
         self._pwm_spinbox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._pwm_spinbox.valueChanged.connect(self._on_pwm_changed)
-        # Hidden slider for compatibility
+        # Hidden slider for compatibility (one-way sync: spinbox -> slider only)
         self._pwm_slider = QSlider(Qt.Orientation.Horizontal)
         self._pwm_slider.setRange(0, 255)
         self._pwm_slider.hide()
         self._pwm_spinbox.valueChanged.connect(self._pwm_slider.setValue)
-        self._pwm_slider.valueChanged.connect(self._pwm_spinbox.setValue)
         pwm_layout.addWidget(pwm_label)
         pwm_layout.addWidget(self._pwm_spinbox, 1)
         self._control_group_layout.addWidget(self._pwm_widget)
@@ -957,6 +961,11 @@ class MainWindow(QMainWindow):
         # Help menu
         help_menu = menubar.addMenu("&Help")
 
+        help_action = QAction("&GLIDER Help", self)
+        help_action.setShortcut(QKeySequence("F1"))
+        help_action.triggered.connect(self._on_help)
+        help_menu.addAction(help_action)
+
         about_action = QAction("&About GLIDER", self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
@@ -1018,6 +1027,21 @@ class MainWindow(QMainWindow):
         self.setStatusBar(status_bar)
         status_bar.showMessage("Ready")
 
+    def _show_status_message(self, message: str, timeout: int = 0) -> None:
+        """Show a status bar message if not in runner mode.
+
+        Avoids auto-creating a status bar in runner mode (which would
+        break the frameless/fullscreen layout).
+
+        Args:
+            message: Message to display
+            timeout: Timeout in milliseconds (0 = no timeout)
+        """
+        if self._view_manager.is_runner_mode:
+            logger.debug(f"Status (runner mode): {message}")
+            return
+        self.statusBar().showMessage(message, timeout)
+
     def _connect_signals(self) -> None:
         """Connect internal signals."""
         # Connect core callbacks
@@ -1049,8 +1073,7 @@ class MainWindow(QMainWindow):
             self._toolbar_status.style().unpolish(self._toolbar_status)
             self._toolbar_status.style().polish(self._toolbar_status)
 
-        if hasattr(self, "statusBar") and self.statusBar():
-            self.statusBar().showMessage(f"State: {state_name}")
+        self._show_status_message(f"State: {state_name}")
 
         # Update runner view recording indicator
         if hasattr(self, "_runner_recording"):
@@ -1413,27 +1436,45 @@ class MainWindow(QMainWindow):
         """Attempt to reconnect to the disconnected board."""
         dialog.accept()
 
+        # Track retry count per board
+        retries = self._reconnect_retries.get(board_id, 0) + 1
+        self._reconnect_retries[board_id] = retries
+
+        if retries > self._max_reconnect_retries:
+            logger.warning(
+                f"Max reconnection retries ({self._max_reconnect_retries}) reached for {board_id}"
+            )
+            self._show_status_message(
+                f"Max retries reached for {board_id}. Stopping experiment.", 5000
+            )
+            self._reconnect_retries.pop(board_id, None)
+            self._run_async(self._core.stop())
+            return
+
         # Show progress
-        self.statusBar().showMessage(f"Reconnecting to {board_id}...")
+        self._show_status_message(
+            f"Reconnecting to {board_id} (attempt {retries}/{self._max_reconnect_retries})..."
+        )
 
         async def retry_connection():
             try:
                 success = await self._core.hardware_manager.connect_board(board_id)
                 if success:
                     logger.info(f"Reconnected to board {board_id}")
-                    self.statusBar().showMessage(f"Reconnected to {board_id}. Resuming...", 3000)
+                    self._reconnect_retries.pop(board_id, None)
+                    self._show_status_message(f"Reconnected to {board_id}. Resuming...", 3000)
                     # Resume the experiment
                     await self._core.resume()
                 else:
                     logger.warning(f"Failed to reconnect to board {board_id}")
-                    self.statusBar().showMessage(f"Failed to reconnect to {board_id}", 5000)
+                    self._show_status_message(f"Failed to reconnect to {board_id}", 5000)
                     # Show dialog again
                     self._show_hardware_disconnection_dialog(
                         board_id, BoardConnectionState.DISCONNECTED
                     )
             except Exception as e:
                 logger.error(f"Error reconnecting to {board_id}: {e}")
-                self.statusBar().showMessage(f"Error: {e}", 5000)
+                self._show_status_message(f"Error: {e}", 5000)
                 self._show_hardware_disconnection_dialog(board_id, BoardConnectionState.ERROR)
 
         self._run_async(retry_connection())
@@ -1460,7 +1501,7 @@ class MainWindow(QMainWindow):
         dialog.accept()
         logger.info("User stopped experiment due to hardware disconnection")
         self._run_async(self._core.stop())
-        self.statusBar().showMessage("Experiment stopped", 3000)
+        self._show_status_message("Experiment stopped", 3000)
 
     def _toggle_view(self) -> None:
         """Toggle between builder and runner views."""
@@ -1480,7 +1521,7 @@ class MainWindow(QMainWindow):
         # Adjust minimum size to allow smaller dimensions (e.g., Pi display)
         self.setMinimumSize(min(width, 480), min(height, 480))
         self.resize(width, height)
-        self.statusBar().showMessage(f"Window resized to {width}x{height}", 2000)
+        self._show_status_message(f"Window resized to {width}x{height}", 2000)
 
     def _set_pi_touchscreen_layout(self) -> None:
         """Set up Pi Touchscreen layout with tabbed panels.
@@ -1537,7 +1578,7 @@ class MainWindow(QMainWindow):
         # Raise the first dock to make it visible
         first_dock.raise_()
 
-        self.statusBar().showMessage("Pi Touchscreen layout applied", 2000)
+        self._show_status_message("Pi Touchscreen layout applied", 2000)
         logger.info("Applied Pi Touchscreen tabbed layout")
 
     def _set_default_layout(self) -> None:
@@ -1591,7 +1632,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "_files_dock", None) is not None:
             self._files_dock.setVisible(False)
 
-        self.statusBar().showMessage("Default layout restored", 2000)
+        self._show_status_message("Default layout restored", 2000)
         logger.info("Restored default desktop layout")
 
     # File operations
@@ -1652,7 +1693,7 @@ class MainWindow(QMainWindow):
                 rec_dir = self._core.session.metadata.recording_directory
                 if rec_dir:
                     self._core.set_recording_directory(Path(rec_dir))
-                self.statusBar().showMessage(f"Opened: {file_path}")
+                self._show_status_message(f"Opened: {file_path}")
             except Exception as e:
                 logger.exception(f"Failed to open file: {e}")
                 QMessageBox.critical(self, "Error", f"Failed to open file: {e}")
@@ -1821,7 +1862,7 @@ class MainWindow(QMainWindow):
         if self._core.session and self._core.session.file_path:
             try:
                 self._core.save_session()
-                self.statusBar().showMessage("Saved")
+                self._show_status_message("Saved")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save: {e}")
         else:
@@ -1847,13 +1888,16 @@ class MainWindow(QMainWindow):
         if file_path:
             try:
                 self._core.save_session(file_path)
-                self.statusBar().showMessage(f"Saved: {file_path}")
+                self._show_status_message(f"Saved: {file_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save: {e}")
 
     def _check_save(self) -> bool:
         """Check if current session should be saved. Returns True to proceed."""
         if self._core.session and self._core.session.is_dirty:
+            # Remember runner mode state before dialog breaks frameless window
+            was_runner_mode = self._view_manager.is_runner_mode
+
             result = QMessageBox.question(
                 self,
                 "Save Changes?",
@@ -1862,6 +1906,11 @@ class MainWindow(QMainWindow):
                 | QMessageBox.StandardButton.Discard
                 | QMessageBox.StandardButton.Cancel,
             )
+
+            # Restore frameless/fullscreen state on Pi after dialog closes
+            if was_runner_mode:
+                self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+                self.showFullScreen()
 
             if result == QMessageBox.StandardButton.Save:
                 self._on_save()
@@ -2451,7 +2500,7 @@ class MainWindow(QMainWindow):
                                     await self._core.hardware_manager.initialize_device(device_id)
                                 except Exception as e:
                                     logger.warning(f"Failed to initialize device {device_id}: {e}")
-                    self.statusBar().showMessage(f"Connected to {board_id}", 3000)
+                    self._show_status_message(f"Connected to {board_id}", 3000)
                 else:
                     QMessageBox.warning(
                         self, "Connection Failed", f"Could not connect to {board_id}"
@@ -2757,6 +2806,11 @@ class MainWindow(QMainWindow):
         """Trigger emergency stop."""
         self._run_async(self._core.emergency_stop())
 
+    def _on_help(self) -> None:
+        """Show the help dialog."""
+        dialog = HelpDialog(self)
+        dialog.exec()
+
     def _on_about(self) -> None:
         """Show about dialog."""
         QMessageBox.about(
@@ -2807,6 +2861,10 @@ class MainWindow(QMainWindow):
         # Switch to desktop/config mode - shows dock panels for full hardware configuration
         desktop_action = menu.addAction("Hardware Config")
         desktop_action.triggered.connect(self._switch_to_desktop_mode)
+
+        # Help
+        help_action = menu.addAction("Help")
+        help_action.triggered.connect(self._on_help)
 
         menu.addSeparator()
 
@@ -3770,7 +3828,7 @@ class MainWindow(QMainWindow):
         self._undo_stack.push(command)
         self._update_undo_redo_actions()
 
-        self.statusBar().showMessage(f"Created node: {display_name}", 2000)
+        self._show_status_message(f"Created node: {display_name}", 2000)
 
     def _setup_node_ports(self, node_item, node_type: str) -> None:
         """Set up input/output ports for a node based on its type."""
@@ -3859,12 +3917,12 @@ class MainWindow(QMainWindow):
         self._undo_stack.push(command)
         self._update_undo_redo_actions()
 
-        self.statusBar().showMessage(f"Deleted node: {node_id}", 2000)
+        self._show_status_message(f"Deleted node: {node_id}", 2000)
 
     def _on_node_selected(self, node_id: str) -> None:
         """Handle node selection from graph view."""
         self._update_properties_panel(node_id)
-        self.statusBar().showMessage(f"Selected: {node_id}", 1000)
+        self._show_status_message(f"Selected: {node_id}", 1000)
 
     def _on_node_moved(self, node_id: str, x: float, y: float) -> None:
         """Handle node movement from graph view."""
@@ -3906,7 +3964,7 @@ class MainWindow(QMainWindow):
         self._undo_stack.push(command)
         self._update_undo_redo_actions()
 
-        self.statusBar().showMessage(f"Connected: {from_node} -> {to_node}", 2000)
+        self._show_status_message(f"Connected: {from_node} -> {to_node}", 2000)
 
         # Refresh flow functions in case a function definition was completed
         self._refresh_flow_functions()
@@ -3933,7 +3991,7 @@ class MainWindow(QMainWindow):
         self._undo_stack.push(command)
         self._update_undo_redo_actions()
 
-        self.statusBar().showMessage(f"Deleted connection: {connection_id}", 2000)
+        self._show_status_message(f"Deleted connection: {connection_id}", 2000)
 
         # Refresh flow functions in case a function definition was broken
         self._refresh_flow_functions()
@@ -4467,7 +4525,7 @@ class MainWindow(QMainWindow):
         """Handle undo action."""
         command = self._undo_stack.undo()
         if command:
-            self.statusBar().showMessage(f"Undo: {command.description()}", 2000)
+            self._show_status_message(f"Undo: {command.description()}", 2000)
             self._update_undo_redo_actions()
 
     def _on_redo(self) -> None:
@@ -4477,7 +4535,7 @@ class MainWindow(QMainWindow):
             # For redo, we need to re-apply the action
             # Most commands just need to be re-created
             self._redo_command(command)
-            self.statusBar().showMessage(f"Redo: {command.description()}", 2000)
+            self._show_status_message(f"Redo: {command.description()}", 2000)
             self._update_undo_redo_actions()
 
     def _redo_command(self, command: Command) -> None:
@@ -5003,7 +5061,6 @@ class MainWindow(QMainWindow):
                     timeout = time.time() + 10
                     while not future.done() and time.time() < timeout:
                         QApplication.processEvents()
-                        time.sleep(0.01)  # Small sleep to prevent busy loop
                     if not future.done():
                         logger.warning("Shutdown timed out")
             except Exception as e:

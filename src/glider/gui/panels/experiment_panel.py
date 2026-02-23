@@ -312,12 +312,6 @@ class ExperimentPanel(QWidget):
             id_item = QTableWidgetItem(subject.subject_id)
             id_item.setData(Qt.ItemDataRole.UserRole, subject.id)
 
-            # Highlight active subject row
-            if subject.id == metadata.active_subject_id:
-                for _col in range(5):
-                    item = QTableWidgetItem()
-                    item.setBackground(Qt.GlobalColor.darkGreen)
-
             self._subject_table.setItem(row, 0, id_item)
             self._subject_table.setItem(row, 1, QTableWidgetItem(subject.name))
             self._subject_table.setItem(row, 2, QTableWidgetItem(subject.group))

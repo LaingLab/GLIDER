@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Callable, Optional
 
 from glider.hal.base_board import BaseBoard, BoardConnectionState
 from glider.hal.base_device import BaseDevice, create_device_from_dict
-from glider.hal.base_device import DeviceConfig as HALDeviceConfig
 from glider.hal.pin_manager import PinConflictError, PinManager
 
 if TYPE_CHECKING:
@@ -49,7 +48,8 @@ class HardwareManager:
     - Error recovery and reconnection
     """
 
-    # Registry of available board drivers
+    # Registry of available board drivers (intentionally class-level: shared across all
+    # HardwareManager instances so that driver registration is global and persistent)
     _driver_registry: dict[str, type[BaseBoard]] = {}
 
     def __init__(self):
@@ -252,12 +252,6 @@ class HardwareManager:
             raise BoardNotFoundError(f"Board not found: {config.board_id}")
 
         pin_manager = self._pin_managers.get(config.board_id)
-
-        # Create HAL device config
-        HALDeviceConfig(
-            pins=config.pins,
-            settings=config.settings,
-        )
 
         # Create device data for factory
         device_data = {
