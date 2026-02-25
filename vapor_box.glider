@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-02-13T11:02:34.210019",
-    "modified_at": "2026-02-20T13:10:08.403956",
+    "modified_at": "2026-02-25T14:58:39.845970",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -131,7 +131,7 @@
         "node_type": "WaitForInput",
         "position": [
           -613.0,
-          -47.0
+          -53.9
         ],
         "state": {
           "threshold_mode": "analog",
@@ -190,7 +190,7 @@
           17.0
         ],
         "state": {
-          "duration": 1
+          "duration": 2
         },
         "device_id": null,
         "visible_in_runner": false
@@ -203,7 +203,7 @@
           210.0
         ],
         "state": {
-          "duration": 1
+          "duration": 2
         },
         "device_id": null,
         "visible_in_runner": false
@@ -260,8 +260,8 @@
         "id": "delay_57067908",
         "node_type": "Delay",
         "position": [
-          346.0,
-          217.0
+          347.15000000000003,
+          219.3
         ],
         "state": {
           "duration": 3
