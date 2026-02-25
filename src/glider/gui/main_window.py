@@ -4679,6 +4679,11 @@ class MainWindow(QMainWindow):
             self._digital_widget.setVisible(is_digital_output)
         if hasattr(self, "_pwm_widget"):
             self._pwm_widget.setVisible(is_pwm_output)
+            if is_pwm_output and hasattr(self, "_pwm_spinbox"):
+                current_value = getattr(device, "_value", 0)
+                self._pwm_spinbox.blockSignals(True)
+                self._pwm_spinbox.setValue(current_value)
+                self._pwm_spinbox.blockSignals(False)
 
     def _get_selected_device(self):
         """Get the currently selected device."""
