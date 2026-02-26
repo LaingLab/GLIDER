@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-02-26T11:12:23.953761",
-    "modified_at": "2026-02-26T11:27:00.958836",
+    "modified_at": "2026-02-26T11:45:09.647186",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -194,37 +194,11 @@
         "visible_in_runner": false
       },
       {
-        "id": "output_4b0ebe88",
-        "node_type": "Output",
-        "position": [
-          -405.9499999999999,
-          218.5
-        ],
-        "state": {
-          "value": 100
-        },
-        "device_id": "pi_pump",
-        "visible_in_runner": false
-      },
-      {
-        "id": "output_f96e661c",
-        "node_type": "Output",
-        "position": [
-          -434.69999999999993,
-          80.49999999999997
-        ],
-        "state": {
-          "value": 100
-        },
-        "device_id": "ard_pump",
-        "visible_in_runner": false
-      },
-      {
         "id": "output_0f0d1c73",
         "node_type": "Output",
         "position": [
-          -1.1499999999999915,
-          83.94999999999999
+          -246.09999999999997,
+          86.24999999999999
         ],
         "state": {
           "value": 0
@@ -236,8 +210,8 @@
         "id": "output_d41d027a",
         "node_type": "Output",
         "position": [
-          16.100000000000037,
-          217.34999999999997
+          -251.84999999999997,
+          204.7
         ],
         "state": {
           "value": 0
@@ -249,8 +223,8 @@
         "id": "delay_a929705c",
         "node_type": "Delay",
         "position": [
-          -213.89999999999998,
-          85.1
+          -468.0499999999999,
+          82.79999999999998
         ],
         "state": {
           "duration": 4
@@ -262,8 +236,8 @@
         "id": "delay_f5ba4538",
         "node_type": "Delay",
         "position": [
-          -209.3,
-          219.65
+          -464.6,
+          198.95000000000002
         ],
         "state": {
           "duration": 4
@@ -281,7 +255,7 @@
         "state": {
           "value": 100
         },
-        "device_id": "ard_atom",
+        "device_id": "ard_pump",
         "visible_in_runner": false
       },
       {
@@ -292,7 +266,7 @@
           79.35
         ],
         "state": {
-          "value": 0
+          "value": 100
         },
         "device_id": "ard_atom",
         "visible_in_runner": false
@@ -307,7 +281,7 @@
         "state": {
           "value": 100
         },
-        "device_id": "pi_atom",
+        "device_id": "pi_pump",
         "visible_in_runner": false
       },
       {
@@ -318,7 +292,7 @@
           193.2
         ],
         "state": {
-          "value": 0
+          "value": 100
         },
         "device_id": "pi_atom",
         "visible_in_runner": false
@@ -344,6 +318,28 @@
         "state": {},
         "device_id": null,
         "visible_in_runner": true
+      },
+      {
+        "id": "output_c42cbc4f",
+        "node_type": "Output",
+        "position": [
+          -40.250000000000014,
+          83.94999999999999
+        ],
+        "state": {},
+        "device_id": "ard_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_b1c3b1dc",
+        "node_type": "Output",
+        "position": [
+          -31.049999999999997,
+          208.15
+        ],
+        "state": {},
+        "device_id": "pi_atom",
+        "visible_in_runner": false
       }
     ],
     "connections": [
@@ -412,38 +408,6 @@
         "connection_type": "exec"
       },
       {
-        "id": "conn_7770c6b7",
-        "from_node": "output_2f13086c",
-        "from_output": 0,
-        "to_node": "output_f96e661c",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_6530859e",
-        "from_node": "output_a24292ee",
-        "from_output": 0,
-        "to_node": "output_4b0ebe88",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_f2152523",
-        "from_node": "output_4b0ebe88",
-        "from_output": 0,
-        "to_node": "delay_f5ba4538",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_f1a85157",
-        "from_node": "output_f96e661c",
-        "from_output": 0,
-        "to_node": "delay_a929705c",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
         "id": "conn_f61cca30",
         "from_node": "delay_a929705c",
         "from_output": 0,
@@ -508,22 +472,6 @@
         "connection_type": "exec"
       },
       {
-        "id": "conn_2148eede",
-        "from_node": "output_5703153c",
-        "from_output": 0,
-        "to_node": "output_4b0ebe88",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_6ae6c9b8",
-        "from_node": "output_97b3dbcf",
-        "from_output": 0,
-        "to_node": "output_f96e661c",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
         "id": "conn_bfa98514",
         "from_node": "startexperiment_9e67cc22",
         "from_output": 0,
@@ -552,6 +500,38 @@
         "from_node": "loop_47efc263",
         "from_output": 0,
         "to_node": "waitforinput_80a933a6",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_600d44b6",
+        "from_node": "output_97b3dbcf",
+        "from_output": 0,
+        "to_node": "delay_a929705c",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_e13583d6",
+        "from_node": "output_0f0d1c73",
+        "from_output": 0,
+        "to_node": "output_c42cbc4f",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_3672c0fd",
+        "from_node": "output_d41d027a",
+        "from_output": 0,
+        "to_node": "output_b1c3b1dc",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_6a50d5f4",
+        "from_node": "output_5703153c",
+        "from_output": 0,
+        "to_node": "delay_f5ba4538",
         "to_input": 0,
         "connection_type": "exec"
       }
