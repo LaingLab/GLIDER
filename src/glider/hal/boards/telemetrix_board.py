@@ -423,7 +423,7 @@ class TelemetrixBoard(BaseBoard):
                     self._call_telemetrix(
                         "set_pin_mode_analog_input",
                         analog_pin,
-                        differential=5,
+                        differential=1,
                         callback=self._analog_callback,
                     )
                     logger.info(
