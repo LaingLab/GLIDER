@@ -1,0 +1,477 @@
+{
+  "metadata": {
+    "id": "f78c92bf-4e7b-42bb-9f12-bd4720c98cb3",
+    "name": "Untitled Experiment",
+    "description": "",
+    "author": "",
+    "version": "1.0.0",
+    "created_at": "2026-02-26T11:12:23.953761",
+    "modified_at": "2026-02-26T11:17:58.539490",
+    "glider_version": "1.0.0",
+    "protocol": "",
+    "experiment_type": "",
+    "experimenter": "",
+    "lab": "",
+    "project": "",
+    "notes": "",
+    "recording_directory": "",
+    "subjects": [],
+    "active_subject_id": null
+  },
+  "hardware": {
+    "boards": [
+      {
+        "id": "ard",
+        "driver_type": "arduino",
+        "port": null,
+        "board_type": "uno",
+        "auto_reconnect": false,
+        "settings": {}
+      },
+      {
+        "id": "pi",
+        "driver_type": "raspberry_pi",
+        "port": null,
+        "board_type": "uno",
+        "auto_reconnect": false,
+        "settings": {}
+      }
+    ],
+    "devices": [
+      {
+        "id": "ard_beam",
+        "device_type": "AnalogInput",
+        "name": "ard_beam",
+        "board_id": "ard",
+        "pins": {
+          "input": 14
+        },
+        "settings": {}
+      },
+      {
+        "id": "ard_pump",
+        "device_type": "PWMOutput",
+        "name": "ard_pump",
+        "board_id": "ard",
+        "pins": {
+          "output": 10
+        },
+        "settings": {}
+      },
+      {
+        "id": "ard_atom",
+        "device_type": "PWMOutput",
+        "name": "ard_atom",
+        "board_id": "ard",
+        "pins": {
+          "output": 11
+        },
+        "settings": {}
+      },
+      {
+        "id": "pi_beam",
+        "device_type": "ADS1115",
+        "name": "pi_beam",
+        "board_id": "pi",
+        "pins": {},
+        "settings": {
+          "i2c_address": 72,
+          "channel": 0,
+          "gain": 1
+        }
+      },
+      {
+        "id": "pi_pump",
+        "device_type": "PWMOutput",
+        "name": "pi_pump",
+        "board_id": "pi",
+        "pins": {
+          "output": 20
+        },
+        "settings": {}
+      },
+      {
+        "id": "pi_atom",
+        "device_type": "PWMOutput",
+        "name": "pi_atom",
+        "board_id": "ard",
+        "pins": {
+          "output": 21
+        },
+        "settings": {}
+      }
+    ]
+  },
+  "flow": {
+    "nodes": [
+      {
+        "id": "startexperiment_9e67cc22",
+        "node_type": "StartExperiment",
+        "position": [
+          -1598.0,
+          106.0
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "endexperiment_fb21cbdb",
+        "node_type": "EndExperiment",
+        "position": [
+          -1176.0,
+          480.0
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_2198bcd8",
+        "node_type": "Delay",
+        "position": [
+          -1425.0,
+          315.0
+        ],
+        "state": {
+          "duration": 1200
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "waitforinput_2fda0316",
+        "node_type": "WaitForInput",
+        "position": [
+          -1324.0,
+          70.0
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": true
+      },
+      {
+        "id": "waitforinput_80a933a6",
+        "node_type": "WaitForInput",
+        "position": [
+          -1323.0,
+          178.0
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": true
+      },
+      {
+        "id": "output_2f13086c",
+        "node_type": "Output",
+        "position": [
+          -702.0,
+          76.0
+        ],
+        "state": {
+          "value": 0
+        },
+        "device_id": "pi_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_ef331bfd",
+        "node_type": "Output",
+        "position": [
+          -1109.0,
+          67.0
+        ],
+        "state": {
+          "value": 100
+        },
+        "device_id": "pi_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_902f4c56",
+        "node_type": "Delay",
+        "position": [
+          -901.0,
+          76.0
+        ],
+        "state": {
+          "duration": 5
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_b454ace5",
+        "node_type": "Output",
+        "position": [
+          -1118.9500000000003,
+          178.25000000000003
+        ],
+        "state": {
+          "value": 100
+        },
+        "device_id": "pi_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_a24292ee",
+        "node_type": "Output",
+        "position": [
+          -686.55,
+          195.49999999999997
+        ],
+        "state": {},
+        "device_id": "pi_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_276a2c3c",
+        "node_type": "Delay",
+        "position": [
+          -908.4999999999998,
+          193.2
+        ],
+        "state": {
+          "duration": 5
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_4b0ebe88",
+        "node_type": "Output",
+        "position": [
+          -405.9499999999999,
+          218.5
+        ],
+        "state": {
+          "value": 100
+        },
+        "device_id": "pi_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_f96e661c",
+        "node_type": "Output",
+        "position": [
+          -434.69999999999993,
+          80.49999999999997
+        ],
+        "state": {
+          "value": 100
+        },
+        "device_id": "ard_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_0f0d1c73",
+        "node_type": "Output",
+        "position": [
+          2.3000000000000114,
+          85.1
+        ],
+        "state": {
+          "value": 100
+        },
+        "device_id": "ard_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_d41d027a",
+        "node_type": "Output",
+        "position": [
+          16.100000000000037,
+          217.34999999999997
+        ],
+        "state": {
+          "value": 100
+        },
+        "device_id": "pi_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_a929705c",
+        "node_type": "Delay",
+        "position": [
+          -213.89999999999998,
+          85.1
+        ],
+        "state": {
+          "duration": 4
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_f5ba4538",
+        "node_type": "Delay",
+        "position": [
+          -209.3,
+          219.65
+        ],
+        "state": {
+          "duration": 4
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn_09b8355e",
+        "from_node": "startexperiment_9e67cc22",
+        "from_output": 0,
+        "to_node": "delay_2198bcd8",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_8de7fac0",
+        "from_node": "delay_2198bcd8",
+        "from_output": 0,
+        "to_node": "endexperiment_fb21cbdb",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_c22a4103",
+        "from_node": "waitforinput_2fda0316",
+        "from_output": 0,
+        "to_node": "output_ef331bfd",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_369204d8",
+        "from_node": "output_ef331bfd",
+        "from_output": 0,
+        "to_node": "delay_902f4c56",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_afcfd9a4",
+        "from_node": "delay_902f4c56",
+        "from_output": 0,
+        "to_node": "output_2f13086c",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_232d2d93",
+        "from_node": "startexperiment_9e67cc22",
+        "from_output": 0,
+        "to_node": "waitforinput_2fda0316",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_8ff311e1",
+        "from_node": "startexperiment_9e67cc22",
+        "from_output": 0,
+        "to_node": "waitforinput_80a933a6",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_13fbc93f",
+        "from_node": "waitforinput_80a933a6",
+        "from_output": 0,
+        "to_node": "output_b454ace5",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_f288d667",
+        "from_node": "output_b454ace5",
+        "from_output": 0,
+        "to_node": "delay_276a2c3c",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_37c7f738",
+        "from_node": "delay_276a2c3c",
+        "from_output": 0,
+        "to_node": "output_a24292ee",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_7770c6b7",
+        "from_node": "output_2f13086c",
+        "from_output": 0,
+        "to_node": "output_f96e661c",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_6530859e",
+        "from_node": "output_a24292ee",
+        "from_output": 0,
+        "to_node": "output_4b0ebe88",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_f2152523",
+        "from_node": "output_4b0ebe88",
+        "from_output": 0,
+        "to_node": "delay_f5ba4538",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_f1a85157",
+        "from_node": "output_f96e661c",
+        "from_output": 0,
+        "to_node": "delay_a929705c",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_f61cca30",
+        "from_node": "delay_a929705c",
+        "from_output": 0,
+        "to_node": "output_0f0d1c73",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_aeaa21bb",
+        "from_node": "delay_f5ba4538",
+        "from_output": 0,
+        "to_node": "output_d41d027a",
+        "to_input": 0,
+        "connection_type": "exec"
+      }
+    ]
+  },
+  "dashboard": {
+    "widgets": [],
+    "layout": "vertical",
+    "columns": 1
+  },
+  "camera": {
+    "camera_index": 0,
+    "resolution": [
+      640,
+      480
+    ],
+    "fps": 30,
+    "exposure": -1,
+    "brightness": 128,
+    "contrast": 128,
+    "cv_enabled": true,
+    "cv_backend": "background_subtraction",
+    "confidence_threshold": 0.5,
+    "tracking_enabled": true,
+    "max_disappeared": 50,
+    "video_recording_enabled": true
+  },
+  "zones": {
+    "zones": [],
+    "config_width": 0,
+    "config_height": 0
+  }
+}
