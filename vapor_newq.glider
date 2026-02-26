@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-02-26T11:12:23.953761",
-    "modified_at": "2026-02-26T11:24:27.888222",
+    "modified_at": "2026-02-26T11:27:00.958836",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -108,8 +108,8 @@
         "id": "startexperiment_9e67cc22",
         "node_type": "StartExperiment",
         "position": [
-          -1598.0,
-          106.0
+          -1794.6499999999999,
+          104.85
         ],
         "state": {},
         "device_id": null,
@@ -144,7 +144,7 @@
         "node_type": "WaitForInput",
         "position": [
           -1324.0,
-          70.0
+          67.69999999999999
         ],
         "state": {
           "threshold_mode": "analog",
@@ -322,6 +322,28 @@
         },
         "device_id": "pi_atom",
         "visible_in_runner": false
+      },
+      {
+        "id": "loop_47efc263",
+        "node_type": "Loop",
+        "position": [
+          -1515.7,
+          151.79999999999998
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": true
+      },
+      {
+        "id": "loop_addff35e",
+        "node_type": "Loop",
+        "position": [
+          -1529.5,
+          36.799999999999955
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": true
       }
     ],
     "connections": [
@@ -362,22 +384,6 @@
         "from_node": "delay_902f4c56",
         "from_output": 0,
         "to_node": "output_2f13086c",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_232d2d93",
-        "from_node": "startexperiment_9e67cc22",
-        "from_output": 0,
-        "to_node": "waitforinput_2fda0316",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_8ff311e1",
-        "from_node": "startexperiment_9e67cc22",
-        "from_output": 0,
-        "to_node": "waitforinput_80a933a6",
         "to_input": 0,
         "connection_type": "exec"
       },
@@ -514,6 +520,38 @@
         "from_node": "output_97b3dbcf",
         "from_output": 0,
         "to_node": "output_f96e661c",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_bfa98514",
+        "from_node": "startexperiment_9e67cc22",
+        "from_output": 0,
+        "to_node": "loop_47efc263",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_fdeb6106",
+        "from_node": "startexperiment_9e67cc22",
+        "from_output": 0,
+        "to_node": "loop_addff35e",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_8f1347a5",
+        "from_node": "loop_addff35e",
+        "from_output": 0,
+        "to_node": "waitforinput_2fda0316",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_89adb224",
+        "from_node": "loop_47efc263",
+        "from_output": 0,
+        "to_node": "waitforinput_80a933a6",
         "to_input": 0,
         "connection_type": "exec"
       }
