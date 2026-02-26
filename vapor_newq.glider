@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-02-26T11:12:23.953761",
-    "modified_at": "2026-02-26T11:22:17.291462",
+    "modified_at": "2026-02-26T11:24:27.888222",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -223,11 +223,11 @@
         "id": "output_0f0d1c73",
         "node_type": "Output",
         "position": [
-          2.3000000000000114,
-          85.1
+          -1.1499999999999915,
+          83.94999999999999
         ],
         "state": {
-          "value": 100
+          "value": 0
         },
         "device_id": "ard_pump",
         "visible_in_runner": false
@@ -240,7 +240,7 @@
           217.34999999999997
         ],
         "state": {
-          "value": 100
+          "value": 0
         },
         "device_id": "pi_pump",
         "visible_in_runner": false
