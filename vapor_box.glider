@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-02-13T11:02:34.210019",
-    "modified_at": "2026-02-25T14:58:39.845970",
+    "modified_at": "2026-02-26T10:55:27.451157",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -332,11 +332,11 @@
         "id": "delay_67229c9d",
         "node_type": "Delay",
         "position": [
-          -858.2608695652175,
+          -857.2608695652175,
           379.13043478260875
         ],
         "state": {
-          "duration": 60
+          "duration": 1200
         },
         "device_id": null,
         "visible_in_runner": false
