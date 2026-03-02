@@ -123,11 +123,20 @@ class TelemetrixThread:
 
         async def _call():
             method = getattr(self._telemetrix, method_name)
-            return await method(*args, **kwargs)
+            # Use wait_for so the coroutine is cancelled on timeout, unblocking
+            # the telemetrix event loop for other tasks (e.g. the serial reporter
+            # that delivers analog callbacks).
+            return await asyncio.wait_for(method(*args, **kwargs), timeout=5.0)
 
         try:
             future = asyncio.run_coroutine_threadsafe(_call(), self._loop)
-            return future.result(timeout=5.0)
+            # Outer timeout is longer than inner wait_for to let cancellation propagate
+            return future.result(timeout=10.0)
+        except TimeoutError:
+            future.cancel()
+            raise RuntimeError(
+                f"Telemetrix operation '{method_name}' timed out after 5s"
+            )
         except RuntimeError as e:
             if "Event loop is closed" in str(e):
                 raise RuntimeError("Telemetrix connection lost - please reconnect the board") from e
@@ -262,11 +271,10 @@ class TelemetrixBoard(BaseBoard):
         self._pin_values: dict[int, Any] = {}
         self._pin_values_lock = threading.Lock()  # Thread-safe access to _pin_values
         self._analog_map: dict[int, int] = {}  # Maps actual pin to Arduino analog number
-        # Store main event loop for marshalling callbacks from telemetrix thread
-        try:
-            self._main_loop: asyncio.AbstractEventLoop | None = asyncio.get_event_loop()
-        except RuntimeError:
-            self._main_loop = None
+        # Main event loop for marshalling callbacks from telemetrix thread.
+        # Initialized to None here; updated in connect() to capture the correct
+        # (qasync) event loop that is actually running.
+        self._main_loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def _telemetrix(self):
@@ -327,6 +335,13 @@ class TelemetrixBoard(BaseBoard):
         try:
             self._set_state(BoardConnectionState.CONNECTING)
             logger.info(f"Connecting to {self.name} on port {self._port or 'auto'}...")
+
+            # Capture the running event loop (qasync) for marshalling callbacks
+            # from the telemetrix thread back to the Qt/main thread.
+            try:
+                self._main_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._main_loop = None
 
             # Import telemetrix here to allow graceful failure if not installed
             try:
