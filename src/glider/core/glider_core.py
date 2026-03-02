@@ -381,6 +381,13 @@ class GliderCore:
         except Exception as e:
             logger.error(f"Failed to register zone nodes: {e}")
 
+        try:
+            from glider.nodes.interface.audio_nodes import register_audio_nodes
+
+            register_audio_nodes(self._flow_engine)
+        except Exception as e:
+            logger.error(f"Failed to register audio nodes: {e}")
+
     async def _load_plugins(self) -> None:
         """Load plugins from the plugin directory."""
         try:
