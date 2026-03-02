@@ -3126,6 +3126,9 @@ class MainWindow(QMainWindow):
                 ("Output", "Output", "Write to a device (digital or PWM)"),
                 ("Input", "Input", "Read from a device (digital or analog)"),
             ],
+            "Audio": [
+                ("AudioPlayback", "Audio Playback", "Play an audio file (WAV/MP3)"),
+            ],
         }
 
         # Category colors for headers
@@ -3134,6 +3137,7 @@ class MainWindow(QMainWindow):
             "Functions": "#2d7a7a",  # Teal
             "Control": "#7a5a2d",  # Orange/Brown
             "I/O": "#2d7a2d",  # Green
+            "Audio": "#6a3a6a",  # Purple
         }
 
         for category, nodes in node_categories.items():
@@ -4473,6 +4477,77 @@ class MainWindow(QMainWindow):
             else:
                 props_layout.addRow(QLabel("(Flow function not found)"))
 
+        # Add properties for AudioPlayback node
+        elif node_type == "AudioPlayback":
+            # File path with browse button
+            file_edit = QLineEdit()
+            file_edit.setReadOnly(True)
+            file_edit.setPlaceholderText("No file selected")
+            saved_file = ""
+            if node_config and node_config.state:
+                saved_file = node_config.state.get("file_path", "")
+            file_edit.setText(saved_file)
+
+            browse_btn = QPushButton("Browse...")
+            browse_btn.clicked.connect(
+                lambda checked, nid=node_id, le=file_edit: self._browse_audio_file(nid, le)
+            )
+
+            file_layout = QHBoxLayout()
+            file_layout.addWidget(file_edit, 1)
+            file_layout.addWidget(browse_btn)
+            file_widget = QWidget()
+            file_widget.setLayout(file_layout)
+            props_layout.addRow("File:", file_widget)
+
+            # Output device selector
+            device_combo = QComboBox()
+            device_combo.addItem("System Default", None)
+            saved_device_index = None
+            saved_device_name = ""
+            if node_config and node_config.state:
+                saved_device_index = node_config.state.get("device_index")
+                saved_device_name = node_config.state.get("device_name", "")
+
+            try:
+                import sounddevice as sd
+
+                devices = sd.query_devices()
+                current_idx = 0
+                for i, dev in enumerate(devices):
+                    if dev["max_output_channels"] > 0:
+                        device_combo.addItem(dev["name"], i)
+                        if i == saved_device_index:
+                            current_idx = device_combo.count() - 1
+                device_combo.setCurrentIndex(current_idx)
+            except ImportError:
+                device_combo.addItem("(sounddevice not installed)", None)
+            except Exception as e:
+                logger.warning(f"Could not enumerate audio devices: {e}")
+
+            def on_audio_device_changed(idx, nid=node_id, combo=device_combo):
+                dev_idx = combo.currentData()
+                dev_name = combo.currentText()
+                self._on_node_property_changed(nid, "device_index", dev_idx)
+                self._on_node_property_changed(nid, "device_name", dev_name)
+
+            device_combo.currentIndexChanged.connect(on_audio_device_changed)
+            props_layout.addRow("Output Device:", device_combo)
+
+            # Volume control
+            volume_spin = QDoubleSpinBox()
+            volume_spin.setRange(0.0, 1.0)
+            volume_spin.setDecimals(2)
+            volume_spin.setSingleStep(0.05)
+            saved_volume = 1.0
+            if node_config and node_config.state:
+                saved_volume = node_config.state.get("volume", 1.0)
+            volume_spin.setValue(saved_volume)
+            volume_spin.valueChanged.connect(
+                lambda val, nid=node_id: self._on_node_property_changed(nid, "volume", val)
+            )
+            props_layout.addRow("Volume:", volume_spin)
+
         self._properties_dock.setWidget(props_widget)
 
     def _on_node_device_changed(self, node_id: str, device_id: str) -> None:
@@ -4507,6 +4582,18 @@ class MainWindow(QMainWindow):
             # Refresh flow functions if function name changed
             if prop_name == "function_name":
                 self._refresh_flow_functions()
+
+    def _browse_audio_file(self, node_id: str, line_edit: QLineEdit) -> None:
+        """Open a file dialog to select an audio file for an AudioPlayback node."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Audio File",
+            "",
+            "Audio Files (*.wav *.mp3);;WAV Files (*.wav);;MP3 Files (*.mp3);;All Files (*)",
+        )
+        if file_path:
+            line_edit.setText(file_path)
+            self._on_node_property_changed(node_id, "file_path", file_path)
 
     def _run_async(self, coro) -> asyncio.Task:
         """
