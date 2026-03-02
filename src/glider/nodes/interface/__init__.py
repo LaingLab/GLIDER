@@ -11,6 +11,10 @@ from glider.nodes.interface.display_nodes import (
     LabelNode,
     LEDIndicatorNode,
 )
+from glider.nodes.interface.audio_nodes import (
+    AudioPlaybackNode,
+    register_audio_nodes,
+)
 from glider.nodes.interface.input_nodes import (
     ButtonNode,
     NumericInputNode,
@@ -27,4 +31,6 @@ __all__ = [
     "ToggleSwitchNode",
     "SliderNode",
     "NumericInputNode",
+    "AudioPlaybackNode",
+    "register_audio_nodes",
 ]
