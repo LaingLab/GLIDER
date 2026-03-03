@@ -21,6 +21,10 @@ from glider.nodes.interface.input_nodes import (
     SliderNode,
     ToggleSwitchNode,
 )
+from glider.nodes.interface.video_nodes import (
+    VideoPlaybackNode,
+    register_video_nodes,
+)
 
 __all__ = [
     "LabelNode",
@@ -33,4 +37,6 @@ __all__ = [
     "NumericInputNode",
     "AudioPlaybackNode",
     "register_audio_nodes",
+    "VideoPlaybackNode",
+    "register_video_nodes",
 ]
