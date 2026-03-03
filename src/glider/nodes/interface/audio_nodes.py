@@ -96,26 +96,30 @@ class AudioPlaybackNode(GliderNode):
         """
         Load an audio file and return (numpy_array, samplerate).
 
-        WAV files are loaded via soundfile; MP3 files via pydub.
+        Tries soundfile first (supports WAV, FLAC, OGG, MP3 via libsndfile).
+        Falls back to pydub for MP3 if soundfile cannot handle it.
         """
-        lower = file_path.lower()
-        if lower.endswith(".mp3"):
-            import numpy as np
-            from pydub import AudioSegment
+        import soundfile as sf
 
-            seg = AudioSegment.from_mp3(file_path)
-            samplerate = seg.frame_rate
-            samples = np.array(seg.get_array_of_samples(), dtype=np.float32)
-            # Normalise int samples to -1..1
-            samples = samples / (2 ** (seg.sample_width * 8 - 1))
-            if seg.channels > 1:
-                samples = samples.reshape(-1, seg.channels)
-            return samples, samplerate
-        else:
-            import soundfile as sf
-
+        try:
             data, samplerate = sf.read(file_path, dtype="float32")
             return data, samplerate
+        except Exception:
+            # soundfile couldn't decode this format; try pydub for MP3
+            if not file_path.lower().endswith(".mp3"):
+                raise
+
+        import numpy as np
+        from pydub import AudioSegment
+
+        seg = AudioSegment.from_mp3(file_path)
+        samplerate = seg.frame_rate
+        samples = np.array(seg.get_array_of_samples(), dtype=np.float32)
+        # Normalise int samples to -1..1
+        samples = samples / (2 ** (seg.sample_width * 8 - 1))
+        if seg.channels > 1:
+            samples = samples.reshape(-1, seg.channels)
+        return samples, samplerate
 
     async def stop(self) -> None:
         """Stop any active playback."""
