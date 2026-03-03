@@ -3129,6 +3129,9 @@ class MainWindow(QMainWindow):
             "Audio": [
                 ("AudioPlayback", "Audio Playback", "Play an audio file (WAV/MP3)"),
             ],
+            "Video": [
+                ("VideoPlayback", "Video Playback", "Play a video file (MP4/AVI)"),
+            ],
         }
 
         # Category colors for headers
@@ -3138,6 +3141,7 @@ class MainWindow(QMainWindow):
             "Control": "#7a5a2d",  # Orange/Brown
             "I/O": "#2d7a2d",  # Green
             "Audio": "#6a3a6a",  # Purple
+            "Video": "#2d5a6a",  # Teal-blue
         }
 
         for category, nodes in node_categories.items():
@@ -4536,9 +4540,7 @@ class MainWindow(QMainWindow):
                             best[norm] = (prio, i, dev["name"])
 
                 current_idx = 0
-                for _norm, (_prio, i, name) in sorted(
-                    best.items(), key=lambda kv: kv[1][1]
-                ):
+                for _norm, (_prio, i, name) in sorted(best.items(), key=lambda kv: kv[1][1]):
                     device_combo.addItem(name, i)
                     if i == saved_device_index:
                         current_idx = device_combo.count() - 1
@@ -4570,6 +4572,50 @@ class MainWindow(QMainWindow):
                 lambda val, nid=node_id: self._on_node_property_changed(nid, "volume", val)
             )
             props_layout.addRow("Volume:", volume_spin)
+
+        # Add properties for VideoPlayback node
+        elif node_type == "VideoPlayback":
+            # File path with browse button
+            file_edit = QLineEdit()
+            file_edit.setReadOnly(True)
+            file_edit.setPlaceholderText("No file selected")
+            saved_file = ""
+            if node_config and node_config.state:
+                saved_file = node_config.state.get("file_path", "")
+            file_edit.setText(saved_file)
+
+            browse_btn = QPushButton("Browse...")
+            browse_btn.clicked.connect(
+                lambda checked, nid=node_id, le=file_edit: self._browse_video_file(nid, le)
+            )
+
+            file_layout = QHBoxLayout()
+            file_layout.addWidget(file_edit, 1)
+            file_layout.addWidget(browse_btn)
+            file_widget = QWidget()
+            file_widget.setLayout(file_layout)
+            props_layout.addRow("File:", file_widget)
+
+            # Monitor selector
+            monitor_combo = QComboBox()
+            screens = QApplication.screens()
+            saved_monitor = -1
+            if node_config and node_config.state:
+                saved_monitor = node_config.state.get("monitor_index", -1)
+            current_idx = 0
+            for i, screen in enumerate(screens):
+                geo = screen.geometry()
+                label = f"{screen.name()} ({geo.width()}x{geo.height()})"
+                monitor_combo.addItem(label, i)
+                if i == saved_monitor:
+                    current_idx = i
+            monitor_combo.setCurrentIndex(current_idx)
+            monitor_combo.currentIndexChanged.connect(
+                lambda idx, nid=node_id, combo=monitor_combo: (
+                    self._on_node_property_changed(nid, "monitor_index", combo.currentData())
+                )
+            )
+            props_layout.addRow("Monitor:", monitor_combo)
 
         self._properties_dock.setWidget(props_widget)
 
@@ -4613,6 +4659,18 @@ class MainWindow(QMainWindow):
             "Select Audio File",
             "",
             "Audio Files (*.wav *.mp3);;WAV Files (*.wav);;MP3 Files (*.mp3);;All Files (*)",
+        )
+        if file_path:
+            line_edit.setText(file_path)
+            self._on_node_property_changed(node_id, "file_path", file_path)
+
+    def _browse_video_file(self, node_id: str, line_edit: QLineEdit) -> None:
+        """Open a file dialog to select a video file for a VideoPlayback node."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Video File",
+            "",
+            "Video Files (*.mp4 *.avi *.mov *.mkv);;MP4 Files (*.mp4);;All Files (*)",
         )
         if file_path:
             line_edit.setText(file_path)
