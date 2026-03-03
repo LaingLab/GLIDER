@@ -388,6 +388,13 @@ class GliderCore:
         except Exception as e:
             logger.error(f"Failed to register audio nodes: {e}")
 
+        try:
+            from glider.nodes.interface.video_nodes import register_video_nodes
+
+            register_video_nodes(self._flow_engine)
+        except Exception as e:
+            logger.error(f"Failed to register video nodes: {e}")
+
     async def _load_plugins(self) -> None:
         """Load plugins from the plugin directory."""
         try:
