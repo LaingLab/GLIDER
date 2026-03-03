@@ -4111,7 +4111,7 @@ class MainWindow(QMainWindow):
                 props_layout.addRow("PWM Value (0-255):", pwm_spin)
             else:
                 # Digital device: show HIGH/LOW radios
-                from PyQt6.QtWidgets import QHBoxLayout, QRadioButton
+                from PyQt6.QtWidgets import QRadioButton
 
                 value_layout = QHBoxLayout()
                 high_radio = QRadioButton("HIGH")
@@ -4513,12 +4513,35 @@ class MainWindow(QMainWindow):
                 import sounddevice as sd
 
                 devices = sd.query_devices()
-                current_idx = 0
+                hostapis = sd.query_hostapis()
+                # Each physical device appears under multiple host APIs
+                # (MME, DirectSound, WASAPI, WDM-KS).  Pick one entry per
+                # physical device, preferring DirectSound > WASAPI > others
+                # for broad compatibility and non-truncated names.
+                api_names = {i: h["name"] for i, h in enumerate(hostapis)}
+                API_PRIORITY = {
+                    "Windows DirectSound": 0,
+                    "Windows WASAPI": 1,
+                }
+                # Collect output devices keyed by a normalized name prefix
+                # (first 28 chars covers MME's truncation limit).
+                best = {}  # norm_name -> (priority, device_index, display_name)
                 for i, dev in enumerate(devices):
                     if dev["max_output_channels"] > 0:
-                        device_combo.addItem(dev["name"], i)
-                        if i == saved_device_index:
-                            current_idx = device_combo.count() - 1
+                        norm = dev["name"][:28].rstrip()
+                        api = api_names.get(dev["hostapi"], "")
+                        prio = API_PRIORITY.get(api, 2)
+                        prev = best.get(norm)
+                        if prev is None or prio < prev[0]:
+                            best[norm] = (prio, i, dev["name"])
+
+                current_idx = 0
+                for _norm, (_prio, i, name) in sorted(
+                    best.items(), key=lambda kv: kv[1][1]
+                ):
+                    device_combo.addItem(name, i)
+                    if i == saved_device_index:
+                        current_idx = device_combo.count() - 1
                 device_combo.setCurrentIndex(current_idx)
             except ImportError:
                 device_combo.addItem("(sounddevice not installed)", None)
