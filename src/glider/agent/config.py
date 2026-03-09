@@ -126,6 +126,6 @@ class AgentConfig:
 # Default models for each provider
 DEFAULT_MODELS = {
     LLMProvider.OLLAMA: "llama3.2",
-    LLMProvider.OPENAI: "gpt-4-turbo",
-    LLMProvider.ANTHROPIC: "claude-3-sonnet-20240229",
+    LLMProvider.OPENAI: "gpt-4o",
+    LLMProvider.ANTHROPIC: "claude-sonnet-4-6",
 }

@@ -426,8 +426,16 @@ class ExperimentSerializer:
         version = schema.schema_version
 
         # Check version compatibility
-        major, minor, patch = map(int, version.split("."))
-        current_major, current_minor, current_patch = map(int, SCHEMA_VERSION.split("."))
+        try:
+            parts = version.split(".")
+            major, minor = int(parts[0]), int(parts[1])
+        except (ValueError, IndexError) as e:
+            raise SchemaValidationError(f"Invalid schema version format: {version}") from e
+        try:
+            current_parts = SCHEMA_VERSION.split(".")
+            current_major, current_minor = int(current_parts[0]), int(current_parts[1])
+        except (ValueError, IndexError) as e:
+            raise SchemaValidationError(f"Invalid current schema version format: {SCHEMA_VERSION}") from e
 
         if major > current_major:
             raise ValueError(f"Schema version {version} is newer than supported {SCHEMA_VERSION}")

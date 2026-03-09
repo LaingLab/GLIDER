@@ -31,6 +31,21 @@ class SessionState(Enum):
     STOPPING = auto()  # Shutting down
     ERROR = auto()  # Error state
 
+    @property
+    def is_active(self) -> bool:
+        """Whether the session is actively running."""
+        return self == SessionState.RUNNING
+
+    @property
+    def can_start(self) -> bool:
+        """Whether the session can be started."""
+        return self in (SessionState.IDLE, SessionState.READY)
+
+    @property
+    def can_stop(self) -> bool:
+        """Whether the session can be stopped."""
+        return self in (SessionState.RUNNING, SessionState.PAUSED, SessionState.ERROR)
+
 
 @dataclass
 class Subject:
@@ -595,6 +610,10 @@ class ExperimentSession:
     def on_change(self, callback: Callable[[], None]) -> None:
         """Register a callback for any changes."""
         self._change_callbacks.append(callback)
+
+    def mark_dirty(self) -> None:
+        """Mark the session as having unsaved changes (public API)."""
+        self._mark_dirty()
 
     def _mark_dirty(self) -> None:
         """Mark the session as having unsaved changes."""

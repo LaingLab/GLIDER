@@ -9,6 +9,7 @@ the next exec output.
 Requires: sounddevice, soundfile (WAV), pydub (MP3 support).
 """
 
+import asyncio
 import logging
 
 from glider.nodes.base_node import (
@@ -69,7 +70,7 @@ class AudioPlaybackNode(GliderNode):
         try:
             import numpy as np
 
-            data, samplerate = self._load_audio(file_path)
+            data, samplerate = await asyncio.to_thread(self._load_audio, file_path)
 
             # Apply volume scaling
             if volume != 1.0:

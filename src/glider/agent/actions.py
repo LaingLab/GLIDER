@@ -25,6 +25,7 @@ class ActionType(Enum):
     # Hardware actions
     ADD_BOARD = auto()
     REMOVE_BOARD = auto()
+    DISCONNECT_BOARD = auto()
     ADD_DEVICE = auto()
     REMOVE_DEVICE = auto()
     CONFIGURE_DEVICE = auto()

@@ -30,7 +30,10 @@ class ButtonNode(ExecNode, InterfaceNode):
 
     def __init__(self):
         ExecNode.__init__(self)
+        # Manually initialize InterfaceNode fields not set by ExecNode so that
+        # both branches of the diamond are properly initialized.
         self._visible_in_runner = True
+        self._widget_callbacks: list = []
         self._label = "Button"
         self._press_count = 0
 
@@ -82,6 +85,7 @@ class ToggleSwitchNode(InterfaceNode):
 
     def __init__(self):
         super().__init__()
+        self._exec_callbacks: list = []
         self._label = "Switch"
         self._switch_state = False
 
@@ -233,6 +237,7 @@ class NumericInputNode(InterfaceNode):
 
     def __init__(self):
         super().__init__()
+        self._exec_callbacks: list = []
         self._label = "Input"
         self._value = 0.0
         self._min_value = None

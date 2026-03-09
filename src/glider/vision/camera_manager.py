@@ -13,6 +13,8 @@ import os
 # Suppress OpenCV warnings before importing cv2
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
+import contextlib
+import io
 import logging
 import shutil
 import subprocess
@@ -1016,73 +1018,69 @@ class CameraManager:
         cameras = []
         found_indices = set()  # Track which indices we've already found
 
-        # Suppress OpenCV warnings during enumeration
-        import io
-        import os
-        import sys
-
-        old_stderr = sys.stderr
-        sys.stderr = io.StringIO()
-
         # Also suppress OpenCV's internal logging
         old_log_level = os.environ.get("OPENCV_LOG_LEVEL", "")
         os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
 
         try:
-            # Get camera names on Windows
-            camera_names = _get_windows_camera_names() if sys.platform == "win32" else []
+            # Suppress OpenCV warnings written to stderr without replacing
+            # sys.stderr globally (which is not thread-safe).
+            with contextlib.redirect_stderr(io.StringIO()):
+                # Get camera names on Windows
+                camera_names = _get_windows_camera_names() if sys.platform == "win32" else []
 
-            # On Windows, use DirectShow only for enumeration
-            # CAP_ANY triggers multiple backends (MSMF, obsensor, etc.) that can
-            # leave cameras in a bad state and cause extremely slow enumeration
-            if sys.platform == "win32":
-                backends_to_try = [cv2.CAP_DSHOW]
-            else:
-                backends_to_try = [_get_camera_backend()]
+                # On Windows, use DirectShow only for enumeration
+                # CAP_ANY triggers multiple backends (MSMF, obsensor, etc.) that can
+                # leave cameras in a bad state and cause extremely slow enumeration
+                if sys.platform == "win32":
+                    backends_to_try = [cv2.CAP_DSHOW]
+                else:
+                    backends_to_try = [_get_camera_backend()]
 
-            for backend in backends_to_try:
-                for i in range(max_cameras):
-                    # Skip if we already found this camera index
-                    if i in found_indices:
-                        continue
+                for backend in backends_to_try:
+                    for i in range(max_cameras):
+                        # Skip if we already found this camera index
+                        if i in found_indices:
+                            continue
 
-                    try:
-                        # Quick check - just see if camera opens
-                        # Don't try to read frames here (too slow for problematic cameras)
-                        cap = cv2.VideoCapture(i, backend)
-                        if cap.isOpened():
-                            # Camera found - add it to the list
-                            # Use detected name if available, otherwise fallback
-                            if i < len(camera_names) and camera_names[i]:
-                                name = camera_names[i]
-                            else:
-                                name = f"Camera {i}"
+                        try:
+                            # Quick check - just see if camera opens
+                            # Don't try to read frames here (too slow for problematic cameras)
+                            cap = cv2.VideoCapture(i, backend)
+                            if cap.isOpened():
+                                # Camera found - add it to the list
+                                # Use detected name if available, otherwise fallback
+                                if i < len(camera_names) and camera_names[i]:
+                                    name = camera_names[i]
+                                else:
+                                    name = f"Camera {i}"
 
-                            # Get basic info without reading frames
-                            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
-                            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
-                            max_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+                                # Get basic info without reading frames
+                                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
+                                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
+                                max_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
-                            cameras.append(
-                                CameraInfo(
-                                    index=i,
-                                    name=name,
-                                    resolutions=[(w, h)] + CameraManager.COMMON_RESOLUTIONS,
-                                    max_fps=max_fps,
-                                    is_available=True,
+                                cameras.append(
+                                    CameraInfo(
+                                        index=i,
+                                        name=name,
+                                        resolutions=[(w, h)] + CameraManager.COMMON_RESOLUTIONS,
+                                        max_fps=max_fps,
+                                        is_available=True,
+                                    )
                                 )
-                            )
-                            found_indices.add(i)
-                            cap.release()
-                            break  # Found with this backend, move to next index
+                                found_indices.add(i)
+                                cap.release()
+                                break  # Found with this backend, move to next index
 
-                        cap.release()
-                    except Exception as e:
-                        # Some cameras/backends can throw exceptions during enumeration
-                        logger.debug(f"Error enumerating camera {i} with backend {backend}: {e}")
+                            cap.release()
+                        except Exception as e:
+                            # Some cameras/backends can throw exceptions during enumeration
+                            logger.debug(
+                                f"Error enumerating camera {i} with backend {backend}: {e}"
+                            )
         finally:
-            # Restore stderr and log level
-            sys.stderr = old_stderr
+            # Restore OpenCV log level
             if old_log_level:
                 os.environ["OPENCV_LOG_LEVEL"] = old_log_level
             elif "OPENCV_LOG_LEVEL" in os.environ:

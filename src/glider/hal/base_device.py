@@ -185,7 +185,10 @@ class BaseDevice(ABC):
             raise ValueError(f"Unknown action: {action_name}")
 
         action = self.actions[action_name]
-        return await action(*args, **kwargs)
+        if asyncio.iscoroutinefunction(action):
+            return await action(*args, **kwargs)
+        else:
+            return await asyncio.to_thread(action, *args, **kwargs)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize device configuration to dictionary."""
@@ -790,6 +793,7 @@ class MotorGovernorDevice(BaseDevice):
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
         self._position: int | None = None
+        self._motor_lock = asyncio.Lock()
 
     @property
     def position(self) -> int | None:
@@ -826,18 +830,17 @@ class MotorGovernorDevice(BaseDevice):
 
         Logic: Set DOWN high, then toggle UP high->low.
         """
-        import asyncio
+        async with self._motor_lock:
+            up_pin = self._config.pins["up"]
+            down_pin = self._config.pins["down"]
 
-        up_pin = self._config.pins["up"]
-        down_pin = self._config.pins["down"]
+            # Set DOWN high
+            await self._board.write_digital(down_pin, True)
 
-        # Set DOWN high
-        await self._board.write_digital(down_pin, True)
-
-        # Toggle UP: high then low
-        await self._board.write_digital(up_pin, True)
-        await asyncio.sleep(0.05)  # Brief pulse
-        await self._board.write_digital(up_pin, False)
+            # Toggle UP: high then low
+            await self._board.write_digital(up_pin, True)
+            await asyncio.sleep(0.05)  # Brief pulse
+            await self._board.write_digital(up_pin, False)
 
     async def move_down(self) -> None:
         """
@@ -845,18 +848,17 @@ class MotorGovernorDevice(BaseDevice):
 
         Logic: Set UP high, then toggle DOWN high->low.
         """
-        import asyncio
+        async with self._motor_lock:
+            up_pin = self._config.pins["up"]
+            down_pin = self._config.pins["down"]
 
-        up_pin = self._config.pins["up"]
-        down_pin = self._config.pins["down"]
+            # Set UP high
+            await self._board.write_digital(up_pin, True)
 
-        # Set UP high
-        await self._board.write_digital(up_pin, True)
-
-        # Toggle DOWN: high then low
-        await self._board.write_digital(down_pin, True)
-        await asyncio.sleep(0.05)  # Brief pulse
-        await self._board.write_digital(down_pin, False)
+            # Toggle DOWN: high then low
+            await self._board.write_digital(down_pin, True)
+            await asyncio.sleep(0.05)  # Brief pulse
+            await self._board.write_digital(down_pin, False)
 
     async def stop(self) -> None:
         """Set both pins low (idle state)."""
