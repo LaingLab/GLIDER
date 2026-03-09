@@ -185,8 +185,7 @@ class AgentController:
         if len(self._conversation) > self.MAX_CONVERSATION_LENGTH:
             # Keep system message (index 0) and the most recent messages
             self._conversation = (
-                self._conversation[:1]
-                + self._conversation[-(self.MAX_CONVERSATION_LENGTH - 1):]
+                self._conversation[:1] + self._conversation[-(self.MAX_CONVERSATION_LENGTH - 1) :]
             )
 
     def _sanitize_input(self, text: str) -> str:

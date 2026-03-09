@@ -376,6 +376,10 @@ class CameraPanel(QWidget):
         self._overlay_cb.toggled.connect(self._on_overlay_toggle)
         cv_layout.addWidget(self._overlay_cb)
 
+        self._vision_cone_cb = QCheckBox("Vision Cone")
+        self._vision_cone_cb.toggled.connect(self._on_vision_cone_toggle)
+        cv_layout.addWidget(self._vision_cone_cb)
+
         cv_layout.addStretch()
         layout.addLayout(cv_layout)
 
@@ -644,6 +648,10 @@ class CameraPanel(QWidget):
     def _on_overlay_toggle(self, enabled: bool) -> None:
         """Handle overlay display toggle."""
         self._cv_processor.settings.draw_overlays = enabled
+
+    def _on_vision_cone_toggle(self, enabled: bool) -> None:
+        """Handle vision cone overlay toggle."""
+        self._cv_processor.settings.vision_cone_enabled = enabled
 
     def _on_multi_camera_toggle(self, enabled: bool) -> None:
         """Handle multi-camera mode toggle."""
