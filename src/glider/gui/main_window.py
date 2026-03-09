@@ -1067,9 +1067,7 @@ class MainWindow(QMainWindow):
         self._hardware_connection_changed.connect(self._on_hardware_connection_change)
 
         self._core.on_state_change(lambda state: self._core_state_changed.emit(state))
-        self._core.on_error(
-            lambda source, error: self._core_error_occurred.emit(source, error)
-        )
+        self._core.on_error(lambda source, error: self._core_error_occurred.emit(source, error))
         self._core.hardware_manager.on_connection_change(
             lambda board_id, state: self._hardware_connection_changed.emit(board_id, state)
         )
@@ -4532,7 +4530,7 @@ class MainWindow(QMainWindow):
             saved_device_name = ""
             if node_config and node_config.state:
                 saved_device_index = node_config.state.get("device_index")
-                saved_device_name = node_config.state.get("device_name", "")
+                saved_device_name = node_config.state.get("device_name", "")  # noqa: F841
 
             try:
                 import sounddevice as sd
@@ -4544,7 +4542,7 @@ class MainWindow(QMainWindow):
                 # physical device, preferring DirectSound > WASAPI > others
                 # for broad compatibility and non-truncated names.
                 api_names = {i: h["name"] for i, h in enumerate(hostapis)}
-                API_PRIORITY = {
+                api_priority = {
                     "Windows DirectSound": 0,
                     "Windows WASAPI": 1,
                 }
@@ -4555,7 +4553,7 @@ class MainWindow(QMainWindow):
                     if dev["max_output_channels"] > 0:
                         norm = dev["name"][:28].rstrip()
                         api = api_names.get(dev["hostapi"], "")
-                        prio = API_PRIORITY.get(api, 2)
+                        prio = api_priority.get(api, 2)
                         prev = best.get(norm)
                         if prev is None or prio < prev[0]:
                             best[norm] = (prio, i, dev["name"])
