@@ -123,9 +123,7 @@ class TelemetrixThread:
             return future.result(timeout=10.0)
         except TimeoutError:
             future.cancel()
-            raise RuntimeError(
-                f"Telemetrix operation '{method_name}' timed out after 5s"
-            )
+            raise RuntimeError(f"Telemetrix operation '{method_name}' timed out after 5s") from None
         except RuntimeError as e:
             if "Event loop is closed" in str(e):
                 raise RuntimeError("Telemetrix connection lost - please reconnect the board") from e
@@ -372,7 +370,7 @@ class TelemetrixBoard(BaseBoard):
         # Disable analog reporting before shutdown to prevent KeyError
         # in telemetrix's _analog_message when callbacks are torn down
         if self._telemetrix_thread is not None:
-            for actual_pin, analog_pin in self._analog_map.items():
+            for _actual_pin, analog_pin in self._analog_map.items():
                 try:
                     self._call_telemetrix("disable_analog_reporting", analog_pin)
                 except Exception:

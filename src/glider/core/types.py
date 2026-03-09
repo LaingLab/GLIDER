@@ -185,5 +185,3 @@ class DeviceType(Enum):
     def is_analog(self) -> bool:
         """Whether this device type uses analog signals."""
         return self in (DeviceType.ANALOG_INPUT, DeviceType.PWM_OUTPUT)
-
-
