@@ -11,6 +11,7 @@ Video-only (no audio track) — cv2.VideoCapture does not handle audio.
 Requires: opencv-python (cv2), already a project dependency.
 """
 
+import asyncio
 import logging
 
 import cv2
@@ -191,8 +192,27 @@ class VideoPlaybackNode(GliderNode):
 
         try:
             self._ensure_player()
+
+            # Create a Future that will be resolved when the video finishes.
+            loop = asyncio.get_event_loop()
+            finished_future: asyncio.Future = loop.create_future()
+
+            def _on_finished():
+                if not finished_future.done():
+                    loop.call_soon_threadsafe(finished_future.set_result, True)
+
+            self._player.finished.connect(_on_finished)
             self._player.play()
             logger.info(f"VideoPlayback: playing '{file_path}'")
+
+            # Wait for the video to finish before proceeding.
+            await finished_future
+
+            # Disconnect the one-shot slot to prevent duplicate triggers on replay.
+            try:
+                self._player.finished.disconnect(_on_finished)
+            except RuntimeError:
+                pass  # Already disconnected (e.g., window closed)
         except Exception as e:
             logger.error(f"VideoPlayback: playback error - {e}")
             self.set_error(str(e))

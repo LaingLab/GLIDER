@@ -496,7 +496,18 @@ class HardwareManager:
         logger.info(f"Added device: {device_id} (type: {device_type}, pins: {pins_str})")
 
     def clear(self) -> None:
-        """Clear all boards and devices."""
+        """Clear all boards and devices without disconnecting them.
+
+        Warning: This does not disconnect boards or shutdown devices. Callers
+        should invoke ``shutdown()`` (async) first to perform a clean teardown
+        and avoid leaking hardware resources (open serial ports, GPIO handles,
+        background threads).
+        """
+        if self._boards or self._devices:
+            logger.warning(
+                "clear() called with active boards/devices. "
+                "Call shutdown() first to avoid resource leaks."
+            )
         self._devices.clear()
         self._boards.clear()
         self._pin_managers.clear()

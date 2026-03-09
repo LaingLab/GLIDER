@@ -133,21 +133,24 @@ class ZoneInputNode(InterfaceNode):
         self.set_output(0, occupied)  # Occupied
         self.set_output(1, object_count)  # Object Count
 
-        # Trigger exec outputs on events (use _fire_exec_output to reach flow engine
-        # callbacks registered on _update_callbacks; wrap in create_task since
-        # update_zone_state is called synchronously from the CV thread)
+        # Trigger exec outputs on events.  update_zone_state() is called from the
+        # CV thread, so asyncio.create_task() would fail (no running loop in that
+        # thread).  Instead, marshal the coroutine to the main event loop using
+        # run_coroutine_threadsafe().
         if entered:
             try:
-                asyncio.create_task(self._fire_exec_output("On Enter"))
+                loop = asyncio.get_event_loop()
+                asyncio.run_coroutine_threadsafe(self._fire_exec_output("On Enter"), loop)
             except RuntimeError:
-                logger.debug("No event loop for On Enter exec output")
+                logger.debug("No event loop available for On Enter exec output")
             logger.debug(f"Zone '{self._zone_name}': On Enter triggered")
 
         if exited:
             try:
-                asyncio.create_task(self._fire_exec_output("On Exit"))
+                loop = asyncio.get_event_loop()
+                asyncio.run_coroutine_threadsafe(self._fire_exec_output("On Exit"), loop)
             except RuntimeError:
-                logger.debug("No event loop for On Exit exec output")
+                logger.debug("No event loop available for On Exit exec output")
             logger.debug(f"Zone '{self._zone_name}': On Exit triggered")
 
     def update_event(self) -> None:

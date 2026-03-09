@@ -238,7 +238,7 @@ def mock_data_recorder(temp_dir):
 @pytest.fixture
 def mock_session():
     """Provide a mock experiment session."""
-    from glider.core.types import SessionState
+    from glider.core.experiment_session import SessionState
 
     session = MagicMock()
     session.name = "Test Session"
