@@ -8,6 +8,7 @@ Provides configurable CV processing including:
 """
 
 import logging
+import math
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
@@ -66,9 +67,10 @@ class TrackedObject:
     disappeared: int = 0  # Frames since last seen
     behavioral_state: str = "unknown"  # Current behavioral state
     velocity: float = 0.0  # Current velocity in pixels/frame
+    keypoints: np.ndarray | None = None  # Nx2 or Nx3 array of keypoint coords
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "track_id": self.track_id,
             "class_name": self.class_name,
             "bbox": self.bbox,
@@ -78,6 +80,9 @@ class TrackedObject:
             "behavioral_state": self.behavioral_state,
             "velocity": self.velocity,
         }
+        if self.keypoints is not None:
+            result["keypoints"] = self.keypoints.tolist()
+        return result
 
 
 @dataclass
@@ -116,6 +121,11 @@ class CVSettings:
     dart_threshold: float = 50.0  # Min pixels/frame for darting
     freeze_duration: int = 15  # Frames required to confirm freeze
     smoothing_window: int = 5  # Frames for velocity smoothing
+    # Vision cone settings
+    vision_cone_enabled: bool = False
+    vision_cone_fov: float = 120.0  # Total field of view in degrees
+    vision_cone_color: tuple[int, int, int] = (0, 255, 255)  # BGR yellow
+    vision_cone_alpha: float = 0.3  # Overlay transparency
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -140,6 +150,10 @@ class CVSettings:
             "dart_threshold": self.dart_threshold,
             "freeze_duration": self.freeze_duration,
             "smoothing_window": self.smoothing_window,
+            "vision_cone_enabled": self.vision_cone_enabled,
+            "vision_cone_fov": self.vision_cone_fov,
+            "vision_cone_color": self.vision_cone_color,
+            "vision_cone_alpha": self.vision_cone_alpha,
         }
 
     @classmethod
@@ -173,6 +187,10 @@ class CVSettings:
             dart_threshold=data.get("dart_threshold", 50.0),
             freeze_duration=data.get("freeze_duration", 15),
             smoothing_window=data.get("smoothing_window", 5),
+            vision_cone_enabled=data.get("vision_cone_enabled", False),
+            vision_cone_fov=data.get("vision_cone_fov", 120.0),
+            vision_cone_color=tuple(data.get("vision_cone_color", [0, 255, 255])),
+            vision_cone_alpha=data.get("vision_cone_alpha", 0.3),
         )
 
 
@@ -211,6 +229,7 @@ class ObjectTracker:
             centroid=detection.centroid,
             age=0,
             disappeared=0,
+            keypoints=getattr(detection, "_keypoints", None),
         )
         self._next_id += 1
         return track_id
@@ -274,6 +293,7 @@ class ObjectTracker:
             self._objects[track_id].class_name = detection.class_name
             self._objects[track_id].disappeared = 0
             self._objects[track_id].age += 1
+            self._objects[track_id].keypoints = getattr(detection, "_keypoints", None)
 
             used_rows.add(row)
             used_cols.add(col)
@@ -585,17 +605,20 @@ class CVProcessor:
 
         detections = []
         for r in results:
-            for box in r.boxes:
+            # Extract per-detection keypoints if available (pose models)
+            has_keypoints = r.keypoints is not None and len(r.keypoints) > 0
+            for i, box in enumerate(r.boxes):
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                 class_id = int(box.cls)
-                detections.append(
-                    Detection(
-                        class_id=class_id,
-                        class_name=r.names[class_id],
-                        confidence=float(box.conf),
-                        bbox=(int(x1), int(y1), int(x2 - x1), int(y2 - y1)),
-                    )
+                det = Detection(
+                    class_id=class_id,
+                    class_name=r.names[class_id],
+                    confidence=float(box.conf),
+                    bbox=(int(x1), int(y1), int(x2 - x1), int(y2 - y1)),
                 )
+                if has_keypoints and i < len(r.keypoints):
+                    det._keypoints = r.keypoints[i].xy.cpu().numpy()
+                detections.append(det)
         return detections
 
     def _bytetrack_to_tracked(self, detections: list[Detection]) -> list[TrackedObject]:
@@ -622,6 +645,7 @@ class CVProcessor:
                         centroid=det.centroid,
                         age=self._bytetrack_ages[det.track_id],
                         disappeared=0,
+                        keypoints=getattr(det, "_keypoints", None),
                     )
                 )
         return tracked
@@ -649,7 +673,8 @@ class CVProcessor:
         for r in results:
             if r.boxes is None:
                 continue
-            for _i, box in enumerate(r.boxes):
+            has_keypoints = r.keypoints is not None and len(r.keypoints) > 0
+            for i, box in enumerate(r.boxes):
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                 class_id = int(box.cls)
 
@@ -665,6 +690,8 @@ class CVProcessor:
                     bbox=(int(x1), int(y1), int(x2 - x1), int(y2 - y1)),
                     track_id=track_id,
                 )
+                if has_keypoints and i < len(r.keypoints):
+                    detection._keypoints = r.keypoints[i].xy.cpu().numpy()
                 detections.append(detection)
 
         return detections
@@ -817,11 +844,83 @@ class CVProcessor:
                         output, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, thickness
                     )
 
+        # Draw vision cones based on keypoints
+        if tracked and self._settings.vision_cone_enabled:
+            self._draw_vision_cones(output, tracked)
+
         # Draw behavioral state overlay in top-left corner
         if tracked and self._settings.behavior_enabled:
             self._draw_behavior_overlay(output, tracked)
 
         return output
+
+    def _draw_vision_cones(self, frame: np.ndarray, tracked: list[TrackedObject]) -> None:
+        """
+        Draw vision cones for tracked objects using keypoint-derived heading.
+
+        Uses nose and ear keypoints (indices 0, 1, 2) from pose models to
+        calculate head direction. Falls back to trail-based heading when
+        keypoints are unavailable.
+
+        Args:
+            frame: Frame to draw on (modified in place)
+            tracked: List of tracked objects
+        """
+        h, w = frame.shape[:2]
+        cone_length = int(math.hypot(w, h))
+        fov_half = math.radians(self._settings.vision_cone_fov / 2)
+        color = self._settings.vision_cone_color
+        alpha = self._settings.vision_cone_alpha
+
+        overlay = frame.copy()
+
+        for obj in tracked:
+            heading = None
+            origin_x, origin_y = None, None
+
+            # Try keypoint-based heading (nose=0, left_ear=1, right_ear=2)
+            if obj.keypoints is not None and len(obj.keypoints) >= 3:
+                kp = obj.keypoints
+                nose_x, nose_y = float(kp[0][0]), float(kp[0][1])
+                l_ear_x, l_ear_y = float(kp[1][0]), float(kp[1][1])
+                r_ear_x, r_ear_y = float(kp[2][0]), float(kp[2][1])
+
+                # Only use if all keypoints are detected (non-zero)
+                if nose_x > 0 and l_ear_x > 0 and r_ear_x > 0:
+                    head_base_x = (l_ear_x + r_ear_x) / 2
+                    head_base_y = (l_ear_y + r_ear_y) / 2
+                    heading = math.atan2(nose_y - head_base_y, nose_x - head_base_x)
+                    origin_x, origin_y = nose_x, nose_y
+
+            # Fall back to trail-based heading
+            if heading is None and obj.track_id in self._trail_history:
+                trail = self._trail_history[obj.track_id]
+                if len(trail) >= 2:
+                    dx = trail[-1][0] - trail[-2][0]
+                    dy = trail[-1][1] - trail[-2][1]
+                    if abs(dx) > 1 or abs(dy) > 1:
+                        heading = math.atan2(dy, dx)
+                        origin_x = float(obj.centroid[0])
+                        origin_y = float(obj.centroid[1])
+
+            if heading is None:
+                continue
+
+            # Calculate cone triangle vertices
+            left_x = int(origin_x + cone_length * math.cos(heading - fov_half))
+            left_y = int(origin_y + cone_length * math.sin(heading - fov_half))
+            right_x = int(origin_x + cone_length * math.cos(heading + fov_half))
+            right_y = int(origin_y + cone_length * math.sin(heading + fov_half))
+
+            triangle = np.array(
+                [[int(origin_x), int(origin_y)], [left_x, left_y], [right_x, right_y]],
+                dtype=np.int32,
+            )
+
+            cv2.fillPoly(overlay, [triangle], color)
+            cv2.polylines(frame, [triangle], True, color, 1)
+
+        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
     def _draw_behavior_overlay(self, frame: np.ndarray, tracked: list[TrackedObject]) -> None:
         """

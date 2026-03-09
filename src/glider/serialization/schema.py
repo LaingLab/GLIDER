@@ -316,7 +316,9 @@ class DashboardWidgetSchema:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], path: str = "dashboard.widget") -> "DashboardWidgetSchema":
+    def from_dict(
+        cls, data: dict[str, Any], path: str = "dashboard.widget"
+    ) -> "DashboardWidgetSchema":
         """Create from dictionary with validation."""
         if not isinstance(data, dict):
             raise SchemaValidationError(f"Expected dict, got {type(data).__name__}", path)
@@ -331,9 +333,7 @@ class DashboardWidgetSchema:
 
         size = data.get("size", "normal")
         if not isinstance(size, str):
-            raise SchemaValidationError(
-                f"Expected str, got {type(size).__name__}", f"{path}.size"
-            )
+            raise SchemaValidationError(f"Expected str, got {type(size).__name__}", f"{path}.size")
 
         visible = data.get("visible", True)
         if not isinstance(visible, bool):
