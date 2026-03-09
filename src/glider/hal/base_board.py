@@ -127,6 +127,15 @@ class BaseBoard(ABC):
         """Connection port for the board."""
         return self._port
 
+    def set_port(self, port: str | None) -> None:
+        """Set the connection port for the board.
+
+        Args:
+            port: New port string (e.g., 'COM3', '/dev/ttyUSB0'), or None.
+                  Takes effect on the next connect() call.
+        """
+        self._port = port
+
     @property
     def state(self) -> BoardConnectionState:
         """Current connection state."""
@@ -312,7 +321,7 @@ class BaseBoard(ABC):
             try:
                 callback(state)
             except Exception:
-                pass  # Don't let callback errors propagate
+                logger.exception("Error in state change callback")
 
     def _notify_callbacks(self, pin: int, value: Any) -> None:
         """Notify all registered callbacks for a pin."""
@@ -321,7 +330,7 @@ class BaseBoard(ABC):
                 try:
                     callback(pin, value)
                 except Exception:
-                    pass  # Don't let callback errors propagate
+                    logger.exception("Error in pin callback")
 
     def _notify_error(self, error: Exception) -> None:
         """Notify all registered error callbacks."""
@@ -329,7 +338,7 @@ class BaseBoard(ABC):
             try:
                 callback(error)
             except Exception:
-                pass
+                logger.exception("Error in error callback")
 
     async def _attempt_reconnect(self) -> None:
         """Background task for automatic reconnection."""

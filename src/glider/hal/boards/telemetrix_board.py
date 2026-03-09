@@ -7,6 +7,8 @@ that allows for callback-based reporting.
 """
 
 import asyncio
+import contextlib
+import io
 import logging
 import threading
 from typing import Any, Optional
@@ -53,8 +55,6 @@ class TelemetrixThread:
 
     def _run(self, port: str | None, sleep_tune: float):
         """Thread entry point - creates its own event loop."""
-        import sys
-
         # Suppress telemetrix debug output via logging
         logging.getLogger("telemetrix_aio").setLevel(logging.WARNING)
         logging.getLogger("telemetrix_aio.telemetrix_aio").setLevel(logging.WARNING)
@@ -64,19 +64,8 @@ class TelemetrixThread:
 
         try:
             # Suppress print statements from telemetrix only during connect
-            class NullWriter:
-                def write(self, s):
-                    pass
-
-                def flush(self):
-                    pass
-
-            original_stdout = sys.stdout
-            sys.stdout = NullWriter()
-            try:
+            with contextlib.redirect_stdout(io.StringIO()):
                 self._loop.run_until_complete(self._connect(port, sleep_tune))
-            finally:
-                sys.stdout = original_stdout
 
             self._ready.set()
             # Run the event loop to process tasks
@@ -478,7 +467,7 @@ class TelemetrixBoard(BaseBoard):
         # Perform a live read from the hardware
         # telemetrix-aio's digital_read returns a list [pin, value, timestamp]
         try:
-            result = self._call_telemetrix("digital_read", pin)
+            result = await asyncio.to_thread(self._call_telemetrix, "digital_read", pin)
             if result and len(result) > 1:
                 value = bool(result[1])
                 with self._pin_values_lock:
@@ -547,7 +536,11 @@ class TelemetrixBoard(BaseBoard):
         if self._main_loop is not None and not self._main_loop.is_closed():
             self._main_loop.call_soon_threadsafe(self._notify_callbacks, pin, value)
         else:
-            self._notify_callbacks(pin, value)
+            logger.warning(
+                "Digital callback fired with no main loop available; "
+                "notification skipped for pin %s",
+                pin,
+            )
 
     async def _analog_callback(self, data: list) -> None:
         """Callback for analog pin value changes (called from telemetrix thread).
@@ -570,7 +563,11 @@ class TelemetrixBoard(BaseBoard):
                             self._notify_callbacks, actual_pin, value
                         )
                     else:
-                        self._notify_callbacks(actual_pin, value)
+                        logger.warning(
+                            "Analog callback fired with no main loop available; "
+                            "notification skipped for pin %s",
+                            actual_pin,
+                        )
                     break
         except Exception as e:
             logger.error(f"Error in analog callback: {e}, data={data}", exc_info=True)

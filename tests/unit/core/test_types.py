@@ -6,7 +6,8 @@ Tests the type enums and their utility methods.
 
 import pytest
 
-from glider.core.types import DeviceType, NodeType, SessionState
+from glider.core.types import DeviceType, NodeType
+from glider.core.experiment_session import SessionState
 
 
 class TestNodeType:

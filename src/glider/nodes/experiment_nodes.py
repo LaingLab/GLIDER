@@ -79,8 +79,8 @@ class EndExperimentNode(GliderNode):
         logger.info("Experiment ended")
 
 
-class DelayNode(GliderNode):
-    """Wait for a specified duration."""
+class LegacyDelayNode(GliderNode):
+    """Wait for a specified duration (legacy; superseded by logic/flow_nodes.DelayNode)."""
 
     definition = NodeDefinition(
         name="Delay",
@@ -188,7 +188,7 @@ class OutputNode(GliderNode):
                             await self._device.turn_off()
             except Exception as e:
                 logger.error(f"Output error: {e}")
-                self._error = str(e)
+                self.set_error(str(e))
         else:
             logger.warning("Output: no device bound")
 
@@ -236,7 +236,7 @@ class InputNode(GliderNode):
                 logger.info(f"Input: read value = {value}")
             except Exception as e:
                 logger.error(f"Input error: {e}")
-                self._error = str(e)
+                self.set_error(str(e))
         else:
             logger.warning("Input: no device bound")
 
@@ -302,7 +302,7 @@ class MotorGovernorNode(GliderNode):
                     logger.warning(f"MotorGovernor: unknown action '{action}'")
             except Exception as e:
                 logger.error(f"MotorGovernor error: {e}")
-                self._error = str(e)
+                self.set_error(str(e))
         else:
             logger.warning("MotorGovernor: no device bound")
 
@@ -387,7 +387,7 @@ class CustomDeviceNode(GliderNode):
                         logger.info(f"CustomDeviceNode: wrote {value} to pin '{pin_name}'")
             except Exception as e:
                 logger.error(f"CustomDeviceNode error: {e}")
-                self._error = str(e)
+                self.set_error(str(e))
         else:
             logger.warning("CustomDeviceNode: no device runner bound")
 
@@ -404,7 +404,8 @@ def register_experiment_nodes(flow_engine) -> None:
     """Register all experiment nodes with the flow engine."""
     flow_engine.register_node("StartExperiment", StartExperimentNode)
     flow_engine.register_node("EndExperiment", EndExperimentNode)
-    flow_engine.register_node("Delay", DelayNode)
+    # DelayNode registration intentionally removed: canonical DelayNode lives in
+    # glider.nodes.logic.flow_nodes and is registered by register_logic_nodes().
     flow_engine.register_node("Output", OutputNode)
     flow_engine.register_node("Input", InputNode)
     flow_engine.register_node("MotorGovernor", MotorGovernorNode)

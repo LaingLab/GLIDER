@@ -184,6 +184,11 @@ class MainWindow(QMainWindow):
     error_occurred = pyqtSignal(str, str)  # source, message
     analog_value_received = pyqtSignal(int, int)  # pin, value - for real-time analog updates
 
+    # Internal cross-thread marshalling signals (background thread -> main thread)
+    _core_state_changed = pyqtSignal(object)  # state object from core callback
+    _core_error_occurred = pyqtSignal(str, object)  # source, exception from core
+    _hardware_connection_changed = pyqtSignal(str, object)  # board_id, state
+
     def __init__(
         self,
         core: "GliderCore",
@@ -219,6 +224,15 @@ class MainWindow(QMainWindow):
         self._runner_view: QWidget | None = None
         self._node_library_dock: QDockWidget | None = None
         self._properties_dock: QDockWidget | None = None
+
+        # Runner-view widgets (created in _create_runner_view; initialised here so
+        # _on_core_state_change can test `is not None` instead of hasattr)
+        self._status_label: QLabel | None = None
+        self._toolbar_status: QLabel | None = None
+        self._runner_recording: QLabel | None = None
+        self._device_refresh_timer: QTimer | None = None
+        self._elapsed_timer: QTimer | None = None
+        self._runner_timer: QLabel | None = None
 
         # Zone configuration
         self._zone_config = ZoneConfiguration()
@@ -1044,30 +1058,40 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         """Connect internal signals."""
-        # Connect core callbacks
-        self._core.on_state_change(self._on_core_state_change)
-        self._core.on_error(self._on_core_error)
+        # Core callbacks may be called from background threads.  Marshal them to
+        # the main thread via Qt's queued connection mechanism by emitting an
+        # internal signal from the callback and connecting that signal to the real
+        # handler here on the main thread.
+        self._core_state_changed.connect(self._on_core_state_change)
+        self._core_error_occurred.connect(self._on_core_error)
+        self._hardware_connection_changed.connect(self._on_hardware_connection_change)
 
-        # Connect hardware connection change callback for disconnect handling
-        self._core.hardware_manager.on_connection_change(self._on_hardware_connection_change)
+        self._core.on_state_change(lambda state: self._core_state_changed.emit(state))
+        self._core.on_error(
+            lambda source, error: self._core_error_occurred.emit(source, error)
+        )
+        self._core.hardware_manager.on_connection_change(
+            lambda board_id, state: self._hardware_connection_changed.emit(board_id, state)
+        )
 
         # Connect session changed to update runner view
         self.session_changed.connect(self._update_runner_experiment_name)
 
+    @pyqtSlot(object)
     def _on_core_state_change(self, state) -> None:
-        """Handle core state changes."""
+        """Handle core state changes (always called on the main thread)."""
         state_name = state.name
         self.state_changed.emit(state_name)
 
         # Update runner view status label - uses property for color (defined in QSS)
-        if hasattr(self, "_status_label"):
+        if self._status_label is not None:
             self._status_label.setText(state_name)
             self._status_label.setProperty("statusState", state_name)
             self._status_label.style().unpolish(self._status_label)
             self._status_label.style().polish(self._status_label)
 
         # Update toolbar status indicator - uses property for color (defined in QSS)
-        if hasattr(self, "_toolbar_status"):
+        if self._toolbar_status is not None:
             self._toolbar_status.setText(state_name)
             self._toolbar_status.setProperty("statusState", state_name)
             self._toolbar_status.style().unpolish(self._toolbar_status)
@@ -1076,14 +1100,14 @@ class MainWindow(QMainWindow):
         self._show_status_message(f"State: {state_name}")
 
         # Update runner view recording indicator
-        if hasattr(self, "_runner_recording"):
+        if self._runner_recording is not None:
             if state_name == "RUNNING" and self._core.data_recorder.is_recording:
                 self._runner_recording.show()
             else:
                 self._runner_recording.hide()
 
         # Start/stop device refresh timer based on state
-        if hasattr(self, "_device_refresh_timer"):
+        if self._device_refresh_timer is not None:
             if state_name == "RUNNING":
                 self._device_refresh_timer.start()
             else:
@@ -1092,7 +1116,7 @@ class MainWindow(QMainWindow):
                 self._update_runner_device_states()
 
         # Start/stop elapsed timer based on state
-        if hasattr(self, "_elapsed_timer"):
+        if self._elapsed_timer is not None:
             if state_name == "RUNNING":
                 import time
 
@@ -1101,9 +1125,7 @@ class MainWindow(QMainWindow):
                 self._update_elapsed_time()  # Immediate update
             else:
                 self._elapsed_timer.stop()
-                if hasattr(self, "_runner_timer"):
-                    # Keep the last time displayed when stopped
-                    pass
+                # Keep the last time displayed when stopped (no-op, just clear guard)
 
     def _refresh_runner_devices(self) -> None:
         """Refresh the device cards in runner view."""
@@ -1256,7 +1278,7 @@ class MainWindow(QMainWindow):
         """Handle experiment name change from user input."""
         if self._core.session:
             self._core.session.metadata.name = name
-            self._core.session._dirty = True
+            self._core.session.mark_dirty()
 
     def _update_elapsed_time(self) -> None:
         """Update the elapsed time display in runner view."""
@@ -1343,14 +1365,16 @@ class MainWindow(QMainWindow):
                     f"font-size: 10px; color: {'#27ae60' if initialized else '#666'}; background: transparent; border: none;"
                 )
 
+    @pyqtSlot(str, object)
     def _on_core_error(self, source: str, error: Exception) -> None:
-        """Handle core errors."""
+        """Handle core errors (always called on the main thread)."""
         self.error_occurred.emit(source, str(error))
         logger.error(f"Error from {source}: {error}")
 
+    @pyqtSlot(str, object)
     def _on_hardware_connection_change(self, board_id: str, state: BoardConnectionState) -> None:
         """
-        Handle hardware connection state changes.
+        Handle hardware connection state changes (always called on the main thread).
 
         If a board disconnects while running, pause and prompt the user.
         """
@@ -2280,9 +2304,8 @@ class MainWindow(QMainWindow):
             new_port = port_combo.currentData()
 
             try:
-                # Update board in hardware manager via internal attribute
-                if hasattr(board, "_port"):
-                    board._port = new_port
+                # Update board port via public API
+                board.set_port(new_port)
 
                 # Update session config
                 if self._core.session:
@@ -2373,10 +2396,8 @@ class MainWindow(QMainWindow):
             new_pins = {pin_name: spin.value() for pin_name, spin in pin_spinboxes.items()}
 
             try:
-                # Update device in hardware manager
-                # Update name via _name attribute (name property may not have setter)
-                if hasattr(device, "_name"):
-                    device._name = new_name
+                # Update device name via public property setter
+                device.name = new_name
 
                 # Update pins via the config object
                 if hasattr(device, "config") and hasattr(device.config, "pins"):

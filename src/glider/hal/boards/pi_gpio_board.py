@@ -8,6 +8,7 @@ wraps these calls using asyncio.to_thread() to ensure non-blocking operation.
 
 import asyncio
 import logging
+import threading
 from typing import Any, Optional
 
 from glider.hal.base_board import (
@@ -92,6 +93,7 @@ class PiGPIOBoard(BaseBoard):
         self._pin_modes: dict[int, PinMode] = {}
         self._pin_types: dict[int, PinType] = {}
         self._pin_values: dict[int, Any] = {}
+        self._pin_values_lock = threading.Lock()  # Thread-safe access to _pin_values
         self._event_loop: asyncio.AbstractEventLoop | None = None
 
     @property
@@ -237,7 +239,8 @@ class PiGPIOBoard(BaseBoard):
 
         def on_change():
             value = device.value
-            self._pin_values[pin] = value
+            with self._pin_values_lock:
+                self._pin_values[pin] = value
             # Use call_soon_threadsafe to marshal back to main event loop
             if self._event_loop is not None:
                 self._event_loop.call_soon_threadsafe(lambda: self._notify_callbacks(pin, value))
@@ -258,7 +261,8 @@ class PiGPIOBoard(BaseBoard):
             await asyncio.to_thread(device.on)
         else:
             await asyncio.to_thread(device.off)
-        self._pin_values[pin] = value
+        with self._pin_values_lock:
+            self._pin_values[pin] = value
 
     async def read_digital(self, pin: int) -> bool:
         """Read a digital value from a pin."""
@@ -270,7 +274,8 @@ class PiGPIOBoard(BaseBoard):
             raise ValueError(f"Pin {pin} not configured")
 
         value = await asyncio.to_thread(lambda: device.value)
-        self._pin_values[pin] = bool(value)
+        with self._pin_values_lock:
+            self._pin_values[pin] = bool(value)
         return bool(value)
 
     async def write_analog(self, pin: int, value: int) -> None:
@@ -285,7 +290,8 @@ class PiGPIOBoard(BaseBoard):
         # Convert 0-255 to 0-1
         pwm_value = max(0.0, min(1.0, value / 255.0))
         await asyncio.to_thread(lambda: setattr(device, "value", pwm_value))
-        self._pin_values[pin] = value
+        with self._pin_values_lock:
+            self._pin_values[pin] = value
 
     async def read_analog(self, pin: int) -> int:
         """Read analog value - not supported on Pi without external ADC."""
@@ -306,7 +312,8 @@ class PiGPIOBoard(BaseBoard):
         servo_value = (angle / 90.0) - 1.0
         servo_value = max(-1.0, min(1.0, servo_value))
         await asyncio.to_thread(lambda: setattr(device, "value", servo_value))
-        self._pin_values[pin] = angle
+        with self._pin_values_lock:
+            self._pin_values[pin] = angle
 
     async def emergency_stop(self) -> None:
         """Set all outputs to safe state."""

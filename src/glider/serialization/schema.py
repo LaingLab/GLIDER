@@ -6,9 +6,12 @@ structure specified in the design document.
 """
 
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Current schema version
 SCHEMA_VERSION = "1.0.0"
@@ -313,9 +316,40 @@ class DashboardWidgetSchema:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "DashboardWidgetSchema":
-        """Create from dictionary."""
-        return cls(**data)
+    def from_dict(cls, data: dict[str, Any], path: str = "dashboard.widget") -> "DashboardWidgetSchema":
+        """Create from dictionary with validation."""
+        if not isinstance(data, dict):
+            raise SchemaValidationError(f"Expected dict, got {type(data).__name__}", path)
+
+        _validate_required(data, ["node_id", "position"], path)
+        _validate_type(data["node_id"], str, "node_id", path)
+
+        if not isinstance(data["position"], int):
+            raise SchemaValidationError(
+                f"Expected int, got {type(data['position']).__name__}", f"{path}.position"
+            )
+
+        size = data.get("size", "normal")
+        if not isinstance(size, str):
+            raise SchemaValidationError(
+                f"Expected str, got {type(size).__name__}", f"{path}.size"
+            )
+
+        visible = data.get("visible", True)
+        if not isinstance(visible, bool):
+            raise SchemaValidationError(
+                f"Expected bool, got {type(visible).__name__}", f"{path}.visible"
+            )
+
+        try:
+            return cls(
+                node_id=data["node_id"],
+                position=data["position"],
+                size=size,
+                visible=visible,
+            )
+        except TypeError as e:
+            raise SchemaValidationError(f"Invalid widget definition: {e}", path) from e
 
 
 @dataclass
@@ -340,7 +374,10 @@ class DashboardConfigSchema:
         if not isinstance(data, dict):
             raise SchemaValidationError(f"Expected dict, got {type(data).__name__}", path)
 
-        widgets = [DashboardWidgetSchema.from_dict(w) for w in data.get("widgets", [])]
+        widgets = [
+            DashboardWidgetSchema.from_dict(w, f"{path}.widgets[{i}]")
+            for i, w in enumerate(data.get("widgets", []))
+        ]
         return cls(
             layout_mode=data.get("layout_mode", "vertical"),
             columns=data.get("columns", 1),
@@ -483,6 +520,10 @@ class ExperimentSchema:
             raise SchemaValidationError(f"Expected dict, got {type(data).__name__}", path or "root")
 
         # Validate schema_version
+        if "schema_version" not in data:
+            logger.warning(
+                "schema_version missing from experiment file; defaulting to %s", SCHEMA_VERSION
+            )
         schema_version = data.get("schema_version", SCHEMA_VERSION)
         if not isinstance(schema_version, str):
             raise SchemaValidationError(

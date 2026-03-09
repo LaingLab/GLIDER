@@ -67,6 +67,7 @@ class GliderCore:
 
         self._initialized = False
         self._shutting_down = False
+        self._experiment_lock = asyncio.Lock()
         self._recording_enabled = True  # Auto-record experiments by default
         self._video_recording_enabled = True  # Auto-record video when camera connected
         self._annotated_video_enabled = True  # Also save annotated video with tracking overlays
@@ -203,7 +204,7 @@ class GliderCore:
 
     def set_recording_directory(self, path: Path) -> None:
         """Set the directory for recording data files (CSV, video, tracking)."""
-        self._data_recorder._output_dir = path
+        self._data_recorder.set_output_directory(path)
         self._video_recorder.set_output_directory(path)
         self._multi_video_recorder.set_output_directory(path)
         self._tracking_logger.set_output_directory(path)
@@ -288,37 +289,7 @@ class GliderCore:
         """Async handler for flow completion."""
         # Stop the flow engine
         await self._flow_engine.stop()
-
-        # Stop data recording
-        if self._data_recorder.is_recording:
-            try:
-                file_path = await self._data_recorder.stop()
-                logger.info(f"Recording saved to: {file_path}")
-            except Exception as e:
-                logger.error(f"Failed to stop recording: {e}")
-
-        # Stop video recording
-        if self._multi_video_recorder.is_recording:
-            try:
-                video_paths = await self._multi_video_recorder.stop()
-                for cam_id, path in video_paths.items():
-                    logger.info(f"Video {cam_id} saved to: {path}")
-            except Exception as e:
-                logger.error(f"Failed to stop multi-camera video recording: {e}")
-        elif self._video_recorder.is_recording:
-            try:
-                video_path = await self._video_recorder.stop()
-                logger.info(f"Video saved to: {video_path}")
-            except Exception as e:
-                logger.error(f"Failed to stop video recording: {e}")
-
-        # Stop tracking logger
-        if self._tracking_logger.is_recording:
-            try:
-                tracking_path = await self._tracking_logger.stop()
-                logger.info(f"Tracking data saved to: {tracking_path}")
-            except Exception as e:
-                logger.error(f"Failed to stop tracking logger: {e}")
+        await self._stop_recorders()
 
         # Set all devices to safe state
         await self._set_all_devices_low()
@@ -591,6 +562,11 @@ class GliderCore:
 
     async def start_experiment(self) -> None:
         """Start running the experiment."""
+        async with self._experiment_lock:
+            await self._start_experiment_locked()
+
+    async def _start_experiment_locked(self) -> None:
+        """Internal start implementation, called under _experiment_lock."""
         if self._session is None:
             raise RuntimeError("No session loaded")
 
@@ -667,13 +643,26 @@ class GliderCore:
 
     async def stop_experiment(self) -> None:
         """Stop the running experiment and set all devices to safe state."""
+        async with self._experiment_lock:
+            await self._stop_experiment_locked()
+
+    async def _stop_experiment_locked(self) -> None:
+        """Internal stop implementation, called under _experiment_lock."""
         if self._session is None:
             return
 
         logger.info("Stopping experiment")
         self._session.state = SessionState.STOPPING
         await self._flow_engine.stop()
+        await self._stop_recorders()
 
+        # Set all devices to LOW/safe state for safety
+        await self._set_all_devices_low()
+
+        self._session.state = SessionState.READY
+
+    async def _stop_recorders(self) -> None:
+        """Stop all active recorders (data, video, tracking)."""
         # Stop data recording
         if self._data_recorder.is_recording:
             try:
@@ -704,11 +693,6 @@ class GliderCore:
                 logger.info(f"Tracking data saved to: {tracking_path}")
             except Exception as e:
                 logger.error(f"Failed to stop tracking logger: {e}")
-
-        # Set all devices to LOW/safe state for safety
-        await self._set_all_devices_low()
-
-        self._session.state = SessionState.READY
 
     async def _set_all_devices_low(self) -> None:
         """Set all output devices to LOW/off state for safety."""
@@ -750,6 +734,9 @@ class GliderCore:
         if self._flow_engine.is_running:
             await self._flow_engine.stop()
 
+        # Stop all recorders
+        await self._stop_recorders()
+
         # Emergency stop hardware
         await self._hardware_manager.emergency_stop()
 
@@ -765,8 +752,8 @@ class GliderCore:
         self._shutting_down = True
         logger.info("Shutting down GLIDER Core...")
 
-        # Stop experiment if running
-        if self._session and self._session.state == SessionState.RUNNING:
+        # Stop experiment if running or paused
+        if self._session and self._session.state in (SessionState.RUNNING, SessionState.PAUSED):
             await self.stop_experiment()
 
         # Disconnect cameras

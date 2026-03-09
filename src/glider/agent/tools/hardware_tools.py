@@ -208,7 +208,7 @@ class HardwareToolExecutor:
             "add_board": ActionType.ADD_BOARD,
             "remove_board": ActionType.REMOVE_BOARD,
             "connect_board": ActionType.ADD_BOARD,
-            "disconnect_board": ActionType.REMOVE_BOARD,
+            "disconnect_board": ActionType.DISCONNECT_BOARD,
             "list_devices": ActionType.GET_STATE,
             "add_device": ActionType.ADD_DEVICE,
             "remove_device": ActionType.REMOVE_DEVICE,
@@ -366,12 +366,16 @@ class HardwareToolExecutor:
 
         hw_manager = self._core.hardware_manager
 
+        # Remove keys that could override explicit parameters
+        reserved_keys = {"board_id", "device_type", "device_id", "name"}
+        safe_settings = {k: v for k, v in settings.items() if k not in reserved_keys}
+
         device_id = hw_manager.add_device(
             board_id=board_id,
             device_type=device_type,
             name=name,
             pin=pin,
-            **settings,
+            **safe_settings,
         )
 
         logger.info(f"Added device: {name} ({device_type}) on pin {pin} - ID: {device_id}")
@@ -440,6 +444,16 @@ class HardwareToolExecutor:
             if key not in self._CONFIGURABLE_PROPERTIES:
                 logger.warning(f"Rejected unknown property '{key}' on device {device_id}")
                 continue
+            if key == "settings":
+                if not isinstance(value, dict):
+                    logger.warning(
+                        f"Rejected 'settings' on device {device_id}: expected dict, "
+                        f"got {type(value).__name__}"
+                    )
+                    continue
+                current = getattr(device, "settings", {})
+                current.update(value)
+                value = current
             if hasattr(device, key):
                 setattr(device, key, value)
                 applied[key] = value

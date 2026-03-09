@@ -88,6 +88,14 @@ class DataRecorder:
             safe_name = "experiment"
         return f"{safe_name}_{timestamp}.csv"
 
+    def set_output_directory(self, path: Path) -> None:
+        """Set the directory for saving CSV recording files.
+
+        Args:
+            path: Directory path for output files
+        """
+        self._output_dir = path
+
     def set_zone_configuration(self, zone_config: "ZoneConfiguration") -> None:
         """Set zone configuration for zone state logging."""
         self._zone_config = zone_config
@@ -251,15 +259,21 @@ class DataRecorder:
 
         # Open file and create CSV writer
         self._file = open(self._file_path, "w", newline="", encoding="utf-8")
-        self._writer = csv.writer(self._file)
+        try:
+            self._writer = csv.writer(self._file)
 
-        # Write metadata and headers
-        self._write_metadata(experiment_name, session)
-        self._file.flush()
+            # Write metadata and headers
+            self._write_metadata(experiment_name, session)
+            self._file.flush()
 
-        # Start sampling task
-        self._recording = True
-        self._sample_task = asyncio.create_task(self._sampling_loop())
+            # Start sampling task
+            self._recording = True
+            self._sample_task = asyncio.create_task(self._sampling_loop())
+        except Exception:
+            self._file.close()
+            self._file = None
+            self._writer = None
+            raise
 
         logger.info(f"Started recording to {self._file_path}")
         return self._file_path

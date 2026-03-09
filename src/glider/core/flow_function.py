@@ -235,6 +235,7 @@ class FlowFunctionRunner:
         self._internal_nodes: dict[str, Any] = {}
         self._completion_event: asyncio.Event | None = None
         self._output_values: dict[str, Any] = {}
+        self._running_tasks: set[asyncio.Task] = set()
 
     @property
     def definition(self) -> FlowFunctionDefinition:
@@ -435,12 +436,18 @@ class FlowFunctionRunner:
                 continue
 
             # Create execution callback
-            def make_exec_callback(target):
+            def make_exec_callback(target, runner=self):
                 async def propagate():
                     if hasattr(target, "execute"):
                         await target.execute()
 
-                return lambda name, val: asyncio.create_task(propagate())
+                def callback(name, val):
+                    task = asyncio.create_task(propagate())
+                    runner._running_tasks.add(task)
+                    task.add_done_callback(runner._running_tasks.discard)
+                    return task
+
+                return callback
 
             if hasattr(from_node, "_update_callbacks"):
                 from_node._update_callbacks.append(make_exec_callback(to_node))

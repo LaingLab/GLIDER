@@ -5,7 +5,7 @@ This module provides enums and type definitions that replace stringly-typed
 logic throughout the codebase, improving type safety and maintainability.
 """
 
-from enum import Enum, auto
+from enum import Enum
 
 
 class NodeType(Enum):
@@ -187,32 +187,3 @@ class DeviceType(Enum):
         return self in (DeviceType.ANALOG_INPUT, DeviceType.PWM_OUTPUT)
 
 
-class SessionState(Enum):
-    """
-    State of an experiment session.
-
-    Matches the states used in ExperimentSession.
-    """
-
-    IDLE = auto()
-    INITIALIZING = auto()
-    READY = auto()
-    RUNNING = auto()
-    PAUSED = auto()
-    STOPPING = auto()
-    ERROR = auto()
-
-    @property
-    def is_active(self) -> bool:
-        """Whether the session is actively running."""
-        return self == SessionState.RUNNING
-
-    @property
-    def can_start(self) -> bool:
-        """Whether the session can be started."""
-        return self in (SessionState.IDLE, SessionState.READY)
-
-    @property
-    def can_stop(self) -> bool:
-        """Whether the session can be stopped."""
-        return self in (SessionState.RUNNING, SessionState.PAUSED, SessionState.ERROR)

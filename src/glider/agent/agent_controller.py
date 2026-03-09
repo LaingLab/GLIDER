@@ -178,6 +178,17 @@ class AgentController:
             custom_instructions=self._config.custom_instructions,
         )
 
+    MAX_CONVERSATION_LENGTH = 50
+
+    def _trim_conversation(self) -> None:
+        """Trim conversation history, keeping the most recent messages."""
+        if len(self._conversation) > self.MAX_CONVERSATION_LENGTH:
+            # Keep system message (index 0) and the most recent messages
+            self._conversation = (
+                self._conversation[:1]
+                + self._conversation[-(self.MAX_CONVERSATION_LENGTH - 1):]
+            )
+
     def _sanitize_input(self, text: str) -> str:
         """
         Sanitize user input to mitigate prompt injection.
@@ -198,6 +209,9 @@ class AgentController:
 
         # Remove null bytes and other non-printable characters
         sanitized = "".join(char for char in text if char.isprintable() or char in "\n\r\t")
+
+        # Escape common prompt injection delimiters
+        sanitized = sanitized.replace("```", "\\`\\`\\`")
 
         # Limit length (e.g., 4000 characters)
         max_input_length = 4000
@@ -232,6 +246,7 @@ class AgentController:
 
             # Add user message to conversation
             self._conversation.append(Message(role="user", content=user_message))
+            self._trim_conversation()
 
             # Build messages for LLM
             messages = [
@@ -294,6 +309,7 @@ class AgentController:
                         content=accumulated_content,
                     )
                 )
+                self._trim_conversation()
 
                 yield AgentResponse(
                     content=accumulated_content, actions=batch.actions, is_complete=True
@@ -306,6 +322,7 @@ class AgentController:
                         content=accumulated_content,
                     )
                 )
+                self._trim_conversation()
 
                 yield AgentResponse(content=accumulated_content, is_complete=True)
 
