@@ -221,6 +221,11 @@ class CameraPanel(QWidget):
     _frame_received = pyqtSignal(object)  # FrameData for single camera
     _multi_frame_received = pyqtSignal(object)  # FrameData for multi-camera
 
+    # Signal to dispatch frame processing to CVWorker on its own thread.
+    # Because _cv_worker lives on a different thread (QueuedConnection is used
+    # automatically), this ensures process_frame() runs on the worker thread.
+    _process_frame_requested = pyqtSignal(object)  # FrameData -> CVWorker.process_frame
+
     def __init__(
         self,
         camera_manager: "CameraManager",
@@ -397,7 +402,8 @@ class CameraPanel(QWidget):
     def _connect_signals(self) -> None:
         """Connect camera callbacks and thread-safe signals."""
         # Register callback with camera manager (called from background thread)
-        self._camera.on_frame(self._on_frame)
+        self._frame_callback_ref = self._on_frame
+        self._camera.on_frame(self._frame_callback_ref)
 
         # Connect thread-safe signals for UI updates (main thread)
         self._frame_received.connect(self._handle_frame_input)
@@ -406,14 +412,21 @@ class CameraPanel(QWidget):
         # Connect CV worker signals
         self._cv_worker.results_ready.connect(self._process_cv_results_on_main_thread)
 
+        # Wire _process_frame_requested to CVWorker.process_frame.  Because
+        # _cv_worker lives on a different QThread, Qt automatically uses a
+        # QueuedConnection, so process_frame() runs on the worker thread — not
+        # the main thread.
+        self._process_frame_requested.connect(self._cv_worker.process_frame)
+
         # Ensure CV thread cleanup on widget destruction
         self.destroyed.connect(self._cleanup_cv_thread)
 
     def _handle_frame_input(self, frame_data: FrameData) -> None:
         """Decide whether to process frame with CV or update UI immediately."""
         if self._cv_enabled_cb.isChecked() and self._cv_processor.is_initialized:
-            # Offload to CV worker thread
-            self._cv_worker.process_frame(frame_data)
+            # Offload to CV worker thread via signal (QueuedConnection ensures
+            # process_frame runs on the worker thread, not the main thread)
+            self._process_frame_requested.emit(frame_data)
         else:
             # Update UI immediately with raw frame
             self._process_frame_on_main_thread(frame_data)
@@ -426,8 +439,8 @@ class CameraPanel(QWidget):
             and self._multi_cam
             and frame_data.camera_id == self._multi_cam.primary_camera_id
         ):
-            # Offload primary camera to CV worker thread
-            self._cv_worker.process_frame(frame_data)
+            # Offload primary camera to CV worker thread via signal
+            self._process_frame_requested.emit(frame_data)
         else:
             # Update UI immediately
             self._process_multi_frame_on_main_thread(frame_data)
@@ -884,6 +897,11 @@ class CameraPanel(QWidget):
                 self._stop_multi_cameras()
             else:
                 self._stop_preview()
+
+        # Deregister frame callback from camera manager to prevent dangling references
+        if hasattr(self, "_frame_callback_ref") and self._frame_callback_ref is not None:
+            self._camera.remove_frame_callback(self._frame_callback_ref)
+            self._frame_callback_ref = None
 
         # Stop CV thread
         if self._cv_thread.isRunning():

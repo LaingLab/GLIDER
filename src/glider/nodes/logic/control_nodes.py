@@ -161,7 +161,7 @@ class ToggleNode(ExecNode):
 
     async def execute(self) -> None:
         """Execute based on which input was triggered."""
-        pass
+        await self.toggle()
 
     def get_state(self) -> dict[str, Any]:
         state = super().get_state()

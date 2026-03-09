@@ -7,12 +7,10 @@ flow. Supports both Data Flow (reactive) and Execution Flow (imperative).
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Callable
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    pass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +51,7 @@ class FlowEngine:
         self._nodes: dict[str, Any] = {}  # node_id -> node instance
         self._connections: list[dict[str, Any]] = []  # Connection list for standalone mode
         self._running_tasks: set[asyncio.Task] = set()
+        self._custom_device_runners: dict[str, Any] = {}
 
         # Callbacks
         self._state_callbacks: list[Callable[[FlowState], None]] = []
@@ -230,8 +229,6 @@ class FlowEngine:
         runner = CustomDeviceRunner(definition, board)
 
         # Store runner for later initialization
-        if not hasattr(self, "_custom_device_runners"):
-            self._custom_device_runners = {}
         self._custom_device_runners[definition_id] = runner
 
         # Bind to the node
@@ -401,6 +398,27 @@ class FlowEngine:
         if to_node is None:
             raise ValueError(f"Target node not found: {to_node_id}")
 
+        # Validate that the source output PortType matches the target input PortType
+        if (
+            hasattr(from_node, "definition")
+            and hasattr(from_node.definition, "outputs")
+            and hasattr(to_node, "definition")
+            and hasattr(to_node.definition, "inputs")
+        ):
+            src_outputs = from_node.definition.outputs
+            tgt_inputs = to_node.definition.inputs
+            if from_output < len(src_outputs) and to_input < len(tgt_inputs):
+                src_port_type = src_outputs[from_output].port_type
+                tgt_port_type = tgt_inputs[to_input].port_type
+                if src_port_type != tgt_port_type:
+                    raise ValueError(
+                        f"Port type mismatch: source output '{src_outputs[from_output].name}' "
+                        f"on node '{from_node_id}' is {src_port_type.name}, but target input "
+                        f"'{tgt_inputs[to_input].name}' on node '{to_node_id}' is "
+                        f"{tgt_port_type.name}. Cannot connect {src_port_type.name} to "
+                        f"{tgt_port_type.name}."
+                    )
+
         # Store connection for standalone execution
         self._connections.append(
             {
@@ -440,8 +458,10 @@ class FlowEngine:
             logger.debug(f"Exec callback fired: {fn}:{fo} -> {tn}, flow state: {self._state}")
             if self._state == FlowState.RUNNING:
                 logger.info(f"Propagating execution: {fn} -> {tn}")
-                # Return the task so callers can await it if needed
-                return asyncio.create_task(self._propagate_execution(fn, fo, tn))
+                task = asyncio.create_task(self._propagate_execution(fn, fo, tn))
+                self._running_tasks.add(task)
+                task.add_done_callback(self._running_tasks.discard)
+                return task
             else:
                 logger.warning(f"Skipping propagation - flow not running (state: {self._state})")
                 return None
@@ -506,7 +526,7 @@ class FlowEngine:
 
     def remove_connection(self, connection_id: str) -> None:
         """Remove a connection."""
-        # Connection removal is handled by ryvencore when nodes are connected
+        self._connections = [c for c in self._connections if c["id"] != connection_id]
         logger.debug(f"Removed connection: {connection_id}")
 
     def get_node(self, node_id: str) -> Any | None:
@@ -545,14 +565,13 @@ class FlowEngine:
         logger.info("Starting flow execution")
 
         # Initialize custom device runners
-        if hasattr(self, "_custom_device_runners"):
-            for def_id, runner in self._custom_device_runners.items():
-                try:
-                    if not runner.is_initialized:
-                        logger.info(f"Initializing custom device runner for definition {def_id}")
-                        await runner.initialize()
-                except Exception as e:
-                    logger.error(f"Failed to initialize custom device runner: {e}")
+        for def_id, runner in self._custom_device_runners.items():
+            try:
+                if not runner.is_initialized:
+                    logger.info(f"Initializing custom device runner for definition {def_id}")
+                    await runner.initialize()
+            except Exception as e:
+                logger.error(f"Failed to initialize custom device runner: {e}")
 
         self.state = FlowState.RUNNING
 
@@ -669,8 +688,7 @@ class FlowEngine:
         self._nodes.clear()
         self._connections.clear()
         self._running_tasks.clear()
-        if hasattr(self, "_custom_device_runners"):
-            self._custom_device_runners.clear()
+        self._custom_device_runners.clear()
         self.state = FlowState.STOPPED
 
         if self._ryvencore_available and self._session:
@@ -778,8 +796,6 @@ class FlowEngine:
             raise ValueError(f"Input port not found: {to_port}")
 
         # Generate connection ID
-        import uuid
-
         conn_id = f"conn_{uuid.uuid4().hex[:8]}"
 
         # Determine connection type
