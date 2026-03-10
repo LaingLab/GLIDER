@@ -2,13 +2,16 @@
 Undo/Redo Command Pattern Implementation for GLIDER.
 
 This module contains command classes for undoable operations in the
-node graph editor.
+node graph editor. Commands accept a controller object that provides:
+  - _graph_view: NodeGraphView instance
+  - _session (property): current ExperimentSession or None
+  - setup_node_ports(node_item, node_type): set up ports on a node
 """
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from glider.gui.main_window import MainWindow
+    from glider.gui.panels.node_editor_controller import NodeEditorController
 
 
 class Command:
@@ -30,8 +33,10 @@ class Command:
 class CreateNodeCommand(Command):
     """Command for creating a node."""
 
-    def __init__(self, main_window: "MainWindow", node_id: str, node_type: str, x: float, y: float):
-        self._main_window = main_window
+    def __init__(
+        self, controller: "NodeEditorController", node_id: str, node_type: str, x: float, y: float
+    ):
+        self._controller = controller
         self._node_id = node_id
         self._node_type = node_type
         self._x = x
@@ -44,9 +49,10 @@ class CreateNodeCommand(Command):
 
     def undo(self) -> None:
         """Delete the node."""
-        self._main_window._graph_view.remove_node(self._node_id)
-        if self._main_window._core.session:
-            self._main_window._core.session.remove_node(self._node_id)
+        self._controller._graph_view.remove_node(self._node_id)
+        session = self._controller._session
+        if session:
+            session.remove_node(self._node_id)
 
     def description(self) -> str:
         return f"Create {self._node_type}"
@@ -55,8 +61,8 @@ class CreateNodeCommand(Command):
 class DeleteNodeCommand(Command):
     """Command for deleting a node."""
 
-    def __init__(self, main_window: "MainWindow", node_id: str, node_data: dict):
-        self._main_window = main_window
+    def __init__(self, controller: "NodeEditorController", node_id: str, node_data: dict):
+        self._controller = controller
         self._node_id = node_id
         self._node_data = node_data  # Saved node state for restoration
 
@@ -67,13 +73,14 @@ class DeleteNodeCommand(Command):
     def undo(self) -> None:
         """Restore the node."""
         data = self._node_data
-        node_item = self._main_window._graph_view.add_node(
+        node_item = self._controller._graph_view.add_node(
             data["id"], data["node_type"], data["x"], data["y"]
         )
-        self._main_window._setup_node_ports(node_item, data["node_type"])
-        self._main_window._graph_view._connect_port_signals(node_item)
+        self._controller.setup_node_ports(node_item, data["node_type"])
+        self._controller._graph_view._connect_port_signals(node_item)
 
-        if self._main_window._core.session:
+        session = self._controller._session
+        if session:
             from glider.core.experiment_session import NodeConfig
 
             node_config = NodeConfig(
@@ -84,7 +91,7 @@ class DeleteNodeCommand(Command):
                 device_id=data.get("device_id"),
                 visible_in_runner=data.get("visible_in_runner", False),
             )
-            self._main_window._core.session.add_node(node_config)
+            session.add_node(node_config)
 
     def description(self) -> str:
         return f"Delete {self._node_data.get('node_type', 'node')}"
@@ -95,14 +102,14 @@ class MoveNodeCommand(Command):
 
     def __init__(
         self,
-        main_window: "MainWindow",
+        controller: "NodeEditorController",
         node_id: str,
         old_x: float,
         old_y: float,
         new_x: float,
         new_y: float,
     ):
-        self._main_window = main_window
+        self._controller = controller
         self._node_id = node_id
         self._old_x = old_x
         self._old_y = old_y
@@ -115,13 +122,12 @@ class MoveNodeCommand(Command):
 
     def undo(self) -> None:
         """Move node back to original position."""
-        node_item = self._main_window._graph_view.nodes.get(self._node_id)
+        node_item = self._controller._graph_view.nodes.get(self._node_id)
         if node_item:
             node_item.setPos(self._old_x, self._old_y)
-        if self._main_window._core.session:
-            self._main_window._core.session.update_node_position(
-                self._node_id, self._old_x, self._old_y
-            )
+        session = self._controller._session
+        if session:
+            session.update_node_position(self._node_id, self._old_x, self._old_y)
 
     def description(self) -> str:
         return "Move node"
@@ -132,7 +138,7 @@ class CreateConnectionCommand(Command):
 
     def __init__(
         self,
-        main_window: "MainWindow",
+        controller: "NodeEditorController",
         conn_id: str,
         from_node: str,
         from_port: int,
@@ -140,7 +146,7 @@ class CreateConnectionCommand(Command):
         to_port: int,
         conn_type: str,
     ):
-        self._main_window = main_window
+        self._controller = controller
         self._conn_id = conn_id
         self._from_node = from_node
         self._from_port = from_port
@@ -154,9 +160,10 @@ class CreateConnectionCommand(Command):
 
     def undo(self) -> None:
         """Remove the connection."""
-        self._main_window._graph_view.remove_connection(self._conn_id)
-        if self._main_window._core.session:
-            self._main_window._core.session.remove_connection(self._conn_id)
+        self._controller._graph_view.remove_connection(self._conn_id)
+        session = self._controller._session
+        if session:
+            session.remove_connection(self._conn_id)
 
     def description(self) -> str:
         return "Create connection"
@@ -165,8 +172,8 @@ class CreateConnectionCommand(Command):
 class DeleteConnectionCommand(Command):
     """Command for deleting a connection."""
 
-    def __init__(self, main_window: "MainWindow", conn_id: str, conn_data: dict):
-        self._main_window = main_window
+    def __init__(self, controller: "NodeEditorController", conn_id: str, conn_data: dict):
+        self._controller = controller
         self._conn_id = conn_id
         self._conn_data = conn_data
 
@@ -177,10 +184,11 @@ class DeleteConnectionCommand(Command):
     def undo(self) -> None:
         """Restore the connection."""
         data = self._conn_data
-        self._main_window._graph_view.add_connection(
+        self._controller._graph_view.add_connection(
             data["id"], data["from_node"], data["from_port"], data["to_node"], data["to_port"]
         )
-        if self._main_window._core.session:
+        session = self._controller._session
+        if session:
             from glider.core.experiment_session import ConnectionConfig
 
             conn_config = ConnectionConfig(
@@ -191,7 +199,7 @@ class DeleteConnectionCommand(Command):
                 to_input=data["to_port"],
                 connection_type=data.get("conn_type", "data"),
             )
-            self._main_window._core.session.add_connection(conn_config)
+            session.add_connection(conn_config)
 
     def description(self) -> str:
         return "Delete connection"
@@ -201,9 +209,9 @@ class PropertyChangeCommand(Command):
     """Command for changing a node property."""
 
     def __init__(
-        self, main_window: "MainWindow", node_id: str, prop_name: str, old_value, new_value
+        self, controller: "NodeEditorController", node_id: str, prop_name: str, old_value, new_value
     ):
-        self._main_window = main_window
+        self._controller = controller
         self._node_id = node_id
         self._prop_name = prop_name
         self._old_value = old_value
@@ -215,10 +223,9 @@ class PropertyChangeCommand(Command):
 
     def undo(self) -> None:
         """Restore old property value."""
-        if self._main_window._core.session:
-            self._main_window._core.session.update_node_state(
-                self._node_id, {self._prop_name: self._old_value}
-            )
+        session = self._controller._session
+        if session:
+            session.update_node_state(self._node_id, {self._prop_name: self._old_value})
 
     def description(self) -> str:
         return f"Change {self._prop_name}"
