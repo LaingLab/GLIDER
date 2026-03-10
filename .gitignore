@@ -182,3 +182,4 @@ CLAUDE.md
 *.glider
 uv.lock
 *.ipynb
+.serena*
