@@ -476,7 +476,7 @@ class NodeEditorController(QObject):
 
             info_label = QLabel("Connect to EndFunction to define a reusable function.")
             info_label.setWordWrap(True)
-            info_label.setStyleSheet("color: #888; font-size: 10px;")
+            info_label.setProperty("textRole", "muted")
             props_layout.addRow(info_label)
 
         # Value control for Output node
@@ -635,7 +635,7 @@ class NodeEditorController(QObject):
                 "Analog mode: waits for value to cross threshold"
             )
             info_label.setWordWrap(True)
-            info_label.setStyleSheet("color: #888; font-size: 10px; margin-top: 8px;")
+            info_label.setProperty("textRole", "muted")
             props_layout.addRow(info_label)
 
         elif node_type == "AnalogRead":
@@ -706,7 +706,7 @@ class NodeEditorController(QObject):
                 "Dashboard: enable to show live analog value in runner view."
             )
             info_label.setWordWrap(True)
-            info_label.setStyleSheet("color: #888; font-size: 10px; margin-top: 8px;")
+            info_label.setProperty("textRole", "muted")
             props_layout.addRow(info_label)
 
         elif node_type in ("CustomDevice", "CustomDeviceAction"):
