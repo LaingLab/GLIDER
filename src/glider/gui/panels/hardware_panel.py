@@ -11,8 +11,6 @@ import sys
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, pyqtSignal
-
-from glider.gui.styles import colors
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -31,6 +29,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from glider.gui.styles import colors
 
 if TYPE_CHECKING:
     from glider.core.hardware_manager import HardwareManager
@@ -196,7 +196,9 @@ class HardwarePanel(QWidget):
                 connected = getattr(board, "is_connected", False)
                 status_text = "Connected" if connected else "Disconnected"
                 status_label = QLabel(f"Status: {status_text}")
-                status_label.setStyleSheet(f"color: {colors.SUCCESS if connected else colors.ERROR};")
+                status_label.setStyleSheet(
+                    f"color: {colors.SUCCESS if connected else colors.ERROR};"
+                )
                 group_layout.addWidget(status_label)
 
                 layout.addWidget(group)

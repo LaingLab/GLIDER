@@ -755,8 +755,8 @@ class NodeEditorController(QObject):
                                 break
 
                         pin_combo.currentIndexChanged.connect(
-                            lambda idx, nid=node_id, combo=pin_combo: self._on_node_property_changed(
-                                nid, "pin", combo.currentData()
+                            lambda idx, nid=node_id, combo=pin_combo: (
+                                self._on_node_property_changed(nid, "pin", combo.currentData())
                             )
                         )
                         props_layout.addRow("Pin:", pin_combo)
@@ -778,8 +778,10 @@ class NodeEditorController(QObject):
                             value_combo.setCurrentIndex(1 if saved_value else 0)
 
                             value_combo.currentIndexChanged.connect(
-                                lambda idx, nid=node_id, combo=value_combo: self._on_node_property_changed(
-                                    nid, "value", combo.currentData()
+                                lambda idx, nid=node_id, combo=value_combo: (
+                                    self._on_node_property_changed(
+                                        nid, "value", combo.currentData()
+                                    )
                                 )
                             )
                             props_layout.addRow("Value:", value_combo)
@@ -945,8 +947,8 @@ class NodeEditorController(QObject):
                     current_idx = i
             monitor_combo.setCurrentIndex(current_idx)
             monitor_combo.currentIndexChanged.connect(
-                lambda idx, nid=node_id, combo=monitor_combo: (
-                    self._on_node_property_changed(nid, "monitor_index", combo.currentData())
+                lambda idx, nid=node_id, combo=monitor_combo: self._on_node_property_changed(
+                    nid, "monitor_index", combo.currentData()
                 )
             )
             props_layout.addRow("Monitor:", monitor_combo)

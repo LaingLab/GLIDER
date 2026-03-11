@@ -27,8 +27,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.gui.styles import colors
-
 if TYPE_CHECKING:
     from glider.vision.calibration import CameraCalibration
     from glider.vision.camera_manager import CameraManager
