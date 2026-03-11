@@ -30,6 +30,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.styles import colors
+
 if TYPE_CHECKING:
     from glider.core.experiment_session import ExperimentSession, Subject
 
@@ -98,7 +100,7 @@ class ExperimentPanel(QWidget):
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setStyleSheet("QScrollArea { border: none; }")
+
 
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
@@ -223,23 +225,23 @@ class ExperimentPanel(QWidget):
 
         # Active subject display
         self._active_frame = QFrame()
-        self._active_frame.setStyleSheet("""
-            QFrame {
-                background-color: #1a3a1a;
-                border: 1px solid #2a5a2a;
+        self._active_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {colors.with_alpha(colors.SUCCESS, 0.15)};
+                border: 1px solid {colors.with_alpha(colors.SUCCESS, 0.3)};
                 border-radius: 4px;
                 padding: 4px;
-            }
+            }}
         """)
         active_layout = QHBoxLayout(self._active_frame)
         active_layout.setContentsMargins(8, 4, 8, 4)
 
         active_label = QLabel("Active:")
-        active_label.setStyleSheet("font-weight: bold; color: #8f8;")
+        active_label.setStyleSheet(f"font-weight: bold; color: {colors.SUCCESS};")
         active_layout.addWidget(active_label)
 
         self._active_subject_label = QLabel("None")
-        self._active_subject_label.setStyleSheet("color: #afa;")
+        self._active_subject_label.setStyleSheet(f"color: {colors.SUCCESS};")
         active_layout.addWidget(self._active_subject_label)
         active_layout.addStretch()
 
