@@ -10,7 +10,7 @@ import uuid
 from typing import Any
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QPen
+from PyQt6.QtGui import QBrush, QPen
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -43,6 +43,7 @@ from glider.core.flow_function import (
     InternalNodeConfig,
     ParameterType,
 )
+from glider.gui.styles import colors
 
 logger = logging.getLogger(__name__)
 
@@ -217,12 +218,12 @@ class FlowGraphPreview(QGraphicsView):
 
             # Draw node rectangle
             rect = self._scene.addRect(x, y, 120, 40)
-            rect.setBrush(QBrush(QColor("#3a3a3a")))
-            rect.setPen(QPen(QColor("#5a9bd4"), 2))
+            rect.setBrush(QBrush(colors.Q_SURFACE_2))
+            rect.setPen(QPen(colors.Q_ACCENT, 2))
 
             # Draw node label
             text = self._scene.addText(node.node_type)
-            text.setDefaultTextColor(QColor("#ffffff"))
+            text.setDefaultTextColor(colors.Q_TEXT_PRIMARY)
             text.setPos(x + 5, y + 10)
 
             self._nodes[node.id] = {"rect": rect, "x": x, "y": y}
@@ -237,7 +238,7 @@ class FlowGraphPreview(QGraphicsView):
                 line = self._scene.addLine(
                     from_info["x"] + 120, from_info["y"] + 20, to_info["x"], to_info["y"] + 20
                 )
-                line.setPen(QPen(QColor("#5a9bd4"), 2))
+                line.setPen(QPen(colors.Q_ACCENT, 2))
 
         # Fit view
         self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)

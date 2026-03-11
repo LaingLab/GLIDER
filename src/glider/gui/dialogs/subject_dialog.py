@@ -102,7 +102,6 @@ class SubjectDialog(QDialog):
         if self._is_touch_mode:
             for button in button_box.buttons():
                 button.setMinimumHeight(44)
-                button.setStyleSheet("font-size: 14px; padding: 8px 16px;")
 
         layout.addWidget(button_box)
 
