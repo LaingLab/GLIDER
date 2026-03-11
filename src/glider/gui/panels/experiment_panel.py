@@ -101,7 +101,6 @@ class ExperimentPanel(QWidget):
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
         layout.setContentsMargins(8, 8, 8, 8)
