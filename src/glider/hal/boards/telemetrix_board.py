@@ -482,14 +482,31 @@ class TelemetrixBoard(BaseBoard):
             return bool(self._pin_values.get(pin, False))
 
     async def write_analog(self, pin: int, value: int) -> None:
-        """Write a PWM value to a pin."""
+        """Write a PWM value to a pin.
+
+        Retries up to 3 times on failure since serial communication can
+        be unreliable, and a missed write (especially to 0) can leave
+        hardware running unintentionally.
+        """
         if not self.is_connected or self._telemetrix_thread is None:
             raise RuntimeError("Board not connected")
 
         value = max(0, min(255, value))
-        await asyncio.to_thread(self._call_telemetrix, "analog_write", pin, value)
-        with self._pin_values_lock:
-            self._pin_values[pin] = value
+        last_error = None
+        for attempt in range(3):
+            try:
+                await asyncio.to_thread(self._call_telemetrix, "analog_write", pin, value)
+                with self._pin_values_lock:
+                    self._pin_values[pin] = value
+                return
+            except Exception as e:
+                last_error = e
+                logger.warning(f"PWM write to pin {pin} failed (attempt {attempt + 1}/3): {e}")
+                if attempt < 2:
+                    await asyncio.sleep(0.05)
+        raise RuntimeError(
+            f"Failed to write PWM value {value} to pin {pin} after 3 attempts: {last_error}"
+        )
 
     async def read_analog(self, pin: int) -> int:
         """Read an analog value from a pin.
@@ -575,17 +592,17 @@ class TelemetrixBoard(BaseBoard):
         if not self.is_connected or self._telemetrix_thread is None:
             return
 
-        try:
-            # Turn off all configured output pins
-            for pin, mode in self._pin_modes.items():
-                if mode == PinMode.OUTPUT:
+        # Turn off all configured output pins, continuing even if individual pins fail
+        for pin, mode in self._pin_modes.items():
+            if mode == PinMode.OUTPUT:
+                try:
                     cap = self._board_config["pins"].get(pin)
                     if cap and PinType.PWM in cap.supported_types:
                         await asyncio.to_thread(self._call_telemetrix, "analog_write", pin, 0)
                     else:
                         await asyncio.to_thread(self._call_telemetrix, "digital_write", pin, 0)
-        except Exception as e:
-            logger.error(f"Error during emergency stop: {e}")
+                except Exception as e:
+                    logger.error(f"Error during emergency stop on pin {pin}: {e}")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize board configuration to dictionary."""
