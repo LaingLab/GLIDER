@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-02-26T11:12:23.953761",
-    "modified_at": "2026-02-26T11:45:09.647186",
+    "modified_at": "2026-03-11T15:11:38.869418",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -171,8 +171,8 @@
         "id": "delay_902f4c56",
         "node_type": "Delay",
         "position": [
-          -901.0,
-          76.0
+          -901.0000000000001,
+          74.85000000000002
         ],
         "state": {
           "duration": 5
@@ -227,7 +227,7 @@
           82.79999999999998
         ],
         "state": {
-          "duration": 4
+          "duration": 3
         },
         "device_id": null,
         "visible_in_runner": false
@@ -240,7 +240,7 @@
           198.95000000000002
         ],
         "state": {
-          "duration": 4
+          "duration": 3
         },
         "device_id": null,
         "visible_in_runner": false
@@ -249,11 +249,11 @@
         "id": "output_883da37c",
         "node_type": "Output",
         "position": [
-          -1112.0499999999995,
-          74.75
+          -1110.8999999999992,
+          74.74999999999999
         ],
         "state": {
-          "value": 100
+          "value": 200
         },
         "device_id": "ard_pump",
         "visible_in_runner": false
@@ -262,11 +262,11 @@
         "id": "output_97b3dbcf",
         "node_type": "Output",
         "position": [
-          -693.4499999999999,
+          -692.3000000000001,
           79.35
         ],
         "state": {
-          "value": 100
+          "value": 200
         },
         "device_id": "ard_atom",
         "visible_in_runner": false
@@ -279,7 +279,7 @@
           189.74999999999994
         ],
         "state": {
-          "value": 100
+          "value": 200
         },
         "device_id": "pi_pump",
         "visible_in_runner": false
@@ -292,7 +292,7 @@
           193.2
         ],
         "state": {
-          "value": 100
+          "value": 200
         },
         "device_id": "pi_atom",
         "visible_in_runner": false
@@ -323,8 +323,8 @@
         "id": "output_c42cbc4f",
         "node_type": "Output",
         "position": [
-          -40.250000000000014,
-          83.94999999999999
+          -36.800000000000026,
+          83.95
         ],
         "state": {},
         "device_id": "ard_atom",
