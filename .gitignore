@@ -182,4 +182,5 @@ CLAUDE.md
 *.glider
 uv.lock
 *.ipynb
-.serena*.superpowers/
+.serena*
+.superpowers/
