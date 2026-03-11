@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from glider.gui.styles import colors
 from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape, draw_zones
 
 if TYPE_CHECKING:
@@ -69,12 +70,12 @@ class ZonePreviewWidget(QLabel):
         super().__init__(parent)
         self.setMinimumSize(640, 480)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet("""
-            QLabel {
-                background-color: #0d0d1a;
-                border: 2px solid #2d2d44;
+        self.setStyleSheet(f"""
+            QLabel {{
+                background-color: {colors.CANVAS};
+                border: 2px solid {colors.BORDER};
                 border-radius: 4px;
-            }
+            }}
         """)
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -584,7 +585,7 @@ class ZoneDialog(QDialog):
         # Convert BGR to RGB for Qt
         self._color_preview.setStyleSheet(
             f"background-color: rgb({color[2]}, {color[1]}, {color[0]}); "
-            f"border: 1px solid #666;"
+            f"border: 1px solid {colors.BORDER};"
         )
 
     def _on_draw_toggled(self, checked: bool) -> None:
@@ -716,7 +717,7 @@ class ZoneDialog(QDialog):
             color_widget = QFrame()
             color_widget.setStyleSheet(
                 f"background-color: rgb({zone.color[2]}, {zone.color[1]}, {zone.color[0]}); "
-                f"border: 1px solid #666;"
+                f"border: 1px solid {colors.BORDER};"
             )
             self._table.setCellWidget(i, 2, color_widget)
 
