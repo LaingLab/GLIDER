@@ -21,6 +21,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.styles import colors
+
 if TYPE_CHECKING:
     from glider.agent.agent_controller import AgentController
 
@@ -44,7 +46,7 @@ class MessageBubble(QFrame):
 
         # Role label
         role_label = QLabel(self._role.capitalize())
-        role_label.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        role_label.setProperty("textRole", "muted")
         layout.addWidget(role_label)
 
         # Content - use QLabel with proper wrapping
@@ -62,26 +64,26 @@ class MessageBubble(QFrame):
 
         # Styling
         if self._role == "user":
-            self.setStyleSheet("""
-                MessageBubble {
-                    background-color: #2a5298;
+            self.setStyleSheet(f"""
+                MessageBubble {{
+                    background-color: {colors.ACCENT_PRESSED};
                     border-radius: 8px;
                     margin-left: 40px;
-                }
-                QLabel {
-                    color: white;
-                }
+                }}
+                QLabel {{
+                    color: {colors.TEXT_PRIMARY};
+                }}
             """)
         else:
-            self.setStyleSheet("""
-                MessageBubble {
-                    background-color: #3c3c3c;
+            self.setStyleSheet(f"""
+                MessageBubble {{
+                    background-color: {colors.SURFACE_2};
                     border-radius: 8px;
                     margin-right: 40px;
-                }
-                QLabel {
-                    color: #e0e0e0;
-                }
+                }}
+                QLabel {{
+                    color: {colors.TEXT_PRIMARY};
+                }}
             """)
 
     def update_content(self, content: str) -> None:
@@ -109,13 +111,13 @@ class ActionConfirmWidget(QFrame):
 
         # Header
         header = QLabel("Agent wants to perform actions:")
-        header.setStyleSheet("font-weight: bold; color: #ffa726;")
+        header.setStyleSheet(f"font-weight: bold; color: {colors.WARNING};")
         layout.addWidget(header)
 
         # Action list
         for action in self._actions:
             action_label = QLabel(f"  - {action.description}")
-            action_label.setStyleSheet("color: #e0e0e0; margin-left: 8px;")
+            action_label.setProperty("textRole", "secondary")
             layout.addWidget(action_label)
 
         # Buttons
@@ -123,33 +125,33 @@ class ActionConfirmWidget(QFrame):
         button_layout.addStretch()
 
         confirm_btn = QPushButton("Execute")
-        confirm_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4caf50;
-                color: white;
+        confirm_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.SUCCESS};
+                color: {colors.BASE};
                 border: none;
                 padding: 6px 16px;
                 border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.ACCENT_HOVER};
+            }}
         """)
         confirm_btn.clicked.connect(self.confirmed.emit)
         button_layout.addWidget(confirm_btn)
 
         reject_btn = QPushButton("Cancel")
-        reject_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
+        reject_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.ERROR};
+                color: {colors.BASE};
                 border: none;
                 padding: 6px 16px;
                 border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #da190b;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {colors.ACCENT_PRESSED};
+            }}
         """)
         reject_btn.clicked.connect(self.rejected.emit)
         button_layout.addWidget(reject_btn)
@@ -157,12 +159,12 @@ class ActionConfirmWidget(QFrame):
         layout.addLayout(button_layout)
 
         # Frame styling
-        self.setStyleSheet("""
-            ActionConfirmWidget {
-                background-color: #2d2d2d;
-                border: 1px solid #ffa726;
+        self.setStyleSheet(f"""
+            ActionConfirmWidget {{
+                background-color: {colors.SURFACE_2};
+                border: 1px solid {colors.WARNING};
                 border-radius: 8px;
-            }
+            }}
         """)
 
 
@@ -226,19 +228,17 @@ class AgentPanel(QWidget):
 
         # Header
         header = QFrame()
-        header.setStyleSheet("background-color: #2d2d2d; border-bottom: 1px solid #444;")
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(8, 4, 8, 4)
 
         title = QLabel("AI Assistant")
-        title.setStyleSheet("font-weight: bold; font-size: 14px;")
         header_layout.addWidget(title)
 
         header_layout.addStretch()
 
         # Status indicator
         self._status_label = QLabel("Ready")
-        self._status_label.setStyleSheet("color: #888; font-size: 11px;")
+        self._status_label.setProperty("textRole", "muted")
         header_layout.addWidget(self._status_label)
 
         header_layout.addSpacing(8)
@@ -256,8 +256,6 @@ class AgentPanel(QWidget):
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setStyleSheet("QScrollArea { border: none; background: #1e1e1e; }")
-
         self._chat_container = QWidget()
         self._chat_container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         self._chat_layout = QVBoxLayout(self._chat_container)
@@ -271,7 +269,6 @@ class AgentPanel(QWidget):
 
         # Quick prompts
         quick_prompts = QFrame()
-        quick_prompts.setStyleSheet("background-color: #2d2d2d;")
         quick_layout = QHBoxLayout(quick_prompts)
         quick_layout.setContentsMargins(8, 4, 8, 4)
 
@@ -283,18 +280,7 @@ class AgentPanel(QWidget):
 
         for label, prompt in prompts:
             btn = QPushButton(label)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #3c3c3c;
-                    border: 1px solid #555;
-                    border-radius: 12px;
-                    padding: 4px 12px;
-                    font-size: 11px;
-                }
-                QPushButton:hover {
-                    background-color: #4c4c4c;
-                }
-            """)
+            btn.setProperty("buttonRole", "secondary")
             btn.clicked.connect(lambda checked, p=prompt: self._send_message(p))
             quick_layout.addWidget(btn)
 
@@ -303,43 +289,16 @@ class AgentPanel(QWidget):
 
         # Input area
         input_frame = QFrame()
-        input_frame.setStyleSheet("background-color: #2d2d2d; border-top: 1px solid #444;")
         input_layout = QHBoxLayout(input_frame)
         input_layout.setContentsMargins(8, 8, 8, 8)
 
         self._input = ChatInput()
-        self._input.setStyleSheet("""
-            QLineEdit {
-                background-color: #3c3c3c;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 8px;
-                color: white;
-            }
-            QLineEdit:focus {
-                border-color: #2196f3;
-            }
-        """)
         self._input.submitted.connect(self._send_message)
         input_layout.addWidget(self._input)
 
         send_btn = QPushButton("Send")
         send_btn.setFixedWidth(60)
-        send_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2196f3;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 8px;
-            }
-            QPushButton:hover {
-                background-color: #1976d2;
-            }
-            QPushButton:disabled {
-                background-color: #555;
-            }
-        """)
+        send_btn.setProperty("buttonRole", "primary")
         send_btn.clicked.connect(lambda: self._send_message(self._input.text()))
         self._send_btn = send_btn
         input_layout.addWidget(send_btn)
