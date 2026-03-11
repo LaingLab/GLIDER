@@ -21,6 +21,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.styles import colors
+
 if TYPE_CHECKING:
     from glider.nodes.base_node import GliderNode
 
@@ -91,12 +93,14 @@ class TouchLabel(TouchWidgetBase):
 
         # Title label
         self._title = QLabel()
-        self._title.setStyleSheet("font-size: 14px; color: #888;")
+        self._title.setStyleSheet(f"font-size: 14px; color: {colors.TEXT_MUTED};")
         layout.addWidget(self._title)
 
         # Value label
         self._label = QLabel()
-        self._label.setStyleSheet("font-size: 24px; font-weight: bold; color: #fff;")
+        self._label.setStyleSheet(
+            f"font-size: 24px; font-weight: bold; color: {colors.TEXT_PRIMARY};"
+        )
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._label)
 
@@ -131,19 +135,19 @@ class TouchButton(TouchWidgetBase):
 
         self._button = QPushButton()
         self._button.setMinimumHeight(60)
-        self._button.setStyleSheet("""
-            QPushButton {
+        self._button.setStyleSheet(f"""
+            QPushButton {{
                 font-size: 18px;
                 font-weight: bold;
-                background-color: #3498db;
-                color: white;
+                background-color: {colors.ACCENT};
+                color: {colors.TEXT_PRIMARY};
                 border: none;
                 border-radius: 8px;
                 padding: 15px;
-            }
-            QPushButton:pressed {
-                background-color: #2980b9;
-            }
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.ACCENT_HOVER};
+            }}
         """)
         self._button.pressed.connect(lambda: self.value_changed.emit(True))
         self._button.released.connect(lambda: self.value_changed.emit(False))
@@ -181,7 +185,7 @@ class TouchToggle(TouchWidgetBase):
 
         # Label
         self._title = QLabel()
-        self._title.setStyleSheet("font-size: 18px; color: #fff;")
+        self._title.setStyleSheet(f"font-size: 18px; color: {colors.TEXT_PRIMARY};")
         layout.addWidget(self._title)
 
         layout.addStretch()
@@ -208,21 +212,21 @@ class TouchToggle(TouchWidgetBase):
     def _update_toggle_style(self) -> None:
         """Update toggle appearance based on state."""
         if self._checked:
-            self._toggle.setStyleSheet("""
-                QPushButton {
-                    background-color: #2ecc71;
+            self._toggle.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {colors.SUCCESS};
                     border: none;
                     border-radius: 25px;
-                }
+                }}
             """)
             self._toggle.setText("ON")
         else:
-            self._toggle.setStyleSheet("""
-                QPushButton {
-                    background-color: #7f8c8d;
+            self._toggle.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {colors.TEXT_MUTED};
                     border: none;
                     border-radius: 25px;
-                }
+                }}
             """)
             self._toggle.setText("OFF")
 
@@ -260,13 +264,15 @@ class TouchSlider(TouchWidgetBase):
         # Title and value row
         header = QHBoxLayout()
         self._title = QLabel()
-        self._title.setStyleSheet("font-size: 16px; color: #888;")
+        self._title.setStyleSheet(f"font-size: 16px; color: {colors.TEXT_MUTED};")
         header.addWidget(self._title)
 
         header.addStretch()
 
         self._value_label = QLabel("0")
-        self._value_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #fff;")
+        self._value_label.setStyleSheet(
+            f"font-size: 20px; font-weight: bold; color: {colors.TEXT_PRIMARY};"
+        )
         header.addWidget(self._value_label)
 
         layout.addLayout(header)
@@ -274,22 +280,22 @@ class TouchSlider(TouchWidgetBase):
         # Slider
         self._slider = QSlider(Qt.Orientation.Horizontal)
         self._slider.setMinimumHeight(40)
-        self._slider.setStyleSheet("""
-            QSlider::groove:horizontal {
+        self._slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
                 height: 20px;
-                background: #34495e;
+                background: {colors.SURFACE_2};
                 border-radius: 10px;
-            }
-            QSlider::handle:horizontal {
+            }}
+            QSlider::handle:horizontal {{
                 width: 40px;
                 height: 40px;
                 margin: -10px 0;
-                background: #3498db;
+                background: {colors.ACCENT};
                 border-radius: 20px;
-            }
-            QSlider::handle:horizontal:pressed {
-                background: #2980b9;
-            }
+            }}
+            QSlider::handle:horizontal:pressed {{
+                background: {colors.ACCENT_HOVER};
+            }}
         """)
         self._slider.valueChanged.connect(self._on_value_changed)
         layout.addWidget(self._slider)
@@ -297,13 +303,13 @@ class TouchSlider(TouchWidgetBase):
         # Min/max labels
         range_layout = QHBoxLayout()
         self._min_label = QLabel("0")
-        self._min_label.setStyleSheet("font-size: 12px; color: #666;")
+        self._min_label.setStyleSheet(f"font-size: 12px; color: {colors.TEXT_DISABLED};")
         range_layout.addWidget(self._min_label)
 
         range_layout.addStretch()
 
         self._max_label = QLabel("100")
-        self._max_label.setStyleSheet("font-size: 12px; color: #666;")
+        self._max_label.setStyleSheet(f"font-size: 12px; color: {colors.TEXT_DISABLED};")
         range_layout.addWidget(self._max_label)
 
         layout.addLayout(range_layout)
@@ -362,7 +368,7 @@ class TouchGauge(TouchWidgetBase):
 
         # Title
         self._title = QLabel()
-        self._title.setStyleSheet("font-size: 14px; color: #888;")
+        self._title.setStyleSheet(f"font-size: 14px; color: {colors.TEXT_MUTED};")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._title)
 
@@ -434,20 +440,18 @@ class GaugeCanvas(QWidget):
         rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
 
         # Background arc
-        painter.setPen(QPen(QColor("#34495e"), 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.setPen(QPen(colors.Q_SURFACE_2, 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.drawArc(rect, 180 * 16, -180 * 16)
 
         # Value arc
         if self._max > self._min:
             ratio = (self._value - self._min) / (self._max - self._min)
             angle = int(-180 * ratio * 16)
-            painter.setPen(
-                QPen(QColor("#3498db"), 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-            )
+            painter.setPen(QPen(colors.Q_ACCENT, 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             painter.drawArc(rect, 180 * 16, angle)
 
         # Value text
-        painter.setPen(QPen(QColor("#fff")))
+        painter.setPen(QPen(colors.Q_TEXT_PRIMARY))
         font = QFont(_get_system_font(), 16, QFont.Weight.Bold)
         painter.setFont(font)
 
@@ -482,7 +486,7 @@ class TouchChart(TouchWidgetBase):
 
         # Title
         self._title = QLabel()
-        self._title.setStyleSheet("font-size: 14px; color: #888;")
+        self._title.setStyleSheet(f"font-size: 14px; color: {colors.TEXT_MUTED};")
         layout.addWidget(self._title)
 
         # Chart canvas
@@ -542,10 +546,10 @@ class ChartCanvas(QWidget):
         margin = 5
 
         # Background
-        painter.fillRect(0, 0, w, h, QColor("#1a1a2e"))
+        painter.fillRect(0, 0, w, h, colors.Q_SURFACE_1)
 
         # Grid lines
-        painter.setPen(QPen(QColor("#2d2d44"), 1))
+        painter.setPen(QPen(colors.Q_BORDER, 1))
         for i in range(1, 4):
             y = margin + (h - 2 * margin) * i // 4
             painter.drawLine(margin, y, w - margin, y)
@@ -569,7 +573,7 @@ class ChartCanvas(QWidget):
             else:
                 path.lineTo(x, y)
 
-        painter.setPen(QPen(QColor("#3498db"), 2))
+        painter.setPen(QPen(colors.Q_ACCENT, 2))
         painter.drawPath(path)
 
 
@@ -584,8 +588,8 @@ class TouchLED(TouchWidgetBase):
         super().__init__(parent)
 
         self._on = False
-        self._on_color = QColor("#2ecc71")  # Green
-        self._off_color = QColor("#7f8c8d")  # Gray
+        self._on_color = QColor(colors.Q_LED_ON)
+        self._off_color = QColor(colors.Q_LED_OFF)
 
         self._setup_ui()
 
@@ -596,7 +600,7 @@ class TouchLED(TouchWidgetBase):
 
         # Label
         self._title = QLabel()
-        self._title.setStyleSheet("font-size: 18px; color: #fff;")
+        self._title.setStyleSheet(f"font-size: 18px; color: {colors.TEXT_PRIMARY};")
         layout.addWidget(self._title)
 
         layout.addStretch()
@@ -611,8 +615,8 @@ class TouchLED(TouchWidgetBase):
         self._title.setText(self._label_text)
 
         if self._node:
-            on_color = getattr(self._node, "on_color", "#2ecc71")
-            off_color = getattr(self._node, "off_color", "#7f8c8d")
+            on_color = getattr(self._node, "on_color", colors.LED_ON)
+            off_color = getattr(self._node, "off_color", colors.LED_OFF)
             self._on_color = QColor(on_color)
             self._off_color = QColor(off_color)
             self._led.set_colors(self._on_color, self._off_color)
@@ -633,8 +637,8 @@ class LEDCanvas(QWidget):
         super().__init__(parent)
 
         self._on = False
-        self._on_color = QColor("#2ecc71")
-        self._off_color = QColor("#7f8c8d")
+        self._on_color = QColor(colors.Q_LED_ON)
+        self._off_color = QColor(colors.Q_LED_OFF)
 
     def set_colors(self, on_color: QColor, off_color: QColor) -> None:
         """Set the LED colors."""
@@ -708,7 +712,7 @@ class TouchNumericInput(TouchWidgetBase):
 
         # Title
         self._title = QLabel()
-        self._title.setStyleSheet("font-size: 14px; color: #888;")
+        self._title.setStyleSheet(f"font-size: 14px; color: {colors.TEXT_MUTED};")
         layout.addWidget(self._title)
 
         # Input row
@@ -717,29 +721,29 @@ class TouchNumericInput(TouchWidgetBase):
         # Decrement button
         self._dec_btn = QPushButton("-")
         self._dec_btn.setMinimumSize(60, 50)
-        self._dec_btn.setStyleSheet("""
-            QPushButton {
+        self._dec_btn.setStyleSheet(f"""
+            QPushButton {{
                 font-size: 24px;
                 font-weight: bold;
-                background-color: #e74c3c;
-                color: white;
+                background-color: {colors.ERROR};
+                color: {colors.TEXT_PRIMARY};
                 border: none;
                 border-radius: 8px;
-            }
-            QPushButton:pressed {
-                background-color: #c0392b;
-            }
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.ERROR};
+            }}
         """)
         self._dec_btn.clicked.connect(self._decrement)
         input_row.addWidget(self._dec_btn)
 
         # Value display
         self._value_label = QLabel("0")
-        self._value_label.setStyleSheet("""
+        self._value_label.setStyleSheet(f"""
             font-size: 28px;
             font-weight: bold;
-            color: #fff;
-            background-color: #34495e;
+            color: {colors.TEXT_PRIMARY};
+            background-color: {colors.SURFACE_2};
             border-radius: 8px;
             padding: 10px;
         """)
@@ -750,18 +754,18 @@ class TouchNumericInput(TouchWidgetBase):
         # Increment button
         self._inc_btn = QPushButton("+")
         self._inc_btn.setMinimumSize(60, 50)
-        self._inc_btn.setStyleSheet("""
-            QPushButton {
+        self._inc_btn.setStyleSheet(f"""
+            QPushButton {{
                 font-size: 24px;
                 font-weight: bold;
-                background-color: #2ecc71;
-                color: white;
+                background-color: {colors.SUCCESS};
+                color: {colors.TEXT_PRIMARY};
                 border: none;
                 border-radius: 8px;
-            }
-            QPushButton:pressed {
-                background-color: #27ae60;
-            }
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.SUCCESS};
+            }}
         """)
         self._inc_btn.clicked.connect(self._increment)
         input_row.addWidget(self._inc_btn)

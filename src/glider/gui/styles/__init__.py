@@ -4,6 +4,8 @@ GLIDER Styles - Qt Style Sheets for desktop and touch modes.
 
 from pathlib import Path
 
+from glider.gui.styles import colors  # noqa: F401
+
 STYLES_DIR = Path(__file__).parent
 
 

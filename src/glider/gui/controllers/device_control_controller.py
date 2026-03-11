@@ -163,10 +163,7 @@ class DeviceControlController(QWidget):
 
         # Value display
         self._input_value_label = QLabel("--")
-        self._input_value_label.setStyleSheet(
-            "font-size: 20px; font-weight: bold; padding: 6px; "
-            "background-color: #2d2d2d; border-radius: 4px; color: #00ff00;"
-        )
+        self._input_value_label.setProperty("inputValue", True)
         self._input_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._input_value_label.setMinimumHeight(36)
         input_group_layout.addWidget(self._input_value_label)
@@ -205,7 +202,7 @@ class DeviceControlController(QWidget):
 
         # Status display
         self._status_label = QLabel("No device selected")
-        self._status_label.setStyleSheet("font-size: 11px; color: #888; padding: 2px;")
+        self._status_label.setProperty("textRole", "muted")
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._status_label)
 

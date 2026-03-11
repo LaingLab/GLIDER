@@ -32,6 +32,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.styles import colors
+
 if TYPE_CHECKING:
     from glider.core.experiment_session import ExperimentSession, Subject
 
@@ -111,7 +113,7 @@ class ExperimentDialog(QDialog):
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setStyleSheet("QScrollArea { border: none; }")
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
 
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
@@ -237,23 +239,23 @@ class ExperimentDialog(QDialog):
 
         # Active subject display
         self._active_frame = QFrame()
-        self._active_frame.setStyleSheet("""
-            QFrame {
-                background-color: #1a3a1a;
-                border: 1px solid #2a5a2a;
+        self._active_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {colors.with_alpha(colors.SUCCESS, 0.1)};
+                border: 1px solid {colors.with_alpha(colors.SUCCESS, 0.3)};
                 border-radius: 4px;
                 padding: 4px;
-            }
+            }}
         """)
         active_layout = QHBoxLayout(self._active_frame)
         active_layout.setContentsMargins(10, 6, 10, 6)
 
         active_label = QLabel("Active:")
-        active_label.setStyleSheet("font-weight: bold; color: #8f8;")
+        active_label.setStyleSheet(f"font-weight: bold; color: {colors.SUCCESS};")
         active_layout.addWidget(active_label)
 
         self._active_subject_label = QLabel("None")
-        self._active_subject_label.setStyleSheet("color: #afa;")
+        self._active_subject_label.setStyleSheet(f"color: {colors.SUCCESS};")
         active_layout.addWidget(self._active_subject_label)
         active_layout.addStretch()
 
@@ -272,7 +274,6 @@ class ExperimentDialog(QDialog):
         if self._is_touch_mode:
             for button in button_box.buttons():
                 button.setMinimumHeight(44)
-                button.setStyleSheet("font-size: 14px; padding: 8px 16px;")
 
         main_layout.addWidget(button_box)
 

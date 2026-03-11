@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.agent.analysis import AnalysisController
+from glider.gui.styles import colors
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class MessageBubble(QFrame):
 
         # Role label
         role_label = QLabel(self._role.capitalize())
-        role_label.setStyleSheet("font-weight: bold; font-size: 11px; color: #888;")
+        role_label.setProperty("textRole", "muted")
         layout.addWidget(role_label)
 
         # Content - use QLabel with proper wrapping
@@ -66,26 +67,26 @@ class MessageBubble(QFrame):
 
         # Styling based on role
         if self._role == "user":
-            self.setStyleSheet("""
-                MessageBubble {
-                    background-color: #2a5298;
+            self.setStyleSheet(f"""
+                MessageBubble {{
+                    background-color: {colors.ACCENT_PRESSED};
                     border-radius: 8px;
                     margin-left: 40px;
-                }
-                QLabel {
-                    color: white;
-                }
+                }}
+                QLabel {{
+                    color: {colors.TEXT_PRIMARY};
+                }}
             """)
         else:
-            self.setStyleSheet("""
-                MessageBubble {
-                    background-color: #3c3c3c;
+            self.setStyleSheet(f"""
+                MessageBubble {{
+                    background-color: {colors.SURFACE_2};
                     border-radius: 8px;
                     margin-right: 40px;
-                }
-                QLabel {
-                    color: #e0e0e0;
-                }
+                }}
+                QLabel {{
+                    color: {colors.TEXT_PRIMARY};
+                }}
             """)
 
     def update_content(self, content: str) -> None:
@@ -149,23 +150,24 @@ class AnalysisDialog(QDialog):
     def _create_header(self) -> QFrame:
         """Create the header section."""
         header = QFrame()
-        header.setStyleSheet("background-color: #2d2d2d; border-bottom: 1px solid #444;")
+        header.setStyleSheet(
+            f"background-color: {colors.SURFACE_2}; border-bottom: 1px solid {colors.BORDER};"
+        )
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(12, 8, 12, 8)
 
         title = QLabel("CSV Data Analysis")
-        title.setStyleSheet("font-weight: bold; font-size: 16px;")
         header_layout.addWidget(title)
 
         header_layout.addStretch()
 
         # Status indicator
-        self._status_indicator = QLabel("●")
-        self._status_indicator.setStyleSheet("color: #888; font-size: 14px;")
+        self._status_indicator = QLabel("\u25cf")
+        self._status_indicator.setProperty("textRole", "muted")
         header_layout.addWidget(self._status_indicator)
 
         self._status_label = QLabel("Initializing...")
-        self._status_label.setStyleSheet("color: #888; font-size: 12px;")
+        self._status_label.setProperty("textRole", "muted")
         header_layout.addWidget(self._status_label)
 
         header_layout.addSpacing(16)
@@ -190,19 +192,6 @@ class AnalysisDialog(QDialog):
         # File list
         self._file_list = QListWidget()
         self._file_list.setMaximumHeight(100)
-        self._file_list.setStyleSheet("""
-            QListWidget {
-                background-color: #2d2d2d;
-                border: 1px solid #444;
-                border-radius: 4px;
-            }
-            QPushButton {
-                padding: 2px 4px;
-            }
-            QListWidget::item:selected {
-                background-color: #3c3c3c;
-            }
-        """)
         files_layout.addWidget(self._file_list)
 
         # File buttons
@@ -243,7 +232,9 @@ class AnalysisDialog(QDialog):
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setStyleSheet("QScrollArea { border: none; background: #1e1e1e; }")
+        scroll_area.setStyleSheet(
+            f"QScrollArea {{ border: none; background: {colors.SURFACE_1}; }}"
+        )
 
         self._chat_container = QWidget()
         self._chat_container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
@@ -258,7 +249,7 @@ class AnalysisDialog(QDialog):
 
         # Quick prompts
         quick_frame = QFrame()
-        quick_frame.setStyleSheet("background-color: #2d2d2d; border-radius: 4px;")
+        quick_frame.setStyleSheet(f"background-color: {colors.SURFACE_2}; border-radius: 4px;")
         quick_layout = QHBoxLayout(quick_frame)
         quick_layout.setContentsMargins(8, 4, 8, 4)
 
@@ -271,21 +262,6 @@ class AnalysisDialog(QDialog):
 
         for label, prompt in prompts:
             btn = QPushButton(label)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #3c3c3c;
-                    border: 1px solid #555;
-                    border-radius: 12px;
-                    padding: 4px 12px;
-                    font-size: 11px;
-                }
-                QPushButton:hover {
-                    background-color: #4c4c4c;
-                }
-                QPushButton:disabled {
-                    color: #666;
-                }
-            """)
             btn.clicked.connect(lambda checked, p=prompt: self._send_message(p))
             quick_layout.addWidget(btn)
 
@@ -299,47 +275,19 @@ class AnalysisDialog(QDialog):
     def _create_input_section(self) -> QFrame:
         """Create the input section."""
         input_frame = QFrame()
-        input_frame.setStyleSheet("background-color: #2d2d2d; border-top: 1px solid #444;")
+        input_frame.setStyleSheet(
+            f"background-color: {colors.SURFACE_2}; border-top: 1px solid {colors.BORDER};"
+        )
         input_layout = QHBoxLayout(input_frame)
         input_layout.setContentsMargins(12, 8, 12, 8)
 
         self._input = QLineEdit()
         self._input.setPlaceholderText("Ask a question about your data...")
-        self._input.setStyleSheet("""
-            QLineEdit {
-                background-color: #3c3c3c;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 8px;
-                color: white;
-            }
-            QLineEdit:focus {
-                border-color: #2196f3;
-            }
-            QLineEdit:disabled {
-                background-color: #2a2a2a;
-            }
-        """)
         self._input.returnPressed.connect(lambda: self._send_message(self._input.text()))
         input_layout.addWidget(self._input)
 
         self._send_btn = QPushButton("Send")
         self._send_btn.setFixedWidth(70)
-        self._send_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2196f3;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 8px;
-            }
-            QPushButton:hover {
-                background-color: #1976d2;
-            }
-            QPushButton:disabled {
-                background-color: #555;
-            }
-        """)
         self._send_btn.clicked.connect(lambda: self._send_message(self._input.text()))
         input_layout.addWidget(self._send_btn)
 
@@ -391,9 +339,9 @@ class AnalysisDialog(QDialog):
         """Update status display."""
         self._status_label.setText(status)
         if connected:
-            self._status_indicator.setStyleSheet("color: #4caf50; font-size: 14px;")
+            self._status_indicator.setStyleSheet(f"color: {colors.SUCCESS};")
         else:
-            self._status_indicator.setStyleSheet("color: #f44336; font-size: 14px;")
+            self._status_indicator.setStyleSheet(f"color: {colors.ERROR};")
 
     def _on_browse_file(self) -> None:
         """Handle browse button click."""
