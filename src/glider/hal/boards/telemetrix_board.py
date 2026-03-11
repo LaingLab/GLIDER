@@ -256,6 +256,7 @@ class TelemetrixBoard(BaseBoard):
         self._telemetrix_thread: TelemetrixThread | None = None
         self._pin_modes: dict[int, PinMode] = {}
         self._pin_values: dict[int, Any] = {}
+        self._pwm_pins_forced_low: set[int] = set()
         self._pin_values_lock = threading.Lock()  # Thread-safe access to _pin_values
         self._analog_map: dict[int, int] = {}  # Maps actual pin to Arduino analog number
         # Main event loop for marshalling callbacks from telemetrix thread.
@@ -495,7 +496,26 @@ class TelemetrixBoard(BaseBoard):
         last_error = None
         for attempt in range(3):
             try:
-                await asyncio.to_thread(self._call_telemetrix, "analog_write", pin, value)
+                if value == 0:
+                    # Switch to digital output mode and drive LOW to fully disable
+                    # the PWM timer. analogWrite(pin, 0) only sets duty cycle to 0%
+                    # but keeps the timer running with a weak output driver, which
+                    # can't overcome back-fed voltage from loads like ultrasonic
+                    # atomizers. digitalWrite(pin, LOW) engages the stronger digital
+                    # output driver.
+                    await asyncio.to_thread(
+                        self._call_telemetrix, "set_pin_mode_digital_output", pin
+                    )
+                    await asyncio.to_thread(self._call_telemetrix, "digital_write", pin, 0)
+                    self._pwm_pins_forced_low.add(pin)
+                else:
+                    if pin in self._pwm_pins_forced_low:
+                        # Re-enable PWM mode before writing a non-zero value
+                        await asyncio.to_thread(
+                            self._call_telemetrix, "set_pin_mode_analog_output", pin
+                        )
+                        self._pwm_pins_forced_low.discard(pin)
+                    await asyncio.to_thread(self._call_telemetrix, "analog_write", pin, value)
                 with self._pin_values_lock:
                     self._pin_values[pin] = value
                 return
@@ -598,7 +618,12 @@ class TelemetrixBoard(BaseBoard):
                 try:
                     cap = self._board_config["pins"].get(pin)
                     if cap and PinType.PWM in cap.supported_types:
-                        await asyncio.to_thread(self._call_telemetrix, "analog_write", pin, 0)
+                        # Force digital LOW to overcome back-fed voltage from loads
+                        await asyncio.to_thread(
+                            self._call_telemetrix, "set_pin_mode_digital_output", pin
+                        )
+                        await asyncio.to_thread(self._call_telemetrix, "digital_write", pin, 0)
+                        self._pwm_pins_forced_low.add(pin)
                     else:
                         await asyncio.to_thread(self._call_telemetrix, "digital_write", pin, 0)
                 except Exception as e:
