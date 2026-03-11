@@ -45,6 +45,7 @@ from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
 from glider.gui.panels.runner_panel import RunnerPanel
+from glider.gui.styles import colors
 from glider.gui.view_manager import ViewManager, ViewMode
 from glider.hal.base_board import BoardConnectionState
 from glider.vision.zones import ZoneConfiguration
@@ -292,9 +293,10 @@ class MainWindow(QMainWindow):
         self._control_dock.setWidget(self._device_control_panel)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._control_dock)
 
-        # Stack control dock below hardware dock
+        # Group left docks: Node Library + Hardware + Device Control
+        self.tabifyDockWidget(self._node_library_dock, self._hardware_dock)
         self.tabifyDockWidget(self._hardware_dock, self._control_dock)
-        self._hardware_dock.raise_()
+        self._node_library_dock.raise_()
 
         # Wire hardware_changed → device control + runner refresh
         self._hardware_panel.hardware_changed.connect(self._device_control_panel.refresh_devices)
@@ -329,6 +331,10 @@ class MainWindow(QMainWindow):
         self._camera_panel.set_zone_configuration(self._zone_config)
         self._camera_dock.setWidget(self._camera_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._camera_dock)
+
+        # Group right docks: Properties + Camera
+        self.tabifyDockWidget(self._properties_dock, self._camera_dock)
+        self._properties_dock.raise_()
 
         # Files dock
         from PyQt6.QtWidgets import QFrame, QScrollArea
@@ -700,7 +706,7 @@ class MainWindow(QMainWindow):
 
         header_layout = QHBoxLayout()
         warning_label = QLabel("Warning")
-        warning_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #f39c12;")
+        warning_label.setStyleSheet(f"font-size: 24px; font-weight: bold; color: {colors.WARNING};")
         header_layout.addWidget(warning_label)
 
         message = QLabel(
@@ -712,7 +718,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(header_layout)
 
         status_label = QLabel(f"Connection state: {state.name}")
-        status_label.setStyleSheet("color: #888;")
+        status_label.setProperty("textRole", "muted")
         layout.addWidget(status_label)
 
         from PyQt6.QtWidgets import QPushButton
