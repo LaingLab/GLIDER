@@ -9,8 +9,6 @@ import logging
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QMimeData, Qt, pyqtSignal
-
-from glider.gui.styles import colors
 from PyQt6.QtGui import QDrag
 from PyQt6.QtWidgets import (
     QDialog,
@@ -23,6 +21,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from glider.gui.styles import colors
 
 if TYPE_CHECKING:
     from glider.gui.node_graph.graph_view import NodeGraphView

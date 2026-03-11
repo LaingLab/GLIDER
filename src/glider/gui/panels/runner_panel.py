@@ -389,7 +389,7 @@ class RunnerPanel(QWidget):
             QLabel {{
                 background-color: {state_color};
                 color: {colors.TEXT_PRIMARY};
-                font-size: {'11px' if is_analog_input else '14px'};
+                font-size: {"11px" if is_analog_input else "14px"};
                 font-weight: bold;
                 border-radius: 8px;
                 padding: 4px 8px;

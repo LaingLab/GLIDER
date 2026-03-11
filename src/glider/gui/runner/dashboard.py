@@ -129,7 +129,8 @@ class RunnerDashboard(QWidget):
             widget = WidgetFactory.create_widget(node)
             if widget:
                 self._content_layout.insertWidget(
-                    self._content_layout.count() - 1, widget  # Before stretch
+                    self._content_layout.count() - 1,
+                    widget,  # Before stretch
                 )
                 self._widgets[node.id] = widget
 

@@ -237,9 +237,7 @@ class NodeItem(QGraphicsRectItem):
         # Header
         header_rect = QRectF(0, 0, rect.width(), self.HEADER_HEIGHT)
         gradient = QLinearGradient(0, 0, 0, self.HEADER_HEIGHT)
-        grad_tuple = self.CATEGORY_GRADIENTS.get(
-            self._category, self.CATEGORY_GRADIENTS["default"]
-        )
+        grad_tuple = self.CATEGORY_GRADIENTS.get(self._category, self.CATEGORY_GRADIENTS["default"])
         gradient.setColorAt(0, QColor(grad_tuple[0]))
         gradient.setColorAt(1, QColor(grad_tuple[1]))
         painter.setBrush(QBrush(gradient))
