@@ -497,17 +497,18 @@ class TelemetrixBoard(BaseBoard):
         for attempt in range(3):
             try:
                 if value == 0:
-                    # Switch to digital output mode and drive LOW to fully disable
-                    # the PWM timer. analogWrite(pin, 0) only sets duty cycle to 0%
-                    # but keeps the timer running with a weak output driver, which
-                    # can't overcome back-fed voltage from loads like ultrasonic
-                    # atomizers. digitalWrite(pin, LOW) engages the stronger digital
-                    # output driver.
+                    # Force pin fully LOW to overcome back-fed voltage from loads
+                    # like ultrasonic atomizers driven through motor controllers.
+                    # Step 1: Zero the PWM duty cycle to stop the timer output
+                    await asyncio.to_thread(self._call_telemetrix, "analog_write", pin, 0)
+                    # Step 2: Switch to digital output mode (disconnects PWM timer)
                     await asyncio.to_thread(
                         self._call_telemetrix, "set_pin_mode_digital_output", pin
                     )
+                    # Step 3: Drive LOW with the stronger digital output driver
                     await asyncio.to_thread(self._call_telemetrix, "digital_write", pin, 0)
                     self._pwm_pins_forced_low.add(pin)
+                    logger.info(f"PWM pin {pin} forced LOW via digital output mode")
                 else:
                     if pin in self._pwm_pins_forced_low:
                         # Re-enable PWM mode before writing a non-zero value
@@ -618,7 +619,8 @@ class TelemetrixBoard(BaseBoard):
                 try:
                     cap = self._board_config["pins"].get(pin)
                     if cap and PinType.PWM in cap.supported_types:
-                        # Force digital LOW to overcome back-fed voltage from loads
+                        # Zero PWM then force digital LOW
+                        await asyncio.to_thread(self._call_telemetrix, "analog_write", pin, 0)
                         await asyncio.to_thread(
                             self._call_telemetrix, "set_pin_mode_digital_output", pin
                         )
