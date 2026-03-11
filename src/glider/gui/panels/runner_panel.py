@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.core.config import get_config
+from glider.gui.styles import colors
 
 if TYPE_CHECKING:
     from glider.core.glider_core import GliderCore
@@ -73,26 +74,6 @@ class RunnerPanel(QWidget):
         self._runner_exp_name = QLineEdit("Untitled Experiment")
         self._runner_exp_name.setProperty("title", True)
         self._runner_exp_name.setPlaceholderText("Enter experiment name...")
-        self._runner_exp_name.setStyleSheet("""
-            QLineEdit {
-                background-color: transparent;
-                border: 1px solid transparent;
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 16px;
-                font-weight: bold;
-                color: white;
-                min-width: 200px;
-            }
-            QLineEdit:hover {
-                border: 1px solid #3d3d5c;
-                background-color: rgba(45, 45, 68, 0.5);
-            }
-            QLineEdit:focus {
-                border: 1px solid #4CAF50;
-                background-color: #2d2d44;
-            }
-        """)
         self._runner_exp_name.textChanged.connect(self._on_experiment_name_changed)
         header_layout.addWidget(self._runner_exp_name)
 
@@ -100,17 +81,9 @@ class RunnerPanel(QWidget):
 
         self._runner_timer = QLabel("00:00")
         self._runner_timer.setProperty("timer", True)
-        self._runner_timer.setStyleSheet("""
-            QLabel[timer] {
-                color: #4CAF50;
-                font-size: 18px;
-                font-weight: bold;
-                font-family: "SF Mono", "Menlo", "Consolas", "Monaco", "Courier New";
-                padding: 4px 8px;
-                background-color: rgba(76, 175, 80, 0.1);
-                border-radius: 4px;
-            }
-        """)
+        self._runner_timer.setStyleSheet(
+            f"color: {colors.SUCCESS}; font-size: 36px; font-weight: bold; font-family: monospace;"
+        )
         header_layout.addWidget(self._runner_timer)
 
         self._status_label = QLabel("IDLE")
@@ -119,18 +92,7 @@ class RunnerPanel(QWidget):
         header_layout.addWidget(self._status_label)
 
         self._runner_menu_btn = QPushButton("\u2699\ufe0f")
-        self._runner_menu_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2d2d44;
-                border: none;
-                border-radius: 8px;
-                font-size: 20px;
-                color: white;
-            }
-            QPushButton:pressed {
-                background-color: #3d3d5c;
-            }
-        """)
+        self._runner_menu_btn.setProperty("buttonRole", "secondary")
         self._runner_menu_btn.clicked.connect(self._show_runner_menu)
         header_layout.addWidget(self._runner_menu_btn)
 
@@ -164,13 +126,7 @@ class RunnerPanel(QWidget):
 
         self._runner_no_devices = QLabel("Connect hardware to see devices")
         self._runner_no_devices.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._runner_no_devices.setStyleSheet("""
-            QLabel {
-                color: #666;
-                font-size: 14px;
-                padding: 40px;
-            }
-        """)
+        self._runner_no_devices.setProperty("textRole", "muted")
         self._runner_devices_layout.addWidget(self._runner_no_devices)
         self._runner_devices_layout.addStretch()
 
@@ -325,31 +281,31 @@ class RunnerPanel(QWidget):
                     if last_value is not None:
                         voltage = (last_value / 1023.0) * 5.0
                         state_text = f"{last_value}\n{voltage:.2f}V"
-                        state_color = "#3498db"
+                        state_color = colors.ACCENT
                         font_size = "11px"
                     else:
                         state_text = "---"
-                        state_color = "#444"
+                        state_color = colors.BORDER
                         font_size = "11px"
                 else:
                     state = getattr(device, "_state", None)
                     if state is not None:
                         if isinstance(state, bool):
                             state_text = "HIGH" if state else "LOW"
-                            state_color = "#27ae60" if state else "#7f8c8d"
+                            state_color = colors.SUCCESS if state else colors.TEXT_MUTED
                         else:
                             state_text = str(state)[:6]
-                            state_color = "#3498db"
+                            state_color = colors.ACCENT
                     else:
                         state_text = "---"
-                        state_color = "#444"
+                        state_color = colors.BORDER
                     font_size = "14px"
 
                 card._state_label.setText(state_text)
                 card._state_label.setStyleSheet(f"""
                     QLabel {{
                         background-color: {state_color};
-                        color: white;
+                        color: {colors.TEXT_PRIMARY};
                         font-size: {font_size};
                         font-weight: bold;
                         border-radius: 8px;
@@ -362,19 +318,13 @@ class RunnerPanel(QWidget):
             if hasattr(card, "_ready_label"):
                 card._ready_label.setText("Ready" if initialized else "---")
                 card._ready_label.setStyleSheet(
-                    f"font-size: 10px; color: {'#27ae60' if initialized else '#666'}; background: transparent; border: none;"
+                    f"font-size: 10px; color: {colors.SUCCESS if initialized else colors.TEXT_DISABLED}; background: transparent; border: none;"
                 )
 
     def _create_device_card(self, device_id: str, device) -> QWidget:
         """Create a device status card for the runner view."""
         card = QWidget()
-        card.setStyleSheet("""
-            QWidget {
-                background-color: #1a1a2e;
-                border: 2px solid #2d2d44;
-                border-radius: 12px;
-            }
-        """)
+        card.setProperty("deviceCard", True)
         card.setFixedHeight(80)
 
         layout = QHBoxLayout(card)
@@ -386,14 +336,14 @@ class RunnerPanel(QWidget):
 
         name_label = QLabel(device_id)
         name_label.setStyleSheet(
-            "font-size: 16px; font-weight: bold; color: #fff; background: transparent; border: none;"
+            f"font-size: 16px; font-weight: bold; color: {colors.TEXT_PRIMARY}; background: transparent; border: none;"
         )
         info_layout.addWidget(name_label)
 
         device_type = getattr(device, "device_type", "Unknown")
         type_label = QLabel(device_type)
         type_label.setStyleSheet(
-            "font-size: 12px; color: #888; background: transparent; border: none;"
+            f"font-size: 12px; color: {colors.TEXT_MUTED}; background: transparent; border: none;"
         )
         info_layout.addWidget(type_label)
 
@@ -416,30 +366,30 @@ class RunnerPanel(QWidget):
             if last_value is not None:
                 voltage = (last_value / 1023.0) * 5.0
                 state_text = f"{last_value}\n{voltage:.2f}V"
-                state_color = "#3498db"
+                state_color = colors.ACCENT
             else:
                 state_text = "---"
-                state_color = "#444"
+                state_color = colors.BORDER
         else:
             state = getattr(device, "_state", None)
             if state is not None:
                 if isinstance(state, bool):
                     state_text = "HIGH" if state else "LOW"
-                    state_color = "#27ae60" if state else "#7f8c8d"
+                    state_color = colors.SUCCESS if state else colors.TEXT_MUTED
                 else:
                     state_text = str(state)[:6]
-                    state_color = "#3498db"
+                    state_color = colors.ACCENT
             else:
                 state_text = "---"
-                state_color = "#444"
+                state_color = colors.BORDER
 
         state_label = QLabel(state_text)
         state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         state_label.setStyleSheet(f"""
             QLabel {{
                 background-color: {state_color};
-                color: white;
-                font-size: {'11px' if is_analog_input else '14px'};
+                color: {colors.TEXT_PRIMARY};
+                font-size: {"11px" if is_analog_input else "14px"};
                 font-weight: bold;
                 border-radius: 8px;
                 padding: 4px 8px;
@@ -452,7 +402,7 @@ class RunnerPanel(QWidget):
         ready_label = QLabel("Ready" if initialized else "---")
         ready_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ready_label.setStyleSheet(
-            f"font-size: 10px; color: {'#27ae60' if initialized else '#666'}; background: transparent; border: none;"
+            f"font-size: 10px; color: {colors.SUCCESS if initialized else colors.TEXT_DISABLED}; background: transparent; border: none;"
         )
         status_layout.addWidget(ready_label)
 
@@ -466,24 +416,6 @@ class RunnerPanel(QWidget):
     def _show_runner_menu(self) -> None:
         """Show the runner mode menu."""
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #1a1a2e;
-                border: 2px solid #3498db;
-                border-radius: 8px;
-                padding: 8px;
-            }
-            QMenu::item {
-                background-color: transparent;
-                padding: 12px 24px;
-                font-size: 16px;
-                color: white;
-                border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #3498db;
-            }
-        """)
 
         open_action = menu.addAction("Open Experiment")
         open_action.triggered.connect(self.open_requested.emit)

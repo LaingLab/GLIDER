@@ -8,6 +8,8 @@ from PyQt6.QtCore import QObject, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPen
 from PyQt6.QtWidgets import QGraphicsEllipseItem, QGraphicsItem
 
+from glider.gui.styles import colors
+
 
 class PortSignals(QObject):
     """Signals for PortItem (QGraphicsItem can't have signals directly)."""
@@ -35,8 +37,8 @@ class PortItem(QGraphicsEllipseItem):
 
     # Port colors by type
     PORT_COLORS = {
-        PortType.DATA: QColor(100, 180, 255),  # Blue
-        PortType.EXEC: QColor(255, 255, 255),  # White
+        PortType.DATA: colors.Q_PORT_DATA,
+        PortType.EXEC: colors.Q_PORT_EXEC,
     }
 
     def __init__(

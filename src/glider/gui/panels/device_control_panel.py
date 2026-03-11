@@ -71,7 +71,7 @@ class DeviceControlPanel(QWidget):
         control_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         control_widget = QWidget()
-        control_widget.setMinimumWidth(200)
+        control_widget.setMinimumWidth(240)
         self._control_layout = QVBoxLayout(control_widget)
         self._control_layout.setContentsMargins(6, 6, 6, 6)
         self._control_layout.setSpacing(8)
@@ -146,10 +146,8 @@ class DeviceControlPanel(QWidget):
         input_group_layout.setSpacing(8)
 
         self._input_value_label = QLabel("--")
-        self._input_value_label.setStyleSheet(
-            "font-size: 20px; font-weight: bold; padding: 6px; "
-            "background-color: #2d2d2d; border-radius: 4px; color: #00ff00;"
-        )
+        self._input_value_label.setWordWrap(True)
+        self._input_value_label.setProperty("inputValue", True)
         self._input_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._input_value_label.setMinimumHeight(48)
         self._input_value_label.setSizePolicy(
@@ -191,7 +189,8 @@ class DeviceControlPanel(QWidget):
 
         # Status display
         self._device_status_label = QLabel("No device selected")
-        self._device_status_label.setStyleSheet("font-size: 11px; color: #888; padding: 2px;")
+        self._device_status_label.setWordWrap(True)
+        self._device_status_label.setProperty("textRole", "muted")
         self._device_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._control_layout.addWidget(self._device_status_label)
 
