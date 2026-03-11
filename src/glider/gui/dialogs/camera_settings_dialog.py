@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from glider.gui.view_manager import ViewManager
     from glider.vision.camera_manager import CameraManager
 
+from glider.gui.styles import colors
 from glider.vision.camera_manager import CameraSettings
 from glider.vision.cv_processor import CVSettings, DetectionBackend
 
@@ -89,22 +90,7 @@ class CameraSettingsDialog(QDialog):
         # Tab widget with larger tabs for touch
         self._tabs = QTabWidget()
         if self._is_touch_mode:
-            self._tabs.setStyleSheet("""
-                QTabWidget::pane {
-                    border: 1px solid #555;
-                    border-radius: 4px;
-                }
-                QTabBar::tab {
-                    padding: 12px 20px;
-                    font-size: 16px;
-                    font-weight: bold;
-                    min-width: 100px;
-                }
-                QTabBar::tab:selected {
-                    background-color: #3a7bd5;
-                    color: white;
-                }
-            """)
+            self._tabs.setProperty("touchMode", True)
         layout.addWidget(self._tabs)
 
         # Camera tab (wrapped in scroll area)
@@ -135,15 +121,9 @@ class CameraSettingsDialog(QDialog):
         )
 
         if self._is_touch_mode:
-            button_box.setStyleSheet("""
-                QPushButton {
-                    padding: 14px 24px;
-                    font-size: 16px;
-                    font-weight: bold;
-                    min-width: 90px;
-                    min-height: 44px;
-                }
-            """)
+            for button in button_box.buttons():
+                button.setMinimumHeight(44)
+                button.setProperty("touchMode", True)
 
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
@@ -160,29 +140,8 @@ class CameraSettingsDialog(QDialog):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         if self._is_touch_mode:
-            # Wide scrollbar and kinetic scrolling for touch
-            scroll.setStyleSheet("""
-                QScrollArea {
-                    background: transparent;
-                }
-                QScrollBar:vertical {
-                    width: 30px;
-                    background: #2a2a2a;
-                    border-radius: 15px;
-                    margin: 4px;
-                }
-                QScrollBar::handle:vertical {
-                    background: #5a5a5a;
-                    border-radius: 13px;
-                    min-height: 60px;
-                }
-                QScrollBar::handle:vertical:hover {
-                    background: #6a6a6a;
-                }
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                    height: 0px;
-                }
-            """)
+            # Enable kinetic scrolling for touch
+            scroll.setProperty("touchMode", True)
             # Enable kinetic scrolling
             QScroller.grabGesture(
                 scroll.viewport(), QScroller.ScrollerGestureType.LeftMouseButtonGesture
@@ -190,66 +149,10 @@ class CameraSettingsDialog(QDialog):
 
         return scroll
 
-    def _get_touch_group_style(self) -> str:
-        """Get stylesheet for group boxes in touch mode."""
-        if not self._is_touch_mode:
-            return ""
-        return """
-            QGroupBox {
-                font-size: 15px;
-                font-weight: bold;
-                padding: 16px 8px 8px 8px;
-                margin-top: 12px;
-                border: 1px solid #444;
-                border-radius: 6px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 4px 8px;
-                color: #3a7bd5;
-            }
-            QLabel {
-                font-size: 14px;
-            }
-            QComboBox {
-                padding: 10px;
-                font-size: 14px;
-                min-height: 36px;
-            }
-            QComboBox::drop-down {
-                width: 30px;
-            }
-            QSpinBox, QDoubleSpinBox {
-                padding: 8px;
-                font-size: 14px;
-                min-height: 36px;
-            }
-            QSpinBox::up-button, QSpinBox::down-button,
-            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
-                width: 30px;
-            }
-            QCheckBox {
-                font-size: 14px;
-                spacing: 10px;
-            }
-            QCheckBox::indicator {
-                width: 28px;
-                height: 28px;
-            }
-            QSlider::groove:horizontal {
-                height: 12px;
-                background: #3a3a3a;
-                border-radius: 6px;
-            }
-            QSlider::handle:horizontal {
-                width: 28px;
-                height: 28px;
-                margin: -8px 0;
-                background: #3a7bd5;
-                border-radius: 14px;
-            }
-        """
+    def _apply_touch_group_property(self, group: QGroupBox) -> None:
+        """Apply touch mode property to a group box."""
+        if self._is_touch_mode:
+            group.setProperty("touchMode", True)
 
     def _create_camera_tab_content(self) -> QWidget:
         """Create the camera settings tab content."""
@@ -261,11 +164,11 @@ class CameraSettingsDialog(QDialog):
             layout.setContentsMargins(12, 12, 12, 12)
             layout.setSpacing(16)
 
-        touch_style = self._get_touch_group_style()
+        # Touch mode applied via QSS property
 
         # Resolution group
         res_group = QGroupBox("Resolution")
-        res_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(res_group)
         res_layout = QFormLayout(res_group)
         if self._is_touch_mode:
             res_layout.setSpacing(12)
@@ -291,7 +194,7 @@ class CameraSettingsDialog(QDialog):
 
         # Image settings group
         image_group = QGroupBox("Image Settings")
-        image_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(image_group)
         image_layout = QFormLayout(image_group)
         if self._is_touch_mode:
             image_layout.setSpacing(12)
@@ -358,7 +261,7 @@ class CameraSettingsDialog(QDialog):
 
         # Connection settings group (for USB cameras like miniscopes)
         conn_group = QGroupBox("Connection")
-        conn_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(conn_group)
         conn_layout = QFormLayout(conn_group)
         if self._is_touch_mode:
             conn_layout.setSpacing(12)
@@ -421,7 +324,7 @@ class CameraSettingsDialog(QDialog):
 
         # Miniscope-specific controls group (visible when miniscope mode enabled)
         self._miniscope_group = QGroupBox("Miniscope Controls")
-        self._miniscope_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(self._miniscope_group)
         miniscope_layout = QFormLayout(self._miniscope_group)
         if self._is_touch_mode:
             miniscope_layout.setSpacing(12)
@@ -531,29 +434,18 @@ class CameraSettingsDialog(QDialog):
             layout.setContentsMargins(12, 12, 12, 12)
             layout.setSpacing(16)
 
-        touch_style = self._get_touch_group_style()
+        # Touch mode applied via QSS property
 
         # Enable CV - prominent checkbox at top
         self._cv_enabled_cb = QCheckBox("Enable CV Processing")
         if self._is_touch_mode:
-            self._cv_enabled_cb.setStyleSheet("""
-                QCheckBox {
-                    font-size: 16px;
-                    font-weight: bold;
-                    padding: 8px;
-                    spacing: 12px;
-                }
-                QCheckBox::indicator {
-                    width: 32px;
-                    height: 32px;
-                }
-            """)
+            self._cv_enabled_cb.setProperty("touchMode", True)
         self._cv_enabled_cb.toggled.connect(self._on_cv_enabled_toggle)
         layout.addWidget(self._cv_enabled_cb)
 
         # Detection group
         detection_group = QGroupBox("Detection")
-        detection_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(detection_group)
         detection_layout = QFormLayout(detection_group)
         if self._is_touch_mode:
             detection_layout.setSpacing(12)
@@ -611,7 +503,7 @@ class CameraSettingsDialog(QDialog):
 
         # Overlay group
         overlay_group = QGroupBox("Display")
-        overlay_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(overlay_group)
         overlay_layout = QFormLayout(overlay_group)
         if self._is_touch_mode:
             overlay_layout.setSpacing(12)
@@ -644,29 +536,18 @@ class CameraSettingsDialog(QDialog):
             layout.setContentsMargins(12, 12, 12, 12)
             layout.setSpacing(16)
 
-        touch_style = self._get_touch_group_style()
+        # Touch mode applied via QSS property
 
         # Enable tracking - prominent checkbox at top
         self._tracking_enabled_cb = QCheckBox("Enable Tracking")
         if self._is_touch_mode:
-            self._tracking_enabled_cb.setStyleSheet("""
-                QCheckBox {
-                    font-size: 16px;
-                    font-weight: bold;
-                    padding: 8px;
-                    spacing: 12px;
-                }
-                QCheckBox::indicator {
-                    width: 32px;
-                    height: 32px;
-                }
-            """)
+            self._tracking_enabled_cb.setProperty("touchMode", True)
         self._tracking_enabled_cb.toggled.connect(self._on_tracking_enabled_toggle)
         layout.addWidget(self._tracking_enabled_cb)
 
         # Tracking parameters
         tracking_group = QGroupBox("Tracking")
-        tracking_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(tracking_group)
         tracking_layout = QFormLayout(tracking_group)
         if self._is_touch_mode:
             tracking_layout.setSpacing(12)
@@ -684,7 +565,7 @@ class CameraSettingsDialog(QDialog):
                 "Number of consecutive frames an object can be missing\n"
                 "before it is deregistered from tracking."
             )
-            help_label.setStyleSheet("color: #888; font-size: 11px;")
+            help_label.setProperty("textRole", "muted")
             tracking_layout.addRow(help_label)
 
         self._max_distance_spin = QSpinBox()
@@ -699,14 +580,14 @@ class CameraSettingsDialog(QDialog):
                 "Maximum distance (in pixels) an object can move\n"
                 "between frames and still be considered the same object."
             )
-            distance_help.setStyleSheet("color: #888; font-size: 11px;")
+            distance_help.setProperty("textRole", "muted")
             tracking_layout.addRow(distance_help)
 
         layout.addWidget(tracking_group)
 
         # Motion detection
         motion_group = QGroupBox("Motion")
-        motion_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(motion_group)
         motion_layout = QFormLayout(motion_group)
         if self._is_touch_mode:
             motion_layout.setSpacing(12)
@@ -738,29 +619,18 @@ class CameraSettingsDialog(QDialog):
             layout.setContentsMargins(12, 12, 12, 12)
             layout.setSpacing(16)
 
-        touch_style = self._get_touch_group_style()
+        # Touch mode applied via QSS property
 
         # Enable behavior analysis - prominent checkbox at top
         self._behavior_enabled_cb = QCheckBox("Enable Behavior Analysis")
         if self._is_touch_mode:
-            self._behavior_enabled_cb.setStyleSheet("""
-                QCheckBox {
-                    font-size: 16px;
-                    font-weight: bold;
-                    padding: 8px;
-                    spacing: 12px;
-                }
-                QCheckBox::indicator {
-                    width: 32px;
-                    height: 32px;
-                }
-            """)
+            self._behavior_enabled_cb.setProperty("touchMode", True)
         self._behavior_enabled_cb.toggled.connect(self._on_behavior_enabled_toggle)
         layout.addWidget(self._behavior_enabled_cb)
 
         # Thresholds group
         thresholds_group = QGroupBox("Thresholds (px/frame)")
-        thresholds_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(thresholds_group)
         thresholds_layout = QFormLayout(thresholds_group)
         if self._is_touch_mode:
             thresholds_layout.setSpacing(12)
@@ -803,7 +673,7 @@ class CameraSettingsDialog(QDialog):
 
         # Timing group
         timing_group = QGroupBox("Timing")
-        timing_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(timing_group)
         timing_layout = QFormLayout(timing_group)
         if self._is_touch_mode:
             timing_layout.setSpacing(12)
@@ -815,7 +685,7 @@ class CameraSettingsDialog(QDialog):
         self._freeze_duration_spin.setValue(15)
         self._freeze_duration_spin.setSuffix(" frames")
         self._freeze_duration_spin.setToolTip(
-            "Number of consecutive low-movement frames required\n" "to confirm a freeze state."
+            "Number of consecutive low-movement frames required\nto confirm a freeze state."
         )
         timing_layout.addRow("Freeze Duration:", self._freeze_duration_spin)
 
@@ -834,27 +704,29 @@ class CameraSettingsDialog(QDialog):
 
         # State colors reference (read-only info)
         colors_group = QGroupBox("State Colors")
-        colors_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(colors_group)
         colors_layout = QVBoxLayout(colors_group)
         if self._is_touch_mode:
             colors_layout.setSpacing(8)
             colors_layout.setContentsMargins(12, 20, 12, 12)
 
         color_labels = [
-            ("FREEZE", "#0000FF", "Complete stillness"),
-            ("IMMOBILE", "#FFFF00", "Minor movements"),
-            ("MOVING", "#00FF00", "Normal locomotion"),
-            ("DARTING", "#FF0000", "Rapid movement"),
+            ("FREEZE", colors.BEHAVIOR_FREEZE, "Complete stillness"),
+            ("IMMOBILE", colors.BEHAVIOR_IMMOBILE, "Minor movements"),
+            ("MOVING", colors.BEHAVIOR_MOVING, "Normal locomotion"),
+            ("DARTING", colors.BEHAVIOR_DARTING, "Rapid movement"),
         ]
         for name, color, desc in color_labels:
             color_row = QHBoxLayout()
             color_box = QLabel()
             color_box.setFixedSize(20, 20)
-            color_box.setStyleSheet(f"background-color: {color}; border: 1px solid #666;")
+            color_box.setStyleSheet(
+                f"background-color: {color}; border: 1px solid {colors.BORDER};"
+            )
             color_row.addWidget(color_box)
             text_label = QLabel(f"{name}: {desc}")
             if self._is_touch_mode:
-                text_label.setStyleSheet("font-size: 13px;")
+                text_label.setProperty("touchMode", True)
             color_row.addWidget(text_label)
             color_row.addStretch()
             colors_layout.addLayout(color_row)
@@ -882,11 +754,11 @@ class CameraSettingsDialog(QDialog):
             layout.setContentsMargins(12, 12, 12, 12)
             layout.setSpacing(16)
 
-        touch_style = self._get_touch_group_style()
+        # Touch mode applied via QSS property
 
         # Calibration group
         calibration_group = QGroupBox("Camera Calibration")
-        calibration_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(calibration_group)
         calibration_layout = QVBoxLayout(calibration_group)
         if self._is_touch_mode:
             calibration_layout.setSpacing(12)
@@ -897,22 +769,13 @@ class CameraSettingsDialog(QDialog):
             "pixel-to-distance conversion for tracking data."
         )
         calibration_desc.setWordWrap(True)
-        if self._is_touch_mode:
-            calibration_desc.setStyleSheet("font-size: 13px; color: #aaa;")
-        else:
-            calibration_desc.setStyleSheet("color: #888; font-size: 11px;")
+        calibration_desc.setProperty("textRole", "muted")
         calibration_layout.addWidget(calibration_desc)
 
         self._calibrate_btn = QPushButton("Open Calibration...")
         if self._is_touch_mode:
             self._calibrate_btn.setMinimumHeight(50)
-            self._calibrate_btn.setStyleSheet("""
-                QPushButton {
-                    font-size: 16px;
-                    font-weight: bold;
-                    padding: 12px;
-                }
-            """)
+            self._calibrate_btn.setProperty("touchMode", True)
         self._calibrate_btn.clicked.connect(self._on_calibration_clicked)
         calibration_layout.addWidget(self._calibrate_btn)
 
@@ -920,7 +783,7 @@ class CameraSettingsDialog(QDialog):
 
         # Zones group
         zones_group = QGroupBox("Zone Configuration")
-        zones_group.setStyleSheet(touch_style)
+        self._apply_touch_group_property(zones_group)
         zones_layout = QVBoxLayout(zones_group)
         if self._is_touch_mode:
             zones_layout.setSpacing(12)
@@ -931,22 +794,13 @@ class CameraSettingsDialog(QDialog):
             "for tracking object entries, exits, and time spent."
         )
         zones_desc.setWordWrap(True)
-        if self._is_touch_mode:
-            zones_desc.setStyleSheet("font-size: 13px; color: #aaa;")
-        else:
-            zones_desc.setStyleSheet("color: #888; font-size: 11px;")
+        zones_desc.setProperty("textRole", "muted")
         zones_layout.addWidget(zones_desc)
 
         self._zones_btn = QPushButton("Open Zone Editor...")
         if self._is_touch_mode:
             self._zones_btn.setMinimumHeight(50)
-            self._zones_btn.setStyleSheet("""
-                QPushButton {
-                    font-size: 16px;
-                    font-weight: bold;
-                    padding: 12px;
-                }
-            """)
+            self._zones_btn.setProperty("touchMode", True)
         self._zones_btn.clicked.connect(self._on_zones_clicked)
         zones_layout.addWidget(self._zones_btn)
 
