@@ -9,6 +9,8 @@ import logging
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QMimeData, Qt, pyqtSignal
+
+from glider.gui.styles import colors
 from PyQt6.QtGui import QDrag
 from PyQt6.QtWidgets import (
     QDialog,
@@ -180,16 +182,17 @@ class NodeLibraryPanel(QWidget):
         }
 
         category_colors = {
-            "Flow": "#2d5a7a",
-            "Functions": "#2d7a7a",
-            "Control": "#7a5a2d",
-            "I/O": "#2d7a2d",
-            "Audio": "#6a3a6a",
-            "Video": "#2d5a6a",
+            "Flow": colors.LIB_FLOW,
+            "Functions": colors.LIB_FUNCTIONS,
+            "Control": colors.LIB_CONTROL,
+            "I/O": colors.LIB_IO,
+            "Audio": colors.LIB_AUDIO,
+            "Video": colors.LIB_VIDEO,
+            "default": colors.BORDER,
         }
 
         for category, nodes in node_categories.items():
-            color = category_colors.get(category, "#444")
+            color = category_colors.get(category, category_colors["default"])
 
             category_widget = QWidget()
             category_layout = QVBoxLayout(category_widget)
@@ -224,7 +227,7 @@ class NodeLibraryPanel(QWidget):
             nodes_container = QWidget()
             nodes_container.setStyleSheet(f"""
                 QWidget {{
-                    background-color: {color}40;
+                    background-color: {colors.with_alpha(color, 0.25)};
                     border-bottom-left-radius: 4px;
                     border-bottom-right-radius: 4px;
                 }}
@@ -263,7 +266,7 @@ class NodeLibraryPanel(QWidget):
             self._custom_devices_container,
             self._custom_devices_layout,
             "Custom Devices",
-            "#6a4a8a",
+            colors.LIB_CUSTOM_DEVICES,
             layout,
             add_new_callback=self._on_new_custom_device,
         )
@@ -277,7 +280,7 @@ class NodeLibraryPanel(QWidget):
             self._flow_functions_container,
             self._flow_functions_layout,
             "Flow Functions",
-            "#4a6a8a",
+            colors.LIB_FLOW_FUNCTIONS,
             layout,
             add_new_callback=self._on_new_flow_function,
         )
@@ -291,7 +294,7 @@ class NodeLibraryPanel(QWidget):
             self._zones_container,
             self._zones_layout,
             "Zones",
-            "#5a4a2d",
+            colors.LIB_ZONES,
             layout,
             add_new_callback=None,
         )
@@ -365,7 +368,7 @@ class NodeLibraryPanel(QWidget):
 
         if not has_functions:
             placeholder = QLabel("Define functions with StartFunction \u2192 EndFunction")
-            placeholder.setStyleSheet("color: #888; padding: 8px; font-size: 10px;")
+            placeholder.setProperty("textRole", "muted")
             placeholder.setWordWrap(True)
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._flow_functions_layout.addWidget(placeholder)
@@ -391,7 +394,7 @@ class NodeLibraryPanel(QWidget):
                 self._zones_layout.addWidget(btn)
         else:
             placeholder = QLabel("Create zones in Camera \u2192 Zones...")
-            placeholder.setStyleSheet("color: #888; padding: 8px; font-size: 10px;")
+            placeholder.setProperty("textRole", "muted")
             placeholder.setWordWrap(True)
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._zones_layout.addWidget(placeholder)
@@ -400,7 +403,7 @@ class NodeLibraryPanel(QWidget):
 
     def _add_placeholder(self, layout, text: str):
         placeholder = QLabel(text)
-        placeholder.setStyleSheet("color: #888; padding: 8px;")
+        placeholder.setProperty("textRole", "muted")
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(placeholder)
 
@@ -476,7 +479,7 @@ class NodeLibraryPanel(QWidget):
 
         nodes_container.setStyleSheet(f"""
             QWidget {{
-                background-color: {color}40;
+                background-color: {colors.with_alpha(color, 0.25)};
                 border-bottom-left-radius: 4px;
                 border-bottom-right-radius: 4px;
             }}
@@ -484,7 +487,7 @@ class NodeLibraryPanel(QWidget):
         nodes_layout.setContentsMargins(4, 4, 4, 4)
 
         placeholder = QLabel("No items defined")
-        placeholder.setStyleSheet("color: #888; padding: 8px;")
+        placeholder.setProperty("textRole", "muted")
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         nodes_layout.addWidget(placeholder)
 
