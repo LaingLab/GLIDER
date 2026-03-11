@@ -8,6 +8,8 @@ from PyQt6.QtCore import QPointF, Qt
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QGraphicsItem, QGraphicsPathItem
 
+from glider.gui.styles import colors
+
 if TYPE_CHECKING:
     from glider.gui.node_graph.node_item import NodeItem
 
@@ -21,9 +23,9 @@ class ConnectionItem(QGraphicsPathItem):
     """
 
     # Connection colors
-    DATA_COLOR = QColor(100, 180, 255)  # Blue
-    EXEC_COLOR = QColor(255, 255, 255)  # White
-    ACTIVE_COLOR = QColor(100, 255, 100)  # Green (for active data flow)
+    DATA_COLOR = colors.Q_PORT_DATA
+    EXEC_COLOR = colors.Q_PORT_EXEC
+    ACTIVE_COLOR = colors.Q_CONN_ACTIVE
 
     def __init__(
         self,
@@ -118,7 +120,7 @@ class ConnectionItem(QGraphicsPathItem):
         if self._active:
             color = self.ACTIVE_COLOR
         elif self.isSelected():
-            color = QColor(255, 180, 0)  # Orange for selected
+            color = colors.Q_CONN_SELECTED
         else:
             color = self._color
 
