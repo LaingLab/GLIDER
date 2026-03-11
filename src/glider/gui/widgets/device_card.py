@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from glider.core.config import get_config
 from glider.core.types import DeviceType
+from glider.gui.styles import colors
 
 
 @dataclass
@@ -51,33 +52,33 @@ def get_device_state_info(device) -> DeviceStateInfo:
                 last_value / config.hardware.adc_resolution
             ) * config.hardware.adc_reference_voltage
             state_text = f"{last_value}\n{voltage:.2f}V"
-            state_color = "#3498db"
+            state_color = colors.ACCENT
         else:
             state_text = "---"
-            state_color = "#444"
+            state_color = colors.TEXT_DISABLED
         font_size = "11px"
     elif is_pwm_output:
         state = getattr(device, "_state", None)
         if state is not None:
             pwm_val = int(state) if not isinstance(state, bool) else (255 if state else 0)
             state_text = str(pwm_val)
-            state_color = "#3498db" if pwm_val > 0 else "#7f8c8d"
+            state_color = colors.ACCENT if pwm_val > 0 else colors.LED_OFF
         else:
             state_text = "---"
-            state_color = "#444"
+            state_color = colors.TEXT_DISABLED
         font_size = "14px"
     else:
         state = getattr(device, "_state", None)
         if state is not None:
             if isinstance(state, bool):
                 state_text = "HIGH" if state else "LOW"
-                state_color = "#27ae60" if state else "#7f8c8d"
+                state_color = colors.SUCCESS if state else colors.LED_OFF
             else:
                 state_text = str(state)[:6]
-                state_color = "#3498db"
+                state_color = colors.ACCENT
         else:
             state_text = "---"
-            state_color = "#444"
+            state_color = colors.TEXT_DISABLED
         font_size = "14px"
 
     return DeviceStateInfo(
@@ -120,7 +121,7 @@ def create_ready_label_style(is_ready: bool) -> str:
     Returns:
         CSS stylesheet string
     """
-    color = "#27ae60" if is_ready else "#666"
+    color = colors.SUCCESS if is_ready else colors.TEXT_DISABLED
     return f"font-size: 10px; color: {color}; background: transparent; border: none;"
 
 
@@ -151,13 +152,7 @@ class DeviceCard(QWidget):
 
     def _setup_ui(self) -> None:
         """Set up the UI components."""
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #1a1a2e;
-                border: 2px solid #2d2d44;
-                border-radius: 12px;
-            }
-        """)
+        self.setProperty("deviceCard", True)
         self.setFixedHeight(self.CARD_HEIGHT)
 
         layout = QHBoxLayout(self)
@@ -169,17 +164,12 @@ class DeviceCard(QWidget):
         info_layout.setSpacing(2)
 
         self._name_label = QLabel(self._device_id)
-        self._name_label.setStyleSheet(
-            "font-size: 16px; font-weight: bold; color: #fff; "
-            "background: transparent; border: none;"
-        )
+        self._name_label.setProperty("textRole", "primary")
         info_layout.addWidget(self._name_label)
 
         device_type = getattr(self._device, "device_type", "Unknown")
         self._type_label = QLabel(device_type)
-        self._type_label.setStyleSheet(
-            "font-size: 12px; color: #888; background: transparent; border: none;"
-        )
+        self._type_label.setProperty("textRole", "muted")
         info_layout.addWidget(self._type_label)
 
         layout.addLayout(info_layout)

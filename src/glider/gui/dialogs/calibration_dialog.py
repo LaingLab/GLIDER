@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from glider.gui.styles import colors
 from glider.vision.calibration import CameraCalibration, LengthUnit
 
 if TYPE_CHECKING:
@@ -53,12 +54,12 @@ class CalibrationPreviewWidget(QLabel):
         super().__init__(parent)
         self.setMinimumSize(640, 480)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet("""
-            QLabel {
-                background-color: #0d0d1a;
-                border: 2px solid #2d2d44;
+        self.setStyleSheet(f"""
+            QLabel {{
+                background-color: {colors.CANVAS};
+                border: 2px solid {colors.BORDER};
                 border-radius: 4px;
-            }
+            }}
         """)
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)

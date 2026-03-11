@@ -30,6 +30,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.styles import colors
+
 if TYPE_CHECKING:
     from glider.core.hardware_manager import HardwareManager
 
@@ -136,61 +138,6 @@ class HardwarePanel(QWidget):
         dialog = QDialog(self)
         dialog.setWindowTitle("Board Settings")
         dialog.setMinimumWidth(350)
-        dialog.setStyleSheet("""
-            QDialog {
-                background-color: #1a1a2e;
-            }
-            QLabel {
-                color: white;
-                font-size: 14px;
-            }
-            QComboBox {
-                background-color: #2d2d44;
-                color: white;
-                border: 2px solid #3498db;
-                border-radius: 6px;
-                padding: 8px;
-                min-height: 36px;
-                font-size: 14px;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 30px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #2d2d44;
-                color: white;
-                selection-background-color: #3498db;
-            }
-            QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-size: 14px;
-                min-height: 40px;
-            }
-            QPushButton:pressed {
-                background-color: #2980b9;
-            }
-            QPushButton[secondary="true"] {
-                background-color: #34495e;
-            }
-            QGroupBox {
-                color: white;
-                font-weight: bold;
-                border: 2px solid #2d2d44;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding-top: 12px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
 
         layout = QVBoxLayout(dialog)
         layout.setSpacing(16)
@@ -217,7 +164,7 @@ class HardwarePanel(QWidget):
 
         if not boards:
             no_boards_label = QLabel("No boards configured.\nLoad an experiment first.")
-            no_boards_label.setStyleSheet("color: #888; font-style: italic;")
+            no_boards_label.setProperty("textRole", "muted")
             layout.addWidget(no_boards_label)
         else:
             for board_id, board in boards.items():
@@ -248,20 +195,21 @@ class HardwarePanel(QWidget):
 
                 connected = getattr(board, "is_connected", False)
                 status_text = "Connected" if connected else "Disconnected"
-                status_color = "#2ecc71" if connected else "#e74c3c"
                 status_label = QLabel(f"Status: {status_text}")
-                status_label.setStyleSheet(f"color: {status_color};")
+                status_label.setStyleSheet(
+                    f"color: {colors.SUCCESS if connected else colors.ERROR};"
+                )
                 group_layout.addWidget(status_label)
 
                 layout.addWidget(group)
 
         if available_ports:
             ports_label = QLabel(f"Detected ports: {', '.join(available_ports)}")
-            ports_label.setStyleSheet("color: #888; font-size: 12px;")
+            ports_label.setProperty("textRole", "muted")
             layout.addWidget(ports_label)
         else:
             ports_label = QLabel("No serial ports detected")
-            ports_label.setStyleSheet("color: #e74c3c; font-size: 12px;")
+            ports_label.setStyleSheet(f"color: {colors.ERROR}; font-size: 12px;")
             layout.addWidget(ports_label)
 
         layout.addStretch()
@@ -464,7 +412,7 @@ class HardwarePanel(QWidget):
                 pin_layout.addRow("Gain:", gain_combo)
 
                 note = QLabel("Note: Uses I2C on GPIO2 (SDA) and GPIO3 (SCL)")
-                note.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
+                note.setProperty("textRole", "muted")
                 note.setWordWrap(True)
                 pin_layout.addRow(note)
             else:
@@ -484,7 +432,7 @@ class HardwarePanel(QWidget):
 
                 if is_analog:
                     note = QLabel("Note: A0=14, A1=15, A2=16, A3=17, A4=18, A5=19")
-                    note.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
+                    note.setProperty("textRole", "muted")
                     note.setWordWrap(True)
                     pin_layout.addRow(note)
 
@@ -573,7 +521,7 @@ class HardwarePanel(QWidget):
         layout = QFormLayout(dialog)
 
         id_label = QLabel(board_id)
-        id_label.setStyleSheet("color: #888;")
+        id_label.setProperty("textRole", "muted")
         layout.addRow("Board ID:", id_label)
 
         port_layout = QHBoxLayout()
@@ -663,11 +611,11 @@ class HardwarePanel(QWidget):
         layout = QFormLayout(dialog)
 
         id_label = QLabel(device_id)
-        id_label.setStyleSheet("color: #888;")
+        id_label.setProperty("textRole", "muted")
         layout.addRow("Device ID:", id_label)
 
         type_label = QLabel(device_type)
-        type_label.setStyleSheet("color: #888;")
+        type_label.setProperty("textRole", "muted")
         layout.addRow("Device Type:", type_label)
 
         name_edit = QLineEdit(current_name)
@@ -687,7 +635,7 @@ class HardwarePanel(QWidget):
 
         if is_analog:
             note = QLabel("Note: A0=14, A1=15, A2=16, A3=17, A4=18, A5=19")
-            note.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
+            note.setProperty("textRole", "muted")
             note.setWordWrap(True)
             layout.addRow(note)
 

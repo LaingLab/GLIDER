@@ -91,13 +91,6 @@ class CameraPreviewWidget(QLabel):
         super().__init__(parent)
         self.setMinimumSize(320, 240)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet("""
-            QLabel {
-                background-color: #0d0d1a;
-                border: 1px solid #2d2d44;
-                border-radius: 8px;
-            }
-        """)
         self._placeholder = True
         self._calibration = None
         self._show_calibration = True
@@ -183,15 +176,7 @@ class CameraPreviewWidget(QLabel):
         self._placeholder = True
         self.clear()
         self.setText(text)
-        self.setStyleSheet("""
-            QLabel {
-                background-color: #0d0d1a;
-                border: 1px solid #2d2d44;
-                border-radius: 8px;
-                color: #666;
-                font-size: 14px;
-            }
-        """)
+        self.setProperty("textRole", "muted")
 
     def mousePressEvent(self, event):
         """Handle mouse clicks on the preview."""
@@ -296,38 +281,22 @@ class CameraPanel(QWidget):
 
         # Status bar
         status_frame = QFrame()
-        status_frame.setStyleSheet("""
-            QFrame {
-                background-color: #1a1a2e;
-                border-radius: 4px;
-                padding: 4px;
-            }
-        """)
         status_layout = QHBoxLayout(status_frame)
         status_layout.setContentsMargins(8, 4, 8, 4)
 
         self._recording_indicator = QLabel("REC")
-        self._recording_indicator.setStyleSheet("""
-            QLabel {
-                background-color: #c0392b;
-                color: white;
-                padding: 2px 8px;
-                border-radius: 8px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-        """)
+        self._recording_indicator.setProperty("recording", True)
         self._recording_indicator.hide()
         status_layout.addWidget(self._recording_indicator)
 
         self._fps_label = QLabel("-- FPS")
-        self._fps_label.setStyleSheet("color: #888; font-size: 11px;")
+        self._fps_label.setProperty("textRole", "muted")
         status_layout.addWidget(self._fps_label)
 
         status_layout.addStretch()
 
         self._resolution_label = QLabel("---")
-        self._resolution_label.setStyleSheet("color: #888; font-size: 11px;")
+        self._resolution_label.setProperty("textRole", "muted")
         status_layout.addWidget(self._resolution_label)
 
         layout.addWidget(status_frame)
@@ -335,7 +304,6 @@ class CameraPanel(QWidget):
         # Camera selector
         camera_layout = QHBoxLayout()
         camera_label = QLabel("Camera:")
-        camera_label.setStyleSheet("font-size: 12px;")
         camera_layout.addWidget(camera_label)
 
         self._camera_combo = QComboBox()
@@ -357,22 +325,29 @@ class CameraPanel(QWidget):
         control_layout.addWidget(self._preview_btn)
 
         self._settings_btn = QPushButton("Settings")
+        self._settings_btn.setProperty("buttonRole", "secondary")
         self._settings_btn.clicked.connect(self.settings_requested.emit)
         control_layout.addWidget(self._settings_btn)
 
         layout.addLayout(control_layout)
 
-        # CV options
-        cv_layout = QHBoxLayout()
+        # Section divider
+        cv_divider = QFrame()
+        cv_divider.setFrameShape(QFrame.Shape.HLine)
+        layout.addWidget(cv_divider)
+
+        cv_section_label = QLabel("Vision")
+        cv_section_label.setProperty("textRole", "section")
+        layout.addWidget(cv_section_label)
+
+        cv_layout = QVBoxLayout()
+        cv_layout.setSpacing(4)
 
         self._cv_enabled_cb = QCheckBox("Computer Vision")
-        # self._cv_enabled_cb.setChecked(True)
-        self._cv_enabled_cb.setFixedWidth(150)
         self._cv_enabled_cb.toggled.connect(self._on_cv_toggle)
         cv_layout.addWidget(self._cv_enabled_cb)
 
         self._overlay_cb = QCheckBox("Overlays")
-        # self._overlay_cb.setChecked(True)
         self._overlay_cb.toggled.connect(self._on_overlay_toggle)
         cv_layout.addWidget(self._overlay_cb)
 
@@ -380,7 +355,6 @@ class CameraPanel(QWidget):
         self._vision_cone_cb.toggled.connect(self._on_vision_cone_toggle)
         cv_layout.addWidget(self._vision_cone_cb)
 
-        cv_layout.addStretch()
         layout.addLayout(cv_layout)
 
         # Multi-camera options

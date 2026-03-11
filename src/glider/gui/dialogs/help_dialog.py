@@ -16,89 +16,47 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-STYLE = """
-QDialog {
-    background-color: #1a1a2e;
-}
-QTabWidget::pane {
-    border: 1px solid #3498db;
-    background-color: #1a1a2e;
-    border-radius: 4px;
-}
-QTabBar::tab {
-    background-color: #16213e;
-    color: #cccccc;
-    padding: 8px 14px;
-    margin-right: 2px;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
-}
-QTabBar::tab:selected {
-    background-color: #1a1a2e;
-    color: white;
-    border-bottom: 2px solid #3498db;
-}
-QTabBar::tab:hover {
-    background-color: #1f2b47;
-}
-QScrollArea {
-    border: none;
-    background-color: #1a1a2e;
-}
-QLabel {
-    color: #e0e0e0;
-}
-QPushButton {
-    background-color: #16213e;
-    color: white;
-    border: 1px solid #3498db;
-    padding: 6px 20px;
-    border-radius: 4px;
-}
-QPushButton:hover {
-    background-color: #1f2b47;
-}
-"""
+from glider.gui.styles import colors
 
-CONTENT_STYLE = """
-body {
-    color: #e0e0e0;
+CONTENT_STYLE = f"""
+body {{
+    color: {colors.TEXT_PRIMARY};
     font-family: sans-serif;
     font-size: 14px;
     line-height: 1.5;
-}
-h2 {
-    color: #3498db;
-    border-bottom: 1px solid #2a2a4e;
+}}
+h2 {{
+    color: {colors.ACCENT};
+    border-bottom: 1px solid {colors.BORDER};
     padding-bottom: 4px;
-}
-h3 { color: #5dade2; }
-code {
-    background-color: #3c3c3c;
+}}
+h3 {{ color: {colors.ACCENT_HOVER}; }}
+code {{
+    background-color: {colors.SURFACE_2};
     padding: 2px 5px;
     border-radius: 3px;
     font-family: monospace;
-    color: #f0c040;
-}
-table {
+    color: {colors.WARNING};
+}}
+table {{
     border-collapse: collapse;
     width: 100%;
     margin: 8px 0;
-}
-th {
-    background-color: #16213e;
-    color: #3498db;
+}}
+th {{
+    background-color: {colors.SURFACE_1};
+    color: {colors.ACCENT};
     padding: 8px;
     text-align: left;
-    border: 1px solid #2a2a4e;
-}
-td {
+    border: 1px solid {colors.BORDER};
+}}
+td {{
     padding: 6px 8px;
-    border: 1px solid #2a2a4e;
-}
-tr:nth-child(even) { background-color: #16213e; }
-ul, ol { padding-left: 20px; }
-li { margin-bottom: 4px; }
+    border: 1px solid {colors.BORDER};
+}}
+tr:nth-child(even) {{ background-color: {colors.SURFACE_1}; }}
+ul, ol {{ padding-left: 20px; }}
+li {{ margin-bottom: 4px; }}
 """
 
 
@@ -536,8 +494,6 @@ class HelpDialog(QDialog):
         self.setWindowTitle("GLIDER Help")
         self.setMinimumSize(800, 600)
         self.resize(800, 600)
-        self.setStyleSheet(STYLE)
-
         layout = QVBoxLayout(self)
 
         tabs = QTabWidget()
