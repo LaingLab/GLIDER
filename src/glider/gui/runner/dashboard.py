@@ -108,7 +108,7 @@ class RunnerDashboard(QWidget):
             # Show placeholder
             placeholder = QLabel("No dashboard widgets configured")
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            placeholder.setStyleSheet("color: #888; font-size: 16px;")
+            placeholder.setProperty("textRole", "muted")
             self._content_layout.insertWidget(0, placeholder)
             self._widgets["_placeholder"] = placeholder
             return
