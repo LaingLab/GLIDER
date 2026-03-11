@@ -355,6 +355,7 @@ class DeviceControlController(QWidget):
                 self._status_label.setText(f"Status: PWM set to {value}")
             except Exception as e:
                 logger.error(f"PWM error: {e}")
+                self._status_label.setText(f"Status: PWM FAILED - {e}")
 
         self._run_async(set_pwm())
 
