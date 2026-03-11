@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.gui.node_graph.port_item import PortItem, PortType
+from glider.gui.styles import colors
 
 
 def _get_system_font() -> str:
@@ -51,11 +52,19 @@ class NodeItem(QGraphicsRectItem):
 
     # Category colors
     CATEGORY_COLORS = {
-        "hardware": QColor(45, 90, 45),  # Green
-        "logic": QColor(45, 74, 90),  # Blue
-        "interface": QColor(90, 74, 45),  # Orange
-        "script": QColor(74, 45, 90),  # Purple
-        "default": QColor(68, 68, 68),  # Gray
+        "hardware": colors.Q_CAT_HARDWARE,
+        "logic": colors.Q_CAT_LOGIC,
+        "interface": colors.Q_CAT_INTERFACE,
+        "script": colors.Q_CAT_SCRIPT,
+        "default": colors.Q_CAT_DEFAULT,
+    }
+
+    CATEGORY_GRADIENTS = {
+        "hardware": colors.CAT_HARDWARE_GRADIENT,
+        "logic": colors.CAT_LOGIC_GRADIENT,
+        "interface": colors.CAT_INTERFACE_GRADIENT,
+        "script": colors.CAT_SCRIPT_GRADIENT,
+        "default": colors.CAT_DEFAULT_GRADIENT,
     }
 
     # Node dimensions
@@ -88,8 +97,8 @@ class NodeItem(QGraphicsRectItem):
 
         # Appearance
         self._header_color = self.CATEGORY_COLORS.get(category, self.CATEGORY_COLORS["default"])
-        self._body_color = QColor(50, 50, 50)
-        self._selected_border_color = QColor(255, 180, 0)
+        self._body_color = colors.Q_NODE_BODY
+        self._selected_border_color = colors.Q_NODE_SELECTED
         self._border_width = 2
 
         # Setup (order matters: create header before updating size)
@@ -109,7 +118,7 @@ class NodeItem(QGraphicsRectItem):
     def _create_header(self) -> None:
         """Create the header text."""
         self._header_text = QGraphicsTextItem(self._title, self)
-        self._header_text.setDefaultTextColor(QColor(220, 220, 220))
+        self._header_text.setDefaultTextColor(colors.Q_NODE_HEADER_TEXT)
         font = QFont(_get_system_font(), 10, QFont.Weight.Bold)
         self._header_text.setFont(font)
         self._header_text.setPos(10, 5)
@@ -228,8 +237,11 @@ class NodeItem(QGraphicsRectItem):
         # Header
         header_rect = QRectF(0, 0, rect.width(), self.HEADER_HEIGHT)
         gradient = QLinearGradient(0, 0, 0, self.HEADER_HEIGHT)
-        gradient.setColorAt(0, self._header_color.lighter(120))
-        gradient.setColorAt(1, self._header_color)
+        grad_tuple = self.CATEGORY_GRADIENTS.get(
+            self._category, self.CATEGORY_GRADIENTS["default"]
+        )
+        gradient.setColorAt(0, QColor(grad_tuple[0]))
+        gradient.setColorAt(1, QColor(grad_tuple[1]))
         painter.setBrush(QBrush(gradient))
         painter.drawRoundedRect(header_rect, self.CORNER_RADIUS, self.CORNER_RADIUS)
         # Fill bottom corners
@@ -241,13 +253,14 @@ class NodeItem(QGraphicsRectItem):
         if self.isSelected():
             pen = QPen(self._selected_border_color, self._border_width + 1)
         else:
-            pen = QPen(self._header_color.darker(120), self._border_width)
+            alpha_color = colors.qcolor_with_alpha(self._header_color, 0.3)
+            pen = QPen(alpha_color, 1)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(rect, self.CORNER_RADIUS, self.CORNER_RADIUS)
 
         # Port labels
-        painter.setPen(QPen(QColor(180, 180, 180)))
+        painter.setPen(QPen(colors.Q_NODE_PORT_LABEL))
         font = QFont(_get_system_font(), 9)
         painter.setFont(font)
 

@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import (
     QBrush,
-    QColor,
     QDragEnterEvent,
     QDragMoveEvent,
     QDropEvent,
@@ -28,6 +27,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.styles import colors
+
 if TYPE_CHECKING:
     from glider.core.flow_engine import FlowEngine
     from glider.gui.node_graph.connection_item import ConnectionItem
@@ -42,9 +43,9 @@ class NodeGraphScene(QGraphicsScene):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._grid_size = 20
-        self._grid_color = QColor(50, 50, 50)
-        self._grid_color_major = QColor(70, 70, 70)
-        self._background_color = QColor(30, 30, 30)
+        self._grid_color = colors.Q_BORDER
+        self._grid_color_major = colors.Q_BORDER
+        self._background_color = colors.Q_CANVAS
 
         # Set scene rect
         self.setSceneRect(-10000, -10000, 20000, 20000)
