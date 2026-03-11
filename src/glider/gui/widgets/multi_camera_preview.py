@@ -21,6 +21,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.styles import colors
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,30 +66,30 @@ class CameraPreviewTile(QFrame):
 
         # Primary indicator
         self._primary_indicator = QLabel("PRIMARY")
-        self._primary_indicator.setStyleSheet("""
-            QLabel {
-                background-color: #3498db;
+        self._primary_indicator.setStyleSheet(f"""
+            QLabel {{
+                background-color: {colors.ACCENT};
                 color: white;
                 padding: 2px 6px;
                 border-radius: 4px;
                 font-size: 9px;
                 font-weight: bold;
-            }
+            }}
         """)
         self._primary_indicator.setVisible(self._is_primary)
         header.addWidget(self._primary_indicator)
 
         # Recording indicator
         self._recording_indicator = QLabel("REC")
-        self._recording_indicator.setStyleSheet("""
-            QLabel {
-                background-color: #c0392b;
+        self._recording_indicator.setStyleSheet(f"""
+            QLabel {{
+                background-color: {colors.ERROR};
                 color: white;
                 padding: 2px 6px;
                 border-radius: 4px;
                 font-size: 9px;
                 font-weight: bold;
-            }
+            }}
         """)
         self._recording_indicator.hide()
         header.addWidget(self._recording_indicator)
@@ -100,18 +102,18 @@ class CameraPreviewTile(QFrame):
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview.setScaledContents(False)
         self._preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._preview.setStyleSheet("""
-            QLabel {
-                background-color: #0d0d1a;
+        self._preview.setStyleSheet(f"""
+            QLabel {{
+                background-color: {colors.CANVAS};
                 border-radius: 4px;
-            }
+            }}
         """)
         self._preview.setText("No Feed")
         layout.addWidget(self._preview, 1)
 
         # FPS label
         self._fps_label = QLabel("-- FPS")
-        self._fps_label.setStyleSheet("color: #888; font-size: 10px;")
+        self._fps_label.setProperty("textRole", "muted")
         self._fps_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         layout.addWidget(self._fps_label)
 
@@ -121,23 +123,23 @@ class CameraPreviewTile(QFrame):
     def _update_style(self) -> None:
         """Update tile style based on state."""
         if self._is_primary:
-            self.setStyleSheet("""
-                CameraPreviewTile {
-                    background-color: #1a1a2e;
-                    border: 2px solid #3498db;
+            self.setStyleSheet(f"""
+                CameraPreviewTile {{
+                    background-color: {colors.SURFACE_2};
+                    border: 2px solid {colors.ACCENT};
                     border-radius: 8px;
-                }
+                }}
             """)
         else:
-            self.setStyleSheet("""
-                CameraPreviewTile {
-                    background-color: #1a1a2e;
-                    border: 1px solid #2d2d44;
+            self.setStyleSheet(f"""
+                CameraPreviewTile {{
+                    background-color: {colors.SURFACE_2};
+                    border: 1px solid {colors.BORDER};
                     border-radius: 8px;
-                }
-                CameraPreviewTile:hover {
-                    border: 1px solid #3498db;
-                }
+                }}
+                CameraPreviewTile:hover {{
+                    border: 1px solid {colors.ACCENT};
+                }}
             """)
 
     @property
@@ -231,13 +233,7 @@ class MultiCameraPreviewWidget(QWidget):
         # Placeholder when no cameras
         self._placeholder = QLabel("No cameras connected")
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._placeholder.setStyleSheet("""
-            QLabel {
-                color: #666;
-                font-size: 14px;
-                padding: 40px;
-            }
-        """)
+        self._placeholder.setProperty("textRole", "disabled")
         self._main_layout.addWidget(self._placeholder)
 
     def add_camera(self, camera_id: str, is_primary: bool = False) -> CameraPreviewTile:
