@@ -17,6 +17,8 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDockWidget,
     QFileDialog,
+    QFrame,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -104,6 +106,12 @@ class MainWindow(QMainWindow):
 
         # Toolbar status (initialised here so _on_core_state_change can test)
         self._toolbar_status: QLabel | None = None
+
+        # Status bar widgets
+        self._conn_dot: QLabel | None = None
+        self._conn_label: QLabel | None = None
+        self._state_label: QLabel | None = None
+        self._stats_label: QLabel | None = None
 
         # Zone configuration
         self._zone_config = ZoneConfiguration()
@@ -399,6 +407,13 @@ class MainWindow(QMainWindow):
 
         menubar = self.menuBar()
 
+        branding = QLabel("GLIDER")
+        branding.setStyleSheet(
+            f"font-weight: 600; color: {colors.ACCENT}; font-size: 13px; "
+            f"letter-spacing: 0.5px; padding: 0 12px 0 4px;"
+        )
+        menubar.setCornerWidget(branding, Qt.Corner.TopLeftCorner)
+
         # File menu
         file_menu = menubar.addMenu("&File")
 
@@ -617,13 +632,46 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self._toolbar_status)
 
     def _setup_status_bar(self) -> None:
-        """Set up the status bar."""
+        """Set up the status bar with connection, state, and stats."""
         if self._view_manager.is_runner_mode:
             return
 
         status_bar = QStatusBar()
+        status_bar.setSizeGripEnabled(False)
         self.setStatusBar(status_bar)
-        status_bar.showMessage("Ready")
+
+        # Connection indicator (left)
+        conn_widget = QWidget()
+        conn_layout = QHBoxLayout(conn_widget)
+        conn_layout.setContentsMargins(4, 0, 4, 0)
+        conn_layout.setSpacing(4)
+
+        self._conn_dot = QLabel("\u2022")
+        self._conn_dot.setStyleSheet(f"color: {colors.ERROR}; font-size: 16px;")
+        conn_layout.addWidget(self._conn_dot)
+
+        self._conn_label = QLabel("No board")
+        self._conn_label.setProperty("textRole", "muted")
+        conn_layout.addWidget(self._conn_label)
+
+        status_bar.addWidget(conn_widget)
+
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet(f"color: {colors.BORDER};")
+        sep.setFixedHeight(14)
+        status_bar.addWidget(sep)
+
+        # State label
+        self._state_label = QLabel("State: IDLE")
+        self._state_label.setProperty("textRole", "muted")
+        status_bar.addWidget(self._state_label)
+
+        # Stats (right-aligned)
+        self._stats_label = QLabel("")
+        self._stats_label.setProperty("textRole", "disabled")
+        status_bar.addPermanentWidget(self._stats_label)
 
     def _show_status_message(self, message: str, timeout: int = 0) -> None:
         """Show a status bar message if not in runner mode."""
@@ -666,6 +714,9 @@ class MainWindow(QMainWindow):
 
         self._show_status_message(f"State: {state_name}")
 
+        if self._state_label is not None:
+            self._state_label.setText(f"State: {state_name}")
+
     @pyqtSlot(str, object)
     def _on_core_error(self, source: str, error: Exception) -> None:
         """Handle core errors."""
@@ -690,6 +741,32 @@ class MainWindow(QMainWindow):
         logger.warning(f"Board {board_id} disconnected during experiment! Pausing...")
         self._run_async(self._core.pause())
         self._show_hardware_disconnection_dialog(board_id, state)
+
+        self._update_connection_status()
+
+    def _update_connection_status(self) -> None:
+        """Update the status bar connection indicator."""
+        if self._conn_dot is None:
+            return
+        boards = self._core.hardware_manager.boards
+        connected = any(
+            getattr(b, "_connected", False) or getattr(b, "connected", False)
+            for b in boards.values()
+        )
+        if connected:
+            for board_id, board in boards.items():
+                if getattr(board, "_connected", False) or getattr(board, "connected", False):
+                    name = getattr(board, "name", board_id)
+                    self._conn_dot.setStyleSheet(f"color: {colors.SUCCESS}; font-size: 16px;")
+                    self._conn_label.setText(f"{name} \u2014 Connected")
+                    return
+        self._conn_dot.setStyleSheet(f"color: {colors.ERROR}; font-size: 16px;")
+        self._conn_label.setText("No board")
+
+    def update_status_stats(self, node_count: int, connection_count: int) -> None:
+        """Update the node/connection count in the status bar."""
+        if self._stats_label is not None:
+            self._stats_label.setText(f"{node_count} nodes \u2022 {connection_count} connections")
 
     def _show_hardware_disconnection_dialog(
         self, board_id: str, state: BoardConnectionState
