@@ -155,31 +155,30 @@ class DeviceControlPanel(QWidget):
         )
         input_group_layout.addWidget(self._input_value_label)
 
-        input_row = QHBoxLayout()
-        input_row.setSpacing(4)
         self._read_btn = QPushButton("Read")
         self._read_btn.setMinimumHeight(32)
-        self._read_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._read_btn.clicked.connect(self._read_input_once)
-        input_row.addWidget(self._read_btn)
+        input_group_layout.addWidget(self._read_btn)
 
+        poll_row = QHBoxLayout()
+        poll_row.setSpacing(8)
         self._continuous_checkbox = QCheckBox("Auto")
-        self._continuous_checkbox.setMinimumWidth(35)
         self._continuous_checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self._continuous_checkbox.stateChanged.connect(self._on_continuous_changed)
-        input_row.addWidget(self._continuous_checkbox)
+        poll_row.addWidget(self._continuous_checkbox)
+
+        poll_label = QLabel("Interval:")
+        poll_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        poll_row.addWidget(poll_label)
 
         self._poll_spinbox = QSpinBox()
         self._poll_spinbox.setRange(50, 5000)
         self._poll_spinbox.setValue(100)
-        self._poll_spinbox.setSuffix("ms")
-        self._poll_spinbox.setMinimumWidth(75)
+        self._poll_spinbox.setSuffix(" ms")
         self._poll_spinbox.setMinimumHeight(28)
-        self._poll_spinbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._poll_spinbox.valueChanged.connect(self._on_poll_interval_changed)
-        input_row.addWidget(self._poll_spinbox)
+        poll_row.addWidget(self._poll_spinbox)
 
-        input_group_layout.addLayout(input_row)
+        input_group_layout.addLayout(poll_row)
         self._input_group = input_group
         self._control_layout.addWidget(input_group)
 
