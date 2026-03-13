@@ -17,13 +17,12 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
-    QFrame,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QSpinBox,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -37,7 +36,6 @@ from glider.gui.commands import (
     PropertyChangeCommand,
     UndoStack,
 )
-from glider.gui.styles import colors
 
 if TYPE_CHECKING:
     from glider.core.hardware_manager import HardwareManager
@@ -418,48 +416,11 @@ class NodeEditorController(QObject):
             node_config = session.get_node(node_id)
 
         props_widget = QWidget()
-        props_layout = QVBoxLayout(props_widget)
-        props_layout.setContentsMargins(12, 12, 12, 12)
-        props_layout.setSpacing(0)
+        props_layout = QFormLayout(props_widget)
+        props_layout.setContentsMargins(8, 8, 8, 8)
 
-        def add_section(title: str):
-            if props_layout.count() > 0:
-                props_layout.addSpacing(12)
-                divider = QFrame()
-                divider.setFrameShape(QFrame.Shape.HLine)
-                divider.setStyleSheet(f"background-color: {colors.BORDER}; max-height: 1px;")
-                props_layout.addWidget(divider)
-                props_layout.addSpacing(12)
-            label = QLabel(title.upper())
-            label.setStyleSheet(
-                f"font-size: 10px; font-weight: 600; color: {colors.TEXT_MUTED}; "
-                f"letter-spacing: 0.5px; padding-bottom: 8px;"
-            )
-            props_layout.addWidget(label)
-
-        def add_row(label_text: str, widget):
-            row = QHBoxLayout()
-            row.setSpacing(8)
-            if label_text:
-                lbl = QLabel(label_text)
-                lbl.setProperty("textRole", "muted")
-                lbl.setFixedWidth(70)
-                row.addWidget(lbl)
-            row.addWidget(widget)
-            props_layout.addLayout(row)
-
-        add_section("Node Info")
-        name_label = QLabel(node_item.node_type)
-        name_label.setStyleSheet(
-            f"font-size: 12px; font-weight: 600; color: {colors.TEXT_PRIMARY}; padding-bottom: 4px;"
-        )
-        props_layout.addWidget(name_label)
-
-        category = getattr(node_item, "_category", "")
-        if category:
-            cat_label = QLabel(category)
-            cat_label.setProperty("textRole", "muted")
-            props_layout.addWidget(cat_label)
+        props_layout.addRow("ID:", QLabel(node_id))
+        props_layout.addRow("Type:", QLabel(node_item.node_type))
 
         if hasattr(node_item, "_actual_node_type") and node_item._actual_node_type:
             node_type = node_item._actual_node_type.replace(" ", "")
@@ -468,7 +429,6 @@ class NodeEditorController(QObject):
 
         # Add device selector for I/O nodes
         if node_type in ["Output", "Input", "WaitForInput", "MotorGovernor"]:
-            add_section("Device")
             device_combo = QComboBox()
             device_combo.addItem("-- Select Device --", None)
             current_device_id = node_config.device_id if node_config else None
@@ -487,10 +447,9 @@ class NodeEditorController(QObject):
                     nid, combo.currentData()
                 )
             )
-            props_layout.addWidget(device_combo)
+            props_layout.addRow("Device:", device_combo)
 
         elif node_type == "Delay":
-            add_section("Settings")
             duration_spin = QSpinBox()
             duration_spin.setRange(0, 3600)
             saved_duration = 1
@@ -501,10 +460,9 @@ class NodeEditorController(QObject):
             duration_spin.valueChanged.connect(
                 lambda val, nid=node_id: self._on_node_property_changed(nid, "duration", val)
             )
-            add_row("Duration", duration_spin)
+            props_layout.addRow("Duration:", duration_spin)
 
         elif node_type == "StartFunction":
-            add_section("Function")
             name_edit = QLineEdit()
             name_edit.setPlaceholderText("Enter function name")
             saved_name = "MyFunction"
@@ -514,16 +472,15 @@ class NodeEditorController(QObject):
             name_edit.textChanged.connect(
                 lambda text, nid=node_id: self._on_node_property_changed(nid, "function_name", text)
             )
-            add_row("Name", name_edit)
+            props_layout.addRow("Function Name:", name_edit)
 
             info_label = QLabel("Connect to EndFunction to define a reusable function.")
             info_label.setWordWrap(True)
             info_label.setProperty("textRole", "muted")
-            props_layout.addWidget(info_label)
+            props_layout.addRow(info_label)
 
         # Value control for Output node
         if node_type == "Output":
-            add_section("Value")
             bound_device_type = None
             if node_config and node_config.device_id:
                 bound_device = self._hardware_manager.get_device(node_config.device_id)
@@ -540,7 +497,7 @@ class NodeEditorController(QObject):
                 pwm_spin.valueChanged.connect(
                     lambda val, nid=node_id: self._on_node_property_changed(nid, "value", val)
                 )
-                add_row("PWM (0-255)", pwm_spin)
+                props_layout.addRow("PWM Value (0-255):", pwm_spin)
             else:
                 from PyQt6.QtWidgets import QRadioButton
 
@@ -566,10 +523,9 @@ class NodeEditorController(QObject):
                 )
                 value_widget = QWidget()
                 value_widget.setLayout(value_layout)
-                props_layout.addWidget(value_widget)
+                props_layout.addRow("Value:", value_widget)
 
         elif node_type == "MotorGovernor":
-            add_section("Settings")
             action_combo = QComboBox()
             action_combo.addItem("Move Up", "up")
             action_combo.addItem("Move Down", "down")
@@ -587,10 +543,9 @@ class NodeEditorController(QObject):
                     nid, "action", combo.currentData()
                 )
             )
-            add_row("Action", action_combo)
+            props_layout.addRow("Action:", action_combo)
 
         elif node_type == "Loop":
-            add_section("Settings")
             count_spin = QSpinBox()
             count_spin.setRange(0, 10000)
             count_spin.setSpecialValueText("Infinite")
@@ -601,7 +556,7 @@ class NodeEditorController(QObject):
             count_spin.valueChanged.connect(
                 lambda val, nid=node_id: self._on_node_property_changed(nid, "count", val)
             )
-            add_row("Iterations", count_spin)
+            props_layout.addRow("Iterations:", count_spin)
 
             delay_spin = QDoubleSpinBox()
             delay_spin.setRange(0.0, 3600.0)
@@ -615,10 +570,9 @@ class NodeEditorController(QObject):
             delay_spin.valueChanged.connect(
                 lambda val, nid=node_id: self._on_node_property_changed(nid, "delay", val)
             )
-            add_row("Delay", delay_spin)
+            props_layout.addRow("Delay:", delay_spin)
 
         elif node_type == "WaitForInput":
-            add_section("Settings")
             mode_combo = QComboBox()
             mode_combo.addItem("Digital (Rising Edge)", "digital")
             mode_combo.addItem("Analog (Threshold)", "analog")
@@ -633,7 +587,7 @@ class NodeEditorController(QObject):
                     nid, "threshold_mode", combo.currentData()
                 )
             )
-            add_row("Mode", mode_combo)
+            props_layout.addRow("Mode:", mode_combo)
 
             threshold_spin = QSpinBox()
             threshold_spin.setRange(0, 1023)
@@ -644,7 +598,7 @@ class NodeEditorController(QObject):
             threshold_spin.valueChanged.connect(
                 lambda val, nid=node_id: self._on_node_property_changed(nid, "threshold", val)
             )
-            add_row("Threshold", threshold_spin)
+            props_layout.addRow("Threshold:", threshold_spin)
 
             direction_combo = QComboBox()
             direction_combo.addItem("Above Threshold", "above")
@@ -660,7 +614,7 @@ class NodeEditorController(QObject):
                     nid, "threshold_direction", combo.currentData()
                 )
             )
-            add_row("Direction", direction_combo)
+            props_layout.addRow("Direction:", direction_combo)
 
             timeout_spin = QDoubleSpinBox()
             timeout_spin.setRange(0.0, 3600.0)
@@ -674,7 +628,7 @@ class NodeEditorController(QObject):
             timeout_spin.valueChanged.connect(
                 lambda val, nid=node_id: self._on_node_property_changed(nid, "timeout", val)
             )
-            add_row("Timeout", timeout_spin)
+            props_layout.addRow("Timeout:", timeout_spin)
 
             info_label = QLabel(
                 "Digital mode: waits for rising edge (LOW \u2192 HIGH)\n"
@@ -682,10 +636,9 @@ class NodeEditorController(QObject):
             )
             info_label.setWordWrap(True)
             info_label.setProperty("textRole", "muted")
-            props_layout.addWidget(info_label)
+            props_layout.addRow(info_label)
 
         elif node_type == "AnalogRead":
-            add_section("Settings")
             continuous_check = QCheckBox("Enable continuous reading")
             saved_continuous = False
             if node_config and node_config.state:
@@ -696,7 +649,7 @@ class NodeEditorController(QObject):
                     nid, "continuous", checked
                 )
             )
-            props_layout.addWidget(continuous_check)
+            props_layout.addRow(continuous_check)
 
             poll_spin = QDoubleSpinBox()
             poll_spin.setRange(0.01, 10.0)
@@ -710,7 +663,7 @@ class NodeEditorController(QObject):
             poll_spin.valueChanged.connect(
                 lambda val, nid=node_id: self._on_node_property_changed(nid, "poll_interval", val)
             )
-            add_row("Poll Interval", poll_spin)
+            props_layout.addRow("Poll Interval:", poll_spin)
 
             threshold_check = QCheckBox("Enable threshold checking")
             saved_threshold_enabled = False
@@ -722,7 +675,7 @@ class NodeEditorController(QObject):
                     nid, "threshold_enabled", checked
                 )
             )
-            props_layout.addWidget(threshold_check)
+            props_layout.addRow(threshold_check)
 
             threshold_spin = QSpinBox()
             threshold_spin.setRange(0, 1023)
@@ -733,7 +686,7 @@ class NodeEditorController(QObject):
             threshold_spin.valueChanged.connect(
                 lambda val, nid=node_id: self._on_node_property_changed(nid, "threshold", val)
             )
-            add_row("Threshold", threshold_spin)
+            props_layout.addRow("Threshold:", threshold_spin)
 
             visible_check = QCheckBox("Show live value in dashboard")
             saved_visible = False
@@ -745,7 +698,7 @@ class NodeEditorController(QObject):
                     nid, "visible_in_runner", checked
                 )
             )
-            props_layout.addWidget(visible_check)
+            props_layout.addRow(visible_check)
 
             info_label = QLabel(
                 "Continuous mode: automatically polls sensor at poll interval.\n"
@@ -754,10 +707,9 @@ class NodeEditorController(QObject):
             )
             info_label.setWordWrap(True)
             info_label.setProperty("textRole", "muted")
-            props_layout.addWidget(info_label)
+            props_layout.addRow(info_label)
 
         elif node_type in ("CustomDevice", "CustomDeviceAction"):
-            add_section("Custom Device")
             definition_id = None
             if node_config and node_config.state:
                 definition_id = node_config.state.get("definition_id")
@@ -768,13 +720,13 @@ class NodeEditorController(QObject):
                 def_dict = session.get_custom_device_definition(definition_id)
                 if def_dict:
                     device_name = def_dict.get("name", "Unknown")
-                    add_row("Device", QLabel(device_name))
+                    props_layout.addRow("Device:", QLabel(device_name))
 
                     desc = def_dict.get("description", "")
                     if desc:
                         desc_label = QLabel(desc)
                         desc_label.setWordWrap(True)
-                        props_layout.addWidget(desc_label)
+                        props_layout.addRow("Description:", desc_label)
 
                     pins = def_dict.get("pins", [])
                     if pins:
@@ -807,7 +759,7 @@ class NodeEditorController(QObject):
                                 self._on_node_property_changed(nid, "pin", combo.currentData())
                             )
                         )
-                        add_row("Pin", pin_combo)
+                        props_layout.addRow("Pin:", pin_combo)
 
                         saved_pin_type = None
                         for pin in pins:
@@ -832,7 +784,7 @@ class NodeEditorController(QObject):
                                     )
                                 )
                             )
-                            add_row("Value", value_combo)
+                            props_layout.addRow("Value:", value_combo)
 
                         elif saved_pin_type in ("analog_output", "pwm"):
                             value_spin = QSpinBox()
@@ -847,18 +799,17 @@ class NodeEditorController(QObject):
                                     nid, "value", val
                                 )
                             )
-                            add_row("Value", value_spin)
+                            props_layout.addRow("Value:", value_spin)
 
                     edit_btn = QPushButton("Edit Device Definition")
                     edit_btn.clicked.connect(
                         lambda checked, did=definition_id: self._edit_custom_device(did)
                     )
-                    props_layout.addWidget(edit_btn)
+                    props_layout.addRow(edit_btn)
                 else:
-                    props_layout.addWidget(QLabel("(Custom device not found)"))
+                    props_layout.addRow(QLabel("(Custom device not found)"))
 
         elif node_type == "FlowFunctionCall":
-            add_section("Function")
             definition_id = None
             if node_config and node_config.state:
                 definition_id = node_config.state.get("definition_id")
@@ -867,22 +818,21 @@ class NodeEditorController(QObject):
                 def_dict = session.get_flow_function_definition(definition_id)
                 if def_dict:
                     func_name = def_dict.get("name", "Unknown")
-                    add_row("Function", QLabel(func_name))
+                    props_layout.addRow("Function:", QLabel(func_name))
 
                     desc = def_dict.get("description", "")
                     if desc:
                         desc_label = QLabel(desc)
                         desc_label.setWordWrap(True)
-                        props_layout.addWidget(desc_label)
+                        props_layout.addRow("Description:", desc_label)
 
                     edit_btn = QPushButton("Edit Flow Function")
                     edit_btn.clicked.connect(lambda: self._edit_flow_function(definition_id))
-                    props_layout.addWidget(edit_btn)
+                    props_layout.addRow(edit_btn)
                 else:
-                    props_layout.addWidget(QLabel("(Flow function not found)"))
+                    props_layout.addRow(QLabel("(Flow function not found)"))
 
         elif node_type == "AudioPlayback":
-            add_section("Audio")
             file_edit = QLineEdit()
             file_edit.setReadOnly(True)
             file_edit.setPlaceholderText("No file selected")
@@ -901,7 +851,7 @@ class NodeEditorController(QObject):
             file_layout.addWidget(browse_btn)
             file_widget = QWidget()
             file_widget.setLayout(file_layout)
-            add_row("File", file_widget)
+            props_layout.addRow("File:", file_widget)
 
             device_combo = QComboBox()
             device_combo.addItem("System Default", None)
@@ -947,7 +897,7 @@ class NodeEditorController(QObject):
                 self._on_node_property_changed(nid, "device_name", dev_name)
 
             device_combo.currentIndexChanged.connect(on_audio_device_changed)
-            add_row("Output", device_combo)
+            props_layout.addRow("Output Device:", device_combo)
 
             volume_spin = QDoubleSpinBox()
             volume_spin.setRange(0.0, 1.0)
@@ -960,10 +910,9 @@ class NodeEditorController(QObject):
             volume_spin.valueChanged.connect(
                 lambda val, nid=node_id: self._on_node_property_changed(nid, "volume", val)
             )
-            add_row("Volume", volume_spin)
+            props_layout.addRow("Volume:", volume_spin)
 
         elif node_type == "VideoPlayback":
-            add_section("Video")
             file_edit = QLineEdit()
             file_edit.setReadOnly(True)
             file_edit.setPlaceholderText("No file selected")
@@ -982,7 +931,7 @@ class NodeEditorController(QObject):
             file_layout.addWidget(browse_btn)
             file_widget = QWidget()
             file_widget.setLayout(file_layout)
-            add_row("File", file_widget)
+            props_layout.addRow("File:", file_widget)
 
             monitor_combo = QComboBox()
             screens = QApplication.screens()
@@ -1002,7 +951,7 @@ class NodeEditorController(QObject):
                     nid, "monitor_index", combo.currentData()
                 )
             )
-            add_row("Monitor", monitor_combo)
+            props_layout.addRow("Monitor:", monitor_combo)
 
         self._properties_dock.setWidget(props_widget)
 
