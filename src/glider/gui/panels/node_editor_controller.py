@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -401,6 +402,21 @@ class NodeEditorController(QObject):
 
         self.flow_functions_changed.emit()
 
+    @staticmethod
+    def _add_section_header(layout: QFormLayout, text: str) -> None:
+        """Add an uppercase section header label spanning the full row."""
+        header = QLabel(text)
+        header.setProperty("class", "props-section-header")
+        layout.addRow(header)
+
+    @staticmethod
+    def _add_divider(layout: QFormLayout) -> None:
+        """Add a horizontal divider line spanning the full row."""
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setProperty("class", "props-divider")
+        layout.addRow(line)
+
     def _update_properties_panel(self, node_id: str) -> None:
         """Update the properties panel for the selected node."""
         if self._properties_dock is None:
@@ -417,8 +433,11 @@ class NodeEditorController(QObject):
 
         props_widget = QWidget()
         props_layout = QFormLayout(props_widget)
-        props_layout.setContentsMargins(8, 8, 8, 8)
+        props_layout.setContentsMargins(12, 12, 12, 12)
+        props_layout.setVerticalSpacing(6)
 
+        # -- Node Info section --
+        self._add_section_header(props_layout, "NODE INFO")
         props_layout.addRow("ID:", QLabel(node_id))
         props_layout.addRow("Type:", QLabel(node_item.node_type))
 
@@ -427,8 +446,11 @@ class NodeEditorController(QObject):
         else:
             node_type = node_item.node_type.replace(" ", "")
 
+        self._add_divider(props_layout)
+
         # Add device selector for I/O nodes
         if node_type in ["Output", "Input", "WaitForInput", "MotorGovernor"]:
+            self._add_section_header(props_layout, "DEVICE")
             device_combo = QComboBox()
             device_combo.addItem("-- Select Device --", None)
             current_device_id = node_config.device_id if node_config else None
@@ -450,6 +472,7 @@ class NodeEditorController(QObject):
             props_layout.addRow("Device:", device_combo)
 
         elif node_type == "Delay":
+            self._add_section_header(props_layout, "CONFIGURATION")
             duration_spin = QSpinBox()
             duration_spin.setRange(0, 3600)
             saved_duration = 1
@@ -463,6 +486,7 @@ class NodeEditorController(QObject):
             props_layout.addRow("Duration:", duration_spin)
 
         elif node_type == "StartFunction":
+            self._add_section_header(props_layout, "FUNCTION")
             name_edit = QLineEdit()
             name_edit.setPlaceholderText("Enter function name")
             saved_name = "MyFunction"
@@ -481,6 +505,8 @@ class NodeEditorController(QObject):
 
         # Value control for Output node
         if node_type == "Output":
+            self._add_divider(props_layout)
+            self._add_section_header(props_layout, "VALUE")
             bound_device_type = None
             if node_config and node_config.device_id:
                 bound_device = self._hardware_manager.get_device(node_config.device_id)
@@ -526,6 +552,7 @@ class NodeEditorController(QObject):
                 props_layout.addRow("Value:", value_widget)
 
         elif node_type == "MotorGovernor":
+            self._add_section_header(props_layout, "ACTION")
             action_combo = QComboBox()
             action_combo.addItem("Move Up", "up")
             action_combo.addItem("Move Down", "down")
@@ -546,6 +573,7 @@ class NodeEditorController(QObject):
             props_layout.addRow("Action:", action_combo)
 
         elif node_type == "Loop":
+            self._add_section_header(props_layout, "LOOP SETTINGS")
             count_spin = QSpinBox()
             count_spin.setRange(0, 10000)
             count_spin.setSpecialValueText("Infinite")
@@ -573,6 +601,7 @@ class NodeEditorController(QObject):
             props_layout.addRow("Delay:", delay_spin)
 
         elif node_type == "WaitForInput":
+            self._add_section_header(props_layout, "INPUT SETTINGS")
             mode_combo = QComboBox()
             mode_combo.addItem("Digital (Rising Edge)", "digital")
             mode_combo.addItem("Analog (Threshold)", "analog")
@@ -639,6 +668,7 @@ class NodeEditorController(QObject):
             props_layout.addRow(info_label)
 
         elif node_type == "AnalogRead":
+            self._add_section_header(props_layout, "ANALOG SETTINGS")
             continuous_check = QCheckBox("Enable continuous reading")
             saved_continuous = False
             if node_config and node_config.state:
@@ -710,6 +740,7 @@ class NodeEditorController(QObject):
             props_layout.addRow(info_label)
 
         elif node_type in ("CustomDevice", "CustomDeviceAction"):
+            self._add_section_header(props_layout, "CUSTOM DEVICE")
             definition_id = None
             if node_config and node_config.state:
                 definition_id = node_config.state.get("definition_id")
@@ -810,6 +841,7 @@ class NodeEditorController(QObject):
                     props_layout.addRow(QLabel("(Custom device not found)"))
 
         elif node_type == "FlowFunctionCall":
+            self._add_section_header(props_layout, "FLOW FUNCTION")
             definition_id = None
             if node_config and node_config.state:
                 definition_id = node_config.state.get("definition_id")
@@ -833,6 +865,7 @@ class NodeEditorController(QObject):
                     props_layout.addRow(QLabel("(Flow function not found)"))
 
         elif node_type == "AudioPlayback":
+            self._add_section_header(props_layout, "AUDIO")
             file_edit = QLineEdit()
             file_edit.setReadOnly(True)
             file_edit.setPlaceholderText("No file selected")
@@ -913,6 +946,7 @@ class NodeEditorController(QObject):
             props_layout.addRow("Volume:", volume_spin)
 
         elif node_type == "VideoPlayback":
+            self._add_section_header(props_layout, "VIDEO")
             file_edit = QLineEdit()
             file_edit.setReadOnly(True)
             file_edit.setPlaceholderText("No file selected")
