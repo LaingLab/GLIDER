@@ -341,7 +341,7 @@ class CameraPanel(QWidget):
         layout.addWidget(cv_section_label)
 
         cv_layout = QVBoxLayout()
-        cv_layout.setSpacing(4)
+        cv_layout.setSpacing(10)
 
         self._cv_enabled_cb = QCheckBox("Computer Vision")
         self._cv_enabled_cb.toggled.connect(self._on_cv_toggle)

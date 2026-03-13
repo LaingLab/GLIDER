@@ -202,7 +202,7 @@ class NodeLibraryPanel(QWidget):
             header_label = QLabel(category.upper())
             header_label.setStyleSheet(f"""
                 padding: 6px 8px;
-                font-size: 10px;
+                font-size: 11px;
                 font-weight: 600;
                 color: {colors.TEXT_TERTIARY};
                 letter-spacing: 0.5px;
@@ -382,7 +382,7 @@ class NodeLibraryPanel(QWidget):
                 border-top-right-radius: 6px;
                 border-bottom-right-radius: 6px;
                 padding: 7px 10px;
-                font-size: 11px;
+                font-size: 13px;
                 color: {colors.TEXT_SECONDARY};
                 text-align: left;
             }}
@@ -415,7 +415,7 @@ class NodeLibraryPanel(QWidget):
         header_label = QLabel(category_name.upper())
         header_label.setStyleSheet(f"""
             padding: 6px 8px;
-            font-size: 10px;
+            font-size: 11px;
             font-weight: 600;
             color: {colors.TEXT_TERTIARY};
             letter-spacing: 0.5px;
