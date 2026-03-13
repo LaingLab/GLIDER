@@ -196,64 +196,25 @@ class NodeLibraryPanel(QWidget):
 
             category_widget = QWidget()
             category_layout = QVBoxLayout(category_widget)
-            category_layout.setContentsMargins(0, 0, 0, 0)
+            category_layout.setContentsMargins(0, 0, 0, 8)
             category_layout.setSpacing(2)
 
-            header_btn = QPushButton(f"\u25bc  {category}")
-            header_btn.setCheckable(True)
-            header_btn.setChecked(True)
-            header_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            header_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {color};
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    padding: 8px 12px;
-                    font-size: 13px;
-                    font-weight: bold;
-                    text-align: left;
-                }}
-                QPushButton:hover {{
-                    background-color: {color}cc;
-                }}
-                QPushButton:checked {{
-                    border-bottom-left-radius: 0px;
-                    border-bottom-right-radius: 0px;
-                }}
+            header_label = QLabel(category.upper())
+            header_label.setStyleSheet(f"""
+                padding: 6px 8px;
+                font-size: 11px;
+                font-weight: 600;
+                color: {colors.TEXT_TERTIARY};
+                letter-spacing: 0.5px;
             """)
-            category_layout.addWidget(header_btn)
-
-            nodes_container = QWidget()
-            nodes_container.setStyleSheet(f"""
-                QWidget {{
-                    background-color: {colors.with_alpha(color, 0.25)};
-                    border-bottom-left-radius: 4px;
-                    border-bottom-right-radius: 4px;
-                }}
-            """)
-            nodes_layout = QVBoxLayout(nodes_container)
-            nodes_layout.setContentsMargins(4, 4, 4, 4)
-            nodes_layout.setSpacing(2)
+            category_layout.addWidget(header_label)
 
             for node_type, node_name, tooltip in nodes:
                 node_btn = DraggableNodeButton(node_type, node_name, category)
                 node_btn.setToolTip(tooltip)
                 node_btn.clicked.connect(lambda checked, nt=node_type: self._add_node_to_center(nt))
-                nodes_layout.addWidget(node_btn)
-
-            category_layout.addWidget(nodes_container)
-
-            def make_toggle(btn, container):
-                def toggle(checked):
-                    container.setVisible(checked)
-                    btn.setText(
-                        f"\u25bc  {btn.text()[3:]}" if checked else f"\u25b6  {btn.text()[3:]}"
-                    )
-
-                return toggle
-
-            header_btn.toggled.connect(make_toggle(header_btn, nodes_container))
+                self._apply_node_btn_style(node_btn, color)
+                category_layout.addWidget(node_btn)
 
             layout.addWidget(category_widget)
 
@@ -335,6 +296,7 @@ class NodeLibraryPanel(QWidget):
                     btn.clicked.connect(
                         lambda checked, did=def_id: self._add_custom_device_node(did)
                     )
+                    self._apply_node_btn_style(btn, colors.LIB_CUSTOM_DEVICES)
                     self._custom_devices_layout.addWidget(btn)
             else:
                 self._add_placeholder(self._custom_devices_layout, "No devices defined")
@@ -364,6 +326,7 @@ class NodeLibraryPanel(QWidget):
                         nid, name
                     )
                 )
+                self._apply_node_btn_style(btn, colors.LIB_FLOW_FUNCTIONS)
                 self._flow_functions_layout.addWidget(btn)
 
         if not has_functions:
@@ -391,6 +354,7 @@ class NodeLibraryPanel(QWidget):
                     f"Outputs: Occupied (bool), Object Count (int), On Enter, On Exit"
                 )
                 btn.clicked.connect(lambda checked, zid=zone.id: self._add_zone_node(zid))
+                self._apply_node_btn_style(btn, colors.LIB_ZONES)
                 self._zones_layout.addWidget(btn)
         else:
             placeholder = QLabel("Create zones in Camera \u2192 Zones...")
@@ -407,6 +371,27 @@ class NodeLibraryPanel(QWidget):
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(placeholder)
 
+    def _apply_node_btn_style(self, btn: QPushButton, color: str) -> None:
+        """Apply the standard left-border node button style."""
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {colors.with_alpha(color, 0.1)};
+                border: none;
+                border-left: 3px solid {color};
+                border-radius: 0;
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+                padding: 7px 10px;
+                font-size: 13px;
+                color: {colors.TEXT_SECONDARY};
+                text-align: left;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.with_alpha(color, 0.2)};
+                color: {colors.TEXT_PRIMARY};
+            }}
+        """)
+
     def _setup_custom_category(
         self,
         nodes_container: QWidget,
@@ -416,10 +401,10 @@ class NodeLibraryPanel(QWidget):
         parent_layout: QVBoxLayout,
         add_new_callback=None,
     ) -> None:
-        """Setup a custom category with a header and add button."""
+        """Setup a custom category with a section label and optional add button."""
         category_widget = QWidget()
         category_layout = QVBoxLayout(category_widget)
-        category_layout.setContentsMargins(0, 0, 0, 0)
+        category_layout.setContentsMargins(0, 0, 0, 8)
         category_layout.setSpacing(2)
 
         header_widget = QWidget()
@@ -427,49 +412,34 @@ class NodeLibraryPanel(QWidget):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(0)
 
-        header_btn = QPushButton(f"\u25bc  {category_name}")
-        header_btn.setCheckable(True)
-        header_btn.setChecked(True)
-        header_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        header_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {color};
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 8px 12px;
-                font-size: 13px;
-                font-weight: bold;
-                text-align: left;
-            }}
-            QPushButton:hover {{
-                background-color: {color}cc;
-            }}
-            QPushButton:checked {{
-                border-bottom-left-radius: 0px;
-                border-bottom-right-radius: 0px;
-            }}
+        header_label = QLabel(category_name.upper())
+        header_label.setStyleSheet(f"""
+            padding: 6px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            color: {colors.TEXT_TERTIARY};
+            letter-spacing: 0.5px;
         """)
-        header_layout.addWidget(header_btn, 1)
+        header_layout.addWidget(header_label, 1)
 
         if add_new_callback:
             add_btn = QPushButton("+")
-            add_btn.setFixedWidth(30)
+            add_btn.setFixedWidth(24)
             add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             add_btn.setToolTip(f"Add new {category_name.lower()[:-1]}")
             add_btn.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: {color};
-                    color: white;
+                    background-color: {colors.with_alpha(color, 0.2)};
+                    color: {colors.TEXT_TERTIARY};
                     border: none;
-                    border-top-right-radius: 4px;
-                    border-bottom-right-radius: 4px;
-                    padding: 8px;
-                    font-size: 16px;
+                    border-radius: 4px;
+                    padding: 2px;
+                    font-size: 14px;
                     font-weight: bold;
                 }}
                 QPushButton:hover {{
-                    background-color: {color}cc;
+                    background-color: {colors.with_alpha(color, 0.4)};
+                    color: {colors.TEXT_PRIMARY};
                 }}
             """)
             add_btn.clicked.connect(add_new_callback)
@@ -477,14 +447,8 @@ class NodeLibraryPanel(QWidget):
 
         category_layout.addWidget(header_widget)
 
-        nodes_container.setStyleSheet(f"""
-            QWidget {{
-                background-color: {colors.with_alpha(color, 0.25)};
-                border-bottom-left-radius: 4px;
-                border-bottom-right-radius: 4px;
-            }}
-        """)
-        nodes_layout.setContentsMargins(4, 4, 4, 4)
+        nodes_container.setStyleSheet("")
+        nodes_layout.setContentsMargins(0, 0, 0, 0)
 
         placeholder = QLabel("No items defined")
         placeholder.setProperty("textRole", "muted")
@@ -492,15 +456,6 @@ class NodeLibraryPanel(QWidget):
         nodes_layout.addWidget(placeholder)
 
         category_layout.addWidget(nodes_container)
-
-        def make_toggle(btn, container):
-            def toggle(checked):
-                container.setVisible(checked)
-                btn.setText(f"\u25bc  {btn.text()[3:]}" if checked else f"\u25b6  {btn.text()[3:]}")
-
-            return toggle
-
-        header_btn.toggled.connect(make_toggle(header_btn, nodes_container))
 
         parent_layout.addWidget(category_widget)
 
