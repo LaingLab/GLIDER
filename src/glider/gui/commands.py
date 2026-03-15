@@ -25,6 +25,10 @@ class Command:
         """Undo the command."""
         raise NotImplementedError
 
+    def redo(self) -> None:
+        """Redo the command. Default re-executes."""
+        self.execute()
+
     def description(self) -> str:
         """Human-readable description."""
         return "Unknown command"
@@ -54,6 +58,24 @@ class CreateNodeCommand(Command):
         if session:
             session.remove_node(self._node_id)
 
+    def redo(self) -> None:
+        """Re-create the node with the original ID."""
+        from glider.core.experiment_session import NodeConfig
+
+        node_item = self._controller._graph_view.add_node(
+            self._node_id, self._node_type, self._x, self._y
+        )
+        self._controller.setup_node_ports(node_item, self._node_type)
+
+        session = self._controller._session
+        if session:
+            node_config = NodeConfig(
+                id=self._node_id,
+                node_type=self._node_type,
+                position=(self._x, self._y),
+            )
+            session.add_node(node_config)
+
     def description(self) -> str:
         return f"Create {self._node_type}"
 
@@ -77,7 +99,6 @@ class DeleteNodeCommand(Command):
             data["id"], data["node_type"], data["x"], data["y"]
         )
         self._controller.setup_node_ports(node_item, data["node_type"])
-        self._controller._graph_view._connect_port_signals(node_item)
 
         session = self._controller._session
         if session:
@@ -92,6 +113,13 @@ class DeleteNodeCommand(Command):
                 visible_in_runner=data.get("visible_in_runner", False),
             )
             session.add_node(node_config)
+
+    def redo(self) -> None:
+        """Re-delete the node."""
+        self._controller._graph_view.remove_node(self._node_id)
+        session = self._controller._session
+        if session:
+            session.remove_node(self._node_id)
 
     def description(self) -> str:
         return f"Delete {self._node_data.get('node_type', 'node')}"
@@ -129,6 +157,15 @@ class MoveNodeCommand(Command):
         if session:
             session.update_node_position(self._node_id, self._old_x, self._old_y)
 
+    def redo(self) -> None:
+        """Move node to new position."""
+        node_item = self._controller._graph_view.nodes.get(self._node_id)
+        if node_item:
+            node_item.setPos(self._new_x, self._new_y)
+        session = self._controller._session
+        if session:
+            session.update_node_position(self._node_id, self._new_x, self._new_y)
+
     def description(self) -> str:
         return "Move node"
 
@@ -164,6 +201,29 @@ class CreateConnectionCommand(Command):
         session = self._controller._session
         if session:
             session.remove_connection(self._conn_id)
+
+    def redo(self) -> None:
+        """Re-create the connection."""
+        self._controller._graph_view.add_connection(
+            self._conn_id,
+            self._from_node,
+            self._from_port,
+            self._to_node,
+            self._to_port,
+        )
+        session = self._controller._session
+        if session:
+            from glider.core.experiment_session import ConnectionConfig
+
+            conn_config = ConnectionConfig(
+                id=self._conn_id,
+                from_node=self._from_node,
+                from_output=self._from_port,
+                to_node=self._to_node,
+                to_input=self._to_port,
+                connection_type=self._conn_type,
+            )
+            session.add_connection(conn_config)
 
     def description(self) -> str:
         return "Create connection"
@@ -201,6 +261,13 @@ class DeleteConnectionCommand(Command):
             )
             session.add_connection(conn_config)
 
+    def redo(self) -> None:
+        """Re-delete the connection."""
+        self._controller._graph_view.remove_connection(self._conn_id)
+        session = self._controller._session
+        if session:
+            session.remove_connection(self._conn_id)
+
     def description(self) -> str:
         return "Delete connection"
 
@@ -226,6 +293,12 @@ class PropertyChangeCommand(Command):
         session = self._controller._session
         if session:
             session.update_node_state(self._node_id, {self._prop_name: self._old_value})
+
+    def redo(self) -> None:
+        """Re-apply new property value."""
+        session = self._controller._session
+        if session:
+            session.update_node_state(self._node_id, {self._prop_name: self._new_value})
 
     def description(self) -> str:
         return f"Change {self._prop_name}"
@@ -262,8 +335,7 @@ class UndoStack:
         if not self._redo_stack:
             return None
         command = self._redo_stack.pop()
-        # Re-execute by undoing the undo (for property changes, we need to swap values)
-        # For most commands, we need to re-apply the action
+        command.redo()
         self._undo_stack.append(command)
         return command
 

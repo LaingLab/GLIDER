@@ -862,11 +862,12 @@ class MotorGovernorDevice(BaseDevice):
 
     async def stop(self) -> None:
         """Set both pins low (idle state)."""
-        up_pin = self._config.pins["up"]
-        down_pin = self._config.pins["down"]
+        async with self._motor_lock:
+            up_pin = self._config.pins["up"]
+            down_pin = self._config.pins["down"]
 
-        await self._board.write_digital(up_pin, False)
-        await self._board.write_digital(down_pin, False)
+            await self._board.write_digital(up_pin, False)
+            await self._board.write_digital(down_pin, False)
 
     async def read_position(self) -> int:
         """Read the current position from the signal pin."""
