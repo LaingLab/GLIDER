@@ -1486,7 +1486,6 @@ class MainWindow(QMainWindow):
     def _on_redo(self) -> None:
         command = self._undo_stack.redo()
         if command:
-            self._node_editor.redo_command(command)
             self._show_status_message(f"Redo: {command.description()}", 2000)
             self._update_undo_redo_actions()
 

@@ -85,7 +85,6 @@ class ToggleSwitchNode(InterfaceNode):
 
     def __init__(self):
         super().__init__()
-        self._exec_callbacks: list = []
         self._label = "Switch"
         self._switch_state = False
 
@@ -105,9 +104,10 @@ class ToggleSwitchNode(InterfaceNode):
         """Toggle the switch state."""
         self._switch_state = not self._switch_state
         self.set_output(0, self._switch_state)
-        # Trigger changed exec output
-        for callback in getattr(self, "_exec_callbacks", []):
-            callback(1)
+        # Trigger changed exec output via _update_callbacks
+        # (the flow engine registers exec propagation on _update_callbacks)
+        for callback in self._update_callbacks:
+            callback("Changed", self._switch_state)
 
     def set_state_value(self, value: bool) -> None:
         """Set the switch state directly."""
@@ -237,7 +237,6 @@ class NumericInputNode(InterfaceNode):
 
     def __init__(self):
         super().__init__()
-        self._exec_callbacks: list = []
         self._label = "Input"
         self._value = 0.0
         self._min_value = None
@@ -273,9 +272,10 @@ class NumericInputNode(InterfaceNode):
     def submit(self) -> None:
         """Called when value is submitted (e.g., Enter key)."""
         self.set_output(0, self._value)
-        # Trigger submitted exec output
-        for callback in getattr(self, "_exec_callbacks", []):
-            callback(1)
+        # Trigger submitted exec output via _update_callbacks
+        # (the flow engine registers exec propagation on _update_callbacks)
+        for callback in self._update_callbacks:
+            callback("Submitted", self._value)
 
     def update_event(self) -> None:
         """Numeric inputs update from UI interactions, not inputs."""
