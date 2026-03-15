@@ -604,13 +604,15 @@ class FlowEngine:
 
         logger.info("Stopping flow execution")
 
-        # Cancel all running tasks
-        for task in self._running_tasks:
+        # Snapshot and cancel all running tasks
+        # (done callbacks mutate _running_tasks, so we must not iterate the live set)
+        tasks = list(self._running_tasks)
+        for task in tasks:
             task.cancel()
 
         # Wait for tasks to complete
-        if self._running_tasks:
-            await asyncio.gather(*self._running_tasks, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._running_tasks.clear()
 
         # Stop all nodes

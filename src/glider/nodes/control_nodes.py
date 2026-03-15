@@ -219,9 +219,9 @@ class WaitForInputNode(GliderNode):
 
             # Triggered successfully
             logger.info(f"  Input received: {self._trigger_value}")
-            # Set output value
-            if len(self._outputs) > 0:
-                self._outputs[0] = self._trigger_value
+            # Set output value on the DATA port (index 2: "value")
+            if len(self._outputs) > 2:
+                self._outputs[2] = self._trigger_value
             # Fire value callbacks (non-exec notification)
             for callback in self._update_callbacks:
                 callback("value", self._trigger_value)
