@@ -49,3 +49,10 @@
 ```pip install -e .```
 4. Launch GLIDER
 ```glider```
+
+
+### One Liners
+
+MacOS/Linux/RPi5: curl -sSf https://raw.githubusercontent.com/LaingLab/glider/main/install.sh | bash
+
+Windows: irm https://raw.githubusercontent.com/LaingLab/glider/main/install.ps1 | iex
