@@ -53,6 +53,6 @@
 
 ### One Liners
 
-MacOS/Linux/RPi5: curl -sSf https://raw.githubusercontent.com/LaingLab/glider/main/install.sh | bash
+MacOS/Linux/RPi5: ```curl -sSf https://raw.githubusercontent.com/LaingLab/glider/main/install.sh | bash```
 
-Windows: irm https://raw.githubusercontent.com/LaingLab/glider/main/install.ps1 | iex
+Windows: ```irm https://raw.githubusercontent.com/LaingLab/glider/main/install.ps1 | iex```
