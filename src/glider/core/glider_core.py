@@ -339,6 +339,13 @@ class GliderCore:
             logger.error(f"Failed to register control nodes: {e}")
 
         try:
+            from glider.nodes.logic.flow_nodes import register_logic_nodes
+
+            register_logic_nodes(self._flow_engine)
+        except Exception as e:
+            logger.error(f"Failed to register logic nodes: {e}")
+
+        try:
             from glider.nodes.flow_function_nodes import register_flow_function_nodes
 
             register_flow_function_nodes(self._flow_engine)
