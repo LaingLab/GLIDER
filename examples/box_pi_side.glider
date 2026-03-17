@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-03-17T09:47:27.596640",
-    "modified_at": "2026-03-17T09:51:45.910518",
+    "modified_at": "2026-03-17T10:13:45.374743",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -170,8 +170,8 @@
         "id": "output_96f90cf1",
         "node_type": "Output",
         "position": [
-          973.7624999999999,
-          -271.05499999999995
+          1166.8474999999996,
+          -265.765
         ],
         "state": {
           "value": 0
@@ -201,6 +201,19 @@
         ],
         "state": {
           "duration": 2
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_b16ab2ff",
+        "node_type": "Delay",
+        "position": [
+          958.8124999999998,
+          -271.11249999999995
+        ],
+        "state": {
+          "duration": 6
         },
         "device_id": null,
         "visible_in_runner": false
@@ -280,8 +293,16 @@
         "connection_type": "exec"
       },
       {
-        "id": "conn_edbd7c28",
+        "id": "conn_ac7bf190",
         "from_node": "output_8aae9e94",
+        "from_output": 0,
+        "to_node": "delay_b16ab2ff",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_8ed28294",
+        "from_node": "delay_b16ab2ff",
         "from_output": 0,
         "to_node": "output_96f90cf1",
         "to_input": 0,
