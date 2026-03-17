@@ -1,0 +1,319 @@
+{
+  "metadata": {
+    "id": "630917c7-4b6a-4834-8310-fe66e8c6f08c",
+    "name": "Untitled Experiment",
+    "description": "",
+    "author": "",
+    "version": "1.0.0",
+    "created_at": "2026-03-17T09:47:27.596640",
+    "modified_at": "2026-03-17T09:51:45.910518",
+    "glider_version": "1.0.0",
+    "protocol": "",
+    "experiment_type": "",
+    "experimenter": "",
+    "lab": "",
+    "project": "",
+    "notes": "",
+    "recording_directory": "",
+    "subjects": [],
+    "active_subject_id": null
+  },
+  "hardware": {
+    "boards": [
+      {
+        "id": "pi",
+        "driver_type": "raspberry_pi",
+        "port": null,
+        "board_type": "uno",
+        "auto_reconnect": false,
+        "settings": {}
+      }
+    ],
+    "devices": [
+      {
+        "id": "pi_pump",
+        "device_type": "PWMOutput",
+        "name": "pi_pump",
+        "board_id": "pi",
+        "pins": {
+          "output": 20
+        },
+        "settings": {}
+      },
+      {
+        "id": "pi_atom",
+        "device_type": "PWMOutput",
+        "name": "pi_atom",
+        "board_id": "pi",
+        "pins": {
+          "output": 21
+        },
+        "settings": {}
+      },
+      {
+        "id": "pi_beam",
+        "device_type": "ADS1115",
+        "name": "pi_beam",
+        "board_id": "pi",
+        "pins": {},
+        "settings": {
+          "i2c_address": 72,
+          "channel": 0,
+          "gain": 1
+        }
+      }
+    ]
+  },
+  "flow": {
+    "nodes": [
+      {
+        "id": "startexperiment_0e3d14f1",
+        "node_type": "StartExperiment",
+        "position": [
+          -617.6449999999999,
+          -279.935
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "endexperiment_59d97347",
+        "node_type": "EndExperiment",
+        "position": [
+          -279.0,
+          18.0
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_9afd7b6b",
+        "node_type": "Delay",
+        "position": [
+          -479.0,
+          -93.0
+        ],
+        "state": {
+          "duration": 1200
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "waitforinput_32931562",
+        "node_type": "WaitForInput",
+        "position": [
+          -178.3225,
+          -275.93499999999995
+        ],
+        "state": {
+          "threshold_mode": "analog",
+          "threshold_direction": "below",
+          "threshold": 100
+        },
+        "device_id": "pi_beam",
+        "visible_in_runner": true
+      },
+      {
+        "id": "loop_3edd28c8",
+        "node_type": "Loop",
+        "position": [
+          -384.0,
+          -277.0
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": true
+      },
+      {
+        "id": "output_6097c316",
+        "node_type": "Output",
+        "position": [
+          15.228625000000008,
+          -273.5208749999999
+        ],
+        "state": {
+          "value": 150
+        },
+        "device_id": "pi_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_a49a2b7a",
+        "node_type": "Output",
+        "position": [
+          390.1389782608696,
+          -268.7243532608695
+        ],
+        "state": {
+          "value": 150
+        },
+        "device_id": "pi_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_8aae9e94",
+        "node_type": "Output",
+        "position": [
+          763.9400709374997,
+          -270.85635718749995
+        ],
+        "state": {
+          "value": 0
+        },
+        "device_id": "pi_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_96f90cf1",
+        "node_type": "Output",
+        "position": [
+          973.7624999999999,
+          -271.05499999999995
+        ],
+        "state": {
+          "value": 0
+        },
+        "device_id": "pi_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_3e16f748",
+        "node_type": "Delay",
+        "position": [
+          206.09724999999997,
+          -272.236625
+        ],
+        "state": {
+          "duration": 4
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_69e683d9",
+        "node_type": "Delay",
+        "position": [
+          592.25,
+          -267.95
+        ],
+        "state": {
+          "duration": 2
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn_e1538df0",
+        "from_node": "startexperiment_0e3d14f1",
+        "from_output": 0,
+        "to_node": "delay_9afd7b6b",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_d19ae6c9",
+        "from_node": "delay_9afd7b6b",
+        "from_output": 0,
+        "to_node": "endexperiment_59d97347",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_0ebff2a0",
+        "from_node": "startexperiment_0e3d14f1",
+        "from_output": 0,
+        "to_node": "loop_3edd28c8",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_f95f4582",
+        "from_node": "loop_3edd28c8",
+        "from_output": 0,
+        "to_node": "waitforinput_32931562",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_61956df2",
+        "from_node": "waitforinput_32931562",
+        "from_output": 0,
+        "to_node": "output_6097c316",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_6c387afb",
+        "from_node": "output_6097c316",
+        "from_output": 0,
+        "to_node": "delay_3e16f748",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_98f0c655",
+        "from_node": "delay_3e16f748",
+        "from_output": 0,
+        "to_node": "output_a49a2b7a",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_e80a2326",
+        "from_node": "output_a49a2b7a",
+        "from_output": 0,
+        "to_node": "delay_69e683d9",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_6dda413e",
+        "from_node": "delay_69e683d9",
+        "from_output": 0,
+        "to_node": "output_8aae9e94",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_edbd7c28",
+        "from_node": "output_8aae9e94",
+        "from_output": 0,
+        "to_node": "output_96f90cf1",
+        "to_input": 0,
+        "connection_type": "exec"
+      }
+    ]
+  },
+  "dashboard": {
+    "widgets": [],
+    "layout": "vertical",
+    "columns": 1
+  },
+  "camera": {
+    "camera_index": 0,
+    "resolution": [
+      640,
+      480
+    ],
+    "fps": 30,
+    "exposure": -1,
+    "brightness": 128,
+    "contrast": 128,
+    "cv_enabled": true,
+    "cv_backend": "background_subtraction",
+    "confidence_threshold": 0.5,
+    "tracking_enabled": true,
+    "max_disappeared": 50,
+    "video_recording_enabled": true
+  },
+  "zones": {
+    "zones": [],
+    "config_width": 0,
+    "config_height": 0
+  }
+}
