@@ -3,6 +3,7 @@ Flow Control Nodes - Execution flow control, delays, and timers.
 """
 
 import asyncio
+import logging
 from typing import Any
 
 from glider.nodes.base_node import (
@@ -60,7 +61,11 @@ class DelayNode(ExecNode):
         self._delay_task: asyncio.Task | None = None
 
     async def execute(self) -> None:
-        duration = float(self.get_input(1) or 1.0)
+        # Priority: 1) state "duration", 2) input port, 3) default 1.0
+        if "duration" in self._state:
+            duration = float(self._state["duration"])
+        else:
+            duration = float(self.get_input(1) or 1.0)
         duration = max(0, duration)
 
         await asyncio.sleep(duration)
@@ -159,3 +164,14 @@ class TimerNode(ExecNode):
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
         self._count = state.get("count", 0)
+
+
+logger = logging.getLogger(__name__)
+
+
+def register_logic_nodes(flow_engine) -> None:
+    """Register all logic/flow control nodes with the flow engine."""
+    flow_engine.register_node("Delay", DelayNode)
+    flow_engine.register_node("Sequence", SequenceNode)
+    flow_engine.register_node("Timer", TimerNode)
+    logger.info("Registered logic nodes")
