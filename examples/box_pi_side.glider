@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-03-17T09:47:27.596640",
-    "modified_at": "2026-03-17T10:13:45.374743",
+    "modified_at": "2026-03-17T10:50:26.940505",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -23,6 +23,14 @@
       {
         "id": "pi",
         "driver_type": "raspberry_pi",
+        "port": null,
+        "board_type": "uno",
+        "auto_reconnect": false,
+        "settings": {}
+      },
+      {
+        "id": "ard",
+        "driver_type": "arduino",
         "port": null,
         "board_type": "uno",
         "auto_reconnect": false,
@@ -61,6 +69,36 @@
           "channel": 0,
           "gain": 1
         }
+      },
+      {
+        "id": "ard_pump",
+        "device_type": "PWMOutput",
+        "name": "ard_pump",
+        "board_id": "ard",
+        "pins": {
+          "output": 9
+        },
+        "settings": {}
+      },
+      {
+        "id": "ard_atom",
+        "device_type": "PWMOutput",
+        "name": "ard_atom",
+        "board_id": "ard",
+        "pins": {
+          "output": 11
+        },
+        "settings": {}
+      },
+      {
+        "id": "ard_beam",
+        "device_type": "AnalogInput",
+        "name": "ard_beam",
+        "board_id": "ard",
+        "pins": {
+          "input": 14
+        },
+        "settings": {}
       }
     ]
   },
@@ -217,6 +255,112 @@
         },
         "device_id": null,
         "visible_in_runner": false
+      },
+      {
+        "id": "waitforinput_a2e4f5af",
+        "node_type": "WaitForInput",
+        "position": [
+          -184.355,
+          -174.35500000000002
+        ],
+        "state": {
+          "threshold": 100,
+          "threshold_mode": "analog",
+          "threshold_direction": "below"
+        },
+        "device_id": "ard_beam",
+        "visible_in_runner": true
+      },
+      {
+        "id": "delay_86be0b42",
+        "node_type": "Delay",
+        "position": [
+          212.0,
+          -155.0
+        ],
+        "state": {
+          "duration": 4
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_ceffe15d",
+        "node_type": "Delay",
+        "position": [
+          589.0,
+          -152.0
+        ],
+        "state": {
+          "duration": 2
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_ff0086e4",
+        "node_type": "Delay",
+        "position": [
+          957.4899999999999,
+          -150.765
+        ],
+        "state": {
+          "duration": 6
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_5a963cdf",
+        "node_type": "Output",
+        "position": [
+          11.902500000000003,
+          -169.28
+        ],
+        "state": {
+          "value": 150
+        },
+        "device_id": "ard_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_c7c9a473",
+        "node_type": "Output",
+        "position": [
+          399.39499999999987,
+          -153.40999999999997
+        ],
+        "state": {
+          "value": 150
+        },
+        "device_id": "ard_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_68869e9a",
+        "node_type": "Output",
+        "position": [
+          772.3399999999999,
+          -148.12000000000003
+        ],
+        "state": {
+          "value": 0
+        },
+        "device_id": "ard_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_29948224",
+        "node_type": "Output",
+        "position": [
+          1175.7025,
+          -154.73250000000002
+        ],
+        "state": {
+          "value": 0
+        },
+        "device_id": "ard_pump",
+        "visible_in_runner": false
       }
     ],
     "connections": [
@@ -305,6 +449,70 @@
         "from_node": "delay_b16ab2ff",
         "from_output": 0,
         "to_node": "output_96f90cf1",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_eb1e69d8",
+        "from_node": "loop_3edd28c8",
+        "from_output": 0,
+        "to_node": "waitforinput_a2e4f5af",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_7364deaf",
+        "from_node": "waitforinput_a2e4f5af",
+        "from_output": 0,
+        "to_node": "output_5a963cdf",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_8e093741",
+        "from_node": "output_5a963cdf",
+        "from_output": 0,
+        "to_node": "delay_86be0b42",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_51ee4b29",
+        "from_node": "delay_86be0b42",
+        "from_output": 0,
+        "to_node": "output_c7c9a473",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_2506e985",
+        "from_node": "output_c7c9a473",
+        "from_output": 0,
+        "to_node": "delay_ceffe15d",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_40067a74",
+        "from_node": "delay_ceffe15d",
+        "from_output": 0,
+        "to_node": "output_68869e9a",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_45619554",
+        "from_node": "output_68869e9a",
+        "from_output": 0,
+        "to_node": "delay_ff0086e4",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_3ca49a16",
+        "from_node": "delay_ff0086e4",
+        "from_output": 0,
+        "to_node": "output_29948224",
         "to_input": 0,
         "connection_type": "exec"
       }
