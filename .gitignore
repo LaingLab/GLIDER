@@ -184,3 +184,5 @@ uv.lock
 *.ipynb
 .serena*
 .superpowers/
+
+docs/*
