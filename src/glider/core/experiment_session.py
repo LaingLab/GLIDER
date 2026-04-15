@@ -306,6 +306,9 @@ class CameraConfig:
     tracking_enabled: bool = True
     max_disappeared: int = 50
     video_recording_enabled: bool = True
+    # Audio recording
+    audio_device_name: str | None = None  # Selected mic name (primary identifier)
+    audio_device_index: int | None = None  # Cached device index (resolved at runtime)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -321,6 +324,8 @@ class CameraConfig:
             "tracking_enabled": self.tracking_enabled,
             "max_disappeared": self.max_disappeared,
             "video_recording_enabled": self.video_recording_enabled,
+            "audio_device_name": self.audio_device_name,
+            "audio_device_index": self.audio_device_index,
         }
 
     @classmethod
@@ -338,6 +343,8 @@ class CameraConfig:
             tracking_enabled=data.get("tracking_enabled", True),
             max_disappeared=data.get("max_disappeared", 50),
             video_recording_enabled=data.get("video_recording_enabled", True),
+            audio_device_name=data.get("audio_device_name"),
+            audio_device_index=data.get("audio_device_index"),
         )
 
 
