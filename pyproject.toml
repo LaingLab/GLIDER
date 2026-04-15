@@ -67,6 +67,7 @@ dev = [
     "ultralytics>=8.0.0",
     "adafruit-circuitpython-ads1x15",
     "pyinstaller>=6.19.0",
+    "PyQt6>=6.4.0",
 ]
 pc = [
     "PyQt6>=6.4.0",
