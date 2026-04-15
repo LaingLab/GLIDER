@@ -865,6 +865,9 @@ class CameraSettings:
     # Miniscope V4 hardware controls (sent via UVC I2C tunnel)
     led_power: int = 0  # 0-100 (percentage, 0=off, 100=max brightness)
     ewl_focus: int = 128  # 0-255 (electrowetting lens focus)
+    # Audio recording
+    audio_device_name: str | None = None  # Selected mic name
+    audio_device_index: int | None = None  # Device index (runtime cache)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
@@ -893,6 +896,8 @@ class CameraSettings:
             "iris": self.iris,
             "led_power": self.led_power,
             "ewl_focus": self.ewl_focus,
+            "audio_device_name": self.audio_device_name,
+            "audio_device_index": self.audio_device_index,
         }
 
     @classmethod
@@ -923,6 +928,8 @@ class CameraSettings:
             iris=data.get("iris", 0),
             led_power=data.get("led_power", 0),
             ewl_focus=data.get("ewl_focus", 128),
+            audio_device_name=data.get("audio_device_name"),
+            audio_device_index=data.get("audio_device_index"),
         )
 
 

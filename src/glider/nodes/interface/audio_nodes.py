@@ -36,9 +36,7 @@ class AudioPlaybackNode(GliderNode):
         ],
         outputs=[
             PortDefinition("next", PortType.EXEC, description="Triggers after playback starts"),
-            PortDefinition(
-                "playing", PortType.DATA, str, "", "File path of audio being played"
-            ),
+            PortDefinition("playing", PortType.DATA, str, "", "File path of audio being played"),
         ],
         color="#5a4a2d",
     )

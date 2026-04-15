@@ -9,6 +9,7 @@ Provides:
 - Tracking data logging to CSV
 """
 
+from glider.vision.audio_recorder import AudioRecorder
 from glider.vision.calibration import (
     CalibrationLine,
     CameraCalibration,
@@ -39,6 +40,8 @@ from glider.vision.video_recorder import (
 )
 
 __all__ = [
+    # Audio Recording
+    "AudioRecorder",
     # Camera
     "CameraManager",
     "CameraInfo",

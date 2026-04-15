@@ -113,6 +113,10 @@ class CameraSettingsDialog(QDialog):
         self._tools_tab = self._create_scrollable_tab(self._create_tools_tab_content())
         self._tabs.addTab(self._tools_tab, "Tools")
 
+        # Audio tab (wrapped in scroll area)
+        self._audio_tab = self._create_scrollable_tab(self._create_audio_tab_content())
+        self._tabs.addTab(self._audio_tab, "Audio")
+
         # Dialog buttons - larger for touch
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -817,6 +821,99 @@ class CameraSettingsDialog(QDialog):
         """Handle zones button click."""
         self.zones_requested.emit()
 
+    def _create_audio_tab_content(self) -> QWidget:
+        """Create audio recording settings tab content."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+
+        # Audio device selection
+        device_group = QGroupBox("Microphone")
+        device_layout = QVBoxLayout(device_group)
+
+        # Device dropdown
+        mic_layout = QHBoxLayout()
+        mic_layout.addWidget(QLabel("Device:"))
+        self._audio_device_combo = QComboBox()
+        mic_layout.addWidget(self._audio_device_combo, 1)
+
+        # Refresh button
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self._refresh_audio_devices)
+        mic_layout.addWidget(refresh_btn)
+        device_layout.addLayout(mic_layout)
+
+        # Test button
+        test_layout = QHBoxLayout()
+        self._audio_test_btn = QPushButton("Test Microphone")
+        self._audio_test_btn.clicked.connect(self._test_microphone)
+        test_layout.addWidget(self._audio_test_btn)
+        self._audio_test_status = QLabel("")
+        test_layout.addWidget(self._audio_test_status, 1)
+        device_layout.addLayout(test_layout)
+
+        layout.addWidget(device_group)
+        layout.addStretch()
+
+        # Populate devices
+        self._refresh_audio_devices()
+
+        return widget
+
+    def _refresh_audio_devices(self) -> None:
+        """Refresh the audio device dropdown."""
+        self._audio_device_combo.clear()
+        self._audio_device_combo.addItem("None (no audio recording)", None)
+
+        try:
+            from glider.vision.audio_recorder import AudioRecorder
+
+            devices = AudioRecorder.enumerate_devices()
+            for idx, name in devices:
+                self._audio_device_combo.addItem(name, idx)
+        except Exception as e:
+            logger.warning(f"Could not enumerate audio devices: {e}")
+
+    def _test_microphone(self) -> None:
+        """Record 1 second of audio and play it back."""
+        device_index = self._audio_device_combo.currentData()
+        if device_index is None:
+            self._audio_test_status.setText("No device selected")
+            return
+
+        self._audio_test_status.setText("Recording...")
+        self._audio_test_btn.setEnabled(False)
+
+        try:
+            import numpy as np
+            import sounddevice as _sd
+
+            duration = 1.0
+            recording = _sd.rec(
+                int(duration * 44100),
+                samplerate=44100,
+                channels=1,
+                dtype="int16",
+                device=device_index,
+                blocking=True,
+            )
+
+            self._audio_test_status.setText("Playing back...")
+            try:
+                _sd.play(recording, samplerate=44100, blocking=True)
+                self._audio_test_status.setText("Test complete")
+            except Exception:
+                # Playback may fail on headless systems
+                if np.any(recording):
+                    self._audio_test_status.setText("Test recording captured successfully")
+                else:
+                    self._audio_test_status.setText("Warning: recording was silent")
+        except ImportError:
+            self._audio_test_status.setText("sounddevice not installed")
+        except Exception as e:
+            self._audio_test_status.setText(f"Error: {e}")
+        finally:
+            self._audio_test_btn.setEnabled(True)
+
     def _load_settings(self):
         """Load current settings into the UI."""
         # Camera settings
@@ -865,6 +962,14 @@ class CameraSettingsDialog(QDialog):
         self._ewl_focus_label.setText(str(self._camera_settings.ewl_focus))
         # Show/hide miniscope group based on mode
         self._miniscope_group.setVisible(self._camera_settings.miniscope_mode)
+
+        # Audio settings
+        audio_name = self._camera_settings.audio_device_name
+        if audio_name:
+            for i in range(self._audio_device_combo.count()):
+                if self._audio_device_combo.itemText(i) == audio_name:
+                    self._audio_device_combo.setCurrentIndex(i)
+                    break
 
         # CV settings
         self._cv_enabled_cb.setChecked(self._cv_settings.enabled)
@@ -1016,6 +1121,15 @@ class CameraSettingsDialog(QDialog):
         # LED and EWL controls
         self._camera_settings.led_power = self._led_power_slider.value()
         self._camera_settings.ewl_focus = self._ewl_focus_slider.value()
+
+        # Audio settings
+        selected_idx = self._audio_device_combo.currentData()
+        if selected_idx is not None:
+            self._camera_settings.audio_device_name = self._audio_device_combo.currentText()
+            self._camera_settings.audio_device_index = selected_idx
+        else:
+            self._camera_settings.audio_device_name = None
+            self._camera_settings.audio_device_index = None
 
         # CV settings
         self._cv_settings.enabled = self._cv_enabled_cb.isChecked()

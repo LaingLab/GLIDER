@@ -16,6 +16,7 @@ from glider.core.data_recorder import DataRecorder
 from glider.core.experiment_session import ExperimentSession, SessionState
 from glider.core.flow_engine import FlowEngine
 from glider.core.hardware_manager import HardwareManager
+from glider.vision.audio_recorder import AudioRecorder, mux_audio_video
 from glider.vision.calibration import CameraCalibration
 from glider.vision.camera_manager import CameraManager
 from glider.vision.cv_processor import CVProcessor
@@ -55,6 +56,7 @@ class GliderCore:
         self._cv_processor = CVProcessor()
         self._video_recorder = VideoRecorder(self._camera_manager)
         self._tracking_logger = TrackingDataLogger()
+        self._audio_recorder = AudioRecorder()
         self._calibration = CameraCalibration()
 
         # Multi-camera support
@@ -209,6 +211,7 @@ class GliderCore:
         self._video_recorder.set_output_directory(path)
         self._multi_video_recorder.set_output_directory(path)
         self._tracking_logger.set_output_directory(path)
+        self._audio_recorder.set_output_directory(path)
 
     def set_recording_interval(self, interval: float) -> None:
         """Set the sampling interval for recording (in seconds)."""
@@ -284,9 +287,7 @@ class GliderCore:
             import os
 
             filename = os.path.basename(str(value))
-            asyncio.create_task(
-                self._data_recorder.record_event("AudioPlayback", filename)
-            )
+            asyncio.create_task(self._data_recorder.record_event("AudioPlayback", filename))
 
     def _on_flow_complete(self) -> None:
         """Handle flow completion (EndExperiment reached)."""
@@ -653,6 +654,30 @@ class GliderCore:
                 except Exception as e:
                     logger.error(f"Failed to start video recording: {e}")
 
+        # Start audio recording if configured
+        audio_device_name = self._session.camera.audio_device_name
+        if audio_device_name:
+            device_index = AudioRecorder.resolve_device_by_name(audio_device_name)
+            if device_index is None:
+                logger.warning(
+                    f"Audio device '{audio_device_name}' not found — skipping audio recording"
+                )
+            else:
+                # Update cached index
+                self._session.camera.audio_device_index = device_index
+                if not AudioRecorder.is_ffmpeg_available():
+                    logger.warning(
+                        "FFmpeg not found — audio will be saved as .wav but not muxed into video"
+                    )
+                try:
+                    audio_path = await self._audio_recorder.start(
+                        experiment_name, device_index=device_index
+                    )
+                    if audio_path:
+                        logger.info(f"Recording audio to: {audio_path}")
+                except Exception as e:
+                    logger.error(f"Failed to start audio recording: {e}")
+
         # Start tracking logger if CV processing enabled and camera is connected
         # (separate from video recording so tracking works even if video recording is disabled)
         if self._cv_processing_enabled and self._camera_manager.is_connected:
@@ -688,7 +713,16 @@ class GliderCore:
         self._session.state = SessionState.READY
 
     async def _stop_recorders(self) -> None:
-        """Stop all active recorders (data, video, tracking)."""
+        """Stop all active recorders (data, audio, video, tracking)."""
+        # Stop audio recording first (need the WAV path for muxing)
+        audio_path = None
+        if self._audio_recorder.is_recording:
+            try:
+                audio_path = await self._audio_recorder.stop()
+                logger.info(f"Audio saved to: {audio_path}")
+            except Exception as e:
+                logger.error(f"Failed to stop audio recording: {e}")
+
         # Stop data recording
         if self._data_recorder.is_recording:
             try:
@@ -697,20 +731,55 @@ class GliderCore:
             except Exception as e:
                 logger.error(f"Failed to stop recording: {e}")
 
-        # Stop video recording
+        # Stop video recording and collect all video paths
+        video_paths: list[Path] = []
+
         if self._multi_video_recorder.is_recording:
             try:
-                video_paths = await self._multi_video_recorder.stop()
-                for cam_id, path in video_paths.items():
+                multi_paths = await self._multi_video_recorder.stop()
+                for cam_id, path in multi_paths.items():
                     logger.info(f"Video {cam_id} saved to: {path}")
+                    video_paths.append(path)
+                # Check for annotated video
+                annotated = self._multi_video_recorder.annotated_file_path
+                if annotated and annotated.exists():
+                    video_paths.append(annotated)
             except Exception as e:
                 logger.error(f"Failed to stop multi-camera video recording: {e}")
         elif self._video_recorder.is_recording:
             try:
                 video_path = await self._video_recorder.stop()
-                logger.info(f"Video saved to: {video_path}")
+                if video_path:
+                    logger.info(f"Video saved to: {video_path}")
+                    video_paths.append(video_path)
+                # Check for annotated video
+                annotated = self._video_recorder.annotated_file_path
+                if annotated and annotated.exists():
+                    video_paths.append(annotated)
             except Exception as e:
                 logger.error(f"Failed to stop video recording: {e}")
+
+        # Mux audio into each video file
+        if audio_path and audio_path.exists() and video_paths:
+            all_muxed = True
+            for vpath in video_paths:
+                try:
+                    success = await mux_audio_video(vpath, audio_path)
+                    if not success:
+                        all_muxed = False
+                except Exception as e:
+                    logger.error(f"Failed to mux audio into {vpath}: {e}")
+                    all_muxed = False
+
+            # Only delete WAV if ALL muxes succeeded
+            if all_muxed:
+                try:
+                    audio_path.unlink()
+                    logger.info("Deleted intermediate audio WAV file")
+                except Exception as e:
+                    logger.error(f"Failed to delete WAV file: {e}")
+            else:
+                logger.warning(f"Some muxes failed — keeping {audio_path} for manual retry")
 
         # Stop tracking logger
         if self._tracking_logger.is_recording:
@@ -737,6 +806,15 @@ class GliderCore:
 
         logger.info("Pausing experiment")
         await self._flow_engine.pause()
+
+        # Pause recorders so audio/video stay in sync
+        if self._audio_recorder.is_recording:
+            self._audio_recorder.pause()
+        if self._video_recorder.is_recording:
+            await self._video_recorder.pause()
+        if self._multi_video_recorder.is_recording:
+            await self._multi_video_recorder.pause()
+
         self._session.state = SessionState.PAUSED
 
     async def resume_experiment(self) -> None:
@@ -746,6 +824,15 @@ class GliderCore:
 
         logger.info("Resuming experiment")
         await self._flow_engine.resume()
+
+        # Resume recorders
+        if self._audio_recorder.is_recording:
+            self._audio_recorder.resume()
+        if self._video_recorder.is_recording:
+            await self._video_recorder.resume()
+        if self._multi_video_recorder.is_recording:
+            await self._multi_video_recorder.resume()
+
         self._session.state = SessionState.RUNNING
 
     async def emergency_stop(self) -> None:
