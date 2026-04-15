@@ -8,6 +8,7 @@
 
 1. Python 3.11, 3.12, or 3.13
 2. uv ```pip install uv```
+3. ```winget install "FFmpeg (Essentials Build)"```
 
 ## Getting Started
 
