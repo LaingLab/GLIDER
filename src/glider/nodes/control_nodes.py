@@ -8,6 +8,7 @@ These nodes provide control flow functionality:
 
 import asyncio
 import logging
+import time
 
 from glider.nodes.base_node import (
     GliderNode,
@@ -73,21 +74,25 @@ class LoopNode(GliderNode):
 
             logger.info(f"  Loop iteration {iteration}")
 
+            body_start = time.monotonic()
+
             try:
                 # Trigger body execution and AWAIT completion
                 await self._exec_body_async()
             except Exception as e:
                 logger.error(f"Error in Loop body (iteration {iteration}): {e}", exc_info=True)
-                # We could break here, but usually it's better to continue or stop based on severity
-                # For now, let's keep looping unless it's a critical error
                 if not self._running:
                     break
 
             iteration += 1
 
-            # Delay between iterations (only if body completed and we're continuing)
+            # Delay between iterations, compensating for body execution time
+            # to prevent cumulative drift
             if delay > 0 and self._running:
-                await asyncio.sleep(delay)
+                body_elapsed = time.monotonic() - body_start
+                remaining = delay - body_elapsed
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
 
         logger.info(f"  Loop completed after {iteration} iterations")
 

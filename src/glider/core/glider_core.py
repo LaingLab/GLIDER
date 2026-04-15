@@ -82,6 +82,7 @@ class GliderCore:
         self._hardware_manager.on_error(self._on_hardware_error)
         self._flow_engine.on_error(self._on_flow_error)
         self._flow_engine.on_flow_complete(self._on_flow_complete)
+        self._flow_engine.on_node_update(self._on_node_update)
 
     @property
     def session(self) -> ExperimentSession | None:
@@ -268,6 +269,24 @@ class GliderCore:
         """Handle flow errors."""
         logger.error(f"Flow error from {source}: {error}")
         self._notify_error(f"flow:{source}", error)
+
+    def _on_node_update(self, node_id: str, output_name: str, value: Any) -> None:
+        """Handle node output updates — record events for audio playback, etc."""
+        if not self._data_recorder.is_recording:
+            return
+
+        node = self._flow_engine.get_node(node_id)
+        if node is None:
+            return
+
+        # Record audio playback events
+        if node.name == "AudioPlayback" and output_name == "playing" and value:
+            import os
+
+            filename = os.path.basename(str(value))
+            asyncio.create_task(
+                self._data_recorder.record_event("AudioPlayback", filename)
+            )
 
     def _on_flow_complete(self) -> None:
         """Handle flow completion (EndExperiment reached)."""

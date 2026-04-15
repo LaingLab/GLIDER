@@ -36,6 +36,9 @@ class AudioPlaybackNode(GliderNode):
         ],
         outputs=[
             PortDefinition("next", PortType.EXEC, description="Triggers after playback starts"),
+            PortDefinition(
+                "playing", PortType.DATA, str, "", "File path of audio being played"
+            ),
         ],
         color="#5a4a2d",
     )
@@ -77,6 +80,9 @@ class AudioPlaybackNode(GliderNode):
                 data = (data * volume).astype(np.float32)
 
             import sounddevice as sd
+
+            # Emit the file path so DataRecorder can log the event
+            self.set_output(1, file_path)
 
             sd.play(data, samplerate, device=device_index)
             logger.info(
