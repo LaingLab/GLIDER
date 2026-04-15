@@ -1,12 +1,12 @@
 {
   "metadata": {
     "id": "7e68ccef-7b28-4070-a01d-615f64b08353",
-    "name": "Untitled Experiment",
+    "name": "test",
     "description": "",
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-04-09T08:40:36.060219",
-    "modified_at": "2026-04-15T12:33:54.567272",
+    "modified_at": "2026-04-15T13:47:10.665222",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -48,8 +48,8 @@
         "id": "startexperiment_7a0cde93",
         "node_type": "StartExperiment",
         "position": [
-          -1355.6500000000003,
-          -495.6499999999999
+          -1374.0500000000002,
+          -495.64999999999986
         ],
         "state": {},
         "device_id": null,
@@ -63,7 +63,8 @@
           -364.79999999999995
         ],
         "state": {
-          "file_path": "C:/Users/bradh/glider/examples/assets/tone.mp3"
+          "file_path": "C:/Users/bradh/glider/examples/assets/tone.mp3",
+          "volume": 0.5
         },
         "device_id": null,
         "visible_in_runner": false
@@ -72,11 +73,12 @@
         "id": "audioplayback_dbdae854",
         "node_type": "AudioPlayback",
         "position": [
-          -208.0,
-          -238.0
+          -226.39999999999998,
+          -234.55000000000004
         ],
         "state": {
-          "file_path": "C:/Users/bradh/glider/examples/assets/cricket.mp3"
+          "file_path": "C:/Users/bradh/glider/examples/assets/cricket.mp3",
+          "volume": 0.5
         },
         "device_id": null,
         "visible_in_runner": false
@@ -99,11 +101,11 @@
         "id": "delay_e96bdb0c",
         "node_type": "Delay",
         "position": [
-          -367.0,
-          -350.0
+          -384.25,
+          -354.6
         ],
         "state": {
-          "duration": 30
+          "duration": 1
         },
         "device_id": null,
         "visible_in_runner": false
@@ -116,7 +118,7 @@
           -231.15
         ],
         "state": {
-          "duration": 30
+          "duration": 1
         },
         "device_id": null,
         "visible_in_runner": false
@@ -129,7 +131,7 @@
           -140.0
         ],
         "state": {
-          "duration": 30
+          "duration": 1
         },
         "device_id": null,
         "visible_in_runner": false
