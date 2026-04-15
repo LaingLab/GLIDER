@@ -306,7 +306,9 @@
     "confidence_threshold": 0.5,
     "tracking_enabled": true,
     "max_disappeared": 50,
-    "video_recording_enabled": true
+    "video_recording_enabled": true,
+    "audio_device_name": null,
+    "audio_device_index": null
   },
   "zones": {
     "zones": [],
