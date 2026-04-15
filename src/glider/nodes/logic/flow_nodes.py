@@ -4,6 +4,7 @@ Flow Control Nodes - Execution flow control, delays, and timers.
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from glider.nodes.base_node import (
@@ -135,12 +136,16 @@ class TimerNode(ExecNode):
 
     async def _timer_loop(self) -> None:
         """Timer loop that triggers at intervals."""
+        next_tick = time.monotonic()
         while True:
             try:
                 interval = float(self.get_input(0) or 1.0)
                 enabled = bool(self.get_input(1) if self.get_input(1) is not None else True)
 
-                await asyncio.sleep(max(0.01, interval))
+                next_tick += max(0.01, interval)
+                sleep_time = next_tick - time.monotonic()
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
 
                 if enabled and not self._paused:
                     self._count += 1

@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-04-09T08:40:36.060219",
-    "modified_at": "2026-04-09T09:19:58.047938",
+    "modified_at": "2026-04-15T12:33:54.567272",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -31,12 +31,12 @@
     ],
     "devices": [
       {
-        "id": "trigger",
+        "id": "fiber",
         "device_type": "DigitalOutput",
-        "name": "trigger",
+        "name": "fiber",
         "board_id": "ard",
         "pins": {
-          "output": 7
+          "output": 0
         },
         "settings": {}
       }
@@ -48,99 +48,32 @@
         "id": "startexperiment_7a0cde93",
         "node_type": "StartExperiment",
         "position": [
-          -604.0,
-          -295.0
+          -1355.6500000000003,
+          -495.6499999999999
         ],
         "state": {},
         "device_id": null,
         "visible_in_runner": false
       },
       {
-        "id": "endexperiment_293c8fae",
-        "node_type": "EndExperiment",
-        "position": [
-          -151.0,
-          -25.0
-        ],
-        "state": {},
-        "device_id": null,
-        "visible_in_runner": false
-      },
-      {
-        "id": "delay_dd2cdef7",
-        "node_type": "Delay",
-        "position": [
-          -377.0,
-          -142.0
-        ],
-        "state": {
-          "duration": 1800
-        },
-        "device_id": null,
-        "visible_in_runner": false
-      },
-      {
-        "id": "loop_9a17acfc",
-        "node_type": "Loop",
-        "position": [
-          -377.0,
-          -299.0
-        ],
-        "state": {
-          "delay": 5.0,
-          "count": 5
-        },
-        "device_id": null,
-        "visible_in_runner": true
-      },
-      {
-        "id": "audioplayback_07823668",
+        "id": "audioplayback_7caad317",
         "node_type": "AudioPlayback",
         "position": [
-          -171.0,
-          -308.0
+          -586.3499999999999,
+          -364.79999999999995
         ],
         "state": {
-          "file_path": "C:/Users/bradh/glider/examples/assets/tone.mp3",
-          "volume": 0.5
+          "file_path": "C:/Users/bradh/glider/examples/assets/tone.mp3"
         },
         "device_id": null,
         "visible_in_runner": false
       },
       {
-        "id": "loop_2981b5ec",
-        "node_type": "Loop",
-        "position": [
-          -147.0,
-          -187.0
-        ],
-        "state": {
-          "count": 5,
-          "delay": 5.0
-        },
-        "device_id": null,
-        "visible_in_runner": true
-      },
-      {
-        "id": "loop_48542a93",
-        "node_type": "Loop",
-        "position": [
-          62.0,
-          -88.0
-        ],
-        "state": {
-          "delay": 5.0,
-          "count": 5
-        },
-        "device_id": null,
-        "visible_in_runner": true
-      },
-      {
-        "id": "audioplayback_2979450a",
+        "id": "audioplayback_dbdae854",
         "node_type": "AudioPlayback",
         "position": [
-          59.0,
-          -189.0
+          -208.0,
+          -238.0
         ],
         "state": {
           "file_path": "C:/Users/bradh/glider/examples/assets/cricket.mp3"
@@ -149,101 +82,205 @@
         "visible_in_runner": false
       },
       {
-        "id": "audioplayback_8d03336e",
+        "id": "audioplayback_aeac3ed8",
         "node_type": "AudioPlayback",
         "position": [
-          248.0,
-          -67.0
+          136.0,
+          -151.0
         ],
         "state": {
           "file_path": "C:/Users/bradh/glider/examples/assets/hawk.mp3",
-          "volume": 0.5
+          "volume": 0.1
         },
         "device_id": null,
         "visible_in_runner": false
       },
       {
-        "id": "output_8fd118c4",
-        "node_type": "Output",
+        "id": "delay_e96bdb0c",
+        "node_type": "Delay",
         "position": [
-          2.0,
-          -306.0
+          -367.0,
+          -350.0
+        ],
+        "state": {
+          "duration": 30
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_70092e10",
+        "node_type": "Delay",
+        "position": [
+          -28.0,
+          -231.15
+        ],
+        "state": {
+          "duration": 30
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_ba0d6a1a",
+        "node_type": "Delay",
+        "position": [
+          324.0,
+          -140.0
+        ],
+        "state": {
+          "duration": 30
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "loop_0af71c07",
+        "node_type": "Loop",
+        "position": [
+          -778.9499999999998,
+          -310.75000000000006
+        ],
+        "state": {
+          "count": 5,
+          "delay": 0.0
+        },
+        "device_id": null,
+        "visible_in_runner": true
+      },
+      {
+        "id": "endexperiment_b94d4082",
+        "node_type": "EndExperiment",
+        "position": [
+          -410.54999999999995,
+          -82.80000000000004
         ],
         "state": {},
-        "device_id": "trigger",
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_0352dde7",
+        "node_type": "Delay",
+        "position": [
+          -979.8000000000001,
+          -372.6
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_8de9095d",
+        "node_type": "Output",
+        "position": [
+          -1184.5,
+          -404.7999999999999
+        ],
+        "state": {},
+        "device_id": "fiber",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_8d6aa0a6",
+        "node_type": "Output",
+        "position": [
+          -606.0499999999997,
+          -95.44999999999999
+        ],
+        "state": {
+          "value": 0
+        },
+        "device_id": "fiber",
         "visible_in_runner": false
       }
     ],
     "connections": [
       {
-        "id": "conn_14f45139",
+        "id": "conn_0272b7f1",
+        "from_node": "audioplayback_7caad317",
+        "from_output": 0,
+        "to_node": "delay_e96bdb0c",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_facb81e6",
+        "from_node": "delay_e96bdb0c",
+        "from_output": 0,
+        "to_node": "audioplayback_dbdae854",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_8d33522a",
+        "from_node": "audioplayback_dbdae854",
+        "from_output": 0,
+        "to_node": "delay_70092e10",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_7bcce8dd",
+        "from_node": "delay_70092e10",
+        "from_output": 0,
+        "to_node": "audioplayback_aeac3ed8",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_fa9903f9",
+        "from_node": "audioplayback_aeac3ed8",
+        "from_output": 0,
+        "to_node": "delay_ba0d6a1a",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_6eb42a5a",
+        "from_node": "loop_0af71c07",
+        "from_output": 0,
+        "to_node": "audioplayback_7caad317",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_d89e0660",
+        "from_node": "delay_0352dde7",
+        "from_output": 0,
+        "to_node": "loop_0af71c07",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_76eb56d2",
         "from_node": "startexperiment_7a0cde93",
         "from_output": 0,
-        "to_node": "delay_dd2cdef7",
+        "to_node": "output_8de9095d",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_5416144f",
-        "from_node": "delay_dd2cdef7",
+        "id": "conn_4cb6e9ea",
+        "from_node": "output_8de9095d",
         "from_output": 0,
-        "to_node": "endexperiment_293c8fae",
+        "to_node": "delay_0352dde7",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_7c98ca4f",
-        "from_node": "startexperiment_7a0cde93",
-        "from_output": 0,
-        "to_node": "loop_9a17acfc",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_3339967f",
-        "from_node": "loop_9a17acfc",
-        "from_output": 0,
-        "to_node": "audioplayback_07823668",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_1d391da2",
-        "from_node": "loop_9a17acfc",
+        "id": "conn_d216d13e",
+        "from_node": "loop_0af71c07",
         "from_output": 1,
-        "to_node": "loop_2981b5ec",
+        "to_node": "output_8d6aa0a6",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_20daf085",
-        "from_node": "loop_2981b5ec",
-        "from_output": 1,
-        "to_node": "loop_48542a93",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_7c830b8b",
-        "from_node": "loop_2981b5ec",
+        "id": "conn_e2b6eae5",
+        "from_node": "output_8d6aa0a6",
         "from_output": 0,
-        "to_node": "audioplayback_2979450a",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_4b7ab634",
-        "from_node": "loop_48542a93",
-        "from_output": 0,
-        "to_node": "audioplayback_8d03336e",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_23322848",
-        "from_node": "audioplayback_07823668",
-        "from_output": 0,
-        "to_node": "output_8fd118c4",
+        "to_node": "endexperiment_b94d4082",
         "to_input": 0,
         "connection_type": "exec"
       }
