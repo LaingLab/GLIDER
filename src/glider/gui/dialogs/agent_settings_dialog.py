@@ -306,7 +306,10 @@ class AgentSettingsDialog(QDialog):
     def _refresh_models(self) -> None:
         """Refresh available models from provider."""
         try:
-            asyncio.create_task(self._async_refresh_models())
+            from glider.core.async_utils import log_task_exception
+
+            task = asyncio.create_task(self._async_refresh_models())
+            task.add_done_callback(log_task_exception)
         except RuntimeError:
             logger.debug("No event loop available for async task")
 
@@ -339,7 +342,10 @@ class AgentSettingsDialog(QDialog):
     def _test_connection(self) -> None:
         """Test connection to the LLM provider."""
         try:
-            asyncio.create_task(self._async_test_connection())
+            from glider.core.async_utils import log_task_exception
+
+            task = asyncio.create_task(self._async_test_connection())
+            task.add_done_callback(log_task_exception)
         except RuntimeError:
             logger.debug("No event loop available for async task")
 

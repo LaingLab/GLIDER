@@ -287,7 +287,10 @@ class GliderCore:
             import os
 
             filename = os.path.basename(str(value))
-            asyncio.create_task(self._data_recorder.record_event("AudioPlayback", filename))
+            task = asyncio.create_task(
+                self._data_recorder.record_event("AudioPlayback", filename)
+            )
+            task.add_done_callback(self._log_task_exception)
 
     def _on_flow_complete(self) -> None:
         """Handle flow completion (EndExperiment reached)."""

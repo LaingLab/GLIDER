@@ -151,7 +151,10 @@ class DigitalReadNode(HardwareNode):
     async def start(self) -> None:
         """Start continuous polling if enabled."""
         if self._continuous:
+            from glider.core.async_utils import log_task_exception
+
             self._polling_task = asyncio.create_task(self._poll_loop())
+            self._polling_task.add_done_callback(log_task_exception)
 
     async def stop(self) -> None:
         """Stop continuous polling."""

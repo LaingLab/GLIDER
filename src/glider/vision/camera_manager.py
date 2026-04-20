@@ -1927,12 +1927,14 @@ class CameraManager:
         Args:
             callback: Function called with (frame, timestamp) for each frame
         """
-        self._frame_callbacks.append(callback)
+        with self._lock:
+            self._frame_callbacks.append(callback)
 
     def remove_frame_callback(self, callback: Callable[[np.ndarray, float], None]) -> None:
         """Remove a frame callback."""
-        if callback in self._frame_callbacks:
-            self._frame_callbacks.remove(callback)
+        with self._lock:
+            if callback in self._frame_callbacks:
+                self._frame_callbacks.remove(callback)
 
     def apply_settings(self, settings: CameraSettings) -> None:
         """
@@ -2250,8 +2252,12 @@ class CameraManager:
             self._frame_queue.put((frame, timestamp))
 
             # Notify callbacks (each gets its own copy so one callback
-            # cannot mutate the frame seen by subsequent callbacks)
-            for callback in self._frame_callbacks:
+            # cannot mutate the frame seen by subsequent callbacks).  Snapshot
+            # the list under the lock so registrations from the main thread
+            # cannot mutate it mid-iteration.
+            with self._lock:
+                callbacks = list(self._frame_callbacks)
+            for callback in callbacks:
                 try:
                     callback(frame.copy(), timestamp)
                 except Exception as e:
