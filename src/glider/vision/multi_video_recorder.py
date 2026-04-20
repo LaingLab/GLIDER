@@ -165,76 +165,123 @@ class MultiVideoRecorder:
             fwt_kwargs["max_queue_size"] = self._buffer_size
 
         with self._lock:
-            # Create writer for each camera
-            for camera_id, camera in self._multi_cam.cameras.items():
-                settings = self._multi_cam.get_camera_settings(camera_id)
-                if settings is None:
-                    continue
+            try:
+                # Create writer for each camera
+                for camera_id, camera in self._multi_cam.cameras.items():
+                    settings = self._multi_cam.get_camera_settings(camera_id)
+                    if settings is None:
+                        continue
 
-                # Determine FPS
-                actual_fps = camera.current_fps
-                recording_fps = actual_fps if actual_fps > 1.0 else settings.fps
-                self._recording_fps[camera_id] = recording_fps
+                    # Determine FPS
+                    actual_fps = camera.current_fps
+                    recording_fps = actual_fps if actual_fps > 1.0 else settings.fps
+                    self._recording_fps[camera_id] = recording_fps
 
-                # Generate filename
-                filename = self._generate_filename(experiment_name, camera_id)
-                file_path = self._output_dir / filename
+                    # Generate filename
+                    filename = self._generate_filename(experiment_name, camera_id)
+                    file_path = self._output_dir / filename
 
-                # Create writer
-                writer = cv2.VideoWriter(str(file_path), fourcc, recording_fps, settings.resolution)
-
-                if not writer.isOpened():
-                    logger.error(f"Failed to create video writer for {camera_id}: {file_path}")
-                    continue
-
-                self._writers[camera_id] = writer
-                self._file_paths[camera_id] = file_path
-                self._frame_counts[camera_id] = 0
-                self._frames_dropped[camera_id] = 0
-
-                # Wrap in FrameWriterThread
-                fwt = FrameWriterThread(writer, **fwt_kwargs)
-                fwt.start()
-                self._writer_threads[camera_id] = fwt
-
-                # Register frame callback
-                if not self._frame_callbacks_registered.get(camera_id, False):
-                    self._multi_cam.on_frame(camera_id, self._on_frame)
-                    self._frame_callbacks_registered[camera_id] = True
-
-                logger.info(f"Recording {camera_id} to {file_path} at {recording_fps:.1f} fps")
-
-            # Create annotated writer for primary camera
-            primary_id = self._multi_cam.primary_camera_id
-            if record_annotated and primary_id and primary_id in self._multi_cam.cameras:
-                primary_settings = self._multi_cam.get_camera_settings(primary_id)
-                if primary_settings:
-                    annotated_filename = self._generate_filename(
-                        experiment_name, primary_id, is_annotated=True
-                    )
-                    self._annotated_file_path = self._output_dir / annotated_filename
-
-                    recording_fps = self._recording_fps.get(primary_id, primary_settings.fps)
-                    self._annotated_writer = cv2.VideoWriter(
-                        str(self._annotated_file_path),
-                        fourcc,
-                        recording_fps,
-                        primary_settings.resolution,
+                    # Create writer
+                    writer = cv2.VideoWriter(
+                        str(file_path), fourcc, recording_fps, settings.resolution
                     )
 
-                    if self._annotated_writer.isOpened():
-                        self._annotated_writer_thread = FrameWriterThread(
-                            self._annotated_writer, **fwt_kwargs
+                    if not writer.isOpened():
+                        logger.error(
+                            f"Failed to create video writer for {camera_id}: {file_path}"
                         )
-                        self._annotated_writer_thread.start()
-                        logger.info(f"Recording annotated video to {self._annotated_file_path}")
-                    else:
-                        logger.warning("Failed to create annotated video writer")
-                        self._annotated_writer = None
+                        continue
+
+                    self._writers[camera_id] = writer
+                    self._file_paths[camera_id] = file_path
+                    self._frame_counts[camera_id] = 0
+                    self._frames_dropped[camera_id] = 0
+
+                    # Wrap in FrameWriterThread
+                    fwt = FrameWriterThread(writer, **fwt_kwargs)
+                    fwt.start()
+                    self._writer_threads[camera_id] = fwt
+
+                    # Register frame callback
+                    if not self._frame_callbacks_registered.get(camera_id, False):
+                        self._multi_cam.on_frame(camera_id, self._on_frame)
+                        self._frame_callbacks_registered[camera_id] = True
+
+                    logger.info(
+                        f"Recording {camera_id} to {file_path} at {recording_fps:.1f} fps"
+                    )
+
+                # Create annotated writer for primary camera
+                primary_id = self._multi_cam.primary_camera_id
+                if record_annotated and primary_id and primary_id in self._multi_cam.cameras:
+                    primary_settings = self._multi_cam.get_camera_settings(primary_id)
+                    if primary_settings:
+                        annotated_filename = self._generate_filename(
+                            experiment_name, primary_id, is_annotated=True
+                        )
+                        self._annotated_file_path = self._output_dir / annotated_filename
+
+                        recording_fps = self._recording_fps.get(
+                            primary_id, primary_settings.fps
+                        )
+                        self._annotated_writer = cv2.VideoWriter(
+                            str(self._annotated_file_path),
+                            fourcc,
+                            recording_fps,
+                            primary_settings.resolution,
+                        )
+
+                        if self._annotated_writer.isOpened():
+                            self._annotated_writer_thread = FrameWriterThread(
+                                self._annotated_writer, **fwt_kwargs
+                            )
+                            self._annotated_writer_thread.start()
+                            logger.info(
+                                f"Recording annotated video to {self._annotated_file_path}"
+                            )
+                        else:
+                            logger.warning("Failed to create annotated video writer")
+                            self._annotated_writer = None
+            except Exception:
+                # Partial failure: release any writers/threads we already allocated
+                # so we don't leak handles or leave zombie threads.
+                self._release_partial_writers()
+                raise
 
         self._state = RecordingState.RECORDING
         logger.info(f"Started multi-camera recording ({len(self._writers)} cameras)")
         return self._file_paths
+
+    def _release_partial_writers(self) -> None:
+        """Release all writers and join threads allocated during a failed start()."""
+        for cam_id, fwt in list(self._writer_threads.items()):
+            try:
+                fwt.stop()
+            except Exception:
+                logger.exception("Error stopping FrameWriterThread for %s", cam_id)
+        self._writer_threads.clear()
+
+        for cam_id, writer in list(self._writers.items()):
+            try:
+                writer.release()
+            except Exception:
+                logger.exception("Error releasing VideoWriter for %s", cam_id)
+        self._writers.clear()
+
+        if self._annotated_writer_thread is not None:
+            try:
+                self._annotated_writer_thread.stop()
+            except Exception:
+                logger.exception("Error stopping annotated FrameWriterThread")
+            self._annotated_writer_thread = None
+        if self._annotated_writer is not None:
+            try:
+                self._annotated_writer.release()
+            except Exception:
+                logger.exception("Error releasing annotated VideoWriter")
+            self._annotated_writer = None
+        self._annotated_file_path = None
+        self._file_paths.clear()
 
     def _on_frame(self, camera_id: str, frame: np.ndarray, timestamp: float) -> None:
         """

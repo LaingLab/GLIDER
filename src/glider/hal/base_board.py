@@ -354,7 +354,10 @@ class BaseBoard(ABC):
         """Start the automatic reconnection process."""
         if self._auto_reconnect and self._reconnect_task is None:
             self._set_state(BoardConnectionState.RECONNECTING)
+            from glider.core.async_utils import log_task_exception
+
             self._reconnect_task = asyncio.create_task(self._attempt_reconnect())
+            self._reconnect_task.add_done_callback(log_task_exception)
 
     def stop_reconnect(self) -> None:
         """Stop the automatic reconnection process."""

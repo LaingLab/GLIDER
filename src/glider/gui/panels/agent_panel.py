@@ -340,7 +340,10 @@ class AgentPanel(QWidget):
 
         # Process asynchronously
         try:
-            asyncio.create_task(self._async_process(text))
+            from glider.core.async_utils import log_task_exception
+
+            task = asyncio.create_task(self._async_process(text))
+            task.add_done_callback(log_task_exception)
         except RuntimeError:
             logger.debug("No event loop available for async task")
 
@@ -411,7 +414,10 @@ class AgentPanel(QWidget):
 
         if self._controller:
             try:
-                asyncio.create_task(self._execute_confirmed())
+                from glider.core.async_utils import log_task_exception
+
+                task = asyncio.create_task(self._execute_confirmed())
+                task.add_done_callback(log_task_exception)
             except RuntimeError:
                 logger.debug("No event loop available for async task")
 
@@ -435,7 +441,10 @@ class AgentPanel(QWidget):
 
         if self._controller:
             try:
-                asyncio.create_task(self._execute_rejected())
+                from glider.core.async_utils import log_task_exception
+
+                task = asyncio.create_task(self._execute_rejected())
+                task.add_done_callback(log_task_exception)
             except RuntimeError:
                 logger.debug("No event loop available for async task")
 
