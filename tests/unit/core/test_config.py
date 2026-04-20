@@ -26,7 +26,7 @@ class TestTimingConfig:
         config = TimingConfig()
 
         assert config.device_refresh_interval_ms == 250
-        assert config.elapsed_timer_interval_ms == 1000
+        assert config.elapsed_timer_interval_ms == 250
         assert config.default_poll_interval == 0.1
         assert config.board_ready_timeout == 10.0
         assert config.board_operation_timeout == 5.0
