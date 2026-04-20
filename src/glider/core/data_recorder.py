@@ -268,7 +268,10 @@ class DataRecorder:
 
             # Start sampling task
             self._recording = True
+            from glider.core.async_utils import log_task_exception
+
             self._sample_task = asyncio.create_task(self._sampling_loop())
+            self._sample_task.add_done_callback(log_task_exception)
         except Exception:
             self._file.close()
             self._file = None

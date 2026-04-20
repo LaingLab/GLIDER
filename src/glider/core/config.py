@@ -20,7 +20,7 @@ class TimingConfig:
 
     # UI refresh intervals (milliseconds)
     device_refresh_interval_ms: int = 250
-    elapsed_timer_interval_ms: int = 1000
+    elapsed_timer_interval_ms: int = 250
 
     # Hardware polling defaults (seconds)
     default_poll_interval: float = 0.1

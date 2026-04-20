@@ -176,6 +176,13 @@ class RunnerPanel(QWidget):
         self._elapsed_timer.setInterval(config.timing.elapsed_timer_interval_ms)
         self._elapsed_timer.timeout.connect(self._update_elapsed_time)
 
+        # --- TEMPORARY: main-thread stall instrument (remove in Task 9) ---
+        self._stall_last_tick: float | None = None
+        self._stall_timer = QTimer(self)
+        self._stall_timer.setInterval(50)
+        self._stall_timer.timeout.connect(self._check_main_thread_stall)
+        self._stall_timer.start()
+
     # --- Public API ---
 
     def refresh_devices(self) -> None:
@@ -246,6 +253,19 @@ class RunnerPanel(QWidget):
             self._core.session.metadata.name = name
             self._core.session.mark_dirty()
         self.experiment_name_changed.emit(name)
+
+    def _check_main_thread_stall(self) -> None:
+        """TEMPORARY: log gaps in the Qt event loop > 200ms."""
+        now = time.monotonic()
+        if self._stall_last_tick is not None:
+            gap = now - self._stall_last_tick
+            if gap > 0.200:
+                logger.warning(
+                    "Main-thread stall: %.3fs (QTimer coalesced %d ticks)",
+                    gap,
+                    max(0, int(gap / 0.050) - 1),
+                )
+        self._stall_last_tick = now
 
     def _update_elapsed_time(self) -> None:
         """Update the elapsed time display."""
