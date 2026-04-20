@@ -46,7 +46,7 @@ class DelayNode(ExecNode):
     definition = NodeDefinition(
         name="Delay",
         category=NodeCategory.LOGIC,
-        description="Delay execution for specified seconds",
+        description="Delay execution for specified duration (seconds or milliseconds)",
         inputs=[
             PortDefinition(name="exec", port_type=PortType.EXEC),
             PortDefinition(name="Duration", data_type=float, default_value=1.0),
@@ -67,6 +67,11 @@ class DelayNode(ExecNode):
             duration = float(self._state["duration"])
         else:
             duration = float(self.get_input(1) or 1.0)
+
+        unit = self._state.get("unit", "seconds")
+        if unit == "milliseconds":
+            duration = duration / 1000.0
+
         duration = max(0, duration)
 
         await asyncio.sleep(duration)
