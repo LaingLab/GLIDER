@@ -501,6 +501,36 @@ class NodeEditorController(QObject):
             props_layout.addRow("Duration:", duration_spin)
             props_layout.addRow("Unit:", unit_combo)
 
+        elif node_type == "Timer":
+            self._add_section_header(props_layout, "CONFIGURATION")
+
+            saved_interval = 1.0
+            saved_unit = "seconds"
+            if node_config and node_config.state:
+                saved_interval = float(node_config.state.get("interval", 1.0))
+                saved_unit = node_config.state.get("unit", "seconds")
+
+            interval_spin = QDoubleSpinBox()
+            interval_spin.setDecimals(3)
+            interval_spin.setRange(0.0, 3_600_000.0)
+            interval_spin.setValue(saved_interval)
+            interval_spin.valueChanged.connect(
+                lambda val, nid=node_id: self._on_node_property_changed(nid, "interval", val)
+            )
+
+            unit_combo = QComboBox()
+            unit_combo.addItem("sec", "seconds")
+            unit_combo.addItem("ms", "milliseconds")
+            unit_combo.setCurrentIndex(0 if saved_unit == "seconds" else 1)
+            unit_combo.currentIndexChanged.connect(
+                lambda _idx, nid=node_id, c=unit_combo: self._on_node_property_changed(
+                    nid, "unit", c.currentData()
+                )
+            )
+
+            props_layout.addRow("Interval:", interval_spin)
+            props_layout.addRow("Unit:", unit_combo)
+
         elif node_type == "StartFunction":
             self._add_section_header(props_layout, "FUNCTION")
             name_edit = QLineEdit()

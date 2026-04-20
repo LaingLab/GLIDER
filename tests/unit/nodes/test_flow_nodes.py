@@ -93,3 +93,11 @@ class TestTimerNode:
         node._state["unit"] = "milliseconds"
         node._inputs[0] = 1  # 1 ms -> below 10 ms floor
         assert node._effective_interval() == 0.01
+
+    def test_effective_interval_state_overrides_port(self):
+        """State 'interval' takes precedence over port input."""
+        node = TimerNode()
+        node._inputs[0] = 5.0  # would be seconds via port
+        node._state["interval"] = 250
+        node._state["unit"] = "milliseconds"
+        assert node._effective_interval() == 0.25
