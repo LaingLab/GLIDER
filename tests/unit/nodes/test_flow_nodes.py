@@ -63,3 +63,33 @@ class TestDelayNode:
             await node.execute()
 
         mock_sleep.assert_awaited_once_with(0)
+
+
+class TestTimerNode:
+    """Tests for TimerNode unit-aware interval handling."""
+
+    def test_effective_interval_seconds_default(self):
+        """Default interval unit is seconds (no conversion)."""
+        node = TimerNode()
+        node._inputs[0] = 2.0  # Interval port
+        assert node._effective_interval() == 2.0
+
+    def test_effective_interval_milliseconds(self):
+        """unit='milliseconds' divides interval by 1000."""
+        node = TimerNode()
+        node._state["unit"] = "milliseconds"
+        node._inputs[0] = 500
+        assert node._effective_interval() == 0.5
+
+    def test_effective_interval_none_returns_default_seconds(self):
+        """When input is None and no state, falls back to 1.0 seconds."""
+        node = TimerNode()
+        node._inputs[0] = None
+        assert node._effective_interval() == 1.0
+
+    def test_effective_interval_enforces_minimum(self):
+        """Interval below 10 ms (0.01 s) is clamped upward."""
+        node = TimerNode()
+        node._state["unit"] = "milliseconds"
+        node._inputs[0] = 1  # 1 ms -> below 10 ms floor
+        assert node._effective_interval() == 0.01
