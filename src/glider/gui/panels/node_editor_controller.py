@@ -473,17 +473,33 @@ class NodeEditorController(QObject):
 
         elif node_type == "Delay":
             self._add_section_header(props_layout, "CONFIGURATION")
-            duration_spin = QSpinBox()
-            duration_spin.setRange(0, 3600)
-            saved_duration = 1
+
+            saved_duration = 1.0
+            saved_unit = "seconds"
             if node_config and node_config.state:
-                saved_duration = node_config.state.get("duration", 1)
+                saved_duration = float(node_config.state.get("duration", 1.0))
+                saved_unit = node_config.state.get("unit", "seconds")
+
+            duration_spin = QDoubleSpinBox()
+            duration_spin.setDecimals(3)
+            duration_spin.setRange(0.0, 3_600_000.0)
             duration_spin.setValue(saved_duration)
-            duration_spin.setSuffix(" sec")
             duration_spin.valueChanged.connect(
                 lambda val, nid=node_id: self._on_node_property_changed(nid, "duration", val)
             )
+
+            unit_combo = QComboBox()
+            unit_combo.addItem("sec", "seconds")
+            unit_combo.addItem("ms", "milliseconds")
+            unit_combo.setCurrentIndex(0 if saved_unit == "seconds" else 1)
+            unit_combo.currentIndexChanged.connect(
+                lambda _idx, nid=node_id, c=unit_combo: self._on_node_property_changed(
+                    nid, "unit", c.currentData()
+                )
+            )
+
             props_layout.addRow("Duration:", duration_spin)
+            props_layout.addRow("Unit:", unit_combo)
 
         elif node_type == "StartFunction":
             self._add_section_header(props_layout, "FUNCTION")
