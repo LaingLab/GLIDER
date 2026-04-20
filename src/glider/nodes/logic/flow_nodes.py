@@ -117,9 +117,12 @@ class TimerNode(ExecNode):
 
     async def start(self) -> None:
         """Start the timer."""
+        from glider.core.async_utils import log_task_exception
+
         self._count = 0
         self._paused = False
         self._timer_task = asyncio.create_task(self._timer_loop())
+        self._timer_task.add_done_callback(log_task_exception)
 
     async def stop(self) -> None:
         """Stop the timer."""
