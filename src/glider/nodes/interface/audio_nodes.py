@@ -37,6 +37,9 @@ class AudioPlaybackNode(GliderNode):
         outputs=[
             PortDefinition("next", PortType.EXEC, description="Triggers after playback starts"),
             PortDefinition("playing", PortType.DATA, str, "", "File path of audio being played"),
+            PortDefinition(
+                "error", PortType.DATA, str, "", "Error message if playback/load failed"
+            ),
         ],
         color="#5a4a2d",
     )
@@ -79,20 +82,25 @@ class AudioPlaybackNode(GliderNode):
 
             import sounddevice as sd
 
-            # Emit the file path so DataRecorder can log the event
-            self.set_output(1, file_path)
-
+            # Start playback first; only emit the "playing" event if sd.play()
+            # returns without error.  This keeps the CSV honest: a row means the
+            # device actually started playing.
             sd.play(data, samplerate, device=device_index)
+            self.set_output(1, file_path)
             logger.info(
                 f"AudioPlayback: playing '{file_path}' "
                 f"(sr={samplerate}, vol={volume}, device={device_index})"
             )
         except ImportError as e:
+            err_msg = f"Missing audio package: {e}"
             logger.error(f"AudioPlayback: missing dependency - {e}")
-            self.set_error(f"Missing audio package: {e}")
+            self.set_output(2, f"{file_path}: {err_msg}")
+            self.set_error(err_msg)
         except Exception as e:
-            logger.error(f"AudioPlayback: playback error - {e}")
-            self.set_error(str(e))
+            err_msg = str(e)
+            logger.error(f"AudioPlayback: playback error - {err_msg}")
+            self.set_output(2, f"{file_path}: {err_msg}")
+            self.set_error(err_msg)
 
         await self._fire_exec_output("next")
 

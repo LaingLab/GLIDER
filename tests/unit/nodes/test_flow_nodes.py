@@ -1,6 +1,5 @@
 """Tests for flow control nodes: DelayNode, TimerNode."""
 
-import asyncio
 from unittest.mock import patch
 
 import pytest
