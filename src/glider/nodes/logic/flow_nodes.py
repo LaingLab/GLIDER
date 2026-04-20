@@ -46,7 +46,7 @@ class DelayNode(ExecNode):
     definition = NodeDefinition(
         name="Delay",
         category=NodeCategory.LOGIC,
-        description="Delay execution for specified seconds",
+        description="Delay execution for specified duration (seconds or milliseconds)",
         inputs=[
             PortDefinition(name="exec", port_type=PortType.EXEC),
             PortDefinition(name="Duration", data_type=float, default_value=1.0),
@@ -67,6 +67,11 @@ class DelayNode(ExecNode):
             duration = float(self._state["duration"])
         else:
             duration = float(self.get_input(1) or 1.0)
+
+        unit = self._state.get("unit", "seconds")
+        if unit == "milliseconds":
+            duration = duration / 1000.0
+
         duration = max(0, duration)
 
         await asyncio.sleep(duration)
@@ -89,7 +94,7 @@ class TimerNode(ExecNode):
                 name="Interval",
                 data_type=float,
                 default_value=1.0,
-                description="Interval in seconds",
+                description="Interval (seconds or milliseconds, per Unit setting)",
             ),
             PortDefinition(name="Enabled", data_type=bool, default_value=True),
         ],
@@ -112,9 +117,12 @@ class TimerNode(ExecNode):
 
     async def start(self) -> None:
         """Start the timer."""
+        from glider.core.async_utils import log_task_exception
+
         self._count = 0
         self._paused = False
         self._timer_task = asyncio.create_task(self._timer_loop())
+        self._timer_task.add_done_callback(log_task_exception)
 
     async def stop(self) -> None:
         """Stop the timer."""
@@ -134,15 +142,28 @@ class TimerNode(ExecNode):
         """Resume the timer."""
         self._paused = False
 
+    def _effective_interval(self) -> float:
+        """Return the interval in seconds, honoring the state 'interval' override and unit."""
+        if "interval" in self._state:
+            raw = self._state["interval"]
+        else:
+            raw = self.get_input(0)
+        if raw is None:
+            raw = 1.0
+        interval = float(raw)
+        if self._state.get("unit", "seconds") == "milliseconds":
+            interval = interval / 1000.0
+        return max(0.01, interval)
+
     async def _timer_loop(self) -> None:
         """Timer loop that triggers at intervals."""
         next_tick = time.monotonic()
         while True:
             try:
-                interval = float(self.get_input(0) or 1.0)
+                interval = self._effective_interval()
                 enabled = bool(self.get_input(1) if self.get_input(1) is not None else True)
 
-                next_tick += max(0.01, interval)
+                next_tick += interval
                 sleep_time = next_tick - time.monotonic()
                 if sleep_time > 0:
                     await asyncio.sleep(sleep_time)

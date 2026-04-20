@@ -177,10 +177,25 @@ class TrackingDataLogger:
         self._prev_positions.clear()
         self._cumulative_distances.clear()
 
-        # Open file and create writer
+        # Open file and create writer.  If any subsequent write raises (e.g.,
+        # metadata serialization error), close the file and clear state so the
+        # caller does not see a recording session with a leaked fd.
         self._file = open(self._file_path, "w", newline="", encoding="utf-8")
-        self._writer = csv.writer(self._file)
+        try:
+            self._writer = csv.writer(self._file)
+            self._write_header_and_metadata(experiment_name, session)
+        except Exception:
+            self._file.close()
+            self._file = None
+            self._writer = None
+            raise
 
+        self._recording = True
+        logger.info(f"Started tracking log: {self._file_path}")
+        return self._file_path
+
+    def _write_header_and_metadata(self, experiment_name: str, session) -> None:
+        """Write all header / metadata rows. Raises if any write fails."""
         # Write metadata header
         self._writer.writerow(["# GLIDER Tracking Data"])
         self._writer.writerow(["# Experiment", experiment_name])
@@ -265,10 +280,6 @@ class TrackingDataLogger:
             ]
         )
         self._file.flush()
-
-        self._recording = True
-        logger.info(f"Started tracking log: {self._file_path}")
-        return self._file_path
 
     def log_frame(
         self,

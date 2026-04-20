@@ -67,9 +67,14 @@ class ZoneInputNode(InterfaceNode):
         self._occupied = False
         self._object_count = 0
         self._exec_callbacks: list[Callable[[int], None]] = []
+        self._main_loop: asyncio.AbstractEventLoop | None = None
 
         # Set outputs to initial values
         self._outputs = [False, 0, None, None]
+
+    async def start(self) -> None:
+        """Capture the main event loop so CV-thread callbacks can post to it."""
+        self._main_loop = asyncio.get_running_loop()
 
     @property
     def zone_id(self) -> str:
@@ -134,23 +139,20 @@ class ZoneInputNode(InterfaceNode):
         self.set_output(1, object_count)  # Object Count
 
         # Trigger exec outputs on events.  update_zone_state() is called from the
-        # CV thread, so asyncio.create_task() would fail (no running loop in that
-        # thread).  Instead, marshal the coroutine to the main event loop using
-        # run_coroutine_threadsafe().
+        # CV thread, so we need a reference to the main event loop captured at
+        # start().  asyncio.get_event_loop() from a non-main thread returns a new,
+        # non-running loop on Python >=3.12, silently dropping exec outputs.
+        loop = self._main_loop
+        if loop is None:
+            logger.debug("Zone '%s': main loop not captured, skipping exec outputs", self._zone_name)
+            return
+
         if entered:
-            try:
-                loop = asyncio.get_event_loop()
-                asyncio.run_coroutine_threadsafe(self._fire_exec_output("On Enter"), loop)
-            except RuntimeError:
-                logger.debug("No event loop available for On Enter exec output")
+            asyncio.run_coroutine_threadsafe(self._fire_exec_output("On Enter"), loop)
             logger.debug(f"Zone '{self._zone_name}': On Enter triggered")
 
         if exited:
-            try:
-                loop = asyncio.get_event_loop()
-                asyncio.run_coroutine_threadsafe(self._fire_exec_output("On Exit"), loop)
-            except RuntimeError:
-                logger.debug("No event loop available for On Exit exec output")
+            asyncio.run_coroutine_threadsafe(self._fire_exec_output("On Exit"), loop)
             logger.debug(f"Zone '{self._zone_name}': On Exit triggered")
 
     def update_event(self) -> None:
