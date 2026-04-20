@@ -94,7 +94,7 @@ class TimerNode(ExecNode):
                 name="Interval",
                 data_type=float,
                 default_value=1.0,
-                description="Interval in seconds",
+                description="Interval (seconds or milliseconds, per Unit setting)",
             ),
             PortDefinition(name="Enabled", data_type=bool, default_value=True),
         ],
@@ -139,15 +139,25 @@ class TimerNode(ExecNode):
         """Resume the timer."""
         self._paused = False
 
+    def _effective_interval(self) -> float:
+        """Return the interval in seconds, honoring the unit state field."""
+        raw = self.get_input(0)
+        if raw is None:
+            raw = 1.0
+        interval = float(raw)
+        if self._state.get("unit", "seconds") == "milliseconds":
+            interval = interval / 1000.0
+        return max(0.01, interval)
+
     async def _timer_loop(self) -> None:
         """Timer loop that triggers at intervals."""
         next_tick = time.monotonic()
         while True:
             try:
-                interval = float(self.get_input(0) or 1.0)
+                interval = self._effective_interval()
                 enabled = bool(self.get_input(1) if self.get_input(1) is not None else True)
 
-                next_tick += max(0.01, interval)
+                next_tick += interval
                 sleep_time = next_tick - time.monotonic()
                 if sleep_time > 0:
                     await asyncio.sleep(sleep_time)
