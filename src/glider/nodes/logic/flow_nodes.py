@@ -140,8 +140,11 @@ class TimerNode(ExecNode):
         self._paused = False
 
     def _effective_interval(self) -> float:
-        """Return the interval in seconds, honoring the unit state field."""
-        raw = self.get_input(0)
+        """Return the interval in seconds, honoring the state 'interval' override and unit."""
+        if "interval" in self._state:
+            raw = self._state["interval"]
+        else:
+            raw = self.get_input(0)
         if raw is None:
             raw = 1.0
         interval = float(raw)
