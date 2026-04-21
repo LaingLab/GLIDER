@@ -9,9 +9,14 @@ Includes real-world distance calculations when calibration is available.
 import csv
 import logging
 import math
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+# Frames between os.fsync() calls. ~10s at 30fps — small enough to bound
+# crash loss, large enough to avoid hammering SD cards on a Raspberry Pi.
+_FSYNC_INTERVAL_FRAMES = 300
 
 if TYPE_CHECKING:
     from glider.core.experiment_session import ExperimentSession
@@ -54,6 +59,9 @@ class TrackingDataLogger:
         # Track previous positions and cumulative distances for each object
         self._prev_positions: dict[int, tuple[float, float]] = {}
         self._cumulative_distances: dict[int, float] = {}
+        # Periodic fsync so a power-loss or crash only loses a bounded window
+        # of tracking data instead of whatever the OS happens to be buffering.
+        self._frames_since_fsync = 0
 
     @property
     def is_recording(self) -> bool:
@@ -130,6 +138,32 @@ class TrackingDataLogger:
         """
         self._frame_width = width
         self._frame_height = height
+
+    def _fsync_if_due(self, force: bool = False) -> None:
+        """
+        Flush Python buffers and, on an interval (or when forced), fsync the
+        file descriptor so bytes reach the disk.
+
+        fsync is relatively expensive — we call it every
+        ``_FSYNC_INTERVAL_FRAMES`` frames so the worst-case crash loss is
+        bounded to roughly that many frames of tracking data.
+        """
+        if self._file is None:
+            return
+        try:
+            self._file.flush()
+        except Exception:
+            logger.exception("TrackingDataLogger: flush failed")
+            return
+        self._frames_since_fsync += 1
+        if force or self._frames_since_fsync >= _FSYNC_INTERVAL_FRAMES:
+            try:
+                os.fsync(self._file.fileno())
+            except OSError:
+                # fsync can fail on some filesystems (e.g., certain network
+                # mounts); the flush above is still useful, so swallow.
+                logger.debug("TrackingDataLogger: os.fsync failed", exc_info=True)
+            self._frames_since_fsync = 0
 
     def _generate_filename(self, experiment_name: str) -> str:
         """
@@ -279,7 +313,9 @@ class TrackingDataLogger:
                 "velocity_px_frame",
             ]
         )
-        self._file.flush()
+        # Force fsync on the header row so the file is durable on disk before
+        # any frame data is written.
+        self._fsync_if_due(force=True)
 
     def log_frame(
         self,
@@ -434,7 +470,7 @@ class TrackingDataLogger:
                     ]
                 )
 
-        self._file.flush()
+        self._fsync_if_due()
 
     def log_event(self, event_name: str, details: str = "") -> None:
         """
@@ -465,7 +501,9 @@ class TrackingDataLogger:
                 "",
             ]
         )
-        self._file.flush()
+        # Events are often the thing the user most wants preserved across a
+        # crash (trial marks, manual annotations), so force fsync.
+        self._fsync_if_due(force=True)
 
     async def stop(self) -> Path | None:
         """
@@ -488,6 +526,8 @@ class TrackingDataLogger:
             self._writer.writerow(["# End Time", end_time.isoformat()])
             self._writer.writerow(["# Duration (s)", f"{duration:.2f}"])
             self._writer.writerow(["# Total Frames", self._frame_count])
+            # Final fsync so the footer is guaranteed durable before close.
+            self._fsync_if_due(force=True)
 
         # Close file
         if self._file:

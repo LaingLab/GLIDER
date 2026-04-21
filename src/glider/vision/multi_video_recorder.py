@@ -64,6 +64,7 @@ class MultiVideoRecorder:
         self._record_annotated = False
         self._recording_fps: dict[str, float] = {}
         self._buffer_size: int | None = None
+        self._writer_error: BaseException | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -198,7 +199,9 @@ class MultiVideoRecorder:
                     self._frames_dropped[camera_id] = 0
 
                     # Wrap in FrameWriterThread
-                    fwt = FrameWriterThread(writer, **fwt_kwargs)
+                    fwt = FrameWriterThread(
+                        writer, error_callback=self._on_writer_error, **fwt_kwargs
+                    )
                     fwt.start()
                     self._writer_threads[camera_id] = fwt
 
@@ -233,7 +236,9 @@ class MultiVideoRecorder:
 
                         if self._annotated_writer.isOpened():
                             self._annotated_writer_thread = FrameWriterThread(
-                                self._annotated_writer, **fwt_kwargs
+                                self._annotated_writer,
+                                error_callback=self._on_writer_error,
+                                **fwt_kwargs,
                             )
                             self._annotated_writer_thread.start()
                             logger.info(
@@ -282,6 +287,24 @@ class MultiVideoRecorder:
             self._annotated_writer = None
         self._annotated_file_path = None
         self._file_paths.clear()
+
+    def _on_writer_error(self, exc: BaseException) -> None:
+        """
+        Handle an unrecoverable writer error from any FrameWriterThread.
+
+        Called from the writer thread. Transitions the recorder into the
+        ERROR state so subsequent frames are rejected and callers can
+        observe the failure via ``state``/``writer_error``.
+        """
+        self._writer_error = exc
+        if self._state in (RecordingState.RECORDING, RecordingState.PAUSED):
+            self._state = RecordingState.ERROR
+        logger.error(f"MultiVideoRecorder: writer aborted due to {exc!r}")
+
+    @property
+    def writer_error(self) -> BaseException | None:
+        """The exception that caused a writer to abort, if any."""
+        return self._writer_error
 
     def _on_frame(self, camera_id: str, frame: np.ndarray, timestamp: float) -> None:
         """

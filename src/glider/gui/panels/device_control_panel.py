@@ -594,3 +594,14 @@ class DeviceControlPanel(QWidget):
                 self._input_value_label.setText("ERROR")
 
         self._run_async(read_value())
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Stop timers before teardown so they don't fire on a dead widget."""
+        for attr in ("_input_poll_timer", "_pwm_debounce_timer"):
+            timer = getattr(self, attr, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+        super().closeEvent(event)
