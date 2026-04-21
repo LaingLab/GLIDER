@@ -109,8 +109,20 @@ class HardwarePanel(QWidget):
 
             for device_id, device in self._hardware_manager.devices.items():
                 if hasattr(device, "board") and device.board is board:
-                    pins = getattr(device, "_pins", [])
-                    pin_str = f"Pin {pins[0]}" if pins else ""
+                    # Read pins from the authoritative source (device.pins, backed
+                    # by device._config.pins) rather than a denormalized copy.
+                    # Previously this used device._pins, a list populated once at
+                    # creation time in HardwareManager — the Edit Device dialog
+                    # updates device.config.pins but not that list, so the tree
+                    # kept showing the old pin number after an edit.
+                    pin_map = getattr(device, "pins", None)
+                    if isinstance(pin_map, dict) and pin_map:
+                        pin_values = list(pin_map.values())
+                    else:
+                        # Fallback for legacy devices that never got a config.pins
+                        # populated but still have the _pins list attached.
+                        pin_values = getattr(device, "_pins", []) or []
+                    pin_str = f"Pin {pin_values[0]}" if pin_values else ""
                     device_item = QTreeWidgetItem(
                         [
                             getattr(device, "name", device_id),
@@ -657,6 +669,12 @@ class HardwarePanel(QWidget):
                     device.config.pins.update(new_pins)
                 elif hasattr(device, "_config") and hasattr(device._config, "pins"):
                     device._config.pins.update(new_pins)
+
+                # Keep the legacy denormalized list (set by HardwareManager at
+                # creation time) in sync so anything still reading it sees the
+                # updated values.
+                if hasattr(device, "_pins"):
+                    device._pins = list(new_pins.values())
 
                 if session:
                     session.update_device(device_id, name=new_name, pins=new_pins)
