@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
@@ -680,6 +680,68 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage(message, timeout)
 
+    def _notify_user(
+        self,
+        title: str,
+        message: str,
+        level: str = "warning",
+        timeout_ms: int = 8000,
+    ) -> None:
+        """
+        Surface a user-visible notification without blocking the event loop.
+
+        In desktop mode this schedules a non-modal ``QMessageBox`` on the next
+        Qt event-loop tick (so it can't freeze an in-flight async coroutine).
+        In runner mode (touch kiosk, usually on the Pi) we avoid modal popups
+        entirely — runner mode is responsiveness-sensitive and dialogs don't
+        work well with touch input — and instead post to the status bar +
+        log at the appropriate level.
+
+        Args:
+            title: Short title for the notification.
+            message: Body text.
+            level: "info", "warning", or "critical" — affects log level and,
+                in desktop mode, the QMessageBox icon.
+            timeout_ms: How long to show the status message in runner mode.
+        """
+        log_message = f"{title}: {message}"
+        if level == "critical":
+            logger.error(log_message)
+        elif level == "warning":
+            logger.warning(log_message)
+        else:
+            logger.info(log_message)
+
+        if self._view_manager.is_runner_mode:
+            # No modal dialogs on the touch dashboard — just the status bar.
+            try:
+                self.statusBar().showMessage(f"{title}: {message}", timeout_ms)
+            except Exception:
+                # Runner mode may not have a conventional status bar; the log
+                # above is still the source of truth.
+                pass
+            return
+
+        # Desktop mode: schedule the dialog on the next event-loop tick so the
+        # calling async coroutine gets to finish returning control to the loop
+        # before the modal box grabs focus.
+        def _show() -> None:
+            icon = QMessageBox.Icon.Warning
+            if level == "critical":
+                icon = QMessageBox.Icon.Critical
+            elif level == "info":
+                icon = QMessageBox.Icon.Information
+            box = QMessageBox(self)
+            box.setIcon(icon)
+            box.setWindowTitle(title)
+            box.setText(message)
+            box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            # Non-modal: don't block the event loop.
+            box.setWindowModality(Qt.WindowModality.NonModal)
+            box.show()
+
+        QTimer.singleShot(0, _show)
+
     # --- Signal wiring ---
 
     def _connect_signals(self) -> None:
@@ -1267,11 +1329,17 @@ class MainWindow(QMainWindow):
                 self._hardware_panel.refresh_tree()
             failed = [k for k, v in results.items() if not v]
             if failed:
-                QMessageBox.warning(
-                    self, "Connection Warning", f"Failed to connect: {', '.join(failed)}"
+                # Non-blocking notification: modal dialogs called from an async
+                # coroutine freeze the event loop (especially bad in runner
+                # mode on a Pi). _notify_user schedules the dialog for the
+                # next tick or routes to the status bar on the runner.
+                self._notify_user(
+                    "Connection Warning",
+                    f"Failed to connect: {', '.join(failed)}",
+                    level="warning",
                 )
         except Exception as e:
-            QMessageBox.critical(self, "Connection Error", str(e))
+            self._notify_user("Connection Error", str(e), level="critical")
 
     def _on_disconnect_hardware(self) -> None:
         self._run_async(self._core.hardware_manager.disconnect_all())
@@ -1445,7 +1513,8 @@ class MainWindow(QMainWindow):
                 self._core.set_recording_directory(Path(rec_dir))
             await self._core.start_experiment()
         except Exception as e:
-            QMessageBox.critical(self, "Start Error", str(e))
+            # Non-blocking: avoid freezing the qasync loop during start.
+            self._notify_user("Start Error", str(e), level="critical")
 
     @pyqtSlot()
     def _on_stop_clicked(self) -> None:
@@ -1455,7 +1524,8 @@ class MainWindow(QMainWindow):
         try:
             await self._core.stop_experiment()
         except Exception as e:
-            QMessageBox.critical(self, "Stop Error", str(e))
+            # Non-blocking: avoid freezing the qasync loop during stop.
+            self._notify_user("Stop Error", str(e), level="critical")
 
     @pyqtSlot()
     def _on_emergency_stop(self) -> None:

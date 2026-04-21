@@ -11,6 +11,7 @@ import logging
 import platform
 import queue
 import threading
+from collections.abc import Callable
 
 import cv2
 import numpy as np
@@ -41,6 +42,7 @@ class FrameWriterThread:
         self,
         writer: cv2.VideoWriter,
         max_queue_size: int = _DEFAULT_MAX_QUEUE,
+        error_callback: Callable[[BaseException], None] | None = None,
     ):
         self._writer = writer
         self._queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=max_queue_size)
@@ -49,6 +51,9 @@ class FrameWriterThread:
         self._thread: threading.Thread | None = None
         self._frames_written = 0
         self._frames_dropped = 0
+        self._failed = False
+        self._error: BaseException | None = None
+        self._error_callback = error_callback
         self._lock = threading.Lock()  # guards counters
 
     # -- public API --
@@ -66,8 +71,13 @@ class FrameWriterThread:
         Add a frame to the write queue (non-blocking).
 
         Returns:
-            True if the frame was queued, False if the queue was full (frame dropped).
+            True if the frame was queued, False if the queue was full (frame dropped)
+            or the writer has already failed.
         """
+        if self._failed:
+            with self._lock:
+                self._frames_dropped += 1
+            return False
         try:
             self._queue.put_nowait(frame)
             return True
@@ -119,10 +129,27 @@ class FrameWriterThread:
     def max_queue_size(self) -> int:
         return self._max_queue_size
 
+    @property
+    def failed(self) -> bool:
+        """True if the writer aborted due to an unrecoverable write error."""
+        return self._failed
+
+    @property
+    def error(self) -> BaseException | None:
+        """The exception that caused the writer to abort, if any."""
+        return self._error
+
     # -- internal --
 
     def _run(self) -> None:
-        """Writer loop: drain queue until stopped and queue is empty."""
+        """Writer loop: drain queue until stopped and queue is empty.
+
+        On a write exception the loop aborts: once cv2.VideoWriter fails
+        (disk full, codec fault, closed file handle) it will not recover,
+        so draining the remaining buffered frames just wastes CPU and masks
+        the failure. We mark the writer as failed, count the queued frames
+        as dropped, and invoke the error callback if one was supplied.
+        """
         while True:
             try:
                 frame = self._queue.get(timeout=0.1)
@@ -135,5 +162,25 @@ class FrameWriterThread:
                 self._writer.write(frame)
                 with self._lock:
                     self._frames_written += 1
-            except Exception:
-                logger.exception("FrameWriterThread: error writing frame")
+            except Exception as exc:
+                logger.exception("FrameWriterThread: error writing frame; aborting writer")
+                self._failed = True
+                self._error = exc
+                # Count the frame we couldn't write plus any still in the queue as dropped.
+                with self._lock:
+                    remaining = self._queue.qsize()
+                    self._frames_dropped += 1 + remaining
+                # Best-effort drain so stop() doesn't wait on a stale queue.
+                while True:
+                    try:
+                        self._queue.get_nowait()
+                    except queue.Empty:
+                        break
+                if self._error_callback is not None:
+                    try:
+                        self._error_callback(exc)
+                    except Exception:
+                        logger.exception(
+                            "FrameWriterThread: error callback raised; swallowing"
+                        )
+                break

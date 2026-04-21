@@ -31,6 +31,7 @@ class RecordingState(Enum):
     RECORDING = auto()
     PAUSED = auto()
     FINALIZING = auto()
+    ERROR = auto()
 
 
 @dataclass
@@ -93,6 +94,7 @@ class VideoRecorder:
         self._frame_callback_registered = False
         self._record_annotated = False  # Whether to also record annotated video
         self._buffer_size: int | None = None  # None = use default
+        self._writer_error: BaseException | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -234,7 +236,9 @@ class VideoRecorder:
                 self._writer = None
                 raise RuntimeError(f"Failed to create video file: {self._file_path}")
 
-            self._writer_thread = FrameWriterThread(self._writer, **fwt_kwargs)
+            self._writer_thread = FrameWriterThread(
+                self._writer, error_callback=self._on_writer_error, **fwt_kwargs
+            )
             self._writer_thread.start()
 
             # Create annotated video writer if requested
@@ -251,7 +255,9 @@ class VideoRecorder:
                     self._annotated_writer = None
                 else:
                     self._annotated_writer_thread = FrameWriterThread(
-                        self._annotated_writer, **fwt_kwargs
+                        self._annotated_writer,
+                        error_callback=self._on_writer_error,
+                        **fwt_kwargs,
                     )
                     self._annotated_writer_thread.start()
                     logger.info(f"Recording annotated video to {self._annotated_file_path}")
@@ -264,6 +270,26 @@ class VideoRecorder:
         self._state = RecordingState.RECORDING
         logger.info(f"Started recording to {self._file_path} at {recording_fps:.1f} fps")
         return self._file_path
+
+    def _on_writer_error(self, exc: BaseException) -> None:
+        """
+        Handle an unrecoverable writer error from a FrameWriterThread.
+
+        Called from the writer thread. Transitions the recorder into the
+        ERROR state so subsequent frames are rejected and callers can
+        observe the failure via ``state``/``writer_error``.
+        """
+        self._writer_error = exc
+        # Only move to ERROR from states where we're still accepting frames;
+        # if we're already FINALIZING we're just tearing down anyway.
+        if self._state in (RecordingState.RECORDING, RecordingState.PAUSED):
+            self._state = RecordingState.ERROR
+        logger.error(f"VideoRecorder: writer aborted due to {exc!r}")
+
+    @property
+    def writer_error(self) -> BaseException | None:
+        """The exception that caused the writer to abort, if any."""
+        return self._writer_error
 
     def _on_frame(self, frame: np.ndarray, timestamp: float) -> None:
         """

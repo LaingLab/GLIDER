@@ -50,6 +50,11 @@ class FlowEngine:
         self._state = FlowState.STOPPED
         self._nodes: dict[str, Any] = {}  # node_id -> node instance
         self._connections: list[dict[str, Any]] = []  # Connection list for standalone mode
+        # Track exec callbacks installed on source nodes so we can remove them
+        # when the connection is torn down (prevents unbounded callback growth
+        # across repeated graph edits during a session).
+        #   connection_id -> (from_node_id, callback)
+        self._connection_callbacks: dict[str, tuple[str, Callable[..., Any]]] = {}
         self._running_tasks: set[asyncio.Task] = set()
         self._custom_device_runners: dict[str, Any] = {}
 
@@ -362,6 +367,17 @@ class FlowEngine:
         if node is None:
             return
 
+        # Tear down any connections (and their exec callbacks) that touch this
+        # node. remove_connection() handles both the source-node callback list
+        # and the self._connections list.
+        stale_ids = [
+            c["id"]
+            for c in self._connections
+            if c["from_node"] == node_id or c["to_node"] == node_id
+        ]
+        for connection_id in stale_ids:
+            self.remove_connection(connection_id)
+
         if self._ryvencore_available and self._flow:
             try:
                 self._flow.remove_node(node)
@@ -468,6 +484,12 @@ class FlowEngine:
 
         if hasattr(from_node, "_update_callbacks"):
             from_node._update_callbacks.append(on_exec_output)
+            # Remember which source node we installed this callback on so
+            # remove_connection() can uninstall it. Without this bookkeeping,
+            # callbacks accumulate on the source node every time the graph is
+            # rewired, and stale callbacks continue firing against nodes that
+            # are no longer connected.
+            self._connection_callbacks[connection_id] = (from_node_id, on_exec_output)
             logger.debug(
                 f"Registered exec callback on {from_node_id}, total callbacks: {len(from_node._update_callbacks)}"
             )
@@ -527,6 +549,20 @@ class FlowEngine:
     def remove_connection(self, connection_id: str) -> None:
         """Remove a connection."""
         self._connections = [c for c in self._connections if c["id"] != connection_id]
+
+        # Uninstall the exec callback we attached in create_connection(), if any.
+        entry = self._connection_callbacks.pop(connection_id, None)
+        if entry is not None:
+            from_node_id, callback = entry
+            from_node = self._nodes.get(from_node_id)
+            if from_node is not None and hasattr(from_node, "_update_callbacks"):
+                try:
+                    from_node._update_callbacks.remove(callback)
+                except ValueError:
+                    # Callback may have already been cleared by the node itself;
+                    # nothing to do.
+                    pass
+
         logger.debug(f"Removed connection: {connection_id}")
 
     def get_node(self, node_id: str) -> Any | None:
@@ -687,6 +723,18 @@ class FlowEngine:
 
     def clear(self) -> None:
         """Clear all nodes and connections and reset state."""
+        # Uninstall any exec callbacks still registered on source nodes before
+        # we drop references to them (clear() is a wholesale reset, not a
+        # graceful per-connection removal).
+        for from_node_id, callback in self._connection_callbacks.values():
+            from_node = self._nodes.get(from_node_id)
+            if from_node is not None and hasattr(from_node, "_update_callbacks"):
+                try:
+                    from_node._update_callbacks.remove(callback)
+                except ValueError:
+                    pass
+        self._connection_callbacks.clear()
+
         self._nodes.clear()
         self._connections.clear()
         self._running_tasks.clear()

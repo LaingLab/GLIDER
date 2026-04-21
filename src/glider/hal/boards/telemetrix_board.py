@@ -47,10 +47,31 @@ class TelemetrixThread:
         self._thread.start()
         # Wait for connection to complete
         if not self._ready.wait(timeout=10.0):
+            # If we time out, telemetrix may have partially initialised and is
+            # still running in the background with an open serial handle. Tear
+            # the thread down before raising so we don't leak the serial port
+            # (and then fail subsequent reconnect attempts with "port busy").
+            logger.warning(
+                "Telemetrix connection timed out after 10s; cleaning up worker thread"
+            )
+            try:
+                self.stop()
+            except Exception as cleanup_exc:
+                logger.warning(
+                    f"Error during telemetrix cleanup after connect timeout: {cleanup_exc}"
+                )
             raise RuntimeError("Telemetrix connection timed out")
         if self._error is not None:
+            # _run() already set _telemetrix to None on error, and its finally
+            # block closes the loop. Join the worker to avoid leaving a zombie.
+            if self._thread is not None and self._thread.is_alive():
+                self._thread.join(timeout=2.0)
             raise self._error
         if self._telemetrix is None:
+            # Best-effort cleanup: the worker should have exited on its own,
+            # but join it so we don't leak.
+            if self._thread is not None and self._thread.is_alive():
+                self._thread.join(timeout=2.0)
             raise RuntimeError("Failed to connect to Arduino")
 
     def _run(self, port: str | None, sleep_tune: float):

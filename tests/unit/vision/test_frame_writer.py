@@ -109,8 +109,15 @@ class TestFrameWriterThread:
         assert fwt.queue_depth == 0
         assert fwt.max_queue_size == 50
 
-    def test_writer_exception_does_not_crash_thread(self):
-        """A write error on one frame doesn't prevent subsequent frames."""
+    def test_writer_exception_aborts_writer(self):
+        """A write error marks the writer as failed and stops further writes.
+
+        Once cv2.VideoWriter fails (disk full, codec fault, closed handle) it
+        will not recover — draining the rest of the queue just masks the
+        failure. The thread aborts on the first exception, marks itself
+        failed, counts remaining frames as dropped, and invokes the error
+        callback exactly once.
+        """
         mock_writer = MagicMock()
         call_count = 0
 
@@ -122,17 +129,48 @@ class TestFrameWriterThread:
 
         mock_writer.write.side_effect = side_effect
 
-        fwt = FrameWriterThread(mock_writer, max_queue_size=100)
+        errors: list[BaseException] = []
+
+        def on_error(exc: BaseException) -> None:
+            errors.append(exc)
+
+        fwt = FrameWriterThread(mock_writer, max_queue_size=100, error_callback=on_error)
         fwt.start()
 
+        # Enqueue enough frames that the third write raises, leaving frames
+        # 4 and 5 either dropped from the queue or rejected at enqueue time.
         for _ in range(5):
             fwt.enqueue(_make_frame())
+            time.sleep(0.005)  # small gap so frames are processed in order
 
         fwt.stop(timeout=5.0)
 
-        # Frame 3 failed, but frames 1,2,4,5 should have been written
-        assert fwt.frames_written == 4
-        assert mock_writer.write.call_count == 5
+        # Frames 1 and 2 made it to disk; frame 3 failed and aborted the loop.
+        assert fwt.frames_written == 2
+        assert fwt.failed is True
+        assert isinstance(fwt.error, RuntimeError)
+        # Callback fires exactly once with the original exception.
+        assert len(errors) == 1
+        assert isinstance(errors[0], RuntimeError)
+        # Any frame enqueued after the abort is counted as dropped; the writer
+        # never gets called more than the 3 attempts it made before aborting.
+        assert mock_writer.write.call_count <= 3
+
+    def test_enqueue_after_failure_returns_false(self):
+        """Enqueue after the writer has aborted should fast-fail."""
+        mock_writer = MagicMock()
+        mock_writer.write.side_effect = RuntimeError("fail")
+
+        fwt = FrameWriterThread(mock_writer, max_queue_size=10)
+        fwt.start()
+        fwt.enqueue(_make_frame())
+        # Give the writer thread a beat to hit the exception.
+        time.sleep(0.2)
+        assert fwt.failed is True
+        # Any subsequent enqueue should be rejected (counted as dropped).
+        assert fwt.enqueue(_make_frame()) is False
+        assert fwt.frames_dropped >= 1
+        fwt.stop(timeout=2.0)
 
     def test_stop_without_start(self):
         """Calling stop without start should not raise."""

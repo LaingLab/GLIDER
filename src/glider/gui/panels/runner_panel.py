@@ -458,3 +458,26 @@ class RunnerPanel(QWidget):
         exit_action.triggered.connect(self.close_requested.emit)
 
         menu.exec(self._runner_menu_btn.mapToGlobal(self._runner_menu_btn.rect().bottomLeft()))
+
+    # --- Cleanup ---
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """
+        Stop all QTimers before the widget is destroyed.
+
+        Timers started in __init__ (particularly the 50ms stall-instrument
+        timer that runs unconditionally) keep firing against a dead widget
+        if we don't explicitly stop them — polluting logs and blocking
+        garbage collection of this panel.
+        """
+        for attr in ("_stall_timer", "_elapsed_timer", "_device_refresh_timer"):
+            timer = getattr(self, attr, None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except Exception:
+                    # Qt objects may already be partially torn down by the time
+                    # closeEvent fires; swallow to guarantee the other timers
+                    # still get stopped.
+                    pass
+        super().closeEvent(event)
