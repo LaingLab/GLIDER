@@ -492,8 +492,14 @@ class HardwareManager:
                 raise HardwareError(str(e)) from e
 
         self._devices[device_id] = device
-        pins_str = ", ".join(f"{k}={v}" for k, v in pins.items())
-        logger.info(f"Added device: {device_id} (type: {device_type}, pins: {pins_str})")
+        if pins:
+            detail = ", ".join(f"{k}={v}" for k, v in pins.items())
+            logger.info(f"Added device: {device_id} (type: {device_type}, pins: {detail})")
+        elif kwargs:
+            detail = ", ".join(f"{k}={v}" for k, v in kwargs.items())
+            logger.info(f"Added device: {device_id} (type: {device_type}, {detail})")
+        else:
+            logger.info(f"Added device: {device_id} (type: {device_type})")
 
     def clear(self) -> None:
         """Clear all boards and devices without disconnecting them.

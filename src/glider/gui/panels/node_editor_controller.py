@@ -646,7 +646,8 @@ class NodeEditorController(QObject):
             )
             props_layout.addRow("Delay:", delay_spin)
 
-        elif node_type == "WaitForInput":
+        if node_type == "WaitForInput":
+            self._add_divider(props_layout)
             self._add_section_header(props_layout, "INPUT SETTINGS")
             mode_combo = QComboBox()
             mode_combo.addItem("Digital (Rising Edge)", "digital")

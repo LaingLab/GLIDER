@@ -119,10 +119,18 @@ class HardwarePanel(QWidget):
                     if isinstance(pin_map, dict) and pin_map:
                         pin_values = list(pin_map.values())
                     else:
-                        # Fallback for legacy devices that never got a config.pins
-                        # populated but still have the _pins list attached.
                         pin_values = getattr(device, "_pins", []) or []
-                    pin_str = f"Pin {pin_values[0]}" if pin_values else ""
+
+                    device_type = getattr(device, "device_type", "unknown")
+                    if device_type == "ADS1115":
+                        cfg = getattr(device, "_config", None)
+                        settings = getattr(cfg, "settings", {}) if cfg else {}
+                        channel = settings.get("channel", 0)
+                        pin_str = f"Ch {channel}"
+                    elif pin_values:
+                        pin_str = f"Pin {pin_values[0]}"
+                    else:
+                        pin_str = ""
                     device_item = QTreeWidgetItem(
                         [
                             getattr(device, "name", device_id),
@@ -609,12 +617,15 @@ class HardwarePanel(QWidget):
 
         current_name = device_config.name if device_config else getattr(device, "name", device_id)
         current_pins = device_config.pins if device_config else {}
+        current_settings = device_config.settings if device_config else {}
         device_type = device_config.device_type if device_config else type(device).__name__
 
         if not current_pins and hasattr(device, "pin"):
             current_pins = {"output": device.pin} if hasattr(device, "pin") else {}
         if not current_pins and hasattr(device, "pins"):
             current_pins = device.pins if isinstance(device.pins, dict) else {}
+
+        is_ads1115 = device_type == "ADS1115"
 
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Edit Device: {device_id}")
@@ -634,22 +645,59 @@ class HardwarePanel(QWidget):
         layout.addRow("Name:", name_edit)
 
         pin_spinboxes: dict[str, QSpinBox] = {}
+        ads1115_settings: dict[str, QSpinBox | QComboBox] = {}
 
-        is_analog = "Analog" in device_type
+        if is_ads1115:
+            addr_spin = QSpinBox()
+            addr_spin.setRange(72, 75)
+            addr_spin.setValue(current_settings.get("i2c_address", 72))
+            addr_spin.setToolTip("I2C address: 72=0x48, 73=0x49, 74=0x4A, 75=0x4B")
+            ads1115_settings["i2c_address"] = addr_spin
+            layout.addRow("I2C Address:", addr_spin)
 
-        for pin_name, pin_value in current_pins.items():
-            spin = QSpinBox()
-            spin.setRange(0, 53)
-            spin.setValue(pin_value)
-            pin_spinboxes[pin_name] = spin
-            label = f"{pin_name.capitalize()} Pin:"
-            layout.addRow(label, spin)
+            chan_spin = QSpinBox()
+            chan_spin.setRange(0, 3)
+            chan_spin.setValue(current_settings.get("channel", 0))
+            chan_spin.setToolTip("ADC channel to read (0-3)")
+            ads1115_settings["channel"] = chan_spin
+            layout.addRow("Channel:", chan_spin)
 
-        if is_analog:
-            note = QLabel("Note: A0=14, A1=15, A2=16, A3=17, A4=18, A5=19")
+            gain_combo = QComboBox()
+            gain_options = [
+                "1 (\u00b14.096V)",
+                "2 (\u00b12.048V)",
+                "4 (\u00b11.024V)",
+                "8 (\u00b10.512V)",
+                "16 (\u00b10.256V)",
+            ]
+            gain_combo.addItems(gain_options)
+            current_gain = current_settings.get("gain", 1)
+            gain_values = [1, 2, 4, 8, 16]
+            if current_gain in gain_values:
+                gain_combo.setCurrentIndex(gain_values.index(current_gain))
+            ads1115_settings["gain_combo"] = gain_combo
+            layout.addRow("Gain:", gain_combo)
+
+            note = QLabel("Note: Uses I2C on GPIO2 (SDA) and GPIO3 (SCL)")
             note.setProperty("textRole", "muted")
             note.setWordWrap(True)
             layout.addRow(note)
+        else:
+            is_analog = "Analog" in device_type
+
+            for pin_name, pin_value in current_pins.items():
+                spin = QSpinBox()
+                spin.setRange(0, 53)
+                spin.setValue(pin_value)
+                pin_spinboxes[pin_name] = spin
+                label = f"{pin_name.capitalize()} Pin:"
+                layout.addRow(label, spin)
+
+            if is_analog:
+                note = QLabel("Note: A0=14, A1=15, A2=16, A3=17, A4=18, A5=19")
+                note.setProperty("textRole", "muted")
+                note.setWordWrap(True)
+                layout.addRow(note)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -661,30 +709,51 @@ class HardwarePanel(QWidget):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             new_name = name_edit.text().strip() or device_id
             new_pins = {pin_name: spin.value() for pin_name, spin in pin_spinboxes.items()}
+            new_settings = None
+
+            if is_ads1115 and ads1115_settings:
+                new_settings = {
+                    "i2c_address": ads1115_settings["i2c_address"].value(),
+                    "channel": ads1115_settings["channel"].value(),
+                    "gain": int(
+                        ads1115_settings["gain_combo"].currentText().split()[0]
+                    ),
+                }
 
             try:
                 device.name = new_name
 
-                if hasattr(device, "config") and hasattr(device.config, "pins"):
-                    device.config.pins.update(new_pins)
-                elif hasattr(device, "_config") and hasattr(device._config, "pins"):
-                    device._config.pins.update(new_pins)
+                if is_ads1115 and new_settings:
+                    if hasattr(device, "config") and hasattr(device.config, "settings"):
+                        device.config.settings.update(new_settings)
+                    elif hasattr(device, "_config") and hasattr(device._config, "settings"):
+                        device._config.settings.update(new_settings)
+                else:
+                    if hasattr(device, "config") and hasattr(device.config, "pins"):
+                        device.config.pins.update(new_pins)
+                    elif hasattr(device, "_config") and hasattr(device._config, "pins"):
+                        device._config.pins.update(new_pins)
 
-                # Keep the legacy denormalized list (set by HardwareManager at
-                # creation time) in sync so anything still reading it sees the
-                # updated values.
-                if hasattr(device, "_pins"):
-                    device._pins = list(new_pins.values())
+                    # Keep the legacy denormalized list (set by HardwareManager at
+                    # creation time) in sync so anything still reading it sees the
+                    # updated values.
+                    if hasattr(device, "_pins"):
+                        device._pins = list(new_pins.values())
 
                 if session:
-                    session.update_device(device_id, name=new_name, pins=new_pins)
+                    session.update_device(
+                        device_id,
+                        name=new_name,
+                        pins=new_pins if not is_ads1115 else None,
+                        settings=new_settings,
+                    )
 
                 self.refresh_tree()
                 QMessageBox.information(
                     self,
                     "Success",
                     f"Updated device: {device_id}\n\n"
-                    "Note: Pin changes take effect after reconnecting the board.",
+                    "Note: Changes take effect after reconnecting the board.",
                 )
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to update device: {e}")
