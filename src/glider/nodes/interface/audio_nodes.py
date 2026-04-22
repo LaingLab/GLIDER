@@ -50,6 +50,8 @@ class AudioPlaybackNode(GliderNode):
         self._state.setdefault("device_index", None)
         self._state.setdefault("device_name", "")
         self._state.setdefault("volume", 1.0)
+        self._cached_audio = None  # (data, samplerate)
+        self._cached_path = None
 
     def update_event(self) -> None:
         """Called when inputs change."""
@@ -74,7 +76,12 @@ class AudioPlaybackNode(GliderNode):
         try:
             import numpy as np
 
-            data, samplerate = await asyncio.to_thread(self._load_audio, file_path)
+            if self._cached_path == file_path and self._cached_audio is not None:
+                data, samplerate = self._cached_audio
+            else:
+                data, samplerate = await asyncio.to_thread(self._load_audio, file_path)
+                self._cached_audio = (data, samplerate)
+                self._cached_path = file_path
 
             # Apply volume scaling
             if volume != 1.0:
