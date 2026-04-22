@@ -1145,21 +1145,25 @@ class MainWindow(QMainWindow):
 
         for device_config in self._core.session.hardware.devices:
             try:
+                settings = device_config.settings or {}
                 if device_config.pins:
-                    pin_name = list(device_config.pins.keys())[0]
-                    pin = device_config.pins[pin_name]
+                    self._core.hardware_manager.add_device_multi_pin(
+                        device_config.id,
+                        device_config.device_type,
+                        device_config.board_id,
+                        device_config.pins,
+                        name=device_config.name,
+                        **settings,
+                    )
                 else:
-                    pin_name = "pin"
-                    pin = 0
-
-                self._core.hardware_manager.add_device(
-                    device_config.id,
-                    device_config.device_type,
-                    device_config.board_id,
-                    pin,
-                    name=device_config.name,
-                    pin_name=pin_name,
-                )
+                    self._core.hardware_manager.add_device_multi_pin(
+                        device_config.id,
+                        device_config.device_type,
+                        device_config.board_id,
+                        {},
+                        name=device_config.name,
+                        **settings,
+                    )
             except Exception as e:
                 logger.warning(f"Failed to add device {device_config.id}: {e}")
 
