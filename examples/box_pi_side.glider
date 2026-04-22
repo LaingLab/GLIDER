@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-03-17T09:47:27.596640",
-    "modified_at": "2026-03-17T10:53:38.188835",
+    "modified_at": "2026-04-22T08:56:36.522389",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -59,18 +59,6 @@
         "settings": {}
       },
       {
-        "id": "pi_beam",
-        "device_type": "ADS1115",
-        "name": "pi_beam",
-        "board_id": "pi",
-        "pins": {},
-        "settings": {
-          "i2c_address": 72,
-          "channel": 0,
-          "gain": 1
-        }
-      },
-      {
         "id": "ard_pump",
         "device_type": "PWMOutput",
         "name": "ard_pump",
@@ -99,6 +87,20 @@
           "input": 14
         },
         "settings": {}
+      },
+      {
+        "id": "pi_beam",
+        "device_type": "ADS1115",
+        "name": "pi_beam",
+        "board_id": "pi",
+        "pins": {
+          "pin": 3
+        },
+        "settings": {
+          "i2c_address": 72,
+          "channel": 3,
+          "gain": 1
+        }
       }
     ]
   },
@@ -138,21 +140,6 @@
         },
         "device_id": null,
         "visible_in_runner": false
-      },
-      {
-        "id": "waitforinput_32931562",
-        "node_type": "WaitForInput",
-        "position": [
-          -178.3225,
-          -275.93499999999995
-        ],
-        "state": {
-          "threshold_mode": "analog",
-          "threshold_direction": "below",
-          "threshold": 100
-        },
-        "device_id": "pi_beam",
-        "visible_in_runner": true
       },
       {
         "id": "loop_3edd28c8",
@@ -260,8 +247,8 @@
         "id": "waitforinput_a2e4f5af",
         "node_type": "WaitForInput",
         "position": [
-          -184.355,
-          -174.35500000000002
+          -182.05499999999998,
+          -173.20500000000004
         ],
         "state": {
           "threshold": 100,
@@ -361,6 +348,21 @@
         },
         "device_id": "ard_pump",
         "visible_in_runner": false
+      },
+      {
+        "id": "waitforinput_5439130e",
+        "node_type": "WaitForInput",
+        "position": [
+          -167.90459999999996,
+          -272.84497499999986
+        ],
+        "state": {
+          "threshold_mode": "analog",
+          "threshold": 100,
+          "threshold_direction": "below"
+        },
+        "device_id": "pi_beam",
+        "visible_in_runner": true
       }
     ],
     "connections": [
@@ -515,6 +517,22 @@
         "to_node": "output_29948224",
         "to_input": 0,
         "connection_type": "exec"
+      },
+      {
+        "id": "conn_34373717",
+        "from_node": "loop_3edd28c8",
+        "from_output": 0,
+        "to_node": "waitforinput_5439130e",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_b18d9d50",
+        "from_node": "waitforinput_5439130e",
+        "from_output": 0,
+        "to_node": "output_6097c316",
+        "to_input": 0,
+        "connection_type": "exec"
       }
     ]
   },
@@ -538,7 +556,9 @@
     "confidence_threshold": 0.5,
     "tracking_enabled": true,
     "max_disappeared": 50,
-    "video_recording_enabled": true
+    "video_recording_enabled": true,
+    "audio_device_name": null,
+    "audio_device_index": null
   },
   "zones": {
     "zones": [],
