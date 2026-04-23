@@ -714,6 +714,46 @@ class NodeEditorController(QObject):
             info_label.setProperty("textRole", "muted")
             props_layout.addRow(info_label)
 
+        elif node_type == "DigitalRead":
+            self._add_section_header(props_layout, "DIGITAL SETTINGS")
+            # DigitalReadNode has full continuous-polling support in its start()/
+            # _poll_loop() methods, but before this UI was added there was no way
+            # to toggle it from the node editor — _continuous stayed False forever.
+            continuous_check = QCheckBox("Enable continuous reading")
+            saved_continuous = False
+            if node_config and node_config.state:
+                saved_continuous = node_config.state.get("continuous", False)
+            continuous_check.setChecked(saved_continuous)
+            continuous_check.toggled.connect(
+                lambda checked, nid=node_id: self._on_node_property_changed(
+                    nid, "continuous", checked
+                )
+            )
+            props_layout.addRow(continuous_check)
+
+            poll_spin = QDoubleSpinBox()
+            poll_spin.setRange(0.01, 10.0)
+            poll_spin.setDecimals(2)
+            poll_spin.setSingleStep(0.05)
+            saved_poll = 0.1
+            if node_config and node_config.state:
+                saved_poll = node_config.state.get("poll_interval", 0.1)
+            poll_spin.setValue(saved_poll)
+            poll_spin.setSuffix(" sec")
+            poll_spin.valueChanged.connect(
+                lambda val, nid=node_id: self._on_node_property_changed(nid, "poll_interval", val)
+            )
+            props_layout.addRow("Poll Interval:", poll_spin)
+
+            info_label = QLabel(
+                "Continuous mode: automatically polls the digital input at the poll\n"
+                "interval. The 'value' output updates on every poll and the 'exec'\n"
+                "output fires downstream nodes after each read."
+            )
+            info_label.setWordWrap(True)
+            info_label.setProperty("textRole", "muted")
+            props_layout.addRow(info_label)
+
         elif node_type == "AnalogRead":
             self._add_section_header(props_layout, "ANALOG SETTINGS")
             continuous_check = QCheckBox("Enable continuous reading")

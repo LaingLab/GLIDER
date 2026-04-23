@@ -164,6 +164,9 @@ class DeviceControlPanel(QWidget):
         poll_row.setSpacing(8)
         self._continuous_checkbox = QCheckBox("Auto")
         self._continuous_checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        # Wire the checkbox to its handler. Without this, toggling "Auto" did
+        # nothing at all — the handler existed only as dead code.
+        self._continuous_checkbox.stateChanged.connect(self._on_continuous_changed)
         poll_row.addWidget(self._continuous_checkbox)
 
         poll_label = QLabel("Interval:")
