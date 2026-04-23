@@ -798,7 +798,21 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str, object)
     def _on_hardware_connection_change(self, board_id: str, state: BoardConnectionState) -> None:
-        """Handle hardware connection state changes."""
+        """Handle hardware connection state changes.
+
+        Two jobs:
+          1. Refresh the status-bar connection indicator (every transition —
+             CONNECTING, CONNECTED, DISCONNECTED, ERROR, RECONNECTING). This
+             must run unconditionally; previously it was gated behind the
+             disconnect path and the dot never turned green on connect.
+          2. If the board dropped *during* a running experiment, pause and
+             surface the hardware-disconnection dialog.
+        """
+        # (1) Always refresh the indicator — this is the only wire-up point.
+        self._update_connection_status()
+
+        # (2) Pause-on-drop guard only applies to terminal-failure states
+        # reached while an experiment is actually running.
         if state not in (BoardConnectionState.DISCONNECTED, BoardConnectionState.ERROR):
             return
 
@@ -815,26 +829,49 @@ class MainWindow(QMainWindow):
         self._run_async(self._core.pause())
         self._show_hardware_disconnection_dialog(board_id, state)
 
-        self._update_connection_status()
-
     def _update_connection_status(self) -> None:
-        """Update the status bar connection indicator."""
-        if self._conn_dot is None:
+        """Update the status bar connection indicator.
+
+        Reads ``board.is_connected`` (and ``board.state`` for the transient
+        CONNECTING case). The old check probed ``_connected`` / ``connected``
+        attributes that don't exist on any BaseBoard subclass, so even when
+        this method *was* reached, it always reported "No board".
+        """
+        if self._conn_dot is None or self._conn_label is None:
             return
+
         boards = self._core.hardware_manager.boards
-        connected = any(
-            getattr(b, "_connected", False) or getattr(b, "connected", False)
-            for b in boards.values()
-        )
-        if connected:
-            for board_id, board in boards.items():
-                if getattr(board, "_connected", False) or getattr(board, "connected", False):
-                    name = getattr(board, "name", board_id)
-                    self._conn_dot.setStyleSheet(f"color: {colors.SUCCESS}; font-size: 16px;")
-                    self._conn_label.setText(f"{name} \u2014 Connected")
-                    return
-        self._conn_dot.setStyleSheet(f"color: {colors.ERROR}; font-size: 16px;")
-        self._conn_label.setText("No board")
+        if not boards:
+            self._conn_dot.setStyleSheet(f"color: {colors.ERROR}; font-size: 16px;")
+            self._conn_label.setText("No board")
+            return
+
+        # Prefer a connected board; fall back to CONNECTING so the user sees
+        # feedback during the connect handshake.
+        connected_board = None
+        connecting_board = None
+        for board_id, board in boards.items():
+            name = getattr(board, "name", board_id)
+            if getattr(board, "is_connected", False):
+                connected_board = (name, board)
+                break
+            if getattr(board, "state", None) in (
+                BoardConnectionState.CONNECTING,
+                BoardConnectionState.RECONNECTING,
+            ):
+                connecting_board = (name, board)
+
+        if connected_board is not None:
+            name, _ = connected_board
+            self._conn_dot.setStyleSheet(f"color: {colors.SUCCESS}; font-size: 16px;")
+            self._conn_label.setText(f"{name} \u2014 Connected")
+        elif connecting_board is not None:
+            name, _ = connecting_board
+            self._conn_dot.setStyleSheet(f"color: {colors.WARNING}; font-size: 16px;")
+            self._conn_label.setText(f"{name} \u2014 Connecting\u2026")
+        else:
+            self._conn_dot.setStyleSheet(f"color: {colors.ERROR}; font-size: 16px;")
+            self._conn_label.setText("No board")
 
     def update_status_stats(self, node_count: int, connection_count: int) -> None:
         """Update the node/connection count in the status bar."""
