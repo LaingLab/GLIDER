@@ -91,7 +91,7 @@ Repository = "https://github.com/LaingLab/glider"
 where = ["src"]
 
 [tool.setuptools.package-data]
-glider = ["schema/*.json", "gui/styles/*.qss"]
+glider = ["schema/*.json", "gui/styles/*.qss", "assets/*.png"]
 
 [tool.black]
 line-length = 100

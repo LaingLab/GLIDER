@@ -85,6 +85,17 @@ class MainWindow(QMainWindow):
     ):
         super().__init__()
 
+        # Set per-window icon as a fallback for window managers (notably some
+        # Wayland compositors and older KDE) that read the window icon rather
+        # than the QApplication-level icon. Safe even if the app-level icon
+        # was already applied in __main__.
+        try:
+            from glider.assets import get_app_icon
+
+            self.setWindowIcon(get_app_icon())
+        except Exception:  # pragma: no cover — cosmetic fallback
+            pass
+
         self._core = core
         if view_manager is not None:
             self._view_manager = view_manager

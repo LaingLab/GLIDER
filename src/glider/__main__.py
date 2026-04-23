@@ -48,6 +48,32 @@ def get_system_font_family() -> str:
         return "DejaVu Sans"
 
 
+# Reverse-domain application ID. Must match the installer's publisher/app pair
+# and is used by Windows to group taskbar icons, drive jump-list identity, and
+# keep pinned shortcuts stable across updates. Keep in line with
+# ``QApplication.setOrganizationDomain`` below.
+_APP_USER_MODEL_ID = "com.lainglab.glider"
+
+
+def _install_windows_app_id() -> None:
+    """Tell Windows this process is 'GLIDER', not 'python.exe'.
+
+    Without this call, the taskbar groups all PyQt windows under whatever exe
+    launched Python (the interpreter during dev, or the frozen launcher after
+    packaging), and pinning the running app gives you a shortcut to the
+    interpreter instead of to GLIDER. Must run *before* any window is shown.
+    No-op on non-Windows platforms or if shell32 is unavailable.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(_APP_USER_MODEL_ID)
+    except Exception:  # pragma: no cover — best-effort cosmetic fix
+        logger.debug("Could not set AppUserModelID", exc_info=True)
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -241,6 +267,10 @@ def main() -> int:
 
     logger.info("Starting GLIDER...")
 
+    # Tell Windows we're GLIDER, not python.exe. Must come before QApplication
+    # is constructed so the taskbar entry is tagged correctly on first paint.
+    _install_windows_app_id()
+
     # Create Qt application
     # Enable high DPI support
     QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -251,6 +281,17 @@ def main() -> int:
     app.setApplicationName("GLIDER")
     app.setOrganizationName("LaingLab")
     app.setOrganizationDomain("lainglab.com")
+
+    # Application icon. Shown in the taskbar, dock, Alt-Tab, window title bar,
+    # and any dialog that doesn't set its own icon. Swallow failures so a
+    # missing asset never blocks launch — users can still run the app without
+    # a branded icon.
+    try:
+        from glider.assets import get_app_icon
+
+        app.setWindowIcon(get_app_icon())
+    except Exception:
+        logger.warning("Could not load application icon", exc_info=True)
 
     # Set default application font to prevent "Point size <= 0" warnings
     default_font = QFont(get_system_font_family(), 10)
