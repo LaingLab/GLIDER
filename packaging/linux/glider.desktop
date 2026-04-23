@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=GLIDER
+GenericName=Laboratory Automation
+Comment=General Laboratory Interface for Design, Experimentation, and Recording
+Exec=glider
+# Icon resolves to /usr/share/icons/hicolor/512x512/apps/glider.png when
+# installed by the Pi image stage (see packaging/pi/). During dev, point it at
+# packaging/linux/glider.png with an absolute path.
+Icon=glider
+Terminal=false
+Categories=Science;Education;DataVisualization;Electronics;
+Keywords=laboratory;automation;arduino;raspberry-pi;experiment;
+StartupWMClass=GLIDER
+# MIME association so .glider files double-click to open in GLIDER.
+MimeType=application/x-glider;
