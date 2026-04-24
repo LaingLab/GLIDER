@@ -1,0 +1,13 @@
+# /etc/sudoers.d/glider
+#
+# Narrow sudoers rule: the `glider` user can run ONLY the in-app update
+# script, and does so without a password prompt (because the app invokes it
+# from a GUI context with no tty). The NOPASSWD is deliberately scoped to
+# this one command — glider cannot get a general root shell from this rule.
+#
+# Security note: the script itself must remain owned by root and not be
+# writable by the glider user, otherwise we'd have created a privilege-
+# escalation path. The pi-gen stage script installs it mode 0755 owned by
+# root, which is the correct posture.
+
+glider ALL=(ALL) NOPASSWD: /opt/glider/scripts/glider-update.sh
