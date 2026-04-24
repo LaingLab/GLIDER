@@ -47,16 +47,17 @@ jobs:
           fi
 
       - name: Install pi-gen build deps
-        # Matches pi-gen's own ./depends file. Missing packages here cause the
-        # build to abort immediately with "Required dependencies not installed".
-        # qemu-user-binfmt is the one that's easy to forget — it's what lets
-        # pi-gen's chroot execute binaries for the target architecture when
-        # the runner and target arch don't match (we happen to match on
-        # ubuntu-22.04-arm, but pi-gen checks for it unconditionally).
+        # Matches pi-gen's arm64-branch ./depends file. Two Ubuntu gotchas:
+        #   1. qemu-user-binfmt and qemu-user-static conflict — they both
+        #      register the same binfmt handlers. pi-gen's arm64 depends
+        #      file explicitly names qemu-user-binfmt, so that's the one
+        #      to install. Don't list qemu-user-static alongside it.
+        #   2. binfmt-support provides the binfmt-registration machinery
+        #      that qemu-user-binfmt plugs into.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            coreutils quilt parted qemu-user-static qemu-user-binfmt \
+            coreutils quilt parted qemu-user-binfmt binfmt-support \
             qemu-utils debootstrap zerofree zip dosfstools libarchive-tools \
             libcap2-bin grep rsync xz-utils file git curl bc arch-test \
             kpartx gpg pigz fdisk
