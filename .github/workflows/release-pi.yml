@@ -60,7 +60,26 @@ jobs:
             coreutils quilt parted qemu-user-binfmt binfmt-support \
             qemu-utils debootstrap zerofree zip dosfstools libarchive-tools \
             libcap2-bin grep rsync xz-utils file git curl bc arch-test \
-            kpartx gpg pigz fdisk
+            kpartx gpg pigz fdisk wget
+
+      - name: Install current Debian archive keyring
+        # Ubuntu 22.04's debian-archive-keyring predates Debian 12 (bookworm).
+        # debootstrap uses the HOST's keyring to seed the chroot, so without
+        # this step the chroot's apt sees "NO_PUBKEY" on every bookworm
+        # repo fetch (main, updates, security). Pull the current keyring
+        # package from Debian's own pool and install it on the host.
+        run: |
+          # Resolve the latest versioned .deb in Debian's pool rather than
+          # hardcoding a version (the keyring ships updates on its own
+          # cadence — pinning a version would age out).
+          KEYRING_URL=$(curl -sL http://ftp.debian.org/debian/pool/main/d/debian-archive-keyring/ \
+            | grep -oE 'debian-archive-keyring_[0-9.+deb~u]+_all\.deb' \
+            | sort -V | tail -n1)
+          echo "Fetching http://ftp.debian.org/debian/pool/main/d/debian-archive-keyring/$KEYRING_URL"
+          curl -sL -o /tmp/debian-archive-keyring.deb \
+            "http://ftp.debian.org/debian/pool/main/d/debian-archive-keyring/$KEYRING_URL"
+          sudo dpkg -i /tmp/debian-archive-keyring.deb
+          dpkg -l debian-archive-keyring | tail -1
 
       - name: Clone pi-gen
         run: git clone --depth 1 --branch arm64 https://github.com/RPi-Distro/pi-gen.git
