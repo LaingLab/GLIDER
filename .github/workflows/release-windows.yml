@@ -64,11 +64,18 @@ jobs:
             choco install innosetup --no-progress -y
             $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           }
+          # /O forces the output directory to a repo-root-relative path so
+          # the artifact upload and release-attach steps below can glob it
+          # with a single fixed pattern. Without this, Inno Setup resolves
+          # `OutputDir=Output` in installer.iss relative to the .iss file's
+          # directory and the installer lands at packaging\windows\Output\.
           & $iscc "/DMyAppVersion=${{ steps.version.outputs.version }}" `
+                  "/O$pwd\Output" `
                   packaging\windows\installer.iss
           if ($LASTEXITCODE -ne 0) {
             throw "ISCC exited with $LASTEXITCODE"
           }
+          Get-ChildItem Output
 
       # --- CODE SIGNING TODO -------------------------------------------------
       # The installer ships unsigned for v1. Every downloader will hit Windows
