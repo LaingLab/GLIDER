@@ -51,11 +51,24 @@ jobs:
       - name: Freeze with PyInstaller
         run: uv run pyinstaller packaging/windows/glider.spec --clean --noconfirm
 
-      - name: Install Inno Setup
-        uses: Minionguyjpro/Inno-Setup-Action@v1
-        with:
-          path: packaging/windows/installer.iss
-          options: "/DMyAppVersion=${{ steps.version.outputs.version }}"
+      - name: Build installer with Inno Setup
+        # Inno Setup 6 is preinstalled on the windows-2022 runner at this path.
+        # Invoking ISCC.exe directly avoids the marketplace action (which
+        # churned its tags) and keeps the pipeline independent of third-party
+        # actions.
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            # Fallback: install via chocolatey if the image ever changes.
+            choco install innosetup --no-progress -y
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc "/DMyAppVersion=${{ steps.version.outputs.version }}" `
+                  packaging\windows\installer.iss
+          if ($LASTEXITCODE -ne 0) {
+            throw "ISCC exited with $LASTEXITCODE"
+          }
 
       # --- CODE SIGNING TODO -------------------------------------------------
       # The installer ships unsigned for v1. Every downloader will hit Windows
