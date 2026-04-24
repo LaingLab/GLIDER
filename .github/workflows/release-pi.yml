@@ -91,6 +91,22 @@ jobs:
           chmod +x pi-gen/stage-glider/00-run.sh
           chmod +x pi-gen/stage-glider/files/glider-update.sh
 
+      - name: Strip unavailable rpi-* packages from stage2
+        # pi-gen's arm64 branch stage2/01-sys-tweaks/00-packages lists
+        # rpi-swap, rpi-loop-utils, and rpi-usb-gadget. None of these are
+        # currently published to archive.raspberrypi.com for bookworm arm64
+        # (as of the run that caught this), so apt aborts with "Unable to
+        # locate package". They're optional conveniences — swap config,
+        # losetup wrapper, and Pi-Zero USB-gadget helpers — and dropping
+        # them doesn't affect the lab-kiosk use case.
+        # If archive.raspberrypi.com later publishes them, drop this step.
+        run: |
+          for pkg in rpi-swap rpi-loop-utils rpi-usb-gadget; do
+            sed -i "/^${pkg}\$/d" pi-gen/stage2/01-sys-tweaks/00-packages
+          done
+          echo "pi-gen/stage2/01-sys-tweaks/00-packages after patch:"
+          cat pi-gen/stage2/01-sys-tweaks/00-packages
+
       - name: Inject fresh keyring into stage0's chroot
         # Symptom without this: stage0/00-configure-apt fails with NO_PUBKEY
         # on bookworm-updates/bookworm-security, because the chroot's own
