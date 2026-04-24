@@ -91,21 +91,39 @@ jobs:
           chmod +x pi-gen/stage-glider/00-run.sh
           chmod +x pi-gen/stage-glider/files/glider-update.sh
 
-      - name: Strip unavailable rpi-* packages from stage2
-        # pi-gen's arm64 branch stage2/01-sys-tweaks/00-packages lists
-        # rpi-swap, rpi-loop-utils, and rpi-usb-gadget. None of these are
-        # currently published to archive.raspberrypi.com for bookworm arm64
-        # (as of the run that caught this), so apt aborts with "Unable to
-        # locate package". They're optional conveniences — swap config,
-        # losetup wrapper, and Pi-Zero USB-gadget helpers — and dropping
-        # them doesn't affect the lab-kiosk use case.
-        # If archive.raspberrypi.com later publishes them, drop this step.
+      - name: Strip unavailable rpi-* packages from pi-gen stages
+        # pi-gen's arm64 branch references rpi-swap, rpi-loop-utils, and
+        # rpi-usb-gadget, but those aren't currently published to
+        # archive.raspberrypi.com for bookworm arm64 — apt aborts with
+        # "Unable to locate package". They're optional conveniences (swap
+        # config, losetup wrapper, Pi-Zero USB-gadget helpers), safe to drop
+        # for a lab-kiosk image. Rather than guessing which file lists them,
+        # scan every package list in every stage.
         run: |
-          for pkg in rpi-swap rpi-loop-utils rpi-usb-gadget; do
-            sed -i "/^${pkg}\$/d" pi-gen/stage2/01-sys-tweaks/00-packages
-          done
-          echo "pi-gen/stage2/01-sys-tweaks/00-packages after patch:"
-          cat pi-gen/stage2/01-sys-tweaks/00-packages
+          set -euo pipefail
+          MISSING=(rpi-swap rpi-loop-utils rpi-usb-gadget)
+          echo "=== Before patch: grep for offending packages ==="
+          grep -rn -E "^(rpi-swap|rpi-loop-utils|rpi-usb-gadget)$" \
+            pi-gen/stage*/ || echo "  (no matches — patch may be unnecessary)"
+
+          # Iterate every file pi-gen uses as an apt list (*-packages,
+          # *-packages-nr) in every stage and strip the three packages.
+          find pi-gen/stage* -type f \
+            \( -name '*-packages' -o -name '*-packages-nr' \) \
+            -print0 | while IFS= read -r -d '' f; do
+              for pkg in "${MISSING[@]}"; do
+                sed -i "/^${pkg}\$/d" "$f"
+              done
+            done
+
+          echo
+          echo "=== After patch: grep for offending packages ==="
+          if grep -rn -E "^(rpi-swap|rpi-loop-utils|rpi-usb-gadget)$" pi-gen/stage*/; then
+            echo "ERROR: offending packages still present after patch"
+            exit 1
+          else
+            echo "  (clean — all three removed)"
+          fi
 
       - name: Inject fresh keyring into stage0's chroot
         # Symptom without this: stage0/00-configure-apt fails with NO_PUBKEY
