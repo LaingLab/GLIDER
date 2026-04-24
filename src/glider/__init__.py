@@ -5,7 +5,8 @@ A modular experimental orchestration platform for laboratory hardware control
 through visual flow-based programming.
 """
 
-__version__ = "1.0.0"
+from glider._version import __version__
+
 __author__ = "LaingLab"
 
 from glider.core.experiment_session import ExperimentSession

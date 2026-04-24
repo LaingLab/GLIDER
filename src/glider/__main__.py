@@ -318,6 +318,25 @@ def main() -> int:
                 window = create_main_window(app, core, force_mode)
                 window.show()
 
+                # Packaging phase-1 wiring: first-run welcome + post-launch
+                # silent update check. Both are best-effort — any failure
+                # here must never prevent the app from coming up.
+                try:
+                    from glider.first_run import run_first_run_if_needed
+
+                    run_first_run_if_needed(window)
+                except Exception:
+                    logger.warning("First-run setup failed", exc_info=True)
+
+                try:
+                    from PyQt6.QtCore import QTimer
+
+                    # Delay so the update check doesn't race first-paint or
+                    # compete with hardware enumeration on slow machines.
+                    QTimer.singleShot(3000, lambda: window.check_for_updates(silent=True))
+                except Exception:
+                    logger.debug("Could not schedule startup update check", exc_info=True)
+
                 # Store core reference for cleanup
                 app._glider_core = core
 
