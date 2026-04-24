@@ -38,11 +38,7 @@ The installer lands at `Output\glider-setup-<version>.exe`.
 |---|---|---|
 | `..\icons\glider.ico` | Present | Already a multi-resolution 16/32/… `.ico`. No action. |
 | `assets\wizard.bmp` / `sidebar.bmp` | Missing | Optional Inno Setup wizard graphics. Default Inno visuals work fine if omitted — keep unless/until we want branded installer screens. |
-| `version_info.txt` | Missing | Windows executable version metadata (company, product, copyright). PyInstaller can generate it via `pyi-set_version` from a template; CI is expected to produce it from `_version.py`. |
-
-The `version_info.txt` reference in `glider.spec` is optional — delete the
-`version=` line from the spec while iterating locally if you haven't
-generated the file yet.
+| `version_info.txt` | Not wired | Windows executable version metadata (company, product, copyright) that shows in the Explorer *Details* tab. Not generated for v1; the `.exe` works fine without it. When we want branded metadata, add a CI step that reads `_version.py` and writes a PyInstaller-format version resource, then uncomment the `version=` kwarg in `glider.spec`. |
 
 ## Code signing — TODO
 
