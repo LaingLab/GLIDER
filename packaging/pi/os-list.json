@@ -1,0 +1,18 @@
+{
+  "_comment": "Raspberry Pi Imager sub-list manifest for GLIDER. Host this JSON at a stable URL (GitHub Pages is free) and give users the URL to paste into Imager's 'Choose OS → Use custom'. The CI release workflow rewrites url/extract_size/extract_sha256/image_download_size/image_download_sha256/release_date from the tagged build artifacts.",
+  "os_list": [
+    {
+      "name": "GLIDER",
+      "description": "Laboratory automation with node-graph experiments (runs in kiosk mode, no terminal required).",
+      "icon": "https://raw.githubusercontent.com/LaingLab/glider/main/src/glider/assets/glider-256.png",
+      "website": "https://github.com/LaingLab/glider",
+      "url": "https://github.com/LaingLab/glider/releases/download/__VERSION__/GLIDER-__VERSION__-pi64.img.xz",
+      "extract_size": 0,
+      "extract_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "image_download_size": 0,
+      "image_download_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "release_date": "0000-00-00",
+      "init_format": "systemd"
+    }
+  ]
+}

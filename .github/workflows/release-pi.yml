@@ -1,0 +1,146 @@
+# Tag-triggered Raspberry Pi SD image build.
+#
+# Uses pi-gen on a GitHub ARM runner to bake an image with GLIDER pre-
+# installed and auto-starting in Runner mode. Outputs:
+#
+#   GLIDER-<version>-pi64.img.xz
+#   os-list.json                  (rewritten with real size/sha256/url/date)
+#
+# Both are attached to the matching draft Release for a human to smoke-test
+# before publishing.
+
+name: release-pi
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # ARM runners build natively; x86 runners would need QEMU user-mode
+    # emulation and take 2-3× as long. If ARM availability is a problem,
+    # swap to ubuntu-22.04 and enable the qemu-user-static fallback in
+    # pi-gen's config.
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: glider
+          fetch-depth: 0  # pi-gen's stage script checks out tags
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          ref="${GITHUB_REF_NAME}"
+          if [[ "$ref" =~ ^v(.+)$ ]]; then
+            echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install pi-gen build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            coreutils quilt parted qemu-user-static debootstrap zerofree zip \
+            dosfstools libarchive-tools libcap2-bin grep rsync xz-utils file git \
+            curl bc arch-test
+
+      - name: Clone pi-gen
+        run: git clone --depth 1 --branch arm64 https://github.com/RPi-Distro/pi-gen.git
+
+      - name: Wire stage-glider into pi-gen
+        run: |
+          cp glider/packaging/pi/pi-gen-config pi-gen/config
+          cp -r glider/packaging/pi/stage-glider pi-gen/
+          chmod +x pi-gen/stage-glider/00-run.sh
+          chmod +x pi-gen/stage-glider/files/glider-update.sh
+
+      - name: Build image
+        working-directory: pi-gen
+        env:
+          GLIDER_REF: ${{ steps.version.outputs.ref }}
+        run: |
+          # Skip NOOBS packaging (not needed for Pi Imager distribution) and
+          # docker-ise nothing — we're already in a disposable runner.
+          sudo -E ./build.sh
+
+      - name: Compress image
+        working-directory: pi-gen/deploy
+        run: |
+          # pi-gen already outputs a .zip — also produce .img.xz because the
+          # Pi Imager manifest prefers xz (better compression for OS images).
+          for img in *.img; do
+            xz --threads=0 -9 --keep "$img"
+          done
+          ls -lh
+
+      - name: Rename artifacts
+        working-directory: pi-gen/deploy
+        run: |
+          V="${{ steps.version.outputs.version }}"
+          for f in *.img.xz; do
+            mv "$f" "GLIDER-${V}-pi64.img.xz"
+          done
+
+      - name: Rewrite os-list.json with real sizes and checksums
+        working-directory: pi-gen/deploy
+        run: |
+          V="${{ steps.version.outputs.version }}"
+          IMG="GLIDER-${V}-pi64.img.xz"
+          SIZE=$(stat -c%s "$IMG")
+          SHA=$(sha256sum "$IMG" | awk '{print $1}')
+          # extract_size = uncompressed image size
+          UNCOMPRESSED_IMG=$(ls *.img | head -n1 || true)
+          if [[ -n "$UNCOMPRESSED_IMG" ]]; then
+            EXTRACT_SIZE=$(stat -c%s "$UNCOMPRESSED_IMG")
+            EXTRACT_SHA=$(sha256sum "$UNCOMPRESSED_IMG" | awk '{print $1}')
+          else
+            EXTRACT_SIZE=0
+            EXTRACT_SHA="unavailable"
+          fi
+          DATE=$(date -u +%Y-%m-%d)
+
+          cp ../../glider/packaging/pi/os-list.json ./os-list.json
+          python3 - <<EOF
+          import json, pathlib
+          p = pathlib.Path("os-list.json")
+          data = json.loads(p.read_text())
+          entry = data["os_list"][0]
+          entry["url"] = entry["url"].replace("__VERSION__", "${V}")
+          entry["image_download_size"] = int("${SIZE}")
+          entry["image_download_sha256"] = "${SHA}"
+          entry["extract_size"] = int("${EXTRACT_SIZE}")
+          entry["extract_sha256"] = "${EXTRACT_SHA}"
+          entry["release_date"] = "${DATE}"
+          p.write_text(json.dumps(data, indent=2))
+          EOF
+          cat os-list.json
+
+      - name: Upload artifacts (manual workflow_dispatch runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: GLIDER-${{ steps.version.outputs.version }}-pi64
+          path: |
+            pi-gen/deploy/GLIDER-*-pi64.img.xz
+            pi-gen/deploy/os-list.json
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            pi-gen/deploy/GLIDER-*-pi64.img.xz
+            pi-gen/deploy/os-list.json
+          fail_on_unmatched_files: true
+          draft: true
