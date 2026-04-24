@@ -1026,6 +1026,33 @@ class CameraSettingsDialog(QDialog):
         """Handle backend selection change."""
         backend = self._backend_combo.itemData(index)
         is_yolo = backend in (DetectionBackend.YOLO_V8, DetectionBackend.YOLO_BYTETRACK)
+
+        # If the user just switched to a YOLO backend, make sure the
+        # ultralytics library is actually available (or offer to install it
+        # — see yolo_install.py for the AGPL rationale). If we can't get
+        # it, revert the combo to Background Sub so the rest of the UI
+        # doesn't end up half-configured. Guarded by an attribute so unit
+        # tests and migrations can construct the dialog without triggering
+        # a real install prompt.
+        if is_yolo and not getattr(self, "_suppress_yolo_prompt", False):
+            from glider.vision.yolo_install import ensure_ultralytics_installed
+
+            if not ensure_ultralytics_installed(self):
+                # Block signals while we rewind; otherwise this handler
+                # fires re-entrantly on setCurrentIndex.
+                self._backend_combo.blockSignals(True)
+                try:
+                    for i in range(self._backend_combo.count()):
+                        if (
+                            self._backend_combo.itemData(i)
+                            == DetectionBackend.BACKGROUND_SUBTRACTION
+                        ):
+                            self._backend_combo.setCurrentIndex(i)
+                            break
+                finally:
+                    self._backend_combo.blockSignals(False)
+                is_yolo = False
+
         self._model_path_edit.setVisible(is_yolo)
         self._model_path_label.setVisible(is_yolo)
         self._browse_model_btn.setVisible(is_yolo)
