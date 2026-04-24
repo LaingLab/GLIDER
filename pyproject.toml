@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "GLIDER"
-version = "1.0.0"
+dynamic = ["version"]
 description = "General Laboratory Interface for Design, Experimentation, and Recording"
 readme = "README.md"
 license = {text = "MIT"}
@@ -36,6 +36,7 @@ dependencies = [
     "opencv-python>=4.8.0",  # TODO: could be moved to [vision] optional group in the future
     "scipy>=1.10.0",
     "httpx>=0.24.0",
+    "packaging>=21.0",  # version comparison in the in-app updater
     "ryvencore>=0.4.0",
     "pandas>=2.0.0",
     # PyQt6 is intentionally absent from core: Raspberry Pi uses system-installed PyQt6
@@ -86,6 +87,10 @@ raspberry_pi = "glider.hal.boards.pi_gpio_board:PiGPIOBoard"
 Homepage = "https://github.com/LaingLab/glider"
 Documentation = "https://github.com/LaingLab/glider#readme"
 Repository = "https://github.com/LaingLab/glider"
+
+[tool.setuptools.dynamic]
+# Version is sourced from src/glider/_version.py — the sole place to bump on release.
+version = {attr = "glider._version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

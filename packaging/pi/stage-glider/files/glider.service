@@ -1,0 +1,33 @@
+[Unit]
+Description=GLIDER Runner (kiosk mode)
+# Wait for a graphical session — lightdm + autologin gets us there.
+After=graphical.target network-online.target
+Wants=network-online.target
+Requires=graphical.target
+
+[Service]
+Type=simple
+User=glider
+Group=glider
+
+# Display/audio targets. DISPLAY=:0 is the lightdm-autologin session; XAUTHORITY
+# points at glider's cookie so Xlib can connect.
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/glider/.Xauthority
+
+# --runner forces touch/kiosk layout regardless of screen size auto-detection.
+# --no-plugins suppresses third-party plugin loading on the locked-down image;
+# remove that flag if the lab wants plugin support.
+ExecStart=/opt/glider/venv/bin/glider --runner
+
+# Restart-on-failure rather than always — if GLIDER exits cleanly (user quit
+# via Settings → Power Off), we should respect that.
+Restart=on-failure
+RestartSec=3
+
+# StandardOutput/Error → journal so `journalctl -u glider` shows the logs.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target

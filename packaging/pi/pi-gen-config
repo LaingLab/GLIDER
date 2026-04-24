@@ -1,0 +1,39 @@
+# pi-gen configuration for the GLIDER SD image.
+#
+# This file is sourced by pi-gen's build.sh. It selects the base image
+# (64-bit Raspberry Pi OS with desktop) and sets kiosk-appropriate defaults.
+#
+# Usage: from pi-gen's root directory,
+#     cp /path/to/glider/packaging/pi/pi-gen-config config
+#     cp -r /path/to/glider/packaging/pi/stage-glider .
+#     sudo ./build.sh
+#
+# The CI workflow at .github/workflows/release-pi.yml runs this inside a
+# GitHub Actions ARM runner — see that file for the canonical invocation.
+
+IMG_NAME="GLIDER"
+RELEASE="bookworm"
+DEPLOY_COMPRESSION="xz"
+COMPRESSION_LEVEL=9
+
+TARGET_HOSTNAME="glider"
+
+# Locale and keyboard. Labs in the US → en_US / us. Edit here if localising.
+LOCALE_DEFAULT="en_US.UTF-8"
+KEYBOARD_KEYMAP="us"
+KEYBOARD_LAYOUT="English (US)"
+TIMEZONE_DEFAULT="America/New_York"
+
+# The default user created by pi-gen. We *also* create a dedicated `glider`
+# user inside stage-glider/00-run.sh for the kiosk systemd unit — keeping
+# them separate means SSH-recovery on the pi-gen default user is still
+# possible if the kiosk ever fails to come up.
+FIRST_USER_NAME="pi"
+# pi-gen 2023.05+ refuses to bake a default password into the image; it must
+# be set on first boot via either the userconf mechanism or Pi Imager's
+# advanced settings. Leave FIRST_USER_PASS unset so the image behaves
+# consistently with official Raspberry Pi OS releases.
+
+# Skip stages we don't need. stage5 is "desktop image with developer tools"
+# (browsers, IDEs, etc.) — too heavy for a kiosk appliance.
+STAGE_LIST="stage0 stage1 stage2 stage3 stage4 stage-glider"

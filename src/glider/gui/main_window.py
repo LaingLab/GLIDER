@@ -142,6 +142,14 @@ class MainWindow(QMainWindow):
         # Experiment dialog
         self._experiment_dialog: ExperimentDialog | None = None
 
+        # Update checker — created eagerly so the Help → Check for Updates
+        # action and the silent startup check share the same instance and
+        # thereby coalesce if both fire at once. Lazy-imported to keep the
+        # module import cheap in test contexts that don't need it.
+        from glider.updater import UpdateChecker
+
+        self._update_checker = UpdateChecker(self)
+
         # Setup UI
         self._setup_window()
         self._setup_ui()
@@ -597,6 +605,16 @@ class MainWindow(QMainWindow):
         help_action.setShortcut(QKeySequence("F1"))
         help_action.triggered.connect(self._on_help)
         help_menu.addAction(help_action)
+
+        # "Check for Updates…" uses the same checker instance as the silent
+        # startup check, so an in-flight check is coalesced rather than run
+        # twice. The ellipsis follows platform convention for an action that
+        # opens a dialog.
+        check_updates_action = QAction("Check for &Updates…", self)
+        check_updates_action.triggered.connect(lambda: self.check_for_updates(silent=False))
+        help_menu.addAction(check_updates_action)
+
+        help_menu.addSeparator()
 
         about_action = QAction("&About GLIDER", self)
         about_action.triggered.connect(self._on_about)
@@ -1587,13 +1605,27 @@ class MainWindow(QMainWindow):
         dialog = HelpDialog(self)
         dialog.exec()
 
+    def check_for_updates(self, *, silent: bool = False) -> None:
+        """Trigger a release check.
+
+        ``silent=True`` is used by the post-launch timer in ``__main__`` — it
+        only prompts if a newer version exists and the user hasn't skipped it.
+        ``silent=False`` is bound to Help → Check for Updates… and always
+        surfaces some feedback (up-to-date, error, or update-available).
+        """
+        self._update_checker.check(silent=silent)
+
     def _on_about(self) -> None:
+        # Pull from the single source of truth so the About box never drifts
+        # out of sync with pyproject.toml or installer metadata at release time.
+        from glider import __version__
+
         QMessageBox.about(
             self,
             "About GLIDER",
             "GLIDER - General Laboratory Interface for Design, "
             "Experimentation, and Recording\n\n"
-            "Version 1.0.0\n\n"
+            f"Version {__version__}\n\n"
             "A modular experimental orchestration platform.",
         )
 
