@@ -91,6 +91,28 @@ jobs:
           chmod +x pi-gen/stage-glider/00-run.sh
           chmod +x pi-gen/stage-glider/files/glider-update.sh
 
+      - name: Inject fresh keyring into stage0's chroot
+        # Symptom without this: stage0/00-configure-apt fails with NO_PUBKEY
+        # on bookworm-updates/bookworm-security, because the chroot's own
+        # debian-archive-keyring (installed by debootstrap) predates those
+        # keys. Patching stage0/prerun.sh is the smallest-surface fix:
+        # debootstrap runs as the last line of prerun.sh, so appending our
+        # dpkg -i after it means the chroot has current keys before any
+        # downstream sub-stage runs `apt-get update`.
+        run: |
+          cat >> pi-gen/stage0/prerun.sh <<'KEYRING_FIX'
+
+          # --- GLIDER CI workaround: refresh debian-archive-keyring in chroot ---
+          if [ -f /tmp/debian-archive-keyring.deb ] && [ -d "${ROOTFS_DIR}/tmp" ]; then
+              cp /tmp/debian-archive-keyring.deb "${ROOTFS_DIR}/tmp/glider-keyring.deb"
+              chroot "${ROOTFS_DIR}" dpkg -i /tmp/glider-keyring.deb
+              rm -f "${ROOTFS_DIR}/tmp/glider-keyring.deb"
+          fi
+          # --- end workaround ---
+          KEYRING_FIX
+          echo "Patched pi-gen/stage0/prerun.sh:"
+          tail -n 12 pi-gen/stage0/prerun.sh
+
       - name: Build image
         working-directory: pi-gen
         env:
