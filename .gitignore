@@ -36,6 +36,10 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# Our real, checked-in Windows build spec. Keep this negation — otherwise the
+# `*.spec` rule above hides it from git and the release-windows CI job fails
+# with "file not found" when it tries to run PyInstaller.
+!packaging/windows/glider.spec
 
 # Installer logs
 pip-log.txt
