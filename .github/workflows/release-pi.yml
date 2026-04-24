@@ -143,6 +143,38 @@ jobs:
             echo "  clean — all three scrubbed"
           fi
 
+      - name: Neutralize missing rpi-resize.service enable
+        # pi-gen's stage2/01-sys-tweaks/01-run.sh runs
+        #     systemctl enable rpi-resize.service
+        # inside the chroot, but the service file isn't present in the
+        # current bookworm/arm64 package set (likely pulled by a meta
+        # package that isn't published, same class of drift as the
+        # rpi-swap/loop-utils/usb-gadget issue). Pi Imager already does
+        # first-boot partition expansion itself during flashing, so the
+        # service is cosmetic here. Patch the enable command to tolerate
+        # missing units (`|| true`) instead of trying to install a package
+        # we don't have.
+        run: |
+          set -euo pipefail
+          echo "=== Before patch: rpi-resize occurrences ==="
+          grep -rn "rpi-resize" pi-gen/ || echo "  (not found)"
+
+          FILES=$(grep -rlE "systemctl[[:space:]]+enable[[:space:]]+rpi-resize" pi-gen/ \
+                  || true)
+          if [ -z "$FILES" ]; then
+            echo "  nothing to patch (may be a different failure mode)"
+          else
+            for f in $FILES; do
+              echo "  patching $f"
+              # Replace the bare systemctl enable with a soft-fail wrapper.
+              sed -i -E "s@(systemctl[[:space:]]+enable[[:space:]]+rpi-resize[^[:space:]]*)@\1 || true@g" "$f"
+            done
+          fi
+
+          echo
+          echo "=== After patch: rpi-resize occurrences ==="
+          grep -rn "rpi-resize" pi-gen/ || true
+
       - name: Inject fresh keyring into stage0's chroot
         # Symptom without this: stage0/00-configure-apt fails with NO_PUBKEY
         # on bookworm-updates/bookworm-security, because the chroot's own
