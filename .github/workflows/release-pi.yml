@@ -94,35 +94,53 @@ jobs:
       - name: Strip unavailable rpi-* packages from pi-gen stages
         # pi-gen's arm64 branch references rpi-swap, rpi-loop-utils, and
         # rpi-usb-gadget, but those aren't currently published to
-        # archive.raspberrypi.com for bookworm arm64 — apt aborts with
-        # "Unable to locate package". They're optional conveniences (swap
-        # config, losetup wrapper, Pi-Zero USB-gadget helpers), safe to drop
-        # for a lab-kiosk image. Rather than guessing which file lists them,
-        # scan every package list in every stage.
+        # archive.raspberrypi.com for bookworm arm64. The reference is
+        # NOT in *-packages files (those are line-delimited package lists) —
+        # it's embedded inline in stage2/01-sys-tweaks/00-packages (which
+        # turned out to be a newer shell-script-style stage, not a list).
+        # Strategy: do a broad grep for every occurrence of the three
+        # package names across pi-gen/, then sed each matching file,
+        # handling both whole-word boundaries and bare-line forms.
         run: |
           set -euo pipefail
           MISSING=(rpi-swap rpi-loop-utils rpi-usb-gadget)
-          echo "=== Before patch: grep for offending packages ==="
-          grep -rn -E "^(rpi-swap|rpi-loop-utils|rpi-usb-gadget)$" \
-            pi-gen/stage*/ || echo "  (no matches — patch may be unnecessary)"
 
-          # Iterate every file pi-gen uses as an apt list (*-packages,
-          # *-packages-nr) in every stage and strip the three packages.
-          find pi-gen/stage* -type f \
-            \( -name '*-packages' -o -name '*-packages-nr' \) \
-            -print0 | while IFS= read -r -d '' f; do
-              for pkg in "${MISSING[@]}"; do
-                sed -i "/^${pkg}\$/d" "$f"
-              done
-            done
+          echo "=== Before patch: all occurrences of offending packages ==="
+          grep -rn -E "\b(rpi-swap|rpi-loop-utils|rpi-usb-gadget)\b" pi-gen/ \
+            || { echo "  (no matches anywhere in pi-gen/)"; exit 1; }
 
           echo
-          echo "=== After patch: grep for offending packages ==="
-          if grep -rn -E "^(rpi-swap|rpi-loop-utils|rpi-usb-gadget)$" pi-gen/stage*/; then
+          echo "=== Applying patches ==="
+          # Enumerate every file containing any of the three names. Use -l
+          # to list unique filenames, then sed each one twice per package:
+          # once for "bare line" form (for *-packages list files) and once
+          # for whole-word inline form (for shell scripts that apt-install
+          # them via a space-separated list).
+          FILES=$(grep -rlE "\b(rpi-swap|rpi-loop-utils|rpi-usb-gadget)\b" pi-gen/ \
+                  || true)
+          if [ -z "$FILES" ]; then
+            echo "  nothing to patch"
+            exit 1
+          fi
+          for f in $FILES; do
+            echo "  patching $f"
+            for pkg in "${MISSING[@]}"; do
+              # (1) Delete the exact bare-line form (list files)
+              sed -i "/^${pkg}\$/d" "$f"
+              # (2) Remove the word from any in-line shell list — leaving
+              # the surrounding command intact. The word-boundary regex
+              # plus an optional trailing space keeps argv spacing sane.
+              sed -i -E "s/\b${pkg}\b ?//g" "$f"
+            done
+          done
+
+          echo
+          echo "=== After patch: re-check ==="
+          if grep -rn -E "\b(rpi-swap|rpi-loop-utils|rpi-usb-gadget)\b" pi-gen/; then
             echo "ERROR: offending packages still present after patch"
             exit 1
           else
-            echo "  (clean — all three removed)"
+            echo "  clean — all three scrubbed"
           fi
 
       - name: Inject fresh keyring into stage0's chroot
