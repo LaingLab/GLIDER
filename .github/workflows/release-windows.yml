@@ -1,0 +1,102 @@
+# Tag-triggered Windows build.
+#
+# Fires on push of any `v*` tag and produces a (currently unsigned)
+# `glider-setup-<version>.exe` attached to the matching GitHub Release.
+# Tag format MUST match `vX.Y.Z` for the sed step that injects the version
+# into the Inno Setup script.
+
+name: release-windows
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Allow manual runs during iteration; useful for testing spec changes
+  # without cutting a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: write  # needed for softprops/action-gh-release
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install project (pc + dev extras)
+        run: uv sync --extra pc --extra dev
+
+      - name: Derive version from tag
+        id: version
+        shell: pwsh
+        run: |
+          # strip the leading 'v' from the tag, or fall back to 0.0.0-dev
+          $ref = "${{ github.ref_name }}"
+          if ($ref -match "^v(.+)$") {
+            $version = $Matches[1]
+          } else {
+            $version = "0.0.0-dev"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Freeze with PyInstaller
+        run: uv run pyinstaller packaging/windows/glider.spec --clean --noconfirm
+
+      - name: Install Inno Setup
+        uses: Minionguyjpro/Inno-Setup-Action@v1
+        with:
+          path: packaging/windows/installer.iss
+          options: "/DMyAppVersion=${{ steps.version.outputs.version }}"
+
+      # --- CODE SIGNING TODO -------------------------------------------------
+      # The installer ships unsigned for v1. Every downloader will hit Windows
+      # SmartScreen's "Windows protected your PC" warning until we sign.
+      #
+      # When ready, replace this block with one of:
+      #
+      #   a) Azure Trusted Signing (recommended, ~$10/mo):
+      #      - uses: azure/trusted-signing-action@v0
+      #        with:
+      #          azure-tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+      #          azure-client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+      #          azure-client-secret:   ${{ secrets.AZURE_CLIENT_SECRET }}
+      #          endpoint:              https://<region>.codesigning.azure.net/
+      #          trusted-signing-account-name: <account>
+      #          certificate-profile-name:     <profile>
+      #          files-folder:          Output
+      #          files-folder-filter:   exe
+      #
+      #   b) EV cert via cloud HSM (DigiCert KeyLocker / SSL.com eSigner):
+      #      Download the vendor's signtool wrapper, configure credentials
+      #      from ${{ secrets.CODE_SIGNING_* }}, then:
+      #      signtool sign /tr http://timestamp.digicert.com /td sha256
+      #                     /fd sha256 Output\glider-setup-*.exe
+      #
+      # Do not ship OV certs — the reputation ramp never finishes at our
+      # download volumes.
+      # -----------------------------------------------------------------------
+
+      - name: Upload installer artifact (for manual workflow_dispatch runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: glider-setup-${{ steps.version.outputs.version }}
+          path: Output/glider-setup-*.exe
+          if-no-files-found: error
+
+      - name: Attach installer to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Output/glider-setup-*.exe
+          fail_on_unmatched_files: true
+          draft: true   # reviewer publishes manually after a smoke test
