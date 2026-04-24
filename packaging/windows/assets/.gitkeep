@@ -1,0 +1,9 @@
+# Placeholder so the assets/ directory exists in git.
+#
+# Drop the following files here before the first signed build:
+#   glider.ico    — 256x256 multi-resolution app icon (required)
+#   sidebar.bmp   — optional Inno Setup wizard sidebar graphic
+#   wizard.bmp    — optional Inno Setup wizard header graphic
+#   version_info.txt — optional PyInstaller version metadata
+#
+# See ../README.md for the full list of placeholders.
