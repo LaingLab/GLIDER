@@ -1,0 +1,2 @@
+# Presence of this file tells pi-gen to export a .img from this stage.
+# The filename is derived from IMG_NAME in ../pi-gen-config.
