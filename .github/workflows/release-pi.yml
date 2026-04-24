@@ -47,12 +47,19 @@ jobs:
           fi
 
       - name: Install pi-gen build deps
+        # Matches pi-gen's own ./depends file. Missing packages here cause the
+        # build to abort immediately with "Required dependencies not installed".
+        # qemu-user-binfmt is the one that's easy to forget — it's what lets
+        # pi-gen's chroot execute binaries for the target architecture when
+        # the runner and target arch don't match (we happen to match on
+        # ubuntu-22.04-arm, but pi-gen checks for it unconditionally).
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            coreutils quilt parted qemu-user-static debootstrap zerofree zip \
-            dosfstools libarchive-tools libcap2-bin grep rsync xz-utils file git \
-            curl bc arch-test
+            coreutils quilt parted qemu-user-static qemu-user-binfmt \
+            qemu-utils debootstrap zerofree zip dosfstools libarchive-tools \
+            libcap2-bin grep rsync xz-utils file git curl bc arch-test \
+            kpartx gpg pigz fdisk
 
       - name: Clone pi-gen
         run: git clone --depth 1 --branch arm64 https://github.com/RPi-Distro/pi-gen.git
