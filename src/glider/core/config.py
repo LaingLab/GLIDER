@@ -20,7 +20,10 @@ class TimingConfig:
 
     # UI refresh intervals (milliseconds)
     device_refresh_interval_ms: int = 250
-    elapsed_timer_interval_ms: int = 250
+    # Elapsed timer is rendered with centisecond resolution (MM:SS.cc), so it
+    # has to tick at least every ~10 ms to look smooth. 50 ms is a fine
+    # compromise: still inside one frame at 60 Hz, doesn't burn CPU on the Pi.
+    elapsed_timer_interval_ms: int = 50
 
     # Hardware polling defaults (seconds)
     default_poll_interval: float = 0.1

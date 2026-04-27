@@ -23,7 +23,9 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QGraphicsScene,
     QGraphicsView,
+    QHBoxLayout,
     QMenu,
+    QPushButton,
     QWidget,
 )
 
@@ -96,6 +98,77 @@ class NodeGraphScene(QGraphicsScene):
             y += major_size
 
 
+class _GraphOverlayControls(QWidget):
+    """Floating zoom/fit toolbar that sits on top of the graph viewport.
+
+    Three small buttons — zoom-in (+), zoom-out (-), and fit-to-screen ([]) —
+    rendered with the same Deep Navy palette as the rest of the chrome. The
+    parent ``NodeGraphView`` is responsible for repositioning this widget on
+    resize; we just emit clicks back through the buttons that the view wired
+    in its constructor.
+
+    Kept private to this module because the buttons are tightly coupled to
+    NodeGraphView's zoom helpers — there's no value in exposing this as a
+    reusable widget yet.
+    """
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setObjectName("graphOverlayControls")
+        # Transparent background so only the buttons themselves paint anything.
+        # Without this, the widget rectangle paints over the grid behind it
+        # and you get a visible card outline even when buttons are inactive.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # Don't grab focus — the graph view handles keyboard shortcuts.
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        # ``_make_button`` keeps the three buttons visually identical without
+        # repeating the QSS string three times.
+        self.zoom_in_btn = self._make_button("+", "Zoom in")
+        self.zoom_out_btn = self._make_button("\u2212", "Zoom out")  # U+2212 minus, wider than '-'
+        self.fit_btn = self._make_button("\u2922", "Fit to screen")  # U+2922 NW-SE arrow
+
+        layout.addWidget(self.zoom_in_btn)
+        layout.addWidget(self.zoom_out_btn)
+        layout.addWidget(self.fit_btn)
+        self.adjustSize()
+
+    @staticmethod
+    def _make_button(label: str, tooltip: str) -> QPushButton:
+        btn = QPushButton(label)
+        btn.setToolTip(tooltip)
+        btn.setFixedSize(32, 32)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {colors.SURFACE_1};
+                color: {colors.TEXT_PRIMARY};
+                border: 1px solid {colors.BORDER};
+                border-radius: 4px;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 0;
+            }}
+            QPushButton:hover {{
+                background-color: {colors.SURFACE_2};
+                border-color: {colors.ACCENT};
+                color: {colors.ACCENT};
+            }}
+            QPushButton:pressed {{
+                background-color: {colors.BASE};
+                color: {colors.ACCENT_PRESSED};
+            }}
+            """
+        )
+        return btn
+
+
 class NodeGraphView(QGraphicsView):
     """
     Main view for the node graph editor.
@@ -146,6 +219,18 @@ class NodeGraphView(QGraphicsView):
         self._zoom = 1.0
         self._zoom_min = 0.1
         self._zoom_max = 3.0
+        # The button-driven zoom uses the same step as the wheel — keeps the
+        # two interaction modes feeling identical when alternated.
+        self._zoom_step = 1.15
+
+        # Floating zoom/fit controls. Positioned in resizeEvent so they stay
+        # pinned to the bottom-right of the viewport regardless of size.
+        self._overlay = _GraphOverlayControls(self.viewport())
+        self._overlay.zoom_in_btn.clicked.connect(self.zoom_in)
+        self._overlay.zoom_out_btn.clicked.connect(self.zoom_out)
+        self._overlay.fit_btn.clicked.connect(self.fit_to_screen)
+        self._overlay.show()
+        self._reposition_overlay()
 
     def _setup_view(self) -> None:
         """Configure the graphics view."""
@@ -341,11 +426,66 @@ class NodeGraphView(QGraphicsView):
         self._connections.clear()
 
     def center_on_nodes(self) -> None:
-        """Center view on all nodes."""
+        """Center view on all nodes (legacy alias for ``fit_to_screen``)."""
+        self.fit_to_screen()
+
+    # --- Zoom controls ----------------------------------------------------
+    #
+    # These are the public entry points used by both the floating overlay
+    # buttons and the keyboard shortcuts. ``wheelEvent`` shares ``_zoom_by``
+    # so wheel and button zooms behave identically.
+
+    def zoom_in(self) -> None:
+        """Zoom in one step around the viewport center."""
+        self._zoom_by(self._zoom_step, anchor_under_mouse=False)
+
+    def zoom_out(self) -> None:
+        """Zoom out one step around the viewport center."""
+        self._zoom_by(1.0 / self._zoom_step, anchor_under_mouse=False)
+
+    def fit_to_screen(self) -> None:
+        """Frame all nodes inside the viewport.
+
+        Falls back to a sensible default view (origin, 1.0 zoom) when the
+        graph is empty so the button never feels broken on a fresh canvas.
+        """
         if self._nodes:
             items_rect = self._scene.itemsBoundingRect()
-            self.fitInView(items_rect, Qt.AspectRatioMode.KeepAspectRatio)
+            # Pad slightly so nodes don't touch the viewport edges; the rect
+            # we hand to fitInView is interpreted in scene coordinates, so
+            # 40 px of padding survives any zoom level.
+            padded = items_rect.adjusted(-40, -40, 40, 40)
+            self.fitInView(padded, Qt.AspectRatioMode.KeepAspectRatio)
+            # fitInView clamps the transform regardless of our zoom limits, so
+            # update the cached value from the actual transform matrix.
             self._zoom = self.transform().m11()
+        else:
+            self.resetTransform()
+            self._zoom = 1.0
+            self.centerOn(0, 0)
+
+    def _zoom_by(self, factor: float, *, anchor_under_mouse: bool) -> None:
+        """Apply a zoom factor, respecting min/max bounds.
+
+        ``anchor_under_mouse`` lets wheel-driven zooms keep whatever the
+        cursor is over fixed in place, while button-driven zooms anchor to
+        the viewport center (the cursor is on the button itself).
+        """
+        new_zoom = self._zoom * factor
+        if not (self._zoom_min <= new_zoom <= self._zoom_max):
+            return
+
+        previous_anchor = self.transformationAnchor()
+        self.setTransformationAnchor(
+            QGraphicsView.ViewportAnchor.AnchorUnderMouse
+            if anchor_under_mouse
+            else QGraphicsView.ViewportAnchor.AnchorViewCenter
+        )
+        try:
+            self.scale(factor, factor)
+            self._zoom = new_zoom
+        finally:
+            self.setTransformationAnchor(previous_anchor)
 
     def _on_node_moved(self, node_id: str, x: float, y: float) -> None:
         """Handle node position changes."""
@@ -369,13 +509,27 @@ class NodeGraphView(QGraphicsView):
 
     # Event handlers
     def wheelEvent(self, event: QWheelEvent) -> None:
-        """Handle zoom with mouse wheel."""
-        factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
-        new_zoom = self._zoom * factor
+        """Handle zoom with mouse wheel (anchored under the cursor)."""
+        factor = self._zoom_step if event.angleDelta().y() > 0 else 1.0 / self._zoom_step
+        self._zoom_by(factor, anchor_under_mouse=True)
 
-        if self._zoom_min <= new_zoom <= self._zoom_max:
-            self._zoom = new_zoom
-            self.scale(factor, factor)
+    def resizeEvent(self, event) -> None:
+        """Keep the overlay controls pinned to the viewport's bottom-right corner."""
+        super().resizeEvent(event)
+        self._reposition_overlay()
+
+    def _reposition_overlay(self) -> None:
+        """Move the floating zoom/fit controls into the bottom-right corner."""
+        if not hasattr(self, "_overlay") or self._overlay is None:
+            return
+        margin = 12
+        viewport = self.viewport()
+        if viewport is None:
+            return
+        overlay_size = self._overlay.sizeHint()
+        x = viewport.width() - overlay_size.width() - margin
+        y = viewport.height() - overlay_size.height() - margin
+        self._overlay.move(max(margin, x), max(margin, y))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Handle mouse press for panning and connection creation."""
@@ -537,7 +691,7 @@ class NodeGraphView(QGraphicsView):
             self.centerOn(0, 0)
         elif event.key() == Qt.Key.Key_F:
             # Fit all nodes in view
-            self.center_on_nodes()
+            self.fit_to_screen()
         else:
             super().keyPressEvent(event)
 

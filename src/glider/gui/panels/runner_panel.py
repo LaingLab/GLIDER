@@ -79,7 +79,7 @@ class RunnerPanel(QWidget):
 
         header_layout.addStretch()
 
-        self._runner_timer = QLabel("00:00")
+        self._runner_timer = QLabel("00:00.00")
         self._runner_timer.setProperty("timer", True)
         self._runner_timer.setStyleSheet(
             f"color: {colors.SUCCESS}; font-size: 36px; font-weight: bold; font-family: monospace;"
@@ -268,19 +268,28 @@ class RunnerPanel(QWidget):
         self._stall_last_tick = now
 
     def _update_elapsed_time(self) -> None:
-        """Update the elapsed time display."""
+        """Update the elapsed time display.
+
+        Format is ``MM:SS.cc`` (or ``HH:MM:SS.cc`` past one hour), where ``cc``
+        is centiseconds — two decimal digits of seconds. We deliberately round
+        *toward zero* (truncate) rather than rounding nearest so the display
+        never jumps ahead of the wall clock and the centiseconds field never
+        reads "60" on a boundary.
+        """
         if self._experiment_start_time is None:
             return
 
         elapsed = time.time() - self._experiment_start_time
-        hours = int(elapsed // 3600)
-        minutes = int((elapsed % 3600) // 60)
-        seconds = int(elapsed % 60)
+        # int() truncates toward zero for non-negative floats — exactly what we want.
+        total_centiseconds = int(elapsed * 100)
+        hours, rem = divmod(total_centiseconds, 360_000)
+        minutes, rem = divmod(rem, 6_000)
+        seconds, centiseconds = divmod(rem, 100)
 
         if hours > 0:
-            time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{centiseconds:02d}"
         else:
-            time_str = f"{minutes:02d}:{seconds:02d}"
+            time_str = f"{minutes:02d}:{seconds:02d}.{centiseconds:02d}"
 
         self._runner_timer.setText(time_str)
 
