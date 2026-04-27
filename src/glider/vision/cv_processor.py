@@ -9,6 +9,7 @@ Provides configurable CV processing including:
 
 import logging
 import math
+import os
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
@@ -16,11 +17,22 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
 
-import cv2
-import numpy as np
-from scipy.spatial import distance as dist
+# Disable Ultralytics' runtime auto-installer BEFORE the package is imported
+# anywhere in the process. By default, ``ultralytics.utils.checks.check_requirements``
+# shells out to ``pip install <pkg>`` whenever a tracker dep (lap, lapx) is
+# missing. In any environment where ``pip`` isn't on PATH — frozen builds,
+# the Pi venv, sandboxed test runs — that produces a 4-second stall and a
+# stack of noisy "non-zero exit status 127" warnings on every frame. We'd
+# rather surface a clean ImportError and fall back to a working backend.
+# Setting the env var here is sufficient: ultralytics reads it lazily on the
+# first call into checks.py.
+os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 
-from glider.vision.behavior_analyzer import BehaviorAnalyzer, BehaviorSettings, BehaviorState
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
+from scipy.spatial import distance as dist  # noqa: E402
+
+from glider.vision.behavior_analyzer import BehaviorAnalyzer, BehaviorSettings, BehaviorState  # noqa: E402
 
 if TYPE_CHECKING:
     from glider.vision.zones import ZoneConfiguration, ZoneState, ZoneTracker
@@ -466,13 +478,34 @@ class CVProcessor:
             return False
 
     def _load_yolo_model(self) -> None:
-        """Load YOLO model for detection."""
+        """Load YOLO model for detection.
+
+        If the user picked the YOLO_BYTETRACK backend, we additionally probe
+        for ``lap`` (the linear-assignment library ByteTrack depends on) and
+        downgrade to plain YOLO_V8 detection if it's missing. Without this
+        check, ``model.track(...)`` would raise ``ModuleNotFoundError: No
+        module named 'lap'`` on *every* frame and Ultralytics would shell out
+        to ``pip install`` each time — see the ``YOLO_AUTOINSTALL`` note at
+        the top of this file.
+        """
         try:
             from ultralytics import YOLO
 
             model_path = self._settings.model_path or "yolov8n.pt"
             self._yolo_model = YOLO(model_path)
             logger.info(f"Loaded YOLO model: {model_path}")
+
+            # ByteTrack-specific dependency probe.
+            if self._settings.backend == DetectionBackend.YOLO_BYTETRACK:
+                import importlib.util
+
+                if importlib.util.find_spec("lap") is None:
+                    logger.warning(
+                        "YOLO+ByteTrack selected but 'lap' is not installed; "
+                        "falling back to YOLO detection only. Install lap to "
+                        "enable persistent track IDs: pip install 'lap>=0.5.12'"
+                    )
+                    self._settings.backend = DetectionBackend.YOLO_V8
         except ImportError:
             logger.warning(
                 "ultralytics not installed, falling back to background subtraction. "

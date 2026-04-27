@@ -50,6 +50,13 @@ rpi = [
 ]
 vision = [
     "ultralytics>=8.0.0",
+    # ByteTrack (model.track(tracker="bytetrack.yaml")) needs `lap` for linear
+    # assignment. Ultralytics doesn't declare it because they treat it as
+    # opt-in, and they shell out to `pip install` at runtime when it's missing
+    # — which fails noisily in any environment where `pip` isn't on PATH
+    # (frozen builds, some Pi venvs). Pinning it here means it's installed
+    # up front and we never hit the AutoUpdate path.
+    "lap>=0.5.12",
 ]
 audio = [
     "sounddevice>=0.4.6",
@@ -66,6 +73,7 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
     "ultralytics>=8.0.0",
+    "lap>=0.5.12",  # see [vision] note
     "adafruit-circuitpython-ads1x15",
     "pyinstaller>=6.19.0",
     "PyQt6>=6.4.0",
