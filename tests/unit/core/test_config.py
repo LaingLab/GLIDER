@@ -26,7 +26,9 @@ class TestTimingConfig:
         config = TimingConfig()
 
         assert config.device_refresh_interval_ms == 250
-        assert config.elapsed_timer_interval_ms == 250
+        # Lowered from 250 ms to 50 ms so the runner-mode elapsed timer can
+        # render centiseconds (MM:SS.cc) smoothly. See runner_panel._update_elapsed_time.
+        assert config.elapsed_timer_interval_ms == 50
         assert config.default_poll_interval == 0.1
         assert config.board_ready_timeout == 10.0
         assert config.board_operation_timeout == 5.0
