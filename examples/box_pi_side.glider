@@ -96,7 +96,7 @@
         "pins": {},
         "settings": {
           "i2c_address": 72,
-          "channel": 3,
+          "channel": 2,
           "gain": 1
         }
       }
