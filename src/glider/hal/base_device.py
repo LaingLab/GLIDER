@@ -613,6 +613,7 @@ class ADS1115Device(BaseDevice):
         self._i2c_address = config.settings.get("i2c_address", 0x48)
         self._gain = config.settings.get("gain", 1)
         self._data_rate = config.settings.get("data_rate", 128)
+        self._channel = config.settings.get("channel", 0)
         self._ads = None  # Will hold the ADS1115 object
         self._channels: dict[int, Any] = {}  # Cache for AnalogIn objects
         self._last_values: dict[int, int] = {}  # Channel -> raw value
@@ -676,17 +677,20 @@ class ADS1115Device(BaseDevice):
         self._channels = {}
         self._initialized = False
 
-    async def read(self, channel: int = 0) -> int:
+    async def read(self, channel: int | None = None) -> int:
         """
         Read raw ADC value from a channel.
 
         Args:
-            channel: Channel number (0-3)
+            channel: Channel number (0-3). If None, uses the channel
+                configured on this device instance.
 
         Returns:
             Raw 16-bit ADC value (-32768 to 32767 for differential,
             0 to 32767 for single-ended)
         """
+        if channel is None:
+            channel = self._channel
         return await self.read_channel(channel)
 
     async def read_channel(self, channel: int = 0) -> int:
@@ -716,18 +720,22 @@ class ADS1115Device(BaseDevice):
             self._last_values[channel] = value
             return value
 
-    async def read_voltage(self, channel: int = 0) -> float:
+    async def read_voltage(self, channel: int | None = None) -> float:
         """
         Read voltage from a channel.
 
         Args:
-            channel: Channel number (0-3)
+            channel: Channel number (0-3). If None, uses the channel
+                configured on this device instance.
 
         Returns:
             Voltage reading
         """
         if not self._initialized or self._ads is None:
             raise RuntimeError("ADS1115 not initialized")
+
+        if channel is None:
+            channel = self._channel
 
         if channel < 0 or channel > 3:
             raise ValueError(f"Invalid channel {channel}. Must be 0-3.")
