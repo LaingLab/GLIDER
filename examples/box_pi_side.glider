@@ -171,7 +171,7 @@
           -268.7243532608695
         ],
         "state": {
-          "value": 150
+          "value": 70
         },
         "device_id": "pi_atom",
         "visible_in_runner": false
@@ -223,7 +223,7 @@
           -267.95
         ],
         "state": {
-          "duration": 2
+          "duration": 1
         },
         "device_id": null,
         "visible_in_runner": false
