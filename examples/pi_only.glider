@@ -1,0 +1,281 @@
+{
+  "metadata": {
+    "id": "d056ecc2-2837-4e09-b1f8-6fd65f2bb6a9",
+    "name": "Untitled Experiment",
+    "description": "",
+    "author": "",
+    "version": "1.0.0",
+    "created_at": "2026-05-11T14:29:17.600432",
+    "modified_at": "2026-05-11T14:32:45.182459",
+    "glider_version": "1.0.0",
+    "protocol": "",
+    "experiment_type": "",
+    "experimenter": "",
+    "lab": "",
+    "project": "",
+    "notes": "",
+    "recording_directory": "",
+    "subjects": [],
+    "active_subject_id": null
+  },
+  "hardware": {
+    "boards": [
+      {
+        "id": "pi",
+        "driver_type": "raspberry_pi",
+        "port": null,
+        "board_type": "uno",
+        "auto_reconnect": false,
+        "settings": {}
+      }
+    ],
+    "devices": [
+      {
+        "id": "pi_beam",
+        "device_type": "ADS1115",
+        "name": "pi_beam",
+        "board_id": "pi",
+        "pins": {},
+        "settings": {
+          "i2c_address": 72,
+          "channel": 2,
+          "gain": 1
+        }
+      },
+      {
+        "id": "pi_pump",
+        "device_type": "PWMOutput",
+        "name": "pi_pump",
+        "board_id": "pi",
+        "pins": {
+          "output": 20
+        },
+        "settings": {}
+      },
+      {
+        "id": "pi_atom",
+        "device_type": "PWMOutput",
+        "name": "pi_atom",
+        "board_id": "pi",
+        "pins": {
+          "output": 21
+        },
+        "settings": {}
+      }
+    ]
+  },
+  "flow": {
+    "nodes": [
+      {
+        "id": "startexperiment_e7122fc9",
+        "node_type": "StartExperiment",
+        "position": [
+          -640.0563624999996,
+          -415.2281999999998
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "waitforinput_8ba94d9b",
+        "node_type": "WaitForInput",
+        "position": [
+          -426.6499999999998,
+          -377.1999999999997
+        ],
+        "state": {
+          "threshold_mode": "analog",
+          "threshold": 100,
+          "threshold_direction": "below"
+        },
+        "device_id": "pi_beam",
+        "visible_in_runner": true
+      },
+      {
+        "id": "output_a66f963f",
+        "node_type": "Output",
+        "position": [
+          -160.99999999999991,
+          -310.49999999999994
+        ],
+        "state": {
+          "value": 150
+        },
+        "device_id": "pi_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_094bc74c",
+        "node_type": "Delay",
+        "position": [
+          50.599999999999994,
+          -309.3499999999999
+        ],
+        "state": {
+          "duration": 4.0
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_4c20a4be",
+        "node_type": "Output",
+        "position": [
+          284.04999999999984,
+          -304.75
+        ],
+        "state": {
+          "value": 70
+        },
+        "device_id": "pi_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_1c618163",
+        "node_type": "Delay",
+        "position": [
+          492.1999999999998,
+          -311.6499999999999
+        ],
+        "state": {
+          "duration": 2.0
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_2b9b172d",
+        "node_type": "Output",
+        "position": [
+          702.6499999999999,
+          -319.6999999999999
+        ],
+        "state": {
+          "value": 0
+        },
+        "device_id": "pi_atom",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_1e95c1ec",
+        "node_type": "Output",
+        "position": [
+          940.6999999999998,
+          -310.49999999999983
+        ],
+        "state": {
+          "value": 0
+        },
+        "device_id": "pi_pump",
+        "visible_in_runner": false
+      },
+      {
+        "id": "endexperiment_e2a638d5",
+        "node_type": "EndExperiment",
+        "position": [
+          1164.9902499999998,
+          -322.42549999999994
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn_73efbe06",
+        "from_node": "output_1e95c1ec",
+        "from_output": 0,
+        "to_node": "endexperiment_e2a638d5",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_24da8b43",
+        "from_node": "output_2b9b172d",
+        "from_output": 0,
+        "to_node": "output_1e95c1ec",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_c0495033",
+        "from_node": "delay_1c618163",
+        "from_output": 0,
+        "to_node": "output_2b9b172d",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_45db7464",
+        "from_node": "output_4c20a4be",
+        "from_output": 0,
+        "to_node": "delay_1c618163",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_069e8e2c",
+        "from_node": "output_a66f963f",
+        "from_output": 0,
+        "to_node": "delay_094bc74c",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_7861ec17",
+        "from_node": "delay_094bc74c",
+        "from_output": 0,
+        "to_node": "output_4c20a4be",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_b1fffef1",
+        "from_node": "waitforinput_8ba94d9b",
+        "from_output": 0,
+        "to_node": "output_a66f963f",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_17cd1307",
+        "from_node": "startexperiment_e7122fc9",
+        "from_output": 0,
+        "to_node": "waitforinput_8ba94d9b",
+        "to_input": 0,
+        "connection_type": "exec"
+      }
+    ]
+  },
+  "dashboard": {
+    "widgets": [],
+    "layout": "vertical",
+    "columns": 1
+  },
+  "camera": {
+    "camera_index": 0,
+    "resolution": [
+      640,
+      480
+    ],
+    "fps": 30,
+    "exposure": -1,
+    "brightness": 128,
+    "contrast": 128,
+    "cv_enabled": true,
+    "cv_backend": "background_subtraction",
+    "confidence_threshold": 0.5,
+    "tracking_enabled": true,
+    "max_disappeared": 50,
+    "video_recording_enabled": true,
+    "audio_device_name": null,
+    "audio_device_index": null
+  },
+  "zones": {
+    "zones": [],
+    "config_width": 0,
+    "config_height": 0
+  }
+}
