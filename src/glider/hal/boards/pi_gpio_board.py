@@ -263,6 +263,7 @@ class PiGPIOBoard(BaseBoard):
             await asyncio.to_thread(device.off)
         with self._pin_values_lock:
             self._pin_values[pin] = value
+        self._notify_output_change(pin, PinType.DIGITAL, bool(value))
 
     async def read_digital(self, pin: int) -> bool:
         """Read a digital value from a pin."""
@@ -292,6 +293,7 @@ class PiGPIOBoard(BaseBoard):
         await asyncio.to_thread(lambda: setattr(device, "value", pwm_value))
         with self._pin_values_lock:
             self._pin_values[pin] = value
+        self._notify_output_change(pin, PinType.PWM, value)
 
     async def read_analog(self, pin: int) -> int:
         """Read analog value - not supported on Pi without external ADC."""
@@ -314,6 +316,7 @@ class PiGPIOBoard(BaseBoard):
         await asyncio.to_thread(lambda: setattr(device, "value", servo_value))
         with self._pin_values_lock:
             self._pin_values[pin] = angle
+        self._notify_output_change(pin, PinType.SERVO, angle)
 
     async def emergency_stop(self) -> None:
         """Set all outputs to safe state."""

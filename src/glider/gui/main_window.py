@@ -353,6 +353,11 @@ class MainWindow(QMainWindow):
         self._camera_panel.set_video_recorder(self._core.video_recorder)
         self._camera_panel.set_multi_video_recorder(self._core.multi_video_recorder)
         self._camera_panel.set_tracking_logger(self._core.tracking_logger)
+        # Frame-aligned device-state CSV + per-edge event log. CameraPanel
+        # ticks both on every processed frame so the device CSV inherits the
+        # tracking CSV's `frame` column for one-key joins to the MP4.
+        self._camera_panel.set_data_recorder(self._core.data_recorder)
+        self._camera_panel.set_event_logger(self._core.event_logger)
         self._camera_panel.set_calibration(self._core.calibration)
         self._camera_panel._preview.set_calibration(self._core.calibration)
         self._camera_panel.set_zone_configuration(self._zone_config)

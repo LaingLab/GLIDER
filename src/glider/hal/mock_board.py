@@ -79,7 +79,11 @@ class MockBoard(BaseBoard):
     async def write_digital(self, pin: int, value: bool) -> None:
         logger.info(f"MockBoard: Write digital pin {pin} = {'HIGH' if value else 'LOW'}")
         self._pin_states[pin] = value
+        # Keep the legacy input-callback fan-out for backward-compat with
+        # tests that watch a pin via register_callback after writing it.
         self._notify_callbacks(pin, value)
+        # Fire the new output-callback path so DeviceEventLogger sees writes.
+        self._notify_output_change(pin, PinType.DIGITAL, bool(value))
 
     async def read_digital(self, pin: int) -> bool:
         value = self._pin_states.get(pin, False)
@@ -90,6 +94,7 @@ class MockBoard(BaseBoard):
         logger.info(f"MockBoard: Write analog pin {pin} = {value}")
         self._pin_states[pin] = value
         self._notify_callbacks(pin, value)
+        self._notify_output_change(pin, PinType.PWM, value)
 
     async def read_analog(self, pin: int) -> int:
         value = self._pin_states.get(pin, 0)

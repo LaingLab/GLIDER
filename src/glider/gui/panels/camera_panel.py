@@ -5,6 +5,7 @@ Provides live camera preview with CV overlays, recording status,
 and quick access to camera settings.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
@@ -225,6 +226,12 @@ class CameraPanel(QWidget):
         self._video_recorder: VideoRecorder | None = None
         self._multi_video_recorder: MultiVideoRecorder | None = None
         self._tracking_logger: TrackingDataLogger | None = None
+        # data_recorder and event_logger are the two newer per-frame
+        # consumers wired in by main_window when the core is constructed.
+        # Kept Optional so unit tests / standalone panels still work without
+        # them.
+        self._data_recorder: Any | None = None
+        self._event_logger: Any | None = None
         self._calibration: CameraCalibration | None = None
         self._zone_config: ZoneConfiguration | None = None
         self._preview_active = False
@@ -548,13 +555,13 @@ class CameraPanel(QWidget):
                 annotated_frame = self._draw_calibration_lines(annotated_frame)
             self._video_recorder.write_annotated_frame(annotated_frame)
 
-        # Log tracking data if tracking logger is active
-        if (
-            self._tracking_logger is not None
-            and self._tracking_logger.is_recording
-            and tracked is not None
-        ):
-            # Set frame size and calibration for distance calculations
+        # Log tracking data if the tracking logger is active. We always call
+        # log_frame (even when `tracked` is None/empty) so the per-session
+        # frame counter advances once per camera frame — this is the
+        # canonical frame index that joins the device-state CSV, the event
+        # log, and the tracking CSV against the MP4. The existing heartbeat
+        # path inside log_frame handles the "no detections, no motion" case.
+        if self._tracking_logger is not None and self._tracking_logger.is_recording:
             h, w = frame.shape[:2]
             self._tracking_logger.set_frame_size(w, h)
             if self._calibration:
@@ -563,7 +570,16 @@ class CameraPanel(QWidget):
             motion_detected = motion.motion_detected if motion else False
             motion_area = motion.motion_area if motion else 0.0
 
-            self._tracking_logger.log_frame(timestamp, tracked, motion_detected, motion_area)
+            self._tracking_logger.log_frame(
+                timestamp, tracked or [], motion_detected, motion_area
+            )
+
+            # Per-frame tick for the device-state recorder + event logger.
+            # Fires unconditionally on every processed frame, independent
+            # of whether CV produced any tracked objects — otherwise an
+            # empty CV result would silently drop the device CSV row for
+            # that frame. Failures must not crash the CV pipeline.
+            self._dispatch_frame_tick(self._tracking_logger.frame_count, timestamp)
 
     def _process_cv_results_on_main_thread(
         self, frame_data: FrameData, detections: list, tracked: list, motion: Any
@@ -800,12 +816,13 @@ class CameraPanel(QWidget):
                         annotated_frame = self._draw_calibration_lines(annotated_frame)
                     self._video_recorder.write_annotated_frame(annotated_frame)
 
-            # Log tracking data if tracking logger is active
-            if (
-                self._tracking_logger is not None
-                and self._tracking_logger.is_recording
-                and tracked is not None
-            ):
+            # Log tracking data + dispatch the per-frame tick. See the
+            # single-cam path's comment above for the rationale: we call
+            # log_frame even when CV returned no tracked objects so the
+            # frame counter advances once per processed frame, and we
+            # dispatch unconditionally so the device CSV gets one row per
+            # frame regardless of CV output.
+            if self._tracking_logger is not None and self._tracking_logger.is_recording:
                 h, w = frame.shape[:2]
                 self._tracking_logger.set_frame_size(w, h)
                 if self._calibration:
@@ -814,7 +831,10 @@ class CameraPanel(QWidget):
                 motion_detected = motion.motion_detected if motion else False
                 motion_area = motion.motion_area if motion else 0.0
 
-                self._tracking_logger.log_frame(timestamp, tracked, motion_detected, motion_area)
+                self._tracking_logger.log_frame(
+                    timestamp, tracked or [], motion_detected, motion_area
+                )
+                self._dispatch_frame_tick(self._tracking_logger.frame_count, timestamp)
 
     def _on_primary_camera_changed(self, camera_id: str) -> None:
         """Handle primary camera change from UI."""
@@ -841,6 +861,57 @@ class CameraPanel(QWidget):
     def set_tracking_logger(self, logger: "TrackingDataLogger") -> None:
         """Set the tracking logger for logging CV results."""
         self._tracking_logger = logger
+
+    def set_data_recorder(self, recorder: Any) -> None:
+        """
+        Set the device-state data recorder. When set, each processed frame
+        triggers a per-frame row via ``record_at_frame``, keeping the
+        device-state CSV frame-aligned with the tracking CSV and the MP4.
+        """
+        self._data_recorder = recorder
+
+    def set_event_logger(self, event_logger: Any) -> None:
+        """
+        Set the device event logger. When set, each processed frame
+        pushes the current frame index into the logger so subsequent
+        event rows are stamped with that frame.
+        """
+        self._event_logger = event_logger
+
+    def _dispatch_frame_tick(self, frame_no: int, frame_ts: float) -> None:
+        """
+        Fire the per-frame side effects on the data_recorder and event_logger.
+
+        Called from the CV processing path immediately after
+        ``tracking_logger.log_frame``. Both consumers are best-effort: an
+        exception in either must not break the CV pipeline (which would
+        also break the live preview and the video recording).
+
+        ``record_at_frame`` is async; we schedule it as a task on the
+        running event loop (qasync provides one on the Qt main thread).
+        ``set_current_frame`` is synchronous and is called directly.
+        """
+        recorder = self._data_recorder
+        if recorder is not None and getattr(recorder, "is_recording", False):
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(recorder.record_at_frame(frame_no, frame_ts))
+            except RuntimeError:
+                # No running loop (unit-test / headless scenario); skip
+                # silently rather than blow up the camera thread.
+                logger.debug(
+                    "frame tick skipped: no running event loop", exc_info=True
+                )
+            except Exception:
+                logger.exception("record_at_frame failed")
+
+        events = self._event_logger
+        if events is not None and getattr(events, "is_recording", False):
+            try:
+                events.set_current_frame(frame_no, frame_ts)
+            except Exception:
+                logger.exception("event_logger.set_current_frame failed")
 
     def set_calibration(self, calibration: "CameraCalibration") -> None:
         """Set the camera calibration for real-world measurements."""

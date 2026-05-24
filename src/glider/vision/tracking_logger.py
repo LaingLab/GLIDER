@@ -49,7 +49,12 @@ class TrackingDataLogger:
         self._writer = None
         self._file_path: Path | None = None
         self._start_time: datetime | None = None
+        # See DataRecorder.set_session_epoch — when set, elapsed_ms in
+        # this file is anchored to the shared session epoch instead of
+        # this logger's own start_time, so tracking rows are joinable to
+        # device-state and event rows on the elapsed_ms column.
         self._start_timestamp: float = 0.0
+        self._session_epoch_override: float | None = None
         self._frame_count = 0
         self._recording = False
         self._calibration: CameraCalibration | None = None
@@ -87,6 +92,19 @@ class TrackingDataLogger:
         """
         self._output_dir = Path(path)
         self._output_dir.mkdir(parents=True, exist_ok=True)
+
+    def set_session_epoch(self, epoch: float) -> None:
+        """
+        Anchor ``elapsed_ms`` against a shared Unix timestamp instead of
+        this logger's own ``start_time``. Must be called before ``start()``.
+        Lets the tracking CSV join cleanly to the device-state CSV and
+        event log on the elapsed_ms column.
+        """
+        if self._recording:
+            logger.warning(
+                "set_session_epoch called while recording; takes effect on next start()"
+            )
+        self._session_epoch_override = float(epoch)
 
     def set_calibration(self, calibration: "CameraCalibration") -> None:
         """
@@ -204,7 +222,11 @@ class TrackingDataLogger:
         filename = self._generate_filename(experiment_name)
         self._file_path = self._output_dir / filename
         self._start_time = datetime.now()
-        self._start_timestamp = self._start_time.timestamp()
+        self._start_timestamp = (
+            self._session_epoch_override
+            if self._session_epoch_override is not None
+            else self._start_time.timestamp()
+        )
         self._frame_count = 0
 
         # Clear tracking state
