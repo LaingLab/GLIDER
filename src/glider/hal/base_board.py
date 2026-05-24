@@ -96,6 +96,12 @@ class BaseBoard(ABC):
         self._callbacks: dict[int, list[Callable]] = {}
         self._error_callbacks: list[Callable] = []
         self._state_callbacks: list[Callable[[BoardConnectionState], None]] = []
+        # Output-change callbacks. Concrete subclasses must call
+        # `_notify_output_change(pin, pin_type, value)` after a successful
+        # write_digital / write_analog / write_pwm / write_servo so listeners
+        # (e.g. DeviceEventLogger) can record output events on the same event
+        # stream as input edges.
+        self._output_callbacks: list[Callable[[int, "PinType", Any], None]] = []
         self._reconnect_task: asyncio.Task | None = None
         self._reconnect_interval = 5.0  # seconds (increased to reduce spam)
         self._i2c_lock = asyncio.Lock()  # Shared lock for I2C operations
@@ -298,6 +304,39 @@ class BaseBoard(ABC):
         """Remove a registered callback."""
         if pin in self._callbacks and callback in self._callbacks[pin]:
             self._callbacks[pin].remove(callback)
+
+    def register_output_callback(
+        self, callback: Callable[[int, "PinType", Any], None]
+    ) -> None:
+        """
+        Register a callback fired after a successful output write.
+
+        Concrete board subclasses invoke ``_notify_output_change`` from
+        their ``write_digital`` / ``write_analog`` / ``write_pwm`` /
+        ``write_servo`` implementations, so listeners can record output
+        events without instrumenting every Device class.
+
+        Args:
+            callback: Function called with (pin, pin_type, value) after each
+                successful output write.
+        """
+        if callback not in self._output_callbacks:
+            self._output_callbacks.append(callback)
+
+    def unregister_output_callback(
+        self, callback: Callable[[int, "PinType", Any], None]
+    ) -> None:
+        """Remove a previously registered output callback."""
+        if callback in self._output_callbacks:
+            self._output_callbacks.remove(callback)
+
+    def _notify_output_change(self, pin: int, pin_type: "PinType", value: Any) -> None:
+        """Notify all registered output callbacks. Errors are swallowed and logged."""
+        for callback in self._output_callbacks:
+            try:
+                callback(pin, pin_type, value)
+            except Exception:
+                logger.exception("Error in output callback")
 
     def register_error_callback(self, callback: Callable[[Exception], None]) -> None:
         """Register a callback for error events."""

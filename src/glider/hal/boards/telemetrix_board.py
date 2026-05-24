@@ -478,6 +478,7 @@ class TelemetrixBoard(BaseBoard):
         await asyncio.to_thread(self._call_telemetrix, "digital_write", pin, 1 if value else 0)
         with self._pin_values_lock:
             self._pin_values[pin] = value
+        self._notify_output_change(pin, PinType.DIGITAL, bool(value))
 
     async def read_digital(self, pin: int) -> bool:
         """Read a digital value from a pin."""
@@ -540,6 +541,7 @@ class TelemetrixBoard(BaseBoard):
                     await asyncio.to_thread(self._call_telemetrix, "analog_write", pin, value)
                 with self._pin_values_lock:
                     self._pin_values[pin] = value
+                self._notify_output_change(pin, PinType.PWM, value)
                 return
             except Exception as e:
                 last_error = e
@@ -578,6 +580,7 @@ class TelemetrixBoard(BaseBoard):
         await asyncio.to_thread(self._call_telemetrix, "servo_write", pin, angle)
         with self._pin_values_lock:
             self._pin_values[pin] = angle
+        self._notify_output_change(pin, PinType.SERVO, angle)
 
     async def _debug_callback_silent(self, data: list) -> None:
         """Silent callback to suppress debug output from telemetrix."""

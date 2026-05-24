@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from glider.core.data_recorder import DataRecorder
+from glider.core.event_logger import DeviceEventLogger
 from glider.core.experiment_session import ExperimentSession, SessionState
 from glider.core.flow_engine import FlowEngine
 from glider.core.hardware_manager import HardwareManager
@@ -50,6 +51,11 @@ class GliderCore:
         self._flow_engine = FlowEngine(self._hardware_manager)
         self._plugin_manager: PluginManager | None = None
         self._data_recorder = DataRecorder(self._hardware_manager)
+        # Event logger captures per-edge / per-write device events, complementary
+        # to the periodic state samples written by data_recorder. Together with
+        # the frame-aligned data_recorder rows (camera-driven mode), this makes
+        # video <-> tracking <-> device joins a single-key operation.
+        self._event_logger = DeviceEventLogger(self._hardware_manager)
 
         # Vision components
         self._camera_manager = CameraManager()
@@ -125,6 +131,11 @@ class GliderCore:
     def tracking_logger(self) -> TrackingDataLogger:
         """Tracking data logger instance."""
         return self._tracking_logger
+
+    @property
+    def event_logger(self) -> DeviceEventLogger:
+        """Device event logger instance (per-edge / per-write event log)."""
+        return self._event_logger
 
     @property
     def calibration(self) -> CameraCalibration:
@@ -624,14 +635,52 @@ class GliderCore:
         if self._session.state != SessionState.PAUSED:
             self.setup_flow()
 
-        # Start data recording if enabled
+        # Shared session epoch — captured once, before any recorder is
+        # started, and propagated to all three recorders so their
+        # `elapsed_ms` columns share t=0. Without this, each recorder
+        # anchors elapsed_ms to its own `start_time`, which differs by
+        # tens of milliseconds because the recorders are started
+        # sequentially below. With it, joining the device CSV, the event
+        # log, and the tracking CSV on `elapsed_ms` becomes exact.
+        import time as _time
+
+        session_epoch = _time.time()
+        self._data_recorder.set_session_epoch(session_epoch)
+        self._event_logger.set_session_epoch(session_epoch)
+        self._tracking_logger.set_session_epoch(session_epoch)
+
+        # Start data recording if enabled. When a camera is connected and
+        # CV processing is on, the recorder switches to camera-driven mode
+        # so each row of the device-state CSV is anchored to a camera frame
+        # (one row per processed frame, with a `frame` column that matches
+        # the tracking CSV and the MP4 frame index). Otherwise it falls
+        # back to the periodic timer loop.
         if self._recording_enabled and not self._data_recorder.is_recording:
             experiment_name = self._session.metadata.name or "experiment"
+            camera_driven = (
+                self._cv_processing_enabled and self._camera_manager.is_connected
+            )
+            self._data_recorder.set_camera_driven(camera_driven)
             try:
                 file_path = await self._data_recorder.start(experiment_name, self._session)
-                logger.info(f"Recording data to: {file_path}")
+                mode = "camera-driven" if camera_driven else "timer-driven"
+                logger.info(f"Recording data ({mode}) to: {file_path}")
             except Exception as e:
                 logger.error(f"Failed to start recording: {e}")
+
+        # Start the device event logger if enabled. It subscribes to
+        # per-board output callbacks (write_digital/analog/servo) and to
+        # per-pin input callbacks for input-capable devices, so every state
+        # transition shorter than the sampling interval is still captured.
+        if self._recording_enabled and not self._event_logger.is_recording:
+            experiment_name = self._session.metadata.name or "experiment"
+            try:
+                event_path = await self._event_logger.start(
+                    experiment_name, self._session
+                )
+                logger.info(f"Recording device events to: {event_path}")
+            except Exception as e:
+                logger.error(f"Failed to start event logger: {e}")
 
         # Start video recording if enabled and camera is connected
         experiment_name = self._session.metadata.name or "experiment"
@@ -731,6 +780,16 @@ class GliderCore:
                 logger.info(f"Audio saved to: {audio_path}")
             except Exception as e:
                 logger.error(f"Failed to stop audio recording: {e}")
+
+        # Stop the event logger BEFORE the data recorder so subscriptions
+        # are torn down while boards/devices are still live; otherwise a
+        # straggling input callback could try to write to a closed CSV.
+        if self._event_logger.is_recording:
+            try:
+                event_path = await self._event_logger.stop()
+                logger.info(f"Event log saved to: {event_path}")
+            except Exception as e:
+                logger.error(f"Failed to stop event logger: {e}")
 
         # Stop data recording
         if self._data_recorder.is_recording:

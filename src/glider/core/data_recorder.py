@@ -52,11 +52,22 @@ class DataRecorder:
         self._writer: csv.writer | None = None
         self._file_path: Path | None = None
         self._start_time: datetime | None = None
+        # Unix-time origin against which all `elapsed_ms` cells are
+        # computed. If `set_session_epoch` is called before `start()`,
+        # that value is used (so every recorder in the session shares t=0
+        # and elapsed_ms is joinable across files). Otherwise it falls
+        # back to this recorder's own start_time on `start()`.
+        self._start_timestamp: float = 0.0
+        self._session_epoch_override: float | None = None
         self._sample_task: asyncio.Task | None = None
         self._device_columns: list[str] = []
         self._zone_columns: list[str] = []
         self._zone_config: ZoneConfiguration | None = None
         self._cv_processor: CVProcessor | None = None
+        # When True, the recorder is driven by per-frame record_at_frame() calls
+        # from the camera pipeline; the internal asyncio.sleep sampling loop is
+        # not created. Must be set before start() to take effect.
+        self._camera_driven: bool = False
 
     @property
     def is_recording(self) -> bool:
@@ -77,6 +88,49 @@ class DataRecorder:
     def sample_interval(self, value: float) -> None:
         """Set the sample interval (minimum 0.01 seconds)."""
         self._sample_interval = max(0.01, value)
+
+    @property
+    def is_camera_driven(self) -> bool:
+        """Whether this recorder is driven by camera frame ticks."""
+        return self._camera_driven
+
+    def set_session_epoch(self, epoch: float) -> None:
+        """
+        Anchor this recorder's ``elapsed_ms`` column to a shared Unix
+        timestamp instead of its own ``_start_time``.
+
+        Used by ``GliderCore.start_experiment`` to give every recorder
+        (data, events, tracking) the same t=0 so the elapsed_ms columns
+        are directly comparable across files. Must be called before
+        ``start()``.
+
+        Args:
+            epoch: Unix timestamp (seconds, float) to use as t=0.
+        """
+        if self._recording:
+            logger.warning(
+                "set_session_epoch called while recording; takes effect on next start()"
+            )
+        self._session_epoch_override = float(epoch)
+
+    def set_camera_driven(self, enabled: bool) -> None:
+        """
+        Configure whether this recorder writes one row per camera frame
+        (driven by record_at_frame()) instead of running its own timer loop.
+
+        Must be set before start() to take effect. When enabled, the internal
+        sampling task is not created and rows are only written when the
+        camera pipeline calls record_at_frame(frame_no, frame_ts).
+
+        Args:
+            enabled: True to use camera-frame ticks; False (default) to use
+                the timer loop with sample_interval.
+        """
+        if self._recording:
+            logger.warning(
+                "set_camera_driven called while recording; takes effect on next start()"
+            )
+        self._camera_driven = enabled
 
     def _generate_filename(self, experiment_name: str) -> str:
         """Generate a filename with experiment name, date, and time."""
@@ -227,10 +281,16 @@ class DataRecorder:
             self._writer.writerow(["#", device_id, device_type, f"board={board_id}", pin_str])
         self._writer.writerow([])
 
-        # Write column headers
+        # Write column headers. `frame` is the canonical camera frame index
+        # (matches TrackingDataLogger's `frame` column for one-key joins
+        # against the video and tracking CSV). It is empty for rows written
+        # by the timer-driven sampling loop (i.e., headless / no-camera
+        # sessions, or before the first frame arrives).
         self._device_columns = self._get_device_columns()
         self._zone_columns = self._get_zone_columns()
-        headers = ["timestamp", "elapsed_ms"] + self._device_columns + self._zone_columns
+        headers = (
+            ["frame", "timestamp", "elapsed_ms"] + self._device_columns + self._zone_columns
+        )
         self._writer.writerow(headers)
 
     async def start(
@@ -256,6 +316,15 @@ class DataRecorder:
         filename = self._generate_filename(experiment_name)
         self._file_path = self._output_dir / filename
         self._start_time = datetime.now()
+        # elapsed_ms is computed against either a session-wide epoch
+        # (so multiple recorders share t=0) or, as a fallback, this
+        # recorder's own start_time. Both `_record_sample` (timer) and
+        # `record_at_frame` (camera) use this single value.
+        self._start_timestamp = (
+            self._session_epoch_override
+            if self._session_epoch_override is not None
+            else self._start_time.timestamp()
+        )
 
         # Open file and create CSV writer
         self._file = open(self._file_path, "w", newline="", encoding="utf-8")
@@ -266,12 +335,16 @@ class DataRecorder:
             self._write_metadata(experiment_name, session)
             self._file.flush()
 
-            # Start sampling task
+            # Start sampling task only when the recorder is timer-driven.
+            # In camera-driven mode the per-frame record_at_frame() calls
+            # from the camera pipeline are the sole source of rows, so we
+            # skip creating the timer task entirely.
             self._recording = True
-            from glider.core.async_utils import log_task_exception
+            if not self._camera_driven:
+                from glider.core.async_utils import log_task_exception
 
-            self._sample_task = asyncio.create_task(self._sampling_loop())
-            self._sample_task.add_done_callback(log_task_exception)
+                self._sample_task = asyncio.create_task(self._sampling_loop())
+                self._sample_task.add_done_callback(log_task_exception)
         except Exception:
             self._file.close()
             self._file = None
@@ -291,26 +364,36 @@ class DataRecorder:
 
             await asyncio.sleep(self._sample_interval)
 
-    async def _record_sample(self) -> None:
-        """Record a single sample of all device states."""
-        if not self._recording or self._writer is None:
-            return
+    async def _build_row(
+        self, frame: int | None, iso_timestamp: str, elapsed_ms: float
+    ) -> list[str]:
+        """
+        Build a CSV row for one device-state sample.
 
-        # Get current timestamp
-        now = datetime.now()
-        elapsed_ms = (now - self._start_time).total_seconds() * 1000 if self._start_time else 0
+        Shared by the timer-driven path (`_record_sample`) and the
+        frame-driven path (`record_at_frame`) so both write identical
+        column layouts.
 
-        # Sample all devices
+        Args:
+            frame: Camera frame index, or None for timer-driven rows (which
+                write an empty string in the `frame` column).
+            iso_timestamp: ISO 8601 timestamp string for the row.
+            elapsed_ms: Milliseconds since the recorder started.
+
+        Returns:
+            List of stringified cell values, in column order.
+        """
         states = await self._sample_devices()
+        row: list[str] = [
+            "" if frame is None else str(frame),
+            iso_timestamp,
+            f"{elapsed_ms:.1f}",
+        ]
 
-        # Build row
-        row = [now.isoformat(timespec="milliseconds"), f"{elapsed_ms:.1f}"]
-
-        # Add device states in column order
+        # Device states (in column order).
         for col in self._device_columns:
             device_id = col.split(":")[0]
             state = states.get(device_id)
-            # Format state value
             if state is None:
                 row.append("")
             elif isinstance(state, bool):
@@ -320,20 +403,69 @@ class DataRecorder:
             else:
                 row.append(str(state))
 
-        # Add zone states in column order
+        # Zone states (in column order). Zones are pixel-space inferences,
+        # so they're only meaningful when a CV processor + zone config are
+        # both attached; otherwise we emit empty cells.
         zone_states = {}
         if self._cv_processor and self._zone_config:
             zone_states = self._cv_processor.get_zone_states()
-
         for col in self._zone_columns:
             zone_name = col.replace("zone:", "")
-            # Find zone state by name
             state_value = ""
             for _zone_id, zone_state in zone_states.items():
                 if zone_state.zone_name == zone_name:
                     state_value = "1" if zone_state.occupied else "0"
                     break
             row.append(state_value)
+
+        return row
+
+    async def _record_sample(self) -> None:
+        """Record a single sample of all device states (timer-driven path)."""
+        if not self._recording or self._writer is None:
+            return
+
+        now = datetime.now()
+        # Compute elapsed_ms against the same `_start_timestamp` used by
+        # `record_at_frame` so the two write paths share an epoch (and the
+        # column is joinable to other recorders when a session epoch is set).
+        elapsed_ms = (
+            (now.timestamp() - self._start_timestamp) * 1000
+            if self._start_timestamp
+            else 0
+        )
+        iso = now.isoformat(timespec="milliseconds")
+        row = await self._build_row(frame=None, iso_timestamp=iso, elapsed_ms=elapsed_ms)
+
+        self._writer.writerow(row)
+        self._file.flush()
+
+    async def record_at_frame(self, frame_no: int, frame_ts: float) -> None:
+        """
+        Record a row anchored to a camera frame.
+
+        Called from the camera pipeline (see CameraPanel) once per processed
+        frame, immediately after TrackingDataLogger.log_frame. The two CSVs
+        then share the same `frame` key and the same Unix timestamp, so
+        joining device states to tracking output (and to MP4 frame indices)
+        is a one-key operation rather than an interpolation.
+
+        Args:
+            frame_no: Canonical camera frame index for this session (the
+                value of TrackingDataLogger.frame_count after its log_frame
+                call for the same frame).
+            frame_ts: Unix timestamp (seconds, float) of the frame as
+                captured by CameraManager (time.time() taken at the moment
+                of frame readback).
+        """
+        if not self._recording or self._writer is None:
+            return
+
+        elapsed_ms = (frame_ts - self._start_timestamp) * 1000 if self._start_timestamp else 0
+        iso = datetime.fromtimestamp(frame_ts).isoformat(timespec="milliseconds")
+        row = await self._build_row(
+            frame=frame_no, iso_timestamp=iso, elapsed_ms=elapsed_ms
+        )
 
         self._writer.writerow(row)
         self._file.flush()
