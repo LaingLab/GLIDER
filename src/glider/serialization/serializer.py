@@ -270,9 +270,24 @@ class ExperimentSerializer:
         return HardwareConfigSchema(boards=boards, devices=devices)
 
     def _extract_flow_config(self, flow_engine: "FlowEngine") -> FlowConfigSchema:
-        """Extract flow configuration from engine."""
+        """Extract flow configuration from engine.
+
+        Node ``type`` is the short registered name (e.g. ``"DigitalWrite"``) —
+        the same string ``flow_engine.register_node(name, cls)`` was called
+        with. Loaders look this up directly in the engine's node registry.
+        Connections are read via ``get_connections()`` which returns a list
+        of dicts with int port indices (``from_output`` / ``to_input``);
+        these are mapped onto ``ConnectionSchema``'s ``from_port`` /
+        ``to_port`` fields.
+        """
         nodes = []
         connections = []
+
+        # Build a reverse map class -> registered name once, so each node looks
+        # up its stable persisted type string.
+        cls_to_name: dict[type, str] = {
+            cls: name for name, cls in flow_engine._node_registry.items()  # noqa: SLF001
+        }
 
         # Extract nodes
         for node_id, node in flow_engine.nodes.items():
@@ -299,9 +314,18 @@ class ExperimentSerializer:
                 )
                 outputs.append(port)
 
+            # Prefer the short registered name; fall back to definition name,
+            # then to the class name. Avoids writing fully-qualified dotted
+            # paths that the apply path would have to round-trip-strip.
+            short_type = cls_to_name.get(type(node))
+            if short_type is None:
+                short_type = getattr(getattr(node, "definition", None), "name", None)
+            if short_type is None:
+                short_type = type(node).__name__
+
             node_schema = NodeSchema(
                 id=node_id,
-                type=f"{type(node).__module__}.{type(node).__name__}",
+                type=short_type,
                 title=getattr(node, "title", type(node).__name__),
                 position=position,
                 properties=self._extract_node_properties(node),
@@ -310,42 +334,77 @@ class ExperimentSerializer:
             )
             nodes.append(node_schema)
 
-        # Extract connections
-        for conn_id, conn in flow_engine.connections.items():
+        # Extract connections. `get_connections()` returns a list of dicts
+        # with keys: id, from_node, from_output, to_node, to_input, type.
+        # (Earlier code attempted `flow_engine.connections.items()` which
+        # tried to attribute-access a non-existent property AND treat the
+        # dict-of-dicts as if it had .from_node_id — every save crashed.)
+        for conn in flow_engine.get_connections():
             conn_schema = ConnectionSchema(
-                id=conn_id,
-                from_node=conn.from_node_id,
-                from_port=conn.from_port,
-                to_node=conn.to_node_id,
-                to_port=conn.to_port,
-                connection_type="exec" if getattr(conn, "is_exec", False) else "data",
+                id=conn["id"],
+                from_node=conn["from_node"],
+                from_port=conn["from_output"],
+                to_node=conn["to_node"],
+                to_port=conn["to_input"],
+                connection_type=conn.get("type", "data"),
             )
             connections.append(conn_schema)
 
         return FlowConfigSchema(nodes=nodes, connections=connections)
 
     def _extract_node_properties(self, node: "GliderNode") -> dict[str, Any]:
-        """Extract serializable properties from a node."""
-        properties = {}
+        """Extract serializable properties from a node.
 
-        # Get properties from node's property definitions
-        for prop_name in getattr(node, "property_names", []):
-            if hasattr(node, prop_name):
-                value = getattr(node, prop_name)
-                # Only include serializable values
-                if isinstance(value, (str, int, float, bool, list, dict, type(None))):
-                    properties[prop_name] = value
+        Uses the node's ``get_state()`` API as the authoritative source of
+        truth. Earlier code iterated ``getattr(node, "property_names", [])``
+        — but no node class ever defined ``property_names``, so the loop
+        body never ran and every per-node parameter (pin, threshold, ITI,
+        camera index, …) was silently dropped on every save. Result: load
+        appeared to succeed and every node reverted to its dataclass
+        defaults.
 
-        # Common properties
+        Common attributes outside the state dict (``visible_in_runner``,
+        ``enabled``) are preserved as siblings to the ``state`` payload so
+        old loaders that don't know about ``state`` still see them.
+        """
+        properties: dict[str, Any] = {}
+
         if hasattr(node, "visible_in_runner"):
-            properties["visible_in_runner"] = node.visible_in_runner
+            properties["visible_in_runner"] = bool(node.visible_in_runner)
+        if hasattr(node, "_enabled"):
+            properties["enabled"] = bool(node._enabled)
+
+        if hasattr(node, "get_state") and callable(node.get_state):
+            try:
+                state = node.get_state()
+            except Exception as e:
+                logger.warning(
+                    "get_state() raised on %s (%s); node state will be empty",
+                    getattr(node, "_glider_id", "?"),
+                    type(node).__name__,
+                    exc_info=e,
+                )
+                state = {}
+            if isinstance(state, dict) and state:
+                properties["state"] = state
 
         return properties
 
     def _apply_hardware_config(
         self, config: HardwareConfigSchema, hardware_manager: "HardwareManager"
     ) -> None:
-        """Apply hardware configuration to manager."""
+        """Apply hardware configuration to manager.
+
+        Note: ``HardwareManager.add_board`` parameter is ``driver_type``,
+        NOT ``board_type``. Earlier code passed the wrong kwarg, so every
+        load crashed immediately with ``TypeError``.
+
+        ``settings`` is passed through as ``**kwargs``; if a user-edited
+        ``.glider`` file ever contains a settings key that collides with an
+        explicit kwarg (``driver_type``, ``port``, ``board_id``), the kwarg
+        collision will raise ``TypeError`` early — that's preferable to
+        silently honoring the malformed override.
+        """
         # Clear existing config
         hardware_manager.clear()
 
@@ -353,7 +412,7 @@ class ExperimentSerializer:
         for board_config in config.boards:
             hardware_manager.add_board(
                 board_id=board_config.id,
-                board_type=board_config.type,
+                driver_type=board_config.type,
                 port=board_config.port,
                 **board_config.settings,
             )
@@ -370,26 +429,77 @@ class ExperimentSerializer:
             )
 
     def _apply_flow_config(self, config: FlowConfigSchema, flow_engine: "FlowEngine") -> None:
-        """Apply flow configuration to engine."""
+        """Apply flow configuration to engine.
+
+        Three changes vs. the previous version:
+
+        1. ``flow_engine.create_node`` takes a *type string* as its second
+           argument, not a class. Earlier code passed the resolved class
+           object as the first positional, which landed it in ``node_id``
+           — every call raised ``TypeError``.
+        2. The persisted ``properties`` dict carries ``state`` (the
+           node's full ``_state`` payload), ``visible_in_runner``, and
+           ``enabled`` as separate keys. ``state`` is handed to
+           ``create_node(state=...)`` which calls ``node.set_state(state)``
+           internally; the others are applied to the constructed node.
+        3. Connections use port *indices* (ints from the schema), so we
+           call ``create_connection`` directly. ``flow_engine.connect``
+           never existed and ``connect_nodes`` requires port names. The
+           schema stores indices, so this is the right call to begin with.
+
+        Backwards-compat for files written by earlier versions:
+        ``node_schema.type`` may carry a fully-qualified dotted path like
+        ``"glider.nodes.experiment_nodes.StartExperimentNode"``. We accept
+        either a short name (matches registry directly) or a long name
+        whose final ``Node`` suffix is stripped (e.g. ``StartExperimentNode``
+        → registry name ``"StartExperiment"``).
+        """
         # Clear existing flow
         flow_engine.clear()
 
         # Create nodes, tracking which ones succeeded
         created_node_ids: set[str] = set()
         for node_schema in config.nodes:
-            node_class = self._node_registry.get(node_schema.type)
-            if node_class:
-                node = flow_engine.create_node(
-                    node_class,
-                    node_id=node_schema.id,
-                    **node_schema.properties,
-                )
-                # Set position for GUI
-                if node:
-                    node.gui_position = node_schema.position
-                    created_node_ids.add(node_schema.id)
-            else:
+            node_type = self._resolve_node_type(node_schema.type, flow_engine)
+            if node_type is None:
                 logger.warning(f"Unknown node type: {node_schema.type}")
+                continue
+
+            props = dict(node_schema.properties or {})
+            state = props.pop("state", None)
+            visible_in_runner = props.pop("visible_in_runner", None)
+            enabled = props.pop("enabled", None)
+
+            # Position dict from schema: prefer (x, y) tuple for create_node.
+            position_tuple: tuple[float, float] = (
+                float(node_schema.position.get("x", 0.0)),
+                float(node_schema.position.get("y", 0.0)),
+            )
+
+            try:
+                node = flow_engine.create_node(
+                    node_id=node_schema.id,
+                    node_type=node_type,
+                    position=position_tuple,
+                    state=state,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to create node {node_schema.id} ({node_type}): {e}")
+                continue
+
+            if node is None:
+                continue
+
+            # Preserve original position dict for the GUI (some panels use
+            # the dict shape directly).
+            node.gui_position = node_schema.position
+
+            if visible_in_runner is not None and hasattr(node, "_visible_in_runner"):
+                node._visible_in_runner = bool(visible_in_runner)
+            if enabled is not None and hasattr(node, "_enabled"):
+                node._enabled = bool(enabled)
+
+            created_node_ids.add(node_schema.id)
 
         # Create connections, skipping any that reference missing nodes
         for conn_schema in config.connections:
@@ -403,12 +513,39 @@ class ExperimentSerializer:
                     f"Skipping connection: target node '{conn_schema.to_node}' was not created"
                 )
                 continue
-            flow_engine.connect(
-                from_node_id=conn_schema.from_node,
-                from_port=conn_schema.from_port,
-                to_node_id=conn_schema.to_node,
-                to_port=conn_schema.to_port,
-            )
+            try:
+                flow_engine.create_connection(
+                    connection_id=conn_schema.id,
+                    from_node_id=conn_schema.from_node,
+                    from_output=conn_schema.from_port,
+                    to_node_id=conn_schema.to_node,
+                    to_input=conn_schema.to_port,
+                    connection_type=conn_schema.connection_type,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Skipping connection " f"{conn_schema.from_node}->{conn_schema.to_node}: {e}"
+                )
+
+    @staticmethod
+    def _resolve_node_type(type_str: str, flow_engine: "FlowEngine") -> str | None:
+        """Resolve a persisted node-type string against the engine registry.
+
+        Accepts: the registered short name (preferred), or a fully-qualified
+        ``module.ClassName`` string from older save files. For the long form,
+        strip a trailing ``Node`` suffix to match the convention used by
+        ``register_node`` (e.g. ``StartExperimentNode`` → ``"StartExperiment"``).
+        """
+        registry = flow_engine._node_registry  # noqa: SLF001
+        if type_str in registry:
+            return type_str
+        # Try the bare class name from a dotted path
+        short = type_str.rsplit(".", 1)[-1] if "." in type_str else type_str
+        if short in registry:
+            return short
+        if short.endswith("Node") and short[:-4] in registry:
+            return short[:-4]
+        return None
 
     def _validate_and_migrate(self, schema: ExperimentSchema) -> ExperimentSchema:
         """

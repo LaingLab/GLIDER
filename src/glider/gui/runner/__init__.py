@@ -1,14 +1,12 @@
 """
-Runner Dashboard - Touch-optimized interface for Raspberry Pi.
+Runner subpackage.
 
-Provides a simplified dashboard for experiment execution
-with large touch targets and high-contrast visuals.
+The user-facing runner UI lives in ``glider.gui.panels.runner_panel.RunnerPanel``
+(constructed inline by ``MainWindow``). Earlier exploratory `RunnerDashboard`
+and `WidgetFactory` classes were removed in the 1.0 release-prep pass — the
+inline panel proved to be the canonical implementation. This module is kept as
+a package boundary for future refactors that may want to extract the touch UI
+back out of ``MainWindow``.
 """
 
-from glider.gui.runner.dashboard import RunnerDashboard
-from glider.gui.runner.widget_factory import WidgetFactory
-
-__all__ = [
-    "RunnerDashboard",
-    "WidgetFactory",
-]
+__all__: list[str] = []

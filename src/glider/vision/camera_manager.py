@@ -33,6 +33,21 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+# Miniscope V4 hardware-safe value ranges. Validation lives at the public-API
+# boundary (CameraManager.set_led_power / set_ewl_focus and
+# CameraSettings.from_dict) so the operator's slider value, the saved-file
+# value, and the actual hardware state cannot drift apart — prior code only
+# clamped inside internal helpers, which silently broke reproducibility.
+#
+# LED is a power LED driven by a digital potentiometer; out-of-range values
+# can push current past spec. EWL is an electrowetting lens (MAX14574
+# driver); out-of-range values produce undefined voltages.
+MINISCOPE_LED_MIN: int = 0
+MINISCOPE_LED_MAX: int = 100
+MINISCOPE_EWL_MIN: int = 0
+MINISCOPE_EWL_MAX: int = 255
+
+
 class FFmpegCapture:
     """
     FFmpeg-based video capture for cameras that OpenCV cannot handle.
@@ -902,7 +917,43 @@ class CameraSettings:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "CameraSettings":
-        """Deserialize from dictionary."""
+        """Deserialize from dictionary.
+
+        Miniscope safety-critical fields (``led_power``, ``ewl_focus``) are
+        clamped to their hardware-safe range with a warning if the loaded
+        value was out of range. Protects against a hand-edited or malformed
+        ``.glider`` file driving the LED or EWL outside spec on load.
+        """
+        led_raw = data.get("led_power", 0)
+        try:
+            led = int(led_raw)
+        except (TypeError, ValueError):
+            logger.warning("led_power %r in saved file is not an int; defaulting to 0", led_raw)
+            led = 0
+        if not (MINISCOPE_LED_MIN <= led <= MINISCOPE_LED_MAX):
+            logger.warning(
+                "led_power %s in saved file is outside [%s, %s]; clamping",
+                led,
+                MINISCOPE_LED_MIN,
+                MINISCOPE_LED_MAX,
+            )
+            led = max(MINISCOPE_LED_MIN, min(MINISCOPE_LED_MAX, led))
+
+        ewl_raw = data.get("ewl_focus", 128)
+        try:
+            ewl = int(ewl_raw)
+        except (TypeError, ValueError):
+            logger.warning("ewl_focus %r in saved file is not an int; defaulting to 128", ewl_raw)
+            ewl = 128
+        if not (MINISCOPE_EWL_MIN <= ewl <= MINISCOPE_EWL_MAX):
+            logger.warning(
+                "ewl_focus %s in saved file is outside [%s, %s]; clamping",
+                ewl,
+                MINISCOPE_EWL_MIN,
+                MINISCOPE_EWL_MAX,
+            )
+            ewl = max(MINISCOPE_EWL_MIN, min(MINISCOPE_EWL_MAX, ewl))
+
         return cls(
             camera_index=data.get("camera_index", 0),
             resolution=tuple(data.get("resolution", [640, 480])),
@@ -926,8 +977,8 @@ class CameraSettings:
             focus=data.get("focus", 0),
             zoom=data.get("zoom", 0),
             iris=data.get("iris", 0),
-            led_power=data.get("led_power", 0),
-            ewl_focus=data.get("ewl_focus", 128),
+            led_power=led,
+            ewl_focus=ewl,
             audio_device_name=data.get("audio_device_name"),
             audio_device_index=data.get("audio_device_index"),
         )
@@ -2060,11 +2111,30 @@ class CameraManager:
         Can be called while streaming to adjust LED brightness on-the-fly.
 
         Args:
-            power_percent: LED power 0-100 (0=off, 100=max)
+            power_percent: LED power 0-100 (0=off, 100=max).
 
         Returns:
-            True if LED was set successfully
+            True if the I2C command was sent successfully.
+
+        Raises:
+            ValueError: if ``power_percent`` is not an int in
+                ``[MINISCOPE_LED_MIN, MINISCOPE_LED_MAX]``. Validating at
+                the public API guarantees the operator's slider value and
+                the physical LED match — prior versions silently clamped
+                inside internal helpers, so the GUI / saved file said one
+                thing while the LED ran at another.
         """
+        if not isinstance(power_percent, int) or isinstance(power_percent, bool):
+            raise ValueError(
+                f"LED power must be an int in [{MINISCOPE_LED_MIN}, "
+                f"{MINISCOPE_LED_MAX}], got {type(power_percent).__name__}"
+            )
+        if not (MINISCOPE_LED_MIN <= power_percent <= MINISCOPE_LED_MAX):
+            raise ValueError(
+                f"LED power {power_percent} outside safe range "
+                f"[{MINISCOPE_LED_MIN}, {MINISCOPE_LED_MAX}]"
+            )
+
         if not self._settings.miniscope_mode:
             logger.warning("LED control requires miniscope mode to be enabled")
             return False
@@ -2079,16 +2149,34 @@ class CameraManager:
 
     def set_ewl_focus(self, focus_value: int) -> bool:
         """
-        Set Miniscope electrowetting lens focus (0-255).
+        Set Miniscope electrowetting lens focus (0-255, 128 = neutral).
 
         Can be called while streaming to adjust focus on-the-fly.
 
         Args:
-            focus_value: Focus position 0-255
+            focus_value: Focus position 0-255 (byte register width; 128 is
+                the lens-neutral position).
 
         Returns:
-            True if focus was set successfully
+            True if the I2C command was sent successfully.
+
+        Raises:
+            ValueError: if ``focus_value`` is not an int in
+                ``[MINISCOPE_EWL_MIN, MINISCOPE_EWL_MAX]``. Validating at
+                the public API keeps the slider, the saved-file value, and
+                the actual lens voltage in agreement.
         """
+        if not isinstance(focus_value, int) or isinstance(focus_value, bool):
+            raise ValueError(
+                f"EWL focus must be an int in [{MINISCOPE_EWL_MIN}, "
+                f"{MINISCOPE_EWL_MAX}], got {type(focus_value).__name__}"
+            )
+        if not (MINISCOPE_EWL_MIN <= focus_value <= MINISCOPE_EWL_MAX):
+            raise ValueError(
+                f"EWL focus {focus_value} outside safe range "
+                f"[{MINISCOPE_EWL_MIN}, {MINISCOPE_EWL_MAX}]"
+            )
+
         if not self._settings.miniscope_mode:
             logger.warning("EWL focus control requires miniscope mode to be enabled")
             return False

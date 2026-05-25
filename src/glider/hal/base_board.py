@@ -101,7 +101,7 @@ class BaseBoard(ABC):
         # write_digital / write_analog / write_pwm / write_servo so listeners
         # (e.g. DeviceEventLogger) can record output events on the same event
         # stream as input edges.
-        self._output_callbacks: list[Callable[[int, "PinType", Any], None]] = []
+        self._output_callbacks: list[Callable[[int, PinType, Any], None]] = []
         self._reconnect_task: asyncio.Task | None = None
         self._reconnect_interval = 5.0  # seconds (increased to reduce spam)
         self._i2c_lock = asyncio.Lock()  # Shared lock for I2C operations
@@ -305,9 +305,7 @@ class BaseBoard(ABC):
         if pin in self._callbacks and callback in self._callbacks[pin]:
             self._callbacks[pin].remove(callback)
 
-    def register_output_callback(
-        self, callback: Callable[[int, "PinType", Any], None]
-    ) -> None:
+    def register_output_callback(self, callback: Callable[[int, "PinType", Any], None]) -> None:
         """
         Register a callback fired after a successful output write.
 
@@ -323,9 +321,7 @@ class BaseBoard(ABC):
         if callback not in self._output_callbacks:
             self._output_callbacks.append(callback)
 
-    def unregister_output_callback(
-        self, callback: Callable[[int, "PinType", Any], None]
-    ) -> None:
+    def unregister_output_callback(self, callback: Callable[[int, "PinType", Any], None]) -> None:
         """Remove a previously registered output callback."""
         if callback in self._output_callbacks:
             self._output_callbacks.remove(callback)
@@ -379,15 +375,81 @@ class BaseBoard(ABC):
             except Exception:
                 logger.exception("Error in error callback")
 
+    # Auto-reconnect tuning. Exponential backoff capped at 60s; give up
+    # after MAX_RECONNECT_ATTEMPTS and transition to ERROR so the operator
+    # can intervene rather than seeing infinite silent retries.
+    MAX_RECONNECT_ATTEMPTS: int = 12
+
     async def _attempt_reconnect(self) -> None:
-        """Background task for automatic reconnection."""
-        while self._auto_reconnect and self._state == BoardConnectionState.RECONNECTING:
-            await asyncio.sleep(self._reconnect_interval)
-            try:
-                if await self.connect():
-                    break
-            except Exception:
-                pass  # Continue trying
+        """Background task for automatic reconnection.
+
+        Previously this loop terminated after the *first* failed
+        ``connect()`` attempt because ``connect()`` transitions the state
+        to ``ERROR`` on failure, which breaks the loop's
+        ``_state == RECONNECTING`` predicate. The follow-up
+        ``start_reconnect()`` re-fired by ``connect()`` then short-circuited
+        because ``_reconnect_task`` was non-None (the just-finished task).
+        Net effect: ``auto_reconnect=True`` made exactly one retry attempt
+        ever, with no UI surface.
+
+        Fixed:
+          * Loop predicate is ``self._auto_reconnect and not self.is_connected``
+            (no longer depends on the state being RECONNECTING).
+          * State is restored to RECONNECTING after every failed connect
+            so the UI shows the actual situation.
+          * Exponential backoff (5 → 10 → 20 → 40 → 60s capped) replaces
+            fixed-interval polling.
+          * Each failure fires error callbacks for UI visibility.
+          * Bounded by ``MAX_RECONNECT_ATTEMPTS``; gives up and sets
+            ERROR after the cap.
+          * Task handle is cleared in ``finally`` so re-entry is allowed.
+        """
+        attempt = 0
+        try:
+            while self._auto_reconnect and not self.is_connected:
+                if attempt >= self.MAX_RECONNECT_ATTEMPTS:
+                    logger.error(
+                        "Auto-reconnect for board %s gave up after %d attempts",
+                        self._id,
+                        attempt,
+                    )
+                    self._set_state(BoardConnectionState.ERROR)
+                    self._notify_error(
+                        RuntimeError(f"Auto-reconnect failed after {attempt} attempts")
+                    )
+                    return
+
+                self._set_state(BoardConnectionState.RECONNECTING)
+                backoff = min(
+                    self._reconnect_interval * (2 ** min(attempt, 4)),
+                    60.0,
+                )
+                try:
+                    await asyncio.sleep(backoff)
+                except asyncio.CancelledError:
+                    return
+
+                attempt += 1
+                logger.info("Auto-reconnect attempt %d for board %s", attempt, self._id)
+                try:
+                    if await self.connect():
+                        logger.info(
+                            "Auto-reconnect succeeded for board %s on attempt %d",
+                            self._id,
+                            attempt,
+                        )
+                        return
+                except Exception as e:
+                    logger.warning(
+                        "Auto-reconnect attempt %d for board %s failed: %s",
+                        attempt,
+                        self._id,
+                        e,
+                    )
+                    self._notify_error(e)
+        finally:
+            # Allow start_reconnect() to fire a new task on the next event.
+            self._reconnect_task = None
 
     def start_reconnect(self) -> None:
         """Start the automatic reconnection process."""

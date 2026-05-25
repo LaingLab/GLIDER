@@ -794,8 +794,21 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(object)
     def _on_core_state_change(self, state) -> None:
-        """Handle core state changes."""
+        """Handle core state changes.
+
+        On entry into ERROR, surface an unmissable critical notification.
+        ERROR after a STOP can mean ``_set_all_devices_low`` failed and at
+        least one hardware output may still be active — the operator
+        cannot distinguish that from a transient error from the status-bar
+        color alone, so we explicitly call ``_notify_user`` at ``critical``
+        level (which opens a non-modal critical dialog in desktop mode,
+        or a long-timeout status message in runner mode).
+        Dedup via ``_last_session_state`` so repeated state callbacks for
+        the same state don't spam the user.
+        """
         state_name = state.name
+        prev_state = getattr(self, "_last_session_state", None)
+        self._last_session_state = state_name
         self.state_changed.emit(state_name)
 
         # Update runner panel
@@ -813,11 +826,38 @@ class MainWindow(QMainWindow):
         if self._state_label is not None:
             self._state_label.setText(f"State: {state_name}")
 
+        # Surface unsafe-state modal on transition INTO ERROR. Skip if we
+        # were already in ERROR (e.g., repeat callback fired by a listener).
+        if state_name == "ERROR" and prev_state != "ERROR":
+            self._notify_user(
+                "UNSAFE STATE — Hardware may still be active",
+                "The experiment session entered an ERROR state.\n\n"
+                "If this happened during or immediately after STOP, one or more "
+                "hardware outputs (heater, relay, PWM, valve, motor) may still "
+                "be active. Verify the physical state of every output device "
+                "before powering down. Check the log for diagnostic details.",
+                level="critical",
+            )
+
     @pyqtSlot(str, object)
     def _on_core_error(self, source: str, error: Exception) -> None:
-        """Handle core errors."""
+        """Handle core errors.
+
+        ``error_occurred`` is kept for backwards compatibility with any
+        external subscribers, but the operator-visible path is now the
+        explicit ``_notify_user`` call below — previously the signal had
+        zero subscribers and every core error vanished into the log.
+        """
         self.error_occurred.emit(source, str(error))
         logger.error(f"Error from {source}: {error}")
+        # Warning-level rather than critical: not every core error means
+        # hardware is in a bad state. The state-change handler above
+        # escalates to critical when the session actually enters ERROR.
+        self._notify_user(
+            f"GLIDER error: {source}",
+            str(error),
+            level="warning",
+        )
 
     @pyqtSlot(str, object)
     def _on_hardware_connection_change(self, board_id: str, state: BoardConnectionState) -> None:
@@ -1668,39 +1708,73 @@ class MainWindow(QMainWindow):
     # --- Utilities ---
 
     def _run_async(self, coro) -> asyncio.Task:
-        """Run an async coroutine with proper task tracking."""
+        """Run an async coroutine with proper task tracking.
+
+        The done-callback both removes the task from the pending set AND
+        inspects ``task.exception()`` so that exceptions raised by the
+        coroutine surface in the log instead of being silently swallowed
+        with the standard "Task exception was never retrieved" warning at
+        GC time. Without this, emergency-stop / hardware-write / network
+        failures vanish into asyncio's default handler with no operator
+        visibility.
+        """
+        from glider.core.async_utils import log_task_exception
+
         task = asyncio.create_task(coro)
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
+        task.add_done_callback(log_task_exception)
         return task
 
     def closeEvent(self, event) -> None:
-        """Handle window close event."""
+        """Handle window close event.
+
+        Cancellation is advisory in asyncio: ``task.cancel()`` only
+        schedules ``CancelledError`` to be raised at the next ``await``
+        point. The previous implementation immediately cleared the
+        pending-task set and launched ``_core.shutdown()`` — so in-flight
+        cancellations raced the shutdown sequence (a write task started
+        50ms earlier could still drive a pin after the shutdown loop set
+        outputs LOW). We now schedule cancellation, await drain via
+        ``asyncio.gather(..., return_exceptions=True)``, and only then
+        kick off ``_core.shutdown()``. A 10-second budget bounds the
+        whole sequence so an unresponsive task can't block app exit.
+        """
+        import time
+
         # Stop device control panel polling
         if self._device_control_panel:
             self._device_control_panel.stop_polling()
 
-        if self._check_save():
-            for task in self._pending_tasks:
-                if not task.done():
-                    task.cancel()
-            self._pending_tasks.clear()
-
-            try:
-                loop = asyncio.get_event_loop()
-                if not loop.is_running():
-                    loop.run_until_complete(self._core.shutdown())
-                else:
-                    future = asyncio.ensure_future(self._core.shutdown())
-                    import time
-
-                    timeout = time.time() + 10
-                    while not future.done() and time.time() < timeout:
-                        QApplication.processEvents()
-                    if not future.done():
-                        logger.warning("Shutdown timed out")
-            except Exception as e:
-                logger.error(f"Error during shutdown: {e}")
-            event.accept()
-        else:
+        if not self._check_save():
             event.ignore()
+            return
+
+        async def _drain_and_shutdown() -> None:
+            pending = [t for t in self._pending_tasks if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            self._pending_tasks.clear()
+            await self._core.shutdown()
+
+        try:
+            loop = asyncio.get_event_loop()
+            if not loop.is_running():
+                loop.run_until_complete(_drain_and_shutdown())
+            else:
+                future = asyncio.ensure_future(_drain_and_shutdown())
+                deadline = time.monotonic() + 10.0
+                # Bounded event-pump loop with a small sleep so we don't
+                # 100%-CPU-spin (previous implementation did).
+                while not future.done() and time.monotonic() < deadline:
+                    QApplication.processEvents()
+                    time.sleep(0.01)
+                if not future.done():
+                    logger.warning("Shutdown timed out after 10s; cancelling.")
+                    future.cancel()
+        except Exception as e:
+            logger.error(f"Error during shutdown: {e}")
+
+        event.accept()

@@ -5,6 +5,8 @@ These nodes are proxies for physical devices and hold references
 to specific hardware driver instances.
 """
 
+import logging
+
 from glider.nodes.hardware.analog_nodes import (
     AnalogReadNode,
     PWMWriteNode,
@@ -18,6 +20,8 @@ from glider.nodes.hardware.digital_nodes import (
     DigitalWriteNode,
 )
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "DigitalWriteNode",
     "DigitalReadNode",
@@ -25,4 +29,21 @@ __all__ = [
     "PWMWriteNode",
     "DeviceActionNode",
     "DeviceReadNode",
+    "register_hardware_nodes",
 ]
+
+
+def register_hardware_nodes(flow_engine) -> None:
+    """Register every hardware node class with the flow engine.
+
+    Without this, the Builder library shows these nodes but
+    ``flow_engine.create_node(type_str, ...)`` returns ``None`` and dropping
+    one onto the canvas silently does nothing.
+    """
+    flow_engine.register_node("DigitalWrite", DigitalWriteNode)
+    flow_engine.register_node("DigitalRead", DigitalReadNode)
+    flow_engine.register_node("AnalogRead", AnalogReadNode)
+    flow_engine.register_node("PWMWrite", PWMWriteNode)
+    flow_engine.register_node("DeviceAction", DeviceActionNode)
+    flow_engine.register_node("DeviceRead", DeviceReadNode)
+    logger.info("Registered hardware nodes")

@@ -275,7 +275,7 @@ class FlowFunctionRunner:
             # Wait for completion (exit node reached) with timeout
             try:
                 await asyncio.wait_for(self._completion_event.wait(), timeout=60.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(f"Flow function '{self._definition.name}' timed out")
 
         except Exception as e:

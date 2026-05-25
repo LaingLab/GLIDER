@@ -223,15 +223,23 @@ class FlowEngine:
                     # No connected board, use first one anyway
                     board = next(iter(boards.values()))
 
+        pin_manager = None
         if board is None:
             logger.warning("No board available for custom device - using mock mode")
             # Create a mock board for testing without hardware
             from glider.hal.mock_board import MockBoard
 
             board = MockBoard()
+        else:
+            # Use the HardwareManager's PinManager for this board so the
+            # runner's pin allocations conflict-check against any standard
+            # devices bound to the same board. Without this, two devices
+            # could quietly drive the same pin (voltage contention).
+            if self._hardware_manager is not None:
+                pin_manager = self._hardware_manager.get_pin_manager(board.id)
 
         # Create the runner
-        runner = CustomDeviceRunner(definition, board)
+        runner = CustomDeviceRunner(definition, board, pin_manager=pin_manager)
 
         # Store runner for later initialization
         self._custom_device_runners[definition_id] = runner
