@@ -5,6 +5,7 @@ Maintains the registry of active Board instances and handles
 connection/disconnection, device initialization, and error recovery.
 """
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -12,6 +13,12 @@ from typing import TYPE_CHECKING
 from glider.hal.base_board import BaseBoard, BoardConnectionState
 from glider.hal.base_device import BaseDevice, create_device_from_dict
 from glider.hal.pin_manager import PinConflictError, PinManager
+
+# Upper bound on how long any single device.shutdown() / board.emergency_stop()
+# / device.initialize() may block. A wedged serial / I2C / GPIO call must not
+# stall the emergency-stop path: a heater that should be turned off cannot
+# wait on the I/O retry timer for a *different* device to give up.
+DEVICE_IO_TIMEOUT_S = 2.0
 
 if TYPE_CHECKING:
     from glider.core.experiment_session import BoardConfig, DeviceConfig
@@ -556,23 +563,49 @@ class HardwareManager:
         """
         Trigger emergency stop on all hardware.
 
-        Sets all outputs to safe state.
+        Drives every output device to its safe state and invokes each
+        board's emergency_stop in parallel, bounded by ``DEVICE_IO_TIMEOUT_S``
+        per call. A single hung device or board cannot block the rest of
+        the sequence — the whole point of e-stop is that it completes
+        promptly even when hardware is misbehaving.
         """
         logger.warning("EMERGENCY STOP triggered!")
 
-        # Shutdown all devices
-        for device in self._devices.values():
+        async def _safe_shutdown(device: BaseDevice) -> None:
             try:
-                await device.shutdown()
+                await asyncio.wait_for(device.shutdown(), timeout=DEVICE_IO_TIMEOUT_S)
+            except TimeoutError:
+                logger.error(
+                    "Emergency shutdown TIMED OUT after %.1fs for device %s",
+                    DEVICE_IO_TIMEOUT_S,
+                    device.id,
+                )
             except Exception as e:
                 logger.error(f"Emergency shutdown error for device {device.id}: {e}")
 
-        # Emergency stop all boards
-        for board in self._boards.values():
+        async def _safe_board_estop(board: BaseBoard) -> None:
             try:
-                await board.emergency_stop()
+                await asyncio.wait_for(board.emergency_stop(), timeout=DEVICE_IO_TIMEOUT_S)
+            except TimeoutError:
+                logger.error(
+                    "Emergency stop TIMED OUT after %.1fs for board %s",
+                    DEVICE_IO_TIMEOUT_S,
+                    board.id,
+                )
             except Exception as e:
                 logger.error(f"Emergency stop error for board {board.id}: {e}")
+
+        # Snapshot the device/board lists so concurrent add/remove during
+        # an e-stop doesn't break iteration.
+        devices = list(self._devices.values())
+        boards = list(self._boards.values())
+
+        # Devices first (drive outputs LOW), then boards (driver-level reset).
+        # Parallel within each phase — one stuck device must not block another.
+        if devices:
+            await asyncio.gather(*(_safe_shutdown(d) for d in devices), return_exceptions=True)
+        if boards:
+            await asyncio.gather(*(_safe_board_estop(b) for b in boards), return_exceptions=True)
 
     async def disconnect_all(self) -> None:
         """Disconnect from all boards."""

@@ -715,9 +715,7 @@ class HardwarePanel(QWidget):
                 new_settings = {
                     "i2c_address": ads1115_settings["i2c_address"].value(),
                     "channel": ads1115_settings["channel"].value(),
-                    "gain": int(
-                        ads1115_settings["gain_combo"].currentText().split()[0]
-                    ),
+                    "gain": int(ads1115_settings["gain_combo"].currentText().split()[0]),
                 }
 
             try:

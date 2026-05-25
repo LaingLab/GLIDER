@@ -108,9 +108,7 @@ class DataRecorder:
             epoch: Unix timestamp (seconds, float) to use as t=0.
         """
         if self._recording:
-            logger.warning(
-                "set_session_epoch called while recording; takes effect on next start()"
-            )
+            logger.warning("set_session_epoch called while recording; takes effect on next start()")
         self._session_epoch_override = float(epoch)
 
     def set_camera_driven(self, enabled: bool) -> None:
@@ -127,9 +125,7 @@ class DataRecorder:
                 the timer loop with sample_interval.
         """
         if self._recording:
-            logger.warning(
-                "set_camera_driven called while recording; takes effect on next start()"
-            )
+            logger.warning("set_camera_driven called while recording; takes effect on next start()")
         self._camera_driven = enabled
 
     def _generate_filename(self, experiment_name: str) -> str:
@@ -288,9 +284,7 @@ class DataRecorder:
         # sessions, or before the first frame arrives).
         self._device_columns = self._get_device_columns()
         self._zone_columns = self._get_zone_columns()
-        headers = (
-            ["frame", "timestamp", "elapsed_ms"] + self._device_columns + self._zone_columns
-        )
+        headers = ["frame", "timestamp", "elapsed_ms"] + self._device_columns + self._zone_columns
         self._writer.writerow(headers)
 
     async def start(
@@ -430,9 +424,7 @@ class DataRecorder:
         # `record_at_frame` so the two write paths share an epoch (and the
         # column is joinable to other recorders when a session epoch is set).
         elapsed_ms = (
-            (now.timestamp() - self._start_timestamp) * 1000
-            if self._start_timestamp
-            else 0
+            (now.timestamp() - self._start_timestamp) * 1000 if self._start_timestamp else 0
         )
         iso = now.isoformat(timespec="milliseconds")
         row = await self._build_row(frame=None, iso_timestamp=iso, elapsed_ms=elapsed_ms)
@@ -463,9 +455,7 @@ class DataRecorder:
 
         elapsed_ms = (frame_ts - self._start_timestamp) * 1000 if self._start_timestamp else 0
         iso = datetime.fromtimestamp(frame_ts).isoformat(timespec="milliseconds")
-        row = await self._build_row(
-            frame=frame_no, iso_timestamp=iso, elapsed_ms=elapsed_ms
-        )
+        row = await self._build_row(frame=frame_no, iso_timestamp=iso, elapsed_ms=elapsed_ms)
 
         self._writer.writerow(row)
         self._file.flush()

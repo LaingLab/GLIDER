@@ -1,14 +1,15 @@
 """
-GUI Controllers for GLIDER.
+GUI controllers subpackage.
 
-This package contains controller classes that encapsulate UI logic,
-extracted from the MainWindow to improve modularity.
+Originally intended to host UI logic extracted from ``MainWindow``. The two
+prototype controllers (``HardwareTreeController``, ``DeviceControlController``)
+were never wired up; the active equivalents live in
+``glider.gui.panels.hardware_panel.HardwarePanel`` and
+``glider.gui.panels.device_control_panel.DeviceControlPanel``. Both were
+removed in the 1.0 release-prep pass.
+
+This module is kept as a package boundary for the planned ``MainWindow``
+decomposition (see ``code-review-laing.md`` Section 6 architecture notes).
 """
 
-from glider.gui.controllers.device_control_controller import DeviceControlController
-from glider.gui.controllers.hardware_controller import HardwareTreeController
-
-__all__ = [
-    "HardwareTreeController",
-    "DeviceControlController",
-]
+__all__: list[str] = []

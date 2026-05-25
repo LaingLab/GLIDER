@@ -111,7 +111,7 @@ class FlowFunctionRunner:
         try:
             await asyncio.wait_for(self._completion_event.wait(), timeout=60.0)
             logger.info("FlowFunctionRunner: function execution complete")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("FlowFunctionRunner: function timed out")
         finally:
             # Clear completion callbacks

@@ -38,12 +38,8 @@ def _read_csv_rows(path) -> tuple[list[str], list[list[str]]]:
     with open(path, encoding="utf-8") as f:
         rows = list(csv.reader(f))
     # Header is the first non-blank, non-`#`-prefixed row.
-    header_idx = next(
-        i for i, r in enumerate(rows) if r and not r[0].startswith("#") and r[0]
-    )
-    data_rows = [
-        r for r in rows[header_idx + 1 :] if r and not r[0].startswith("#") and r != []
-    ]
+    header_idx = next(i for i, r in enumerate(rows) if r and not r[0].startswith("#") and r[0])
+    data_rows = [r for r in rows[header_idx + 1 :] if r and not r[0].startswith("#") and r != []]
     return rows[header_idx], data_rows
 
 
@@ -112,9 +108,7 @@ async def test_camera_driven_does_not_create_sample_task(tmp_path):
         await asyncio.sleep(0.2)
         _, data_rows = _read_csv_rows(recorder.file_path)
         numeric_frames = [r for r in data_rows if r and r[0].isdigit()]
-        assert numeric_frames == [], (
-            "camera-driven mode wrote rows without record_at_frame calls"
-        )
+        assert numeric_frames == [], "camera-driven mode wrote rows without record_at_frame calls"
     finally:
         await recorder.stop()
 
@@ -144,9 +138,7 @@ async def test_session_epoch_overrides_start_time(tmp_path):
     assert len(frame_rows) == 1
     elapsed = float(frame_rows[0][2])
     # 2.0 seconds since the shared epoch.
-    assert 1990.0 <= elapsed <= 2010.0, (
-        f"expected ~2000 ms against shared epoch, got {elapsed}"
-    )
+    assert 1990.0 <= elapsed <= 2010.0, f"expected ~2000 ms against shared epoch, got {elapsed}"
 
 
 @pytest.mark.asyncio

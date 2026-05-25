@@ -34,7 +34,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from glider.hal.base_board import PinType
 
@@ -67,7 +67,7 @@ class DeviceEventLogger:
 
     def __init__(
         self,
-        hardware_manager: "HardwareManager",
+        hardware_manager: HardwareManager,
         output_dir: Path | None = None,
     ):
         """
@@ -97,12 +97,8 @@ class DeviceEventLogger:
         # Subscriptions are tracked so stop() can cleanly tear them down
         # without leaving dangling references on boards that outlive a
         # session.
-        self._input_subscriptions: list[
-            tuple["BaseBoard", int, Any]
-        ] = []  # (board, pin, callback)
-        self._output_subscriptions: list[
-            tuple["BaseBoard", Any]
-        ] = []  # (board, callback)
+        self._input_subscriptions: list[tuple[BaseBoard, int, Any]] = []  # (board, pin, callback)
+        self._output_subscriptions: list[tuple[BaseBoard, Any]] = []  # (board, callback)
 
         # fsync bookkeeping (mirrors TrackingDataLogger's pattern).
         self._rows_since_fsync = 0
@@ -130,9 +126,7 @@ class DeviceEventLogger:
         See DataRecorder.set_session_epoch for the joinability rationale.
         """
         if self._recording:
-            logger.warning(
-                "set_session_epoch called while recording; takes effect on next start()"
-            )
+            logger.warning("set_session_epoch called while recording; takes effect on next start()")
         self._session_epoch_override = float(epoch)
 
     # ------------------------------------------------------------------
@@ -171,7 +165,7 @@ class DeviceEventLogger:
     async def start(
         self,
         experiment_name: str = "experiment",
-        session: Optional["ExperimentSession"] = None,
+        session: ExperimentSession | None = None,
     ) -> Path:
         """
         Open the events CSV and subscribe to board/device event sources.
@@ -226,9 +220,7 @@ class DeviceEventLogger:
 
         if self._writer and self._file:
             end_time = datetime.now()
-            duration = (
-                (end_time - self._start_time).total_seconds() if self._start_time else 0
-            )
+            duration = (end_time - self._start_time).total_seconds() if self._start_time else 0
             self._writer.writerow([])
             self._writer.writerow(["# End Time", end_time.isoformat()])
             self._writer.writerow(["# Duration (s)", f"{duration:.2f}"])
@@ -247,9 +239,7 @@ class DeviceEventLogger:
     # Header / metadata
     # ------------------------------------------------------------------
 
-    def _write_header(
-        self, experiment_name: str, session: Optional["ExperimentSession"]
-    ) -> None:
+    def _write_header(self, experiment_name: str, session: ExperimentSession | None) -> None:
         assert self._writer is not None
 
         self._writer.writerow(["# GLIDER Device Event Log"])
@@ -287,7 +277,7 @@ class DeviceEventLogger:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _device_is_input_capable(device: "BaseDevice") -> bool:
+    def _device_is_input_capable(device: BaseDevice) -> bool:
         """
         Heuristic: a device is treated as input-capable if its ``actions``
         dict advertises a ``"read"`` operation. Subscribing the per-pin
@@ -359,7 +349,7 @@ class DeviceEventLogger:
     # Callbacks
     # ------------------------------------------------------------------
 
-    def _on_output_change_factory(self, board: "BaseBoard"):
+    def _on_output_change_factory(self, board: BaseBoard):
         board_id = board.id
 
         def _cb(pin: int, pin_type: PinType, value: Any) -> None:
@@ -374,9 +364,7 @@ class DeviceEventLogger:
 
         return _cb
 
-    def _on_input_change_factory(
-        self, board: "BaseBoard", device: "BaseDevice", pin: int
-    ):
+    def _on_input_change_factory(self, board: BaseBoard, device: BaseDevice, pin: int):
         board_id = board.id
 
         def _cb(pin_arg: int, value: Any) -> None:
@@ -398,9 +386,7 @@ class DeviceEventLogger:
     # Row writing
     # ------------------------------------------------------------------
 
-    def _find_device_for_pin(
-        self, board: "BaseBoard", pin: int
-    ) -> Optional["BaseDevice"]:
+    def _find_device_for_pin(self, board: BaseBoard, pin: int) -> BaseDevice | None:
         for device in self._hardware_manager.devices.values():
             d_board = getattr(device, "_board", None) or getattr(device, "board", None)
             d_config = getattr(device, "_config", None)
@@ -416,7 +402,7 @@ class DeviceEventLogger:
         self,
         source: str,
         board_id: str,
-        device: Optional["BaseDevice"],
+        device: BaseDevice | None,
         pin: int,
         pin_type: PinType | None,
         value: Any,

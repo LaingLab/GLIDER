@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from glider.hal.base_board import BaseBoard
+    from glider.hal.pin_manager import PinManager
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,7 @@ class CustomDeviceRunner:
         board: "BaseBoard",
         pin_assignments: dict[str, int] | None = None,
         name: str | None = None,
+        pin_manager: "PinManager | None" = None,
     ):
         """
         Initialize the custom device runner.
@@ -115,6 +117,14 @@ class CustomDeviceRunner:
             pin_assignments: Optional mapping of pin names to actual pin numbers.
                             If not provided, uses pin_number from each PinDefinition.
             name: Optional instance name
+            pin_manager: Optional PinManager (typically owned by the
+                HardwareManager for this board). When provided, the runner
+                allocates its pins through the manager during ``initialize``
+                so conflicts between this custom device and any standard
+                ``BaseDevice`` bound to the same board are caught at
+                allocation time. Pre-fix, CustomDeviceRunner bypassed
+                PinManager entirely and silently shared pins with other
+                devices — voltage contention.
         """
         self._id = str(uuid.uuid4())
         self._definition = definition
@@ -123,6 +133,8 @@ class CustomDeviceRunner:
         self._initialized = False
         self._pin_states: dict[str, Any] = {}
         self._last_read_values: dict[str, Any] = {}
+        self._pin_manager = pin_manager
+        self._allocated_pins: list[int] = []  # pins this runner reserved
 
         # Build pin assignments from definitions if not provided
         if pin_assignments is not None:
@@ -159,9 +171,40 @@ class CustomDeviceRunner:
         return self._definition.pins
 
     async def initialize(self) -> None:
-        """Initialize all pins to their configured modes and defaults."""
+        """Initialize all pins to their configured modes and defaults.
+
+        When a ``PinManager`` was supplied at construction time, every pin
+        is first reserved through it (atomic — all-or-nothing). This is
+        the only path that protects against a custom device claiming a
+        pin that a standard ``BaseDevice`` on the same board has already
+        bound. Prior versions skipped this step entirely, so two devices
+        could quietly drive the same pin (voltage contention).
+        """
         from glider.hal.base_board import PinMode
         from glider.hal.base_board import PinType as BoardPinType
+
+        # Pre-flight: reserve every assigned pin through PinManager (when
+        # available). Atomicity matters — if any pin is already claimed
+        # we must not partially-configure others, so do this before any
+        # board.set_pin_mode call.
+        if self._pin_manager is not None:
+            try:
+                for pin_def in self._definition.pins:
+                    pin_num = self._pin_assignments.get(pin_def.name)
+                    if pin_num is None:
+                        continue
+                    self._pin_manager.allocate_pin(pin_num, self, pin_def.name)
+                    self._allocated_pins.append(pin_num)
+            except Exception:
+                # Roll back any partial allocations; re-raise so the
+                # caller knows the runner is unusable.
+                for already in self._allocated_pins:
+                    try:
+                        self._pin_manager.release_pin(already)
+                    except Exception:
+                        logger.exception("Failed to release pin %d during rollback", already)
+                self._allocated_pins.clear()
+                raise
 
         for pin_def in self._definition.pins:
             pin_num = self._pin_assignments.get(pin_def.name)
@@ -200,19 +243,35 @@ class CustomDeviceRunner:
         logger.info(f"Custom device '{self._name}' initialized")
 
     async def shutdown(self) -> None:
-        """Shutdown the device safely."""
-        # Set all outputs to low/0
-        for pin_def in self._definition.pins:
-            pin_num = self._pin_assignments.get(pin_def.name)
-            if pin_num is None:
-                continue
+        """Shutdown the device safely.
 
-            if pin_def.pin_type == PinType.DIGITAL_OUTPUT:
-                await self._board.write_digital(pin_num, False)
-            elif pin_def.pin_type in (PinType.ANALOG_OUTPUT, PinType.PWM):
-                await self._board.write_analog(pin_num, 0)
+        Drives every output pin to its safe state and releases any
+        PinManager allocations so the same pins can be re-bound by other
+        devices (e.g., after a graph reload).
+        """
+        try:
+            # Set all outputs to low/0
+            for pin_def in self._definition.pins:
+                pin_num = self._pin_assignments.get(pin_def.name)
+                if pin_num is None:
+                    continue
 
-        self._initialized = False
+                if pin_def.pin_type == PinType.DIGITAL_OUTPUT:
+                    await self._board.write_digital(pin_num, False)
+                elif pin_def.pin_type in (PinType.ANALOG_OUTPUT, PinType.PWM):
+                    await self._board.write_analog(pin_num, 0)
+        finally:
+            # Release PinManager allocations even if safe-state writes
+            # raised — better to free the pins than to permanently lock
+            # them due to a single failed write.
+            if self._pin_manager is not None:
+                for pin in self._allocated_pins:
+                    try:
+                        self._pin_manager.release_pin(pin)
+                    except Exception:
+                        logger.exception("Failed to release pin %d on shutdown", pin)
+                self._allocated_pins.clear()
+            self._initialized = False
         logger.info(f"Custom device '{self._name}' shutdown")
 
     async def write_pin(self, pin_name: str, value: Any) -> None:

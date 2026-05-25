@@ -51,9 +51,7 @@ class TelemetrixThread:
             # still running in the background with an open serial handle. Tear
             # the thread down before raising so we don't leak the serial port
             # (and then fail subsequent reconnect attempts with "port busy").
-            logger.warning(
-                "Telemetrix connection timed out after 10s; cleaning up worker thread"
-            )
+            logger.warning("Telemetrix connection timed out after 10s; cleaning up worker thread")
             try:
                 self.stop()
             except Exception as cleanup_exc:
