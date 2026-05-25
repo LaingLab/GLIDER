@@ -1,6 +1,6 @@
 """Tests for flow control nodes: DelayNode, TimerNode."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -8,20 +8,40 @@ from glider.nodes.logic.flow_nodes import DelayNode, TimerNode
 
 
 class TestDelayNode:
-    """Tests for DelayNode unit-aware duration handling."""
+    """Tests for DelayNode unit-aware duration handling.
+
+    DelayNode runs its sleep via ``asyncio.to_thread(event.wait, duration)``
+    so the wait happens off the qasync event loop (see the docstring on
+    ``DelayNode`` for why). These tests patch ``asyncio.to_thread`` to
+    capture the resolved duration without actually sleeping.
+    """
+
+    async def _capture_resolved_duration(self, node: DelayNode) -> float:
+        """Run ``node.execute()`` and return the duration value handed
+        to ``asyncio.to_thread`` (which is the second arg to that call —
+        ``to_thread(event.wait, duration)``).
+        """
+        # _fire_exec_output requires no real wiring; stub it out so the
+        # call doesn't fail when execute() returns from the (mocked) sleep.
+        node._fire_exec_output = AsyncMock()  # type: ignore[assignment]
+
+        with patch("glider.nodes.logic.flow_nodes.asyncio.to_thread") as mock_to_thread:
+            mock_to_thread.return_value = False  # event.wait returns False on timeout
+            await node.execute()
+            assert mock_to_thread.await_count == 1, (
+                f"Expected asyncio.to_thread to be awaited once, "
+                f"got {mock_to_thread.await_count} times"
+            )
+            # to_thread(callable, *args) — duration is the second positional
+            args, _kwargs = mock_to_thread.await_args
+            return args[1]
 
     @pytest.mark.asyncio
     async def test_execute_seconds_default_unit(self):
         """Duration without unit defaults to seconds."""
         node = DelayNode()
         node._state["duration"] = 0.5
-
-        with patch("asyncio.sleep") as mock_sleep:
-            mock_sleep.return_value = None
-            await node.execute()
-
-        # Called once with seconds value
-        mock_sleep.assert_awaited_once_with(0.5)
+        assert await self._capture_resolved_duration(node) == 0.5
 
     @pytest.mark.asyncio
     async def test_execute_milliseconds_unit_converts_to_seconds(self):
@@ -29,12 +49,7 @@ class TestDelayNode:
         node = DelayNode()
         node._state["duration"] = 500
         node._state["unit"] = "milliseconds"
-
-        with patch("asyncio.sleep") as mock_sleep:
-            mock_sleep.return_value = None
-            await node.execute()
-
-        mock_sleep.assert_awaited_once_with(0.5)
+        assert await self._capture_resolved_duration(node) == 0.5
 
     @pytest.mark.asyncio
     async def test_execute_milliseconds_unit_with_port_input(self):
@@ -43,12 +58,7 @@ class TestDelayNode:
         node._state["unit"] = "milliseconds"
         # Input port index 1 is Duration
         node._inputs[1] = 250
-
-        with patch("asyncio.sleep") as mock_sleep:
-            mock_sleep.return_value = None
-            await node.execute()
-
-        mock_sleep.assert_awaited_once_with(0.25)
+        assert await self._capture_resolved_duration(node) == 0.25
 
     @pytest.mark.asyncio
     async def test_execute_negative_clamped_to_zero(self):
@@ -56,12 +66,7 @@ class TestDelayNode:
         node = DelayNode()
         node._state["duration"] = -5
         node._state["unit"] = "milliseconds"
-
-        with patch("asyncio.sleep") as mock_sleep:
-            mock_sleep.return_value = None
-            await node.execute()
-
-        mock_sleep.assert_awaited_once_with(0)
+        assert await self._capture_resolved_duration(node) == 0
 
 
 class TestTimerNode:
