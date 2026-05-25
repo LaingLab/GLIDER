@@ -610,9 +610,22 @@ class TrackingDataLogger:
         # crash (trial marks, manual annotations), so force fsync.
         self._fsync_if_due(force=True)
 
-    async def stop(self) -> Path | None:
+    async def stop(self, flow_duration_s: float | None = None) -> Path | None:
         """
         Stop logging and close file.
+
+        Args:
+            flow_duration_s: Optional authoritative flow duration to record
+                in the footer. When provided, the ``# Duration (s)`` line is
+                the *flow's* logical duration (start-of-flow to
+                end-of-flow), not the recorder's own ``start_time`` →
+                ``stop_time`` wall-clock. This anchors the file's
+                ``Duration`` field to the same source-of-truth as the
+                runner timer (see ``GliderCore.last_flow_duration_s``) and
+                prevents teardown latency from inflating the reported
+                experiment duration. When ``None``, falls back to the
+                recorder's own wall-clock duration for backwards
+                compatibility.
 
         Returns:
             Path to the saved log file
@@ -625,11 +638,25 @@ class TrackingDataLogger:
         # Write footer
         if self._writer and self._file:
             end_time = datetime.now()
-            duration = (end_time - self._start_time).total_seconds() if self._start_time else 0
+            recording_duration = (
+                (end_time - self._start_time).total_seconds() if self._start_time else 0
+            )
+            # ``# Duration (s)`` is the operator's truth-of-record for
+            # "how long was the experiment." Prefer the flow-anchored
+            # value (insensitive to teardown latency); record the
+            # recorder's own clock separately for diagnostics.
+            display_duration = (
+                flow_duration_s if flow_duration_s is not None else recording_duration
+            )
 
             self._writer.writerow([])
             self._writer.writerow(["# End Time", end_time.isoformat()])
-            self._writer.writerow(["# Duration (s)", f"{duration:.2f}"])
+            self._writer.writerow(["# Duration (s)", f"{display_duration:.2f}"])
+            if flow_duration_s is not None:
+                # Keep the recorder-wall-clock value for diagnostics so a
+                # mismatch (large teardown latency, missed frames) is
+                # visible in the file without having to re-derive it.
+                self._writer.writerow(["# Recording Duration (s)", f"{recording_duration:.2f}"])
             self._writer.writerow(["# Total Frames", self._frame_count])
             # Final fsync so the footer is guaranteed durable before close.
             self._fsync_if_due(force=True)

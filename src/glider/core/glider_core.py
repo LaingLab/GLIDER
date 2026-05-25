@@ -8,6 +8,7 @@ and flow execution.
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -81,6 +82,18 @@ class GliderCore:
         self._annotated_video_enabled = True  # Also save annotated video with tracking overlays
         self._cv_processing_enabled = True  # Enable CV processing by default
 
+        # Flow timing anchors (monotonic, immune to wall-clock drift / NTP).
+        # ``_flow_start_monotonic`` is captured the moment the flow engine
+        # is told to start (the last step of ``start_experiment``), and
+        # ``_flow_end_monotonic`` is captured at the very FIRST line of
+        # ``_handle_flow_complete`` / ``_stop_experiment_locked``, *before*
+        # any teardown I/O. This decouples the reported flow duration from
+        # the variable cost of stopping recorders / setting devices low /
+        # transitioning state, which previously made a ``Delay(10s)`` flow
+        # display as 10.11s-10.43s run-to-run.
+        self._flow_start_monotonic: float | None = None
+        self._flow_end_monotonic: float | None = None
+
         # Callbacks
         self._session_callbacks: list[Callable[[ExperimentSession], None]] = []
         self._state_callbacks: list[Callable[[SessionState], None]] = []
@@ -96,6 +109,25 @@ class GliderCore:
     def session(self) -> ExperimentSession | None:
         """Current experiment session."""
         return self._session
+
+    @property
+    def last_flow_duration_s(self) -> float | None:
+        """Duration of the most recent flow, in seconds.
+
+        Computed as ``_flow_end_monotonic - _flow_start_monotonic``.
+        Returns ``None`` if no flow has completed yet, or while one is
+        still running (only ``_flow_start_monotonic`` set).
+
+        This is the operator's truth-of-record for "how long did the
+        experiment take." It does NOT include pre-flow recorder setup
+        or post-flow teardown — only the time between the engine being
+        told to start and the engine signaling completion (or the user
+        clicking STOP). Use this in the runner timer's final display
+        and in output-file duration footers.
+        """
+        if self._flow_start_monotonic is None or self._flow_end_monotonic is None:
+            return None
+        return self._flow_end_monotonic - self._flow_start_monotonic
 
     @property
     def hardware_manager(self) -> HardwareManager:
@@ -310,7 +342,18 @@ class GliderCore:
                 task.add_done_callback(self._log_task_exception)
 
     def _on_flow_complete(self) -> None:
-        """Handle flow completion (EndExperiment reached)."""
+        """Handle flow completion (EndExperiment reached).
+
+        Capture ``_flow_end_monotonic`` HERE — synchronously, before the
+        teardown task even gets scheduled — so the reported flow duration
+        reflects the actual logical end of the flow (when EndExperiment
+        fired) rather than when teardown happens to finish. This is what
+        keeps ``Delay(10s)`` reporting exactly 10s instead of 10s plus
+        the variable I/O cost of stopping recorders + setting devices
+        low + atomic-renaming output files.
+        """
+        if self._flow_start_monotonic is not None:
+            self._flow_end_monotonic = time.monotonic()
         logger.info("Flow completed - transitioning to READY state")
         # Schedule the async completion handler
         task = asyncio.create_task(self._handle_flow_complete())
@@ -770,8 +813,19 @@ class GliderCore:
             except Exception as e:
                 logger.error(f"Failed to start tracking logger: {e}")
 
+        # Reset prior-run timing so ``last_flow_duration_s`` is None until
+        # this flow completes (callers can detect "still running" cleanly).
+        self._flow_start_monotonic = None
+        self._flow_end_monotonic = None
+
         self._session.state = SessionState.RUNNING
         await self._flow_engine.start()
+        # Capture the flow's logical start AFTER the engine is live —
+        # i.e., the moment the StartExperiment node is about to be
+        # scheduled. Anything that ran before this (recorder setup,
+        # state transition, board init) is *pre*-flow and is correctly
+        # excluded from the reported duration.
+        self._flow_start_monotonic = time.monotonic()
 
     async def stop_experiment(self) -> None:
         """Stop the running experiment and set all devices to safe state."""
@@ -782,6 +836,15 @@ class GliderCore:
         """Internal stop implementation, called under _experiment_lock."""
         if self._session is None:
             return
+
+        # Capture the flow's logical end NOW, before any teardown I/O.
+        # The operator clicked STOP at this instant — that's the
+        # truth-of-record for "how long did the experiment run."
+        # Stopping recorders, draining cancellations, and driving
+        # devices low all happen on the operator's clock; they're
+        # post-flow and must not inflate the reported duration.
+        if self._flow_start_monotonic is not None and self._flow_end_monotonic is None:
+            self._flow_end_monotonic = time.monotonic()
 
         logger.info("Stopping experiment")
         self._session.state = SessionState.STOPPING
@@ -875,7 +938,15 @@ class GliderCore:
         # Stop tracking logger
         if self._tracking_logger.is_recording:
             try:
-                tracking_path = await self._tracking_logger.stop()
+                # Pass the authoritative flow duration so the CSV footer's
+                # ``# Duration (s)`` line reflects the flow's logical
+                # duration, not recorder-start-to-recorder-stop wall-clock
+                # (which includes pre-flow setup + post-flow teardown
+                # latency — variable, and exactly the source of the
+                # 10.11s / 10.43s drift the user reported).
+                tracking_path = await self._tracking_logger.stop(
+                    flow_duration_s=self.last_flow_duration_s
+                )
                 logger.info(f"Tracking data saved to: {tracking_path}")
             except Exception as e:
                 logger.error(f"Failed to stop tracking logger: {e}")
