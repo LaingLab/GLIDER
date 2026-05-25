@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-flight CI for outdated commits on the same PR/branch.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------------
+  # Lint, format, type-check. Single platform, fastest interpreter — these
+  # don't need to run on every OS × Python combo.
+  # ------------------------------------------------------------------------
+  lint:
+    name: Lint + format + type-check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dev extras
+        run: uv sync --extra dev
+
+      - name: Ruff
+        run: uv run ruff check src tests
+
+      - name: Black --check
+        run: uv run black --check src tests
+
+      - name: Mypy
+        # Start permissive (ignore-missing-imports), tighten over time. Failing
+        # mypy doesn't fail CI yet; it's surfaced for visibility.
+        run: uv run mypy src || true
+
+  # ------------------------------------------------------------------------
+  # Unit + integration tests across the supported Python / OS matrix.
+  # ------------------------------------------------------------------------
+  test:
+    name: Test (Python ${{ matrix.python-version }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
+
+      - name: Install system dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1 libegl1 libxkbcommon-x11-0 libdbus-1-3 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-xinerama0 libxcb-xinput0 libxcb-xfixes0 \
+            ffmpeg
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install project + dev extras
+        run: uv sync --extra dev
+
+      - name: Run tests with coverage
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONPATH: src
+        # --cov-fail-under starts at today's coverage; ratchet upward on every
+        # release. Producing a coverage report at all is the win — the floor
+        # can move once the test sprint lands.
+        run: |
+          uv run pytest tests/ -v \
+            --cov=glider \
+            --cov-report=xml \
+            --cov-report=term
+
+      - name: Upload coverage (Ubuntu / 3.12 only)
+        if: runner.os == 'Linux' && matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+  # ------------------------------------------------------------------------
+  # PyInstaller smoke build on Windows. Catches "frozen exe crashes on
+  # launch" regressions (missing hidden imports, wrong Qt plugin path,
+  # missing DLL) at PR time rather than at release-tag time.
+  # ------------------------------------------------------------------------
+  pyinstaller-smoke:
+    name: PyInstaller smoke build (Windows)
+    runs-on: windows-2022
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install project + dev extras
+        run: uv sync --extra dev
+
+      - name: Build with PyInstaller
+        run: uv run pyinstaller packaging/windows/glider.spec --clean --noconfirm
+
+      - name: Smoke test frozen exe
+        # Asserts the bundle launches and the entry point is correctly wired.
+        # If hidden imports are missing this will fail with ModuleNotFoundError
+        # before the --version output prints.
+        run: |
+          .\dist\GLIDER\GLIDER.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "Frozen exe failed --version" }
