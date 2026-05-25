@@ -184,9 +184,11 @@ pyrightconfig.json
 CLAUDE.md
 *.cpython-313.pyc
 *.glider
-uv.lock
+# uv.lock IS tracked — reproducible installs for the application.
 *.ipynb
 .serena*
 .superpowers/
 
 docs/*
+# Pass-2 code review raw agent transcripts (kept locally for reference)
+.review-section*-raw.txt
