@@ -7,8 +7,8 @@ name = "GLIDER"
 dynamic = ["version"]
 description = "General Laboratory Interface for Design, Experimentation, and Recording"
 readme = "README.md"
-license = {text = "MIT"}
-requires-python = ">=3.10,<3.14"
+license = {file = "LICENSE"}
+requires-python = ">=3.11,<3.14"
 authors = [
     {name = "LaingLab"}
 ]
@@ -19,7 +19,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -70,13 +69,14 @@ dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-qt>=4.2.0",
+    "pytest-cov>=4.0.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
-    "ultralytics>=8.0.0",
-    "lap>=0.5.12",  # see [vision] note
-    "adafruit-circuitpython-ads1x15",
+    "mypy>=1.0.0",
     "pyinstaller>=6.19.0",
-    "PyQt6>=6.4.0",
+    # Pull the full PC + ML + I2C surface for development so dev installs can
+    # exercise every code path without remembering individual extras.
+    "GLIDER[pc,vision,i2c]",
 ]
 pc = [
     "PyQt6>=6.4.0",
@@ -108,20 +108,25 @@ glider = ["schema/*.json", "gui/styles/*.qss", "assets/*.png"]
 
 [tool.black]
 line-length = 100
-target-version = ["py310", "py311", "py312", "py313"]
+target-version = ["py311", "py312", "py313"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests/unit", "tests/integration"]
+markers = [
+    "slow: marks tests as slow (deselect with -m 'not slow')",
+    "hardware: marks tests requiring real hardware (deselect with -m 'not hardware')",
+]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
