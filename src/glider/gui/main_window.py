@@ -202,7 +202,7 @@ class MainWindow(QMainWindow):
         self._create_runner_view()
 
         self._stack.addWidget(self._builder_view)  # Index 0
-        self._stack.addWidget(self._runner_panel)  # Index 1
+        self._stack.addWidget(self._runner_container)  # Index 1
 
         if self._view_manager.is_runner_mode:
             self._stack.setCurrentIndex(1)
@@ -252,6 +252,17 @@ class MainWindow(QMainWindow):
         self._runner_panel.help_requested.connect(self._on_help)
         self._runner_panel.close_requested.connect(self.close)
         self._runner_panel.switch_to_desktop_requested.connect(self._switch_to_desktop_mode)
+
+        # Manual control page + tab container
+        from glider.gui.runner.manual_control_panel import ManualControlPanel
+        from glider.gui.runner.manual_control_runner import ManualControlRunner
+        from glider.gui.runner.runner_container import RunnerContainer
+
+        self._manual_control_panel = ManualControlPanel(self._core)
+        self._manual_control_runner = ManualControlRunner(self._core)
+        self._manual_control_panel.function_run_requested.connect(self._on_manual_run)
+
+        self._runner_container = RunnerContainer(self._runner_panel, self._manual_control_panel)
 
     def _setup_dock_widgets(self) -> None:
         """Set up dock widgets for desktop mode."""
@@ -791,6 +802,7 @@ class MainWindow(QMainWindow):
         )
 
         self.session_changed.connect(lambda: self._runner_panel.update_experiment_name())
+        self.session_changed.connect(self._manual_control_panel.refresh)
 
     @pyqtSlot(object)
     def _on_core_state_change(self, state) -> None:
@@ -799,7 +811,7 @@ class MainWindow(QMainWindow):
         self.state_changed.emit(state_name)
 
         # Update runner panel
-        self._runner_panel.update_state(state_name)
+        self._runner_container.update_state(state_name)
 
         # Update toolbar status indicator
         if self._toolbar_status is not None:
@@ -1605,6 +1617,22 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def _on_emergency_stop(self) -> None:
         self._run_async(self._core.emergency_stop())
+
+    @pyqtSlot(str)
+    def _on_manual_run(self, start_node_id: str) -> None:
+        self._run_async(self._manual_run_async(start_node_id))
+
+    async def _manual_run_async(self, start_node_id: str) -> None:
+        from glider.gui.runner.manual_control_runner import RunOutcome
+
+        self._manual_control_panel.set_running(start_node_id)
+        try:
+            result = await self._manual_control_runner.run(start_node_id)
+        finally:
+            self._manual_control_panel.set_running(None)
+
+        if result.outcome is not RunOutcome.SUCCESS:
+            self._show_status_message(f"Manual run: {result.outcome.value}")
 
     def _on_help(self) -> None:
         dialog = HelpDialog(self)
