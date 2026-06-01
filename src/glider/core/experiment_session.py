@@ -528,6 +528,7 @@ class ExperimentSession:
         # Custom devices and flow functions
         self._custom_device_definitions: dict[str, Any] = {}  # id -> definition dict
         self._flow_function_definitions: dict[str, Any] = {}  # id -> definition dict
+        self._manual_controls: list[dict[str, Any]] = []  # runner manual-control buttons
 
         # Callbacks for state changes
         self._state_callbacks: list[Callable[[SessionState], None]] = []
@@ -804,6 +805,16 @@ class ExperimentSession:
         """Get a flow function definition by ID."""
         return self._flow_function_definitions.get(definition_id)
 
+    @property
+    def manual_controls(self) -> list[dict[str, Any]]:
+        """Ordered list of manual-control button bindings (Runner mode)."""
+        return self._manual_controls
+
+    def set_manual_controls(self, entries: list[dict[str, Any]]) -> None:
+        """Replace the manual-control button list and mark the session dirty."""
+        self._manual_controls = list(entries)
+        self.mark_dirty()
+
     # Serialization
     def to_dict(self) -> dict[str, Any]:
         """Serialize session to dictionary."""
@@ -820,6 +831,8 @@ class ExperimentSession:
             result["custom_devices"] = self._custom_device_definitions
         if self._flow_function_definitions:
             result["flow_functions"] = self._flow_function_definitions
+        if self._manual_controls:
+            result["manual_controls"] = self._manual_controls
         return result
 
     @classmethod
@@ -835,6 +848,7 @@ class ExperimentSession:
         # Load custom definitions
         session._custom_device_definitions = data.get("custom_devices", {})
         session._flow_function_definitions = data.get("flow_functions", {})
+        session._manual_controls = data.get("manual_controls", [])
         return session
 
     def to_json(self, indent: int = 2) -> str:
@@ -899,6 +913,7 @@ class ExperimentSession:
         self._zones = ZoneConfig()
         self._custom_device_definitions = {}
         self._flow_function_definitions = {}
+        self._manual_controls = []
         self._state = SessionState.IDLE
         self._file_path = None
         self._mark_dirty()
