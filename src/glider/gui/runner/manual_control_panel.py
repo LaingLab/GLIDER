@@ -15,7 +15,7 @@ import logging
 from collections import Counter
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog,
     QFrame,
@@ -307,7 +307,7 @@ class ManualControlPanel(QWidget):
         list_widget.setProperty("manualPicker", True)
         for disp, _nid in labels:
             item = QListWidgetItem(disp)
-            item.setSizeHint(item.sizeHint().expandedTo(item.sizeHint().__class__(0, 56)))
+            item.setSizeHint(item.sizeHint().expandedTo(QSize(0, 56)))
             list_widget.addItem(item)
         QScroller.grabGesture(
             list_widget.viewport(), QScroller.ScrollerGestureType.LeftMouseButtonGesture
