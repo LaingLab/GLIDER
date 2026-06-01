@@ -504,50 +504,16 @@ class NodeLibraryPanel(QWidget):
 
     def _detect_graph_functions(self) -> list:
         """Detect complete function definitions in the graph."""
+        from glider.core.graph_functions import list_graph_functions
+
         session = self._session
         if not session:
             return []
-
-        functions = []
-        flow = session.flow
-
-        start_nodes = [n for n in flow.nodes if n.node_type == "StartFunction"]
-
-        for start_node in start_nodes:
-            func_name = "MyFunction"
-            if start_node.state:
-                func_name = start_node.state.get("function_name", "MyFunction")
-
-            if self._trace_to_end_function(start_node.id, flow):
-                functions.append(
-                    {
-                        "name": func_name,
-                        "start_node_id": start_node.id,
-                    }
-                )
-
-        return functions
-
-    def _trace_to_end_function(self, start_id: str, flow) -> bool:
-        """Trace from a node to see if it eventually reaches an EndFunction."""
-        visited = set()
-        to_visit = [start_id]
-
-        while to_visit:
-            current_id = to_visit.pop()
-            if current_id in visited:
-                continue
-            visited.add(current_id)
-
-            for node in flow.nodes:
-                if node.id == current_id and node.node_type == "EndFunction":
-                    return True
-
-            for conn in flow.connections:
-                if conn.from_node == current_id:
-                    to_visit.append(conn.to_node)
-
-        return False
+        return [
+            {"name": info.name, "start_node_id": info.start_node_id}
+            for info in list_graph_functions(session)
+            if info.has_end
+        ]
 
     def _add_function_call_node(self, start_node_id: str, func_name: str) -> None:
         """Add a FunctionCall node to the graph."""
