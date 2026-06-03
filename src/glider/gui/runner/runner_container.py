@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
@@ -34,6 +35,9 @@ class RunnerContainer(QWidget):
 
         tabs = QWidget()
         tabs.setProperty("runnerTabBar", True)
+        # Plain QWidget only paints a QSS background/border when styled-background
+        # is enabled; without this the bar's top divider would not render.
+        tabs.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         tabs.setFixedHeight(56)
         tabs_layout = QHBoxLayout(tabs)
         tabs_layout.setContentsMargins(0, 0, 0, 0)
@@ -43,12 +47,12 @@ class RunnerContainer(QWidget):
         self._dashboard_btn.setCheckable(True)
         self._dashboard_btn.setChecked(True)
         self._dashboard_btn.clicked.connect(lambda: self._select(0))
-        tabs_layout.addWidget(self._dashboard_btn)
+        tabs_layout.addWidget(self._dashboard_btn, 1)  # equal-width tabs
 
         self._manual_btn = QPushButton("Manual")
         self._manual_btn.setCheckable(True)
         self._manual_btn.clicked.connect(lambda: self._select(1))
-        tabs_layout.addWidget(self._manual_btn)
+        tabs_layout.addWidget(self._manual_btn, 1)
 
         layout.addWidget(tabs)
 
