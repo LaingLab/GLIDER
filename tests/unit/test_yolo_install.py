@@ -28,9 +28,7 @@ class TestIsUltralyticsAvailable:
             calls[0] += 1
             return None  # not available
 
-        monkeypatch.setattr(
-            yolo_install.importlib.util, "find_spec", fake_find_spec
-        )
+        monkeypatch.setattr(yolo_install.importlib.util, "find_spec", fake_find_spec)
         assert yolo_install.is_ultralytics_available() is False
         assert yolo_install.is_ultralytics_available() is False
         assert calls[0] == 1, "second call should hit the cache"
@@ -43,9 +41,7 @@ class TestIsUltralyticsAvailable:
             calls[0] += 1
             return object()  # truthy — available
 
-        monkeypatch.setattr(
-            yolo_install.importlib.util, "find_spec", fake_find_spec
-        )
+        monkeypatch.setattr(yolo_install.importlib.util, "find_spec", fake_find_spec)
         assert yolo_install.is_ultralytics_available() is True
         assert yolo_install.is_ultralytics_available(use_cache=False) is True
         assert calls[0] == 2
@@ -127,9 +123,7 @@ class TestEnsureInstalled:
         assert yolo_install.ensure_ultralytics_installed(None) is True
         assert called == []
 
-    def test_frozen_build_shows_message_and_returns_false(
-        self, qapp, monkeypatch
-    ) -> None:
+    def test_frozen_build_shows_message_and_returns_false(self, qapp, monkeypatch) -> None:
         monkeypatch.setattr(yolo_install, "is_ultralytics_available", lambda **_: False)
         monkeypatch.setattr(yolo_install, "can_auto_install", lambda: False)
         shown = []
@@ -138,9 +132,7 @@ class TestEnsureInstalled:
             "_show_frozen_build_message",
             lambda _p: shown.append("frozen"),
         )
-        monkeypatch.setattr(
-            yolo_install, "_confirm_agpl", lambda _p: shown.append("agpl") or True
-        )
+        monkeypatch.setattr(yolo_install, "_confirm_agpl", lambda _p: shown.append("agpl") or True)
 
         assert yolo_install.ensure_ultralytics_installed(None) is False
         assert shown == ["frozen"], "should not reach AGPL confirm in frozen builds"
@@ -155,8 +147,7 @@ class TestEnsureInstalled:
         monkeypatch.setattr(
             yolo_install,
             "install_ultralytics_blocking",
-            lambda **_: ran.append("ran")
-            or yolo_install.InstallResult(True, ""),
+            lambda **_: ran.append("ran") or yolo_install.InstallResult(True, ""),
         )
         assert yolo_install.ensure_ultralytics_installed(None) is False
         assert ran == []

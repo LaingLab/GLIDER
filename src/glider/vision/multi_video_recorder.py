@@ -188,9 +188,7 @@ class MultiVideoRecorder:
                     )
 
                     if not writer.isOpened():
-                        logger.error(
-                            f"Failed to create video writer for {camera_id}: {file_path}"
-                        )
+                        logger.error(f"Failed to create video writer for {camera_id}: {file_path}")
                         continue
 
                     self._writers[camera_id] = writer
@@ -210,9 +208,7 @@ class MultiVideoRecorder:
                         self._multi_cam.on_frame(camera_id, self._on_frame)
                         self._frame_callbacks_registered[camera_id] = True
 
-                    logger.info(
-                        f"Recording {camera_id} to {file_path} at {recording_fps:.1f} fps"
-                    )
+                    logger.info(f"Recording {camera_id} to {file_path} at {recording_fps:.1f} fps")
 
                 # Create annotated writer for primary camera
                 primary_id = self._multi_cam.primary_camera_id
@@ -224,9 +220,7 @@ class MultiVideoRecorder:
                         )
                         self._annotated_file_path = self._output_dir / annotated_filename
 
-                        recording_fps = self._recording_fps.get(
-                            primary_id, primary_settings.fps
-                        )
+                        recording_fps = self._recording_fps.get(primary_id, primary_settings.fps)
                         self._annotated_writer = cv2.VideoWriter(
                             str(self._annotated_file_path),
                             fourcc,
@@ -241,9 +235,7 @@ class MultiVideoRecorder:
                                 **fwt_kwargs,
                             )
                             self._annotated_writer_thread.start()
-                            logger.info(
-                                f"Recording annotated video to {self._annotated_file_path}"
-                            )
+                            logger.info(f"Recording annotated video to {self._annotated_file_path}")
                         else:
                             logger.warning("Failed to create annotated video writer")
                             self._annotated_writer = None

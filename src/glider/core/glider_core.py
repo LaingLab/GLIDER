@@ -657,9 +657,7 @@ class GliderCore:
         # back to the periodic timer loop.
         if self._recording_enabled and not self._data_recorder.is_recording:
             experiment_name = self._session.metadata.name or "experiment"
-            camera_driven = (
-                self._cv_processing_enabled and self._camera_manager.is_connected
-            )
+            camera_driven = self._cv_processing_enabled and self._camera_manager.is_connected
             self._data_recorder.set_camera_driven(camera_driven)
             try:
                 file_path = await self._data_recorder.start(experiment_name, self._session)
@@ -675,9 +673,7 @@ class GliderCore:
         if self._recording_enabled and not self._event_logger.is_recording:
             experiment_name = self._session.metadata.name or "experiment"
             try:
-                event_path = await self._event_logger.start(
-                    experiment_name, self._session
-                )
+                event_path = await self._event_logger.start(experiment_name, self._session)
                 logger.info(f"Recording device events to: {event_path}")
             except Exception as e:
                 logger.error(f"Failed to start event logger: {e}")

@@ -144,8 +144,7 @@ class _GraphOverlayControls(QWidget):
         btn.setFixedSize(32, 32)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        btn.setStyleSheet(
-            f"""
+        btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {colors.SURFACE_1};
                 color: {colors.TEXT_PRIMARY};
@@ -164,8 +163,7 @@ class _GraphOverlayControls(QWidget):
                 background-color: {colors.BASE};
                 color: {colors.ACCENT_PRESSED};
             }}
-            """
-        )
+            """)
         return btn
 
 
