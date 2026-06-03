@@ -232,7 +232,8 @@ class NodeLibraryPanel(QWidget):
             add_new_callback=self._on_new_custom_device,
         )
 
-        # Flow Functions section
+        # Graph Functions section: call-buttons auto-detected from
+        # StartFunction -> EndFunction chains in the graph (no editor dialog).
         self._flow_functions_container = QWidget()
         self._flow_functions_layout = QVBoxLayout(self._flow_functions_container)
         self._flow_functions_layout.setContentsMargins(0, 0, 0, 0)
@@ -240,10 +241,10 @@ class NodeLibraryPanel(QWidget):
         self._setup_custom_category(
             self._flow_functions_container,
             self._flow_functions_layout,
-            "Flow Functions",
-            colors.LIB_FLOW_FUNCTIONS,
+            "Graph Functions",
+            colors.LIB_FUNCTIONS,
             layout,
-            add_new_callback=self._on_new_flow_function,
+            add_new_callback=None,
         )
 
         # Zones section
@@ -326,7 +327,7 @@ class NodeLibraryPanel(QWidget):
                         nid, name
                     )
                 )
-                self._apply_node_btn_style(btn, colors.LIB_FLOW_FUNCTIONS)
+                self._apply_node_btn_style(btn, colors.LIB_FUNCTIONS)
                 self._flow_functions_layout.addWidget(btn)
 
         if not has_functions:
@@ -476,27 +477,6 @@ class NodeLibraryPanel(QWidget):
             logger.warning(f"Could not import CustomDeviceDialog: {e}")
             QMessageBox.warning(self, "Not Available", "Custom device editor not available.")
 
-    def _on_new_flow_function(self) -> None:
-        """Open dialog to create a new flow function."""
-        try:
-            from glider.core.flow_engine import FlowEngine
-            from glider.gui.dialogs.flow_function_dialog import FlowFunctionDialog
-
-            available_types = FlowEngine.get_available_nodes()
-            available_types.extend(["FlowFunctionEntry", "FlowFunctionExit", "Parameter"])
-
-            dialog = FlowFunctionDialog(available_node_types=available_types, parent=self)
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                definition = dialog.get_definition()
-                session = self._session
-                if session:
-                    session.add_flow_function_definition(definition.to_dict())
-                    self.refresh_flow_functions()
-                    logger.info(f"Created flow function: {definition.name}")
-        except ImportError as e:
-            logger.warning(f"Could not import FlowFunctionDialog: {e}")
-            QMessageBox.warning(self, "Not Available", "Flow function editor not available.")
-
     def _add_zone_node(self, zone_id: str) -> None:
         """Add a zone input node to the graph."""
         center = self._graph_view.mapToScene(self._graph_view.viewport().rect().center())
@@ -524,11 +504,6 @@ class NodeLibraryPanel(QWidget):
         """Add a custom device action node to the graph."""
         center = self._graph_view.mapToScene(self._graph_view.viewport().rect().center())
         self._graph_view.node_created.emit(f"CustomDevice:{definition_id}", center.x(), center.y())
-
-    def _add_flow_function_node(self, definition_id: str) -> None:
-        """Add a flow function node to the graph."""
-        center = self._graph_view.mapToScene(self._graph_view.viewport().rect().center())
-        self._graph_view.node_created.emit(f"FlowFunction:{definition_id}", center.x(), center.y())
 
     def _edit_custom_device(self, definition_id: str) -> None:
         """Edit an existing custom device definition."""
@@ -578,61 +553,6 @@ class NodeLibraryPanel(QWidget):
             session.remove_custom_device_definition(definition_id)
             self.refresh_custom_devices()
             logger.info(f"Deleted custom device: {name}")
-
-    def _edit_flow_function(self, definition_id: str) -> None:
-        """Edit an existing flow function definition."""
-        session = self._session
-        if not session:
-            return
-
-        def_dict = session.get_flow_function_definition(definition_id)
-        if not def_dict:
-            QMessageBox.warning(self, "Error", "Flow function not found.")
-            return
-
-        try:
-            from glider.core.flow_engine import FlowEngine
-            from glider.core.flow_function import FlowFunctionDefinition
-            from glider.gui.dialogs.flow_function_dialog import FlowFunctionDialog
-
-            definition = FlowFunctionDefinition.from_dict(def_dict)
-            available_types = FlowEngine.get_available_nodes()
-            available_types.extend(["FlowFunctionEntry", "FlowFunctionExit", "Parameter"])
-
-            dialog = FlowFunctionDialog(
-                definition=definition, available_node_types=available_types, parent=self
-            )
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                updated_def = dialog.get_definition()
-                session.remove_flow_function_definition(definition_id)
-                session.add_flow_function_definition(updated_def.to_dict())
-                self.refresh_flow_functions()
-                logger.info(f"Updated flow function: {updated_def.name}")
-        except ImportError as e:
-            logger.warning(f"Could not import FlowFunctionDialog: {e}")
-            QMessageBox.warning(self, "Not Available", "Flow function editor not available.")
-
-    def _delete_flow_function(self, definition_id: str) -> None:
-        """Delete a flow function definition."""
-        session = self._session
-        if not session:
-            return
-
-        def_dict = session.get_flow_function_definition(definition_id)
-        name = def_dict.get("name", "Unknown") if def_dict else "Unknown"
-
-        result = QMessageBox.question(
-            self,
-            "Delete Flow Function",
-            f"Are you sure you want to delete '{name}'?\n\nThis cannot be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-
-        if result == QMessageBox.StandardButton.Yes:
-            session.remove_flow_function_definition(definition_id)
-            self.refresh_flow_functions()
-            logger.info(f"Deleted flow function: {name}")
 
     def _add_node_to_center(self, node_type: str) -> None:
         """Add a node to the center of the graph view."""

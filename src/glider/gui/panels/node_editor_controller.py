@@ -126,7 +126,6 @@ class NodeEditorController(QObject):
             "StartFunction": ([], [">next"]),
             "EndFunction": ([">exec"], []),
             "FunctionCall": ([">exec"], [">next"]),
-            "FlowFunctionCall": ([">exec"], [">next"]),
             "ZoneInput": ([], ["Occupied", "Object Count", ">On Enter", ">On Exit"]),
         }
 
@@ -228,14 +227,6 @@ class NodeEditorController(QObject):
                     display_name = "Function"
                 initial_state["function_start_id"] = start_node_id
                 initial_state["function_name"] = display_name
-        elif node_type.startswith("FlowFunction:"):
-            definition_id = node_type.split(":", 1)[1]
-            actual_node_type = "FlowFunctionCall"
-            if session:
-                def_dict = session.get_flow_function_definition(definition_id)
-                if def_dict:
-                    display_name = def_dict.get("name", "Flow Function")
-                    initial_state["definition_id"] = definition_id
         elif node_type.startswith("ZoneInput:"):
             zone_id = node_type.split(":", 1)[1]
             actual_node_type = "ZoneInput"
@@ -261,7 +252,7 @@ class NodeEditorController(QObject):
         flow_nodes = ["StartExperiment", "EndExperiment", "Delay"]
         control_nodes = ["Loop", "WaitForInput"]
         io_nodes = ["Output", "Input", "MotorGovernor", "CustomDeviceAction"]
-        function_nodes = ["FlowFunctionCall", "FunctionCall", "StartFunction", "EndFunction"]
+        function_nodes = ["FunctionCall", "StartFunction", "EndFunction"]
         interface_nodes = ["ZoneInput"]
 
         if node_type_normalized in flow_nodes:
@@ -927,30 +918,6 @@ class NodeEditorController(QObject):
                 else:
                     props_layout.addRow(QLabel("(Custom device not found)"))
 
-        elif node_type == "FlowFunctionCall":
-            self._add_section_header(props_layout, "FLOW FUNCTION")
-            definition_id = None
-            if node_config and node_config.state:
-                definition_id = node_config.state.get("definition_id")
-
-            if definition_id and session:
-                def_dict = session.get_flow_function_definition(definition_id)
-                if def_dict:
-                    func_name = def_dict.get("name", "Unknown")
-                    props_layout.addRow("Function:", QLabel(func_name))
-
-                    desc = def_dict.get("description", "")
-                    if desc:
-                        desc_label = QLabel(desc)
-                        desc_label.setWordWrap(True)
-                        props_layout.addRow("Description:", desc_label)
-
-                    edit_btn = QPushButton("Edit Flow Function")
-                    edit_btn.clicked.connect(lambda: self._edit_flow_function(definition_id))
-                    props_layout.addRow(edit_btn)
-                else:
-                    props_layout.addRow(QLabel("(Flow function not found)"))
-
         elif node_type == "AudioPlayback":
             self._add_section_header(props_layout, "AUDIO")
             file_edit = QLineEdit()
@@ -1153,34 +1120,3 @@ class NodeEditorController(QObject):
                 logger.info(f"Updated custom device: {updated_def.name}")
         except ImportError as e:
             logger.warning(f"Could not import CustomDeviceDialog: {e}")
-
-    def _edit_flow_function(self, definition_id: str) -> None:
-        """Edit an existing flow function definition."""
-        session = self._session
-        if not session:
-            return
-
-        def_dict = session.get_flow_function_definition(definition_id)
-        if not def_dict:
-            return
-
-        try:
-            from glider.core.flow_engine import FlowEngine
-            from glider.core.flow_function import FlowFunctionDefinition
-            from glider.gui.dialogs.flow_function_dialog import FlowFunctionDialog
-
-            definition = FlowFunctionDefinition.from_dict(def_dict)
-            available_types = FlowEngine.get_available_nodes()
-            available_types.extend(["FlowFunctionEntry", "FlowFunctionExit", "Parameter"])
-
-            dialog = FlowFunctionDialog(
-                definition=definition, available_node_types=available_types, parent=None
-            )
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                updated_def = dialog.get_definition()
-                session.remove_flow_function_definition(definition_id)
-                session.add_flow_function_definition(updated_def.to_dict())
-                self.flow_functions_changed.emit()
-                logger.info(f"Updated flow function: {updated_def.name}")
-        except ImportError as e:
-            logger.warning(f"Could not import FlowFunctionDialog: {e}")

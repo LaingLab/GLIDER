@@ -105,7 +105,6 @@ LIB_IO = "#1a4a2e"
 LIB_AUDIO = "#3d1a5f"
 LIB_VIDEO = "#1e3a5f"
 LIB_CUSTOM_DEVICES = "#3d1a5f"
-LIB_FLOW_FUNCTIONS = "#1e3a5f"
 LIB_ZONES = "#4a3a1a"
 
 # === Behavior State Colors (CV-specific, not theme colors) ===
