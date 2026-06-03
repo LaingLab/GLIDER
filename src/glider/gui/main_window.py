@@ -1272,14 +1272,6 @@ class MainWindow(QMainWindow):
                         def_dict = self._core.session.get_custom_device_definition(definition_id)
                         if def_dict:
                             display_name = def_dict.get("name", "Custom Device")
-                elif node_type == "FlowFunctionCall":
-                    definition_id = (
-                        node_config.state.get("definition_id") if node_config.state else None
-                    )
-                    if definition_id:
-                        def_dict = self._core.session.get_flow_function_definition(definition_id)
-                        if def_dict:
-                            display_name = def_dict.get("name", "Flow Function")
                 elif node_type == "ZoneInput":
                     zone_name = (
                         node_config.state.get("zone_name", "Zone") if node_config.state else "Zone"
@@ -1297,7 +1289,6 @@ class MainWindow(QMainWindow):
                     "CustomDeviceAction",
                 ]
                 function_nodes = [
-                    "FlowFunctionCall",
                     "FunctionCall",
                     "StartFunction",
                     "EndFunction",
