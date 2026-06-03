@@ -180,7 +180,5 @@ class FrameWriterThread:
                     try:
                         self._error_callback(exc)
                     except Exception:
-                        logger.exception(
-                            "FrameWriterThread: error callback raised; swallowing"
-                        )
+                        logger.exception("FrameWriterThread: error callback raised; swallowing")
                 break

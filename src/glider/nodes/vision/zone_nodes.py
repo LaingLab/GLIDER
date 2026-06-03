@@ -144,7 +144,9 @@ class ZoneInputNode(InterfaceNode):
         # non-running loop on Python >=3.12, silently dropping exec outputs.
         loop = self._main_loop
         if loop is None:
-            logger.debug("Zone '%s': main loop not captured, skipping exec outputs", self._zone_name)
+            logger.debug(
+                "Zone '%s': main loop not captured, skipping exec outputs", self._zone_name
+            )
             return
 
         if entered:

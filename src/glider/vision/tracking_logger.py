@@ -101,9 +101,7 @@ class TrackingDataLogger:
         event log on the elapsed_ms column.
         """
         if self._recording:
-            logger.warning(
-                "set_session_epoch called while recording; takes effect on next start()"
-            )
+            logger.warning("set_session_epoch called while recording; takes effect on next start()")
         self._session_epoch_override = float(epoch)
 
     def set_calibration(self, calibration: "CameraCalibration") -> None:
