@@ -61,6 +61,7 @@ class ManualControlRunner:
         self._busy = True
         try:
             engine = self._core.flow_engine
+            # Lazy load: instantiate the graph if idle (engine cleared on load).
             if not engine.nodes:
                 self._core.setup_flow()
 
@@ -68,9 +69,25 @@ class ManualControlRunner:
             if node is None:
                 return RunResult(RunOutcome.NOT_FOUND)
 
-            runner = self._make_runner(start_node_id, engine)
-            await runner.execute()
-            return RunResult(RunOutcome.SUCCESS)
+            # Exec-flow propagation in FlowEngine is gated on FlowState.RUNNING.
+            # A manual run executes a StartFunction chain while the engine is
+            # otherwise idle, so briefly enable RUNNING for the duration and
+            # restore the prior state afterward. This does NOT start a recorded
+            # experiment or change session state (nothing subscribes to the
+            # engine's flow-state) — only the internal propagation gate.
+            from glider.core.flow_engine import FlowState
+
+            prev_state = engine.state
+            engine.state = FlowState.RUNNING
+            try:
+                runner = self._make_runner(start_node_id, engine)
+                completed = await runner.execute()
+            finally:
+                engine.state = prev_state
+
+            if completed:
+                return RunResult(RunOutcome.SUCCESS)
+            return RunResult(RunOutcome.ERROR, "function timed out")
         except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
             logger.exception("Manual control run failed for %s", start_node_id)
             return RunResult(RunOutcome.ERROR, str(exc))
