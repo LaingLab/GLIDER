@@ -343,7 +343,6 @@ def sample_experiment_schema() -> dict[str, Any]:
         "flow": {"nodes": [], "connections": []},
         "dashboard": {"widgets": [], "layout": {}},
         "custom_devices": [],
-        "flow_functions": [],
     }
 
 
