@@ -1,8 +1,8 @@
 """
-Device and Flow Function Library - Import/Export functionality.
+Device Library - Import/Export functionality.
 
-Provides the ability to save custom devices and flow functions to
-standalone files for sharing and reuse across projects.
+Provides the ability to save custom devices to standalone files for
+sharing and reuse across projects.
 """
 
 import json
@@ -11,20 +11,18 @@ from pathlib import Path
 from typing import Any
 
 from glider.core.custom_device import CustomDeviceDefinition
-from glider.core.flow_function import FlowFunctionDefinition
 
 logger = logging.getLogger(__name__)
 
 
 # File extensions
 DEVICE_EXTENSION = ".gdevice"
-FLOW_FUNCTION_EXTENSION = ".gflow"
 LIBRARY_EXTENSION = ".glibrary"
 
 
 class DeviceLibrary:
     """
-    Manages import/export of custom devices and flow functions.
+    Manages import/export of custom devices.
 
     Supports:
     - Exporting individual definitions to files
@@ -48,7 +46,6 @@ class DeviceLibrary:
         """Ensure the library directory exists."""
         self._library_path.mkdir(parents=True, exist_ok=True)
         (self._library_path / "devices").mkdir(exist_ok=True)
-        (self._library_path / "functions").mkdir(exist_ok=True)
 
     @property
     def library_path(self) -> Path:
@@ -139,106 +136,15 @@ class DeviceLibrary:
         return devices
 
     # =========================================================================
-    # Flow Function Import/Export
-    # =========================================================================
-
-    def export_flow_function(
-        self, definition: FlowFunctionDefinition, path: Path | None = None
-    ) -> Path:
-        """
-        Export a flow function definition to a file.
-
-        Args:
-            definition: The flow function definition to export
-            path: Target file path (default: library/functions/{name}.gflow)
-
-        Returns:
-            Path to the exported file
-        """
-        if path is None:
-            safe_name = definition.name.lower().replace(" ", "_")
-            path = self._library_path / "functions" / f"{safe_name}{FLOW_FUNCTION_EXTENSION}"
-
-        data = {
-            "type": "flow_function",
-            "version": "1.0",
-            "definition": definition.to_dict(),
-        }
-
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-
-        logger.info(f"Exported flow function '{definition.name}' to {path}")
-        return path
-
-    def import_flow_function(self, path: Path) -> FlowFunctionDefinition:
-        """
-        Import a flow function definition from a file.
-
-        Args:
-            path: Path to the flow function file
-
-        Returns:
-            The imported flow function definition
-
-        Raises:
-            ValueError: If the file is not a valid flow function definition
-        """
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-
-        if data.get("type") != "flow_function":
-            raise ValueError(f"Not a valid flow function file: {path}")
-
-        definition = FlowFunctionDefinition.from_dict(data["definition"])
-        logger.info(f"Imported flow function '{definition.name}' from {path}")
-        return definition
-
-    def list_library_functions(self) -> list[dict[str, Any]]:
-        """
-        List all flow functions in the library.
-
-        Returns:
-            List of function info dictionaries with 'name', 'id', 'path'
-        """
-        functions = []
-        functions_dir = self._library_path / "functions"
-
-        for file_path in functions_dir.glob(f"*{FLOW_FUNCTION_EXTENSION}"):
-            try:
-                with open(file_path, encoding="utf-8") as f:
-                    data = json.load(f)
-                if data.get("type") == "flow_function":
-                    definition = data.get("definition", {})
-                    functions.append(
-                        {
-                            "name": definition.get("name", "Unknown"),
-                            "id": definition.get("id", ""),
-                            "description": definition.get("description", ""),
-                            "path": str(file_path),
-                        }
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to read function file {file_path}: {e}")
-
-        return functions
-
-    # =========================================================================
     # Combined Library Export/Import
     # =========================================================================
 
-    def export_library(
-        self,
-        devices: list[CustomDeviceDefinition],
-        functions: list[FlowFunctionDefinition],
-        path: Path,
-    ) -> Path:
+    def export_library(self, devices: list[CustomDeviceDefinition], path: Path) -> Path:
         """
-        Export multiple devices and functions to a single library file.
+        Export multiple devices to a single library file.
 
         Args:
             devices: List of device definitions
-            functions: List of flow function definitions
             path: Target file path
 
         Returns:
@@ -248,7 +154,6 @@ class DeviceLibrary:
             "type": "glider_library",
             "version": "1.0",
             "devices": [d.to_dict() for d in devices],
-            "functions": [f.to_dict() for f in functions],
         }
 
         # Ensure correct extension
@@ -258,22 +163,18 @@ class DeviceLibrary:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
-        logger.info(
-            f"Exported library with {len(devices)} devices and {len(functions)} functions to {path}"
-        )
+        logger.info(f"Exported library with {len(devices)} devices to {path}")
         return path
 
-    def import_library(
-        self, path: Path
-    ) -> tuple[list[CustomDeviceDefinition], list[FlowFunctionDefinition]]:
+    def import_library(self, path: Path) -> list[CustomDeviceDefinition]:
         """
-        Import devices and functions from a library file.
+        Import devices from a library file.
 
         Args:
             path: Path to the library file
 
         Returns:
-            Tuple of (devices, functions)
+            List of imported device definitions
 
         Raises:
             ValueError: If the file is not a valid library file
@@ -285,12 +186,9 @@ class DeviceLibrary:
             raise ValueError(f"Not a valid library file: {path}")
 
         devices = [CustomDeviceDefinition.from_dict(d) for d in data.get("devices", [])]
-        functions = [FlowFunctionDefinition.from_dict(f) for f in data.get("functions", [])]
 
-        logger.info(
-            f"Imported library with {len(devices)} devices and {len(functions)} functions from {path}"
-        )
-        return devices, functions
+        logger.info(f"Imported library with {len(devices)} devices from {path}")
+        return devices
 
     # =========================================================================
     # Session Integration
@@ -298,7 +196,7 @@ class DeviceLibrary:
 
     def export_session_definitions(self, session, path: Path) -> Path:
         """
-        Export all custom definitions from a session to a library file.
+        Export all custom devices from a session to a library file.
 
         Args:
             session: ExperimentSession to export from
@@ -310,28 +208,24 @@ class DeviceLibrary:
         devices = [
             CustomDeviceDefinition.from_dict(d) for d in session.custom_device_definitions.values()
         ]
-        functions = [
-            FlowFunctionDefinition.from_dict(f) for f in session.flow_function_definitions.values()
-        ]
 
-        return self.export_library(devices, functions, path)
+        return self.export_library(devices, path)
 
-    def import_to_session(self, session, path: Path, overwrite: bool = False) -> tuple[int, int]:
+    def import_to_session(self, session, path: Path, overwrite: bool = False) -> int:
         """
-        Import definitions from a file into a session.
+        Import custom devices from a file into a session.
 
         Args:
             session: ExperimentSession to import into
-            path: Path to the file (device, function, or library)
+            path: Path to the file (device or library)
             overwrite: Whether to overwrite existing definitions with same ID
 
         Returns:
-            Tuple of (devices_imported, functions_imported)
+            Number of devices imported
         """
         file_ext = Path(path).suffix.lower()
 
         devices_imported = 0
-        functions_imported = 0
 
         if file_ext == DEVICE_EXTENSION:
             device = self.import_device(path)
@@ -339,27 +233,16 @@ class DeviceLibrary:
                 session.add_custom_device_definition(device.to_dict())
                 devices_imported = 1
 
-        elif file_ext == FLOW_FUNCTION_EXTENSION:
-            func = self.import_flow_function(path)
-            if overwrite or func.id not in session.flow_function_definitions:
-                session.add_flow_function_definition(func.to_dict())
-                functions_imported = 1
-
         elif file_ext == LIBRARY_EXTENSION:
-            devices, functions = self.import_library(path)
-            for device in devices:
+            for device in self.import_library(path):
                 if overwrite or device.id not in session.custom_device_definitions:
                     session.add_custom_device_definition(device.to_dict())
                     devices_imported += 1
-            for func in functions:
-                if overwrite or func.id not in session.flow_function_definitions:
-                    session.add_flow_function_definition(func.to_dict())
-                    functions_imported += 1
 
         else:
             raise ValueError(f"Unknown file type: {file_ext}")
 
-        return devices_imported, functions_imported
+        return devices_imported
 
 
 # Global library instance
