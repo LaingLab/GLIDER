@@ -101,7 +101,7 @@ class BaseBoard(ABC):
         # write_digital / write_analog / write_pwm / write_servo so listeners
         # (e.g. DeviceEventLogger) can record output events on the same event
         # stream as input edges.
-        self._output_callbacks: list[Callable[[int, "PinType", Any], None]] = []
+        self._output_callbacks: list[Callable[[int, PinType, Any], None]] = []
         self._reconnect_task: asyncio.Task | None = None
         self._reconnect_interval = 5.0  # seconds (increased to reduce spam)
         self._i2c_lock = asyncio.Lock()  # Shared lock for I2C operations
@@ -305,9 +305,7 @@ class BaseBoard(ABC):
         if pin in self._callbacks and callback in self._callbacks[pin]:
             self._callbacks[pin].remove(callback)
 
-    def register_output_callback(
-        self, callback: Callable[[int, "PinType", Any], None]
-    ) -> None:
+    def register_output_callback(self, callback: Callable[[int, "PinType", Any], None]) -> None:
         """
         Register a callback fired after a successful output write.
 
@@ -323,9 +321,7 @@ class BaseBoard(ABC):
         if callback not in self._output_callbacks:
             self._output_callbacks.append(callback)
 
-    def unregister_output_callback(
-        self, callback: Callable[[int, "PinType", Any], None]
-    ) -> None:
+    def unregister_output_callback(self, callback: Callable[[int, "PinType", Any], None]) -> None:
         """Remove a previously registered output callback."""
         if callback in self._output_callbacks:
             self._output_callbacks.remove(callback)

@@ -156,16 +156,16 @@ class TestUpdateCheckerResultHandling:
     """
 
     def test_silent_mode_no_ui_when_up_to_date(self, qapp, isolated_settings, monkeypatch) -> None:
-        checker = UpdateChecker(
-            parent=None, current_version="1.0.0", settings=isolated_settings
-        )
+        checker = UpdateChecker(parent=None, current_version="1.0.0", settings=isolated_settings)
         shown = []
         monkeypatch.setattr(
             "glider.updater.QMessageBox.information",
             lambda *a, **k: shown.append(("info", a, k)),
         )
         # No prompt branch either — just track _show_prompt calls.
-        monkeypatch.setattr(UpdateChecker, "_show_prompt", lambda self, info: shown.append(("prompt", info)))
+        monkeypatch.setattr(
+            UpdateChecker, "_show_prompt", lambda self, info: shown.append(("prompt", info))
+        )
 
         checker._silent = True
         checker._on_result(UpdateInfo("1.0.0", "https://x", ""))
@@ -173,25 +173,25 @@ class TestUpdateCheckerResultHandling:
         assert shown == []  # nothing user-visible when silent and up-to-date
 
     def test_manual_mode_shows_up_to_date(self, qapp, isolated_settings, monkeypatch) -> None:
-        checker = UpdateChecker(
-            parent=None, current_version="1.0.0", settings=isolated_settings
-        )
+        checker = UpdateChecker(parent=None, current_version="1.0.0", settings=isolated_settings)
         shown = []
         monkeypatch.setattr(
             "glider.updater.QMessageBox.information",
             lambda *a, **k: shown.append("up-to-date"),
         )
-        monkeypatch.setattr(UpdateChecker, "_show_prompt", lambda self, info: shown.append("prompt"))
+        monkeypatch.setattr(
+            UpdateChecker, "_show_prompt", lambda self, info: shown.append("prompt")
+        )
 
         checker._silent = False
         checker._on_result(UpdateInfo("1.0.0", "https://x", ""))
 
         assert shown == ["up-to-date"]
 
-    def test_silent_mode_shows_prompt_when_newer(self, qapp, isolated_settings, monkeypatch) -> None:
-        checker = UpdateChecker(
-            parent=None, current_version="1.0.0", settings=isolated_settings
-        )
+    def test_silent_mode_shows_prompt_when_newer(
+        self, qapp, isolated_settings, monkeypatch
+    ) -> None:
+        checker = UpdateChecker(parent=None, current_version="1.0.0", settings=isolated_settings)
         shown = []
         monkeypatch.setattr(UpdateChecker, "_show_prompt", lambda self, info: shown.append(info))
 
@@ -201,12 +201,12 @@ class TestUpdateCheckerResultHandling:
 
         assert shown == [info]
 
-    def test_silent_mode_respects_skipped_version(self, qapp, isolated_settings, monkeypatch) -> None:
+    def test_silent_mode_respects_skipped_version(
+        self, qapp, isolated_settings, monkeypatch
+    ) -> None:
         # Simulate the user having previously clicked "Don't ask again" for 1.1.0.
         isolated_settings.setValue(SKIPPED_VERSION_KEY, "1.1.0")
-        checker = UpdateChecker(
-            parent=None, current_version="1.0.0", settings=isolated_settings
-        )
+        checker = UpdateChecker(parent=None, current_version="1.0.0", settings=isolated_settings)
         shown = []
         monkeypatch.setattr(UpdateChecker, "_show_prompt", lambda self, info: shown.append(info))
 
@@ -215,14 +215,14 @@ class TestUpdateCheckerResultHandling:
 
         assert shown == []  # suppressed
 
-    def test_manual_mode_ignores_skipped_version(self, qapp, isolated_settings, monkeypatch) -> None:
+    def test_manual_mode_ignores_skipped_version(
+        self, qapp, isolated_settings, monkeypatch
+    ) -> None:
         # User asked "don't ask again" for 1.1.0 but then manually clicked
         # Help → Check for Updates. That counts as un-snoozing — the prompt
         # should appear so they can change their mind.
         isolated_settings.setValue(SKIPPED_VERSION_KEY, "1.1.0")
-        checker = UpdateChecker(
-            parent=None, current_version="1.0.0", settings=isolated_settings
-        )
+        checker = UpdateChecker(parent=None, current_version="1.0.0", settings=isolated_settings)
         shown = []
         monkeypatch.setattr(UpdateChecker, "_show_prompt", lambda self, info: shown.append(info))
 
@@ -235,9 +235,7 @@ class TestUpdateCheckerResultHandling:
         self, qapp, isolated_settings, monkeypatch
     ) -> None:
         isolated_settings.setValue(SKIPPED_VERSION_KEY, "1.1.0")
-        checker = UpdateChecker(
-            parent=None, current_version="1.0.0", settings=isolated_settings
-        )
+        checker = UpdateChecker(parent=None, current_version="1.0.0", settings=isolated_settings)
         shown = []
         monkeypatch.setattr(UpdateChecker, "_show_prompt", lambda self, info: shown.append(info))
 
@@ -250,9 +248,7 @@ class TestUpdateCheckerResultHandling:
     def test_network_failure_silent_mode_stays_quiet(
         self, qapp, isolated_settings, monkeypatch
     ) -> None:
-        checker = UpdateChecker(
-            parent=None, current_version="1.0.0", settings=isolated_settings
-        )
+        checker = UpdateChecker(parent=None, current_version="1.0.0", settings=isolated_settings)
         shown = []
         monkeypatch.setattr(
             "glider.updater.QMessageBox.information",
@@ -265,9 +261,7 @@ class TestUpdateCheckerResultHandling:
     def test_network_failure_manual_mode_surfaces_message(
         self, qapp, isolated_settings, monkeypatch
     ) -> None:
-        checker = UpdateChecker(
-            parent=None, current_version="1.0.0", settings=isolated_settings
-        )
+        checker = UpdateChecker(parent=None, current_version="1.0.0", settings=isolated_settings)
         shown = []
         monkeypatch.setattr(
             "glider.updater.QMessageBox.information",

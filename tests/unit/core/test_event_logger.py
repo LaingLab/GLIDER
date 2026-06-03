@@ -167,12 +167,8 @@ async def test_session_epoch_anchors_event_elapsed_ms(tmp_path):
     # ~5000 ms is the floor since the event fires after start(). It will be
     # slightly higher (test overhead). The point is that it's >> 0, which
     # would be the case if the override hadn't been respected.
-    assert elapsed >= 4990.0, (
-        f"event logger ignored session epoch override; got {elapsed} ms"
-    )
-    assert elapsed < 10000.0, (
-        f"unexpectedly large elapsed_ms ({elapsed} ms); test probably hung"
-    )
+    assert elapsed >= 4990.0, f"event logger ignored session epoch override; got {elapsed} ms"
+    assert elapsed < 10000.0, f"unexpectedly large elapsed_ms ({elapsed} ms); test probably hung"
 
 
 @pytest.mark.asyncio
@@ -221,7 +217,8 @@ async def test_session_epoch_shared_across_recorder_and_event_log(tmp_path):
     rec_elapsed = float(rec_frame_rows[0][2])
 
     ev_rows = [
-        r for r in _read_event_rows(elog.file_path)
+        r
+        for r in _read_event_rows(elog.file_path)
         if r["frame"] == "42" and r["source"] == "output_write" and r["value"] == "1"
     ]
     assert ev_rows
@@ -231,9 +228,9 @@ async def test_session_epoch_shared_across_recorder_and_event_log(tmp_path):
     # so the difference should be small. If the event logger were using
     # its own start_time instead of the shared epoch the difference would
     # be larger because the two recorders started ~ms apart.
-    assert abs(ev_elapsed - rec_elapsed) < 50.0, (
-        f"shared epoch not respected: rec={rec_elapsed}, ev={ev_elapsed}"
-    )
+    assert (
+        abs(ev_elapsed - rec_elapsed) < 50.0
+    ), f"shared epoch not respected: rec={rec_elapsed}, ev={ev_elapsed}"
 
 
 @pytest.mark.asyncio
@@ -253,6 +250,6 @@ async def test_unsubscribes_cleanly_on_stop(tmp_path):
     await led.turn_on()
     size_after = path.stat().st_size
 
-    assert size_after == size_before, (
-        "DeviceEventLogger appended rows to the events CSV after stop()"
-    )
+    assert (
+        size_after == size_before
+    ), "DeviceEventLogger appended rows to the events CSV after stop()"
