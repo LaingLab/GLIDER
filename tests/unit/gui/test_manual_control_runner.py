@@ -12,6 +12,7 @@ class _FakeEngine:
     def __init__(self, nodes=None):
         self._nodes = nodes or {}
         self.setup_called = 0
+        self.state = None
 
     @property
     def nodes(self):
@@ -59,6 +60,7 @@ async def test_busy_guard_rejects_overlapping_runs():
 
         async def execute(self):
             await release.wait()
+            return True
 
     core = _FakeCore(connected=True, nodes={"s1": object()})
     runner = ManualControlRunner(core, function_runner_factory=_SlowRunner)
@@ -84,6 +86,7 @@ async def test_lazy_setup_flow_when_engine_empty():
 
         async def execute(self):
             executed["ran"] = True
+            return True
 
     core = _FakeCore(connected=True, nodes={})
 
@@ -113,4 +116,19 @@ async def test_execution_error_returns_error_outcome():
     result = await runner.run("s1")
     assert result.outcome is RunOutcome.ERROR
     assert "boom" in (result.error or "")
+    assert runner.is_busy is False
+
+
+async def test_incomplete_run_returns_error_outcome():
+    class _TimeoutRunner:
+        def __init__(self, start_node_id, engine):
+            pass
+
+        async def execute(self):
+            return False  # simulates FlowFunctionRunner timing out
+
+    core = _FakeCore(connected=True, nodes={"s1": object()})
+    runner = ManualControlRunner(core, function_runner_factory=_TimeoutRunner)
+    result = await runner.run("s1")
+    assert result.outcome is RunOutcome.ERROR
     assert runner.is_busy is False
