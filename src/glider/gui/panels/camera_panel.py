@@ -570,9 +570,7 @@ class CameraPanel(QWidget):
             motion_detected = motion.motion_detected if motion else False
             motion_area = motion.motion_area if motion else 0.0
 
-            self._tracking_logger.log_frame(
-                timestamp, tracked or [], motion_detected, motion_area
-            )
+            self._tracking_logger.log_frame(timestamp, tracked or [], motion_detected, motion_area)
 
             # Per-frame tick for the device-state recorder + event logger.
             # Fires unconditionally on every processed frame, independent
@@ -900,9 +898,7 @@ class CameraPanel(QWidget):
             except RuntimeError:
                 # No running loop (unit-test / headless scenario); skip
                 # silently rather than blow up the camera thread.
-                logger.debug(
-                    "frame tick skipped: no running event loop", exc_info=True
-                )
+                logger.debug("frame tick skipped: no running event loop", exc_info=True)
             except Exception:
                 logger.exception("record_at_frame failed")
 

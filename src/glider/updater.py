@@ -220,8 +220,7 @@ class UpdateChecker(QObject):
                 QMessageBox.information(
                     self._parent_widget,
                     "Check for Updates",
-                    f"You're up to date — GLIDER {self._current_version} "
-                    "is the latest release.",
+                    f"You're up to date — GLIDER {self._current_version} " "is the latest release.",
                 )
             return
 

@@ -32,7 +32,11 @@ import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 from scipy.spatial import distance as dist  # noqa: E402
 
-from glider.vision.behavior_analyzer import BehaviorAnalyzer, BehaviorSettings, BehaviorState  # noqa: E402
+from glider.vision.behavior_analyzer import (  # noqa: E402
+    BehaviorAnalyzer,
+    BehaviorSettings,
+    BehaviorState,
+)
 
 if TYPE_CHECKING:
     from glider.vision.zones import ZoneConfiguration, ZoneState, ZoneTracker
