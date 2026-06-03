@@ -525,9 +525,8 @@ class ExperimentSession:
         self._dirty = False  # Has unsaved changes
         self._file_path: str | None = None
 
-        # Custom devices and flow functions
+        # Custom devices
         self._custom_device_definitions: dict[str, Any] = {}  # id -> definition dict
-        self._flow_function_definitions: dict[str, Any] = {}  # id -> definition dict
         self._manual_controls: list[dict[str, Any]] = []  # runner manual-control buttons
 
         # Callbacks for state changes
@@ -568,11 +567,6 @@ class ExperimentSession:
     def custom_device_definitions(self) -> dict[str, Any]:
         """Custom device definitions (id -> definition dict)."""
         return self._custom_device_definitions
-
-    @property
-    def flow_function_definitions(self) -> dict[str, Any]:
-        """Flow function definitions (id -> definition dict)."""
-        return self._flow_function_definitions
 
     @property
     def state(self) -> SessionState:
@@ -787,24 +781,6 @@ class ExperimentSession:
         """Get a custom device definition by ID."""
         return self._custom_device_definitions.get(definition_id)
 
-    # Flow function definition management
-    def add_flow_function_definition(self, definition_dict: dict[str, Any]) -> None:
-        """Add a flow function definition."""
-        def_id = definition_dict.get("id")
-        if def_id:
-            self._flow_function_definitions[def_id] = definition_dict
-            self._mark_dirty()
-
-    def remove_flow_function_definition(self, definition_id: str) -> None:
-        """Remove a flow function definition."""
-        if definition_id in self._flow_function_definitions:
-            del self._flow_function_definitions[definition_id]
-            self._mark_dirty()
-
-    def get_flow_function_definition(self, definition_id: str) -> dict[str, Any] | None:
-        """Get a flow function definition by ID."""
-        return self._flow_function_definitions.get(definition_id)
-
     @property
     def manual_controls(self) -> list[dict[str, Any]]:
         """Ordered list of manual-control button bindings (Runner mode)."""
@@ -829,8 +805,6 @@ class ExperimentSession:
         # Only include custom definitions if there are any
         if self._custom_device_definitions:
             result["custom_devices"] = self._custom_device_definitions
-        if self._flow_function_definitions:
-            result["flow_functions"] = self._flow_function_definitions
         if self._manual_controls:
             result["manual_controls"] = self._manual_controls
         return result
@@ -847,7 +821,6 @@ class ExperimentSession:
         session._zones = ZoneConfig.from_dict(data.get("zones", {}))
         # Load custom definitions
         session._custom_device_definitions = data.get("custom_devices", {})
-        session._flow_function_definitions = data.get("flow_functions", {})
         session._manual_controls = data.get("manual_controls", [])
         return session
 
@@ -912,7 +885,6 @@ class ExperimentSession:
         self._camera = CameraConfig()
         self._zones = ZoneConfig()
         self._custom_device_definitions = {}
-        self._flow_function_definitions = {}
         self._manual_controls = []
         self._state = SessionState.IDLE
         self._file_path = None
