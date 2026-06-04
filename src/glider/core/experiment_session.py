@@ -525,8 +525,6 @@ class ExperimentSession:
         self._dirty = False  # Has unsaved changes
         self._file_path: str | None = None
 
-        # Custom devices
-        self._custom_device_definitions: dict[str, Any] = {}  # id -> definition dict
         self._manual_controls: list[dict[str, Any]] = []  # runner manual-control buttons
 
         # Callbacks for state changes
@@ -562,11 +560,6 @@ class ExperimentSession:
     def zones(self) -> ZoneConfig:
         """Zone configuration."""
         return self._zones
-
-    @property
-    def custom_device_definitions(self) -> dict[str, Any]:
-        """Custom device definitions (id -> definition dict)."""
-        return self._custom_device_definitions
 
     @property
     def state(self) -> SessionState:
@@ -763,24 +756,6 @@ class ExperimentSession:
                 return conn
         return None
 
-    # Custom device definition management
-    def add_custom_device_definition(self, definition_dict: dict[str, Any]) -> None:
-        """Add a custom device definition."""
-        def_id = definition_dict.get("id")
-        if def_id:
-            self._custom_device_definitions[def_id] = definition_dict
-            self._mark_dirty()
-
-    def remove_custom_device_definition(self, definition_id: str) -> None:
-        """Remove a custom device definition."""
-        if definition_id in self._custom_device_definitions:
-            del self._custom_device_definitions[definition_id]
-            self._mark_dirty()
-
-    def get_custom_device_definition(self, definition_id: str) -> dict[str, Any] | None:
-        """Get a custom device definition by ID."""
-        return self._custom_device_definitions.get(definition_id)
-
     @property
     def manual_controls(self) -> list[dict[str, Any]]:
         """Ordered list of manual-control button bindings (Runner mode)."""
@@ -802,9 +777,6 @@ class ExperimentSession:
             "camera": self._camera.to_dict(),
             "zones": self._zones.to_dict(),
         }
-        # Only include custom definitions if there are any
-        if self._custom_device_definitions:
-            result["custom_devices"] = self._custom_device_definitions
         if self._manual_controls:
             result["manual_controls"] = self._manual_controls
         return result
@@ -819,8 +791,6 @@ class ExperimentSession:
         session._dashboard = DashboardConfig.from_dict(data.get("dashboard", {}))
         session._camera = CameraConfig.from_dict(data.get("camera", {}))
         session._zones = ZoneConfig.from_dict(data.get("zones", {}))
-        # Load custom definitions
-        session._custom_device_definitions = data.get("custom_devices", {})
         session._manual_controls = data.get("manual_controls", [])
         return session
 
@@ -884,7 +854,6 @@ class ExperimentSession:
         self._dashboard = DashboardConfig()
         self._camera = CameraConfig()
         self._zones = ZoneConfig()
-        self._custom_device_definitions = {}
         self._manual_controls = []
         self._state = SessionState.IDLE
         self._file_path = None

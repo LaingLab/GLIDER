@@ -11,11 +11,9 @@ from typing import TYPE_CHECKING
 from PyQt6.QtCore import QMimeData, Qt, pyqtSignal
 from PyQt6.QtGui import QDrag
 from PyQt6.QtWidgets import (
-    QDialog,
     QHBoxLayout,
     QLabel,
     QMenu,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -218,20 +216,6 @@ class NodeLibraryPanel(QWidget):
 
             layout.addWidget(category_widget)
 
-        # Custom Devices section
-        self._custom_devices_container = QWidget()
-        self._custom_devices_layout = QVBoxLayout(self._custom_devices_container)
-        self._custom_devices_layout.setContentsMargins(0, 0, 0, 0)
-        self._custom_devices_layout.setSpacing(2)
-        self._setup_custom_category(
-            self._custom_devices_container,
-            self._custom_devices_layout,
-            "Custom Devices",
-            colors.LIB_CUSTOM_DEVICES,
-            layout,
-            add_new_callback=self._on_new_custom_device,
-        )
-
         # Graph Functions section: call-buttons auto-detected from
         # StartFunction -> EndFunction chains in the graph (no editor dialog).
         self._flow_functions_container = QWidget()
@@ -270,39 +254,6 @@ class NodeLibraryPanel(QWidget):
         outer_layout.addWidget(scroll_area)
 
     # --- Public API ---
-
-    def refresh_custom_devices(self) -> None:
-        """Refresh the custom devices in the node library."""
-        while self._custom_devices_layout.count():
-            item = self._custom_devices_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        session = self._session
-        if session:
-            definitions = session.custom_device_definitions
-            if definitions:
-                for def_id, def_dict in definitions.items():
-                    name = def_dict.get("name", "Unknown")
-                    btn = EditableDraggableButton(
-                        f"CustomDevice:{def_id}",
-                        name,
-                        "Custom Devices",
-                        on_edit=lambda did=def_id: self._edit_custom_device(did),
-                        on_delete=lambda did=def_id: self._delete_custom_device(did),
-                    )
-                    btn.setToolTip(
-                        f"{def_dict.get('description', '')}\n(Right-click to edit/delete)"
-                    )
-                    btn.clicked.connect(
-                        lambda checked, did=def_id: self._add_custom_device_node(did)
-                    )
-                    self._apply_node_btn_style(btn, colors.LIB_CUSTOM_DEVICES)
-                    self._custom_devices_layout.addWidget(btn)
-            else:
-                self._add_placeholder(self._custom_devices_layout, "No devices defined")
-        else:
-            self._add_placeholder(self._custom_devices_layout, "No devices defined")
 
     def refresh_flow_functions(self) -> None:
         """Refresh the flow functions in the node library."""
@@ -460,23 +411,6 @@ class NodeLibraryPanel(QWidget):
 
         parent_layout.addWidget(category_widget)
 
-    def _on_new_custom_device(self) -> None:
-        """Open dialog to create a new custom device."""
-        try:
-            from glider.gui.dialogs.custom_device_dialog import CustomDeviceDialog
-
-            dialog = CustomDeviceDialog(parent=self)
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                definition = dialog.get_definition()
-                session = self._session
-                if session:
-                    session.add_custom_device_definition(definition.to_dict())
-                    self.refresh_custom_devices()
-                    logger.info(f"Created custom device: {definition.name}")
-        except ImportError as e:
-            logger.warning(f"Could not import CustomDeviceDialog: {e}")
-            QMessageBox.warning(self, "Not Available", "Custom device editor not available.")
-
     def _add_zone_node(self, zone_id: str) -> None:
         """Add a zone input node to the graph."""
         center = self._graph_view.mapToScene(self._graph_view.viewport().rect().center())
@@ -499,60 +433,6 @@ class NodeLibraryPanel(QWidget):
         """Add a FunctionCall node to the graph."""
         center = self._graph_view.mapToScene(self._graph_view.viewport().rect().center())
         self._graph_view.node_created.emit(f"FunctionCall:{start_node_id}", center.x(), center.y())
-
-    def _add_custom_device_node(self, definition_id: str) -> None:
-        """Add a custom device action node to the graph."""
-        center = self._graph_view.mapToScene(self._graph_view.viewport().rect().center())
-        self._graph_view.node_created.emit(f"CustomDevice:{definition_id}", center.x(), center.y())
-
-    def _edit_custom_device(self, definition_id: str) -> None:
-        """Edit an existing custom device definition."""
-        session = self._session
-        if not session:
-            return
-
-        def_dict = session.get_custom_device_definition(definition_id)
-        if not def_dict:
-            QMessageBox.warning(self, "Error", "Custom device not found.")
-            return
-
-        try:
-            from glider.core.custom_device import CustomDeviceDefinition
-            from glider.gui.dialogs.custom_device_dialog import CustomDeviceDialog
-
-            definition = CustomDeviceDefinition.from_dict(def_dict)
-            dialog = CustomDeviceDialog(definition=definition, parent=self)
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                updated_def = dialog.get_definition()
-                session.remove_custom_device_definition(definition_id)
-                session.add_custom_device_definition(updated_def.to_dict())
-                self.refresh_custom_devices()
-                logger.info(f"Updated custom device: {updated_def.name}")
-        except ImportError as e:
-            logger.warning(f"Could not import CustomDeviceDialog: {e}")
-            QMessageBox.warning(self, "Not Available", "Custom device editor not available.")
-
-    def _delete_custom_device(self, definition_id: str) -> None:
-        """Delete a custom device definition."""
-        session = self._session
-        if not session:
-            return
-
-        def_dict = session.get_custom_device_definition(definition_id)
-        name = def_dict.get("name", "Unknown") if def_dict else "Unknown"
-
-        result = QMessageBox.question(
-            self,
-            "Delete Custom Device",
-            f"Are you sure you want to delete '{name}'?\n\nThis cannot be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-
-        if result == QMessageBox.StandardButton.Yes:
-            session.remove_custom_device_definition(definition_id)
-            self.refresh_custom_devices()
-            logger.info(f"Deleted custom device: {name}")
 
     def _add_node_to_center(self, node_type: str) -> None:
         """Add a node to the center of the graph view."""
