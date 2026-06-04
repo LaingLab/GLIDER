@@ -4,6 +4,7 @@ Flow Control Nodes - Execution flow control, delays, and timers.
 
 import asyncio
 import logging
+import threading
 import time
 from typing import Any
 
@@ -41,7 +42,32 @@ class SequenceNode(ExecNode):
 
 
 class DelayNode(ExecNode):
-    """Delay execution for a specified time."""
+    """Delay execution for a specified time.
+
+    Sleep is performed on a worker thread via
+    ``asyncio.to_thread(threading.Event.wait, duration)`` rather than
+    ``asyncio.sleep`` for two reasons:
+
+    1. **Timing precision.** ``asyncio.sleep`` resolves on the qasync
+       event loop, which under typical GLIDER load (data recorder
+       sampling at 100 ms, runner timer ticking at 50 ms, Qt repaints,
+       device polls) is too congested for sub-100ms wakeup accuracy.
+       Field reports showed a 10-second delay returning in 10.01-10.27s
+       (260 ms jitter). ``threading.Event.wait(timeout)`` is backed by
+       an OS condition variable (precision ~1 ms on macOS/Linux) and
+       runs on a thread that isn't competing with Qt for loop time, so
+       a 10s delay reliably returns within a few ms of 10s.
+
+    2. **Clean cancellation.** ``Event.set()`` returns control to the
+       waiting thread immediately, which then unblocks the ``to_thread``
+       wrapper, which delivers the result back to the asyncio side.
+       ``DelayNode.stop()`` simply sets the event and the in-flight
+       sleep returns promptly — no need to cancel an asyncio task and
+       hope its sleep wakeup observes the cancellation in time.
+
+    The event is replaced on each ``execute()`` so a node reused across
+    multiple runs starts each delay with a fresh, unset event.
+    """
 
     definition = NodeDefinition(
         name="Delay",
@@ -59,7 +85,10 @@ class DelayNode(ExecNode):
 
     def __init__(self):
         super().__init__()
-        self._delay_task: asyncio.Task | None = None
+        # threading.Event (not asyncio.Event) — must be settable from the
+        # asyncio side AND waited on from the worker thread. stop() will
+        # set this to break out of an in-flight wait.
+        self._stop_event: threading.Event = threading.Event()
 
     async def execute(self) -> None:
         # Priority: 1) state "duration", 2) input port, 3) default 1.0
@@ -74,12 +103,26 @@ class DelayNode(ExecNode):
 
         duration = max(0, duration)
 
-        await asyncio.sleep(duration)
+        # Fresh event per execute() so a previous stop() doesn't leak
+        # into a new delay (and so the node is safely reusable across
+        # multiple flow runs without re-init).
+        self._stop_event = threading.Event()
+
+        # Wait on a worker thread. Event.wait(timeout) returns True if
+        # the event was set (cancellation), False on timeout (delay
+        # completed normally). Either way we just unblock and fall
+        # through — only fire Completed on the normal path.
+        cancelled = await asyncio.to_thread(self._stop_event.wait, duration)
+        if cancelled:
+            return
+
         await self._fire_exec_output("Completed")
 
     async def stop(self) -> None:
-        if self._delay_task:
-            self._delay_task.cancel()
+        # Wakes any in-flight Event.wait on the worker thread within
+        # condition-variable precision (~µs). The asyncio side picks
+        # up the to_thread completion within a normal loop tick.
+        self._stop_event.set()
 
 
 class TimerNode(ExecNode):

@@ -233,6 +233,14 @@ class RunnerPanel(QWidget):
             self._update_elapsed_time()
         else:
             self._elapsed_timer.stop()
+            # When the flow has completed, snap the displayed elapsed time
+            # to the flow's *logical* duration rather than leaving it on the
+            # last QTimer tick (which includes teardown latency — closing
+            # recorder files, atomic-renaming output, driving devices low,
+            # and so on, which adds a variable 100-400ms on a Pi). This is
+            # what keeps a ``Delay(10s)`` flow display 10.00s instead of
+            # 10.11s / 10.43s run-to-run.
+            self._snap_timer_to_flow_duration()
 
     def update_experiment_name(self, name: str | None = None) -> None:
         """Update the experiment name from session."""
@@ -278,10 +286,33 @@ class RunnerPanel(QWidget):
         """
         if self._experiment_start_time is None:
             return
+        self._set_timer_display(time.time() - self._experiment_start_time)
 
-        elapsed = time.time() - self._experiment_start_time
+    def _snap_timer_to_flow_duration(self) -> None:
+        """On flow end, freeze the timer on the flow's logical duration.
+
+        This is the operator-visible piece of the timing fix. The QTimer's
+        last live-tick was a few hundred ms before the state change
+        actually fired (timer ticks at the configured interval), and the
+        state change itself fired *after* the entire teardown sequence.
+        Without this, the display ends on a stale wall-clock value that
+        includes I/O latency. ``core.last_flow_duration_s`` is anchored
+        to flow-engine start/end and is the truth-of-record.
+        """
+        duration = self._core.last_flow_duration_s
+        if duration is None:
+            # No flow ran (or in progress) — leave the last live tick as
+            # the display. Happens on cleanup paths that don't correspond
+            # to a flow termination.
+            return
+        self._set_timer_display(duration)
+
+    def _set_timer_display(self, elapsed: float) -> None:
+        """Format ``elapsed`` (seconds) as MM:SS.cc / HH:MM:SS.cc and paint
+        it into the timer label. Truncates toward zero so centiseconds
+        never reads ``60``."""
         # int() truncates toward zero for non-negative floats — exactly what we want.
-        total_centiseconds = int(elapsed * 100)
+        total_centiseconds = int(max(0.0, elapsed) * 100)
         hours, rem = divmod(total_centiseconds, 360_000)
         minutes, rem = divmod(rem, 6_000)
         seconds, centiseconds = divmod(rem, 100)
