@@ -1159,7 +1159,6 @@ class MainWindow(QMainWindow):
             if self._hardware_panel:
                 self._hardware_panel.refresh_tree()
             if self._node_library_panel:
-                self._node_library_panel.refresh_custom_devices()
                 self._node_library_panel.refresh_flow_functions()
                 self._node_library_panel.refresh_zones(self._zone_config)
             if self._node_editor:
@@ -1195,7 +1194,6 @@ class MainWindow(QMainWindow):
                 if self._hardware_panel:
                     self._hardware_panel.refresh_tree()
                 if self._node_library_panel:
-                    self._node_library_panel.refresh_custom_devices()
                     self._node_library_panel.refresh_flow_functions()
                     self._node_library_panel.refresh_zones(self._zone_config)
                 if self._experiment_dialog:
@@ -1264,15 +1262,7 @@ class MainWindow(QMainWindow):
                 display_name = node_type
                 definition_id = None
 
-                if node_type in ("CustomDevice", "CustomDeviceAction"):
-                    definition_id = (
-                        node_config.state.get("definition_id") if node_config.state else None
-                    )
-                    if definition_id:
-                        def_dict = self._core.session.get_custom_device_definition(definition_id)
-                        if def_dict:
-                            display_name = def_dict.get("name", "Custom Device")
-                elif node_type == "ZoneInput":
+                if node_type == "ZoneInput":
                     zone_name = (
                         node_config.state.get("zone_name", "Zone") if node_config.state else "Zone"
                     )
@@ -1285,8 +1275,6 @@ class MainWindow(QMainWindow):
                     "Output",
                     "Input",
                     "MotorGovernor",
-                    "CustomDevice",
-                    "CustomDeviceAction",
                 ]
                 function_nodes = [
                     "FunctionCall",

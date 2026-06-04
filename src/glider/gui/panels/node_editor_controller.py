@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -121,8 +120,6 @@ class NodeEditorController(QObject):
             "Output": ([">exec"], [">next"]),
             "Input": ([">exec"], ["value", ">next"]),
             "MotorGovernor": ([">exec"], [">next"]),
-            "CustomDevice": ([">exec"], ["value", ">next"]),
-            "CustomDeviceAction": ([">exec"], ["value", ">next"]),
             "StartFunction": ([], [">next"]),
             "EndFunction": ([">exec"], []),
             "FunctionCall": ([">exec"], [">next"]),
@@ -208,15 +205,7 @@ class NodeEditorController(QObject):
 
         session = self._session
 
-        if node_type.startswith("CustomDevice:"):
-            definition_id = node_type.split(":", 1)[1]
-            actual_node_type = "CustomDevice"
-            if session:
-                def_dict = session.get_custom_device_definition(definition_id)
-                if def_dict:
-                    display_name = def_dict.get("name", "Custom Device")
-                    initial_state["definition_id"] = definition_id
-        elif node_type.startswith("FunctionCall:"):
+        if node_type.startswith("FunctionCall:"):
             start_node_id = node_type.split(":", 1)[1]
             actual_node_type = "FunctionCall"
             if session:
@@ -251,7 +240,7 @@ class NodeEditorController(QObject):
         category = "default"
         flow_nodes = ["StartExperiment", "EndExperiment", "Delay"]
         control_nodes = ["Loop", "WaitForInput"]
-        io_nodes = ["Output", "Input", "MotorGovernor", "CustomDeviceAction"]
+        io_nodes = ["Output", "Input", "MotorGovernor"]
         function_nodes = ["FunctionCall", "StartFunction", "EndFunction"]
         interface_nodes = ["ZoneInput"]
 
@@ -817,107 +806,6 @@ class NodeEditorController(QObject):
             info_label.setProperty("textRole", "muted")
             props_layout.addRow(info_label)
 
-        elif node_type in ("CustomDevice", "CustomDeviceAction"):
-            self._add_section_header(props_layout, "CUSTOM DEVICE")
-            definition_id = None
-            if node_config and node_config.state:
-                definition_id = node_config.state.get("definition_id")
-            if not definition_id and hasattr(node_item, "_definition_id"):
-                definition_id = node_item._definition_id
-
-            if definition_id and session:
-                def_dict = session.get_custom_device_definition(definition_id)
-                if def_dict:
-                    device_name = def_dict.get("name", "Unknown")
-                    props_layout.addRow("Device:", QLabel(device_name))
-
-                    desc = def_dict.get("description", "")
-                    if desc:
-                        desc_label = QLabel(desc)
-                        desc_label.setWordWrap(True)
-                        props_layout.addRow("Description:", desc_label)
-
-                    pins = def_dict.get("pins", [])
-                    if pins:
-                        pin_combo = QComboBox()
-                        pin_combo.addItem("(Select a pin)", "")
-                        for pin in pins:
-                            pin_name = pin.get("name", "")
-                            pin_number = pin.get("pin_number")
-                            pin_type = pin.get("pin_type", "")
-                            pin_desc = pin.get("description", "")
-                            if pin_number is not None:
-                                display_text = f"{pin_name} [Pin {pin_number}] ({pin_type})"
-                            else:
-                                display_text = f"{pin_name} ({pin_type})"
-                            if pin_desc:
-                                display_text += f" - {pin_desc}"
-                            pin_combo.addItem(display_text, pin_name)
-
-                        saved_pin = ""
-                        if node_config and node_config.state:
-                            saved_pin = node_config.state.get("pin", "")
-
-                        for i in range(pin_combo.count()):
-                            if pin_combo.itemData(i) == saved_pin:
-                                pin_combo.setCurrentIndex(i)
-                                break
-
-                        pin_combo.currentIndexChanged.connect(
-                            lambda idx, nid=node_id, combo=pin_combo: (
-                                self._on_node_property_changed(nid, "pin", combo.currentData())
-                            )
-                        )
-                        props_layout.addRow("Pin:", pin_combo)
-
-                        saved_pin_type = None
-                        for pin in pins:
-                            if pin.get("name") == saved_pin:
-                                saved_pin_type = pin.get("pin_type")
-                                break
-
-                        if saved_pin_type in ("digital_output",):
-                            value_combo = QComboBox()
-                            value_combo.addItem("LOW (0)", 0)
-                            value_combo.addItem("HIGH (1)", 1)
-
-                            saved_value = 0
-                            if node_config and node_config.state:
-                                saved_value = node_config.state.get("value", 0)
-                            value_combo.setCurrentIndex(1 if saved_value else 0)
-
-                            value_combo.currentIndexChanged.connect(
-                                lambda idx, nid=node_id, combo=value_combo: (
-                                    self._on_node_property_changed(
-                                        nid, "value", combo.currentData()
-                                    )
-                                )
-                            )
-                            props_layout.addRow("Value:", value_combo)
-
-                        elif saved_pin_type in ("analog_output", "pwm"):
-                            value_spin = QSpinBox()
-                            value_spin.setRange(0, 255)
-                            saved_value = 0
-                            if node_config and node_config.state:
-                                saved_value = node_config.state.get("value", 0)
-                            value_spin.setValue(int(saved_value))
-
-                            value_spin.valueChanged.connect(
-                                lambda val, nid=node_id: self._on_node_property_changed(
-                                    nid, "value", val
-                                )
-                            )
-                            props_layout.addRow("Value:", value_spin)
-
-                    edit_btn = QPushButton("Edit Device Definition")
-                    edit_btn.clicked.connect(
-                        lambda checked, did=definition_id: self._edit_custom_device(did)
-                    )
-                    props_layout.addRow(edit_btn)
-                else:
-                    props_layout.addRow(QLabel("(Custom device not found)"))
-
         elif node_type == "AudioPlayback":
             self._add_section_header(props_layout, "AUDIO")
             file_edit = QLineEdit()
@@ -1096,27 +984,3 @@ class NodeEditorController(QObject):
         if file_path:
             line_edit.setText(file_path)
             self._on_node_property_changed(node_id, "file_path", file_path)
-
-    def _edit_custom_device(self, definition_id: str) -> None:
-        """Edit an existing custom device definition."""
-        session = self._session
-        if not session:
-            return
-
-        def_dict = session.get_custom_device_definition(definition_id)
-        if not def_dict:
-            return
-
-        try:
-            from glider.core.custom_device import CustomDeviceDefinition
-            from glider.gui.dialogs.custom_device_dialog import CustomDeviceDialog
-
-            definition = CustomDeviceDefinition.from_dict(def_dict)
-            dialog = CustomDeviceDialog(definition=definition, parent=None)
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                updated_def = dialog.get_definition()
-                session.remove_custom_device_definition(definition_id)
-                session.add_custom_device_definition(updated_def.to_dict())
-                logger.info(f"Updated custom device: {updated_def.name}")
-        except ImportError as e:
-            logger.warning(f"Could not import CustomDeviceDialog: {e}")
