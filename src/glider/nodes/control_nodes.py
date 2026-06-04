@@ -233,7 +233,7 @@ class WaitForInputNode(GliderNode):
             # Fire triggered exec output and await downstream chain
             await self._fire_exec_output("triggered")
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.info("  Timeout waiting for input")
             await self._fire_exec_output("timeout")
 
@@ -255,7 +255,7 @@ class WaitForInputNode(GliderNode):
         while self._waiting:
             # Check timeout
             if timeout > 0 and (time.time() - start_time) >= timeout:
-                raise asyncio.TimeoutError()
+                raise TimeoutError()
 
             # Read from device
             try:
