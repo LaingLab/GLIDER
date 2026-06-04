@@ -38,7 +38,7 @@ class RecordingState(Enum):
 class VideoFormat:
     """Video output format configuration."""
 
-    codec: str = "mp4v"  # OpenCV fourcc code
+    codec: str = "avc1"  # H.264 fourcc; modern, widely-compatible successor to mp4v
     extension: str = ".mp4"
     quality: int = 95  # For JPEG-based codecs
 
@@ -52,10 +52,66 @@ class VideoFormat:
     @classmethod
     def from_dict(cls, data: dict) -> "VideoFormat":
         return cls(
-            codec=data.get("codec", "mp4v"),
+            codec=data.get("codec", "avc1"),
             extension=data.get("extension", ".mp4"),
             quality=data.get("quality", 95),
         )
+
+
+# Codec used when the requested codec cannot be opened by the local OpenCV build.
+# mp4v (MPEG-4 Part 2) ships in essentially every OpenCV/FFmpeg build, so it is a
+# safe last resort that still produces a playable .mp4.
+FALLBACK_CODEC = "mp4v"
+
+
+def open_video_writer(
+    path: "Path",
+    codec: str,
+    fps: float,
+    resolution: tuple[int, int],
+    fallback_codec: str = FALLBACK_CODEC,
+) -> "tuple[cv2.VideoWriter | None, str | None]":
+    """
+    Create a ``cv2.VideoWriter``, falling back to a compatible codec if needed.
+
+    OpenCV's bundled FFmpeg does not always include every encoder. In particular
+    the pip ``opencv-python`` wheels often omit H.264/HEVC for licensing reasons,
+    in which case ``cv2.VideoWriter`` reports ``isOpened() == False`` instead of
+    raising. When the requested ``codec`` cannot open a writer we retry once with
+    ``fallback_codec`` so recording degrades to an older format rather than
+    silently producing no file at all.
+
+    Args:
+        path: Output file path.
+        codec: Preferred OpenCV fourcc code (e.g. ``"avc1"``).
+        fps: Frames per second for the output.
+        resolution: ``(width, height)`` in pixels.
+        fallback_codec: Codec to retry with if ``codec`` is unavailable.
+
+    Returns:
+        ``(writer, codec_used)``. ``writer`` is ``None`` (and ``codec_used`` is
+        ``None``) only if even the fallback codec failed to open.
+    """
+    codecs_to_try = [codec]
+    if fallback_codec and fallback_codec.lower() != codec.lower():
+        codecs_to_try.append(fallback_codec)
+
+    for candidate in codecs_to_try:
+        fourcc = cv2.VideoWriter_fourcc(*candidate)
+        writer = cv2.VideoWriter(str(path), fourcc, fps, resolution)
+        if writer.isOpened():
+            if candidate != codec:
+                logger.warning(
+                    "Codec %r unavailable in this OpenCV build; " "falling back to %r for %s",
+                    codec,
+                    candidate,
+                    path,
+                )
+            return writer, candidate
+        # Release the failed handle before trying the next codec.
+        writer.release()
+
+    return None, None
 
 
 class VideoRecorder:
@@ -154,12 +210,14 @@ class VideoRecorder:
         self._output_dir.mkdir(parents=True, exist_ok=True)
         logger.debug(f"Video output directory: {self._output_dir}")
 
-    def set_video_format(self, codec: str = "mp4v", extension: str = ".mp4") -> None:
+    def set_video_format(self, codec: str = "avc1", extension: str = ".mp4") -> None:
         """
         Set the video codec and file extension.
 
         Args:
-            codec: OpenCV fourcc codec code (e.g., "mp4v", "XVID", "MJPG")
+            codec: OpenCV fourcc codec code (e.g., "avc1", "mp4v", "XVID", "MJPG").
+                If the codec is unavailable in the local OpenCV build, recording
+                falls back to ``mp4v`` automatically.
             extension: File extension (e.g., ".mp4", ".avi")
         """
         self._video_format = VideoFormat(codec=codec, extension=extension)
@@ -209,7 +267,6 @@ class VideoRecorder:
 
         # Get camera settings for video writer
         settings = self._camera.settings
-        fourcc = cv2.VideoWriter_fourcc(*self._video_format.codec)
 
         # Use measured FPS if camera is already streaming, otherwise use configured FPS
         # This helps when actual frame rate is lower due to processing overhead
@@ -226,14 +283,16 @@ class VideoRecorder:
             fwt_kwargs["max_queue_size"] = self._buffer_size
 
         with self._lock:
-            # Create raw video writer
-            self._writer = cv2.VideoWriter(
-                str(self._file_path), fourcc, recording_fps, settings.resolution
+            # Create raw video writer (falls back to a compatible codec if needed)
+            self._writer, _ = open_video_writer(
+                self._file_path,
+                self._video_format.codec,
+                recording_fps,
+                settings.resolution,
             )
 
-            if not self._writer.isOpened():
+            if self._writer is None:
                 logger.error(f"Failed to create video writer: {self._file_path}")
-                self._writer = None
                 raise RuntimeError(f"Failed to create video file: {self._file_path}")
 
             self._writer_thread = FrameWriterThread(
@@ -245,14 +304,16 @@ class VideoRecorder:
             if self._record_annotated:
                 annotated_filename = self._generate_filename(f"{experiment_name}_annotated")
                 self._annotated_file_path = self._output_dir / annotated_filename
-                self._annotated_writer = cv2.VideoWriter(
-                    str(self._annotated_file_path), fourcc, recording_fps, settings.resolution
+                self._annotated_writer, _ = open_video_writer(
+                    self._annotated_file_path,
+                    self._video_format.codec,
+                    recording_fps,
+                    settings.resolution,
                 )
-                if not self._annotated_writer.isOpened():
+                if self._annotated_writer is None:
                     logger.warning(
                         f"Failed to create annotated video writer: {self._annotated_file_path}"
                     )
-                    self._annotated_writer = None
                 else:
                     self._annotated_writer_thread = FrameWriterThread(
                         self._annotated_writer,
@@ -428,11 +489,12 @@ class VideoRecorder:
             # Get video properties
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fourcc = cv2.VideoWriter_fourcc(*self._video_format.codec)
 
-            # Create new writer with correct FPS
-            writer = cv2.VideoWriter(str(temp_path), fourcc, correct_fps, (width, height))
-            if not writer.isOpened():
+            # Create new writer with correct FPS (falls back to a compatible codec)
+            writer, _ = open_video_writer(
+                temp_path, self._video_format.codec, correct_fps, (width, height)
+            )
+            if writer is None:
                 logger.error("Failed to create temp video writer")
                 cap.release()
                 return False
