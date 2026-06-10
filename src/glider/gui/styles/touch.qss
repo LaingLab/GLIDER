@@ -468,57 +468,6 @@ QDialog {
     border-color: #2a3440;
 }
 
-/* === Touch Widget Specific Styles === */
-
-/* Touch Label */
-.TouchLabel {
-    background-color: #0f1419;
-    border: 2px solid #1e2530;
-    border-radius: 12px;
-}
-
-/* Touch Button */
-.TouchButton QPushButton {
-    min-height: 80px;
-    font-size: 20px;
-}
-
-/* Touch Toggle */
-.TouchToggle {
-    min-height: 80px;
-}
-
-/* Touch Slider */
-.TouchSlider {
-    min-height: 100px;
-}
-
-/* Touch Gauge */
-.TouchGauge {
-    min-height: 140px;
-    background-color: #0f1419;
-    border: 2px solid #1e2530;
-    border-radius: 12px;
-}
-
-/* Touch Chart */
-.TouchChart {
-    min-height: 180px;
-    background-color: #0f1419;
-    border: 2px solid #1e2530;
-    border-radius: 12px;
-}
-
-/* Touch LED */
-.TouchLED {
-    min-height: 80px;
-}
-
-/* Touch Numeric Input */
-.TouchNumericInput {
-    min-height: 100px;
-}
-
 /* === Control Panel === */
 .ControlPanel {
     background-color: #0b0f14;

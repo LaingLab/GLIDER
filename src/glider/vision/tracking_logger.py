@@ -10,6 +10,7 @@ import csv
 import logging
 import math
 import os
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -37,6 +38,11 @@ class TrackingDataLogger:
     behavioral_state, velocity_px_frame
     """
 
+    # Number of consecutive write failures tolerated before we give up on
+    # the recording. One transient EIO during a four-hour overnight run
+    # shouldn't abort the experiment; ten in a row mean the disk is gone.
+    _MAX_CONSECUTIVE_WRITE_ERRORS = 5
+
     def __init__(self, output_dir: Path | None = None):
         """
         Initialize the tracking logger.
@@ -48,6 +54,7 @@ class TrackingDataLogger:
         self._file = None
         self._writer = None
         self._file_path: Path | None = None
+        self._partial_path: Path | None = None  # .partial.csv during recording
         self._start_time: datetime | None = None
         # See DataRecorder.set_session_epoch — when set, elapsed_ms in
         # this file is anchored to the shared session epoch instead of
@@ -55,6 +62,16 @@ class TrackingDataLogger:
         # device-state and event rows on the elapsed_ms column.
         self._start_timestamp: float = 0.0
         self._session_epoch_override: float | None = None
+        # Flow-relative timing anchor. ``elapsed_ms`` measures time from
+        # the shared session epoch (recorder/event/tracking are all
+        # joinable on it), but the analyst usually wants time from the
+        # *flow* boundary, not the recorder-start boundary. ``_flow_anchor``
+        # is the wall-clock instant the flow began; frames logged before
+        # the anchor is set get an empty ``flow_elapsed_ms`` cell
+        # (pre-flow setup / camera warmup); frames after get
+        # ``(timestamp - anchor) * 1000``. Set by GliderCore the moment
+        # ``flow_engine.start()`` returns.
+        self._flow_anchor: float | None = None
         self._frame_count = 0
         self._recording = False
         self._calibration: CameraCalibration | None = None
@@ -67,11 +84,65 @@ class TrackingDataLogger:
         # Periodic fsync so a power-loss or crash only loses a bounded window
         # of tracking data instead of whatever the OS happens to be buffering.
         self._frames_since_fsync = 0
+        # Write-failure tracking. The tracking CSV is the primary scientific
+        # artifact; previous code's bare writerow calls would silently abort
+        # the log on a disk-full / USB-unplug / encoding error, while
+        # `is_recording` continued to return True to the UI. We now count
+        # consecutive failures and surface them.
+        self._write_error_count: int = 0
+        self._failed: bool = False
+        self._writer_error_callback: Callable[[Exception], None] | None = None
 
     @property
     def is_recording(self) -> bool:
-        """Whether logging is active."""
-        return self._recording
+        """Whether logging is active and write-healthy."""
+        return self._recording and not self._failed
+
+    @property
+    def is_failed(self) -> bool:
+        """True if the writer has aborted due to repeated I/O failures."""
+        return self._failed
+
+    def set_writer_error_callback(self, callback: Callable[[Exception], None] | None) -> None:
+        """Register a callback invoked on terminal write failure.
+
+        Mirrors ``VideoRecorder.set_error_callback`` so the UI can react
+        when the tracking CSV stream dies (typically disk-full / USB
+        unplug). The callback fires once when the consecutive-error cap
+        is hit, after which ``is_recording`` returns False.
+        """
+        self._writer_error_callback = callback
+
+    def _on_write_error(self, exc: Exception, *, context: str) -> bool:
+        """Handle a write exception. Returns True if recording aborted.
+
+        Increments the consecutive-failure counter; on the Nth failure
+        (per ``_MAX_CONSECUTIVE_WRITE_ERRORS``) sets ``_failed=True``,
+        notifies the callback, and the caller should stop writing.
+        """
+        self._write_error_count += 1
+        logger.warning(
+            "TrackingDataLogger %s failed (%d/%d): %s",
+            context,
+            self._write_error_count,
+            self._MAX_CONSECUTIVE_WRITE_ERRORS,
+            exc,
+        )
+        if self._write_error_count >= self._MAX_CONSECUTIVE_WRITE_ERRORS:
+            logger.error(
+                "TrackingDataLogger giving up after %d consecutive write errors; "
+                "tracking output for this experiment is incomplete",
+                self._write_error_count,
+            )
+            self._failed = True
+            self._recording = False
+            if self._writer_error_callback is not None:
+                try:
+                    self._writer_error_callback(exc)
+                except Exception:
+                    logger.exception("TrackingDataLogger error callback raised")
+            return True
+        return False
 
     @property
     def file_path(self) -> Path | None:
@@ -103,6 +174,24 @@ class TrackingDataLogger:
         if self._recording:
             logger.warning("set_session_epoch called while recording; takes effect on next start()")
         self._session_epoch_override = float(epoch)
+
+    def set_flow_anchor(self, timestamp: float) -> None:
+        """
+        Anchor ``flow_elapsed_ms`` to a flow-boundary wall-clock timestamp.
+
+        ``elapsed_ms`` measures time from the recorder's session epoch
+        (shared across all recorders so rows are joinable), but the
+        analyst usually wants time from the *flow* boundary so an
+        ethogram / raster plot lines up with t=0 at the moment
+        StartExperiment fired. Call this once at flow start with the
+        Unix timestamp of that instant. Frames logged before the call
+        get an empty ``flow_elapsed_ms`` cell (pre-flow setup / camera
+        warmup); frames after get ``(timestamp - anchor) * 1000``.
+
+        Args:
+            timestamp: Unix timestamp (seconds, float) marking flow t=0.
+        """
+        self._flow_anchor = float(timestamp)
 
     def set_calibration(self, calibration: "CameraCalibration") -> None:
         """
@@ -227,6 +316,11 @@ class TrackingDataLogger:
         )
         self._frame_count = 0
 
+        # Reset the flow anchor so a previous run's flow boundary doesn't
+        # leak into a new recording. The orchestrator (GliderCore) will
+        # call set_flow_anchor() once the flow engine actually starts.
+        self._flow_anchor = None
+
         # Clear tracking state
         self._prev_positions.clear()
         self._cumulative_distances.clear()
@@ -310,12 +404,17 @@ class TrackingDataLogger:
 
         self._writer.writerow([])
 
-        # Write column headers
+        # Write column headers. ``flow_elapsed_ms`` is empty for frames
+        # captured before ``set_flow_anchor()`` is called (pre-flow
+        # setup), and ``(timestamp - flow_anchor) * 1000`` afterward —
+        # giving downstream ethogram / raster scripts a column they can
+        # plot directly with t=0 aligned to flow start.
         self._writer.writerow(
             [
                 "frame",
                 "timestamp",
                 "elapsed_ms",
+                "flow_elapsed_ms",
                 "object_id",
                 "class",
                 "x",
@@ -337,6 +436,27 @@ class TrackingDataLogger:
         # any frame data is written.
         self._fsync_if_due(force=True)
 
+    def _safe_writerow(self, row: list, *, context: str = "writerow") -> bool:
+        """Write a CSV row, swallowing/escalating I/O errors.
+
+        Returns True on success. On failure, increments the consecutive-
+        error counter and, on the Nth failure, marks the logger ``_failed``
+        and stops recording. Subsequent calls to ``log_frame`` will short-
+        circuit at the ``is_recording`` guard.
+        """
+        if self._writer is None or self._failed:
+            return False
+        try:
+            self._writer.writerow(row)
+        except Exception as e:
+            self._on_write_error(e, context=context)
+            return False
+        # Success — reset the consecutive-failure counter so transient
+        # errors don't accumulate over hours of healthy writes.
+        if self._write_error_count > 0:
+            self._write_error_count = 0
+        return True
+
     def log_frame(
         self,
         timestamp: float,
@@ -353,7 +473,7 @@ class TrackingDataLogger:
             motion_detected: Whether motion was detected
             motion_area: Area percentage with motion
         """
-        if not self._recording or self._writer is None:
+        if not self.is_recording or self._writer is None:
             return
 
         self._frame_count += 1
@@ -366,6 +486,12 @@ class TrackingDataLogger:
                     f"objects={len(tracked_objects)}, motion={motion_detected}"
                 )
         elapsed_ms = (timestamp - self._start_timestamp) * 1000
+        # Time relative to flow start (StartExperiment fired). Empty until
+        # GliderCore calls set_flow_anchor(); subsequent frames carry the
+        # flow-aligned millisecond offset analysts can plot directly.
+        flow_elapsed_cell = (
+            f"{(timestamp - self._flow_anchor) * 1000:.1f}" if self._flow_anchor is not None else ""
+        )
         iso_timestamp = datetime.fromtimestamp(timestamp).isoformat(timespec="milliseconds")
 
         # Log each tracked object
@@ -414,11 +540,12 @@ class TrackingDataLogger:
             behavioral_state = getattr(obj, "behavioral_state", "unknown")
             velocity = getattr(obj, "velocity", 0.0)
 
-            self._writer.writerow(
+            if not self._safe_writerow(
                 [
                     self._frame_count,
                     iso_timestamp,
                     f"{elapsed_ms:.1f}",
+                    flow_elapsed_cell,
                     obj.track_id,
                     obj.class_name,
                     x,
@@ -434,16 +561,19 @@ class TrackingDataLogger:
                     zone_ids,
                     behavioral_state,
                     f"{velocity:.2f}",
-                ]
-            )
+                ],
+                context="log_frame[object]",
+            ):
+                return  # write failure; logger may have flagged _failed
 
         # Log motion event if no objects but motion detected
         if not tracked_objects and motion_detected:
-            self._writer.writerow(
+            self._safe_writerow(
                 [
                     self._frame_count,
                     iso_timestamp,
                     f"{elapsed_ms:.1f}",
+                    flow_elapsed_cell,
                     -1,  # No object ID for motion-only
                     "motion",
                     0,
@@ -459,7 +589,8 @@ class TrackingDataLogger:
                     "",  # Empty zone_ids
                     "",  # Empty behavioral_state
                     "",  # Empty velocity
-                ]
+                ],
+                context="log_frame[motion]",
             )
 
         # Log periodic heartbeat frames when no activity (every 30 seconds)
@@ -472,6 +603,7 @@ class TrackingDataLogger:
                         self._frame_count,
                         iso_timestamp,
                         f"{elapsed_ms:.1f}",
+                        flow_elapsed_cell,
                         -1,
                         "heartbeat",
                         0,

@@ -249,10 +249,18 @@ class DigitalOutputDevice(BaseDevice):
         self._initialized = True
 
     async def shutdown(self) -> None:
-        if self._initialized:
-            pin = self._config.pins["output"]
-            await self._board.write_digital(pin, False)
-            self._state = False
+        try:
+            if self._initialized:
+                pin = self._config.pins["output"]
+                await self._board.write_digital(pin, False)
+                self._state = False
+        finally:
+            # Always clear the flag, even if the safe-state write raised —
+            # the caller may immediately re-initialize against a different
+            # board, and ``is_initialized`` lying about state corrupts that
+            # path. ``_set_all_devices_low`` in GliderCore records the
+            # failure separately.
+            self._initialized = False
 
     async def turn_on(self) -> None:
         """Turn the output on."""
@@ -328,7 +336,9 @@ class DigitalInputDevice(BaseDevice):
         self._initialized = True
 
     async def shutdown(self) -> None:
-        pass  # No shutdown needed for input
+        # Inputs have no safe-state write, but the flag must still clear
+        # so a subsequent ``initialize()`` re-runs ``set_pin_mode``.
+        self._initialized = False
 
     async def read(self) -> bool:
         """Read the current input state."""
@@ -389,7 +399,10 @@ class AnalogInputDevice(BaseDevice):
         self._initialized = True
 
     async def shutdown(self) -> None:
-        pass
+        # No safe-state write for analog inputs; clear the flag so a
+        # subsequent initialize re-runs set_pin_mode against the (possibly
+        # reconnected, possibly different) board.
+        self._initialized = False
 
     async def read(self) -> int:
         """Read the raw analog value."""
@@ -464,8 +477,11 @@ class PWMOutputDevice(BaseDevice):
         self._initialized = True
 
     async def shutdown(self) -> None:
-        if self._initialized:
-            await self.off()
+        try:
+            if self._initialized:
+                await self.off()
+        finally:
+            self._initialized = False
 
     async def set_value(self, value: int) -> None:
         """Set the raw PWM value."""
@@ -534,7 +550,10 @@ class ServoDevice(BaseDevice):
         self._initialized = True
 
     async def shutdown(self) -> None:
-        pass  # Servos typically hold position
+        # Servos hold their last commanded position — there is no
+        # "safe" angle in general. Clear the flag so reinit works
+        # correctly after a disconnect/reconnect cycle.
+        self._initialized = False
 
     async def set_angle(self, angle: int) -> None:
         """Set the servo angle."""
@@ -829,8 +848,11 @@ class MotorGovernorDevice(BaseDevice):
 
     async def shutdown(self) -> None:
         """Stop all movement on shutdown."""
-        if self._initialized:
-            await self.stop()
+        try:
+            if self._initialized:
+                await self.stop()
+        finally:
+            self._initialized = False
 
     async def move_up(self) -> None:
         """
