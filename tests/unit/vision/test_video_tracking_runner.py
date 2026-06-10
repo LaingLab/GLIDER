@@ -6,12 +6,16 @@ import pandas as pd
 
 from glider.vision.cv_processor import MotionResult, TrackedObject
 from glider.vision.video_tracking_runner import VideoTrackingConfig, VideoTrackingRunner
+from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape
 
 
 class FakeCV:
     """Stand-in CVProcessor: reports one object whose x = frame index * 5."""
 
     is_initialized = True
+
+    def __init__(self):
+        self._n = -1
 
     def initialize(self):  # pragma: no cover - trivial
         return True
@@ -20,8 +24,7 @@ class FakeCV:
         pass
 
     def process_frame(self, frame, timestamp):
-        # Centroid marches rightward so it can cross a zone later.
-        self._n = getattr(self, "_n", -1) + 1
+        self._n += 1
         obj = TrackedObject(
             track_id=1,
             class_name="subject",
@@ -73,3 +76,29 @@ def test_progress_callback_reports_total(synthetic_clip: Path, tmp_path: Path):
         progress_cb=lambda done, total: seen.append((done, total))
     )
     assert seen[-1] == (12, 12)
+
+
+def test_tracking_csv_populates_zone_ids_when_zones_set(synthetic_clip: Path, tmp_path: Path):
+    out = tmp_path / "out"
+    out.mkdir()
+    zones = ZoneConfiguration()
+    # Whole-frame zone (normalized top-left .. bottom-right), so every centroid
+    # falls inside it and zone_ids is populated for every data row.
+    zones.add_zone(
+        Zone(id="all", name="all", shape=ZoneShape.RECTANGLE, vertices=[(0.0, 0.0), (1.0, 1.0)])
+    )
+    cfg = VideoTrackingConfig(
+        source_path=synthetic_clip,
+        output_dir=out,
+        zone_config=zones,
+        write_zone_events=False,
+        write_annotated=False,
+    )
+    VideoTrackingRunner(cfg, cv_processor=FakeCV()).run()
+
+    tracking = list(out.glob("*tracking*.csv"))[0]
+    df = pd.read_csv(tracking, comment="#")
+    # zone_ids should contain the zone name for at least the rows where the object
+    # is inside the frame. Non-empty for the first row at minimum.
+    assert df["zone_ids"].notna().any()
+    assert (df["zone_ids"].astype(str).str.contains("all")).any()

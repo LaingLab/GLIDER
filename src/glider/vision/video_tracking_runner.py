@@ -31,6 +31,13 @@ CancelCb = Callable[[], bool]
 
 @dataclass
 class VideoTrackingConfig:
+    """Configuration for a VideoTrackingRunner pass.
+
+    write_zone_events / write_annotated / annotated_codec are consumed by the
+    zone-event and annotated-video stages (added in later tasks); leaving them
+    True is harmless until those stages exist.
+    """
+
     source_path: Path
     output_dir: Path
     zone_config: ZoneConfiguration | None = None
@@ -57,8 +64,32 @@ class VideoTrackingRunner:
         progress_cb: ProgressCb | None = None,
         cancel_cb: CancelCb | None = None,
     ) -> Path:
-        """Process the video and return the output directory. Raises on
-        unrecoverable setup errors (bad video, unwritable dir)."""
+        """Process the video and write artifacts; return the output directory.
+
+        Timestamps derive from the video timeline (frame / fps), not wall clock.
+        On cancel (cancel_cb returns True) the loop stops between frames and the
+        output directory is still returned with metadata.json written. If
+        process_frame/log_frame raises mid-loop, the logger is stopped and the
+        source released (finally), then the exception propagates and
+        metadata.json is NOT written. Raises ValueError if the video cannot be
+        opened. Must not be called from a thread with a running event loop
+        (see the guard below).
+        """
+        # asyncio.run() below requires that no event loop is already running on
+        # this thread. The intended caller is VideoTrackingWorker on a QThread
+        # (no loop). Fail fast with a clear message if misused from the qasync
+        # main thread.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass  # no running loop — good
+        else:
+            raise RuntimeError(
+                "VideoTrackingRunner.run() must not be called from a thread with "
+                "a running event loop; offload it to a QThread via "
+                "VideoTrackingWorker."
+            )
+
         cfg = self._cfg
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -81,6 +112,9 @@ class VideoTrackingRunner:
         if cfg.write_tracking:
             tracker = TrackingDataLogger(output_dir=cfg.output_dir)
             tracker.set_session_epoch(base)
+            if cfg.zone_config is not None:
+                tracker.set_zone_configuration(cfg.zone_config)
+                tracker.set_frame_size(width, height)
             asyncio.run(tracker.start(experiment_name=stem))
 
         try:
