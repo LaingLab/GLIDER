@@ -62,6 +62,16 @@ class TrackingDataLogger:
         # device-state and event rows on the elapsed_ms column.
         self._start_timestamp: float = 0.0
         self._session_epoch_override: float | None = None
+        # Flow-relative timing anchor. ``elapsed_ms`` measures time from
+        # the shared session epoch (recorder/event/tracking are all
+        # joinable on it), but the analyst usually wants time from the
+        # *flow* boundary, not the recorder-start boundary. ``_flow_anchor``
+        # is the wall-clock instant the flow began; frames logged before
+        # the anchor is set get an empty ``flow_elapsed_ms`` cell
+        # (pre-flow setup / camera warmup); frames after get
+        # ``(timestamp - anchor) * 1000``. Set by GliderCore the moment
+        # ``flow_engine.start()`` returns.
+        self._flow_anchor: float | None = None
         self._frame_count = 0
         self._recording = False
         self._calibration: CameraCalibration | None = None
@@ -164,6 +174,24 @@ class TrackingDataLogger:
         if self._recording:
             logger.warning("set_session_epoch called while recording; takes effect on next start()")
         self._session_epoch_override = float(epoch)
+
+    def set_flow_anchor(self, timestamp: float) -> None:
+        """
+        Anchor ``flow_elapsed_ms`` to a flow-boundary wall-clock timestamp.
+
+        ``elapsed_ms`` measures time from the recorder's session epoch
+        (shared across all recorders so rows are joinable), but the
+        analyst usually wants time from the *flow* boundary so an
+        ethogram / raster plot lines up with t=0 at the moment
+        StartExperiment fired. Call this once at flow start with the
+        Unix timestamp of that instant. Frames logged before the call
+        get an empty ``flow_elapsed_ms`` cell (pre-flow setup / camera
+        warmup); frames after get ``(timestamp - anchor) * 1000``.
+
+        Args:
+            timestamp: Unix timestamp (seconds, float) marking flow t=0.
+        """
+        self._flow_anchor = float(timestamp)
 
     def set_calibration(self, calibration: "CameraCalibration") -> None:
         """
@@ -288,6 +316,11 @@ class TrackingDataLogger:
         )
         self._frame_count = 0
 
+        # Reset the flow anchor so a previous run's flow boundary doesn't
+        # leak into a new recording. The orchestrator (GliderCore) will
+        # call set_flow_anchor() once the flow engine actually starts.
+        self._flow_anchor = None
+
         # Clear tracking state
         self._prev_positions.clear()
         self._cumulative_distances.clear()
@@ -371,12 +404,17 @@ class TrackingDataLogger:
 
         self._writer.writerow([])
 
-        # Write column headers
+        # Write column headers. ``flow_elapsed_ms`` is empty for frames
+        # captured before ``set_flow_anchor()`` is called (pre-flow
+        # setup), and ``(timestamp - flow_anchor) * 1000`` afterward —
+        # giving downstream ethogram / raster scripts a column they can
+        # plot directly with t=0 aligned to flow start.
         self._writer.writerow(
             [
                 "frame",
                 "timestamp",
                 "elapsed_ms",
+                "flow_elapsed_ms",
                 "object_id",
                 "class",
                 "x",
@@ -448,6 +486,12 @@ class TrackingDataLogger:
                     f"objects={len(tracked_objects)}, motion={motion_detected}"
                 )
         elapsed_ms = (timestamp - self._start_timestamp) * 1000
+        # Time relative to flow start (StartExperiment fired). Empty until
+        # GliderCore calls set_flow_anchor(); subsequent frames carry the
+        # flow-aligned millisecond offset analysts can plot directly.
+        flow_elapsed_cell = (
+            f"{(timestamp - self._flow_anchor) * 1000:.1f}" if self._flow_anchor is not None else ""
+        )
         iso_timestamp = datetime.fromtimestamp(timestamp).isoformat(timespec="milliseconds")
 
         # Log each tracked object
@@ -501,6 +545,7 @@ class TrackingDataLogger:
                     self._frame_count,
                     iso_timestamp,
                     f"{elapsed_ms:.1f}",
+                    flow_elapsed_cell,
                     obj.track_id,
                     obj.class_name,
                     x,
@@ -528,6 +573,7 @@ class TrackingDataLogger:
                     self._frame_count,
                     iso_timestamp,
                     f"{elapsed_ms:.1f}",
+                    flow_elapsed_cell,
                     -1,  # No object ID for motion-only
                     "motion",
                     0,
@@ -557,6 +603,7 @@ class TrackingDataLogger:
                         self._frame_count,
                         iso_timestamp,
                         f"{elapsed_ms:.1f}",
+                        flow_elapsed_cell,
                         -1,
                         "heartbeat",
                         0,

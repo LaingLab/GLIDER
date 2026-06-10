@@ -93,6 +93,18 @@ class GliderCore:
         # display as 10.11s-10.43s run-to-run.
         self._flow_start_monotonic: float | None = None
         self._flow_end_monotonic: float | None = None
+        # Wall-clock siblings of the monotonic anchors. Captured at the
+        # same instants but using time.time() so they can be cross-
+        # referenced with output-file timestamps (which are all Unix
+        # epoch). Used to:
+        #   - emit ``flow_marker`` rows into the event log (analysts grep
+        #     for the wall-clock boundaries of the flow), and
+        #   - drive ``set_flow_anchor()`` on the tracking + data
+        #     recorders so each frame/sample carries a flow-relative
+        #     ``flow_elapsed_ms`` column (analysts plot ethograms /
+        #     rasters with t=0 at flow start, no offset math).
+        self._flow_start_wall: float | None = None
+        self._flow_end_wall: float | None = None
 
         # Callbacks
         self._session_callbacks: list[Callable[[ExperimentSession], None]] = []
@@ -351,9 +363,19 @@ class GliderCore:
         keeps ``Delay(10s)`` reporting exactly 10s instead of 10s plus
         the variable I/O cost of stopping recorders + setting devices
         low + atomic-renaming output files.
+
+        Also captures the wall-clock end and writes the ``end`` flow
+        marker to the event log NOW — before _stop_recorders() tears
+        the event logger down. The marker's wall-clock matches the
+        same instant the monotonic anchor sees, so the event-log
+        boundary, the runner timer, and the recorder footer all agree.
         """
         if self._flow_start_monotonic is not None:
             self._flow_end_monotonic = time.monotonic()
+            self._flow_end_wall = time.time()
+            # Stamp the boundary into the event log before teardown
+            # closes it. Safe to call when not recording — it no-ops.
+            self._event_logger.record_flow_marker("end")
         logger.info("Flow completed - transitioning to READY state")
         # Schedule the async completion handler
         task = asyncio.create_task(self._handle_flow_complete())
@@ -817,6 +839,8 @@ class GliderCore:
         # this flow completes (callers can detect "still running" cleanly).
         self._flow_start_monotonic = None
         self._flow_end_monotonic = None
+        self._flow_start_wall = None
+        self._flow_end_wall = None
 
         self._session.state = SessionState.RUNNING
         await self._flow_engine.start()
@@ -826,6 +850,18 @@ class GliderCore:
         # state transition, board init) is *pre*-flow and is correctly
         # excluded from the reported duration.
         self._flow_start_monotonic = time.monotonic()
+        self._flow_start_wall = time.time()
+
+        # Anchor the recorders' ``flow_elapsed_ms`` column and emit a
+        # ``flow_marker`` row into the event log. Done immediately after
+        # the monotonic capture so all three artifacts (event log,
+        # tracking CSV, data CSV) reference the same wall-clock instant
+        # as t=0 for the flow. Frames/samples captured during pre-flow
+        # setup get an empty flow_elapsed_ms cell; everything from here
+        # forward is flow-aligned.
+        self._tracking_logger.set_flow_anchor(self._flow_start_wall)
+        self._data_recorder.set_flow_anchor(self._flow_start_wall)
+        self._event_logger.record_flow_marker("start")
 
     async def stop_experiment(self) -> None:
         """Stop the running experiment and set all devices to safe state."""
@@ -845,6 +881,11 @@ class GliderCore:
         # post-flow and must not inflate the reported duration.
         if self._flow_start_monotonic is not None and self._flow_end_monotonic is None:
             self._flow_end_monotonic = time.monotonic()
+            self._flow_end_wall = time.time()
+            # Stamp the boundary into the event log before _stop_recorders
+            # tears it down, so a stopped-by-operator run still has a
+            # locatable end-of-flow marker for post-hoc analysis.
+            self._event_logger.record_flow_marker("end")
 
         logger.info("Stopping experiment")
         self._session.state = SessionState.STOPPING

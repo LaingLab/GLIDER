@@ -153,6 +153,55 @@ class DeviceEventLogger:
         self._current_frame_ts = float(frame_ts)
 
     # ------------------------------------------------------------------
+    # Flow markers
+    # ------------------------------------------------------------------
+
+    def record_flow_marker(self, marker: str) -> None:
+        """
+        Record a flow boundary marker to the event log.
+
+        Writes a row with ``source="flow_marker"`` and the marker name
+        (typically ``"start"`` / ``"end"``) in the ``value`` cell, with
+        the same wall-clock timestamp and ``elapsed_ms`` as any other
+        event written at this instant. Analysts grep these rows to find
+        the exact boundary times so post-hoc analysis (ethogram / raster
+        plot / video sync) can trim and align against the same flow
+        boundaries the runner reports — no offset detective work.
+
+        Args:
+            marker: Marker name to record (``"start"`` / ``"end"``).
+        """
+        if not self._recording or self._writer is None:
+            return
+
+        now = time.time()
+        elapsed_ms = (now - self._start_timestamp) * 1000 if self._start_timestamp else 0.0
+        iso = datetime.fromtimestamp(now).isoformat(timespec="milliseconds")
+        frame_cell = "" if self._current_frame is None else str(self._current_frame)
+
+        try:
+            self._writer.writerow(
+                [
+                    frame_cell,
+                    iso,
+                    f"{elapsed_ms:.1f}",
+                    "flow_marker",
+                    "",  # board_id — flow markers are not tied to a board
+                    "",  # device_id
+                    "",  # device_type
+                    "",  # pin
+                    "",  # pin_type
+                    str(marker),
+                ]
+            )
+            # Flow markers are infrequent but load-bearing — force fsync
+            # so they're guaranteed durable even if the machine loses
+            # power before the next event/sample lands.
+            self._fsync(force=True)
+        except Exception:
+            logger.exception("DeviceEventLogger: flow marker write failed")
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 

@@ -59,6 +59,14 @@ class DataRecorder:
         # back to this recorder's own start_time on `start()`.
         self._start_timestamp: float = 0.0
         self._session_epoch_override: float | None = None
+        # Flow-relative timing anchor. See tracking_logger.TrackingDataLogger
+        # for the full rationale: ``elapsed_ms`` measures time from the
+        # recorder's session epoch (joinable across recorders), but the
+        # analyst wants time from the *flow* boundary so sensor traces
+        # line up at t=0 with StartExperiment. Set once by GliderCore the
+        # instant flow_engine.start() returns; rows before are empty in
+        # the flow_elapsed_ms column, rows after carry the offset.
+        self._flow_anchor: float | None = None
         self._sample_task: asyncio.Task | None = None
         self._device_columns: list[str] = []
         self._zone_columns: list[str] = []
@@ -110,6 +118,22 @@ class DataRecorder:
         if self._recording:
             logger.warning("set_session_epoch called while recording; takes effect on next start()")
         self._session_epoch_override = float(epoch)
+
+    def set_flow_anchor(self, timestamp: float) -> None:
+        """
+        Anchor ``flow_elapsed_ms`` to a flow-boundary wall-clock timestamp.
+
+        Mirrors ``TrackingDataLogger.set_flow_anchor`` so the device-state
+        CSV carries the same flow-relative time column as the tracking
+        CSV — analysts can plot sensor traces and tracking traces against
+        the same t=0 (flow start) without computing per-file offsets.
+        Rows written before this call get an empty ``flow_elapsed_ms``
+        cell; rows after get ``(timestamp - anchor) * 1000``.
+
+        Args:
+            timestamp: Unix timestamp (seconds, float) marking flow t=0.
+        """
+        self._flow_anchor = float(timestamp)
 
     def set_camera_driven(self, enabled: bool) -> None:
         """
@@ -281,10 +305,17 @@ class DataRecorder:
         # (matches TrackingDataLogger's `frame` column for one-key joins
         # against the video and tracking CSV). It is empty for rows written
         # by the timer-driven sampling loop (i.e., headless / no-camera
-        # sessions, or before the first frame arrives).
+        # sessions, or before the first frame arrives). ``flow_elapsed_ms``
+        # is empty until ``set_flow_anchor()`` is called (pre-flow
+        # samples), then carries time-since-flow-start so this CSV's
+        # sensor traces align at t=0 with the tracking CSV and runner.
         self._device_columns = self._get_device_columns()
         self._zone_columns = self._get_zone_columns()
-        headers = ["frame", "timestamp", "elapsed_ms"] + self._device_columns + self._zone_columns
+        headers = (
+            ["frame", "timestamp", "elapsed_ms", "flow_elapsed_ms"]
+            + self._device_columns
+            + self._zone_columns
+        )
         self._writer.writerow(headers)
 
     async def start(
@@ -319,6 +350,10 @@ class DataRecorder:
             if self._session_epoch_override is not None
             else self._start_time.timestamp()
         )
+        # Reset the flow anchor so a previous run's flow boundary doesn't
+        # leak into a new recording. GliderCore will call set_flow_anchor()
+        # again once flow_engine.start() returns.
+        self._flow_anchor = None
 
         # Open file and create CSV writer
         self._file = open(self._file_path, "w", newline="", encoding="utf-8")
@@ -359,7 +394,11 @@ class DataRecorder:
             await asyncio.sleep(self._sample_interval)
 
     async def _build_row(
-        self, frame: int | None, iso_timestamp: str, elapsed_ms: float
+        self,
+        frame: int | None,
+        iso_timestamp: str,
+        elapsed_ms: float,
+        flow_elapsed_cell: str = "",
     ) -> list[str]:
         """
         Build a CSV row for one device-state sample.
@@ -373,6 +412,11 @@ class DataRecorder:
                 write an empty string in the `frame` column).
             iso_timestamp: ISO 8601 timestamp string for the row.
             elapsed_ms: Milliseconds since the recorder started.
+            flow_elapsed_cell: Pre-formatted ``flow_elapsed_ms`` cell
+                value. Empty string for samples taken before
+                ``set_flow_anchor()`` is called; ``"{ms:.1f}"`` for
+                samples after. Callers compute it because they have the
+                raw timestamp; ``_build_row`` just injects.
 
         Returns:
             List of stringified cell values, in column order.
@@ -382,6 +426,7 @@ class DataRecorder:
             "" if frame is None else str(frame),
             iso_timestamp,
             f"{elapsed_ms:.1f}",
+            flow_elapsed_cell,
         ]
 
         # Device states (in column order).
@@ -420,14 +465,21 @@ class DataRecorder:
             return
 
         now = datetime.now()
+        now_ts = now.timestamp()
         # Compute elapsed_ms against the same `_start_timestamp` used by
         # `record_at_frame` so the two write paths share an epoch (and the
         # column is joinable to other recorders when a session epoch is set).
-        elapsed_ms = (
-            (now.timestamp() - self._start_timestamp) * 1000 if self._start_timestamp else 0
+        elapsed_ms = (now_ts - self._start_timestamp) * 1000 if self._start_timestamp else 0
+        flow_elapsed_cell = (
+            f"{(now_ts - self._flow_anchor) * 1000:.1f}" if self._flow_anchor is not None else ""
         )
         iso = now.isoformat(timespec="milliseconds")
-        row = await self._build_row(frame=None, iso_timestamp=iso, elapsed_ms=elapsed_ms)
+        row = await self._build_row(
+            frame=None,
+            iso_timestamp=iso,
+            elapsed_ms=elapsed_ms,
+            flow_elapsed_cell=flow_elapsed_cell,
+        )
 
         self._writer.writerow(row)
         self._file.flush()
@@ -454,8 +506,16 @@ class DataRecorder:
             return
 
         elapsed_ms = (frame_ts - self._start_timestamp) * 1000 if self._start_timestamp else 0
+        flow_elapsed_cell = (
+            f"{(frame_ts - self._flow_anchor) * 1000:.1f}" if self._flow_anchor is not None else ""
+        )
         iso = datetime.fromtimestamp(frame_ts).isoformat(timespec="milliseconds")
-        row = await self._build_row(frame=frame_no, iso_timestamp=iso, elapsed_ms=elapsed_ms)
+        row = await self._build_row(
+            frame=frame_no,
+            iso_timestamp=iso,
+            elapsed_ms=elapsed_ms,
+            flow_elapsed_cell=flow_elapsed_cell,
+        )
 
         self._writer.writerow(row)
         self._file.flush()
