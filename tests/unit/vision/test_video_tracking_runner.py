@@ -102,3 +102,44 @@ def test_tracking_csv_populates_zone_ids_when_zones_set(synthetic_clip: Path, tm
     # is inside the frame. Non-empty for the first row at minimum.
     assert df["zone_ids"].notna().any()
     assert (df["zone_ids"].astype(str).str.contains("all")).any()
+
+
+def _right_half_zone() -> ZoneConfiguration:
+    cfg = ZoneConfiguration()
+    cfg.add_zone(
+        Zone(
+            id="z1",
+            name="right",
+            shape=ZoneShape.RECTANGLE,
+            # RECTANGLE vertices are [(x1,y1), (x2,y2)] = top-left, bottom-right
+            # in normalized coords. Right half = x 0.5..1.0, full height.
+            vertices=[(0.5, 0.0), (1.0, 1.0)],
+        )
+    )
+    return cfg
+
+
+def test_zone_events_enter_and_occupancy(synthetic_clip: Path, tmp_path: Path):
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = VideoTrackingConfig(
+        source_path=synthetic_clip,
+        output_dir=out,
+        zone_config=_right_half_zone(),
+        write_tracking=False,
+        write_zone_events=True,
+        write_annotated=False,
+    )
+    VideoTrackingRunner(cfg, cv_processor=FakeCV()).run()
+
+    events = pd.read_csv(out / "zone_events.csv")
+    # FakeCV centroid x = n*5+4 on a 64px-wide frame; crosses x=32 (norm 0.5)
+    # at n=6 (34). Exactly one 'enter' for object 1, no exits.
+    enters = events[events["event"] == "enter"]
+    assert list(enters["object_id"]) == [1]
+    assert int(enters["frame"].iloc[0]) == 7  # logger frames are 1-based
+
+    occ = pd.read_csv(out / "zone_occupancy.csv")
+    row = occ[occ["zone_id"] == "z1"].iloc[0]
+    assert int(row["frames_in_zone"]) >= 1
+    assert abs(row["seconds"] - row["frames_in_zone"] / 10.0) < 1e-6

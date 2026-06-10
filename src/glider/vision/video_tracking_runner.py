@@ -11,6 +11,7 @@ VideoFileSource instead of a live camera, with timestamps taken from the
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import logging
 from collections.abc import Callable
@@ -117,6 +118,15 @@ class VideoTrackingRunner:
                 tracker.set_frame_size(width, height)
             asyncio.run(tracker.start(experiment_name=stem))
 
+        zones = (
+            self._cfg.zone_config.zones
+            if (self._cfg.write_zone_events and self._cfg.zone_config)
+            else []
+        )
+        zone_file, zone_writer = self._open_zone_writer()
+        prev_members: dict[str, set[int]] = {z.id: set() for z in zones}
+        frames_in_zone: dict[str, int] = {z.id: 0 for z in zones}
+
         try:
             for n, frame in source.frames():
                 if cancel_cb is not None and cancel_cb():
@@ -126,15 +136,54 @@ class VideoTrackingRunner:
                 _detections, tracked, motion = self._cv.process_frame(frame, ts)
                 if tracker is not None:
                     tracker.log_frame(ts, tracked, motion.motion_detected, motion.motion_area)
+                if zones:
+                    elapsed_ms = (n / fps) * 1000.0
+                    for zone in zones:
+                        current: set[int] = set()
+                        for obj in tracked:
+                            cx, cy = obj.centroid
+                            if zone.contains_point_pixels(int(cx), int(cy), width, height):
+                                current.add(obj.track_id)
+                        if current:
+                            frames_in_zone[zone.id] += 1
+                        for tid in current - prev_members[zone.id]:
+                            zone_writer.writerow(
+                                [n + 1, f"{elapsed_ms:.1f}", zone.id, zone.name, tid, "enter"]
+                            )
+                        for tid in prev_members[zone.id] - current:
+                            zone_writer.writerow(
+                                [n + 1, f"{elapsed_ms:.1f}", zone.id, zone.name, tid, "exit"]
+                            )
+                        prev_members[zone.id] = current
                 if progress_cb is not None:
                     progress_cb(n + 1, total)
         finally:
             if tracker is not None:
                 asyncio.run(tracker.stop())
             source.release()
+            if zone_file is not None:
+                zone_file.close()
+                self._write_occupancy(zones, frames_in_zone, fps)
 
         self._write_metadata(fps, total, (width, height))
         return cfg.output_dir
+
+    def _open_zone_writer(self):
+        """Return (file, csv_writer) for zone_events.csv, or (None, None)."""
+        if not self._cfg.write_zone_events or not self._cfg.zone_config:
+            return None, None
+        f = open(self._cfg.output_dir / "zone_events.csv", "w", newline="")
+        w = csv.writer(f)
+        w.writerow(["frame", "elapsed_ms", "zone_id", "zone_name", "object_id", "event"])
+        return f, w
+
+    def _write_occupancy(self, zones, frames_in_zone: dict[str, int], fps: float) -> None:
+        with open(self._cfg.output_dir / "zone_occupancy.csv", "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["zone_id", "zone_name", "frames_in_zone", "seconds"])
+            for zone in zones:
+                fz = frames_in_zone[zone.id]
+                w.writerow([zone.id, zone.name, fz, f"{fz / fps:.3f}"])
 
     def _write_metadata(self, fps: float, frame_count: int, resolution: tuple[int, int]) -> None:
         cfg = self._cfg
