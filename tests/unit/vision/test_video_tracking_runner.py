@@ -159,3 +159,27 @@ def test_zone_files_absent_when_disabled(synthetic_clip: Path, tmp_path: Path):
     VideoTrackingRunner(cfg, cv_processor=FakeCV()).run()
     assert not (out / "zone_events.csv").exists()
     assert not (out / "zone_occupancy.csv").exists()
+
+
+def test_annotated_video_written_with_discoverable_name(synthetic_clip: Path, tmp_path: Path):
+    import pytest
+
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = VideoTrackingConfig(
+        source_path=synthetic_clip,
+        output_dir=out,
+        zone_config=_right_half_zone(),
+        write_tracking=False,
+        write_zone_events=False,
+        write_annotated=True,
+        annotated_codec="mp4v",  # widely available; open_video_writer falls back if not
+    )
+    VideoTrackingRunner(cfg, cv_processor=FakeCV()).run()
+
+    # Stem must end in "_annotated" so analysis._io.find_artifacts discovers it.
+    annotated = list(out.glob("*_annotated.mp4"))
+    if not annotated:
+        pytest.skip("this OpenCV build cannot open any mp4 writer")
+    assert len(annotated) == 1
+    assert annotated[0].stat().st_size > 0

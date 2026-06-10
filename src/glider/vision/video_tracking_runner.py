@@ -20,10 +20,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TextIO
 
+import cv2
+
 from glider.vision.cv_processor import CVProcessor, CVSettings
 from glider.vision.tracking_logger import TrackingDataLogger
+from glider.vision.video_recorder import open_video_writer
 from glider.vision.video_source import VideoFileSource
-from glider.vision.zones import Zone, ZoneConfiguration
+from glider.vision.zones import Zone, ZoneConfiguration, draw_zones
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +132,15 @@ class VideoTrackingRunner:
         prev_members: dict[str, set[int]] = {z.id: set() for z in zones}
         frames_in_zone: dict[str, int] = {z.id: 0 for z in zones}
 
+        annotated_writer = None
+        if cfg.write_annotated:
+            ann_path = cfg.output_dir / f"{stem}_annotated.mp4"
+            annotated_writer, _codec = open_video_writer(
+                ann_path, cfg.annotated_codec, fps, (width, height)
+            )
+            if annotated_writer is None:
+                logger.warning("VideoTrackingRunner: no annotated-video codec available")
+
         try:
             for n, frame in source.frames():
                 if cancel_cb is not None and cancel_cb():
@@ -157,18 +169,41 @@ class VideoTrackingRunner:
                                 [n + 1, f"{elapsed_ms:.1f}", zone.id, zone.name, tid, "exit"]
                             )
                         prev_members[zone.id] = current
+                if annotated_writer is not None:
+                    annotated_writer.write(self._annotate(frame, tracked, cfg.zone_config))
                 if progress_cb is not None:
                     progress_cb(n + 1, total)
         finally:
             if tracker is not None:
                 asyncio.run(tracker.stop())
             source.release()
+            if annotated_writer is not None:
+                annotated_writer.release()
             if zone_file is not None:
                 zone_file.close()
                 self._write_occupancy(zones, frames_in_zone, fps)
 
         self._write_metadata(fps, total, (width, height))
         return cfg.output_dir
+
+    @staticmethod
+    def _annotate(frame, tracked, zone_config):
+        out = frame.copy()
+        for obj in tracked:
+            x, y, w, h = obj.bbox
+            cv2.rectangle(out, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.putText(
+                out,
+                f"id:{obj.track_id}",
+                (x, max(0, y - 4)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (0, 255, 0),
+                1,
+            )
+        if zone_config and zone_config.zones:
+            out = draw_zones(out, zone_config, alpha=0.3, show_labels=True)
+        return out
 
     def _open_zone_writer(self) -> tuple[TextIO | None, Any]:
         """Return (file, csv_writer) for zone_events.csv, or (None, None)."""
