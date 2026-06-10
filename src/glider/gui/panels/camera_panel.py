@@ -7,7 +7,7 @@ and quick access to camera settings.
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Optional
 
 import cv2
@@ -461,6 +461,12 @@ class CameraPanel(QWidget):
         self._browse_btn.clicked.connect(self._on_browse_video)
         self._seek_slider.valueChanged.connect(self._on_seek)
         self._run_btn.clicked.connect(self._on_run_tracking)
+        self._cancel_btn.clicked.connect(self._on_cancel_run)
+
+        # Initialise run-thread attributes so _on_cancel_run / _teardown_run_thread
+        # can guard safely before any run has started.
+        self._run_thread = None
+        self._run_worker = None
 
     def _handle_frame_input(self, frame_data: FrameData) -> None:
         """Decide whether to process frame with CV or update UI immediately."""
@@ -1004,6 +1010,11 @@ class CameraPanel(QWidget):
         self._preview_btn.setEnabled(not self._video_mode)
         if self._video_mode and self._preview_active:
             self._stop_preview()
+        if self._video_mode:
+            # Video is a single stream; make sure the single-camera preview is
+            # the visible page so scrubbed frames are shown (not the hidden
+            # multi-camera preview).
+            self._preview_stack.setCurrentWidget(self._preview)
 
     def _on_browse_video(self) -> None:
         from PyQt6.QtWidgets import QFileDialog, QMessageBox
@@ -1056,7 +1067,7 @@ class CameraPanel(QWidget):
             source_path=Path(self._video_source.path),
             output_dir=Path(out_dir),
             zone_config=self._zone_config,
-            cv_settings=self._cv_processor.settings,
+            cv_settings=replace(self._cv_processor.settings),
         )
         # cv_processor=None → the runner builds a fresh CVProcessor (clean IDs).
         self._run_thread = QThread()
@@ -1066,7 +1077,6 @@ class CameraPanel(QWidget):
         self._run_worker.progress.connect(self._on_run_progress)
         self._run_worker.finished.connect(self._on_run_finished)
         self._run_worker.failed.connect(self._on_run_failed)
-        self._cancel_btn.clicked.connect(self._run_worker.cancel)
 
         self._progress_container.setVisible(True)
         self._run_progress.setRange(0, self._video_source.frame_count)
@@ -1074,6 +1084,12 @@ class CameraPanel(QWidget):
         self._cancel_btn.setEnabled(True)
         self._run_btn.setEnabled(False)
         self._run_thread.start()
+
+    def _on_cancel_run(self) -> None:
+        """Cancel the in-flight tracking run (stable slot, connected once)."""
+        worker = getattr(self, "_run_worker", None)
+        if worker is not None:
+            worker.cancel()
 
     def _on_run_progress(self, done: int, total: int) -> None:
         self._run_progress.setValue(done)
@@ -1116,6 +1132,10 @@ class CameraPanel(QWidget):
 
     def closeEvent(self, event):
         """Clean up on close."""
+        # Tear down any in-flight tracking run and release the scrub video source.
+        self._teardown_run_thread()
+        self._video_source.release()
+
         if self._preview_active:
             if self._multi_camera_mode:
                 self._stop_multi_cameras()
