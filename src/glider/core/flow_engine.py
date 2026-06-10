@@ -56,7 +56,6 @@ class FlowEngine:
         #   connection_id -> (from_node_id, callback)
         self._connection_callbacks: dict[str, tuple[str, Callable[..., Any]]] = {}
         self._running_tasks: set[asyncio.Task] = set()
-        self._custom_device_runners: dict[str, Any] = {}
 
         # Callbacks
         self._state_callbacks: list[Callable[[FlowState], None]] = []
@@ -188,69 +187,6 @@ class FlowEngine:
             except Exception as e:
                 logger.warning(f"Failed to register node type {node_type}: {e}")
 
-    def _bind_custom_device_runner(self, node, definition_id: str, session) -> None:
-        """
-        Create and bind a CustomDeviceRunner to a CustomDevice node.
-
-        Args:
-            node: The CustomDeviceNode instance
-            definition_id: ID of the custom device definition
-            session: ExperimentSession containing the definition
-        """
-        from glider.core.custom_device import CustomDeviceDefinition, CustomDeviceRunner
-
-        # Get the definition from the session
-        def_dict = session.get_custom_device_definition(definition_id)
-        if not def_dict:
-            logger.warning(f"Custom device definition not found: {definition_id}")
-            return
-
-        # Create the definition object
-        definition = CustomDeviceDefinition.from_dict(def_dict)
-
-        # Get the first available board from hardware manager
-        board = None
-        if self._hardware_manager:
-            boards = self._hardware_manager.boards
-            if boards:
-                # Get the first connected board
-                for board_id, b in boards.items():
-                    if b.is_connected:
-                        board = b
-                        logger.info(f"Using board '{board_id}' for custom device")
-                        break
-                if board is None and boards:
-                    # No connected board, use first one anyway
-                    board = next(iter(boards.values()))
-
-        pin_manager = None
-        if board is None:
-            logger.warning("No board available for custom device - using mock mode")
-            # Create a mock board for testing without hardware
-            from glider.hal.mock_board import MockBoard
-
-            board = MockBoard()
-        else:
-            # Use the HardwareManager's PinManager for this board so the
-            # runner's pin allocations conflict-check against any standard
-            # devices bound to the same board. Without this, two devices
-            # could quietly drive the same pin (voltage contention).
-            if self._hardware_manager is not None:
-                pin_manager = self._hardware_manager.get_pin_manager(board.id)
-
-        # Create the runner
-        runner = CustomDeviceRunner(definition, board, pin_manager=pin_manager)
-
-        # Store runner for later initialization
-        self._custom_device_runners[definition_id] = runner
-
-        # Bind to the node
-        if hasattr(node, "set_custom_device_context"):
-            node.set_custom_device_context(runner, definition_id)
-            logger.info(f"Bound CustomDeviceRunner for '{definition.name}' to node")
-        else:
-            logger.warning("Node does not support set_custom_device_context")
-
     def _bind_function_runner(self, node, start_node_id: str) -> None:
         """
         Create and bind a FlowFunctionRunner to a FunctionCall node.
@@ -321,21 +257,6 @@ class FlowEngine:
             elif hasattr(node, "_state"):
                 node._state = state
             logger.info(f"Applied state to node {node_id}: {state}")
-
-        # Handle CustomDevice nodes - create and bind the runner
-        logger.info(f"create_node: type={node_type}, state={state}, session={session is not None}")
-        if node_type in ("CustomDevice", "CustomDeviceAction"):
-            logger.info("CustomDevice node detected, binding runner...")
-            if state and session:
-                definition_id = state.get("definition_id")
-                if definition_id:
-                    self._bind_custom_device_runner(node, definition_id, session)
-                else:
-                    logger.warning("CustomDevice node has no definition_id in state")
-            else:
-                logger.warning(
-                    f"CustomDevice node missing state ({state}) or session ({session is not None})"
-                )
 
         # Handle FunctionCall nodes - bind the runner
         if node_type == "FunctionCall":
@@ -608,15 +529,6 @@ class FlowEngine:
 
         logger.info("Starting flow execution")
 
-        # Initialize custom device runners
-        for def_id, runner in self._custom_device_runners.items():
-            try:
-                if not runner.is_initialized:
-                    logger.info(f"Initializing custom device runner for definition {def_id}")
-                    await runner.initialize()
-            except Exception as e:
-                logger.error(f"Failed to initialize custom device runner: {e}")
-
         self.state = FlowState.RUNNING
 
         # Start any continuous nodes (timers, sensors, etc.)
@@ -746,7 +658,6 @@ class FlowEngine:
         self._nodes.clear()
         self._connections.clear()
         self._running_tasks.clear()
-        self._custom_device_runners.clear()
         self.state = FlowState.STOPPED
 
         if self._ryvencore_available and self._session:

@@ -96,6 +96,10 @@ class HardwareManager:
         """Dictionary of active board instances."""
         return self._boards.copy()
 
+    def is_any_board_connected(self) -> bool:
+        """True if at least one registered board reports a live connection."""
+        return any(board.is_connected for board in self._boards.values())
+
     @property
     def devices(self) -> dict[str, BaseDevice]:
         """Dictionary of active device instances."""

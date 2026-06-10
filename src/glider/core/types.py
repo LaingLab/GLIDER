@@ -22,18 +22,15 @@ class NodeType(Enum):
     OUTPUT = "Output"
     INPUT = "Input"
     MOTOR_GOVERNOR = "MotorGovernor"
-    CUSTOM_DEVICE = "CustomDevice"
-    CUSTOM_DEVICE_ACTION = "CustomDeviceAction"
 
     # Control nodes
     LOOP = "Loop"
     WAIT_FOR_INPUT = "WaitForInput"
 
-    # Flow function nodes
+    # Graph function nodes (inline StartFunction -> EndFunction chains)
     START_FUNCTION = "StartFunction"
     END_FUNCTION = "EndFunction"
     FUNCTION_CALL = "FunctionCall"
-    FLOW_FUNCTION_CALL = "FlowFunctionCall"
 
     # Hardware nodes
     DIGITAL_WRITE = "DigitalWrite"
