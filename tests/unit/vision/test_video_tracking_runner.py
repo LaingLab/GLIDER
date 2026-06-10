@@ -143,3 +143,19 @@ def test_zone_events_enter_and_occupancy(synthetic_clip: Path, tmp_path: Path):
     row = occ[occ["zone_id"] == "z1"].iloc[0]
     assert int(row["frames_in_zone"]) >= 1
     assert abs(row["seconds"] - row["frames_in_zone"] / 10.0) < 1e-6
+
+
+def test_zone_files_absent_when_disabled(synthetic_clip: Path, tmp_path: Path):
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = VideoTrackingConfig(
+        source_path=synthetic_clip,
+        output_dir=out,
+        zone_config=_right_half_zone(),
+        write_tracking=False,
+        write_zone_events=False,  # guard: no zone files even though zones exist
+        write_annotated=False,
+    )
+    VideoTrackingRunner(cfg, cv_processor=FakeCV()).run()
+    assert not (out / "zone_events.csv").exists()
+    assert not (out / "zone_occupancy.csv").exists()
