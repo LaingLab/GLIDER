@@ -20,9 +20,12 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -202,6 +205,7 @@ class CameraPanel(QWidget):
     """
 
     settings_requested = pyqtSignal()
+    analysis_requested = pyqtSignal(str)  # output_dir → open the Analysis panel
 
     # Thread-safe signals for frame updates (background thread -> main thread)
     _frame_received = pyqtSignal(object)  # FrameData for single camera
@@ -238,6 +242,13 @@ class CameraPanel(QWidget):
         self._multi_camera_mode = False
         self._last_frame = None
         self._frame_count = 0
+
+        # Video-file source state (offline tracking)
+        from glider.vision.video_source import VideoFileSource
+
+        self._video_source = VideoFileSource()
+        self._video_mode = False
+        self._video_current_frame = 0
 
         # Initialize CV Worker and Thread
         self._cv_thread = QThread()
@@ -324,6 +335,45 @@ class CameraPanel(QWidget):
 
         layout.addLayout(camera_layout)
 
+        # --- Source toggle: Live camera vs Video file ---
+        source_layout = QHBoxLayout()
+        self._live_radio = QRadioButton("Live")
+        self._video_radio = QRadioButton("Video file")
+        self._live_radio.setChecked(True)
+        self._browse_btn = QPushButton("Browse…")
+        self._browse_btn.setEnabled(False)
+        source_layout.addWidget(QLabel("Source:"))
+        source_layout.addWidget(self._live_radio)
+        source_layout.addWidget(self._video_radio)
+        source_layout.addWidget(self._browse_btn, 1)
+        layout.addLayout(source_layout)
+
+        # --- Video transport (hidden until a file loads) ---
+        self._video_controls = QWidget()
+        vctl = QHBoxLayout(self._video_controls)
+        vctl.setContentsMargins(0, 0, 0, 0)
+        self._seek_slider = QSlider(Qt.Orientation.Horizontal)
+        self._seek_slider.setEnabled(False)
+        self._frame_label = QLabel("0 / 0")
+        self._run_btn = QPushButton("Run tracking")
+        self._run_btn.setEnabled(False)
+        vctl.addWidget(self._seek_slider, 1)
+        vctl.addWidget(self._frame_label)
+        vctl.addWidget(self._run_btn)
+        self._video_controls.setVisible(False)
+        layout.addWidget(self._video_controls)
+
+        # --- Run progress + cancel (hidden until a run starts) ---
+        progress_row = QHBoxLayout()
+        self._run_progress = QProgressBar()
+        self._cancel_btn = QPushButton("Cancel")
+        progress_row.addWidget(self._run_progress, 1)
+        progress_row.addWidget(self._cancel_btn)
+        self._progress_container = QWidget()
+        self._progress_container.setLayout(progress_row)
+        self._progress_container.setVisible(False)
+        layout.addWidget(self._progress_container)
+
         # Control buttons
         control_layout = QHBoxLayout()
 
@@ -405,6 +455,12 @@ class CameraPanel(QWidget):
 
         # Ensure CV thread cleanup on widget destruction
         self.destroyed.connect(self._cleanup_cv_thread)
+
+        # Video-source controls
+        self._live_radio.toggled.connect(self._on_source_toggled)
+        self._browse_btn.clicked.connect(self._on_browse_video)
+        self._seek_slider.valueChanged.connect(self._on_seek)
+        self._run_btn.clicked.connect(self._on_run_tracking)
 
     def _handle_frame_input(self, frame_data: FrameData) -> None:
         """Decide whether to process frame with CV or update UI immediately."""
@@ -932,6 +988,125 @@ class CameraPanel(QWidget):
     def get_current_frame(self) -> np.ndarray | None:
         """Get the current frame (for snapshots)."""
         return self._last_frame.copy() if self._last_frame is not None else None
+
+    # ------------------------------------------------------------------
+    # Video-file source handlers (Part A)
+    # ------------------------------------------------------------------
+
+    def _on_source_toggled(self, live_checked: bool) -> None:
+        """Switch between live camera and video-file source."""
+        self._video_mode = not live_checked
+        self._browse_btn.setEnabled(self._video_mode)
+        self._video_controls.setVisible(self._video_mode)
+        # Disable live-only controls in video mode.
+        self._camera_combo.setEnabled(not self._video_mode)
+        self._refresh_btn.setEnabled(not self._video_mode)
+        self._preview_btn.setEnabled(not self._video_mode)
+        if self._video_mode and self._preview_active:
+            self._stop_preview()
+
+    def _on_browse_video(self) -> None:
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open video", "", "Video files (*.mp4 *.avi *.mov *.mkv);;All files (*)"
+        )
+        if not path:
+            return
+        if not self._video_source.load(path):
+            QMessageBox.warning(self, "Video", f"Could not open:\n{path}")
+            return
+        n = self._video_source.frame_count
+        self._seek_slider.setEnabled(True)
+        self._seek_slider.setRange(0, n - 1)
+        self._seek_slider.setValue(0)
+        self._run_btn.setEnabled(True)
+        self._on_seek(0)
+
+    def _on_seek(self, n: int) -> None:
+        if not self._video_source.is_loaded:
+            return
+        frame = self._video_source.read_frame(n)
+        if frame is None:
+            return
+        self._video_current_frame = n
+        self._frame_label.setText(f"{n} / {self._video_source.frame_count - 1}")
+        self._preview.set_zone_configuration(self._zone_config)
+        self._preview.update_frame(frame)
+
+    # ------------------------------------------------------------------
+    # Batch-tracking run handlers (Part B)
+    # ------------------------------------------------------------------
+
+    def _on_run_tracking(self) -> None:
+        from pathlib import Path
+
+        from PyQt6.QtWidgets import QFileDialog
+
+        from glider.gui.panels.video_tracking_worker import VideoTrackingWorker
+        from glider.vision.video_tracking_runner import VideoTrackingConfig
+
+        if not self._video_source.is_loaded:
+            return
+        out_dir = QFileDialog.getExistingDirectory(self, "Choose output folder")
+        if not out_dir:
+            return
+
+        cfg = VideoTrackingConfig(
+            source_path=Path(self._video_source.path),
+            output_dir=Path(out_dir),
+            zone_config=self._zone_config,
+            cv_settings=self._cv_processor.settings,
+        )
+        # cv_processor=None → the runner builds a fresh CVProcessor (clean IDs).
+        self._run_thread = QThread()
+        self._run_worker = VideoTrackingWorker(cfg)
+        self._run_worker.moveToThread(self._run_thread)
+        self._run_thread.started.connect(self._run_worker.run)
+        self._run_worker.progress.connect(self._on_run_progress)
+        self._run_worker.finished.connect(self._on_run_finished)
+        self._run_worker.failed.connect(self._on_run_failed)
+        self._cancel_btn.clicked.connect(self._run_worker.cancel)
+
+        self._progress_container.setVisible(True)
+        self._run_progress.setRange(0, self._video_source.frame_count)
+        self._run_progress.setValue(0)
+        self._cancel_btn.setEnabled(True)
+        self._run_btn.setEnabled(False)
+        self._run_thread.start()
+
+    def _on_run_progress(self, done: int, total: int) -> None:
+        self._run_progress.setValue(done)
+
+    def _on_run_finished(self, output_dir: str) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+
+        self._teardown_run_thread()
+        self._progress_container.setVisible(False)
+        self._run_btn.setEnabled(True)
+        box = QMessageBox(self)
+        box.setWindowTitle("Tracking complete")
+        box.setText(f"Wrote results to:\n{output_dir}")
+        open_btn = box.addButton("Open in Analysis panel", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+        if box.clickedButton() is open_btn:
+            self.analysis_requested.emit(output_dir)
+
+    def _on_run_failed(self, message: str) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+
+        self._teardown_run_thread()
+        self._progress_container.setVisible(False)
+        self._run_btn.setEnabled(True)
+        QMessageBox.critical(self, "Tracking failed", message)
+
+    def _teardown_run_thread(self) -> None:
+        if getattr(self, "_run_thread", None) is not None:
+            self._run_thread.quit()
+            self._run_thread.wait()
+            self._run_thread = None
+            self._run_worker = None
 
     def _cleanup_cv_thread(self) -> None:
         """Ensure CV thread is stopped on destruction."""
