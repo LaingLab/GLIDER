@@ -75,11 +75,13 @@ class FlowFunctionRunner:
         if self._completion_event:
             self._completion_event.set()
 
-    async def execute(self) -> None:
+    async def execute(self) -> bool:
         """
         Execute the function by triggering the StartFunction node.
 
-        Waits until an EndFunction node is reached.
+        Waits until an EndFunction node is reached. Returns True if the
+        function completed, False if it timed out (or the start node is
+        missing).
         """
         # Find EndFunction nodes if not already found
         if not self._end_node_ids:
@@ -98,7 +100,7 @@ class FlowFunctionRunner:
         start_node = self._flow_engine.get_node(self._start_node_id)
         if start_node is None:
             logger.error(f"StartFunction node not found: {self._start_node_id}")
-            return
+            return False
 
         logger.info(f"FlowFunctionRunner: executing StartFunction {self._start_node_id}")
         if hasattr(start_node, "execute"):
@@ -108,9 +110,11 @@ class FlowFunctionRunner:
                 start_node.execute()
 
         # Wait for function completion with timeout
+        completed = False
         try:
             await asyncio.wait_for(self._completion_event.wait(), timeout=60.0)
             logger.info("FlowFunctionRunner: function execution complete")
+            completed = True
         except TimeoutError:
             logger.warning("FlowFunctionRunner: function timed out")
         finally:
@@ -119,6 +123,7 @@ class FlowFunctionRunner:
                 end_node = self._flow_engine.get_node(end_node_id)
                 if end_node and hasattr(end_node, "set_completion_callback"):
                     end_node.set_completion_callback(None)
+        return completed
 
 
 class StartFunctionNode(GliderNode):

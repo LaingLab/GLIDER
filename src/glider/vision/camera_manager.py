@@ -1129,7 +1129,7 @@ class CameraManager:
                                 )
                                 found_indices.add(i)
                                 cap.release()
-                                break  # Found with this backend, move to next index
+                                continue  # Found; advance to the next index
 
                             cap.release()
                         except Exception as e:

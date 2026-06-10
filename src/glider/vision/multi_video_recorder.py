@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 from glider.vision.frame_writer import FrameWriterThread
-from glider.vision.video_recorder import RecordingState, VideoFormat
+from glider.vision.video_recorder import RecordingState, VideoFormat, open_video_writer
 
 if TYPE_CHECKING:
     from glider.vision.multi_camera_manager import MultiCameraManager
@@ -100,8 +100,12 @@ class MultiVideoRecorder:
         self._output_dir.mkdir(parents=True, exist_ok=True)
         logger.debug(f"Multi-video output directory: {self._output_dir}")
 
-    def set_video_format(self, codec: str = "mp4v", extension: str = ".mp4") -> None:
-        """Set the video codec and file extension."""
+    def set_video_format(self, codec: str = "avc1", extension: str = ".mp4") -> None:
+        """Set the video codec and file extension.
+
+        If the codec is unavailable in the local OpenCV build, recording falls
+        back to ``mp4v`` automatically.
+        """
         self._video_format = VideoFormat(codec=codec, extension=extension)
         logger.debug(f"Video format: {codec} ({extension})")
 
@@ -158,8 +162,6 @@ class MultiVideoRecorder:
         self._frames_dropped.clear()
         self._annotated_frame_count = 0
 
-        fourcc = cv2.VideoWriter_fourcc(*self._video_format.codec)
-
         # Build FrameWriterThread kwargs
         fwt_kwargs = {}
         if self._buffer_size is not None:
@@ -182,12 +184,15 @@ class MultiVideoRecorder:
                     filename = self._generate_filename(experiment_name, camera_id)
                     file_path = self._output_dir / filename
 
-                    # Create writer
-                    writer = cv2.VideoWriter(
-                        str(file_path), fourcc, recording_fps, settings.resolution
+                    # Create writer (falls back to a compatible codec if needed)
+                    writer, _ = open_video_writer(
+                        file_path,
+                        self._video_format.codec,
+                        recording_fps,
+                        settings.resolution,
                     )
 
-                    if not writer.isOpened():
+                    if writer is None:
                         logger.error(f"Failed to create video writer for {camera_id}: {file_path}")
                         continue
 
@@ -221,14 +226,14 @@ class MultiVideoRecorder:
                         self._annotated_file_path = self._output_dir / annotated_filename
 
                         recording_fps = self._recording_fps.get(primary_id, primary_settings.fps)
-                        self._annotated_writer = cv2.VideoWriter(
-                            str(self._annotated_file_path),
-                            fourcc,
+                        self._annotated_writer, _ = open_video_writer(
+                            self._annotated_file_path,
+                            self._video_format.codec,
                             recording_fps,
                             primary_settings.resolution,
                         )
 
-                        if self._annotated_writer.isOpened():
+                        if self._annotated_writer is not None:
                             self._annotated_writer_thread = FrameWriterThread(
                                 self._annotated_writer,
                                 error_callback=self._on_writer_error,

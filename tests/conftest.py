@@ -342,8 +342,6 @@ def sample_experiment_schema() -> dict[str, Any]:
         "hardware": {"boards": [], "devices": []},
         "flow": {"nodes": [], "connections": []},
         "dashboard": {"widgets": [], "layout": {}},
-        "custom_devices": [],
-        "flow_functions": [],
     }
 
 

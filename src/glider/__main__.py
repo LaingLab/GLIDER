@@ -76,9 +76,17 @@ def _install_windows_app_id() -> None:
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
+    from glider._version import __version__
+
     parser = argparse.ArgumentParser(
         prog="glider",
         description="GLIDER - General Laboratory Interface for Design, Experimentation, and Recording",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Print the version and exit",
     )
     parser.add_argument(
         "--builder",

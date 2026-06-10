@@ -13,18 +13,23 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Optional imports — audio recording is disabled if not installed
+# Optional imports — audio recording is disabled if not installed.
+# Catch OSError as well as ImportError: sounddevice/soundfile import fine as
+# Python modules but raise OSError at import time when their native backend
+# (PortAudio / libsndfile) is missing — common on headless CI runners and
+# minimal Pi images. Without this, importing anything from `glider` would
+# hard-fail on such machines.
 try:
     import sounddevice as sd
-except ImportError:
+except (ImportError, OSError):
     sd = None
-    logger.info("sounddevice not available — audio recording disabled")
+    logger.info("sounddevice/PortAudio not available — audio recording disabled")
 
 try:
     import soundfile as sf
-except ImportError:
+except (ImportError, OSError):
     sf = None
-    logger.info("soundfile not available — audio recording disabled")
+    logger.info("soundfile/libsndfile not available — audio recording disabled")
 
 
 class AudioRecorder:

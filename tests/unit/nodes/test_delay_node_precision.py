@@ -39,6 +39,11 @@ import pytest
 
 from glider.nodes.logic.flow_nodes import DelayNode
 
+# These assert sub-100ms / sub-200ms timing on a delay whose result is
+# delivered through the asyncio loop. Shared CI runners have too much
+# scheduling jitter for that to be stable, so they are excluded from CI
+# (`pytest -m "not slow"`) and run locally via `pytest -m slow`.
+pytestmark = pytest.mark.slow
 
 async def _loop_pressure(stop_event: asyncio.Event, burst_ms: float, period_ms: float) -> None:
     """Periodically burn a short burst of CPU on the event loop to
