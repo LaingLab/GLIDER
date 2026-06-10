@@ -18,11 +18,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any, TextIO
 
 from glider.vision.cv_processor import CVProcessor, CVSettings
 from glider.vision.tracking_logger import TrackingDataLogger
 from glider.vision.video_source import VideoFileSource
-from glider.vision.zones import ZoneConfiguration
+from glider.vision.zones import Zone, ZoneConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +73,10 @@ class VideoTrackingRunner:
         output directory is still returned with metadata.json written. If
         process_frame/log_frame raises mid-loop, the logger is stopped and the
         source released (finally), then the exception propagates and
-        metadata.json is NOT written. Raises ValueError if the video cannot be
-        opened. Must not be called from a thread with a running event loop
-        (see the guard below).
+        metadata.json is NOT written (zone_events.csv / zone_occupancy.csv are
+        still flushed with whatever frames were processed). Raises ValueError if
+        the video cannot be opened. Must not be called from a thread with a
+        running event loop (see the guard below).
         """
         # asyncio.run() below requires that no event loop is already running on
         # this thread. The intended caller is VideoTrackingWorker on a QThread
@@ -168,17 +170,21 @@ class VideoTrackingRunner:
         self._write_metadata(fps, total, (width, height))
         return cfg.output_dir
 
-    def _open_zone_writer(self):
+    def _open_zone_writer(self) -> tuple[TextIO | None, Any]:
         """Return (file, csv_writer) for zone_events.csv, or (None, None)."""
         if not self._cfg.write_zone_events or not self._cfg.zone_config:
             return None, None
-        f = open(self._cfg.output_dir / "zone_events.csv", "w", newline="")
+        f = open(self._cfg.output_dir / "zone_events.csv", "w", newline="", encoding="utf-8")
         w = csv.writer(f)
         w.writerow(["frame", "elapsed_ms", "zone_id", "zone_name", "object_id", "event"])
         return f, w
 
-    def _write_occupancy(self, zones, frames_in_zone: dict[str, int], fps: float) -> None:
-        with open(self._cfg.output_dir / "zone_occupancy.csv", "w", newline="") as f:
+    def _write_occupancy(
+        self, zones: list[Zone], frames_in_zone: dict[str, int], fps: float
+    ) -> None:
+        with open(
+            self._cfg.output_dir / "zone_occupancy.csv", "w", newline="", encoding="utf-8"
+        ) as f:
             w = csv.writer(f)
             w.writerow(["zone_id", "zone_name", "frames_in_zone", "seconds"])
             for zone in zones:
