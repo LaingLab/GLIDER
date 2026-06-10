@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Any, TextIO
 
 import cv2
+import numpy as np
 
-from glider.vision.cv_processor import CVProcessor, CVSettings
+from glider.vision.cv_processor import CVProcessor, CVSettings, TrackedObject
 from glider.vision.tracking_logger import TrackingDataLogger
 from glider.vision.video_recorder import open_video_writer
 from glider.vision.video_source import VideoFileSource
@@ -187,7 +188,12 @@ class VideoTrackingRunner:
         return cfg.output_dir
 
     @staticmethod
-    def _annotate(frame, tracked, zone_config):
+    def _annotate(
+        frame: np.ndarray,
+        tracked: list[TrackedObject],
+        zone_config: ZoneConfiguration | None,
+    ) -> np.ndarray:
+        """Return a copy of *frame* with bbox/ID overlays and zones drawn."""
         out = frame.copy()
         for obj in tracked:
             x, y, w, h = obj.bbox
