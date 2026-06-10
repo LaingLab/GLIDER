@@ -13,8 +13,6 @@ backend selection is needed in this module.
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QVBoxLayout, QWidget
-
 # These imports must come from backend_qtagg specifically — that
 # backend talks to qtpy, which respects whichever Qt binding is already
 # imported (PyQt6 in our case). Importing matplotlib.pyplot first
@@ -24,6 +22,7 @@ from matplotlib.backends.backend_qtagg import (  # noqa: E402
     NavigationToolbar2QT,
 )
 from matplotlib.figure import Figure  # noqa: E402
+from PyQt6.QtWidgets import QVBoxLayout, QWidget
 
 
 class MplCanvas(QWidget):
