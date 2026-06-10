@@ -138,6 +138,10 @@ class MainWindow(QMainWindow):
         self._runner_panel: RunnerPanel | None = None
         self._node_editor: NodeEditorController | None = None
         self._camera_panel: CameraPanel | None = None
+        # Lazily created when the camera panel hands off a finished video
+        # tracking run for review (analysis_requested signal).
+        self._analysis_dock: QDockWidget | None = None
+        self._analysis_panel = None  # AnalysisPanel, imported + created lazily
 
         # Experiment dialog
         self._experiment_dialog: ExperimentDialog | None = None
@@ -361,6 +365,7 @@ class MainWindow(QMainWindow):
             multi_camera_manager=self._core.multi_camera_manager,
         )
         self._camera_panel.settings_requested.connect(self._on_camera_settings)
+        self._camera_panel.analysis_requested.connect(self._on_open_analysis_panel)
         self._camera_panel.set_video_recorder(self._core.video_recorder)
         self._camera_panel.set_multi_video_recorder(self._core.multi_video_recorder)
         self._camera_panel.set_tracking_logger(self._core.tracking_logger)
@@ -1531,6 +1536,29 @@ class MainWindow(QMainWindow):
 
         dialog = AnalysisDialog(parent=self)
         dialog.exec()
+
+    def _on_open_analysis_panel(self, directory: str) -> None:
+        """Open (or reuse) the Analysis dock and load a finished recording.
+
+        Wired to CameraPanel.analysis_requested — fired when the operator
+        clicks "Open in Analysis panel" after a video tracking run.
+        """
+        from glider.gui.panels.analysis import AnalysisPanel
+
+        if self._analysis_dock is None:
+            self._analysis_panel = AnalysisPanel()
+            self._analysis_dock = QDockWidget("Analysis", self)
+            self._analysis_dock.setWidget(self._analysis_panel)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._analysis_dock)
+
+        if not self._analysis_panel.load_recording(Path(directory)):
+            from PyQt6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(self, "Analysis", f"No GLIDER recording found in:\n{directory}")
+            return
+
+        self._analysis_dock.show()
+        self._analysis_dock.raise_()
 
     def _on_experiment_metadata_changed(self) -> None:
         self._core.session._dirty = True
