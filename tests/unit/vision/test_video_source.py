@@ -1,3 +1,5 @@
+"""Tests for VideoFileSource — offline video frame access (scrub + sequential)."""
+
 from pathlib import Path
 
 import numpy as np
@@ -34,3 +36,13 @@ def test_frames_yields_every_frame_in_order(synthetic_clip: Path):
     indices = [n for n, _frame in src.frames()]
     assert indices == list(range(12))
     src.release()
+
+
+def test_release_resets_state(synthetic_clip: Path):
+    src = VideoFileSource()
+    src.load(synthetic_clip)
+    src.release()
+    assert src.is_loaded is False
+    assert src.frame_count == 0
+    assert src.resolution == (0, 0)
+    assert src.path is None

@@ -10,6 +10,7 @@ no callbacks. Used by the Camera panel's video-tracking mode.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -48,7 +49,7 @@ class VideoFileSource:
             return False
         fps = cap.get(cv2.CAP_PROP_FPS)
         # Guard against 0 / NaN fps from some containers.
-        if not fps or fps != fps or fps <= 0:
+        if not fps or math.isnan(fps) or fps <= 0:
             fps = _DEFAULT_FPS
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -107,3 +108,7 @@ class VideoFileSource:
         if self._cap is not None:
             self._cap.release()
             self._cap = None
+        self._path = None
+        self._frame_count = 0
+        self._fps = _DEFAULT_FPS
+        self._resolution = (0, 0)
