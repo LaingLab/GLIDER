@@ -206,6 +206,7 @@ class CameraPanel(QWidget):
 
     settings_requested = pyqtSignal()
     analysis_requested = pyqtSignal(str)  # output_dir → open the Analysis panel
+    draw_zones_requested = pyqtSignal(object)  # scrubbed frame (np.ndarray) for the zone editor
 
     # Thread-safe signals for frame updates (background thread -> main thread)
     _frame_received = pyqtSignal(object)  # FrameData for single camera
@@ -249,6 +250,7 @@ class CameraPanel(QWidget):
         self._video_source = VideoFileSource()
         self._video_mode = False
         self._video_current_frame = 0
+        self._video_frame = None  # most recent scrubbed frame (np.ndarray)
 
         # Initialize CV Worker and Thread
         self._cv_thread = QThread()
@@ -355,10 +357,13 @@ class CameraPanel(QWidget):
         self._seek_slider = QSlider(Qt.Orientation.Horizontal)
         self._seek_slider.setEnabled(False)
         self._frame_label = QLabel("0 / 0")
+        self._draw_zones_btn = QPushButton("Draw Zones…")
+        self._draw_zones_btn.setEnabled(False)
         self._run_btn = QPushButton("Run tracking")
         self._run_btn.setEnabled(False)
         vctl.addWidget(self._seek_slider, 1)
         vctl.addWidget(self._frame_label)
+        vctl.addWidget(self._draw_zones_btn)
         vctl.addWidget(self._run_btn)
         self._video_controls.setVisible(False)
         layout.addWidget(self._video_controls)
@@ -460,6 +465,7 @@ class CameraPanel(QWidget):
         self._live_radio.toggled.connect(self._on_source_toggled)
         self._browse_btn.clicked.connect(self._on_browse_video)
         self._seek_slider.valueChanged.connect(self._on_seek)
+        self._draw_zones_btn.clicked.connect(self._on_draw_zones)
         self._run_btn.clicked.connect(self._on_run_tracking)
         self._cancel_btn.clicked.connect(self._on_cancel_run)
 
@@ -1031,6 +1037,7 @@ class CameraPanel(QWidget):
         self._seek_slider.setEnabled(True)
         self._seek_slider.setRange(0, n - 1)
         self._seek_slider.setValue(0)
+        self._draw_zones_btn.setEnabled(True)
         self._run_btn.setEnabled(True)
         self._on_seek(0)
 
@@ -1041,6 +1048,7 @@ class CameraPanel(QWidget):
         if frame is None:
             return
         self._video_current_frame = n
+        self._video_frame = frame
         self._frame_label.setText(f"{n} / {self._video_source.frame_count - 1}")
         self._preview.set_zone_configuration(self._zone_config)
         self._preview.update_frame(frame)
@@ -1117,10 +1125,22 @@ class CameraPanel(QWidget):
         self._run_btn.setEnabled(True)
         QMessageBox.critical(self, "Tracking failed", message)
 
+    def _on_draw_zones(self) -> None:
+        """Ask the host window to open the zone editor on the current video frame."""
+        if self._video_frame is not None:
+            self.draw_zones_requested.emit(self._video_frame)
+
+    def refresh_scrub_frame(self) -> None:
+        """Re-render the current scrubbed frame (e.g. after zones changed)."""
+        if self._video_mode and self._video_source.is_loaded:
+            self._on_seek(self._video_current_frame)
+
     def _teardown_run_thread(self) -> None:
         if getattr(self, "_run_thread", None) is not None:
+            if self._run_worker is not None:
+                self._run_worker.cancel()  # stop the loop between frames
             self._run_thread.quit()
-            self._run_thread.wait()
+            self._run_thread.wait(5000)
             self._run_thread = None
             self._run_worker = None
 

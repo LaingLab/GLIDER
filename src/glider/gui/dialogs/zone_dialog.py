@@ -387,7 +387,11 @@ class ZoneDialog(QDialog):
     """
 
     def __init__(
-        self, camera_manager: "CameraManager", zone_config: ZoneConfiguration, parent=None
+        self,
+        camera_manager: "CameraManager",
+        zone_config: ZoneConfiguration,
+        parent=None,
+        frame: "np.ndarray | None" = None,
     ):
         super().__init__(parent)
         self._camera = camera_manager
@@ -399,14 +403,17 @@ class ZoneDialog(QDialog):
         self._setup_ui()
         self._update_table()
 
-        # Capture current frame
-        if self._camera.is_connected:
+        # Seed the canvas. An explicit frame (e.g. a scrubbed video frame) takes
+        # precedence over the live camera, so zones can be drawn offline.
+        initial = frame
+        if initial is None and self._camera.is_connected:
             result = self._camera.get_frame()
             if result is not None:
-                frame, timestamp = result
-                self._preview.set_frame(frame)
-                self._zone_config.config_width = frame.shape[1]
-                self._zone_config.config_height = frame.shape[0]
+                initial, _timestamp = result
+        if initial is not None:
+            self._preview.set_frame(initial)
+            self._zone_config.config_width = initial.shape[1]
+            self._zone_config.config_height = initial.shape[0]
 
         self._preview.set_zone_configuration(self._zone_config)
 
