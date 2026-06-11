@@ -366,6 +366,7 @@ class MainWindow(QMainWindow):
         )
         self._camera_panel.settings_requested.connect(self._on_camera_settings)
         self._camera_panel.analysis_requested.connect(self._on_open_analysis_panel)
+        self._camera_panel.draw_zones_requested.connect(self._on_video_zones_requested)
         self._camera_panel.set_video_recorder(self._core.video_recorder)
         self._camera_panel.set_multi_video_recorder(self._core.multi_video_recorder)
         self._camera_panel.set_tracking_logger(self._core.tracking_logger)
@@ -1490,8 +1491,18 @@ class MainWindow(QMainWindow):
                 )
 
     def _on_zones_requested(self) -> None:
+        self._open_zone_dialog(frame=None)
+
+    def _on_video_zones_requested(self, frame) -> None:
+        """Open the zone editor on a scrubbed video frame (offline mode)."""
+        self._open_zone_dialog(frame=frame)
+
+    def _open_zone_dialog(self, frame=None) -> None:
         dialog = ZoneDialog(
-            camera_manager=self._core.camera_manager, zone_config=self._zone_config, parent=self
+            camera_manager=self._core.camera_manager,
+            zone_config=self._zone_config,
+            parent=self,
+            frame=frame,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._zone_config = dialog.get_zone_configuration()
@@ -1509,6 +1520,11 @@ class MainWindow(QMainWindow):
                 self._node_library_panel.refresh_zones(self._zone_config)
             if self._node_editor:
                 self._node_editor.set_zone_configuration(self._zone_config)
+
+            # In offline video mode, re-render the scrubbed frame so the newly
+            # drawn zones appear immediately on the preview.
+            if frame is not None and self._camera_panel:
+                self._camera_panel.refresh_scrub_frame()
 
     # --- Experiment operations ---
 
