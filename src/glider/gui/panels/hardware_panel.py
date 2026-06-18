@@ -127,6 +127,11 @@ class HardwarePanel(QWidget):
                         settings = getattr(cfg, "settings", {}) if cfg else {}
                         channel = settings.get("channel", 0)
                         pin_str = f"Ch {channel}"
+                    elif device_type == "GenericI2C":
+                        cfg = getattr(device, "_config", None)
+                        settings = getattr(cfg, "settings", {}) if cfg else {}
+                        address = settings.get("i2c_address", 0x40)
+                        pin_str = f"0x{address:02X}"
                     elif pin_values:
                         pin_str = f"Pin {pin_values[0]}"
                     else:
@@ -360,6 +365,7 @@ class HardwarePanel(QWidget):
             "Servo Motor": ("Servo", ["signal"]),
             "Motor Governor": ("MotorGovernor", ["up", "down", "signal"]),
             "ADS1115 (I2C ADC)": ("ADS1115", []),
+            "Generic I2C Device": ("GenericI2C", []),
         }
 
         dialog = QDialog(self)
@@ -389,20 +395,56 @@ class HardwarePanel(QWidget):
 
         pin_spinboxes: dict[str, QSpinBox] = {}
         ads1115_settings: dict[str, QSpinBox] = {}
+        i2c_settings: dict[str, QSpinBox] = {}
 
         def update_pin_inputs():
             while pin_layout.rowCount() > 0:
                 pin_layout.removeRow(0)
             pin_spinboxes.clear()
             ads1115_settings.clear()
+            i2c_settings.clear()
 
             ui_type = type_combo.currentText()
             device_type, pin_names = device_type_map[ui_type]
 
             is_analog = device_type == "AnalogInput"
             is_ads1115 = device_type == "ADS1115"
+            is_generic_i2c = device_type == "GenericI2C"
 
-            if is_ads1115:
+            if is_generic_i2c:
+                bus_spin = QSpinBox()
+                bus_spin.setRange(0, 1)
+                bus_spin.setValue(1)
+                bus_spin.setToolTip("I2C bus number (1 = Pi primary bus)")
+                i2c_settings["i2c_bus"] = bus_spin
+                pin_layout.addRow("Bus:", bus_spin)
+
+                addr_spin = QSpinBox()
+                addr_spin.setDisplayIntegerBase(16)
+                addr_spin.setPrefix("0x")
+                addr_spin.setRange(0x03, 0x77)
+                addr_spin.setValue(0x40)
+                addr_spin.setToolTip("7-bit I2C address (0x03-0x77)")
+                i2c_settings["i2c_address"] = addr_spin
+                pin_layout.addRow("Address:", addr_spin)
+
+                reg_spin = QSpinBox()
+                reg_spin.setDisplayIntegerBase(16)
+                reg_spin.setPrefix("0x")
+                reg_spin.setRange(-1, 0xFF)
+                reg_spin.setValue(-1)
+                reg_spin.setSpecialValueText("None")
+                reg_spin.setToolTip(
+                    "Optional default register for the no-arg Read (None = raw byte)"
+                )
+                i2c_settings["register"] = reg_spin
+                pin_layout.addRow("Register:", reg_spin)
+
+                note = QLabel("Note: Uses I2C on GPIO2 (SDA) / GPIO3 (SCL)")
+                note.setProperty("textRole", "muted")
+                note.setWordWrap(True)
+                pin_layout.addRow(note)
+            elif is_ads1115:
                 addr_spin = QSpinBox()
                 addr_spin.setRange(72, 75)
                 addr_spin.setValue(72)
@@ -488,6 +530,12 @@ class HardwarePanel(QWidget):
                 settings["channel"] = ads1115_settings["channel"].value()
                 gain_text = ads1115_settings["gain_combo"].currentText()
                 settings["gain"] = int(gain_text.split()[0])
+            elif device_type == "GenericI2C" and i2c_settings:
+                settings["i2c_bus"] = i2c_settings["i2c_bus"].value()
+                settings["i2c_address"] = i2c_settings["i2c_address"].value()
+                reg = i2c_settings["register"].value()
+                if reg >= 0:  # -1 (special "None") ⇒ omit, leaving raw-byte read
+                    settings["register"] = reg
 
             try:
                 self._hardware_manager.add_device_multi_pin(
@@ -626,6 +674,8 @@ class HardwarePanel(QWidget):
             current_pins = device.pins if isinstance(device.pins, dict) else {}
 
         is_ads1115 = device_type == "ADS1115"
+        is_generic_i2c = device_type == "GenericI2C"
+        is_settings_device = is_ads1115 or is_generic_i2c
 
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Edit Device: {device_id}")
@@ -646,6 +696,7 @@ class HardwarePanel(QWidget):
 
         pin_spinboxes: dict[str, QSpinBox] = {}
         ads1115_settings: dict[str, QSpinBox | QComboBox] = {}
+        i2c_settings: dict[str, QSpinBox] = {}
 
         if is_ads1115:
             addr_spin = QSpinBox()
@@ -679,6 +730,38 @@ class HardwarePanel(QWidget):
             layout.addRow("Gain:", gain_combo)
 
             note = QLabel("Note: Uses I2C on GPIO2 (SDA) and GPIO3 (SCL)")
+            note.setProperty("textRole", "muted")
+            note.setWordWrap(True)
+            layout.addRow(note)
+        elif is_generic_i2c:
+            bus_spin = QSpinBox()
+            bus_spin.setRange(0, 1)
+            bus_spin.setValue(current_settings.get("i2c_bus", 1))
+            bus_spin.setToolTip("I2C bus number (1 = Pi primary bus)")
+            i2c_settings["i2c_bus"] = bus_spin
+            layout.addRow("Bus:", bus_spin)
+
+            addr_spin = QSpinBox()
+            addr_spin.setDisplayIntegerBase(16)
+            addr_spin.setPrefix("0x")
+            addr_spin.setRange(0x03, 0x77)
+            addr_spin.setValue(current_settings.get("i2c_address", 0x40))
+            addr_spin.setToolTip("7-bit I2C address (0x03-0x77)")
+            i2c_settings["i2c_address"] = addr_spin
+            layout.addRow("Address:", addr_spin)
+
+            reg_spin = QSpinBox()
+            reg_spin.setDisplayIntegerBase(16)
+            reg_spin.setPrefix("0x")
+            reg_spin.setRange(-1, 0xFF)
+            reg_value = current_settings.get("register")
+            reg_spin.setValue(reg_value if reg_value is not None else -1)
+            reg_spin.setSpecialValueText("None")
+            reg_spin.setToolTip("Optional default register for the no-arg Read (None = raw byte)")
+            i2c_settings["register"] = reg_spin
+            layout.addRow("Register:", reg_spin)
+
+            note = QLabel("Note: Uses I2C on GPIO2 (SDA) / GPIO3 (SCL)")
             note.setProperty("textRole", "muted")
             note.setWordWrap(True)
             layout.addRow(note)
@@ -717,11 +800,18 @@ class HardwarePanel(QWidget):
                     "channel": ads1115_settings["channel"].value(),
                     "gain": int(ads1115_settings["gain_combo"].currentText().split()[0]),
                 }
+            elif is_generic_i2c and i2c_settings:
+                new_settings = {
+                    "i2c_bus": i2c_settings["i2c_bus"].value(),
+                    "i2c_address": i2c_settings["i2c_address"].value(),
+                }
+                reg = i2c_settings["register"].value()
+                new_settings["register"] = reg if reg >= 0 else None
 
             try:
                 device.name = new_name
 
-                if is_ads1115 and new_settings:
+                if is_settings_device and new_settings:
                     if hasattr(device, "config") and hasattr(device.config, "settings"):
                         device.config.settings.update(new_settings)
                     elif hasattr(device, "_config") and hasattr(device._config, "settings"):
@@ -742,7 +832,7 @@ class HardwarePanel(QWidget):
                     session.update_device(
                         device_id,
                         name=new_name,
-                        pins=new_pins if not is_ads1115 else None,
+                        pins=new_pins if not is_settings_device else None,
                         settings=new_settings,
                     )
 

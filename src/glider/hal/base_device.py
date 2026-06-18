@@ -790,6 +790,238 @@ class ADS1115Device(BaseDevice):
         return instance
 
 
+class GenericI2CDevice(BaseDevice):
+    """
+    Generic I2C device exposing the full SMBus surface via ``smbus2``.
+
+    Talks to any I2C peripheral on a Raspberry Pi by address, without needing a
+    dedicated device class per chip. One device instance binds one bus + one
+    7-bit address. Every transfer runs in a worker thread under the board's
+    shared ``i2c_lock`` so it coexists safely with other I2C devices (e.g. an
+    ADS1115) on the same bus.
+
+    Settings:
+    - i2c_bus: I2C bus number (default 1 — the Pi's primary bus on GPIO2/GPIO3)
+    - i2c_address: 7-bit address, 0x03-0x77 (default 0x40)
+    - register: optional default register for the no-arg ``read`` action. When
+        None (default), ``read`` performs a raw byte receive instead.
+
+    The transfer methods take ``None``-sentinel defaults for their required
+    arguments and validate presence explicitly. This is deliberate: the
+    ``DeviceActionNode`` only forwards a node input when it is non-``None``, so
+    an unconnected port arrives as a *missing* positional — the sentinels turn
+    that into a clear ``ValueError`` rather than a raw ``TypeError``.
+    """
+
+    ADDR_MIN = 0x03
+    ADDR_MAX = 0x77
+    BLOCK_MAX = 32
+
+    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
+        super().__init__(board, config, name)
+        self._bus_num = int(config.settings.get("i2c_bus", 1))
+        self._address = self._validate_address(config.settings.get("i2c_address", 0x40))
+        register = config.settings.get("register", None)
+        self._register = self._validate_register(register) if register is not None else None
+        self._bus = None  # smbus2.SMBus handle, created in initialize()
+        self._lock = asyncio.Lock()  # fallback when the board exposes no i2c_lock
+
+    # --- validation helpers ---
+
+    @classmethod
+    def _validate_address(cls, address: Any) -> int:
+        addr = int(address)
+        if addr < cls.ADDR_MIN or addr > cls.ADDR_MAX:
+            raise ValueError(
+                f"I2C address 0x{addr:02X} out of range "
+                f"(0x{cls.ADDR_MIN:02X}-0x{cls.ADDR_MAX:02X})"
+            )
+        return addr
+
+    @staticmethod
+    def _validate_register(register: Any) -> int:
+        if register is None:
+            raise ValueError("register is required")
+        reg = int(register)
+        if reg < 0x00 or reg > 0xFF:
+            raise ValueError(f"register 0x{reg:X} out of range (0x00-0xFF)")
+        return reg
+
+    @staticmethod
+    def _validate_byte(value: Any, label: str = "value") -> int:
+        if value is None:
+            raise ValueError(f"{label} is required")
+        v = int(value)
+        if v < 0x00 or v > 0xFF:
+            raise ValueError(f"{label} {v} out of range (0x00-0xFF)")
+        return v
+
+    @staticmethod
+    def _validate_word(value: Any, label: str = "value") -> int:
+        if value is None:
+            raise ValueError(f"{label} is required")
+        v = int(value)
+        if v < 0x0000 or v > 0xFFFF:
+            raise ValueError(f"{label} {v} out of range (0x0000-0xFFFF)")
+        return v
+
+    @classmethod
+    def _validate_length(cls, length: Any) -> int:
+        n = int(length)
+        if n < 1 or n > cls.BLOCK_MAX:
+            raise ValueError(f"block length {n} out of range (1-{cls.BLOCK_MAX})")
+        return n
+
+    @classmethod
+    def _validate_block(cls, data: Any) -> list[int]:
+        if data is None:
+            raise ValueError("data is required")
+        block = list(data)
+        if len(block) < 1 or len(block) > cls.BLOCK_MAX:
+            raise ValueError(f"block data length {len(block)} out of range (1-{cls.BLOCK_MAX})")
+        return [cls._validate_byte(b, "data byte") for b in block]
+
+    # --- identity ---
+
+    @property
+    def device_type(self) -> str:
+        return "GenericI2C"
+
+    @property
+    def required_pins(self) -> list[str]:
+        # I2C: SDA/SCL are fixed (GPIO2/GPIO3); no GPIO pins are allocated.
+        return []
+
+    @property
+    def i2c_bus(self) -> int:
+        """Configured I2C bus number."""
+        return self._bus_num
+
+    @property
+    def i2c_address(self) -> int:
+        """Configured 7-bit I2C address."""
+        return self._address
+
+    @property
+    def register(self) -> int | None:
+        """Optional default register used by the no-arg ``read`` action."""
+        return self._register
+
+    @property
+    def actions(self) -> dict[str, Callable]:
+        return {
+            "read": self.read,
+            "read_byte": self.read_byte,
+            "write_byte": self.write_byte,
+            "read_byte_data": self.read_byte_data,
+            "write_byte_data": self.write_byte_data,
+            "read_word_data": self.read_word_data,
+            "write_word_data": self.write_word_data,
+            "read_block": self.read_block,
+            "write_block": self.write_block,
+        }
+
+    # --- lifecycle ---
+
+    async def initialize(self) -> None:
+        """Open the I2C bus via smbus2 (lazy-imported in a worker thread)."""
+
+        def _open():
+            try:
+                import smbus2
+            except ImportError as e:
+                raise RuntimeError(
+                    "smbus2 not installed. Run: pip install 'GLIDER[i2c]' "
+                    "(or pip install smbus2)"
+                ) from e
+            return smbus2.SMBus(self._bus_num)
+
+        self._bus = await asyncio.to_thread(_open)
+        self._initialized = True
+        logger.info("GenericI2C initialized on bus %d at 0x%02X", self._bus_num, self._address)
+
+    async def shutdown(self) -> None:
+        """Close the bus and clear state (safe to call before initialize)."""
+        try:
+            if self._bus is not None:
+                await asyncio.to_thread(self._bus.close)
+        finally:
+            self._bus = None
+            self._initialized = False
+
+    # --- transfer plumbing ---
+
+    async def _transfer(self, method_name: str, *args) -> Any:
+        """Run an smbus2 call in a thread under the board's I2C lock."""
+        if not self._initialized or self._bus is None:
+            raise RuntimeError("GenericI2C device not initialized")
+        fn = getattr(self._bus, method_name)
+        lock = getattr(self._board, "i2c_lock", self._lock)
+        async with lock:
+            return await asyncio.to_thread(fn, *args)
+
+    # --- actions ---
+
+    async def read(self) -> int:
+        """No-arg read: configured default register if set, else a raw byte."""
+        if self._register is not None:
+            return await self.read_byte_data(self._register)
+        return await self.read_byte()
+
+    async def read_byte(self) -> int:
+        """Receive a single byte (no register)."""
+        return await self._transfer("read_byte", self._address)
+
+    async def write_byte(self, value: Any = None) -> None:
+        """Send a single byte (no register)."""
+        value = self._validate_byte(value)
+        await self._transfer("write_byte", self._address, value)
+
+    async def read_byte_data(self, register: Any = None) -> int:
+        """Read a byte from ``register``."""
+        register = self._validate_register(register)
+        return await self._transfer("read_byte_data", self._address, register)
+
+    async def write_byte_data(self, register: Any = None, value: Any = None) -> None:
+        """Write ``value`` (a byte) to ``register``."""
+        register = self._validate_register(register)
+        value = self._validate_byte(value)
+        await self._transfer("write_byte_data", self._address, register, value)
+
+    async def read_word_data(self, register: Any = None) -> int:
+        """Read a 16-bit word from ``register``."""
+        register = self._validate_register(register)
+        return await self._transfer("read_word_data", self._address, register)
+
+    async def write_word_data(self, register: Any = None, value: Any = None) -> None:
+        """Write ``value`` (a 16-bit word) to ``register``."""
+        register = self._validate_register(register)
+        value = self._validate_word(value)
+        await self._transfer("write_word_data", self._address, register, value)
+
+    async def read_block(self, register: Any = None, length: Any = BLOCK_MAX) -> list[int]:
+        """Read ``length`` bytes (1-32) starting at ``register``."""
+        register = self._validate_register(register)
+        length = self._validate_length(length)
+        return await self._transfer("read_i2c_block_data", self._address, register, length)
+
+    async def write_block(self, register: Any = None, data: Any = None) -> None:
+        """Write a list of bytes (1-32) starting at ``register``."""
+        register = self._validate_register(register)
+        data = self._validate_block(data)
+        await self._transfer("write_i2c_block_data", self._address, register, data)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], board: "BaseBoard") -> "GenericI2CDevice":
+        config = DeviceConfig(
+            pins=data["config"].get("pins", {}),
+            settings=data["config"].get("settings", {}),
+        )
+        instance = cls(board, config, data.get("name"))
+        instance._id = data.get("id", instance._id)
+        return instance
+
+
 class MotorGovernorDevice(BaseDevice):
     """
     Motor Governor device for controlling motorized positioning.
@@ -925,6 +1157,7 @@ DEVICE_REGISTRY: dict[str, type] = {
     "Servo": ServoDevice,
     "MotorGovernor": MotorGovernorDevice,
     "ADS1115": ADS1115Device,
+    "GenericI2C": GenericI2CDevice,
 }
 
 
