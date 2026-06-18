@@ -38,6 +38,9 @@ class DeviceControlPanel(QWidget):
     status_message = pyqtSignal(str, int)  # message, timeout_ms
     analog_value_received = pyqtSignal(int, int)  # pin, value
 
+    # Device types whose live value can be read from this panel's Read controls.
+    READABLE_DEVICE_TYPES = ("DigitalInput", "AnalogInput", "ADS1115", "GenericI2C")
+
     def __init__(self, hardware_manager: "HardwareManager", run_async_fn, parent=None):
         super().__init__(parent)
         self._hardware_manager = hardware_manager
@@ -254,7 +257,7 @@ class DeviceControlPanel(QWidget):
         self._device_status_label.setText(f"Status: {status} | Type: {device_type}")
 
         # Enable/disable input reading based on device type
-        is_input_device = device_type in ("DigitalInput", "AnalogInput", "ADS1115")
+        is_input_device = device_type in self.READABLE_DEVICE_TYPES
         self._input_group.setEnabled(is_input_device)
 
         # Show/hide appropriate output controls based on device type
@@ -388,7 +391,7 @@ class DeviceControlPanel(QWidget):
             return
 
         device_type = getattr(device, "device_type", "")
-        if device_type not in ("DigitalInput", "AnalogInput", "ADS1115"):
+        if device_type not in self.READABLE_DEVICE_TYPES:
             QMessageBox.warning(
                 self,
                 "Invalid Device",
@@ -451,6 +454,10 @@ class DeviceControlPanel(QWidget):
                     self._device_status_label.setText(
                         f"Status: ADS1115 Ch{channel} = {raw_value} ({voltage:.3f}V)"
                     )
+                elif device_type == "GenericI2C":
+                    value = await device.read()
+                    self._input_value_label.setText(f"{value}\n0x{value:X}")
+                    self._device_status_label.setText(f"Status: I2C read = {value} (0x{value:X})")
             except Exception as e:
                 logger.error(f"Read error: {e}")
                 self._input_value_label.setText("ERROR")
@@ -468,7 +475,7 @@ class DeviceControlPanel(QWidget):
                 return
 
             device_type = getattr(device, "device_type", "")
-            if device_type not in ("DigitalInput", "AnalogInput", "ADS1115"):
+            if device_type not in self.READABLE_DEVICE_TYPES:
                 self._continuous_checkbox.setChecked(False)
                 QMessageBox.warning(
                     self,
@@ -555,7 +562,7 @@ class DeviceControlPanel(QWidget):
             return
 
         device_type = getattr(device, "device_type", "")
-        if device_type not in ("DigitalInput", "AnalogInput", "ADS1115"):
+        if device_type not in self.READABLE_DEVICE_TYPES:
             self._input_poll_timer.stop()
             self._continuous_checkbox.setChecked(False)
             return
@@ -590,6 +597,9 @@ class DeviceControlPanel(QWidget):
                     voltage = await device.read_voltage(channel)
                     display = f"{raw_value}\n{voltage:.3f}V"
                     self._input_value_label.setText(display)
+                elif device_type == "GenericI2C":
+                    value = await device.read()
+                    self._input_value_label.setText(f"{value}\n0x{value:X}")
             except Exception as e:
                 logger.error(f"Poll read error: {e}")
                 self._input_poll_timer.stop()

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -395,7 +396,7 @@ class HardwarePanel(QWidget):
 
         pin_spinboxes: dict[str, QSpinBox] = {}
         ads1115_settings: dict[str, QSpinBox] = {}
-        i2c_settings: dict[str, QSpinBox] = {}
+        i2c_settings: dict[str, QWidget] = {}
 
         def update_pin_inputs():
             while pin_layout.rowCount() > 0:
@@ -439,6 +440,14 @@ class HardwarePanel(QWidget):
                 )
                 i2c_settings["register"] = reg_spin
                 pin_layout.addRow("Register:", reg_spin)
+
+                word_check = QCheckBox("16-bit big-endian (combine 2 registers)")
+                word_check.setToolTip(
+                    "Read 2 bytes MSB-first from the register (e.g. the AS5600 "
+                    "12-bit angle at 0x0E/0x0F)"
+                )
+                i2c_settings["read_word"] = word_check
+                pin_layout.addRow("Word read:", word_check)
 
                 note = QLabel("Note: Uses I2C on GPIO2 (SDA) / GPIO3 (SCL)")
                 note.setProperty("textRole", "muted")
@@ -536,6 +545,8 @@ class HardwarePanel(QWidget):
                 reg = i2c_settings["register"].value()
                 if reg >= 0:  # -1 (special "None") ⇒ omit, leaving raw-byte read
                     settings["register"] = reg
+                if i2c_settings["read_word"].isChecked():
+                    settings["read_word"] = True
 
             try:
                 self._hardware_manager.add_device_multi_pin(
@@ -696,7 +707,7 @@ class HardwarePanel(QWidget):
 
         pin_spinboxes: dict[str, QSpinBox] = {}
         ads1115_settings: dict[str, QSpinBox | QComboBox] = {}
-        i2c_settings: dict[str, QSpinBox] = {}
+        i2c_settings: dict[str, QWidget] = {}
 
         if is_ads1115:
             addr_spin = QSpinBox()
@@ -761,6 +772,15 @@ class HardwarePanel(QWidget):
             i2c_settings["register"] = reg_spin
             layout.addRow("Register:", reg_spin)
 
+            word_check = QCheckBox("16-bit big-endian (combine 2 registers)")
+            word_check.setChecked(bool(current_settings.get("read_word", False)))
+            word_check.setToolTip(
+                "Read 2 bytes MSB-first from the register (e.g. the AS5600 "
+                "12-bit angle at 0x0E/0x0F)"
+            )
+            i2c_settings["read_word"] = word_check
+            layout.addRow("Word read:", word_check)
+
             note = QLabel("Note: Uses I2C on GPIO2 (SDA) / GPIO3 (SCL)")
             note.setProperty("textRole", "muted")
             note.setWordWrap(True)
@@ -807,6 +827,7 @@ class HardwarePanel(QWidget):
                 }
                 reg = i2c_settings["register"].value()
                 new_settings["register"] = reg if reg >= 0 else None
+                new_settings["read_word"] = i2c_settings["read_word"].isChecked()
 
             try:
                 device.name = new_name
