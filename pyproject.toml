@@ -64,6 +64,11 @@ audio = [
 ]
 i2c = [
     "adafruit-circuitpython-ads1x15",
+    # Generic register-level I2C (smbus2). Pure-Python but imports `fcntl`, so it
+    # is Linux/Pi-only at runtime — GenericI2CDevice lazy-imports it inside
+    # initialize(), so non-Linux dev installs are unaffected (it is never imported
+    # there). Installs fine on every OS for `uv sync`.
+    "smbus2>=0.4.0",
 ]
 dev = [
     "pytest>=7.0.0",
