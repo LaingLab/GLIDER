@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-06-18T14:44:56.138970",
+    "modified_at": "2026-06-18T14:53:16.851749",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -132,7 +132,7 @@
         "state": {
           "value": 0
         },
-        "device_id": "left_pwm",
+        "device_id": "right_pwm",
         "visible_in_runner": false
       },
       {
