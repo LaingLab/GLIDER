@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-06-18T12:53:30.257581",
+    "modified_at": "2026-06-18T13:53:50.456743",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -78,8 +78,8 @@
         "id": "startexperiment_dcbf5b5b",
         "node_type": "StartExperiment",
         "position": [
-          -508.5321394485439,
-          -393.47371919409693
+          -496.2856042672298,
+          -305.8638905893123
         ],
         "state": {},
         "device_id": null,
@@ -100,8 +100,8 @@
         "id": "output_1108779f",
         "node_type": "Output",
         "position": [
-          -501.05322629964706,
-          -261.1699006365807
+          -493.5168969573,
+          -217.8360069180851
         ],
         "state": {},
         "device_id": "right_enable",
@@ -111,8 +111,8 @@
         "id": "output_f8aef4a8",
         "node_type": "Output",
         "position": [
-          -504.3280839878801,
-          -147.36859597048442
+          -495.8497134777397,
+          -134.18001962137708
         ],
         "state": {},
         "device_id": "left_enable",
@@ -126,7 +126,7 @@
           -36.02343457056289
         ],
         "state": {
-          "value": 10
+          "value": 150
         },
         "device_id": "right_pwm",
         "visible_in_runner": false
@@ -135,8 +135,8 @@
         "id": "delay_5388a83f",
         "node_type": "Delay",
         "position": [
-          -497.778368611414,
-          -50.760294167611306
+          -500.04679961330436,
+          -50.00415050031451
         ],
         "state": {},
         "device_id": null,
@@ -159,7 +159,7 @@
         "id": "output_3b280820",
         "node_type": "Output",
         "position": [
-          -306.1991938497843,
+          -303.9307628478939,
           138.36273732784372
         ],
         "state": {},
@@ -198,7 +198,7 @@
           -37.660863414679355
         ],
         "state": {
-          "value": 10
+          "value": 150
         },
         "device_id": "left_pwm",
         "visible_in_runner": false
@@ -221,7 +221,9 @@
           -116.74867658550599,
           59.315859878119966
         ],
-        "state": {},
+        "state": {
+          "duration": 3.0
+        },
         "device_id": null,
         "visible_in_runner": false
       }
