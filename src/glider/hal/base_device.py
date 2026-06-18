@@ -805,6 +805,12 @@ class GenericI2CDevice(BaseDevice):
     - i2c_address: 7-bit address, 0x03-0x77 (default 0x40)
     - register: optional default register for the no-arg ``read`` action. When
         None (default), ``read`` performs a raw byte receive instead.
+    - read_word: when True (and ``register`` is set), the no-arg ``read`` reads
+        two bytes big-endian (MSB first) and returns the combined 16-bit value,
+        instead of a single byte. This is what most 16-bit sensors need — e.g.
+        the AS5600 magnetic encoder, whose 12-bit angle lives in ANGLE_H/ANGLE_L
+        at 0x0E/0x0F. Default False. (SMBus-native little-endian word reads are
+        still available explicitly via the ``read_word_data`` action.)
 
     The transfer methods take ``None``-sentinel defaults for their required
     arguments and validate presence explicitly. This is deliberate: the
@@ -823,6 +829,7 @@ class GenericI2CDevice(BaseDevice):
         self._address = self._validate_address(config.settings.get("i2c_address", 0x40))
         register = config.settings.get("register", None)
         self._register = self._validate_register(register) if register is not None else None
+        self._read_word = bool(config.settings.get("read_word", False))
         self._bus = None  # smbus2.SMBus handle, created in initialize()
         self._lock = asyncio.Lock()  # fallback when the board exposes no i2c_lock
 
@@ -908,6 +915,11 @@ class GenericI2CDevice(BaseDevice):
         return self._register
 
     @property
+    def read_word(self) -> bool:
+        """Whether the no-arg ``read`` returns a big-endian 16-bit word."""
+        return self._read_word
+
+    @property
     def actions(self) -> dict[str, Callable]:
         return {
             "read": self.read,
@@ -917,6 +929,7 @@ class GenericI2CDevice(BaseDevice):
             "write_byte_data": self.write_byte_data,
             "read_word_data": self.read_word_data,
             "write_word_data": self.write_word_data,
+            "read_word_be": self.read_word_be,
             "read_block": self.read_block,
             "write_block": self.write_block,
         }
@@ -963,10 +976,17 @@ class GenericI2CDevice(BaseDevice):
     # --- actions ---
 
     async def read(self) -> int:
-        """No-arg read: configured default register if set, else a raw byte."""
-        if self._register is not None:
-            return await self.read_byte_data(self._register)
-        return await self.read_byte()
+        """No-arg read.
+
+        - no default register -> a raw byte receive
+        - default register + read_word -> a big-endian 16-bit word
+        - default register otherwise -> a single byte from that register
+        """
+        if self._register is None:
+            return await self.read_byte()
+        if self._read_word:
+            return await self.read_word_be(self._register)
+        return await self.read_byte_data(self._register)
 
     async def read_byte(self) -> int:
         """Receive a single byte (no register)."""
@@ -989,9 +1009,21 @@ class GenericI2CDevice(BaseDevice):
         await self._transfer("write_byte_data", self._address, register, value)
 
     async def read_word_data(self, register: Any = None) -> int:
-        """Read a 16-bit word from ``register``."""
+        """Read a 16-bit word from ``register`` (SMBus-native, little-endian)."""
         register = self._validate_register(register)
         return await self._transfer("read_word_data", self._address, register)
+
+    async def read_word_be(self, register: Any = None) -> int:
+        """Read two bytes starting at ``register``, MSB first (big-endian).
+
+        Reads ``register`` (high byte) and ``register+1`` (low byte) in address
+        order and returns ``(high << 8) | low``. This is the layout used by most
+        16-bit I2C sensors — e.g. the AS5600's 12-bit angle at 0x0E/0x0F — and
+        avoids the byte-swap you'd get from the SMBus-native ``read_word_data``.
+        """
+        register = self._validate_register(register)
+        data = await self.read_block(register, 2)
+        return (int(data[0]) << 8) | int(data[1])
 
     async def write_word_data(self, register: Any = None, value: Any = None) -> None:
         """Write ``value`` (a 16-bit word) to ``register``."""

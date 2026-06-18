@@ -80,9 +80,18 @@ def test_actions_expose_full_smbus_surface():
         "write_byte_data",
         "read_word_data",
         "write_word_data",
+        "read_word_be",
         "read_block",
         "write_block",
     }
+
+
+def test_read_word_setting_defaults_false():
+    assert _make_device().read_word is False
+
+
+def test_read_word_setting_parsed():
+    assert _make_device(settings={"read_word": True}).read_word is True
 
 
 # --- Lifecycle ----------------------------------------------------------------
@@ -197,6 +206,28 @@ async def test_read_alias_raw_byte_when_no_default_register(fake_smbus2):
     device = await _initialized(settings={"i2c_address": 0x50})
     assert await device.read() == 0x07
     bus.read_byte.assert_called_once_with(0x50)
+
+
+# --- Big-endian 2-byte read (e.g. AS5600 12-bit angle) ------------------------
+
+
+async def test_read_word_be_combines_two_registers_msb_first(fake_smbus2):
+    _module, bus = fake_smbus2
+    # AS5600 ANGLE_H=0x0A, ANGLE_L=0xBC  -> 0x0ABC (2748)
+    bus.read_i2c_block_data.return_value = [0x0A, 0xBC]
+    device = await _initialized(settings={"i2c_address": 0x36})
+    assert await device.read_word_be(0x0E) == 0x0ABC
+    bus.read_i2c_block_data.assert_called_once_with(0x36, 0x0E, 2)
+
+
+async def test_read_alias_uses_big_endian_word_when_read_word_set(fake_smbus2):
+    _module, bus = fake_smbus2
+    bus.read_i2c_block_data.return_value = [0x0A, 0xBC]
+    device = await _initialized(settings={"i2c_address": 0x36, "register": 0x0E, "read_word": True})
+    assert await device.read() == 0x0ABC
+    bus.read_i2c_block_data.assert_called_once_with(0x36, 0x0E, 2)
+    # Must NOT fall back to the single-byte read.
+    bus.read_byte_data.assert_not_called()
 
 
 # --- Validation / error paths -------------------------------------------------
