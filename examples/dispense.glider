@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-06-18T14:38:08.230714",
+    "modified_at": "2026-06-18T14:44:56.138970",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -88,114 +88,46 @@
   "flow": {
     "nodes": [
       {
-        "id": "startexperiment_dcbf5b5b",
-        "node_type": "StartExperiment",
+        "id": "startfunction_55eb2b2d",
+        "node_type": "StartFunction",
         "position": [
-          -496.2856042672298,
-          -305.8638905893123
-        ],
-        "state": {},
-        "device_id": null,
-        "visible_in_runner": false
-      },
-      {
-        "id": "endexperiment_f6d0fd7d",
-        "node_type": "EndExperiment",
-        "position": [
-          106.68414843047805,
-          230.81920462934085
-        ],
-        "state": {},
-        "device_id": null,
-        "visible_in_runner": false
-      },
-      {
-        "id": "output_1108779f",
-        "node_type": "Output",
-        "position": [
-          -493.5168969573,
-          -217.8360069180851
-        ],
-        "state": {},
-        "device_id": "right_enable",
-        "visible_in_runner": false
-      },
-      {
-        "id": "output_f8aef4a8",
-        "node_type": "Output",
-        "position": [
-          -495.8497134777397,
-          -134.18001962137708
-        ],
-        "state": {},
-        "device_id": "left_enable",
-        "visible_in_runner": false
-      },
-      {
-        "id": "output_9e23dcbf",
-        "node_type": "Output",
-        "position": [
-          -309.47405153801736,
-          -36.02343457056289
+          -675.6521739130433,
+          -34.78260869565216
         ],
         "state": {
-          "value": 150
-        },
-        "device_id": "right_pwm",
-        "visible_in_runner": false
-      },
-      {
-        "id": "delay_5388a83f",
-        "node_type": "Delay",
-        "position": [
-          -500.04679961330436,
-          -50.00415050031451
-        ],
-        "state": {},
-        "device_id": null,
-        "visible_in_runner": false
-      },
-      {
-        "id": "delay_9b342666",
-        "node_type": "Delay",
-        "position": [
-          -307.8366226939008,
-          58.9474383881938
-        ],
-        "state": {
-          "duration": 3.0
+          "function_name": "Clockwise"
         },
         "device_id": null,
         "visible_in_runner": false
       },
       {
-        "id": "output_3b280820",
-        "node_type": "Output",
+        "id": "endfunction_b81800c4",
+        "node_type": "EndFunction",
         "position": [
-          -303.9307628478939,
-          138.36273732784372
-        ],
-        "state": {},
-        "device_id": "right_pwm",
-        "visible_in_runner": false
-      },
-      {
-        "id": "delay_1aa5dd4e",
-        "node_type": "Delay",
-        "position": [
-          -307.8366226939008,
-          221.8716083777849
+          -668.6956521739129,
+          316.5217391304348
         ],
         "state": {},
         "device_id": null,
         "visible_in_runner": false
       },
       {
-        "id": "output_329f5320",
+        "id": "delay_c9cd6435",
+        "node_type": "Delay",
+        "position": [
+          -673.0434782608696,
+          140.00000000000003
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_93131922",
         "node_type": "Output",
         "position": [
-          -123.33932768307487,
-          137.46215146357963
+          -671.304347826087,
+          226.95652173913044
         ],
         "state": {
           "value": 0
@@ -204,137 +136,142 @@
         "visible_in_runner": false
       },
       {
-        "id": "output_0ecf3f6b",
+        "id": "output_35c58b2d",
         "node_type": "Output",
         "position": [
-          -119.57324134160692,
-          -37.660863414679355
+          -673.913043478261,
+          52.17391304347828
         ],
         "state": {
-          "value": 150
+          "value": 255
         },
-        "device_id": "left_pwm",
+        "device_id": "right_pwm",
         "visible_in_runner": false
       },
       {
-        "id": "delay_b0cbcc9b",
-        "node_type": "Delay",
+        "id": "startfunction_829bc011",
+        "node_type": "StartFunction",
         "position": [
-          -118.63171975623996,
-          226.9067020734431
+          -440.86956521739137,
+          -29.565217391304355
+        ],
+        "state": {
+          "function_name": "CounterClockwise"
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "endfunction_774b2171",
+        "node_type": "EndFunction",
+        "position": [
+          -431.30434782608705,
+          324.34782608695656
         ],
         "state": {},
         "device_id": null,
         "visible_in_runner": false
       },
       {
-        "id": "delay_91b2ccea",
-        "node_type": "Delay",
+        "id": "output_1eb9d123",
+        "node_type": "Output",
         "position": [
-          -116.74867658550599,
-          59.315859878119966
+          -434.7826086956523,
+          235.6521739130435
         ],
         "state": {
-          "duration": 3.0
+          "value": 0
         },
+        "device_id": "left_pwm",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_92ab806d",
+        "node_type": "Output",
+        "position": [
+          -438.26086956521743,
+          52.173913043478265
+        ],
+        "state": {
+          "value": 255
+        },
+        "device_id": "left_pwm",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_7fa31b28",
+        "node_type": "Delay",
+        "position": [
+          -434.7826086956522,
+          143.47826086956525
+        ],
+        "state": {},
         "device_id": null,
         "visible_in_runner": false
       }
     ],
     "connections": [
       {
-        "id": "conn_b4859bdd",
-        "from_node": "startexperiment_dcbf5b5b",
+        "id": "conn_a1bc32c1",
+        "from_node": "startfunction_55eb2b2d",
         "from_output": 0,
-        "to_node": "output_1108779f",
+        "to_node": "output_35c58b2d",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_c27f2f23",
-        "from_node": "output_1108779f",
+        "id": "conn_794ccf82",
+        "from_node": "output_35c58b2d",
         "from_output": 0,
-        "to_node": "output_f8aef4a8",
+        "to_node": "delay_c9cd6435",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_df39a553",
-        "from_node": "output_f8aef4a8",
+        "id": "conn_bf6375c8",
+        "from_node": "delay_c9cd6435",
         "from_output": 0,
-        "to_node": "delay_5388a83f",
+        "to_node": "output_93131922",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_bf360689",
-        "from_node": "delay_5388a83f",
+        "id": "conn_2862814d",
+        "from_node": "output_93131922",
         "from_output": 0,
-        "to_node": "output_9e23dcbf",
+        "to_node": "endfunction_b81800c4",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_f1ef7d5c",
-        "from_node": "output_9e23dcbf",
+        "id": "conn_de20a700",
+        "from_node": "startfunction_829bc011",
         "from_output": 0,
-        "to_node": "delay_9b342666",
+        "to_node": "output_92ab806d",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_36b119e9",
-        "from_node": "delay_9b342666",
+        "id": "conn_e004db3e",
+        "from_node": "output_92ab806d",
         "from_output": 0,
-        "to_node": "output_3b280820",
+        "to_node": "delay_7fa31b28",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_51ba5c7f",
-        "from_node": "output_3b280820",
+        "id": "conn_01d49463",
+        "from_node": "delay_7fa31b28",
         "from_output": 0,
-        "to_node": "delay_1aa5dd4e",
+        "to_node": "output_1eb9d123",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_cc8c010a",
-        "from_node": "delay_1aa5dd4e",
+        "id": "conn_66a471da",
+        "from_node": "output_1eb9d123",
         "from_output": 0,
-        "to_node": "output_0ecf3f6b",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_8e5cc867",
-        "from_node": "output_0ecf3f6b",
-        "from_output": 0,
-        "to_node": "delay_91b2ccea",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_65e91e76",
-        "from_node": "delay_91b2ccea",
-        "from_output": 0,
-        "to_node": "output_329f5320",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_caf46691",
-        "from_node": "output_329f5320",
-        "from_output": 0,
-        "to_node": "delay_b0cbcc9b",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_767a1b7d",
-        "from_node": "delay_b0cbcc9b",
-        "from_output": 0,
-        "to_node": "endexperiment_f6d0fd7d",
+        "to_node": "endfunction_774b2171",
         "to_input": 0,
         "connection_type": "exec"
       }
@@ -368,5 +305,17 @@
     "zones": [],
     "config_width": 0,
     "config_height": 0
-  }
+  },
+  "manual_controls": [
+    {
+      "slot": 0,
+      "start_node_id": "startfunction_55eb2b2d",
+      "label": "Clockwise"
+    },
+    {
+      "slot": 1,
+      "start_node_id": "startfunction_829bc011",
+      "label": "CounterClockwise"
+    }
+  ]
 }
