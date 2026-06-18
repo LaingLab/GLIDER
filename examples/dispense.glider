@@ -1,0 +1,357 @@
+{
+  "metadata": {
+    "id": "5735bf6d-30d4-4883-b9e3-25ed2e7b6a87",
+    "name": "Untitled Experiment",
+    "description": "",
+    "author": "",
+    "version": "1.0.0",
+    "created_at": "2026-06-18T12:37:11.500380",
+    "modified_at": "2026-06-18T12:53:30.257581",
+    "glider_version": "1.0.0",
+    "protocol": "",
+    "experiment_type": "",
+    "experimenter": "",
+    "lab": "",
+    "project": "",
+    "notes": "",
+    "recording_directory": "",
+    "subjects": [],
+    "active_subject_id": null
+  },
+  "hardware": {
+    "boards": [
+      {
+        "id": "pi",
+        "driver_type": "raspberry_pi",
+        "port": null,
+        "board_type": "uno",
+        "auto_reconnect": false,
+        "settings": {}
+      }
+    ],
+    "devices": [
+      {
+        "id": "right_pwm",
+        "device_type": "PWMOutput",
+        "name": "right_pwm",
+        "board_id": "pi",
+        "pins": {
+          "output": 20
+        },
+        "settings": {}
+      },
+      {
+        "id": "left_pwm",
+        "device_type": "PWMOutput",
+        "name": "left_pwm",
+        "board_id": "pi",
+        "pins": {
+          "output": 21
+        },
+        "settings": {}
+      },
+      {
+        "id": "right_enable",
+        "device_type": "DigitalOutput",
+        "name": "right_enable",
+        "board_id": "pi",
+        "pins": {
+          "output": 23
+        },
+        "settings": {}
+      },
+      {
+        "id": "left_enable",
+        "device_type": "DigitalOutput",
+        "name": "left_enable",
+        "board_id": "pi",
+        "pins": {
+          "output": 24
+        },
+        "settings": {}
+      }
+    ]
+  },
+  "flow": {
+    "nodes": [
+      {
+        "id": "startexperiment_dcbf5b5b",
+        "node_type": "StartExperiment",
+        "position": [
+          -508.5321394485439,
+          -393.47371919409693
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "endexperiment_f6d0fd7d",
+        "node_type": "EndExperiment",
+        "position": [
+          106.68414843047805,
+          230.81920462934085
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_1108779f",
+        "node_type": "Output",
+        "position": [
+          -501.05322629964706,
+          -261.1699006365807
+        ],
+        "state": {},
+        "device_id": "right_enable",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_f8aef4a8",
+        "node_type": "Output",
+        "position": [
+          -504.3280839878801,
+          -147.36859597048442
+        ],
+        "state": {},
+        "device_id": "left_enable",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_9e23dcbf",
+        "node_type": "Output",
+        "position": [
+          -309.47405153801736,
+          -36.02343457056289
+        ],
+        "state": {
+          "value": 10
+        },
+        "device_id": "right_pwm",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_5388a83f",
+        "node_type": "Delay",
+        "position": [
+          -497.778368611414,
+          -50.760294167611306
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_9b342666",
+        "node_type": "Delay",
+        "position": [
+          -307.8366226939008,
+          58.9474383881938
+        ],
+        "state": {
+          "duration": 3.0
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_3b280820",
+        "node_type": "Output",
+        "position": [
+          -306.1991938497843,
+          138.36273732784372
+        ],
+        "state": {},
+        "device_id": "right_pwm",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_1aa5dd4e",
+        "node_type": "Delay",
+        "position": [
+          -307.8366226939008,
+          221.8716083777849
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_329f5320",
+        "node_type": "Output",
+        "position": [
+          -123.33932768307487,
+          137.46215146357963
+        ],
+        "state": {
+          "value": 0
+        },
+        "device_id": "left_pwm",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_0ecf3f6b",
+        "node_type": "Output",
+        "position": [
+          -119.57324134160692,
+          -37.660863414679355
+        ],
+        "state": {
+          "value": 10
+        },
+        "device_id": "left_pwm",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_b0cbcc9b",
+        "node_type": "Delay",
+        "position": [
+          -118.63171975623996,
+          226.9067020734431
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_91b2ccea",
+        "node_type": "Delay",
+        "position": [
+          -116.74867658550599,
+          59.315859878119966
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn_b4859bdd",
+        "from_node": "startexperiment_dcbf5b5b",
+        "from_output": 0,
+        "to_node": "output_1108779f",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_c27f2f23",
+        "from_node": "output_1108779f",
+        "from_output": 0,
+        "to_node": "output_f8aef4a8",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_df39a553",
+        "from_node": "output_f8aef4a8",
+        "from_output": 0,
+        "to_node": "delay_5388a83f",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_bf360689",
+        "from_node": "delay_5388a83f",
+        "from_output": 0,
+        "to_node": "output_9e23dcbf",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_f1ef7d5c",
+        "from_node": "output_9e23dcbf",
+        "from_output": 0,
+        "to_node": "delay_9b342666",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_36b119e9",
+        "from_node": "delay_9b342666",
+        "from_output": 0,
+        "to_node": "output_3b280820",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_51ba5c7f",
+        "from_node": "output_3b280820",
+        "from_output": 0,
+        "to_node": "delay_1aa5dd4e",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_cc8c010a",
+        "from_node": "delay_1aa5dd4e",
+        "from_output": 0,
+        "to_node": "output_0ecf3f6b",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_8e5cc867",
+        "from_node": "output_0ecf3f6b",
+        "from_output": 0,
+        "to_node": "delay_91b2ccea",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_65e91e76",
+        "from_node": "delay_91b2ccea",
+        "from_output": 0,
+        "to_node": "output_329f5320",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_caf46691",
+        "from_node": "output_329f5320",
+        "from_output": 0,
+        "to_node": "delay_b0cbcc9b",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_767a1b7d",
+        "from_node": "delay_b0cbcc9b",
+        "from_output": 0,
+        "to_node": "endexperiment_f6d0fd7d",
+        "to_input": 0,
+        "connection_type": "exec"
+      }
+    ]
+  },
+  "dashboard": {
+    "widgets": [],
+    "layout": "vertical",
+    "columns": 1
+  },
+  "camera": {
+    "camera_index": 0,
+    "resolution": [
+      640,
+      480
+    ],
+    "fps": 30,
+    "exposure": -1,
+    "brightness": 128,
+    "contrast": 128,
+    "cv_enabled": true,
+    "cv_backend": "background_subtraction",
+    "confidence_threshold": 0.5,
+    "tracking_enabled": true,
+    "max_disappeared": 50,
+    "video_recording_enabled": true,
+    "audio_device_name": null,
+    "audio_device_index": null
+  },
+  "zones": {
+    "zones": [],
+    "config_width": 0,
+    "config_height": 0
+  }
+}
