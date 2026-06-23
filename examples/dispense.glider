@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-06-18T14:53:16.851749",
+    "modified_at": "2026-06-23T14:59:18.908947",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -88,59 +88,66 @@
   "flow": {
     "nodes": [
       {
-        "id": "startfunction_55eb2b2d",
+        "id": "startfunction_1f0c8d9c",
         "node_type": "StartFunction",
         "position": [
-          -675.6521739130433,
-          -34.78260869565216
+          -1042.0,
+          -5.0
         ],
-        "state": {
-          "function_name": "Clockwise"
-        },
+        "state": {},
         "device_id": null,
         "visible_in_runner": false
       },
       {
-        "id": "endfunction_b81800c4",
+        "id": "endfunction_08a275e2",
         "node_type": "EndFunction",
         "position": [
-          -668.6956521739129,
-          316.5217391304348
+          -30.449073554183066,
+          198.176670409882
         ],
         "state": {},
         "device_id": null,
         "visible_in_runner": false
       },
       {
-        "id": "delay_c9cd6435",
-        "node_type": "Delay",
+        "id": "output_0c4a9031",
+        "node_type": "Output",
         "position": [
-          -673.0434782608696,
-          140.00000000000003
+          -648.5704660303202,
+          34.28523301516002
         ],
         "state": {},
-        "device_id": null,
+        "device_id": "left_enable",
         "visible_in_runner": false
       },
       {
-        "id": "output_93131922",
+        "id": "output_a6ff08c4",
         "node_type": "Output",
         "position": [
-          -671.304347826087,
-          226.95652173913044
+          -844.0,
+          14.0
         ],
-        "state": {
-          "value": 0
-        },
-        "device_id": "right_pwm",
+        "state": {},
+        "device_id": "right_enable",
         "visible_in_runner": false
       },
       {
-        "id": "output_35c58b2d",
+        "id": "waitforinput_448bd202",
+        "node_type": "WaitForInput",
+        "position": [
+          -421.67678270634497,
+          152.06667602470517
+        ],
+        "state": {},
+        "device_id": "i2c",
+        "visible_in_runner": true
+      },
+      {
+        "id": "output_603092eb",
         "node_type": "Output",
         "position": [
-          -673.913043478261,
-          52.17391304347828
+          -649.3658057271198,
+          146.31280179674349
         ],
         "state": {
           "value": 255
@@ -149,129 +156,63 @@
         "visible_in_runner": false
       },
       {
-        "id": "startfunction_829bc011",
-        "node_type": "StartFunction",
-        "position": [
-          -440.86956521739137,
-          -29.565217391304355
-        ],
-        "state": {
-          "function_name": "CounterClockwise"
-        },
-        "device_id": null,
-        "visible_in_runner": false
-      },
-      {
-        "id": "endfunction_774b2171",
-        "node_type": "EndFunction",
-        "position": [
-          -431.30434782608705,
-          324.34782608695656
-        ],
-        "state": {},
-        "device_id": null,
-        "visible_in_runner": false
-      },
-      {
-        "id": "output_1eb9d123",
+        "id": "output_56a3645d",
         "node_type": "Output",
         "position": [
-          -434.7826086956523,
-          235.6521739130435
-        ],
-        "state": {
-          "value": 0
-        },
-        "device_id": "left_pwm",
-        "visible_in_runner": false
-      },
-      {
-        "id": "output_92ab806d",
-        "node_type": "Output",
-        "position": [
-          -438.26086956521743,
-          52.173913043478265
-        ],
-        "state": {
-          "value": 255
-        },
-        "device_id": "left_pwm",
-        "visible_in_runner": false
-      },
-      {
-        "id": "delay_7fa31b28",
-        "node_type": "Delay",
-        "position": [
-          -434.7826086956522,
-          143.47826086956525
+          -236.73082537900058,
+          183.30199326221225
         ],
         "state": {},
-        "device_id": null,
+        "device_id": "right_pwm",
         "visible_in_runner": false
       }
     ],
     "connections": [
       {
-        "id": "conn_a1bc32c1",
-        "from_node": "startfunction_55eb2b2d",
+        "id": "conn_d928f243",
+        "from_node": "startfunction_1f0c8d9c",
         "from_output": 0,
-        "to_node": "output_35c58b2d",
+        "to_node": "output_a6ff08c4",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_794ccf82",
-        "from_node": "output_35c58b2d",
+        "id": "conn_87df6777",
+        "from_node": "output_a6ff08c4",
         "from_output": 0,
-        "to_node": "delay_c9cd6435",
+        "to_node": "output_0c4a9031",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_bf6375c8",
-        "from_node": "delay_c9cd6435",
+        "id": "conn_944a25c5",
+        "from_node": "output_0c4a9031",
         "from_output": 0,
-        "to_node": "output_93131922",
+        "to_node": "output_603092eb",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_2862814d",
-        "from_node": "output_93131922",
+        "id": "conn_223cfc81",
+        "from_node": "output_603092eb",
         "from_output": 0,
-        "to_node": "endfunction_b81800c4",
+        "to_node": "waitforinput_448bd202",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_de20a700",
-        "from_node": "startfunction_829bc011",
+        "id": "conn_37639000",
+        "from_node": "waitforinput_448bd202",
         "from_output": 0,
-        "to_node": "output_92ab806d",
+        "to_node": "output_56a3645d",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_e004db3e",
-        "from_node": "output_92ab806d",
+        "id": "conn_9414d528",
+        "from_node": "output_56a3645d",
         "from_output": 0,
-        "to_node": "delay_7fa31b28",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_01d49463",
-        "from_node": "delay_7fa31b28",
-        "from_output": 0,
-        "to_node": "output_1eb9d123",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_66a471da",
-        "from_node": "output_1eb9d123",
-        "from_output": 0,
-        "to_node": "endfunction_774b2171",
+        "to_node": "endfunction_08a275e2",
         "to_input": 0,
         "connection_type": "exec"
       }
@@ -316,6 +257,11 @@
       "slot": 1,
       "start_node_id": "startfunction_829bc011",
       "label": "CounterClockwise"
+    },
+    {
+      "slot": 2,
+      "start_node_id": "startfunction_1f0c8d9c",
+      "label": "MyFunction"
     }
   ]
 }
