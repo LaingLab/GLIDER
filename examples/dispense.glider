@@ -116,7 +116,9 @@
           -648.5704660303202,
           34.28523301516002
         ],
-        "state": {},
+        "state": {
+          "value": 1
+        },
         "device_id": "left_enable",
         "visible_in_runner": false
       },
@@ -127,7 +129,9 @@
           -844.0,
           14.0
         ],
-        "state": {},
+        "state": {
+          "value": 1
+        },
         "device_id": "right_enable",
         "visible_in_runner": false
       },
@@ -138,7 +142,11 @@
           -421.67678270634497,
           152.06667602470517
         ],
-        "state": {},
+        "state": {
+          "threshold_mode": "revolution",
+          "turns_target": 1,
+          "counts_per_turn": 4096
+        },
         "device_id": "i2c",
         "visible_in_runner": true
       },
@@ -162,7 +170,9 @@
           -236.73082537900058,
           183.30199326221225
         ],
-        "state": {},
+        "state": {
+          "value": 0
+        },
         "device_id": "right_pwm",
         "visible_in_runner": false
       }
@@ -250,16 +260,6 @@
   "manual_controls": [
     {
       "slot": 0,
-      "start_node_id": "startfunction_55eb2b2d",
-      "label": "Clockwise"
-    },
-    {
-      "slot": 1,
-      "start_node_id": "startfunction_829bc011",
-      "label": "CounterClockwise"
-    },
-    {
-      "slot": 2,
       "start_node_id": "startfunction_1f0c8d9c",
       "label": "MyFunction"
     }
