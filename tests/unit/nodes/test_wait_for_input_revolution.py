@@ -89,13 +89,75 @@ def test_revolution_state_round_trips():
             "threshold_mode": "revolution",
             "turns_target": 5,
             "counts_per_turn": 1024,
+            "ramp_down": True,
+            "ramp_device_id": "right_pwm",
+            "drive_pwm": 120,
+            "creep_pwm": 25,
+            "ramp_zone": 300,
         }
     )
     assert node._threshold_mode == "revolution"
     assert node._turns_target == 5
     assert node._counts_per_turn == 1024
+    assert node._ramp_down is True
+    assert node._ramp_device_id == "right_pwm"
+    assert node._drive_pwm == 120
+    assert node._creep_pwm == 25
+    assert node._ramp_zone == 300
 
     state = node.get_state()
     assert state["threshold_mode"] == "revolution"
     assert state["turns_target"] == 5
     assert state["counts_per_turn"] == 1024
+    assert state["ramp_down"] is True
+    assert state["ramp_device_id"] == "right_pwm"
+    assert state["drive_pwm"] == 120
+    assert state["creep_pwm"] == 25
+    assert state["ramp_zone"] == 300
+
+
+class _RecordingPWM:
+    """Mock PWMOutput device that records every set_value() write."""
+
+    device_type = "PWMOutput"
+
+    def __init__(self):
+        self.writes: list[int] = []
+
+    async def set_value(self, value: int) -> None:
+        self.writes.append(value)
+
+
+async def test_ramp_down_decelerates_then_stops_at_landing():
+    # Sweep approaching the wrap: full drive outside the 512-count zone, then
+    # easing down as the angle nears 4096, then a wrap to 50 (= turn complete).
+    values = [3000, 3600, 3800, 4000, 4090, 50]
+    node = _make_node(values, turns=1)
+    pwm = _RecordingPWM()
+    node._ramp_down = True
+    node._ramp_device = pwm
+    node._drive_pwm = 100
+    node._creep_pwm = 30
+    node._ramp_zone = 512
+
+    await node._poll_device(timeout=0.0)
+
+    # Triggered on the wrap; value is the post-wrap reading.
+    assert node._trigger_value == 50
+    # Outside the deceleration zone the motor runs at full drive speed.
+    assert pwm.writes[0] == 100
+    # Through the zone the PWM only ever decreases (monotonic ramp down).
+    ramp_writes = pwm.writes[:-1]  # exclude the final stop
+    assert ramp_writes == sorted(ramp_writes, reverse=True)
+    # It is near the creep speed just before the wrap, and stops at the landing.
+    assert pwm.writes[-2] <= node._creep_pwm + 5
+    assert pwm.writes[-1] == 0
+
+
+async def test_no_ramp_writes_when_ramp_device_absent():
+    # Revolution mode without a ramp device must not attempt any PWM writes.
+    node = _make_node([3000, 4090, 50], turns=1)
+    node._ramp_down = True
+    node._ramp_device = None  # not resolved -> ramp is skipped
+    await node._poll_device(timeout=0.0)
+    assert node._trigger_value == 50
