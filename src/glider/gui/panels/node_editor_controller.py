@@ -632,12 +632,14 @@ class NodeEditorController(QObject):
             mode_combo = QComboBox()
             mode_combo.addItem("Digital (Rising Edge)", "digital")
             mode_combo.addItem("Analog (Threshold)", "analog")
+            mode_combo.addItem("Revolution (Turns)", "revolution")
 
             saved_mode = "digital"
             if node_config and node_config.state:
                 saved_mode = node_config.state.get("threshold_mode", "digital")
 
-            mode_combo.setCurrentIndex(0 if saved_mode == "digital" else 1)
+            mode_idx = mode_combo.findData(saved_mode)
+            mode_combo.setCurrentIndex(mode_idx if mode_idx >= 0 else 0)
             mode_combo.currentIndexChanged.connect(
                 lambda idx, nid=node_id, combo=mode_combo: self._on_node_property_changed(
                     nid, "threshold_mode", combo.currentData()
@@ -646,7 +648,7 @@ class NodeEditorController(QObject):
             props_layout.addRow("Mode:", mode_combo)
 
             threshold_spin = QSpinBox()
-            threshold_spin.setRange(0, 1023)
+            threshold_spin.setRange(0, 65535)
             saved_threshold = 512
             if node_config and node_config.state:
                 saved_threshold = node_config.state.get("threshold", 512)
@@ -672,6 +674,33 @@ class NodeEditorController(QObject):
             )
             props_layout.addRow("Direction:", direction_combo)
 
+            # Revolution mode: how many full turns to wait for. Applies only
+            # when Mode is "Revolution (Turns)"; ignored otherwise.
+            turns_spin = QSpinBox()
+            turns_spin.setRange(1, 100000)
+            saved_turns = 1
+            if node_config and node_config.state:
+                saved_turns = node_config.state.get("turns_target", 1)
+            turns_spin.setValue(saved_turns)
+            turns_spin.valueChanged.connect(
+                lambda val, nid=node_id: self._on_node_property_changed(nid, "turns_target", val)
+            )
+            props_layout.addRow("Turns:", turns_spin)
+
+            # Revolution mode: sensor full-scale range (e.g. 4096 for the
+            # 12-bit AS5600 raw angle). A reading jump larger than half this
+            # is treated as one wrap-around / completed turn.
+            counts_spin = QSpinBox()
+            counts_spin.setRange(2, 65535)
+            saved_counts = 4096
+            if node_config and node_config.state:
+                saved_counts = node_config.state.get("counts_per_turn", 4096)
+            counts_spin.setValue(saved_counts)
+            counts_spin.valueChanged.connect(
+                lambda val, nid=node_id: self._on_node_property_changed(nid, "counts_per_turn", val)
+            )
+            props_layout.addRow("Counts/Turn:", counts_spin)
+
             timeout_spin = QDoubleSpinBox()
             timeout_spin.setRange(0.0, 3600.0)
             timeout_spin.setDecimals(1)
@@ -688,7 +717,9 @@ class NodeEditorController(QObject):
 
             info_label = QLabel(
                 "Digital mode: waits for rising edge (LOW \u2192 HIGH)\n"
-                "Analog mode: waits for value to cross threshold"
+                "Analog mode: waits for value to cross threshold\n"
+                "Revolution mode: counts full turns of a wrap-around "
+                "sensor (e.g. AS5600)"
             )
             info_label.setWordWrap(True)
             info_label.setProperty("textRole", "muted")

@@ -187,9 +187,11 @@ class WaitForInputNode(GliderNode):
         self._waiting = False
         self._trigger_value = None
         self._poll_interval = 0.05  # 50ms polling interval
-        self._threshold_mode = "digital"  # "digital" or "analog"
+        self._threshold_mode = "digital"  # "digital", "analog", or "revolution"
         self._threshold = 512  # Default analog threshold
         self._threshold_direction = "above"  # "above" or "below"
+        self._turns_target = 1  # Revolution mode: fire after this many turns
+        self._counts_per_turn = 4096  # Revolution mode: sensor full-scale range
 
     def update_event(self) -> None:
         """Called when inputs change."""
@@ -211,10 +213,17 @@ class WaitForInputNode(GliderNode):
         self._threshold_mode = self._state.get("threshold_mode", "digital")
         self._threshold = self._state.get("threshold", 512)
         self._threshold_direction = self._state.get("threshold_direction", "above")
+        self._turns_target = self._state.get("turns_target", 1)
+        self._counts_per_turn = self._state.get("counts_per_turn", 4096)
 
         logger.info(f"  Waiting for input (timeout: {timeout}s, mode: {self._threshold_mode})")
         if self._threshold_mode == "analog":
             logger.info(f"  Threshold: {self._threshold_direction} {self._threshold}")
+        elif self._threshold_mode == "revolution":
+            logger.info(
+                f"  Revolution: {self._turns_target} turn(s), "
+                f"{self._counts_per_turn} counts/turn"
+            )
 
         self._waiting = True
         self._trigger_value = None
@@ -249,6 +258,7 @@ class WaitForInputNode(GliderNode):
         error_count = 0
         max_errors = 3  # Stop after 3 consecutive errors
         last_value = None  # Track previous value for edge detection
+        turn_count = 0  # Revolution mode: completed turns so far
 
         logger.info(f"  Starting device poll loop, device type: {type(self._device).__name__}")
 
@@ -298,6 +308,24 @@ class WaitForInputNode(GliderNode):
                                 )
                                 triggered = True
 
+                elif self._threshold_mode == "revolution":
+                    # Revolution mode: count wrap-arounds of a sawtooth sensor
+                    # (e.g. AS5600 raw angle 0-4095). A reading delta whose
+                    # magnitude exceeds half the full-scale range can only be
+                    # the 4095<->0 boundary being crossed, i.e. one completed
+                    # turn. Either direction counts. The very first reading has
+                    # no predecessor, so it can never register a phantom wrap.
+                    if isinstance(value, (int, float)) and last_value is not None:
+                        if abs(value - last_value) > self._counts_per_turn / 2:
+                            turn_count += 1
+                            logger.info(
+                                f"  Wrap detected ({last_value} -> {value}); "
+                                f"turn {turn_count}/{self._turns_target}"
+                            )
+                            if turn_count >= self._turns_target:
+                                logger.info("  TRIGGERED! Target turns reached")
+                                triggered = True
+
                 if triggered:
                     self._trigger_value = value
                     return
@@ -330,6 +358,8 @@ class WaitForInputNode(GliderNode):
         state["threshold_mode"] = self._threshold_mode
         state["threshold"] = self._threshold
         state["threshold_direction"] = self._threshold_direction
+        state["turns_target"] = self._turns_target
+        state["counts_per_turn"] = self._counts_per_turn
         return state
 
     def set_state(self, state: dict) -> None:
@@ -338,6 +368,8 @@ class WaitForInputNode(GliderNode):
         self._threshold_mode = state.get("threshold_mode", "digital")
         self._threshold = state.get("threshold", 512)
         self._threshold_direction = state.get("threshold_direction", "above")
+        self._turns_target = state.get("turns_target", 1)
+        self._counts_per_turn = state.get("counts_per_turn", 4096)
 
     def _exec_timeout(self) -> None:
         """Trigger the timeout output."""
