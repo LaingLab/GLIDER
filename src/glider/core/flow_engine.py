@@ -269,6 +269,12 @@ class FlowEngine:
                 else:
                     logger.warning("FunctionCall node has no function_start_id in state")
 
+        # Give nodes that ask for it access to the hardware manager, so they
+        # can reach devices other than their own bound one (e.g. revolution
+        # ramp-down needs to drive a motor PWM while bound to the encoder).
+        if self._hardware_manager and hasattr(node, "set_hardware_manager"):
+            node.set_hardware_manager(self._hardware_manager)
+
         # Bind to device if specified
         if device_id and self._hardware_manager:
             device = self._hardware_manager.get_device(device_id)

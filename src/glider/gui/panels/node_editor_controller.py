@@ -701,6 +701,78 @@ class NodeEditorController(QObject):
             )
             props_layout.addRow("Counts/Turn:", counts_spin)
 
+            # Revolution mode "ramp down to landing": as the angle nears the
+            # wrap, ease a motor's PWM from drive speed down to a creep so it
+            # coasts almost nothing and lands on ~0. Applies only in revolution
+            # mode with a ramp device selected.
+            ramp_check = QCheckBox("Ramp down to landing (revolution)")
+            saved_ramp = False
+            if node_config and node_config.state:
+                saved_ramp = node_config.state.get("ramp_down", False)
+            ramp_check.setChecked(saved_ramp)
+            ramp_check.toggled.connect(
+                lambda checked, nid=node_id: self._on_node_property_changed(
+                    nid, "ramp_down", checked
+                )
+            )
+            props_layout.addRow(ramp_check)
+
+            ramp_device_combo = QComboBox()
+            ramp_device_combo.addItem("-- Ramp Device (PWM) --", None)
+            saved_ramp_device = None
+            if node_config and node_config.state:
+                saved_ramp_device = node_config.state.get("ramp_device_id")
+            ramp_current_index = 0
+            ramp_idx = 1
+            for dev_id, device in self._hardware_manager.devices.items():
+                if getattr(device, "device_type", "") != "PWMOutput":
+                    continue
+                device_name = getattr(device, "name", dev_id)
+                ramp_device_combo.addItem(f"{device_name} (PWMOutput)", dev_id)
+                if dev_id == saved_ramp_device:
+                    ramp_current_index = ramp_idx
+                ramp_idx += 1
+            ramp_device_combo.setCurrentIndex(ramp_current_index)
+            ramp_device_combo.currentIndexChanged.connect(
+                lambda idx, nid=node_id, combo=ramp_device_combo: self._on_node_property_changed(
+                    nid, "ramp_device_id", combo.currentData()
+                )
+            )
+            props_layout.addRow("Ramp Device:", ramp_device_combo)
+
+            drive_pwm_spin = QSpinBox()
+            drive_pwm_spin.setRange(0, 255)
+            saved_drive_pwm = 100
+            if node_config and node_config.state:
+                saved_drive_pwm = node_config.state.get("drive_pwm", 100)
+            drive_pwm_spin.setValue(saved_drive_pwm)
+            drive_pwm_spin.valueChanged.connect(
+                lambda val, nid=node_id: self._on_node_property_changed(nid, "drive_pwm", val)
+            )
+            props_layout.addRow("Drive PWM:", drive_pwm_spin)
+
+            creep_pwm_spin = QSpinBox()
+            creep_pwm_spin.setRange(0, 255)
+            saved_creep_pwm = 30
+            if node_config and node_config.state:
+                saved_creep_pwm = node_config.state.get("creep_pwm", 30)
+            creep_pwm_spin.setValue(saved_creep_pwm)
+            creep_pwm_spin.valueChanged.connect(
+                lambda val, nid=node_id: self._on_node_property_changed(nid, "creep_pwm", val)
+            )
+            props_layout.addRow("Creep PWM:", creep_pwm_spin)
+
+            ramp_zone_spin = QSpinBox()
+            ramp_zone_spin.setRange(1, 65535)
+            saved_ramp_zone = 512
+            if node_config and node_config.state:
+                saved_ramp_zone = node_config.state.get("ramp_zone", 512)
+            ramp_zone_spin.setValue(saved_ramp_zone)
+            ramp_zone_spin.valueChanged.connect(
+                lambda val, nid=node_id: self._on_node_property_changed(nid, "ramp_zone", val)
+            )
+            props_layout.addRow("Ramp Zone (counts):", ramp_zone_spin)
+
             timeout_spin = QDoubleSpinBox()
             timeout_spin.setRange(0.0, 3600.0)
             timeout_spin.setDecimals(1)
@@ -719,7 +791,9 @@ class NodeEditorController(QObject):
                 "Digital mode: waits for rising edge (LOW \u2192 HIGH)\n"
                 "Analog mode: waits for value to cross threshold\n"
                 "Revolution mode: counts full turns of a wrap-around "
-                "sensor (e.g. AS5600)"
+                "sensor (e.g. AS5600)\n"
+                "Ramp down: eases the ramp device's PWM to a creep near the "
+                "wrap so the motor lands on ~0"
             )
             info_label.setWordWrap(True)
             info_label.setProperty("textRole", "muted")

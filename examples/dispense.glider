@@ -145,7 +145,12 @@
         "state": {
           "threshold_mode": "revolution",
           "turns_target": 1,
-          "counts_per_turn": 4096
+          "counts_per_turn": 4096,
+          "ramp_down": true,
+          "ramp_device_id": "right_pwm",
+          "drive_pwm": 100,
+          "creep_pwm": 30,
+          "ramp_zone": 512
         },
         "device_id": "i2c",
         "visible_in_runner": true

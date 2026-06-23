@@ -192,6 +192,23 @@ class WaitForInputNode(GliderNode):
         self._threshold_direction = "above"  # "above" or "below"
         self._turns_target = 1  # Revolution mode: fire after this many turns
         self._counts_per_turn = 4096  # Revolution mode: sensor full-scale range
+        # Revolution-mode "ramp down to landing": decelerate a motor PWM as the
+        # angle approaches the wrap so it coasts almost nothing and lands on ~0.
+        self._ramp_down = False
+        self._ramp_device_id = None
+        self._drive_pwm = 100  # speed before the deceleration zone
+        self._creep_pwm = 30  # minimum speed at the wrap point
+        self._ramp_zone = 512  # counts before the wrap where ramping begins
+        self._hardware_manager = None  # set by the flow engine for device lookup
+        self._ramp_device = None  # resolved PWM device, looked up at execute time
+
+    def set_hardware_manager(self, hardware_manager) -> None:
+        """Give the node access to other devices (e.g. the ramp-down motor).
+
+        The flow engine calls this so revolution-mode ramp-down can drive a
+        PWM device that is not the node's own bound (encoder) device.
+        """
+        self._hardware_manager = hardware_manager
 
     def update_event(self) -> None:
         """Called when inputs change."""
@@ -215,6 +232,23 @@ class WaitForInputNode(GliderNode):
         self._threshold_direction = self._state.get("threshold_direction", "above")
         self._turns_target = self._state.get("turns_target", 1)
         self._counts_per_turn = self._state.get("counts_per_turn", 4096)
+        self._ramp_down = self._state.get("ramp_down", False)
+        self._ramp_device_id = self._state.get("ramp_device_id")
+        self._drive_pwm = self._state.get("drive_pwm", 100)
+        self._creep_pwm = self._state.get("creep_pwm", 30)
+        self._ramp_zone = self._state.get("ramp_zone", 512)
+
+        # Resolve the PWM device to ramp (revolution mode only). If it can't be
+        # found, ramping is silently skipped — the wait still works.
+        self._ramp_device = None
+        if self._threshold_mode == "revolution" and self._ramp_down:
+            if self._ramp_device_id and self._hardware_manager is not None:
+                self._ramp_device = self._hardware_manager.get_device(self._ramp_device_id)
+            if self._ramp_device is None:
+                logger.warning(
+                    f"  Ramp-down enabled but ramp device '{self._ramp_device_id}' "
+                    "not found; continuing without ramp"
+                )
 
         logger.info(f"  Waiting for input (timeout: {timeout}s, mode: {self._threshold_mode})")
         if self._threshold_mode == "analog":
@@ -224,6 +258,11 @@ class WaitForInputNode(GliderNode):
                 f"  Revolution: {self._turns_target} turn(s), "
                 f"{self._counts_per_turn} counts/turn"
             )
+            if self._ramp_device is not None:
+                logger.info(
+                    f"  Ramp-down on '{self._ramp_device_id}': "
+                    f"drive={self._drive_pwm}, creep={self._creep_pwm}, zone={self._ramp_zone}"
+                )
 
         self._waiting = True
         self._trigger_value = None
@@ -326,8 +365,22 @@ class WaitForInputNode(GliderNode):
                                 logger.info("  TRIGGERED! Target turns reached")
                                 triggered = True
 
+                    # Ramp down to landing: on the final turn, ease the motor
+                    # PWM toward a creep as the angle nears the wrap so it
+                    # coasts almost nothing and lands on ~0.
+                    if (
+                        not triggered
+                        and self._ramp_device is not None
+                        and turn_count >= self._turns_target - 1
+                        and isinstance(value, (int, float))
+                    ):
+                        await self._apply_ramp(value)
+
                 if triggered:
                     self._trigger_value = value
+                    # Stop the motor immediately at the landing point.
+                    if self._ramp_device is not None:
+                        await self._set_ramp_pwm(0)
                     return
 
                 last_value = value
@@ -342,6 +395,38 @@ class WaitForInputNode(GliderNode):
 
             # Wait before next poll
             await asyncio.sleep(self._poll_interval)
+
+    async def _apply_ramp(self, value: float) -> None:
+        """Write a decelerating PWM based on how close ``value`` is to the wrap.
+
+        Outside the deceleration zone the motor runs at ``drive_pwm``; within
+        the last ``ramp_zone`` counts before ``counts_per_turn`` the PWM eases
+        linearly down to ``creep_pwm`` at the wrap point.
+        """
+        span = max(1, self._ramp_zone)
+        remaining = self._counts_per_turn - value  # counts until the wrap
+        remaining = max(0, remaining)
+        if remaining >= span:
+            pwm = self._drive_pwm
+        else:
+            frac = remaining / span  # 1.0 at zone entry -> 0.0 at the wrap
+            pwm = self._creep_pwm + (self._drive_pwm - self._creep_pwm) * frac
+        await self._set_ramp_pwm(pwm)
+
+    async def _set_ramp_pwm(self, pwm: float) -> None:
+        """Write a 0-255 PWM value to the resolved ramp device."""
+        device = self._ramp_device
+        if device is None:
+            return
+        pwm_value = max(0, min(255, int(round(pwm))))
+        try:
+            if hasattr(device, "set_value"):
+                await device.set_value(pwm_value)
+            elif hasattr(device, "board"):
+                pin = list(device.pins.values())[0] if getattr(device, "pins", None) else 0
+                await device.board.write_analog(pin, pwm_value)
+        except Exception as e:
+            logger.error(f"  Ramp PWM write failed: {e}")
 
     def _exec_triggered(self) -> None:
         """Trigger the triggered output."""
@@ -360,6 +445,11 @@ class WaitForInputNode(GliderNode):
         state["threshold_direction"] = self._threshold_direction
         state["turns_target"] = self._turns_target
         state["counts_per_turn"] = self._counts_per_turn
+        state["ramp_down"] = self._ramp_down
+        state["ramp_device_id"] = self._ramp_device_id
+        state["drive_pwm"] = self._drive_pwm
+        state["creep_pwm"] = self._creep_pwm
+        state["ramp_zone"] = self._ramp_zone
         return state
 
     def set_state(self, state: dict) -> None:
@@ -370,6 +460,11 @@ class WaitForInputNode(GliderNode):
         self._threshold_direction = state.get("threshold_direction", "above")
         self._turns_target = state.get("turns_target", 1)
         self._counts_per_turn = state.get("counts_per_turn", 4096)
+        self._ramp_down = state.get("ramp_down", False)
+        self._ramp_device_id = state.get("ramp_device_id")
+        self._drive_pwm = state.get("drive_pwm", 100)
+        self._creep_pwm = state.get("creep_pwm", 30)
+        self._ramp_zone = state.get("ramp_zone", 512)
 
     def _exec_timeout(self) -> None:
         """Trigger the timeout output."""
