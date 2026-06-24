@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-06-23T15:39:24.197735",
+    "modified_at": "2026-06-24T14:23:00.800731",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -149,7 +149,7 @@
           "ramp_down": true,
           "ramp_device_id": "right_pwm",
           "drive_pwm": 100,
-          "creep_pwm": 30,
+          "creep_pwm": 10,
           "ramp_zone": 512
         },
         "device_id": "i2c",
