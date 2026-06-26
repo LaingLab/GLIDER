@@ -429,7 +429,7 @@ class NodeEditorController(QObject):
         self._add_divider(props_layout)
 
         # Add device selector for I/O nodes
-        if node_type in ["Output", "Input", "WaitForInput", "MotorGovernor"]:
+        if node_type in ["Output", "Input", "WaitForInput", "MotorGovernor", "DeviceAction"]:
             self._add_section_header(props_layout, "DEVICE")
             device_combo = QComboBox()
             device_combo.addItem("-- Select Device --", None)
@@ -450,6 +450,49 @@ class NodeEditorController(QObject):
                 )
             )
             props_layout.addRow("Device:", device_combo)
+
+            if node_type == "DeviceAction":
+                self._add_section_header(props_layout, "ACTION")
+                action_combo = QComboBox()
+                action_combo.setEditable(True)
+                # Offer the bound device's available actions, if any.
+                bound_id = node_config.device_id if node_config else None
+                if bound_id:
+                    dev = self._hardware_manager.get_device(bound_id)
+                    if dev is not None and hasattr(dev, "actions"):
+                        try:
+                            action_combo.addItems(list(dev.actions.keys()))
+                        except Exception:
+                            pass
+                saved_action = ""
+                if node_config and node_config.state:
+                    saved_action = node_config.state.get("action_name", "")
+                if saved_action:
+                    action_combo.setCurrentText(saved_action)
+                action_combo.currentTextChanged.connect(
+                    lambda txt, nid=node_id: self._on_node_property_changed(nid, "action_name", txt)
+                )
+                props_layout.addRow("Action:", action_combo)
+
+                args_edit = QLineEdit()
+                args_edit.setPlaceholderText("constant args, e.g. on  or  20,10")
+                saved_args = ""
+                if node_config and node_config.state:
+                    saved_args = node_config.state.get("arguments", "")
+                args_edit.setText(saved_args)
+                args_edit.textChanged.connect(
+                    lambda txt, nid=node_id: self._on_node_property_changed(nid, "arguments", txt)
+                )
+                props_layout.addRow("Arguments:", args_edit)
+
+                note = QLabel(
+                    "Args are split on commas and passed to the action (numbers "
+                    "auto-detected). Used when no data inputs are wired — e.g. a "
+                    "BLE 'write' with 'on' / 'off' / '20,10'."
+                )
+                note.setProperty("textRole", "muted")
+                note.setWordWrap(True)
+                props_layout.addRow(note)
 
         elif node_type == "Delay":
             self._add_section_header(props_layout, "CONFIGURATION")
