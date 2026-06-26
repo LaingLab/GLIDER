@@ -58,6 +58,7 @@ class DeviceActionNode(HardwareNode):
     def __init__(self):
         super().__init__()
         self._action_name = ""
+        self._arguments = ""  # constant args typed in node properties
 
     @property
     def action_name(self) -> str:
@@ -66,6 +67,34 @@ class DeviceActionNode(HardwareNode):
     @action_name.setter
     def action_name(self, value: str) -> None:
         self._action_name = value
+
+    @property
+    def arguments(self) -> str:
+        return self._arguments
+
+    @arguments.setter
+    def arguments(self, value: str) -> None:
+        self._arguments = value
+
+    @staticmethod
+    def _coerce(token: str) -> Any:
+        """Coerce a typed argument token to int/float when it looks numeric."""
+        try:
+            return int(token)
+        except ValueError:
+            pass
+        try:
+            return float(token)
+        except ValueError:
+            return token
+
+    @classmethod
+    def _parse_arguments(cls, text: str) -> list:
+        """Split a comma-separated arguments string into coerced values.
+
+        e.g. "20,10" -> [20, 10]; "on" -> ["on"]. Empty tokens are dropped.
+        """
+        return [cls._coerce(tok.strip()) for tok in text.split(",") if tok.strip()]
 
     async def hardware_operation(self) -> None:
         """Execute the device action."""
@@ -77,12 +106,19 @@ class DeviceActionNode(HardwareNode):
             self.set_error("No device bound")
             return
 
-        # Collect arguments
+        # Collect arguments from wired data inputs first.
         args = []
         if self.get_input(1) is not None:
             args.append(self.get_input(1))
         if self.get_input(2) is not None:
             args.append(self.get_input(2))
+
+        # Fall back to the constant arguments typed in the node properties when
+        # nothing is wired. The flow engine doesn't deliver values into action
+        # arg ports, so this is the reliable way to pass a fixed command (e.g.
+        # a BLE "on" / "off" / "20,10").
+        if not args and self._arguments.strip():
+            args = self._parse_arguments(self._arguments)
 
         # Execute action
         result = await self._device.execute_action(self._action_name, *args)
@@ -94,11 +130,13 @@ class DeviceActionNode(HardwareNode):
     def get_state(self) -> dict[str, Any]:
         state = super().get_state()
         state["action_name"] = self._action_name
+        state["arguments"] = self._arguments
         return state
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
         self._action_name = state.get("action_name", "")
+        self._arguments = state.get("arguments", "")
 
 
 class DeviceReadNode(HardwareNode):
