@@ -161,3 +161,33 @@ async def test_no_ramp_writes_when_ramp_device_absent():
     node._ramp_device = None  # not resolved -> ramp is skipped
     await node._poll_device(timeout=0.0)
     assert node._trigger_value == 50
+
+
+async def test_landing_tolerance_stops_before_the_wrap():
+    # Motor climbs toward the wrap and stalls at 4060 (never reaches 4095).
+    # With a 50-count landing tolerance it should still stop, because 4060 is
+    # within 50 of 0 (4096 - 4060 = 36 <= 50). This is the stall case from the
+    # field log, where the old wrap-only logic ran forever.
+    node = _make_node([2000, 3000, 4000, 4060], turns=1)
+    node._land_tolerance = 50
+    # Drive the loop a few iterations; it stalls at 4060 (repeats forever).
+    await node._poll_device(timeout=1.0)
+    assert node._trigger_value == 4060
+
+
+async def test_landing_tolerance_not_armed_when_starting_near_zero():
+    # If the angle starts within tolerance of 0 (e.g. 20) but has NOT yet
+    # passed mid-range, the landing must not trigger immediately. Here it
+    # climbs through the mid-range, arms, then lands near the wrap at 4070.
+    node = _make_node([20, 30, 2048, 4000, 4070], turns=1)
+    node._land_tolerance = 40
+    await node._poll_device(timeout=1.0)
+    assert node._trigger_value == 4070
+
+
+async def test_landing_tolerance_off_uses_pure_wrap_detection():
+    # land_tolerance = 0 -> behaves exactly like wrap-only revolution mode.
+    node = _make_node([0, 1500, 3000, 4090, 60], turns=1)
+    node._land_tolerance = 0
+    await node._poll_device(timeout=0.0)
+    assert node._trigger_value == 60  # only the wrap (4090 -> 60) fires

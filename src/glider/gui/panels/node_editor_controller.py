@@ -773,6 +773,22 @@ class NodeEditorController(QObject):
             )
             props_layout.addRow("Ramp Zone (counts):", ramp_zone_spin)
 
+            # Landing tolerance: stop the moment the angle is within this many
+            # counts of 0 (either side of the wrap), instead of needing a clean
+            # 4095->0 jump. 0 disables it (pure wrap detection). Keeps the motor
+            # moving at landing, avoiding a low-PWM stall short of the target.
+            land_tol_spin = QSpinBox()
+            land_tol_spin.setRange(0, 65535)
+            saved_land_tol = 0
+            if node_config and node_config.state:
+                saved_land_tol = node_config.state.get("land_tolerance", 0)
+            land_tol_spin.setValue(saved_land_tol)
+            land_tol_spin.setSpecialValueText("Off (exact wrap)")
+            land_tol_spin.valueChanged.connect(
+                lambda val, nid=node_id: self._on_node_property_changed(nid, "land_tolerance", val)
+            )
+            props_layout.addRow("Landing tolerance:", land_tol_spin)
+
             timeout_spin = QDoubleSpinBox()
             timeout_spin.setRange(0.0, 3600.0)
             timeout_spin.setDecimals(1)

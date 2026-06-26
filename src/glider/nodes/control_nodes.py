@@ -199,6 +199,8 @@ class WaitForInputNode(GliderNode):
         self._drive_pwm = 100  # speed before the deceleration zone
         self._creep_pwm = 30  # minimum speed at the wrap point
         self._ramp_zone = 512  # counts before the wrap where ramping begins
+        self._land_tolerance = 0  # stop within this many counts of 0 (0 = off)
+        self._landing_armed = False  # armed after the angle passes mid-range
         self._hardware_manager = None  # set by the flow engine for device lookup
         self._ramp_device = None  # resolved PWM device, looked up at execute time
 
@@ -237,6 +239,8 @@ class WaitForInputNode(GliderNode):
         self._drive_pwm = self._state.get("drive_pwm", 100)
         self._creep_pwm = self._state.get("creep_pwm", 30)
         self._ramp_zone = self._state.get("ramp_zone", 512)
+        self._land_tolerance = self._state.get("land_tolerance", 0)
+        self._landing_armed = False  # re-arm fresh each run
 
         # Resolve the PWM device to ramp (revolution mode only). If it can't be
         # found, ramping is silently skipped — the wait still works.
@@ -347,23 +351,51 @@ class WaitForInputNode(GliderNode):
                                 )
                                 triggered = True
 
-                elif self._threshold_mode == "revolution":
+                elif self._threshold_mode == "revolution" and isinstance(value, (int, float)):
                     # Revolution mode: count wrap-arounds of a sawtooth sensor
                     # (e.g. AS5600 raw angle 0-4095). A reading delta whose
                     # magnitude exceeds half the full-scale range can only be
                     # the 4095<->0 boundary being crossed, i.e. one completed
                     # turn. Either direction counts. The very first reading has
                     # no predecessor, so it can never register a phantom wrap.
-                    if isinstance(value, (int, float)) and last_value is not None:
-                        if abs(value - last_value) > self._counts_per_turn / 2:
-                            turn_count += 1
-                            logger.info(
-                                f"  Wrap detected ({last_value} -> {value}); "
-                                f"turn {turn_count}/{self._turns_target}"
-                            )
-                            if turn_count >= self._turns_target:
-                                logger.info("  TRIGGERED! Target turns reached")
-                                triggered = True
+                    if (
+                        last_value is not None
+                        and abs(value - last_value) > self._counts_per_turn / 2
+                    ):
+                        turn_count += 1
+                        logger.info(
+                            f"  Wrap detected ({last_value} -> {value}); "
+                            f"turn {turn_count}/{self._turns_target}"
+                        )
+                        if turn_count >= self._turns_target:
+                            logger.info("  TRIGGERED! Target turns reached")
+                            triggered = True
+
+                    # Arm tolerance landing once the angle has been seen in the
+                    # mid-range, so starting near 0 can't trigger it instantly.
+                    if 0.25 * self._counts_per_turn <= value <= 0.75 * self._counts_per_turn:
+                        self._landing_armed = True
+
+                    # Landing tolerance: on the final turn, stop the moment the
+                    # angle is within `land_tolerance` counts of 0 (either just
+                    # before the wrap, value >= counts - tol, or just after it,
+                    # value <= tol). This closes the loop directly on the signal
+                    # and -- crucially -- stops while the motor is still moving,
+                    # before the ramp eases PWM down into a stall.
+                    if (
+                        not triggered
+                        and self._land_tolerance > 0
+                        and self._landing_armed
+                        and turn_count >= self._turns_target - 1
+                        and (
+                            value <= self._land_tolerance
+                            or value >= self._counts_per_turn - self._land_tolerance
+                        )
+                    ):
+                        logger.info(
+                            f"  TRIGGERED! Within {self._land_tolerance} of 0 (value={value})"
+                        )
+                        triggered = True
 
                     # Ramp down to landing: on the final turn, ease the motor
                     # PWM toward a creep as the angle nears the wrap so it
@@ -372,7 +404,6 @@ class WaitForInputNode(GliderNode):
                         not triggered
                         and self._ramp_device is not None
                         and turn_count >= self._turns_target - 1
-                        and isinstance(value, (int, float))
                     ):
                         await self._apply_ramp(value)
 
@@ -450,6 +481,7 @@ class WaitForInputNode(GliderNode):
         state["drive_pwm"] = self._drive_pwm
         state["creep_pwm"] = self._creep_pwm
         state["ramp_zone"] = self._ramp_zone
+        state["land_tolerance"] = self._land_tolerance
         return state
 
     def set_state(self, state: dict) -> None:
@@ -465,6 +497,7 @@ class WaitForInputNode(GliderNode):
         self._drive_pwm = state.get("drive_pwm", 100)
         self._creep_pwm = state.get("creep_pwm", 30)
         self._ramp_zone = state.get("ramp_zone", 512)
+        self._land_tolerance = state.get("land_tolerance", 0)
 
     def _exec_timeout(self) -> None:
         """Trigger the timeout output."""
