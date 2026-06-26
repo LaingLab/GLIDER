@@ -1180,6 +1180,188 @@ class MotorGovernorDevice(BaseDevice):
         return instance
 
 
+class BLEWriteDevice(BaseDevice):
+    """
+    Generic BLE peripheral: writes string commands to one GATT characteristic.
+
+    Talks to any Bluetooth LE peripheral that exposes a writable characteristic,
+    without needing a dedicated device class per gadget. One device instance owns
+    one ``BleakClient`` connection to one peripheral address. Commands are
+    arbitrary strings (e.g. ``"on"``, ``"off"``, ``"20,10"``) encoded to bytes
+    and written to the configured characteristic -- e.g. an optogenetic stimulator
+    whose command characteristic accepts ``"<hz>,<seconds>"`` or ``"on"``/``"off"``.
+
+    Settings:
+    - address: peripheral BLE address (MAC on Windows/Linux, UUID on macOS).
+        Required.
+    - char_uuid: UUID of the writable command characteristic. Required.
+    - service_uuid: optional service UUID (kept for reference / future filtering).
+    - write_response: preferred write mode used only when the characteristic
+        advertises BOTH modes (or its properties can't be read). The mode is
+        otherwise auto-detected from the characteristic: a characteristic that
+        supports only Write Request is written with response, one that supports
+        only Write Without Response is written without -- so this rarely needs
+        setting. True = Write Request (acknowledged), False = Write Without
+        Response (default).
+    - encoding: text encoding for commands (default "utf-8").
+
+    The connection is opened lazily in ``initialize()`` and reused. A dropped
+    link is transparently re-established on the next ``write``.
+    """
+
+    def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
+        super().__init__(board, config, name)
+        s = config.settings
+        self._address = str(s.get("address", "")).strip()
+        self._char_uuid = str(s.get("char_uuid", "")).strip()
+        self._service_uuid = str(s.get("service_uuid", "")).strip() or None
+        self._write_response = bool(s.get("write_response", False))
+        self._encoding = s.get("encoding", "utf-8")
+        self._client = None  # BleakClient, created in initialize()
+        self._lock = asyncio.Lock()  # serialize writes / (re)connects
+
+    @property
+    def device_type(self) -> str:
+        return "BLEWrite"
+
+    @property
+    def required_pins(self) -> list[str]:
+        # BLE has no GPIO pins.
+        return []
+
+    @property
+    def address(self) -> str:
+        """Configured peripheral BLE address."""
+        return self._address
+
+    @property
+    def char_uuid(self) -> str:
+        """Configured writable characteristic UUID."""
+        return self._char_uuid
+
+    @property
+    def actions(self) -> dict[str, Callable]:
+        return {"write": self.write}
+
+    async def initialize(self) -> None:
+        """Validate settings and open the BLE connection."""
+        if not self._address:
+            raise ValueError("BLEWrite: 'address' setting is required")
+        if not self._char_uuid:
+            raise ValueError("BLEWrite: 'char_uuid' setting is required")
+        await self._ensure_connected()
+        self._initialized = True
+        logger.info("BLEWrite initialized: %s char %s", self._address, self._char_uuid)
+
+    async def shutdown(self) -> None:
+        """Disconnect the peripheral (safe to call before initialize)."""
+        client = self._client
+        self._client = None
+        self._initialized = False
+        if client is not None:
+            try:
+                await client.disconnect()
+            except Exception as e:  # pragma: no cover - disconnect best-effort
+                logger.warning("BLEWrite: error during disconnect: %s", e)
+
+    async def _ensure_connected(self) -> None:
+        """Open (or reopen) the BleakClient connection if not already up."""
+        if self._client is not None and self._client.is_connected:
+            return
+        try:
+            from bleak import BleakClient
+        except ImportError as e:
+            raise RuntimeError(
+                "bleak not installed. Run: pip install bleak (or reinstall GLIDER)."
+            ) from e
+        client = BleakClient(self._address)
+        await client.connect()
+        self._client = client
+        logger.info("BLEWrite: connected to %s", self._address)
+
+    @staticmethod
+    def _format_arg(value: Any) -> str:
+        """Render one command argument as text.
+
+        Whole-number floats become bare ints ("20" not "20.0") since the
+        DeviceAction node's Number Input ports deliver floats -- so two of them
+        wired to ``write`` produce e.g. "20,10".
+        """
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return str(value)
+
+    def _char_properties(self) -> set | None:
+        """The connected characteristic's GATT properties, or None if unknown."""
+        client = self._client
+        if client is None:
+            return None
+        try:
+            char = client.services.get_characteristic(self._char_uuid)
+            if char is None:
+                return None
+            return set(char.properties)
+        except Exception:
+            return None
+
+    def _effective_response(self) -> bool:
+        """Pick the write mode, auto-detecting from the characteristic.
+
+        A characteristic that supports only one write mode is written that way;
+        when it supports both (or its properties can't be read) the configured
+        ``write_response`` preference is honoured.
+        """
+        props = self._char_properties()
+        if props is None:
+            return self._write_response
+        has_with = "write" in props
+        has_without = "write-without-response" in props
+        if has_with and not has_without:
+            return True
+        if has_without and not has_with:
+            return False
+        return self._write_response
+
+    async def write(self, *args: Any) -> None:
+        """Write a command to the characteristic.
+
+        Accepts one or more arguments and joins them with commas, so a single
+        string command (``write("on")`` / ``write("500,10")``) and a pair of
+        Number Inputs (``write(500, 10)`` -> ``"500,10"``) both work. The command
+        is encoded with ``encoding``. If the link dropped, one reconnect is
+        attempted before the write is retried. No args is an explicit error
+        (an unconnected DeviceAction port arrives as a missing positional).
+        """
+        if not args or all(a is None for a in args):
+            raise ValueError("BLEWrite.write: command is required")
+        command = ",".join(self._format_arg(a) for a in args if a is not None)
+        data = command.encode(self._encoding)
+        async with self._lock:
+            try:
+                await self._ensure_connected()
+                await self._client.write_gatt_char(
+                    self._char_uuid, data, response=self._effective_response()
+                )
+            except Exception:
+                # Link may have dropped; reconnect once and retry.
+                self._client = None
+                await self._ensure_connected()
+                await self._client.write_gatt_char(
+                    self._char_uuid, data, response=self._effective_response()
+                )
+        logger.info("BLEWrite: wrote %r to %s", command, self._char_uuid)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], board: "BaseBoard") -> "BLEWriteDevice":
+        config = DeviceConfig(
+            pins=data["config"].get("pins", {}),
+            settings=data["config"].get("settings", {}),
+        )
+        instance = cls(board, config, data.get("name"))
+        instance._id = data.get("id", instance._id)
+        return instance
+
+
 # Registry of built-in device types
 DEVICE_REGISTRY: dict[str, type] = {
     "DigitalOutput": DigitalOutputDevice,
@@ -1190,6 +1372,7 @@ DEVICE_REGISTRY: dict[str, type] = {
     "MotorGovernor": MotorGovernorDevice,
     "ADS1115": ADS1115Device,
     "GenericI2C": GenericI2CDevice,
+    "BLEWrite": BLEWriteDevice,
 }
 
 

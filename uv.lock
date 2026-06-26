@@ -623,6 +623,7 @@ wheels = [
 name = "glider"
 source = { editable = "." }
 dependencies = [
+    { name = "bleak" },
     { name = "httpx" },
     { name = "jsonschema" },
     { name = "numpy" },
@@ -684,6 +685,7 @@ vision = [
 requires-dist = [
     { name = "adafruit-circuitpython-ads1x15", marker = "extra == 'i2c'" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
+    { name = "bleak", specifier = ">=0.21.0" },
     { name = "glider", extras = ["audio"], marker = "extra == 'pc'" },
     { name = "glider", extras = ["i2c", "pc", "vision"], marker = "extra == 'dev'" },
     { name = "gpiozero", marker = "extra == 'rpi'", specifier = ">=2.0" },
