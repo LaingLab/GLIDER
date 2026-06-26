@@ -133,6 +133,10 @@ class HardwarePanel(QWidget):
                         settings = getattr(cfg, "settings", {}) if cfg else {}
                         address = settings.get("i2c_address", 0x40)
                         pin_str = f"0x{address:02X}"
+                    elif device_type == "BLEWrite":
+                        cfg = getattr(device, "_config", None)
+                        settings = getattr(cfg, "settings", {}) if cfg else {}
+                        pin_str = settings.get("address", "") or "no address"
                     elif pin_values:
                         pin_str = f"Pin {pin_values[0]}"
                     else:
@@ -282,7 +286,7 @@ class HardwarePanel(QWidget):
         layout = QFormLayout(dialog)
 
         type_combo = QComboBox()
-        type_combo.addItems(["telemetrix", "pigpio"])
+        type_combo.addItems(["telemetrix", "pigpio", "bluetooth"])
         layout.addRow("Board Type:", type_combo)
 
         id_edit = QLineEdit()
@@ -318,6 +322,15 @@ class HardwarePanel(QWidget):
 
         layout.addRow("Serial Port:", port_layout)
 
+        # Bluetooth has no serial port; grey the row out when it's selected.
+        def _toggle_port_row():
+            is_serial = type_combo.currentText() != "bluetooth"
+            port_combo.setEnabled(is_serial)
+            refresh_btn.setEnabled(is_serial)
+
+        type_combo.currentTextChanged.connect(lambda _: _toggle_port_row())
+        _toggle_port_row()
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -330,9 +343,13 @@ class HardwarePanel(QWidget):
 
             board_id = id_edit.text().strip() or f"board_{len(self._hardware_manager.boards)}"
             board_type = type_combo.currentText()
-            port = port_combo.currentData()
+            port = port_combo.currentData() if board_type != "bluetooth" else None
 
-            driver_type = "arduino" if board_type == "telemetrix" else "raspberry_pi"
+            driver_type = {
+                "telemetrix": "arduino",
+                "pigpio": "raspberry_pi",
+                "bluetooth": "bluetooth",
+            }.get(board_type, "raspberry_pi")
 
             try:
                 self._hardware_manager.add_board(board_id, board_type, port=port)
@@ -367,6 +384,7 @@ class HardwarePanel(QWidget):
             "Motor Governor": ("MotorGovernor", ["up", "down", "signal"]),
             "ADS1115 (I2C ADC)": ("ADS1115", []),
             "Generic I2C Device": ("GenericI2C", []),
+            "BLE Device (write characteristic)": ("BLEWrite", []),
         }
 
         dialog = QDialog(self)
@@ -397,6 +415,7 @@ class HardwarePanel(QWidget):
         pin_spinboxes: dict[str, QSpinBox] = {}
         ads1115_settings: dict[str, QSpinBox] = {}
         i2c_settings: dict[str, QWidget] = {}
+        ble_settings: dict[str, QWidget] = {}
 
         def update_pin_inputs():
             while pin_layout.rowCount() > 0:
@@ -404,6 +423,7 @@ class HardwarePanel(QWidget):
             pin_spinboxes.clear()
             ads1115_settings.clear()
             i2c_settings.clear()
+            ble_settings.clear()
 
             ui_type = type_combo.currentText()
             device_type, pin_names = device_type_map[ui_type]
@@ -411,8 +431,80 @@ class HardwarePanel(QWidget):
             is_analog = device_type == "AnalogInput"
             is_ads1115 = device_type == "ADS1115"
             is_generic_i2c = device_type == "GenericI2C"
+            is_ble = device_type == "BLEWrite"
 
-            if is_generic_i2c:
+            if is_ble:
+                addr_combo = QComboBox()
+                addr_combo.setEditable(True)
+                addr_combo.setMinimumWidth(240)
+                addr_combo.lineEdit().setPlaceholderText("BLE address (or Scan)")
+                ble_settings["address"] = addr_combo
+
+                scan_btn = QPushButton("Scan")
+                scan_btn.setToolTip("Discover nearby BLE peripherals (~5s)")
+
+                def do_scan(_=False, combo=addr_combo, btn=scan_btn):
+                    btn.setEnabled(False)
+                    btn.setText("Scanning…")
+
+                    async def _scan():
+                        try:
+                            board = self._hardware_manager.get_board(board_combo.currentText())
+                            if board is None or not hasattr(board, "scan"):
+                                QMessageBox.warning(
+                                    dialog, "Scan", "Select a Bluetooth board first."
+                                )
+                                return
+                            results = await board.scan(timeout=5.0)
+                            combo.clear()
+                            if not results:
+                                combo.addItem("(no devices found)", None)
+                            for nm, addr in results:
+                                combo.addItem(f"{addr} ({nm})", addr)
+                        except Exception as e:  # noqa: BLE001 - surfaced to user
+                            QMessageBox.critical(dialog, "Scan failed", str(e))
+                        finally:
+                            btn.setEnabled(True)
+                            btn.setText("Scan")
+
+                    self._run_async(_scan())
+
+                scan_btn.clicked.connect(do_scan)
+
+                addr_row = QHBoxLayout()
+                addr_row.addWidget(addr_combo)
+                addr_row.addWidget(scan_btn)
+                addr_container = QWidget()
+                addr_container.setLayout(addr_row)
+                pin_layout.addRow("Address:", addr_container)
+
+                char_edit = QLineEdit()
+                char_edit.setPlaceholderText("writable characteristic UUID")
+                ble_settings["char_uuid"] = char_edit
+                pin_layout.addRow("Characteristic:", char_edit)
+
+                svc_edit = QLineEdit()
+                svc_edit.setPlaceholderText("optional service UUID")
+                ble_settings["service_uuid"] = svc_edit
+                pin_layout.addRow("Service (opt):", svc_edit)
+
+                resp_check = QCheckBox("Prefer write with response (acknowledged)")
+                resp_check.setToolTip(
+                    "The write mode is auto-detected from the characteristic. "
+                    "This preference is used only when the characteristic "
+                    "supports both modes."
+                )
+                ble_settings["write_response"] = resp_check
+                pin_layout.addRow(resp_check)
+
+                note = QLabel(
+                    "Send commands from the flow with a Device Action node: "
+                    "action 'write', arg1 = 'on' / 'off' / '20,10'."
+                )
+                note.setProperty("textRole", "muted")
+                note.setWordWrap(True)
+                pin_layout.addRow(note)
+            elif is_generic_i2c:
                 bus_spin = QSpinBox()
                 bus_spin.setRange(0, 1)
                 bus_spin.setValue(1)
@@ -547,6 +639,18 @@ class HardwarePanel(QWidget):
                     settings["register"] = reg
                 if i2c_settings["read_word"].isChecked():
                     settings["read_word"] = True
+            elif device_type == "BLEWrite" and ble_settings:
+                addr = ble_settings["address"].currentData()
+                if not addr:
+                    # Manually typed, or "addr (name)" picked without data.
+                    raw = ble_settings["address"].currentText().strip()
+                    addr = raw.split(" (")[0].strip() if raw else ""
+                settings["address"] = addr
+                settings["char_uuid"] = ble_settings["char_uuid"].text().strip()
+                svc = ble_settings["service_uuid"].text().strip()
+                if svc:
+                    settings["service_uuid"] = svc
+                settings["write_response"] = ble_settings["write_response"].isChecked()
 
             try:
                 self._hardware_manager.add_device_multi_pin(

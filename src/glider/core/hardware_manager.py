@@ -643,5 +643,12 @@ def _register_builtin_drivers():
     except ImportError:
         logger.warning("PiGPIOBoard driver not available")
 
+    try:
+        from glider.hal.boards.ble_board import BLEBoard
+
+        HardwareManager.register_driver("bluetooth", BLEBoard)
+    except ImportError:
+        logger.warning("BLEBoard driver not available")
+
 
 _register_builtin_drivers()
