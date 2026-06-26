@@ -149,8 +149,9 @@
           "ramp_down": true,
           "ramp_device_id": "right_pwm",
           "drive_pwm": 100,
-          "creep_pwm": 10,
-          "ramp_zone": 512
+          "creep_pwm": 40,
+          "ramp_zone": 512,
+          "land_tolerance": 40
         },
         "device_id": "i2c",
         "visible_in_runner": true
