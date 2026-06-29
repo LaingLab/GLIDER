@@ -136,6 +136,20 @@ def test_clear_while_pressed_does_not_crash(qtbot):
     assert panel._entry_for_slot(0) is None
 
 
+def test_delete_badge_clears_slot_even_when_disabled(qtbot):
+    # No hardware -> the run tile is disabled, but the ✕ badge must stay
+    # clickable so the operator can still remove the button.
+    session = ExperimentSession()
+    session.set_manual_controls([{"slot": 0, "start_node_id": "s1", "label": "A"}])
+    panel = ManualControlPanel(_Core(session, connected=False))
+    qtbot.addWidget(panel)
+    assert panel._slot_buttons[0].isEnabled() is False
+    del_btn = panel._delete_buttons[0]
+    assert del_btn.isEnabled() is True
+    del_btn.click()
+    assert panel._entry_for_slot(0) is None
+
+
 def test_right_click_menu_resolves_slot_even_when_disabled(qtbot, monkeypatch):
     from PyQt6.QtCore import QPoint
 
@@ -152,6 +166,33 @@ def test_right_click_menu_resolves_slot_even_when_disabled(qtbot, monkeypatch):
     monkeypatch.setattr(panel, "_show_slot_menu", lambda slot: opened.append(slot))
     panel._on_content_context_menu(QPoint(5, 5))
     assert opened == [0]
+
+
+def test_run_stopwatch_counts_then_freezes(qtbot, monkeypatch):
+    import glider.gui.runner.manual_control_panel as mcp
+
+    session = ExperimentSession()
+    session.set_manual_controls([{"slot": 0, "start_node_id": "s1", "label": "Dispense"}])
+    panel = ManualControlPanel(_Core(session))
+    qtbot.addWidget(panel)
+
+    clock = [100.0]
+    monkeypatch.setattr(mcp.time, "monotonic", lambda: clock[0])
+
+    panel.set_running("s1")  # run starts at t=100
+    clock[0] = 112.0  # 12s elapsed
+    panel._update_tile_labels()
+    assert panel._slot_buttons[0].text() == "Dispense\n0:12"  # live count-up
+
+    panel.set_running(None)  # finishes at t=112
+    assert panel._slot_buttons[0].text() == "Dispense\nLast: 0:12"  # frozen
+
+
+def test_fmt_elapsed():
+    from glider.gui.runner.manual_control_panel import ManualControlPanel
+
+    assert ManualControlPanel._fmt_elapsed(7) == "0:07"
+    assert ManualControlPanel._fmt_elapsed(72) == "1:12"
 
 
 def test_buttons_disabled_when_no_hardware(qtbot):
