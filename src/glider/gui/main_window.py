@@ -265,6 +265,7 @@ class MainWindow(QMainWindow):
         self._manual_control_panel = ManualControlPanel(self._core)
         self._manual_control_runner = ManualControlRunner(self._core)
         self._manual_control_panel.function_run_requested.connect(self._on_manual_run)
+        self._manual_control_panel.function_run_requested_param.connect(self._on_manual_run_param)
 
         self._runner_container = RunnerContainer(self._runner_panel, self._manual_control_panel)
 
@@ -1702,12 +1703,15 @@ class MainWindow(QMainWindow):
     def _on_manual_run(self, start_node_id: str) -> None:
         self._run_async(self._manual_run_async(start_node_id))
 
-    async def _manual_run_async(self, start_node_id: str) -> None:
+    def _on_manual_run_param(self, start_node_id: str, param: dict) -> None:
+        self._run_async(self._manual_run_async(start_node_id, param))
+
+    async def _manual_run_async(self, start_node_id: str, param: dict | None = None) -> None:
         from glider.gui.runner.manual_control_runner import RunOutcome
 
         self._manual_control_panel.set_running(start_node_id)
         try:
-            result = await self._manual_control_runner.run(start_node_id)
+            result = await self._manual_control_runner.run(start_node_id, param=param)
         finally:
             self._manual_control_panel.set_running(None)
 
