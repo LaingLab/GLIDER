@@ -9,12 +9,12 @@ from glider.gui.dialogs.custom_device_dialog import CustomDeviceDialog
 
 
 def _set_row(dialog, row, name, op, register=None, primary=False):
-    dialog._table.cellWidget(row, 0).setText(name)
-    op_combo = dialog._table.cellWidget(row, 1)
-    op_combo.setCurrentIndex(op_combo.findData(op))
+    entry = dialog._action_rows[row]
+    entry["name"].setText(name)
+    entry["op"].setCurrentIndex(entry["op"].findData(op))
     if register is not None:
-        dialog._table.cellWidget(row, 2).setValue(register)
-    dialog._table.cellWidget(row, 3).setChecked(primary)
+        entry["reg"].setValue(register)
+    entry["primary"].setChecked(primary)
 
 
 def test_builds_i2c_definition(qtbot):
