@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -369,6 +370,51 @@ class HardwarePanel(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to add board: {e}")
 
+    def _build_schema_widgets(self, layout, schema, out: dict) -> None:
+        """Render a device SETTINGS_SCHEMA into a form layout.
+
+        ``out`` is populated with ``key -> (widget, type)`` for later
+        collection. Supported field types: int, hex, float, bool, str.
+        """
+        for field in schema:
+            key = field.get("key")
+            if not key:
+                continue
+            ftype = field.get("type", "str")
+            default = field.get("default")
+            if ftype in ("int", "hex"):
+                widget = QSpinBox()
+                widget.setRange(int(field.get("min", 0)), int(field.get("max", 2_000_000_000)))
+                if ftype == "hex":
+                    widget.setDisplayIntegerBase(16)
+                    widget.setPrefix("0x")
+                widget.setValue(int(default or 0))
+            elif ftype == "float":
+                widget = QDoubleSpinBox()
+                widget.setDecimals(int(field.get("decimals", 2)))
+                widget.setRange(float(field.get("min", 0.0)), float(field.get("max", 1e9)))
+                widget.setValue(float(default if default is not None else 0.0))
+            elif ftype == "bool":
+                widget = QCheckBox()
+                widget.setChecked(bool(default))
+            else:
+                widget = QLineEdit()
+                if default is not None:
+                    widget.setText(str(default))
+            if field.get("help"):
+                widget.setToolTip(str(field["help"]))
+            out[key] = (widget, ftype)
+            layout.addRow(f"{field.get('label', key)}:", widget)
+
+    @staticmethod
+    def _read_schema_widget(widget, ftype: str):
+        """Read a value back from a schema-rendered widget."""
+        if ftype in ("int", "hex", "float"):
+            return widget.value()
+        if ftype == "bool":
+            return widget.isChecked()
+        return widget.text().strip()
+
     def _on_add_device(self) -> None:
         """Show dialog to add a new device."""
         if not self._hardware_manager.boards:
@@ -386,6 +432,16 @@ class HardwarePanel(QWidget):
             "Generic I2C Device": ("GenericI2C", []),
             "BLE Device (write characteristic)": ("BLEWrite", []),
         }
+
+        # Surface plugin-registered device types (anything in DEVICE_REGISTRY
+        # that isn't one of the built-ins above). Their settings form is
+        # rendered from each device class's optional SETTINGS_SCHEMA.
+        from glider.hal.base_device import DEVICE_REGISTRY
+
+        builtin_types = {dt for dt, _ in device_type_map.values()}
+        for dt in DEVICE_REGISTRY:
+            if dt not in builtin_types:
+                device_type_map[f"{dt} (plugin)"] = (dt, [])
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Add Device")
@@ -416,6 +472,7 @@ class HardwarePanel(QWidget):
         ads1115_settings: dict[str, QSpinBox] = {}
         i2c_settings: dict[str, QWidget] = {}
         ble_settings: dict[str, QWidget] = {}
+        schema_widgets: dict[str, tuple] = {}  # plugin devices: key -> (widget, type)
 
         def update_pin_inputs():
             while pin_layout.rowCount() > 0:
@@ -424,6 +481,7 @@ class HardwarePanel(QWidget):
             ads1115_settings.clear()
             i2c_settings.clear()
             ble_settings.clear()
+            schema_widgets.clear()
 
             ui_type = type_combo.currentText()
             device_type, pin_names = device_type_map[ui_type]
@@ -433,7 +491,14 @@ class HardwarePanel(QWidget):
             is_generic_i2c = device_type == "GenericI2C"
             is_ble = device_type == "BLEWrite"
 
-            if is_ble:
+            # Plugin devices may declare a SETTINGS_SCHEMA for an auto-rendered form.
+            device_class = DEVICE_REGISTRY.get(device_type)
+            schema = getattr(device_class, "SETTINGS_SCHEMA", None) if device_class else None
+            is_schema = schema and not (is_ads1115 or is_generic_i2c or is_ble)
+
+            if is_schema:
+                self._build_schema_widgets(pin_layout, schema, schema_widgets)
+            elif is_ble:
                 addr_combo = QComboBox()
                 addr_combo.setEditable(True)
                 addr_combo.setMinimumWidth(240)
@@ -449,18 +514,28 @@ class HardwarePanel(QWidget):
 
                     async def _scan():
                         try:
-                            board = self._hardware_manager.get_board(board_combo.currentText())
-                            if board is None or not hasattr(board, "scan"):
-                                QMessageBox.warning(
-                                    dialog, "Scan", "Select a Bluetooth board first."
-                                )
-                                return
-                            results = await board.scan(timeout=5.0)
+                            # Scanning discovers peripherals via the host BLE
+                            # adapter -- it does not depend on which board is
+                            # selected, so scan directly via the BLE board's
+                            # (static) scanner.
+                            from glider.hal.boards.ble_board import BLEBoard
+
+                            results = await BLEBoard.scan(timeout=8.0)
                             combo.clear()
                             if not results:
                                 combo.addItem("(no devices found)", None)
                             for nm, addr in results:
-                                combo.addItem(f"{addr} ({nm})", addr)
+                                # Show the advertised name; fall back to the
+                                # address for unnamed peripherals so they stay
+                                # distinguishable. The address is kept as the
+                                # item data (and tooltip) and is what gets saved.
+                                label = nm if nm and nm != "(unknown)" else addr
+                                combo.addItem(label, addr)
+                                combo.setItemData(
+                                    combo.count() - 1, addr, Qt.ItemDataRole.ToolTipRole
+                                )
+                        except ImportError:
+                            QMessageBox.critical(dialog, "Scan failed", "bleak is not installed.")
                         except Exception as e:  # noqa: BLE001 - surfaced to user
                             QMessageBox.critical(dialog, "Scan failed", str(e))
                         finally:
@@ -651,6 +726,10 @@ class HardwarePanel(QWidget):
                 if svc:
                     settings["service_uuid"] = svc
                 settings["write_response"] = ble_settings["write_response"].isChecked()
+            elif schema_widgets:
+                # Plugin device: collect its schema-rendered settings.
+                for key, (widget, ftype) in schema_widgets.items():
+                    settings[key] = self._read_schema_widget(widget, ftype)
 
             try:
                 self._hardware_manager.add_device_multi_pin(

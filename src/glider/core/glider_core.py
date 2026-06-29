@@ -420,6 +420,10 @@ class GliderCore:
         # Load plugins
         await self._load_plugins()
 
+        # Load declarative custom devices from the device library (safe: data,
+        # not code) and register them as device types.
+        self._load_device_library()
+
         # Create new session
         self._session = ExperimentSession()
         self._session.on_state_change(self._notify_state_change)
@@ -508,15 +512,33 @@ class GliderCore:
     async def _load_plugins(self) -> None:
         """Load plugins from the plugin directory."""
         try:
+            from pathlib import Path
+
+            from glider.core.config import get_config
             from glider.plugins.plugin_manager import PluginManager
 
-            self._plugin_manager = PluginManager()
+            cfg = get_config().plugins
+            extra_dirs = [Path(p) for p in cfg.plugin_dirs]
+            self._plugin_manager = PluginManager(
+                plugin_dirs=extra_dirs or None,
+                enable_directory_plugins=cfg.enable_directory_plugins,
+            )
             await self._plugin_manager.discover_plugins()
             await self._plugin_manager.load_plugins()
         except ImportError:
             logger.warning("Plugin manager not available")
         except Exception as e:
             logger.error(f"Error loading plugins: {e}")
+
+    def _load_device_library(self) -> None:
+        """Register declarative custom devices from the device library."""
+        try:
+            from glider.core.config import get_config
+            from glider.core.device_library import load_and_register_all
+
+            load_and_register_all(get_config().paths.devices_dir)
+        except Exception as e:
+            logger.error(f"Error loading device library: {e}")
 
     def new_session(self) -> ExperimentSession:
         """Create a new experiment session."""
