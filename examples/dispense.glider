@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-06-29T13:27:07.277942",
+    "modified_at": "2026-06-29T15:05:36.086750",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -141,19 +141,19 @@
         "id": "waitforinput_448bd202",
         "node_type": "WaitForInput",
         "position": [
-          -420.6940657847338,
-          152.06667602470517
+          -419.6673921901784,
+          151.19711080731386
         ],
         "state": {
           "threshold_mode": "revolution",
           "turns_target": 1,
-          "counts_per_turn": 4096,
+          "counts_per_turn": 4078,
           "ramp_down": true,
           "ramp_device_id": "right_pwm",
-          "drive_pwm": 100,
-          "creep_pwm": 40,
-          "ramp_zone": 512,
-          "land_tolerance": 40
+          "drive_pwm": 150,
+          "creep_pwm": 30,
+          "ramp_zone": 4000,
+          "land_tolerance": 0
         },
         "device_id": "i2c",
         "visible_in_runner": true
@@ -253,7 +253,10 @@
         "state": {
           "threshold_mode": "revolution",
           "ramp_down": true,
-          "ramp_device_id": "left_pwm"
+          "ramp_device_id": "left_pwm",
+          "drive_pwm": 150,
+          "counts_per_turn": 4078,
+          "ramp_zone": 100
         },
         "device_id": "i2c",
         "visible_in_runner": true
