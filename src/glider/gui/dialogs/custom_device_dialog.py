@@ -16,14 +16,14 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
-    QTableWidget,
     QVBoxLayout,
+    QWidget,
 )
 
 from glider.hal.declarative_device import WRITE_VALUE_OPS, standard_settings
@@ -45,8 +45,6 @@ _GPIO_OPS = [
     ("Write PWM", "write_pwm"),
 ]
 
-_COL_NAME, _COL_OP, _COL_REG, _COL_PRIMARY = range(4)
-
 
 class CustomDeviceDialog(QDialog):
     """Dialog to build and save a declarative custom device."""
@@ -54,8 +52,10 @@ class CustomDeviceDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("New Custom Device")
-        self.setMinimumWidth(560)
+        self.setMinimumSize(720, 560)
+        self.resize(760, 640)
         self.device_name = ""
+        self._action_rows: list[dict] = []  # one dict of widgets per action
 
         layout = QVBoxLayout(self)
 
@@ -76,22 +76,37 @@ class CustomDeviceDialog(QDialog):
         layout.addLayout(form)
 
         layout.addWidget(QLabel("Actions:"))
-        self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["Action Name", "Operation", "Register", "Primary"])
-        self._table.horizontalHeader().setSectionResizeMode(
-            _COL_NAME, QHeaderView.ResizeMode.Stretch
-        )
-        layout.addWidget(self._table)
 
-        row_btns = QHBoxLayout()
+        # Column headers above the action rows.
+        header = QHBoxLayout()
+        for text, width in (("Name", None), ("Operation", 180), ("Register", 90), ("Primary", 70)):
+            lbl = QLabel(text)
+            lbl.setProperty("textRole", "muted")
+            if width:
+                lbl.setFixedWidth(width)
+            header.addWidget(lbl, 1 if width is None else 0)
+        header.addSpacing(34)  # space above the remove button
+        layout.addLayout(header)
+
+        # Scrollable list of action rows (each row is a real widget, so styled
+        # editors size to their natural height with no clipping).
+        self._rows_container = QWidget()
+        self._rows_layout = QVBoxLayout(self._rows_container)
+        self._rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._rows_layout.setSpacing(4)
+        self._rows_layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self._rows_container)
+        layout.addWidget(scroll, stretch=1)
+
         add_btn = QPushButton("Add Action")
         add_btn.clicked.connect(self._add_row)
-        remove_btn = QPushButton("Remove Selected")
-        remove_btn.clicked.connect(self._remove_selected)
-        row_btns.addWidget(add_btn)
-        row_btns.addWidget(remove_btn)
-        row_btns.addStretch()
-        layout.addLayout(row_btns)
+        add_row = QHBoxLayout()
+        add_row.addWidget(add_btn)
+        add_row.addStretch()
+        layout.addLayout(add_row)
 
         hint = QLabel(
             "I2C ops use the Register column; write ops take their value at run time "
@@ -110,7 +125,7 @@ class CustomDeviceDialog(QDialog):
 
         self._add_row()  # start with one action row
 
-    # --- table helpers ---
+    # --- helpers ---
 
     def _current_transport(self) -> str:
         return self._transport_combo.currentData()
@@ -119,42 +134,61 @@ class CustomDeviceDialog(QDialog):
         return _I2C_OPS if self._current_transport() == "i2c" else _GPIO_OPS
 
     def _add_row(self) -> None:
-        row = self._table.rowCount()
-        self._table.insertRow(row)
+        row_widget = QWidget()
+        h = QHBoxLayout(row_widget)
+        h.setContentsMargins(0, 0, 0, 0)
 
-        self._table.setCellWidget(row, _COL_NAME, QLineEdit())
+        name = QLineEdit()
+        name.setPlaceholderText("Action name")
 
-        op_combo = QComboBox()
-        for label, op in self._op_list():
-            op_combo.addItem(label, op)
-        op_combo.currentIndexChanged.connect(lambda _i, r=row: self._sync_register_enabled(r))
-        self._table.setCellWidget(row, _COL_OP, op_combo)
+        op = QComboBox()
+        for label, op_key in self._op_list():
+            op.addItem(label, op_key)
+        op.setFixedWidth(180)
 
-        reg_spin = QSpinBox()
-        reg_spin.setDisplayIntegerBase(16)
-        reg_spin.setPrefix("0x")
-        reg_spin.setRange(0x00, 0xFF)
-        self._table.setCellWidget(row, _COL_REG, reg_spin)
+        reg = QSpinBox()
+        reg.setDisplayIntegerBase(16)
+        reg.setPrefix("0x")
+        reg.setRange(0x00, 0xFF)
+        reg.setFixedWidth(90)
 
         primary = QCheckBox()
-        self._table.setCellWidget(row, _COL_PRIMARY, primary)
+        primary.setFixedWidth(70)
 
-        self._sync_register_enabled(row)
+        remove = QPushButton("✕")
+        remove.setFixedWidth(34)
+        remove.setToolTip("Remove this action")
 
-    def _remove_selected(self) -> None:
-        row = self._table.currentRow()
-        if row >= 0:
-            self._table.removeRow(row)
+        h.addWidget(name, 1)
+        h.addWidget(op)
+        h.addWidget(reg)
+        h.addWidget(primary)
+        h.addWidget(remove)
 
-    def _sync_register_enabled(self, row: int) -> None:
+        entry = {"widget": row_widget, "name": name, "op": op, "reg": reg, "primary": primary}
+        op.currentIndexChanged.connect(lambda _i, e=entry: self._sync_register_enabled(e))
+        remove.clicked.connect(lambda _c, e=entry: self._remove_row(e))
+
+        # Insert before the trailing stretch so rows stack from the top.
+        self._rows_layout.insertWidget(self._rows_layout.count() - 1, row_widget)
+        self._action_rows.append(entry)
+        self._sync_register_enabled(entry)
+
+    def _remove_row(self, entry: dict) -> None:
+        if entry not in self._action_rows:
+            return
+        self._action_rows.remove(entry)
+        entry["widget"].setParent(None)
+        entry["widget"].deleteLater()
+
+    def _sync_register_enabled(self, entry: dict) -> None:
         """Register only applies to I2C ops."""
-        reg = self._table.cellWidget(row, _COL_REG)
-        if reg is not None:
-            reg.setEnabled(self._current_transport() == "i2c")
+        entry["reg"].setEnabled(self._current_transport() == "i2c")
 
     def _on_transport_changed(self) -> None:
         # Ops differ per transport, so reset the action rows.
-        self._table.setRowCount(0)
+        for entry in list(self._action_rows):
+            self._remove_row(entry)
         self._add_row()
 
     # --- build / save ---
@@ -162,16 +196,14 @@ class CustomDeviceDialog(QDialog):
     def _build_definition(self) -> dict:
         transport = self._current_transport()
         actions = []
-        for row in range(self._table.rowCount()):
-            name = self._table.cellWidget(row, _COL_NAME).text().strip()
-            op = self._table.cellWidget(row, _COL_OP).currentData()
-            primary = self._table.cellWidget(row, _COL_PRIMARY).isChecked()
-            action = {"name": name, "op": op}
+        for entry in self._action_rows:
+            op = entry["op"].currentData()
+            action = {"name": entry["name"].text().strip(), "op": op}
             if transport == "i2c":
-                action["params"] = {"register": self._table.cellWidget(row, _COL_REG).value()}
+                action["params"] = {"register": entry["reg"].value()}
             if op in WRITE_VALUE_OPS:
                 action["runtime_args"] = ["value"]
-            if primary:
+            if entry["primary"].isChecked():
                 action["primary"] = True
             actions.append(action)
 
