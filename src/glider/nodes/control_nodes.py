@@ -201,6 +201,7 @@ class WaitForInputNode(GliderNode):
         self._ramp_zone = 512  # counts before the wrap where ramping begins
         self._land_tolerance = 0  # stop within this many counts of 0 (0 = off)
         self._landing_armed = False  # armed after the angle passes mid-range
+        self._ramp_direction = 1  # +1 angle rising toward top wrap, -1 falling to 0
         self._hardware_manager = None  # set by the flow engine for device lookup
         self._ramp_device = None  # resolved PWM device, looked up at execute time
 
@@ -241,6 +242,7 @@ class WaitForInputNode(GliderNode):
         self._ramp_zone = self._state.get("ramp_zone", 512)
         self._land_tolerance = self._state.get("land_tolerance", 0)
         self._landing_armed = False  # re-arm fresh each run
+        self._ramp_direction = 1  # assume rising until motion proves otherwise
 
         # Resolve the PWM device to ramp (revolution mode only). If it can't be
         # found, ramping is silently skipped — the wait still works.
@@ -358,18 +360,32 @@ class WaitForInputNode(GliderNode):
                     # the 4095<->0 boundary being crossed, i.e. one completed
                     # turn. Either direction counts. The very first reading has
                     # no predecessor, so it can never register a phantom wrap.
-                    if (
-                        last_value is not None
-                        and abs(value - last_value) > self._counts_per_turn / 2
-                    ):
-                        turn_count += 1
-                        logger.info(
-                            f"  Wrap detected ({last_value} -> {value}); "
-                            f"turn {turn_count}/{self._turns_target}"
-                        )
-                        if turn_count >= self._turns_target:
-                            logger.info("  TRIGGERED! Target turns reached")
-                            triggered = True
+                    if last_value is not None:
+                        raw_delta = value - last_value
+                        if abs(raw_delta) > self._counts_per_turn / 2:
+                            turn_count += 1
+                            logger.info(
+                                f"  Wrap detected ({last_value} -> {value}); "
+                                f"turn {turn_count}/{self._turns_target}"
+                            )
+                            if turn_count >= self._turns_target:
+                                logger.info("  TRIGGERED! Target turns reached")
+                                triggered = True
+
+                        # Signed shortest-path movement -> rotation direction, so
+                        # the ramp knows which boundary (0 or counts_per_turn) the
+                        # motor is approaching. +1 = angle rising toward the wrap,
+                        # -1 = angle falling toward 0.
+                        step = raw_delta
+                        half = self._counts_per_turn / 2
+                        if step > half:
+                            step -= self._counts_per_turn
+                        elif step < -half:
+                            step += self._counts_per_turn
+                        if step > 0:
+                            self._ramp_direction = 1
+                        elif step < 0:
+                            self._ramp_direction = -1
 
                     # Arm tolerance landing once the angle has been seen in the
                     # mid-range, so starting near 0 can't trigger it instantly.
@@ -430,12 +446,18 @@ class WaitForInputNode(GliderNode):
     async def _apply_ramp(self, value: float) -> None:
         """Write a decelerating PWM based on how close ``value`` is to the wrap.
 
-        Outside the deceleration zone the motor runs at ``drive_pwm``; within
-        the last ``ramp_zone`` counts before ``counts_per_turn`` the PWM eases
-        linearly down to ``creep_pwm`` at the wrap point.
+        Outside the deceleration zone the motor runs at ``drive_pwm``; within the
+        last ``ramp_zone`` counts before the wrap the PWM eases linearly down to
+        ``creep_pwm``. The wrap is at the top (``counts_per_turn``) when the angle
+        is rising and at 0 when it is falling, so distance-to-wrap depends on the
+        rotation direction -- otherwise the ramp would slow the motor at the wrong
+        end when it spins the other way.
         """
         span = max(1, self._ramp_zone)
-        remaining = self._counts_per_turn - value  # counts until the wrap
+        if self._ramp_direction >= 0:
+            remaining = self._counts_per_turn - value  # rising toward the top wrap
+        else:
+            remaining = value  # falling toward the 0 wrap
         remaining = max(0, remaining)
         if remaining >= span:
             pwm = self._drive_pwm
