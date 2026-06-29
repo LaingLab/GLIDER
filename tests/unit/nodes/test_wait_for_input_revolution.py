@@ -154,6 +154,29 @@ async def test_ramp_down_decelerates_then_stops_at_landing():
     assert pwm.writes[-1] == 0
 
 
+async def test_ramp_down_decelerates_in_decreasing_direction():
+    # Reverse rotation: the angle falls toward the 0 wrap. The ramp must slow
+    # the motor as the angle approaches 0 (not 4096), then stop on the wrap.
+    values = [3000, 2500, 2000, 1000, 500, 100, 4090]
+    node = _make_node(values, turns=1)
+    pwm = _RecordingPWM()
+    node._ramp_down = True
+    node._ramp_device = pwm
+    node._drive_pwm = 100
+    node._creep_pwm = 30
+    node._ramp_zone = 512
+
+    await node._poll_device(timeout=0.0)
+
+    assert node._trigger_value == 4090  # wrapped 100 -> 4090
+    assert node._ramp_direction == -1  # detected falling rotation
+    assert pwm.writes[0] == 100  # full drive far from the 0 wrap
+    ramp_writes = pwm.writes[:-1]
+    assert ramp_writes == sorted(ramp_writes, reverse=True)  # eases down toward 0
+    assert pwm.writes[-2] <= node._creep_pwm + 20  # near creep just before the wrap
+    assert pwm.writes[-1] == 0
+
+
 async def test_no_ramp_writes_when_ramp_device_absent():
     # Revolution mode without a ramp device must not attempt any PWM writes.
     node = _make_node([3000, 4090, 50], turns=1)
