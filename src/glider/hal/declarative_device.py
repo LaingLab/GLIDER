@@ -61,6 +61,36 @@ _I2C_OPS = {"read_byte", "read_word", "write_byte", "write_word"}
 _GPIO_OPS = {"set_high", "set_low", "read_digital", "read_analog", "write_pwm"}
 # Ops whose value is supplied at runtime (from a Device Action arg).
 WRITE_VALUE_OPS = {"write_byte", "write_word", "write_pwm"}
+# I2C ops that read the cumulative revolution accumulator (no register needed).
+REVOLUTION_OPS = {"read_revolutions", "read_angle", "read_total_counts", "reset_revolutions"}
+# Extra settings added to an I2C device when revolution tracking is enabled.
+REVOLUTION_SETTINGS = [
+    {
+        "key": "angle_register",
+        "label": "Angle Register",
+        "type": "hex",
+        "default": 0x0E,
+        "min": 0x00,
+        "max": 0xFF,
+    },
+    {
+        "key": "counts_per_turn",
+        "label": "Counts/Turn",
+        "type": "int",
+        "default": 4096,
+        "min": 2,
+        "max": 65535,
+    },
+    {
+        "key": "decimals",
+        "label": "Rounding (decimals)",
+        "type": "int",
+        "default": 2,
+        "min": 0,
+        "max": 6,
+    },
+]
+_REV_POLL_INTERVAL = 0.02  # seconds between angle samples
 
 
 class DeclarativeDevice(BaseDevice):
@@ -87,6 +117,16 @@ class DeclarativeDevice(BaseDevice):
         self._bus = None  # smbus2 handle for i2c
         self._lock = asyncio.Lock()  # fallback when the board exposes no i2c_lock
 
+        # Revolution tracking (I2C only): a background loop unwraps the angle
+        # register into a cumulative signed count.
+        self._track_revolutions = bool(defn.get("track_revolutions"))
+        self._angle_register = int(self._settings.get("angle_register", 0x0E) or 0x0E)
+        self._counts_per_turn = int(self._settings.get("counts_per_turn", 4096) or 4096)
+        self._decimals = int(self._settings.get("decimals", 2) or 0)
+        self._total_counts = 0.0
+        self._last_raw: int | None = None
+        self._poll_task: asyncio.Task | None = None
+
     # --- identity ---
 
     @property
@@ -112,12 +152,22 @@ class DeclarativeDevice(BaseDevice):
     async def initialize(self) -> None:
         if self._transport == "i2c":
             await self._open_i2c()
+            if self._track_revolutions:
+                self._last_raw = await self._read_angle_raw()
+                self._poll_task = asyncio.create_task(self._rev_poll_loop())
         elif self._transport == "gpio":
             await self._configure_gpio()
         self._initialized = True
         logger.info("DeclarativeDevice '%s' initialized (%s)", self.device_type, self._transport)
 
     async def shutdown(self) -> None:
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            try:
+                await self._poll_task
+            except asyncio.CancelledError:
+                pass
+            self._poll_task = None
         if self._bus is not None:
             await asyncio.to_thread(self._bus.close)
             self._bus = None
@@ -216,6 +266,50 @@ class DeclarativeDevice(BaseDevice):
     async def _op_write_pwm(self, value):
         await self._board.write_analog(self._pin(), int(float(value)))
 
+    # --- revolution tracking ---
+
+    async def _read_angle_raw(self) -> int:
+        data = await self._i2c_call("read_i2c_block_data", self._angle_register, 2)
+        return ((data[0] << 8) | data[1]) & 0x0FFF  # AS5600-style 12-bit, big-endian
+
+    async def _rev_poll_loop(self) -> None:
+        errors = 0
+        while True:
+            await asyncio.sleep(_REV_POLL_INTERVAL)
+            try:
+                self._accumulate(await self._read_angle_raw())
+                errors = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # transient I2C hiccup
+                errors += 1
+                if errors <= 3:
+                    logger.warning("RotaryEncoder/declarative poll error: %s", e)
+
+    def _accumulate(self, raw: int) -> None:
+        if self._last_raw is not None:
+            delta = raw - self._last_raw
+            half = self._counts_per_turn / 2
+            if delta > half:
+                delta -= self._counts_per_turn
+            elif delta < -half:
+                delta += self._counts_per_turn
+            self._total_counts += delta
+        self._last_raw = raw
+
+    async def _op_read_revolutions(self):
+        return round(self._total_counts / self._counts_per_turn, self._decimals)
+
+    async def _op_read_angle(self):
+        return int(self._last_raw or 0)
+
+    async def _op_read_total_counts(self):
+        return int(self._total_counts)
+
+    async def _op_reset_revolutions(self):
+        self._total_counts = 0.0
+        return 0.0
+
     @classmethod
     def from_dict(cls, data: dict, board) -> "DeclarativeDevice":
         config = DeviceConfig(
@@ -234,6 +328,11 @@ def standard_settings(transport: str) -> list[dict]:
     return [dict(f) for f in I2C_SETTINGS]
 
 
+def revolution_settings() -> list[dict]:
+    """Extra settings for an I2C device with revolution tracking enabled."""
+    return [dict(f) for f in REVOLUTION_SETTINGS]
+
+
 def validate_definition(definition: dict) -> list[str]:
     """Return a list of problems with a definition (empty if valid)."""
     errors = []
@@ -247,6 +346,8 @@ def validate_definition(definition: dict) -> list[str]:
     if not actions:
         errors.append("Device needs at least one action")
     valid_ops = _I2C_OPS if transport == "i2c" else _GPIO_OPS
+    if transport == "i2c" and definition.get("track_revolutions"):
+        valid_ops = valid_ops | REVOLUTION_OPS
     seen = set()
     for a in actions:
         an = a.get("name", "")

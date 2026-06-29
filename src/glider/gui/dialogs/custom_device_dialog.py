@@ -26,7 +26,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.hal.declarative_device import WRITE_VALUE_OPS, standard_settings
+from glider.hal.declarative_device import (
+    WRITE_VALUE_OPS,
+    revolution_settings,
+    standard_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,12 @@ _I2C_OPS = [
     ("Write byte", "write_byte"),
     ("Write word (16-bit)", "write_word"),
 ]
+_REVOLUTION_OPS = [
+    ("Read revolutions", "read_revolutions"),
+    ("Read angle", "read_angle"),
+    ("Read total counts", "read_total_counts"),
+    ("Reset revolutions", "reset_revolutions"),
+]
 _GPIO_OPS = [
     ("Set HIGH", "set_high"),
     ("Set LOW", "set_low"),
@@ -44,6 +54,8 @@ _GPIO_OPS = [
     ("Read analog", "read_analog"),
     ("Write PWM", "write_pwm"),
 ]
+# I2C ops that take a register (the rest read the revolution accumulator).
+_REGISTER_OPS = {"read_byte", "read_word", "write_byte", "write_word"}
 
 
 class CustomDeviceDialog(QDialog):
@@ -73,6 +85,14 @@ class CustomDeviceDialog(QDialog):
         self._transport_combo.addItem("GPIO", "gpio")
         self._transport_combo.currentIndexChanged.connect(self._on_transport_changed)
         form.addRow("Transport:", self._transport_combo)
+
+        self._track_check = QCheckBox("Track revolutions (I2C rotary encoder)")
+        self._track_check.setToolTip(
+            "Continuously unwrap an angle register into a cumulative turn count; "
+            "adds revolution read ops and angle/counts-per-turn settings."
+        )
+        self._track_check.toggled.connect(lambda _on: self._rebuild_rows())
+        form.addRow("", self._track_check)
         layout.addLayout(form)
 
         layout.addWidget(QLabel("Actions:"))
@@ -131,7 +151,12 @@ class CustomDeviceDialog(QDialog):
         return self._transport_combo.currentData()
 
     def _op_list(self) -> list[tuple[str, str]]:
-        return _I2C_OPS if self._current_transport() == "i2c" else _GPIO_OPS
+        if self._current_transport() != "i2c":
+            return _GPIO_OPS
+        ops = list(_I2C_OPS)
+        if self._track_check.isChecked():
+            ops += _REVOLUTION_OPS
+        return ops
 
     def _add_row(self) -> None:
         row_widget = QWidget()
@@ -182,24 +207,36 @@ class CustomDeviceDialog(QDialog):
         entry["widget"].deleteLater()
 
     def _sync_register_enabled(self, entry: dict) -> None:
-        """Register only applies to I2C ops."""
-        entry["reg"].setEnabled(self._current_transport() == "i2c")
+        """Register applies only to I2C ops that address a register."""
+        op = entry["op"].currentData()
+        enabled = self._current_transport() == "i2c" and op in _REGISTER_OPS
+        entry["reg"].setEnabled(enabled)
 
-    def _on_transport_changed(self) -> None:
-        # Ops differ per transport, so reset the action rows.
+    def _rebuild_rows(self) -> None:
         for entry in list(self._action_rows):
             self._remove_row(entry)
         self._add_row()
+
+    def _on_transport_changed(self) -> None:
+        # Revolution tracking is I2C-only; ops differ per transport.
+        is_i2c = self._current_transport() == "i2c"
+        self._track_check.setEnabled(is_i2c)
+        if not is_i2c:
+            self._track_check.blockSignals(True)
+            self._track_check.setChecked(False)
+            self._track_check.blockSignals(False)
+        self._rebuild_rows()
 
     # --- build / save ---
 
     def _build_definition(self) -> dict:
         transport = self._current_transport()
+        track = transport == "i2c" and self._track_check.isChecked()
         actions = []
         for entry in self._action_rows:
             op = entry["op"].currentData()
             action = {"name": entry["name"].text().strip(), "op": op}
-            if transport == "i2c":
+            if transport == "i2c" and op in _REGISTER_OPS:
                 action["params"] = {"register": entry["reg"].value()}
             if op in WRITE_VALUE_OPS:
                 action["runtime_args"] = ["value"]
@@ -207,14 +244,21 @@ class CustomDeviceDialog(QDialog):
                 action["primary"] = True
             actions.append(action)
 
-        return {
+        settings = standard_settings(transport)
+        if track:
+            settings = settings + revolution_settings()
+
+        definition = {
             "schema_version": "1.0",
             "name": self._name_edit.text().strip(),
             "description": self._desc_edit.text().strip(),
             "transport": transport,
-            "settings": standard_settings(transport),
+            "settings": settings,
             "actions": actions,
         }
+        if track:
+            definition["track_revolutions"] = True
+        return definition
 
     def _on_accept(self) -> None:
         from glider.core.config import get_config
