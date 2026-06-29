@@ -25,6 +25,46 @@ class GraphFunctionInfo:
     has_end: bool
 
 
+@dataclass(frozen=True)
+class RevolutionParam:
+    """A revolution-mode WaitForInput found in a function chain.
+
+    node_id is the WaitForInput node whose ``turns_target`` a touchscreen prompt
+    can set; turns is its current target (used as the prompt's default).
+    """
+
+    node_id: str
+    turns: int
+
+
+def find_revolution_node(start_id: str, flow) -> RevolutionParam | None:
+    """Trace exec connections from start_id for a revolution-mode WaitForInput.
+
+    Returns the first such node (so a 'Run N revolutions' prompt can set its
+    ``turns_target``), or None if the function has none.
+    """
+    by_id = {node.id: node for node in flow.nodes}
+    visited: set[str] = set()
+    to_visit = [start_id]
+    while to_visit:
+        current = to_visit.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        node = by_id.get(current)
+        if (
+            node is not None
+            and node.node_type == "WaitForInput"
+            and (node.state or {}).get("threshold_mode") == "revolution"
+        ):
+            turns = int((node.state or {}).get("turns_target", 1) or 1)
+            return RevolutionParam(node_id=current, turns=turns)
+        for conn in flow.connections:
+            if conn.from_node == current:
+                to_visit.append(conn.to_node)
+    return None
+
+
 def list_graph_functions(session) -> list[GraphFunctionInfo]:
     """Return one entry per StartFunction node in the session's flow."""
     if session is None:

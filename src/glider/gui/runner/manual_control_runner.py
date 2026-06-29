@@ -52,7 +52,15 @@ class ManualControlRunner:
     def is_busy(self) -> bool:
         return self._busy
 
-    async def run(self, start_node_id: str) -> RunResult:
+    async def run(self, start_node_id: str, param: dict | None = None) -> RunResult:
+        """Run a function chain.
+
+        ``param`` optionally injects a runtime value into one node's state before
+        running -- e.g. ``{"node_id": ..., "state_key": "turns_target",
+        "value": 5}`` to set a revolution target from a touchscreen prompt. This
+        is the reliable way to parameterize a run, since the engine does not
+        deliver wired data into node inputs.
+        """
         if self._busy:
             return RunResult(RunOutcome.BUSY)
         if not self._core.hardware_manager.is_any_board_connected():
@@ -68,6 +76,13 @@ class ManualControlRunner:
             node = engine.get_node(start_node_id)
             if node is None:
                 return RunResult(RunOutcome.NOT_FOUND)
+
+            # Inject the runtime parameter into the target node's state, after
+            # setup so it lands on the live node that will execute.
+            if param:
+                target = engine.get_node(param["node_id"])
+                if target is not None and hasattr(target, "_state"):
+                    target._state[param["state_key"]] = param["value"]
 
             # Exec-flow propagation in FlowEngine is gated on FlowState.RUNNING.
             # A manual run executes a StartFunction chain while the engine is

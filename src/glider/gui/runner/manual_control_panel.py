@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.core.graph_functions import list_graph_functions
+from glider.core.graph_functions import find_revolution_node, list_graph_functions
 from glider.gui.styles import colors
 
 if TYPE_CHECKING:
@@ -66,6 +66,8 @@ class ManualControlPanel(QWidget):
     """Touch button-grid bound to graph functions by ``start_node_id``."""
 
     function_run_requested = pyqtSignal(str)  # emits a start_node_id
+    # emits (start_node_id, param dict) for a parameterized run (e.g. N revolutions)
+    function_run_requested_param = pyqtSignal(str, object)
 
     def __init__(self, core: GliderCore, parent: QWidget | None = None):
         super().__init__(parent)
@@ -174,11 +176,40 @@ class ManualControlPanel(QWidget):
         self.refresh()
 
     def activate_slot(self, slot: int) -> None:
-        """Emit function_run_requested for the slot's bound function."""
+        """Run the slot's function, prompting for a value if it's parameterized.
+
+        If the function contains a revolution-mode WaitForInput, a touch number
+        pad asks for the number of revolutions, which is then injected into that
+        node before the function runs.
+        """
         entry = self._entry_for_slot(slot)
         if entry is None:
             return
-        self.function_run_requested.emit(entry["start_node_id"])
+        start_node_id = entry["start_node_id"]
+        rev = self._revolution_param(start_node_id)
+        if rev is None:
+            self.function_run_requested.emit(start_node_id)
+            return
+
+        from glider.gui.dialogs.number_pad_dialog import NumberPadDialog
+
+        turns = NumberPadDialog.get_int(
+            "Revolutions", value=rev.turns, minimum=1, maximum=100000, parent=self
+        )
+        if turns is None:
+            return  # cancelled
+        param = {"node_id": rev.node_id, "state_key": "turns_target", "value": turns}
+        self.function_run_requested_param.emit(start_node_id, param)
+
+    def _revolution_param(self, start_node_id: str):
+        """The revolution-mode WaitForInput in this function, if any."""
+        try:
+            session = self._core.session
+            if session is None:
+                return None
+            return find_revolution_node(start_node_id, session.flow)
+        except Exception:  # never block a run on detection
+            return None
 
     def is_slot_enabled(self, slot: int) -> bool:
         """Effective enabled state for a slot, per the spec rules."""

@@ -45,6 +45,27 @@ async def test_no_hardware_returns_not_ready():
     assert result.outcome is RunOutcome.NO_HARDWARE
 
 
+async def test_param_injected_into_target_node_state():
+    class _Node:
+        def __init__(self):
+            self._state = {}
+
+    class _OkRunner:
+        def __init__(self, start_node_id, engine):
+            pass
+
+        async def execute(self):
+            return True
+
+    target = _Node()
+    core = _FakeCore(connected=True, nodes={"s1": object(), "w": target})
+    runner = ManualControlRunner(core, function_runner_factory=_OkRunner)
+
+    result = await runner.run("s1", param={"node_id": "w", "state_key": "turns_target", "value": 5})
+    assert result.outcome is RunOutcome.SUCCESS
+    assert target._state["turns_target"] == 5
+
+
 async def test_unknown_node_returns_not_found():
     runner = ManualControlRunner(_FakeCore(connected=True, nodes={"other": object()}))
     result = await runner.run("s1")

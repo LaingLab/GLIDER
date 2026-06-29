@@ -70,6 +70,48 @@ def test_run_requested_emitted_on_activate(qtbot):
     assert blocker.args == ["s1"]
 
 
+def test_parameterized_run_for_revolution_function(qtbot, monkeypatch):
+    import glider.gui.runner.manual_control_panel as mcp
+    from glider.core.graph_functions import RevolutionParam
+    from glider.gui.dialogs.number_pad_dialog import NumberPadDialog
+
+    # A function with a revolution node -> prompt -> param run.
+    monkeypatch.setattr(mcp, "find_revolution_node", lambda sid, flow: RevolutionParam("w1", 1))
+    monkeypatch.setattr(NumberPadDialog, "get_int", classmethod(lambda cls, *a, **k: 5))
+
+    session = ExperimentSession()
+    session.set_manual_controls([{"slot": 0, "start_node_id": "s1", "label": "Dispense"}])
+    panel = ManualControlPanel(_Core(session))
+    qtbot.addWidget(panel)
+
+    with qtbot.waitSignal(panel.function_run_requested_param, timeout=500) as blocker:
+        panel.activate_slot(0)
+    assert blocker.args[0] == "s1"
+    assert blocker.args[1] == {"node_id": "w1", "state_key": "turns_target", "value": 5}
+
+
+def test_parameterized_run_cancelled_emits_nothing(qtbot, monkeypatch):
+    import glider.gui.runner.manual_control_panel as mcp
+    from glider.core.graph_functions import RevolutionParam
+    from glider.gui.dialogs.number_pad_dialog import NumberPadDialog
+
+    monkeypatch.setattr(mcp, "find_revolution_node", lambda sid, flow: RevolutionParam("w1", 1))
+    monkeypatch.setattr(
+        NumberPadDialog, "get_int", classmethod(lambda cls, *a, **k: None)
+    )  # cancel
+
+    session = ExperimentSession()
+    session.set_manual_controls([{"slot": 0, "start_node_id": "s1", "label": "Dispense"}])
+    panel = ManualControlPanel(_Core(session))
+    qtbot.addWidget(panel)
+
+    fired = []
+    panel.function_run_requested_param.connect(lambda *a: fired.append(a))
+    panel.function_run_requested.connect(lambda *a: fired.append(a))
+    panel.activate_slot(0)
+    assert fired == []
+
+
 def test_buttons_disabled_when_no_hardware(qtbot):
     session = ExperimentSession()
     session.set_manual_controls([{"slot": 0, "start_node_id": "s1", "label": "A"}])

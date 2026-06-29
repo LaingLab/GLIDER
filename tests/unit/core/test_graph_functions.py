@@ -1,6 +1,10 @@
 # tests/unit/core/test_graph_functions.py
 from glider.core.experiment_session import ExperimentSession
-from glider.core.graph_functions import GraphFunctionInfo, list_graph_functions
+from glider.core.graph_functions import (
+    GraphFunctionInfo,
+    find_revolution_node,
+    list_graph_functions,
+)
 
 
 def _session_with_flow(nodes, connections):
@@ -71,3 +75,31 @@ def test_two_start_functions_sharing_name_are_distinct_entries():
 def test_zero_functions_returns_empty():
     session = _session_with_flow(nodes=[_node("n1", "Delay")], connections=[])
     assert list_graph_functions(session) == []
+
+
+def test_find_revolution_node_in_chain():
+    session = _session_with_flow(
+        nodes=[
+            _node("s1", "StartFunction"),
+            _node("o1", "Output"),
+            _node("w1", "WaitForInput", {"threshold_mode": "revolution", "turns_target": 3}),
+            _node("e1", "EndFunction"),
+        ],
+        connections=[_conn("s1", "o1"), _conn("o1", "w1"), _conn("w1", "e1")],
+    )
+    rp = find_revolution_node("s1", session.flow)
+    assert rp is not None
+    assert rp.node_id == "w1"
+    assert rp.turns == 3
+
+
+def test_find_revolution_node_none_when_not_revolution():
+    session = _session_with_flow(
+        nodes=[
+            _node("s1", "StartFunction"),
+            _node("w1", "WaitForInput", {"threshold_mode": "digital"}),
+            _node("e1", "EndFunction"),
+        ],
+        connections=[_conn("s1", "w1"), _conn("w1", "e1")],
+    )
+    assert find_revolution_node("s1", session.flow) is None
