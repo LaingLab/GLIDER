@@ -17,6 +17,7 @@ from glider.core import device_library
 from glider.hal.base_device import DeviceConfig
 from glider.hal.declarative_device import (
     build_device_class,
+    revolution_settings,
     standard_settings,
     validate_definition,
 )
@@ -193,6 +194,41 @@ async def test_gpio_analog_input():
     await dev.initialize()
     assert ("mode", 14, "INPUT", "ANALOG") in board.calls
     assert await dev.read() == 512
+
+
+# --- revolution tracking -------------------------------------------------
+
+
+def _rev_device(**settings):
+    defn = {
+        "name": "Enc",
+        "transport": "i2c",
+        "track_revolutions": True,
+        "settings": standard_settings("i2c") + revolution_settings(),
+        "actions": [
+            {"name": "turns", "op": "read_revolutions", "primary": True},
+            {"name": "angle", "op": "read_angle"},
+            {"name": "reset", "op": "reset_revolutions"},
+        ],
+    }
+    cls = build_device_class(defn)
+    return cls(None, DeviceConfig(pins={}, settings=settings), name="Enc")
+
+
+def test_revolution_ops_need_track_flag():
+    base = {"name": "X", "transport": "i2c", "actions": [{"name": "a", "op": "read_revolutions"}]}
+    assert any("not valid" in e for e in validate_definition(base))  # no track flag
+    assert validate_definition({**base, "track_revolutions": True}) == []
+
+
+async def test_revolution_accumulate_and_reset():
+    dev = _rev_device()  # counts_per_turn default 4096, decimals 2
+    for raw in [0, 1024, 2048, 3072, 4095, 0]:  # one full forward turn
+        dev._accumulate(raw)
+    assert await dev.read() == 1.0  # primary = read_revolutions
+    assert await dev.execute_action("angle") == 0
+    await dev.execute_action("reset")
+    assert await dev.read() == 0.0
 
 
 # --- device library ------------------------------------------------------
