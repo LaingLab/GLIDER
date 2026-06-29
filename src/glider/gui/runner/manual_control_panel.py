@@ -12,6 +12,7 @@ This widget is PURE UI: it does not run anything itself.
 from __future__ import annotations
 
 import logging
+import time
 from collections import Counter
 from typing import TYPE_CHECKING
 
@@ -62,6 +63,31 @@ def build_picker_labels(infos):
     return labels
 
 
+class _SlotTile(QWidget):
+    """A run button with an always-enabled ✕ delete badge in the corner.
+
+    The badge is a sibling of the run button (not a child), so disabling the run
+    button (e.g. no hardware connected) does not disable the badge -- delete
+    stays available in any state.
+    """
+
+    def __init__(self, run_button: QPushButton, delete_button: QPushButton, parent=None):
+        super().__init__(parent)
+        self._run = run_button
+        self._delete = delete_button
+        self._run.setParent(self)
+        self._delete.setParent(self)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._run)
+        self._delete.raise_()  # float over the run button's top-right
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        margin = 4
+        self._delete.move(self.width() - self._delete.width() - margin, margin)
+
+
 class ManualControlPanel(QWidget):
     """Touch button-grid bound to graph functions by ``start_node_id``."""
 
@@ -77,8 +103,19 @@ class ManualControlPanel(QWidget):
 
         # slot -> QPushButton for the real (assigned) tiles.
         self._slot_buttons: dict[int, QPushButton] = {}
+        # slot -> always-enabled ✕ delete badge.
+        self._delete_buttons: dict[int, QPushButton] = {}
         # slot -> press-and-hold timer.
         self._press_timers: dict[int, QTimer] = {}
+
+        # Run stopwatch: monotonic start of the active run, and the last
+        # completed duration per function (keyed by start_node_id, so it
+        # survives grid rebuilds and re-packing).
+        self._run_start: float | None = None
+        self._last_durations: dict[str, float] = {}
+        self._run_tick = QTimer(self)
+        self._run_tick.setInterval(200)
+        self._run_tick.timeout.connect(self._update_tile_labels)
 
         self.setObjectName("manualControlPanel")
         self._setup_ui()
@@ -125,6 +162,7 @@ class ManualControlPanel(QWidget):
             timer.stop()
         self._press_timers.clear()
         self._slot_buttons.clear()
+        self._delete_buttons.clear()
 
         while self._grid.count():
             item = self._grid.takeAt(0)
@@ -141,9 +179,8 @@ class ManualControlPanel(QWidget):
         for entry in entries:
             slot = entry["slot"]
             is_missing = entry["start_node_id"] not in known_ids
-            btn = self._make_slot_button(slot, entry, is_missing)
-            self._slot_buttons[slot] = btn
-            self._grid.addWidget(btn, index // columns, index % columns)
+            tile = self._make_slot_button(slot, entry, is_missing)
+            self._grid.addWidget(tile, index // columns, index % columns)
             index += 1
 
         # Trailing "+ Assign" tile.
@@ -154,6 +191,7 @@ class ManualControlPanel(QWidget):
         self._grid.addWidget(assign_btn, index // columns, index % columns)
 
         self._apply_enable_state()
+        self._update_tile_labels()  # restore running/last-run text after rebuild
 
     def assign_function(self, slot: int, start_node_id: str, label: str) -> None:
         """Upsert (by slot) an entry into manual_controls and refresh."""
@@ -221,9 +259,23 @@ class ManualControlPanel(QWidget):
         return self._compute_enabled(slot)
 
     def set_running(self, node_id_or_none: str | None) -> None:
-        """Mark a node as the active run (or clear) and re-apply visuals."""
-        self._running_node_id = node_id_or_none
+        """Mark a node as the active run (or clear), driving the run stopwatch.
+
+        On start, the running tile counts up live; on finish it freezes showing
+        that run's duration until the function is run again.
+        """
+        if node_id_or_none is not None:
+            self._running_node_id = node_id_or_none
+            self._run_start = time.monotonic()
+            self._run_tick.start()
+        else:
+            if self._running_node_id is not None and self._run_start is not None:
+                self._last_durations[self._running_node_id] = time.monotonic() - self._run_start
+            self._running_node_id = None
+            self._run_start = None
+            self._run_tick.stop()
         self._apply_enable_state()
+        self._update_tile_labels()
 
     def update_state(self, state_name: str) -> None:
         """Update the core state name and re-apply enable-state."""
@@ -259,6 +311,29 @@ class ManualControlPanel(QWidget):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
+    # --- Run stopwatch ---
+
+    @staticmethod
+    def _fmt_elapsed(seconds: float) -> str:
+        total = int(seconds)
+        return f"{total // 60}:{total % 60:02d}"
+
+    def _update_tile_labels(self) -> None:
+        """Show the live run time on the running tile and the last duration on
+        finished ones; plain label otherwise."""
+        for slot, btn in self._slot_buttons.items():
+            entry = self._entry_for_slot(slot)
+            if entry is None:
+                continue
+            label = entry.get("label", "")
+            nid = entry["start_node_id"]
+            if nid == self._running_node_id and self._run_start is not None:
+                btn.setText(f"{label}\n{self._fmt_elapsed(time.monotonic() - self._run_start)}")
+            elif nid in self._last_durations:
+                btn.setText(f"{label}\nLast: {self._fmt_elapsed(self._last_durations[nid])}")
+            else:
+                btn.setText(label)
+
     # --- Helpers ---
 
     def _entry_for_slot(self, slot: int) -> dict | None:
@@ -267,8 +342,8 @@ class ManualControlPanel(QWidget):
                 return entry
         return None
 
-    def _make_slot_button(self, slot: int, entry: dict, is_missing: bool) -> QPushButton:
-        """Create a bound slot button with click + press-and-hold wiring."""
+    def _make_slot_button(self, slot: int, entry: dict, is_missing: bool) -> QWidget:
+        """Create a slot tile: a run button + an always-enabled ✕ delete badge."""
         btn = QPushButton(entry.get("label", ""))
         btn.setMinimumHeight(96)
         btn.setProperty("manualTile", "missing" if is_missing else "slot")
@@ -295,7 +370,18 @@ class ManualControlPanel(QWidget):
         btn.pressed.connect(lambda s=slot: self._start_press_timer(s))
         btn.released.connect(lambda s=slot: self._stop_press_timer(s))
 
-        return btn
+        self._slot_buttons[slot] = btn
+
+        # Always-enabled ✕ delete badge (sibling of btn in the tile), so it
+        # stays clickable on desktop and touch even when the tile is disabled.
+        del_btn = QPushButton("✕")
+        del_btn.setFixedSize(28, 28)
+        del_btn.setToolTip("Remove this button")
+        del_btn.setProperty("manualTile", "delete")
+        del_btn.clicked.connect(lambda _checked=False, s=slot: self.clear_slot(s))
+        self._delete_buttons[slot] = del_btn
+
+        return _SlotTile(btn, del_btn)
 
     def _start_press_timer(self, slot: int) -> None:
         timer = self._press_timers.get(slot)
