@@ -118,6 +118,17 @@ class PathConfig:
 
 
 @dataclass
+class PluginConfig:
+    """Plugin loading configuration."""
+
+    # Load plugins from ~/.glider/plugins (plus any plugin_dirs). Off by default
+    # because directory plugins execute arbitrary code on load; opt in here.
+    enable_directory_plugins: bool = False
+    # Extra directories to search, in addition to ~/.glider/plugins.
+    plugin_dirs: list[str] = field(default_factory=list)
+
+
+@dataclass
 class GliderConfig:
     """Main configuration container for GLIDER."""
 
@@ -125,6 +136,7 @@ class GliderConfig:
     ui: UIConfig = field(default_factory=UIConfig)
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
     paths: PathConfig = field(default_factory=PathConfig)
+    plugins: PluginConfig = field(default_factory=PluginConfig)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary."""
@@ -150,6 +162,10 @@ class GliderConfig:
                 "pwm_max": self.hardware.pwm_max,
                 "input_poll_interval_ms": self.hardware.input_poll_interval_ms,
             },
+            "plugins": {
+                "enable_directory_plugins": self.plugins.enable_directory_plugins,
+                "plugin_dirs": self.plugins.plugin_dirs,
+            },
         }
 
     @classmethod
@@ -174,6 +190,12 @@ class GliderConfig:
             for key, value in hw_data.items():
                 if hasattr(config.hardware, key):
                     setattr(config.hardware, key, value)
+
+        if "plugins" in data:
+            plugin_data = data["plugins"]
+            for key, value in plugin_data.items():
+                if hasattr(config.plugins, key):
+                    setattr(config.plugins, key, value)
 
         return config
 

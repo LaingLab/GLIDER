@@ -590,6 +590,10 @@ class MainWindow(QMainWindow):
         )
         hardware_menu.addAction(add_device_action)
 
+        new_custom_device_action = QAction("New Custom Device &Type...", self)
+        new_custom_device_action.triggered.connect(self._on_new_custom_device)
+        hardware_menu.addAction(new_custom_device_action)
+
         hardware_menu.addSeparator()
 
         connect_action = QAction("&Connect All", self)
@@ -1552,6 +1556,19 @@ class MainWindow(QMainWindow):
 
         dialog = AnalysisDialog(parent=self)
         dialog.exec()
+
+    def _on_new_custom_device(self) -> None:
+        """Open the no-code custom device builder; refresh on save."""
+        from glider.gui.dialogs.custom_device_dialog import CustomDeviceDialog
+
+        dialog = CustomDeviceDialog(parent=self)
+        if dialog.exec():
+            # The new type is registered in DEVICE_REGISTRY and appears the next
+            # time Add Device is opened.
+            self._show_status_message(
+                f"Custom device '{dialog.device_name}' created — add it via Hardware → Add Device",
+                5000,
+            )
 
     def _on_open_analysis_panel(self, directory: str) -> None:
         """Open (or reuse) the Analysis dock and load a finished recording.

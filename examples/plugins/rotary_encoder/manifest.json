@@ -1,0 +1,9 @@
+{
+  "name": "rotary_encoder",
+  "version": "1.0.0",
+  "description": "Rotary encoder (AS5600) device: tracks cumulative revolutions, angle, and degrees over I2C, with gear-ratio and rounding settings.",
+  "author": "GLIDER",
+  "plugin_type": "device",
+  "entry_point": "rotary_encoder:setup",
+  "requirements": ["smbus2>=0.4.0"]
+}
