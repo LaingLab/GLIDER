@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-06-29T15:05:36.086750",
+    "modified_at": "2026-06-29T15:09:12.828770",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -152,7 +152,7 @@
           "ramp_device_id": "right_pwm",
           "drive_pwm": 150,
           "creep_pwm": 30,
-          "ramp_zone": 4000,
+          "ramp_zone": 3500,
           "land_tolerance": 0
         },
         "device_id": "i2c",
@@ -256,7 +256,7 @@
           "ramp_device_id": "left_pwm",
           "drive_pwm": 150,
           "counts_per_turn": 4078,
-          "ramp_zone": 100
+          "ramp_zone": 500
         },
         "device_id": "i2c",
         "visible_in_runner": true
