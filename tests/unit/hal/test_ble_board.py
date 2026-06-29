@@ -20,14 +20,28 @@ class _FakeBLEDevice:
         self.address = address
 
 
+class _FakeAdv:
+    def __init__(self, local_name):
+        self.local_name = local_name
+        self.service_uuids = []
+
+
 @pytest.fixture
 def fake_bleak(monkeypatch):
     mod = types.ModuleType("bleak")
 
     class _Scanner:
         @staticmethod
-        async def discover(timeout=5.0):
-            return [_FakeBLEDevice("Opto-A", "AA:BB"), _FakeBLEDevice(None, "CC:DD")]
+        async def discover(timeout=5.0, return_adv=False, **kwargs):
+            # "Opto-A" advertises its name only in the scan response, so
+            # device.name is empty but the advertisement's local_name has it.
+            entries = {
+                "AA:BB": (_FakeBLEDevice(None, "AA:BB"), _FakeAdv("Opto-A")),
+                "CC:DD": (_FakeBLEDevice(None, "CC:DD"), _FakeAdv(None)),
+            }
+            if return_adv:
+                return entries
+            return [dev for dev, _ in entries.values()]
 
     mod.BleakScanner = _Scanner
     monkeypatch.setitem(sys.modules, "bleak", mod)
