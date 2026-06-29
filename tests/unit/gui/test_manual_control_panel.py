@@ -112,6 +112,48 @@ def test_parameterized_run_cancelled_emits_nothing(qtbot, monkeypatch):
     assert fired == []
 
 
+def test_press_timer_guard_survives_cleared_timers(qtbot):
+    # Regression: clearing a slot reparents a still-pressed button, which makes
+    # Qt emit released() synchronously after refresh() cleared _press_timers.
+    # The guarded handlers must not KeyError.
+    session = ExperimentSession()
+    session.set_manual_controls([{"slot": 0, "start_node_id": "s1", "label": "A"}])
+    panel = ManualControlPanel(_Core(session))
+    qtbot.addWidget(panel)
+    panel._press_timers.clear()  # simulate mid-refresh state
+    panel._stop_press_timer(0)  # must not raise
+    panel._start_press_timer(0)  # must not raise
+
+
+def test_clear_while_pressed_does_not_crash(qtbot):
+    session = ExperimentSession()
+    session.set_manual_controls([{"slot": 0, "start_node_id": "s1", "label": "A"}])
+    panel = ManualControlPanel(_Core(session))
+    qtbot.addWidget(panel)
+    btn = panel._slot_buttons[0]
+    btn.pressed.emit()  # finger/mouse down (long-press timer started)
+    panel.clear_slot(0)  # Clear -> refresh() rebuilds while "pressed"
+    assert panel._entry_for_slot(0) is None
+
+
+def test_right_click_menu_resolves_slot_even_when_disabled(qtbot, monkeypatch):
+    from PyQt6.QtCore import QPoint
+
+    # No hardware -> tiles are disabled, but Clear must still be reachable.
+    session = ExperimentSession()
+    session.set_manual_controls([{"slot": 0, "start_node_id": "s1", "label": "A"}])
+    panel = ManualControlPanel(_Core(session, connected=False))
+    qtbot.addWidget(panel)
+    btn = panel._slot_buttons[0]
+    assert btn.isEnabled() is False  # the tile itself is disabled
+
+    monkeypatch.setattr(panel._content, "childAt", lambda _pos: btn)
+    opened = []
+    monkeypatch.setattr(panel, "_show_slot_menu", lambda slot: opened.append(slot))
+    panel._on_content_context_menu(QPoint(5, 5))
+    assert opened == [0]
+
+
 def test_buttons_disabled_when_no_hardware(qtbot):
     session = ExperimentSession()
     session.set_manual_controls([{"slot": 0, "start_node_id": "s1", "label": "A"}])

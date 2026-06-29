@@ -109,6 +109,11 @@ class ManualControlPanel(QWidget):
         self._grid.setSpacing(8)
         self._scroll.setWidget(self._content)
 
+        # Panel-level right-click menu: fires even over a disabled tile (the
+        # event propagates from the disabled child to this enabled container).
+        self._content.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._content.customContextMenuRequested.connect(self._on_content_context_menu)
+
         layout.addWidget(self._scroll, 1)
 
     # --- Public API ---
@@ -272,17 +277,49 @@ class ManualControlPanel(QWidget):
 
         btn.clicked.connect(lambda _checked=False, s=slot: self._on_clicked(s))
 
-        # Press-and-hold timer opens the per-slot context menu.
+        # Right-click (desktop) opens Reassign/Clear. The menu is handled at the
+        # panel level (see _on_content_context_menu) rather than per-button,
+        # because a disabled tile (e.g. no hardware connected) doesn't receive
+        # context-menu events. Touch devices use the long-press below.
+
+        # Press-and-hold timer opens the per-slot context menu (touchscreens).
         timer = QTimer(btn)
         timer.setSingleShot(True)
         timer.setInterval(_LONG_PRESS_MS)
         timer.timeout.connect(lambda s=slot: self._show_slot_menu(s))
         self._press_timers[slot] = timer
 
-        btn.pressed.connect(lambda s=slot: self._press_timers[s].start())
-        btn.released.connect(lambda s=slot: self._press_timers[s].stop())
+        # Guard timer access: refresh() clears _press_timers and reparenting a
+        # still-pressed button makes Qt emit released() synchronously, which
+        # would otherwise KeyError on a slot that's mid-rebuild.
+        btn.pressed.connect(lambda s=slot: self._start_press_timer(s))
+        btn.released.connect(lambda s=slot: self._stop_press_timer(s))
 
         return btn
+
+    def _start_press_timer(self, slot: int) -> None:
+        timer = self._press_timers.get(slot)
+        if timer is not None:
+            timer.start()
+
+    def _stop_press_timer(self, slot: int) -> None:
+        timer = self._press_timers.get(slot)
+        if timer is not None:
+            timer.stop()
+
+    def _on_content_context_menu(self, pos) -> None:
+        """Right-click anywhere on a tile -> that slot's Reassign/Clear menu.
+
+        Resolves the tile under the cursor via childAt, which returns disabled
+        widgets too, so Clear works regardless of a tile's run-enabled state.
+        """
+        child = self._content.childAt(pos)
+        if child is None:
+            return
+        for slot, btn in self._slot_buttons.items():
+            if btn is child or btn.isAncestorOf(child):
+                self._show_slot_menu(slot)
+                return
 
     def _on_clicked(self, slot: int) -> None:
         """A real tap: cancel any pending long-press and activate."""
