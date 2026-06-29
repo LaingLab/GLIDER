@@ -67,16 +67,27 @@ class BLEBoard(BaseBoard):
         self._set_state(BoardConnectionState.DISCONNECTED)
         logger.info("BLEBoard: adapter released")
 
-    async def scan(self, timeout: float = 5.0) -> list[tuple[str, str]]:
+    @staticmethod
+    async def scan(timeout: float = 8.0) -> list[tuple[str, str]]:
         """Discover nearby BLE peripherals.
 
         Returns a list of ``(name, address)`` tuples; ``name`` falls back to
         ``"(unknown)"`` when the peripheral advertises none.
+
+        Reads the name from the advertisement data (``local_name``) rather than
+        ``device.name``: many peripherals (e.g. Zephyr devices) send their name
+        in the SCAN RESPONSE, which an active scan captures into ``local_name``
+        even when ``device.name`` comes back empty on Windows. Static so callers
+        can scan the host adapter without needing a board instance.
         """
         from bleak import BleakScanner
 
-        devices = await BleakScanner.discover(timeout=timeout)
-        results = [(getattr(d, "name", None) or "(unknown)", d.address) for d in devices]
+        # return_adv=True -> {address: (BLEDevice, AdvertisementData)}
+        discovered = await BleakScanner.discover(timeout=timeout, return_adv=True)
+        results = []
+        for dev, adv in discovered.values():
+            name = (getattr(adv, "local_name", None) or getattr(dev, "name", None) or "").strip()
+            results.append((name or "(unknown)", dev.address))
         logger.info("BLEBoard: scan found %d peripheral(s)", len(results))
         return results
 
