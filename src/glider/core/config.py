@@ -110,6 +110,11 @@ class PathConfig:
         default_factory=lambda: Path.home() / ".glider" / "library" / "functions"
     )
 
+    # Default root for Behavior-Analysis tool project folders
+    behavior_projects_dir: Path = field(
+        default_factory=lambda: Path.home() / ".glider" / "behavior_projects"
+    )
+
     # File extensions
     experiment_extension: str = ".glider"
     device_extension: str = ".gdevice"

@@ -216,6 +216,13 @@ class TestGliderConfig:
         assert "timing" in parsed
 
 
+def test_behavior_projects_dir_default():
+    from glider.core.config import GliderConfig
+
+    cfg = GliderConfig()
+    assert cfg.paths.behavior_projects_dir == Path.home() / ".glider" / "behavior_projects"
+
+
 class TestGlobalConfig:
     """Tests for global configuration functions."""
 
