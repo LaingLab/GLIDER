@@ -676,6 +676,7 @@ class NodeEditorController(QObject):
             mode_combo.addItem("Digital (Rising Edge)", "digital")
             mode_combo.addItem("Analog (Threshold)", "analog")
             mode_combo.addItem("Revolution (Turns)", "revolution")
+            mode_combo.addItem("Move Counts", "counts")
 
             saved_mode = "digital"
             if node_config and node_config.state:
@@ -729,6 +730,19 @@ class NodeEditorController(QObject):
                 lambda val, nid=node_id: self._on_node_property_changed(nid, "turns_target", val)
             )
             props_layout.addRow("Turns:", turns_spin)
+
+            # Move Counts mode: signed displacement to travel from the start
+            # before stopping. Applies only when Mode is "Move Counts".
+            counts_target_spin = QSpinBox()
+            counts_target_spin.setRange(1, 10_000_000)
+            saved_counts_target = 400
+            if node_config and node_config.state:
+                saved_counts_target = node_config.state.get("counts_target", 400)
+            counts_target_spin.setValue(saved_counts_target)
+            counts_target_spin.valueChanged.connect(
+                lambda val, nid=node_id: self._on_node_property_changed(nid, "counts_target", val)
+            )
+            props_layout.addRow("Move counts:", counts_target_spin)
 
             # Revolution mode: sensor full-scale range (e.g. 4096 for the
             # 12-bit AS5600 raw angle). A reading jump larger than half this
@@ -851,8 +865,10 @@ class NodeEditorController(QObject):
                 "Analog mode: waits for value to cross threshold\n"
                 "Revolution mode: counts full turns of a wrap-around "
                 "sensor (e.g. AS5600)\n"
+                "Move Counts: travels 'Move counts' of displacement from the "
+                "start, then stops (bidirectional)\n"
                 "Ramp down: eases the ramp device's PWM to a creep near the "
-                "wrap so the motor lands on ~0"
+                "target so the motor lands on it"
             )
             info_label.setWordWrap(True)
             info_label.setProperty("textRole", "muted")

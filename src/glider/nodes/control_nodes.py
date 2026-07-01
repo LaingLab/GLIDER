@@ -192,6 +192,7 @@ class WaitForInputNode(GliderNode):
         self._threshold_direction = "above"  # "above" or "below"
         self._turns_target = 1  # Revolution mode: fire after this many turns
         self._counts_per_turn = 4096  # Revolution mode: sensor full-scale range
+        self._counts_target = 400  # Counts mode: move this many counts then stop
         # Revolution-mode "ramp down to landing": decelerate a motor PWM as the
         # angle approaches the wrap so it coasts almost nothing and lands on ~0.
         self._ramp_down = False
@@ -235,6 +236,7 @@ class WaitForInputNode(GliderNode):
         self._threshold_direction = self._state.get("threshold_direction", "above")
         self._turns_target = self._state.get("turns_target", 1)
         self._counts_per_turn = self._state.get("counts_per_turn", 4096)
+        self._counts_target = self._state.get("counts_target", 400)
         self._ramp_down = self._state.get("ramp_down", False)
         self._ramp_device_id = self._state.get("ramp_device_id")
         self._drive_pwm = self._state.get("drive_pwm", 100)
@@ -244,10 +246,10 @@ class WaitForInputNode(GliderNode):
         self._landing_armed = False  # re-arm fresh each run
         self._ramp_direction = 1  # assume rising until motion proves otherwise
 
-        # Resolve the PWM device to ramp (revolution mode only). If it can't be
-        # found, ramping is silently skipped — the wait still works.
+        # Resolve the PWM device to ramp (revolution/counts modes). If it can't
+        # be found, ramping is silently skipped — the wait still works.
         self._ramp_device = None
-        if self._threshold_mode == "revolution" and self._ramp_down:
+        if self._threshold_mode in ("revolution", "counts") and self._ramp_down:
             if self._ramp_device_id and self._hardware_manager is not None:
                 self._ramp_device = self._hardware_manager.get_device(self._ramp_device_id)
             if self._ramp_device is None:
@@ -269,6 +271,8 @@ class WaitForInputNode(GliderNode):
                     f"  Ramp-down on '{self._ramp_device_id}': "
                     f"drive={self._drive_pwm}, creep={self._creep_pwm}, zone={self._ramp_zone}"
                 )
+        elif self._threshold_mode == "counts":
+            logger.info(f"  Move counts: target {self._counts_target} (signed displacement)")
 
         self._waiting = True
         self._trigger_value = None
@@ -304,6 +308,7 @@ class WaitForInputNode(GliderNode):
         max_errors = 3  # Stop after 3 consecutive errors
         last_value = None  # Track previous value for edge detection
         turn_count = 0  # Revolution mode: completed turns so far
+        accumulated = 0.0  # Counts mode: signed displacement from the start
 
         logger.info(f"  Starting device poll loop, device type: {type(self._device).__name__}")
 
@@ -421,7 +426,35 @@ class WaitForInputNode(GliderNode):
                         and self._ramp_device is not None
                         and turn_count >= self._turns_target - 1
                     ):
-                        await self._apply_ramp(value)
+                        remaining = (
+                            self._counts_per_turn - value if self._ramp_direction >= 0 else value
+                        )
+                        await self._apply_ramp(remaining)
+
+                elif self._threshold_mode == "counts" and isinstance(value, (int, float)):
+                    # Move-counts mode: accumulate signed displacement from the
+                    # start (wrap-corrected) and stop once the magnitude reaches
+                    # the target. Direction is whichever way the motor drives, so
+                    # this is bidirectional via the absolute displacement.
+                    if last_value is not None:
+                        delta = value - last_value
+                        half = self._counts_per_turn / 2
+                        if delta > half:
+                            delta -= self._counts_per_turn
+                        elif delta < -half:
+                            delta += self._counts_per_turn
+                        accumulated += delta
+
+                    # Stop at the target, less any land_tolerance to pre-empt
+                    # coast (same idea as revolution-mode landing).
+                    stop_at = max(0, self._counts_target - self._land_tolerance)
+                    if abs(accumulated) >= stop_at:
+                        logger.info(
+                            f"  TRIGGERED! Moved {accumulated:.0f}/{self._counts_target} counts"
+                        )
+                        triggered = True
+                    elif self._ramp_device is not None:
+                        await self._apply_ramp(self._counts_target - abs(accumulated))
 
                 if triggered:
                     self._trigger_value = value
@@ -443,21 +476,15 @@ class WaitForInputNode(GliderNode):
             # Wait before next poll
             await asyncio.sleep(self._poll_interval)
 
-    async def _apply_ramp(self, value: float) -> None:
-        """Write a decelerating PWM based on how close ``value`` is to the wrap.
+    async def _apply_ramp(self, remaining: float) -> None:
+        """Write a decelerating PWM given counts remaining to the landing.
 
         Outside the deceleration zone the motor runs at ``drive_pwm``; within the
-        last ``ramp_zone`` counts before the wrap the PWM eases linearly down to
-        ``creep_pwm``. The wrap is at the top (``counts_per_turn``) when the angle
-        is rising and at 0 when it is falling, so distance-to-wrap depends on the
-        rotation direction -- otherwise the ramp would slow the motor at the wrong
-        end when it spins the other way.
+        last ``ramp_zone`` counts of the target the PWM eases linearly down to
+        ``creep_pwm``. The caller computes ``remaining`` for its mode (distance to
+        the wrap for revolution, distance to the count target for counts mode).
         """
         span = max(1, self._ramp_zone)
-        if self._ramp_direction >= 0:
-            remaining = self._counts_per_turn - value  # rising toward the top wrap
-        else:
-            remaining = value  # falling toward the 0 wrap
         remaining = max(0, remaining)
         if remaining >= span:
             pwm = self._drive_pwm
@@ -498,6 +525,7 @@ class WaitForInputNode(GliderNode):
         state["threshold_direction"] = self._threshold_direction
         state["turns_target"] = self._turns_target
         state["counts_per_turn"] = self._counts_per_turn
+        state["counts_target"] = self._counts_target
         state["ramp_down"] = self._ramp_down
         state["ramp_device_id"] = self._ramp_device_id
         state["drive_pwm"] = self._drive_pwm
@@ -514,6 +542,7 @@ class WaitForInputNode(GliderNode):
         self._threshold_direction = state.get("threshold_direction", "above")
         self._turns_target = state.get("turns_target", 1)
         self._counts_per_turn = state.get("counts_per_turn", 4096)
+        self._counts_target = state.get("counts_target", 400)
         self._ramp_down = state.get("ramp_down", False)
         self._ramp_device_id = state.get("ramp_device_id")
         self._drive_pwm = state.get("drive_pwm", 100)

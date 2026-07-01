@@ -177,6 +177,44 @@ async def test_ramp_down_decelerates_in_decreasing_direction():
     assert pwm.writes[-1] == 0
 
 
+async def test_counts_mode_stops_at_target_forward():
+    # Move-counts mode: accumulate displacement until |displacement| >= target.
+    node = _make_node([0, 100, 200, 300, 400, 500], turns=1)
+    node._threshold_mode = "counts"
+    node._counts_target = 400
+    await node._poll_device(timeout=0.0)
+    # First reading where cumulative displacement reaches 400 is value 400.
+    assert node._trigger_value == 400
+
+
+async def test_counts_mode_stops_at_target_reverse():
+    # Reverse motion (decreasing angle) accumulates negative displacement; the
+    # magnitude is what counts, so it still stops after 400 counts of travel.
+    node = _make_node([1000, 900, 800, 700, 600], turns=1)
+    node._threshold_mode = "counts"
+    node._counts_target = 400
+    await node._poll_device(timeout=0.0)
+    assert node._trigger_value == 600  # moved 1000 -> 600 = 400 counts
+
+
+async def test_counts_mode_ramps_toward_target():
+    node = _make_node([0, 1000, 2000, 3600, 3900, 4000], turns=1)
+    node._threshold_mode = "counts"
+    node._counts_target = 4000
+    pwm = _RecordingPWM()
+    node._ramp_down = True
+    node._ramp_device = pwm
+    node._drive_pwm = 100
+    node._creep_pwm = 30
+    node._ramp_zone = 512
+    await node._poll_device(timeout=0.0)
+    assert node._trigger_value == 4000  # 4000 counts of displacement reached
+    assert pwm.writes[0] == 100  # full drive far from the target
+    ramp_writes = pwm.writes[:-1]
+    assert ramp_writes == sorted(ramp_writes, reverse=True)  # eases down to the target
+    assert pwm.writes[-1] == 0
+
+
 async def test_no_ramp_writes_when_ramp_device_absent():
     # Revolution mode without a ramp device must not attempt any PWM writes.
     node = _make_node([3000, 4090, 50], turns=1)
