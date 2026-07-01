@@ -26,22 +26,32 @@ class GraphFunctionInfo:
 
 
 @dataclass(frozen=True)
-class RevolutionParam:
-    """A revolution-mode WaitForInput found in a function chain.
+class RunParam:
+    """A parameterizable WaitForInput found in a function chain.
 
-    node_id is the WaitForInput node whose ``turns_target`` a touchscreen prompt
-    can set; turns is its current target (used as the prompt's default).
+    A touchscreen prompt sets ``state_key`` on node ``node_id`` before running;
+    ``value`` is the current target (the prompt default) and ``label`` is what
+    to ask for (e.g. "Revolutions" or "Counts").
     """
 
     node_id: str
-    turns: int
+    state_key: str
+    value: int
+    label: str
 
 
-def find_revolution_node(start_id: str, flow) -> RevolutionParam | None:
-    """Trace exec connections from start_id for a revolution-mode WaitForInput.
+# Modes whose target a touchscreen prompt can set: mode -> (state_key, label).
+_PARAM_MODES = {
+    "revolution": ("turns_target", 1, "Revolutions"),
+    "counts": ("counts_target", 400, "Counts"),
+}
 
-    Returns the first such node (so a 'Run N revolutions' prompt can set its
-    ``turns_target``), or None if the function has none.
+
+def find_run_param(start_id: str, flow) -> RunParam | None:
+    """Trace exec connections from start_id for a parameterizable WaitForInput.
+
+    Returns the first revolution- or counts-mode WaitForInput so a touchscreen
+    prompt can set its target before running, or None if the function has none.
     """
     by_id = {node.id: node for node in flow.nodes}
     visited: set[str] = set()
@@ -52,13 +62,12 @@ def find_revolution_node(start_id: str, flow) -> RevolutionParam | None:
             continue
         visited.add(current)
         node = by_id.get(current)
-        if (
-            node is not None
-            and node.node_type == "WaitForInput"
-            and (node.state or {}).get("threshold_mode") == "revolution"
-        ):
-            turns = int((node.state or {}).get("turns_target", 1) or 1)
-            return RevolutionParam(node_id=current, turns=turns)
+        if node is not None and node.node_type == "WaitForInput":
+            mode = (node.state or {}).get("threshold_mode")
+            if mode in _PARAM_MODES:
+                state_key, default, label = _PARAM_MODES[mode]
+                value = int((node.state or {}).get(state_key, default) or default)
+                return RunParam(node_id=current, state_key=state_key, value=value, label=label)
         for conn in flow.connections:
             if conn.from_node == current:
                 to_visit.append(conn.to_node)

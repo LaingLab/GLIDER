@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.core.graph_functions import find_revolution_node, list_graph_functions
+from glider.core.graph_functions import find_run_param, list_graph_functions
 from glider.gui.styles import colors
 
 if TYPE_CHECKING:
@@ -221,36 +221,36 @@ class ManualControlPanel(QWidget):
     def activate_slot(self, slot: int) -> None:
         """Run the slot's function, prompting for a value if it's parameterized.
 
-        If the function contains a revolution-mode WaitForInput, a touch number
-        pad asks for the number of revolutions, which is then injected into that
-        node before the function runs.
+        If the function contains a revolution- or counts-mode WaitForInput, a
+        touch number pad asks for the target (revolutions or counts), which is
+        injected into that node before the function runs.
         """
         entry = self._entry_for_slot(slot)
         if entry is None:
             return
         start_node_id = entry["start_node_id"]
-        rev = self._revolution_param(start_node_id)
-        if rev is None:
+        run_param = self._run_param(start_node_id)
+        if run_param is None:
             self.function_run_requested.emit(start_node_id)
             return
 
         from glider.gui.dialogs.number_pad_dialog import NumberPadDialog
 
-        turns = NumberPadDialog.get_int(
-            "Revolutions", value=rev.turns, minimum=1, maximum=100000, parent=self
+        value = NumberPadDialog.get_int(
+            run_param.label, value=run_param.value, minimum=1, maximum=10_000_000, parent=self
         )
-        if turns is None:
+        if value is None:
             return  # cancelled
-        param = {"node_id": rev.node_id, "state_key": "turns_target", "value": turns}
+        param = {"node_id": run_param.node_id, "state_key": run_param.state_key, "value": value}
         self.function_run_requested_param.emit(start_node_id, param)
 
-    def _revolution_param(self, start_node_id: str):
-        """The revolution-mode WaitForInput in this function, if any."""
+    def _run_param(self, start_node_id: str):
+        """The parameterizable (revolution/counts) WaitForInput here, if any."""
         try:
             session = self._core.session
             if session is None:
                 return None
-            return find_revolution_node(start_node_id, session.flow)
+            return find_run_param(start_node_id, session.flow)
         except Exception:  # never block a run on detection
             return None
 

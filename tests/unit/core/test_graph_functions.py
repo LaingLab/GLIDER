@@ -2,7 +2,7 @@
 from glider.core.experiment_session import ExperimentSession
 from glider.core.graph_functions import (
     GraphFunctionInfo,
-    find_revolution_node,
+    find_run_param,
     list_graph_functions,
 )
 
@@ -77,7 +77,7 @@ def test_zero_functions_returns_empty():
     assert list_graph_functions(session) == []
 
 
-def test_find_revolution_node_in_chain():
+def test_find_run_param_revolution():
     session = _session_with_flow(
         nodes=[
             _node("s1", "StartFunction"),
@@ -87,13 +87,30 @@ def test_find_revolution_node_in_chain():
         ],
         connections=[_conn("s1", "o1"), _conn("o1", "w1"), _conn("w1", "e1")],
     )
-    rp = find_revolution_node("s1", session.flow)
+    rp = find_run_param("s1", session.flow)
     assert rp is not None
-    assert rp.node_id == "w1"
-    assert rp.turns == 3
+    assert (rp.node_id, rp.state_key, rp.value, rp.label) == (
+        "w1",
+        "turns_target",
+        3,
+        "Revolutions",
+    )
 
 
-def test_find_revolution_node_none_when_not_revolution():
+def test_find_run_param_counts():
+    session = _session_with_flow(
+        nodes=[
+            _node("s1", "StartFunction"),
+            _node("w1", "WaitForInput", {"threshold_mode": "counts", "counts_target": 400}),
+            _node("e1", "EndFunction"),
+        ],
+        connections=[_conn("s1", "w1"), _conn("w1", "e1")],
+    )
+    rp = find_run_param("s1", session.flow)
+    assert (rp.node_id, rp.state_key, rp.value, rp.label) == ("w1", "counts_target", 400, "Counts")
+
+
+def test_find_run_param_none_when_not_parameterizable():
     session = _session_with_flow(
         nodes=[
             _node("s1", "StartFunction"),
@@ -102,4 +119,4 @@ def test_find_revolution_node_none_when_not_revolution():
         ],
         connections=[_conn("s1", "w1"), _conn("w1", "e1")],
     )
-    assert find_revolution_node("s1", session.flow) is None
+    assert find_run_param("s1", session.flow) is None
