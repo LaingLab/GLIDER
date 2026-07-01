@@ -625,6 +625,27 @@ class MainWindow(QMainWindow):
         emergency_action.triggered.connect(self._on_emergency_stop)
         run_menu.addAction(emergency_action)
 
+        # Tools menu
+        tools_menu = menubar.addMenu("&Tools")
+
+        behavior_action = QAction("&Behavior Analysis…", self)
+        behavior_action.triggered.connect(self._open_behavior_analysis)
+        # Lazy import: keep GLIDER startup free of the behavior/PyQt-heavy
+        # window and the optional [behavior] dependency probe until the menu
+        # is actually built.
+        from glider.gui.behavior.availability import (
+            behavior_available,
+            missing_behavior_deps,
+        )
+
+        if not behavior_available():
+            behavior_action.setEnabled(False)
+            behavior_action.setToolTip(
+                "Install the behavior extra: pip install glider[behavior] "
+                f"(missing: {', '.join(missing_behavior_deps())})"
+            )
+        tools_menu.addAction(behavior_action)
+
         # Help menu
         help_menu = menubar.addMenu("&Help")
 
@@ -646,6 +667,21 @@ class MainWindow(QMainWindow):
         about_action = QAction("&About GLIDER", self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
+
+    def _open_behavior_analysis(self) -> None:
+        """Open (or re-surface) the Behavior Analysis window.
+
+        Constructed lazily on first use and kept on ``self`` so it isn't
+        garbage-collected; the import is deferred so GLIDER startup never
+        pulls in the behavior/PyQt-heavy window unless the user asks for it.
+        """
+        from glider.gui.behavior.window import BehaviorAnalysisWindow
+
+        if getattr(self, "_behavior_window", None) is None:
+            self._behavior_window = BehaviorAnalysisWindow(parent=None)
+        self._behavior_window.show()
+        self._behavior_window.raise_()
+        self._behavior_window.activateWindow()
 
     def _setup_toolbar(self) -> None:
         """Set up the toolbar."""

@@ -4,6 +4,19 @@ GLIDER Test Configuration and Fixtures.
 Provides shared fixtures for unit and integration tests.
 """
 
+# Preload torch before anything imports PyQt6. On Windows, if PyQt6 is loaded
+# into the process first, torch's native DLLs (c10.dll) fail to load with
+# WinError 1114. This must run at the top of the root conftest so it happens
+# before pytest-qt or any test pulls in Qt. Guarded so machines without torch
+# (it ships with the vision/behavior extras) are unaffected.
+import importlib.util as _importlib_util
+
+if _importlib_util.find_spec("torch") is not None:
+    try:
+        import torch as _torch  # noqa: F401
+    except (ImportError, OSError):
+        pass
+
 import tempfile
 from pathlib import Path
 from typing import Any

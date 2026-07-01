@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-06-29T16:05:22.590115",
+    "modified_at": "2026-06-30T13:11:57.180931",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -145,7 +145,7 @@
           151.19711080731386
         ],
         "state": {
-          "threshold_mode": "revolution",
+          "threshold_mode": "counts",
           "turns_target": 1,
           "counts_per_turn": 4096,
           "ramp_down": true,
