@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-07-01T14:52:56.642393",
+    "modified_at": "2026-07-01T14:54:04.319637",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -247,8 +247,8 @@
         "id": "waitforinput_27617c43",
         "node_type": "WaitForInput",
         "position": [
-          -823.516780310161,
-          389.1559009580237
+          -823.5167803101612,
+          388.44001931573325
         ],
         "state": {
           "threshold_mode": "counts",
@@ -258,7 +258,7 @@
           "counts_per_turn": 500,
           "ramp_zone": 3500,
           "creep_pwm": 24,
-          "land_tolerance": 5
+          "land_tolerance": 0
         },
         "device_id": "i2c",
         "visible_in_runner": true
