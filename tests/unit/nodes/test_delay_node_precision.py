@@ -45,6 +45,7 @@ from glider.nodes.logic.flow_nodes import DelayNode
 # (`pytest -m "not slow"`) and run locally via `pytest -m slow`.
 pytestmark = pytest.mark.slow
 
+
 async def _loop_pressure(stop_event: asyncio.Event, burst_ms: float, period_ms: float) -> None:
     """Periodically burn a short burst of CPU on the event loop to
     simulate the kind of pressure that comes from Qt repaints + ticking

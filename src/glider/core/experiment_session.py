@@ -384,7 +384,9 @@ class NodeConfig:
         return {
             "id": self.id,
             "node_type": self.node_type,
-            "position": list(self.position),
+            # Sub-pixel precision is meaningless for canvas layout; rounding
+            # keeps re-saves from churning 17-digit floats in the diff.
+            "position": [round(float(p), 2) for p in self.position],
             "state": self.state,
             "device_id": self.device_id,
             "visible_in_runner": self.visible_in_runner,
