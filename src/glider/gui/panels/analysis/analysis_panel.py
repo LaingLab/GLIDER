@@ -277,7 +277,9 @@ class AnalysisPanel(QWidget):
         self._summary_labels["Duration"].setText(
             f"{duration:.2f} s" if duration is not None else "—"
         )
-        self._summary_labels["Frames"].setText(str(len(s.tracking)) if not s.tracking.empty else "0")
+        self._summary_labels["Frames"].setText(
+            str(len(s.tracking)) if not s.tracking.empty else "0"
+        )
         fps = s.frame_rate
         self._summary_labels["FPS"].setText(f"{fps:.1f}" if fps is not None else "—")
 

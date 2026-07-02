@@ -293,7 +293,17 @@ class WaitForInputNode(GliderNode):
 
         except TimeoutError:
             logger.info("  Timeout waiting for input")
+            # De-energize the ramp-driven motor: the triggered-path stop never
+            # ran, and downstream stop nodes hang off "triggered", not "timeout".
+            await self._set_ramp_pwm(0)
             await self._fire_exec_output("timeout")
+
+        except Exception:
+            # Polling failed (e.g. repeated device read errors). Stop the
+            # ramp-driven motor before propagating — the error halts the exec
+            # chain, so no downstream node will ever write PWM 0.
+            await self._set_ramp_pwm(0)
+            raise
 
         finally:
             self._waiting = False
@@ -454,7 +464,13 @@ class WaitForInputNode(GliderNode):
                         )
                         triggered = True
                     elif self._ramp_device is not None:
-                        await self._apply_ramp(self._counts_target - abs(accumulated))
+                        # Clamp the deceleration zone to the move length, so a
+                        # zone larger than the target still starts at drive_pwm
+                        # instead of opening partway down the ramp.
+                        await self._apply_ramp(
+                            self._counts_target - abs(accumulated),
+                            span=min(self._ramp_zone, self._counts_target),
+                        )
 
                 if triggered:
                     self._trigger_value = value
@@ -476,15 +492,17 @@ class WaitForInputNode(GliderNode):
             # Wait before next poll
             await asyncio.sleep(self._poll_interval)
 
-    async def _apply_ramp(self, remaining: float) -> None:
+    async def _apply_ramp(self, remaining: float, span: float | None = None) -> None:
         """Write a decelerating PWM given counts remaining to the landing.
 
         Outside the deceleration zone the motor runs at ``drive_pwm``; within the
         last ``ramp_zone`` counts of the target the PWM eases linearly down to
         ``creep_pwm``. The caller computes ``remaining`` for its mode (distance to
-        the wrap for revolution, distance to the count target for counts mode).
+        the wrap for revolution, distance to the count target for counts mode) and
+        may pass ``span`` to override the zone width (e.g. clamped to the move
+        length for short counts-mode moves).
         """
-        span = max(1, self._ramp_zone)
+        span = max(1, self._ramp_zone if span is None else span)
         remaining = max(0, remaining)
         if remaining >= span:
             pwm = self._drive_pwm

@@ -215,6 +215,85 @@ async def test_counts_mode_ramps_toward_target():
     assert pwm.writes[-1] == 0
 
 
+async def test_counts_mode_zone_larger_than_target_still_starts_at_drive():
+    # ramp_zone (3500) exceeds the move target (300): the effective zone must
+    # clamp to the move length so the motor starts at full drive_pwm instead
+    # of opening partway down the ramp (which can stall short moves).
+    node = _make_node([0, 50, 100, 200, 300], turns=1)
+    node._threshold_mode = "counts"
+    node._counts_target = 300
+    pwm = _RecordingPWM()
+    node._ramp_down = True
+    node._ramp_device = pwm
+    node._drive_pwm = 150
+    node._creep_pwm = 24
+    node._ramp_zone = 3500
+    await node._poll_device(timeout=0.0)
+    assert node._trigger_value == 300
+    assert pwm.writes[0] == 150  # full drive at the start, not mid-ramp
+    assert pwm.writes[-1] == 0
+
+
+class _FailingDevice:
+    """Device whose every read raises, like a flaky I2C encoder."""
+
+    id = "flaky"
+
+    async def read(self):
+        raise OSError("I2C read failed")
+
+
+class _RecordingHardwareManager:
+    """Resolves one known device id to a recording PWM."""
+
+    def __init__(self, device_id: str, device):
+        self._device_id = device_id
+        self._device = device
+
+    def get_device(self, device_id):
+        return self._device if device_id == self._device_id else None
+
+
+def _ramping_counts_state(**overrides) -> dict:
+    state = {
+        "threshold_mode": "counts",
+        "counts_target": 400,
+        "ramp_down": True,
+        "ramp_device_id": "left_pwm",
+        "poll_interval": 0.0,
+    }
+    state.update(overrides)
+    return state
+
+
+async def test_polling_failure_stops_the_ramp_motor():
+    # Repeated device read errors abort the wait with RuntimeError. Since the
+    # error halts the exec chain, no downstream stop node ever runs — so the
+    # node itself must de-energize the motor it was ramp-driving.
+    node = WaitForInputNode()
+    node._device = _FailingDevice()
+    pwm = _RecordingPWM()
+    node.set_hardware_manager(_RecordingHardwareManager("left_pwm", pwm))
+    node.set_state(_ramping_counts_state())
+
+    with pytest.raises(RuntimeError):
+        await node.execute()
+    assert pwm.writes[-1] == 0
+
+
+async def test_timeout_stops_the_ramp_motor():
+    # A wait that times out fires the "timeout" exec path; downstream stop
+    # nodes hang off "triggered", so the node must stop the motor itself.
+    node = WaitForInputNode()
+    node._device = _ScriptedDevice([0, 10, 20])  # never reaches the target
+    pwm = _RecordingPWM()
+    node.set_hardware_manager(_RecordingHardwareManager("left_pwm", pwm))
+    node.set_state(_ramping_counts_state(timeout=0.2))
+
+    await node.execute()
+    assert pwm.writes[-1] == 0
+
+
 async def test_no_ramp_writes_when_ramp_device_absent():
     # Revolution mode without a ramp device must not attempt any PWM writes.
     node = _make_node([3000, 4090, 50], turns=1)

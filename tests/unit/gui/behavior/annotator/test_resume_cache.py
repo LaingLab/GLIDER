@@ -91,9 +91,8 @@ def test_resume_cache_uses_videos_dir_when_provided(tmp_path):
 
 def test_resume_cache_round_trip_with_proposedclip(tmp_path):
     """ProposedClip dataclasses serialize cleanly through the JSON cache."""
-    from glider.gui.behavior.annotator.sampler import ProposedClip
-
     from glider.gui.behavior.annotator.resume_cache import ResumeCache
+    from glider.gui.behavior.annotator.sampler import ProposedClip
 
     clip = ProposedClip(
         window_index=42,

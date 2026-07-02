@@ -146,6 +146,7 @@
         ],
         "state": {
           "threshold_mode": "counts",
+          "counts_target": 400,
           "turns_target": 1,
           "counts_per_turn": 4096,
           "ramp_down": true,
@@ -252,10 +253,11 @@
         ],
         "state": {
           "threshold_mode": "counts",
+          "counts_target": 400,
           "ramp_down": true,
           "ramp_device_id": "left_pwm",
           "drive_pwm": 150,
-          "counts_per_turn": 500,
+          "counts_per_turn": 4096,
           "ramp_zone": 3500,
           "creep_pwm": 24,
           "land_tolerance": 0
