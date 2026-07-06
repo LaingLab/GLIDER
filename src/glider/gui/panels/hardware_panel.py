@@ -428,6 +428,10 @@ class HardwarePanel(QWidget):
             "PWM Output (Dimmable LED, Motor)": ("PWMOutput", ["output"]),
             "Servo Motor": ("Servo", ["signal"]),
             "Motor Governor": ("MotorGovernor", ["up", "down", "signal"]),
+            "Stepper Motor (A4988)": (
+                "StepperA4988",
+                ["step", "dir", "enable", "ms1", "ms2", "ms3"],
+            ),
             "ADS1115 (I2C ADC)": ("ADS1115", []),
             "Generic I2C Device": ("GenericI2C", []),
             "BLE Device (write characteristic)": ("BLEWrite", []),
@@ -472,6 +476,7 @@ class HardwarePanel(QWidget):
         ads1115_settings: dict[str, QSpinBox] = {}
         i2c_settings: dict[str, QWidget] = {}
         ble_settings: dict[str, QWidget] = {}
+        stepper_settings: dict[str, QWidget] = {}
         schema_widgets: dict[str, tuple] = {}  # plugin devices: key -> (widget, type)
 
         def update_pin_inputs():
@@ -481,6 +486,7 @@ class HardwarePanel(QWidget):
             ads1115_settings.clear()
             i2c_settings.clear()
             ble_settings.clear()
+            stepper_settings.clear()
             schema_widgets.clear()
 
             ui_type = type_combo.currentText()
@@ -490,11 +496,12 @@ class HardwarePanel(QWidget):
             is_ads1115 = device_type == "ADS1115"
             is_generic_i2c = device_type == "GenericI2C"
             is_ble = device_type == "BLEWrite"
+            is_stepper = device_type == "StepperA4988"
 
             # Plugin devices may declare a SETTINGS_SCHEMA for an auto-rendered form.
             device_class = DEVICE_REGISTRY.get(device_type)
             schema = getattr(device_class, "SETTINGS_SCHEMA", None) if device_class else None
-            is_schema = schema and not (is_ads1115 or is_generic_i2c or is_ble)
+            is_schema = schema and not (is_ads1115 or is_generic_i2c or is_ble or is_stepper)
 
             if is_schema:
                 self._build_schema_widgets(pin_layout, schema, schema_widgets)
@@ -674,6 +681,50 @@ class HardwarePanel(QWidget):
                     note.setWordWrap(True)
                     pin_layout.addRow(note)
 
+                if is_stepper:
+                    # Lazy import (like DEVICE_REGISTRY elsewhere in this file)
+                    # so the GUI module keeps no top-level HAL dependency.
+                    from glider.hal.devices.stepper_a4988 import MICROSTEP_MODES
+
+                    spr_spin = QSpinBox()
+                    spr_spin.setRange(1, 10000)
+                    spr_spin.setValue(200)
+                    spr_spin.setToolTip("Full steps per motor revolution (typically 200)")
+                    stepper_settings["steps_per_rev"] = spr_spin
+                    pin_layout.addRow("Steps/rev:", spr_spin)
+
+                    steptype_combo = QComboBox()
+                    steptype_combo.addItems(list(MICROSTEP_MODES))
+                    steptype_combo.setToolTip("Default microstep resolution (MS1-MS3)")
+                    stepper_settings["steptype"] = steptype_combo
+                    pin_layout.addRow("Microstep:", steptype_combo)
+
+                    delay_spin = QDoubleSpinBox()
+                    delay_spin.setDecimals(4)
+                    # GUI floor of 0.0005s is intentional (sane hardware
+                    # minimum) even though the device accepts step_delay >= 0.
+                    delay_spin.setRange(0.0005, 0.5)
+                    delay_spin.setSingleStep(0.001)
+                    delay_spin.setValue(0.005)
+                    delay_spin.setSuffix(" s")
+                    delay_spin.setToolTip("Delay between STEP pulse edges (smaller = faster)")
+                    stepper_settings["step_delay"] = delay_spin
+                    pin_layout.addRow("Step delay:", delay_spin)
+
+                    hold_check = QCheckBox("De-energize after each move (no holding torque)")
+                    hold_check.setChecked(True)
+                    stepper_settings["auto_disable"] = hold_check
+                    pin_layout.addRow(hold_check)
+
+                    note = QLabel(
+                        "Drive from the flow with a Device Action node: action "
+                        "'move_turns', arg1 = 1.5 (negative = reverse). ENABLE "
+                        "is managed automatically."
+                    )
+                    note.setProperty("textRole", "muted")
+                    note.setWordWrap(True)
+                    pin_layout.addRow(note)
+
         type_combo.currentTextChanged.connect(lambda: update_pin_inputs())
         update_pin_inputs()
 
@@ -726,6 +777,11 @@ class HardwarePanel(QWidget):
                 if svc:
                     settings["service_uuid"] = svc
                 settings["write_response"] = ble_settings["write_response"].isChecked()
+            elif device_type == "StepperA4988" and stepper_settings:
+                settings["steps_per_rev"] = stepper_settings["steps_per_rev"].value()
+                settings["steptype"] = stepper_settings["steptype"].currentText()
+                settings["step_delay"] = stepper_settings["step_delay"].value()
+                settings["auto_disable"] = stepper_settings["auto_disable"].isChecked()
             elif schema_widgets:
                 # Plugin device: collect its schema-rendered settings.
                 for key, (widget, ftype) in schema_widgets.items():
@@ -869,6 +925,7 @@ class HardwarePanel(QWidget):
 
         is_ads1115 = device_type == "ADS1115"
         is_generic_i2c = device_type == "GenericI2C"
+        is_stepper = device_type == "StepperA4988"
         is_settings_device = is_ads1115 or is_generic_i2c
 
         dialog = QDialog(self)
@@ -891,6 +948,7 @@ class HardwarePanel(QWidget):
         pin_spinboxes: dict[str, QSpinBox] = {}
         ads1115_settings: dict[str, QSpinBox | QComboBox] = {}
         i2c_settings: dict[str, QWidget] = {}
+        stepper_settings: dict[str, QWidget] = {}
 
         if is_ads1115:
             addr_spin = QSpinBox()
@@ -985,6 +1043,45 @@ class HardwarePanel(QWidget):
                 note.setWordWrap(True)
                 layout.addRow(note)
 
+            if is_stepper:
+                # Lazy import (like DEVICE_REGISTRY elsewhere in this file) so
+                # the GUI module keeps no top-level HAL dependency.
+                from glider.hal.devices.stepper_a4988 import MICROSTEP_MODES
+
+                spr_spin = QSpinBox()
+                spr_spin.setRange(1, 10000)
+                spr_spin.setValue(int(current_settings.get("steps_per_rev", 200)))
+                spr_spin.setToolTip("Full steps per motor revolution (typically 200)")
+                stepper_settings["steps_per_rev"] = spr_spin
+                layout.addRow("Steps/rev:", spr_spin)
+
+                steptype_combo = QComboBox()
+                steptype_options = list(MICROSTEP_MODES)
+                steptype_combo.addItems(steptype_options)
+                steptype_combo.setToolTip("Default microstep resolution (MS1-MS3)")
+                current_steptype = current_settings.get("steptype", "Full")
+                if current_steptype in steptype_options:
+                    steptype_combo.setCurrentIndex(steptype_options.index(current_steptype))
+                stepper_settings["steptype"] = steptype_combo
+                layout.addRow("Microstep:", steptype_combo)
+
+                delay_spin = QDoubleSpinBox()
+                delay_spin.setDecimals(4)
+                # GUI floor of 0.0005s is intentional (sane hardware minimum)
+                # even though the device itself accepts step_delay >= 0.
+                delay_spin.setRange(0.0005, 0.5)
+                delay_spin.setSingleStep(0.001)
+                delay_spin.setValue(float(current_settings.get("step_delay", 0.005)))
+                delay_spin.setSuffix(" s")
+                delay_spin.setToolTip("Delay between STEP pulse edges (smaller = faster)")
+                stepper_settings["step_delay"] = delay_spin
+                layout.addRow("Step delay:", delay_spin)
+
+                hold_check = QCheckBox("De-energize after each move (no holding torque)")
+                hold_check.setChecked(bool(current_settings.get("auto_disable", True)))
+                stepper_settings["auto_disable"] = hold_check
+                layout.addRow(hold_check)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -1011,6 +1108,13 @@ class HardwarePanel(QWidget):
                 reg = i2c_settings["register"].value()
                 new_settings["register"] = reg if reg >= 0 else None
                 new_settings["read_word"] = i2c_settings["read_word"].isChecked()
+            elif is_stepper and stepper_settings:
+                new_settings = {
+                    "steps_per_rev": stepper_settings["steps_per_rev"].value(),
+                    "steptype": stepper_settings["steptype"].currentText(),
+                    "step_delay": stepper_settings["step_delay"].value(),
+                    "auto_disable": stepper_settings["auto_disable"].isChecked(),
+                }
 
             try:
                 device.name = new_name
@@ -1031,6 +1135,12 @@ class HardwarePanel(QWidget):
                     # updated values.
                     if hasattr(device, "_pins"):
                         device._pins = list(new_pins.values())
+
+                    # BaseDevice.config is a guaranteed property, so no hasattr
+                    # guard is needed (the is_settings_device path above uses
+                    # hasattr because it may touch _config on legacy devices).
+                    if is_stepper and new_settings:
+                        device.config.settings.update(new_settings)
 
                 if session:
                     session.update_device(
