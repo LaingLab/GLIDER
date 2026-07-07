@@ -202,7 +202,6 @@ class WaitForInputNode(GliderNode):
         self._creep_pwm = 30  # minimum speed at the wrap point
         self._ramp_zone = 512  # counts before the wrap where ramping begins
         self._land_tolerance = 0  # stop within this many counts of 0 (0 = off)
-        self._landing_armed = False  # armed after the angle passes mid-range
         self._ramp_direction = 1  # +1 angle rising toward top wrap, -1 falling to 0
         self._hardware_manager = None  # set by the flow engine for device lookup
         self._ramp_device = None  # resolved PWM device, looked up at execute time
@@ -244,7 +243,6 @@ class WaitForInputNode(GliderNode):
         self._creep_pwm = self._state.get("creep_pwm", 30)
         self._ramp_zone = self._state.get("ramp_zone", 512)
         self._land_tolerance = self._state.get("land_tolerance", 0)
-        self._landing_armed = False  # re-arm fresh each run
         self._ramp_direction = 1  # assume rising until motion proves otherwise
 
         # Resolve the PWM device to ramp (revolution/counts modes). If it can't
@@ -320,7 +318,8 @@ class WaitForInputNode(GliderNode):
         last_value = None  # digital-mode rising-edge detection
         # Revolution/counts wrap math is delegated to the shared pure helper.
         # `st` carries last_value/turn_count/accumulated/landing_armed/ramp_direction
-        # across poll iterations; `settings` mirrors the node's current attributes.
+        # across poll iterations; `settings` is a one-time snapshot of the node's
+        # attributes taken at poll start (not re-read each iteration).
         st = rt.new_state()
         settings = {
             "turns_target": self._turns_target,
@@ -386,10 +385,9 @@ class WaitForInputNode(GliderNode):
                     # direction, mid-range arming and landing-tolerance math live
                     # in the shared pure helper; `st` carries state across polls.
                     triggered = rt.revolution_triggered(value, settings, st)
-                    # Mirror the helper's rotation direction and arm gate back
-                    # onto the node (tests assert `node._ramp_direction`).
+                    # Mirror the helper's rotation direction back onto the node;
+                    # the ramp branch below reads it and a test asserts it.
                     self._ramp_direction = st["ramp_direction"]
-                    self._landing_armed = st["landing_armed"]
 
                     # Ramp down to landing: on the final turn, ease the motor
                     # PWM toward a creep as the angle nears the wrap so it
