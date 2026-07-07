@@ -15,10 +15,15 @@ a mapping with ``name``, ``hotkey``, and an optional ``color``::
       - name: rearing
         hotkey: "1"
         color: "#1d4ed8"
+        tags: [locomotory]
       - name: grooming
         hotkey: "2"
       - name: locomote
         hotkey: "3"
+
+An optional ``tags`` list carries semantic class labels (e.g.
+``stationary``, ``locomotory``) that downstream priors consume; it
+round-trips through the file and defaults to empty when omitted.
 
 Colors omitted from the file are assigned from a built-in palette in
 the order behaviors appear. Hotkeys must be unique; the loader raises
