@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-07-01T15:42:39.978868",
+    "modified_at": "2026-07-07T11:44:55.355629",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -31,56 +31,23 @@
     ],
     "devices": [
       {
-        "id": "right_pwm",
-        "device_type": "PWMOutput",
-        "name": "right_pwm",
+        "id": "STPR",
+        "device_type": "StepperA4988",
+        "name": "STPR",
         "board_id": "pi",
         "pins": {
-          "output": 20
+          "step": 17,
+          "dir": 4,
+          "enable": 27,
+          "ms1": 22,
+          "ms2": 23,
+          "ms3": 24
         },
-        "settings": {}
-      },
-      {
-        "id": "left_pwm",
-        "device_type": "PWMOutput",
-        "name": "left_pwm",
-        "board_id": "pi",
-        "pins": {
-          "output": 21
-        },
-        "settings": {}
-      },
-      {
-        "id": "right_enable",
-        "device_type": "DigitalOutput",
-        "name": "right_enable",
-        "board_id": "pi",
-        "pins": {
-          "output": 23
-        },
-        "settings": {}
-      },
-      {
-        "id": "left_enable",
-        "device_type": "DigitalOutput",
-        "name": "left_enable",
-        "board_id": "pi",
-        "pins": {
-          "output": 24
-        },
-        "settings": {}
-      },
-      {
-        "id": "i2c",
-        "device_type": "GenericI2C",
-        "name": "i2c",
-        "board_id": "pi",
-        "pins": {},
         "settings": {
-          "i2c_bus": 1,
-          "i2c_address": 54,
-          "register": 14,
-          "read_word": true
+          "steps_per_rev": 200,
+          "steptype": "Full",
+          "step_delay": 0.005,
+          "auto_disable": true
         }
       }
     ]
@@ -88,109 +55,11 @@
   "flow": {
     "nodes": [
       {
-        "id": "startfunction_1f0c8d9c",
-        "node_type": "StartFunction",
-        "position": [
-          -1042.0,
-          -5.0
-        ],
-        "state": {
-          "function_name": "One Way"
-        },
-        "device_id": null,
-        "visible_in_runner": false
-      },
-      {
-        "id": "endfunction_08a275e2",
-        "node_type": "EndFunction",
-        "position": [
-          -30.449073554183066,
-          198.176670409882
-        ],
-        "state": {},
-        "device_id": null,
-        "visible_in_runner": false
-      },
-      {
-        "id": "output_0c4a9031",
-        "node_type": "Output",
-        "position": [
-          -647.2479660303203,
-          34.28523301516002
-        ],
-        "state": {
-          "value": 1
-        },
-        "device_id": "left_enable",
-        "visible_in_runner": false
-      },
-      {
-        "id": "output_a6ff08c4",
-        "node_type": "Output",
-        "position": [
-          -844.0,
-          14.0
-        ],
-        "state": {
-          "value": 1
-        },
-        "device_id": "right_enable",
-        "visible_in_runner": false
-      },
-      {
-        "id": "waitforinput_448bd202",
-        "node_type": "WaitForInput",
-        "position": [
-          -419.6673921901784,
-          151.19711080731386
-        ],
-        "state": {
-          "threshold_mode": "counts",
-          "counts_target": 400,
-          "turns_target": 1,
-          "counts_per_turn": 4096,
-          "ramp_down": true,
-          "ramp_device_id": "right_pwm",
-          "drive_pwm": 150,
-          "creep_pwm": 24,
-          "ramp_zone": 3500,
-          "land_tolerance": 0
-        },
-        "device_id": "i2c",
-        "visible_in_runner": true
-      },
-      {
-        "id": "output_603092eb",
-        "node_type": "Output",
-        "position": [
-          -648.0433057271198,
-          146.3128017967435
-        ],
-        "state": {
-          "value": 100
-        },
-        "device_id": "right_pwm",
-        "visible_in_runner": false
-      },
-      {
-        "id": "output_56a3645d",
-        "node_type": "Output",
-        "position": [
-          -236.73082537900058,
-          183.30199326221225
-        ],
-        "state": {
-          "value": 0
-        },
-        "device_id": "right_pwm",
-        "visible_in_runner": false
-      },
-      {
         "id": "startfunction_71aa7c2a",
         "node_type": "StartFunction",
         "position": [
-          -1035.7836353781738,
-          281.05703958079476
+          -1035.78,
+          281.06
         ],
         "state": {
           "function_name": "Other Way"
@@ -202,132 +71,30 @@
         "id": "endfunction_c1f61fce",
         "node_type": "EndFunction",
         "position": [
-          -602.4054729476472,
-          492.3411777271964
+          -602.41,
+          492.34
         ],
         "state": {},
         "device_id": null,
         "visible_in_runner": false
       },
       {
-        "id": "output_63fb3406",
-        "node_type": "Output",
-        "position": [
-          -815.6550449372716,
-          286.9533411104617
-        ],
-        "state": {
-          "value": 255
-        },
-        "device_id": "left_pwm",
-        "visible_in_runner": false
-      },
-      {
-        "id": "output_2c80209a",
-        "node_type": "Output",
-        "position": [
-          -1039.714503064618,
-          454.01521778436074
-        ],
-        "state": {},
-        "device_id": "left_enable",
-        "visible_in_runner": false
-      },
-      {
-        "id": "output_35e1cd13",
-        "node_type": "Output",
-        "position": [
-          -1036.1234184565626,
-          364.5879779177443
-        ],
-        "state": {},
-        "device_id": "right_enable",
-        "visible_in_runner": false
-      },
-      {
-        "id": "waitforinput_27617c43",
+        "id": "waitforinput_dae1d44b",
         "node_type": "WaitForInput",
         "position": [
-          -823.5167803101612,
-          388.44001931573325
+          -811.9,
+          382.95
         ],
         "state": {
           "threshold_mode": "counts",
-          "counts_target": 400,
-          "ramp_down": true,
-          "ramp_device_id": "left_pwm",
-          "drive_pwm": 150,
-          "counts_per_turn": 4096,
-          "ramp_zone": 3500,
-          "creep_pwm": 24,
-          "land_tolerance": 0
+          "counts_target": 200,
+          "counts_per_turn": 200
         },
-        "device_id": "i2c",
+        "device_id": "STPR",
         "visible_in_runner": true
-      },
-      {
-        "id": "output_ea33a869",
-        "node_type": "Output",
-        "position": [
-          -825.4822141533834,
-          491.3584608055854
-        ],
-        "state": {
-          "value": 0
-        },
-        "device_id": "left_pwm",
-        "visible_in_runner": false
       }
     ],
     "connections": [
-      {
-        "id": "conn_d928f243",
-        "from_node": "startfunction_1f0c8d9c",
-        "from_output": 0,
-        "to_node": "output_a6ff08c4",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_87df6777",
-        "from_node": "output_a6ff08c4",
-        "from_output": 0,
-        "to_node": "output_0c4a9031",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_944a25c5",
-        "from_node": "output_0c4a9031",
-        "from_output": 0,
-        "to_node": "output_603092eb",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_223cfc81",
-        "from_node": "output_603092eb",
-        "from_output": 0,
-        "to_node": "waitforinput_448bd202",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_37639000",
-        "from_node": "waitforinput_448bd202",
-        "from_output": 0,
-        "to_node": "output_56a3645d",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_9414d528",
-        "from_node": "output_56a3645d",
-        "from_output": 0,
-        "to_node": "endfunction_08a275e2",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
       {
         "id": "conn_66ea441a",
         "from_node": "startfunction_71aa7c2a",
@@ -353,26 +120,26 @@
         "connection_type": "exec"
       },
       {
-        "id": "conn_b6f0e65b",
-        "from_node": "output_63fb3406",
+        "id": "conn_ff47eca2",
+        "from_node": "output_ea33a869",
         "from_output": 0,
-        "to_node": "waitforinput_27617c43",
+        "to_node": "endfunction_c1f61fce",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_847a92b6",
-        "from_node": "waitforinput_27617c43",
+        "id": "conn_9493ceec",
+        "from_node": "waitforinput_dae1d44b",
         "from_output": 0,
         "to_node": "output_ea33a869",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_ff47eca2",
-        "from_node": "output_ea33a869",
+        "id": "conn_7663ceff",
+        "from_node": "output_63fb3406",
         "from_output": 0,
-        "to_node": "endfunction_c1f61fce",
+        "to_node": "waitforinput_dae1d44b",
         "to_input": 0,
         "connection_type": "exec"
       }
@@ -410,8 +177,8 @@
   "manual_controls": [
     {
       "slot": 0,
-      "start_node_id": "startfunction_1f0c8d9c",
-      "label": "MyFunction"
+      "start_node_id": "startfunction_71aa7c2a",
+      "label": "Other Way"
     },
     {
       "slot": 1,
