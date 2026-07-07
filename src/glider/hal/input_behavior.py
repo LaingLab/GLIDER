@@ -14,10 +14,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from glider.hal.base_device import BaseDevice  # noqa: F401
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
