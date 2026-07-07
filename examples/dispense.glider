@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-07-07T11:44:55.355629",
+    "modified_at": "2026-07-07T11:49:54.226157",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -31,24 +31,64 @@
     ],
     "devices": [
       {
-        "id": "STPR",
-        "device_type": "StepperA4988",
-        "name": "STPR",
+        "id": "direction",
+        "device_type": "DigitalOutput",
+        "name": "direction",
         "board_id": "pi",
         "pins": {
-          "step": 17,
-          "dir": 4,
-          "enable": 27,
-          "ms1": 22,
-          "ms2": 23,
-          "ms3": 24
+          "output": 4
         },
-        "settings": {
-          "steps_per_rev": 200,
-          "steptype": "Full",
-          "step_delay": 0.005,
-          "auto_disable": true
-        }
+        "settings": {}
+      },
+      {
+        "id": "step",
+        "device_type": "DigitalOutput",
+        "name": "step",
+        "board_id": "pi",
+        "pins": {
+          "output": 17
+        },
+        "settings": {}
+      },
+      {
+        "id": "enable",
+        "device_type": "DigitalOutput",
+        "name": "enable",
+        "board_id": "pi",
+        "pins": {
+          "output": 27
+        },
+        "settings": {}
+      },
+      {
+        "id": "ms1",
+        "device_type": "DigitalOutput",
+        "name": "ms1",
+        "board_id": "pi",
+        "pins": {
+          "output": 22
+        },
+        "settings": {}
+      },
+      {
+        "id": "ms2",
+        "device_type": "DigitalOutput",
+        "name": "ms2",
+        "board_id": "pi",
+        "pins": {
+          "output": 23
+        },
+        "settings": {}
+      },
+      {
+        "id": "ms3",
+        "device_type": "DigitalOutput",
+        "name": "ms3",
+        "board_id": "pi",
+        "pins": {
+          "output": 24
+        },
+        "settings": {}
       }
     ]
   },
@@ -77,21 +117,6 @@
         "state": {},
         "device_id": null,
         "visible_in_runner": false
-      },
-      {
-        "id": "waitforinput_dae1d44b",
-        "node_type": "WaitForInput",
-        "position": [
-          -811.9,
-          382.95
-        ],
-        "state": {
-          "threshold_mode": "counts",
-          "counts_target": 200,
-          "counts_per_turn": 200
-        },
-        "device_id": "STPR",
-        "visible_in_runner": true
       }
     ],
     "connections": [
