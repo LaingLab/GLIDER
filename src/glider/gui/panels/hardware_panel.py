@@ -373,47 +373,18 @@ class HardwarePanel(QWidget):
     def _build_schema_widgets(self, layout, schema, out: dict) -> None:
         """Render a device SETTINGS_SCHEMA into a form layout.
 
-        ``out`` is populated with ``key -> (widget, type)`` for later
-        collection. Supported field types: int, hex, float, bool, str.
+        Delegates to the shared :mod:`glider.gui.widgets.schema_form` helper.
         """
-        for field in schema:
-            key = field.get("key")
-            if not key:
-                continue
-            ftype = field.get("type", "str")
-            default = field.get("default")
-            if ftype in ("int", "hex"):
-                widget = QSpinBox()
-                widget.setRange(int(field.get("min", 0)), int(field.get("max", 2_000_000_000)))
-                if ftype == "hex":
-                    widget.setDisplayIntegerBase(16)
-                    widget.setPrefix("0x")
-                widget.setValue(int(default or 0))
-            elif ftype == "float":
-                widget = QDoubleSpinBox()
-                widget.setDecimals(int(field.get("decimals", 2)))
-                widget.setRange(float(field.get("min", 0.0)), float(field.get("max", 1e9)))
-                widget.setValue(float(default if default is not None else 0.0))
-            elif ftype == "bool":
-                widget = QCheckBox()
-                widget.setChecked(bool(default))
-            else:
-                widget = QLineEdit()
-                if default is not None:
-                    widget.setText(str(default))
-            if field.get("help"):
-                widget.setToolTip(str(field["help"]))
-            out[key] = (widget, ftype)
-            layout.addRow(f"{field.get('label', key)}:", widget)
+        from glider.gui.widgets.schema_form import build_schema_widgets
+
+        build_schema_widgets(layout, schema, out)
 
     @staticmethod
     def _read_schema_widget(widget, ftype: str):
         """Read a value back from a schema-rendered widget."""
-        if ftype in ("int", "hex", "float"):
-            return widget.value()
-        if ftype == "bool":
-            return widget.isChecked()
-        return widget.text().strip()
+        from glider.gui.widgets.schema_form import read_schema_widget
+
+        return read_schema_widget(widget, ftype)
 
     def _on_add_device(self) -> None:
         """Show dialog to add a new device."""
