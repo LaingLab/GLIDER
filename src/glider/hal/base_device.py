@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from glider.hal.base_board import BaseBoard
+    from glider.hal.input_behavior import InputBehavior
 
 
 @dataclass
@@ -115,6 +116,15 @@ class BaseDevice(ABC):
             {'activate': self.turn_on, 'deactivate': self.turn_off}
         """
         ...
+
+    @property
+    def input_behaviors(self) -> list["InputBehavior"]:
+        """Wait/input behaviors this device offers to WaitForInput (default none).
+
+        Override to advertise named things the node can wait on. See
+        glider.hal.input_behavior.InputBehavior.
+        """
+        return []
 
     @property
     def required_pins(self) -> list[str]:

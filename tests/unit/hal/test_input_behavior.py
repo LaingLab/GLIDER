@@ -135,3 +135,10 @@ async def test_on_sample_skipped_on_triggering_sample():
     ctx = await _ctx(_ScriptedDevice([0, 1, 9]))  # triggers on 9 (limit 5)
     await _SideEffectBehavior().wait_for_input({"limit": 5}, ctx, 1.0)
     assert samples == [0, 1]  # on_sample not called for the triggering value 9
+
+
+def test_base_device_declares_no_behaviors_by_default():
+    from glider.hal.base_device import DeviceConfig, DigitalInputDevice
+
+    dev = DigitalInputDevice(board=None, config=DeviceConfig(pins={"pin": 2}, settings={}))
+    assert dev.input_behaviors == []
