@@ -43,6 +43,12 @@ _RAW_MASK = 0x0FFF
 
 
 # --- input behaviors (things the WaitForInput node can wait on) ---
+#
+# Behavior settings schemas are entirely independent of the device
+# ``SETTINGS_SCHEMA`` above: they configure one *wait*, not the device. That is
+# why fields like ``counts_per_turn`` and ``land_tolerance`` are re-declared here
+# even though the device also has a ``counts_per_turn`` -- the WaitForInput node
+# only sees a behavior's own ``settings`` list.
 
 _RAMP_FIELDS = [
     {"key": "ramp_down", "label": "Ramp down to landing", "type": "bool", "default": False},
@@ -87,6 +93,8 @@ class _EncoderRampBehavior(InputBehavior):
     read_action = "angle"  # sample the RAW sawtooth angle, not cumulative revs
 
     def _resolve_ramp(self, settings, ctx):
+        # Memoize the lookup -- including a ``None`` result -- so a disabled or
+        # missing ramp device isn't re-resolved on every poll of the wait.
         if ctx.scratch.get("ramp_resolved"):
             return ctx.scratch.get("ramp_device")
         ctx.scratch["ramp_resolved"] = True
@@ -108,6 +116,13 @@ class _EncoderRampBehavior(InputBehavior):
 
 
 class RevolutionBehavior(_EncoderRampBehavior):
+    """Wait until the shaft has completed ``turns_target`` full revolutions.
+
+    ``turns_target`` is the number of whole turns to count (via wrap detection on
+    the raw angle) before the wait fires; on the final turn the optional ramp
+    eases the motor down as the angle approaches the wrap so it lands cleanly.
+    """
+
     key = "revolution"
     label = "Revolution (Turns)"
     settings = [
@@ -123,22 +138,33 @@ class RevolutionBehavior(_EncoderRampBehavior):
     ]
 
     def check(self, value, settings, ctx):
-        st = ctx.scratch.setdefault("st", rt.new_state())
-        return rt.revolution_triggered(value, settings, st)
+        # One behavior owns the entire ctx.scratch dict for the duration of a
+        # single wait, so its keys ("tracking_state"/"ramp_resolved"/
+        # "ramp_device") can never collide with another behavior's -- it's safe
+        # to stash freely here.
+        tracking_state = ctx.scratch.setdefault("tracking_state", rt.new_state())
+        return rt.revolution_triggered(value, settings, tracking_state)
 
     async def on_sample(self, value, settings, ctx):
         dev = self._resolve_ramp(settings, ctx)
         if dev is None:
             return
-        st = ctx.scratch["st"]
-        if st["turn_count"] < settings.get("turns_target", 1) - 1:
-            return  # only ramp on the final turn (matches legacy)
+        tracking_state = ctx.scratch["tracking_state"]
+        if tracking_state["turn_count"] < settings.get("turns_target", 1) - 1:
+            return  # ramp only during the last turn's approach to the wrap
         cpt = settings.get("counts_per_turn", 4096)
-        remaining = cpt - value if st["ramp_direction"] >= 0 else value
+        remaining = cpt - value if tracking_state["ramp_direction"] >= 0 else value
         await self._write_pwm(ctx, rt.ramp_pwm(remaining, settings))
 
 
 class MoveCountsBehavior(_EncoderRampBehavior):
+    """Wait until the shaft has moved ``counts_target`` encoder counts.
+
+    ``counts_target`` is the absolute (bidirectional) displacement in raw counts
+    to travel before the wait fires; the optional ramp decelerates the motor as
+    the accumulated displacement nears the target so it stops on the mark.
+    """
+
     key = "counts"
     label = "Move Counts"
     settings = [
@@ -154,16 +180,16 @@ class MoveCountsBehavior(_EncoderRampBehavior):
     ]
 
     def check(self, value, settings, ctx):
-        st = ctx.scratch.setdefault("st", rt.new_state())
-        return rt.counts_triggered(value, settings, st)
+        tracking_state = ctx.scratch.setdefault("tracking_state", rt.new_state())
+        return rt.counts_triggered(value, settings, tracking_state)
 
     async def on_sample(self, value, settings, ctx):
         dev = self._resolve_ramp(settings, ctx)
         if dev is None:
             return
-        st = ctx.scratch["st"]
+        tracking_state = ctx.scratch["tracking_state"]
         target = settings.get("counts_target", 400)
-        remaining = target - abs(st["accumulated"])
+        remaining = target - abs(tracking_state["accumulated"])
         span = min(settings.get("ramp_zone", 512), target)
         await self._write_pwm(ctx, rt.ramp_pwm(remaining, settings, span=span))
 
