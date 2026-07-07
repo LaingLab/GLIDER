@@ -13,9 +13,11 @@ from glider.analysis.behavior.labels import (
 )
 from glider.analysis.behavior.model import BehaviorModel
 from glider.analysis.behavior.pipeline import (
+    HybridTrainResult,
     LgbmReg,
     TrainResult,
     cross_validate_sessions,
+    train_hybrid_model,
     train_model,
 )
 from glider.analysis.behavior.windowing import apply_rolling
@@ -24,6 +26,7 @@ __all__ = [
     "AMBIGUOUS",
     "BehaviorModel",
     "FeatureSpec",
+    "HybridTrainResult",
     "LgbmReg",
     "TrainResult",
     "apply_rolling",
@@ -32,5 +35,6 @@ __all__ = [
     "compute_features",
     "cross_validate_sessions",
     "fit_embedding",
+    "train_hybrid_model",
     "train_model",
 ]

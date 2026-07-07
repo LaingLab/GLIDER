@@ -40,6 +40,11 @@ FREEZING = "freezing"
 DARTING = "darting"
 NONE = ""
 
+# Single source of truth for the calibration percentiles, shared with the
+# offline kinematic prior (:mod:`glider.analysis.behavior.prior`).
+FREEZE_PCT_DEFAULT = 10.0
+DART_PCT_DEFAULT = 99.5
+
 
 class FreezeDartDetector:
     """Online state machine: per-frame speed -> ``"freezing"`` / ``"darting"`` / ``""``.
@@ -139,8 +144,8 @@ class CausalSpeed:
 def calibrate_speed_thresholds(
     xy_frames,
     *,
-    freeze_pct: float = 10.0,
-    dart_pct: float = 99.5,
+    freeze_pct: float = FREEZE_PCT_DEFAULT,
+    dart_pct: float = DART_PCT_DEFAULT,
     coord_smooth: int = 5,
     speed_smooth: int = 3,
 ) -> tuple[float, float]:

@@ -36,12 +36,16 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
 
+if TYPE_CHECKING:
+    from glider.analysis.behavior.hybrid import HybridModel
+
 from glider.analysis.behavior.annotations import AnnotationStore
+from glider.analysis.behavior.benchmarks.metrics import macro_frame_f1
 from glider.analysis.behavior.features import FeatureSpec, compute_features
 from glider.analysis.behavior.labels import (
     AMBIGUOUS,
@@ -66,6 +70,23 @@ class TrainResult:
 
     model: BehaviorModel
     summary: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class HybridTrainResult:
+    """Bundle returned by :func:`train_hybrid_model`.
+
+    ``model`` is the shipped :class:`~glider.analysis.behavior.hybrid.HybridModel`
+    (final base refit on all kept rows, blended at the tuned ``lam``).
+    ``per_lambda_f1`` maps each grid λ to its validation macro-F1;
+    ``base_val_f1`` is the base model's (λ=0) validation macro-F1.
+    """
+
+    model: HybridModel  # imported under TYPE_CHECKING to avoid an import cycle
+    lam: float
+    per_lambda_f1: dict[float, float]
+    n_val: int
+    base_val_f1: float
 
 
 @dataclass(frozen=True)
@@ -107,7 +128,7 @@ def train_model(
     background_class_name: str = "background",
     background_subsample_ratio: float = 5.0,
     holdout_sessions: list[SessionPair] | None = None,
-    classifier_type: str = "rf",
+    classifier_type: str = "lightgbm",
     mirror_augment: bool = False,
     merge_map: dict[str, str] | None = None,
     exclude: set[str] | None = None,
@@ -176,10 +197,11 @@ def train_model(
         test on session B (a different mouse / day). When supplied,
         ``test_split`` is ignored.
     classifier_type
-        ``"rf"`` (default, ``RandomForestClassifier``) or
-        ``"lightgbm"`` (``lightgbm.LGBMClassifier``). LightGBM is
+        ``"lightgbm"`` (default, ``lightgbm.LGBMClassifier``) or
+        ``"rf"`` (``RandomForestClassifier``). LightGBM is
         usually a few percent better on tabular features and trains
-        much faster, but is an optional dependency.
+        much faster; it is the default backend and falls back to RF
+        only if not installed.
     mirror_augment
         When True, generate horizontally-mirrored copies of each
         training session (left/right keypoint pairs swapped, x-coords
@@ -216,8 +238,8 @@ def train_model(
 
     spec = spec or FeatureSpec()
 
-    # ---- 1. Per-session feature + label assembly ----
-    x_all, y_all, g_all, per_session_counts = _assemble_sessions(
+    # ---- 1-2. Assemble features/labels, drop unusable rows, subsample bg ----
+    assembled = _assemble_and_filter(
         sessions,
         spec=spec,
         window=window,
@@ -229,56 +251,16 @@ def train_model(
         freq_features=freq_features,
         traj_features=traj_features,
         motion_features=motion_features,
+        include_background=include_background,
+        background_class_name=background_class_name,
+        background_subsample_ratio=background_subsample_ratio,
+        random_state=random_state,
     )
-
-    # ---- 2. Optionally promote unannotated frames to a background class ----
-    # Done BEFORE the drop-mask so the background label is treated as
-    # ordinary supervision; AMBIGUOUS rows are still dropped because
-    # we can't pick a single right answer for them.
-    if include_background:
-        if not background_class_name:
-            raise ValueError("background_class_name must be non-empty")
-        y_all = y_all.where(y_all != "", background_class_name)
-    n_total = len(x_all)
-    keep_mask = (y_all != "") & (y_all != AMBIGUOUS) & ~x_all.isna().any(axis=1)
-    n_kept = int(keep_mask.sum())
-    if n_kept < 2:
-        raise ValueError(
-            f"only {n_kept} usable rows after filtering; "
-            f"need at least 2. Check that your annotations CSV covers "
-            f"the pose CSV's frame range."
-        )
-
-    x_kept = x_all.loc[keep_mask].reset_index(drop=True)
-    y_kept = y_all.loc[keep_mask].reset_index(drop=True)
-    g_kept = g_all.loc[keep_mask].reset_index(drop=True)
-
-    # ---- 2b. Subsample the background class if it dominates ----
-    # On long videos most frames are unannotated, so without this the
-    # background class can be 100× the largest behavior class and the
-    # forest just learns "always predict background".
-    background_subsampled_to: int | None = None
-    if (
-        include_background
-        and background_subsample_ratio > 0
-        and background_class_name in set(y_kept)
-    ):
-        bg_mask = y_kept == background_class_name
-        n_bg = int(bg_mask.sum())
-        non_bg_counts = y_kept[~bg_mask].value_counts()
-        if len(non_bg_counts):
-            largest_non_bg = int(non_bg_counts.iloc[0])
-            cap = max(1, int(round(background_subsample_ratio * largest_non_bg)))
-            if n_bg > cap:
-                rng = np.random.default_rng(random_state)
-                bg_idx = np.flatnonzero(bg_mask.to_numpy())
-                keep_bg = rng.choice(bg_idx, size=cap, replace=False)
-                keep_indices = np.concatenate([np.flatnonzero(~bg_mask.to_numpy()), keep_bg])
-                keep_indices.sort()
-                x_kept = x_kept.iloc[keep_indices].reset_index(drop=True)
-                y_kept = y_kept.iloc[keep_indices].reset_index(drop=True)
-                g_kept = g_kept.iloc[keep_indices].reset_index(drop=True)
-                background_subsampled_to = cap
+    x_kept, y_kept, g_kept = assembled.x_kept, assembled.y_kept, assembled.g_kept
+    n_total = assembled.n_total
+    n_kept = assembled.n_kept
+    per_session_counts = assembled.per_session_counts
+    background_subsampled_to = assembled.background_subsampled_to
 
     # ---- 3. Train/test split strategy ----
     # Three modes, in priority order:
@@ -468,6 +450,155 @@ def train_model(
     return TrainResult(model=model, summary=summary)
 
 
+def train_hybrid_model(
+    sessions: list[SessionPair],
+    *,
+    tag_map: dict[str, frozenset[str]],
+    spec: FeatureSpec | None = None,
+    window: int = 30,
+    stats: tuple[str, ...] = DEFAULT_STATS,
+    fps: float = 30.0,
+    n_estimators: int = 200,
+    random_state: int = 42,
+    class_weight: str | None = None,
+    lgbm_reg: LgbmReg | None = None,
+    val_frac: float = 0.25,
+    lam_grid: tuple[float, ...] | None = None,
+    mirror_augment: bool = False,
+    merge_map: dict[str, str] | None = None,
+    exclude: set[str] | None = None,
+    freq_features: bool = False,
+    traj_features: bool = False,
+    motion_features: bool = False,
+) -> HybridTrainResult:
+    """Train a hybrid (LightGBM base + kinematic prior) model with λ tuning.
+
+    The blend weight ``lam`` is selected on a held-out validation split that is
+    carved out **before** the λ-selection base is fit, so the base never scores
+    its own training rows on validation:
+
+    1. Assemble + filter all sessions into pooled kept rows (shared with
+       :func:`train_model`).
+    2. Group-shuffle split those rows into ``train_core`` / ``val`` on the zone
+       group ids (``val_frac`` held out).
+    3. Fit a LightGBM base on ``train_core`` only.
+    4. Build a :class:`~glider.analysis.behavior.prior.KinematicPrior` and
+       calibrate it **once** on the pooled kept speed (unsupervised, leakage-free).
+    5. For each λ in ``lam_grid`` (default ``0.0 … 1.0`` step ``0.1``), blend the
+       ``train_core`` base with the prior and score ``val`` macro-F1. Pick the
+       best λ; ties resolve to the smallest λ (so λ=0 wins on no improvement).
+    6. Refit the shipped base on ALL kept rows and wrap it in the final
+       :class:`~glider.analysis.behavior.hybrid.HybridModel` at the tuned λ.
+
+    LightGBM is hard-required (``require=True``); the prior needs the graded
+    freeze/dart kinematics that the RandomForest fallback would not change, but
+    the hybrid design commits to the gradient-boosted base.
+    """
+    from glider.analysis.behavior.hybrid import HybridModel
+    from glider.analysis.behavior.prior import KinematicPrior
+
+    if not sessions:
+        raise ValueError("train_hybrid_model requires at least one (pose, annotations) pair")
+    if not 0.0 < val_frac < 1.0:
+        raise ValueError(f"val_frac must be in (0, 1), got {val_frac}")
+
+    spec = spec or FeatureSpec()
+    if lam_grid is None:
+        lam_grid = tuple(round(0.1 * i, 1) for i in range(11))
+
+    # ---- 1. Assemble + filter (shared with train_model) ----
+    assembled = _assemble_and_filter(
+        sessions,
+        spec=spec,
+        window=window,
+        stats=stats,
+        fps=fps,
+        mirror_augment=mirror_augment,
+        merge_map=merge_map,
+        exclude=exclude,
+        freq_features=freq_features,
+        traj_features=traj_features,
+        motion_features=motion_features,
+        include_background=False,
+        background_class_name="background",
+        background_subsample_ratio=0.0,
+        random_state=random_state,
+    )
+    x_kept, y_kept, g_kept = assembled.x_kept, assembled.y_kept, assembled.g_kept
+
+    # ---- 2. Split BEFORE fitting the λ-selection base ----
+    from sklearn.model_selection import GroupShuffleSplit
+
+    # Split on the zone group ids so adjacent windows from one labeled zone
+    # can't leak across train_core/val. Background isn't handled here
+    # (include_background=False above), so every kept row has group id >= 0 —
+    # no unique-id remap for background rows is needed (unlike train_model).
+    gss = GroupShuffleSplit(n_splits=1, test_size=val_frac, random_state=random_state)
+    train_idx, val_idx = next(gss.split(x_kept, y_kept, groups=g_kept.to_numpy()))
+    x_train_core = x_kept.iloc[train_idx].reset_index(drop=True)
+    y_train_core = y_kept.iloc[train_idx].reset_index(drop=True)
+    x_val = x_kept.iloc[val_idx].reset_index(drop=True)
+    y_val = y_kept.iloc[val_idx].reset_index(drop=True)
+
+    def _fit_base(x, y) -> BehaviorModel:
+        clf = _build_classifier(
+            classifier_type="lightgbm",
+            n_estimators=n_estimators,
+            random_state=random_state,
+            class_weight=class_weight,
+            lgbm_reg=lgbm_reg,
+            require=True,
+        )
+        clf.fit(x, y)
+        return BehaviorModel(
+            classifier=clf,
+            feature_names=list(x_kept.columns),
+            spec=spec,
+            window=window,
+            stats=tuple(stats),
+            fps=fps,
+            classes=[str(c) for c in clf.classes_],
+            library_versions=capture_library_versions(),
+        )
+
+    # ---- 3. train_core-only base for λ selection ----
+    base_core = _fit_base(x_train_core, y_train_core)
+
+    # ---- 4. Calibrate the prior ONCE on the pooled kept speed ----
+    prior = KinematicPrior(tag_map)
+    prior.calibrate(x_kept)
+
+    classes = [str(c) for c in base_core.classifier.classes_]
+
+    # ---- 5. Score each λ on the held-out val split ----
+    gt = y_val.tolist()
+    per_lambda_f1: dict[float, float] = {}
+    for lam in lam_grid:
+        preds = HybridModel(base_core, prior, lam, tag_map).predict(x_val)
+        per_lambda_f1[float(lam)] = macro_frame_f1(gt, preds.tolist(), classes)
+
+    # Best λ, ties → smallest λ (so λ=0 wins on no improvement).
+    best_lam = max(lam_grid, key=lambda lam: (per_lambda_f1[float(lam)], -float(lam)))
+    # λ=0 is exactly the base, so reuse its already-computed val F1 when the
+    # grid includes 0.0 (the default); only recompute if a caller omitted it.
+    if 0.0 in per_lambda_f1:
+        base_val_f1 = per_lambda_f1[0.0]
+    else:
+        base_val_f1 = macro_frame_f1(gt, base_core.predict(x_val).tolist(), classes)
+
+    # ---- 6. Refit the shipped base on ALL kept rows; wrap at λ* ----
+    shipped_base = _fit_base(x_kept, y_kept)
+    final_model = HybridModel(shipped_base, prior, best_lam, tag_map)
+
+    return HybridTrainResult(
+        model=final_model,
+        lam=float(best_lam),
+        per_lambda_f1=per_lambda_f1,
+        n_val=int(len(x_val)),
+        base_val_f1=base_val_f1,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -561,6 +692,126 @@ def _assemble_sessions(
     return x_all, y_all, g_all, per_session_counts
 
 
+@dataclass
+class _AssembledData:
+    """Kept windowed features / labels / group-ids + assembly diagnostics.
+
+    Output of :func:`_assemble_and_filter` — the assemble → drop-mask →
+    background-subsample block shared by :func:`train_model` and
+    :func:`train_hybrid_model`.
+    """
+
+    x_kept: pd.DataFrame
+    y_kept: pd.Series
+    g_kept: pd.Series
+    n_total: int
+    n_kept: int
+    per_session_counts: list[dict[str, int]]
+    background_subsampled_to: int | None
+
+
+def _assemble_and_filter(
+    sessions: list[SessionPair],
+    *,
+    spec: FeatureSpec,
+    window: int,
+    stats: tuple[str, ...],
+    fps: float,
+    mirror_augment: bool,
+    merge_map: dict[str, str] | None,
+    exclude: set[str] | None,
+    freq_features: bool,
+    traj_features: bool,
+    motion_features: bool,
+    include_background: bool,
+    background_class_name: str,
+    background_subsample_ratio: float,
+    random_state: int,
+) -> _AssembledData:
+    """Assemble sessions, drop unusable rows, and subsample background.
+
+    Factors out the block both :func:`train_model` and
+    :func:`train_hybrid_model` need. Rows are dropped when unannotated,
+    :data:`AMBIGUOUS`, or NaN in any feature column; when
+    ``include_background`` is set, unannotated frames are first promoted to
+    ``background_class_name`` and (optionally) subsampled to
+    ``background_subsample_ratio`` × the largest behavior class.
+    """
+    # ---- 1. Per-session feature + label assembly ----
+    x_all, y_all, g_all, per_session_counts = _assemble_sessions(
+        sessions,
+        spec=spec,
+        window=window,
+        stats=stats,
+        fps=fps,
+        mirror_augment=mirror_augment,
+        merge_map=merge_map,
+        exclude=exclude,
+        freq_features=freq_features,
+        traj_features=traj_features,
+        motion_features=motion_features,
+    )
+
+    # ---- 2. Optionally promote unannotated frames to a background class ----
+    # Done BEFORE the drop-mask so the background label is treated as
+    # ordinary supervision; AMBIGUOUS rows are still dropped because
+    # we can't pick a single right answer for them.
+    if include_background:
+        if not background_class_name:
+            raise ValueError("background_class_name must be non-empty")
+        y_all = y_all.where(y_all != "", background_class_name)
+    n_total = len(x_all)
+    keep_mask = (y_all != "") & (y_all != AMBIGUOUS) & ~x_all.isna().any(axis=1)
+    n_kept = int(keep_mask.sum())
+    if n_kept < 2:
+        raise ValueError(
+            f"only {n_kept} usable rows after filtering; "
+            f"need at least 2. Check that your annotations CSV covers "
+            f"the pose CSV's frame range."
+        )
+
+    x_kept = x_all.loc[keep_mask].reset_index(drop=True)
+    y_kept = y_all.loc[keep_mask].reset_index(drop=True)
+    g_kept = g_all.loc[keep_mask].reset_index(drop=True)
+
+    # ---- 2b. Subsample the background class if it dominates ----
+    # On long videos most frames are unannotated, so without this the
+    # background class can be 100× the largest behavior class and the
+    # forest just learns "always predict background".
+    background_subsampled_to: int | None = None
+    if (
+        include_background
+        and background_subsample_ratio > 0
+        and background_class_name in set(y_kept)
+    ):
+        bg_mask = y_kept == background_class_name
+        n_bg = int(bg_mask.sum())
+        non_bg_counts = y_kept[~bg_mask].value_counts()
+        if len(non_bg_counts):
+            largest_non_bg = int(non_bg_counts.iloc[0])
+            cap = max(1, int(round(background_subsample_ratio * largest_non_bg)))
+            if n_bg > cap:
+                rng = np.random.default_rng(random_state)
+                bg_idx = np.flatnonzero(bg_mask.to_numpy())
+                keep_bg = rng.choice(bg_idx, size=cap, replace=False)
+                keep_indices = np.concatenate([np.flatnonzero(~bg_mask.to_numpy()), keep_bg])
+                keep_indices.sort()
+                x_kept = x_kept.iloc[keep_indices].reset_index(drop=True)
+                y_kept = y_kept.iloc[keep_indices].reset_index(drop=True)
+                g_kept = g_kept.iloc[keep_indices].reset_index(drop=True)
+                background_subsampled_to = cap
+
+    return _AssembledData(
+        x_kept=x_kept,
+        y_kept=y_kept,
+        g_kept=g_kept,
+        n_total=n_total,
+        n_kept=n_kept,
+        per_session_counts=per_session_counts,
+        background_subsampled_to=background_subsampled_to,
+    )
+
+
 def _append_motion(feats: pd.DataFrame, pose_csv: Path, pose, spec: FeatureSpec):
     """Concat per-frame egocentric motion-energy features onto ``feats``.
 
@@ -631,7 +882,7 @@ def cross_validate_sessions(
     n_estimators: int = 200,
     random_state: int = 42,
     class_weight: str | None = None,
-    classifier_type: str = "rf",
+    classifier_type: str = "lightgbm",
     mirror_augment: bool = False,
     merge_map: dict[str, str] | None = None,
     exclude: set[str] | None = None,
@@ -671,6 +922,10 @@ def cross_validate_sessions(
     Returns a dict of per-fold and aggregate accuracy / macro-F1, pooled
     per-class metrics + confusion, and (with background) the false-alarm
     rate. Does not fit or return a final model — it only measures.
+
+    ``classifier_type`` defaults to ``"lightgbm"`` (matching
+    :func:`train_model`) so CV measures the same backend that gets
+    deployed; pass ``"rf"`` to evaluate the RandomForest backend instead.
     """
     if not sessions:
         raise ValueError("cross_validate_sessions requires at least one session")
@@ -1075,9 +1330,11 @@ def _build_classifier(
     random_state: int,
     class_weight: str | None,
     lgbm_reg: LgbmReg | None = None,
+    require: bool = False,
 ):
     """Construct an RF or LightGBM classifier. Falls back to RF if
-    LightGBM is requested but not installed."""
+    LightGBM is requested but not installed, unless ``require`` is True
+    (used by the hybrid model, which hard-requires LightGBM)."""
     classifier_type = (classifier_type or "rf").lower()
     if classifier_type == "lightgbm":
         try:
@@ -1100,7 +1357,11 @@ def _build_classifier(
                 min_split_gain=reg.min_split_gain,
                 verbosity=-1,
             )
-        except ImportError:
+        except ImportError as e:
+            if require:
+                raise RuntimeError(
+                    "lightgbm is required for the hybrid model; pip install lightgbm"
+                ) from e
             import warnings
 
             warnings.warn(
