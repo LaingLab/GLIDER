@@ -76,6 +76,25 @@ def test_save_load_round_trip(tmp_path):
     loaded = HybridModel.load(p)
     x = _frame([0.0, 9.0])
     np.testing.assert_array_equal(loaded.predict(x), hyb.predict(x))
+    # Would catch a dropped prior field: thresholds, rules, and tag_map must
+    # all survive the round-trip, not just the predictions on one frame.
+    assert loaded.prior._freeze_thr == prior._freeze_thr
+    assert loaded.prior._dart_thr == prior._dart_thr
+    assert loaded.prior._scale == prior._scale
+    assert loaded.prior.freeze_pct == prior.freeze_pct
+    assert loaded.prior.dart_pct == prior.dart_pct
+    assert loaded.prior.tag_map == prior.tag_map
+    assert [(r.name, r.tag_weights) for r in loaded.prior.rules] == [
+        (r.name, r.tag_weights) for r in prior.rules
+    ]
+
+
+def test_lam_out_of_range_raises():
+    base, prior = _base(), _prior()
+    with pytest.raises(ValueError):
+        HybridModel(base, prior, lam=1.5, tag_map=TAG_MAP)
+    with pytest.raises(ValueError):
+        HybridModel(base, prior, lam=-0.1, tag_map=TAG_MAP)
 
 
 def test_load_rejects_non_hybrid_bundle(tmp_path):
