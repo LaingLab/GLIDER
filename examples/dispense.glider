@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-07-07T11:49:54.226157",
+    "modified_at": "2026-07-07T11:59:57.505928",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -95,39 +95,92 @@
   "flow": {
     "nodes": [
       {
-        "id": "startfunction_71aa7c2a",
-        "node_type": "StartFunction",
+        "id": "startexperiment_ef8180ed",
+        "node_type": "StartExperiment",
         "position": [
-          -1035.78,
-          281.06
+          -808.0,
+          -394.0
         ],
-        "state": {
-          "function_name": "Other Way"
-        },
+        "state": {},
         "device_id": null,
         "visible_in_runner": false
       },
       {
-        "id": "endfunction_c1f61fce",
-        "node_type": "EndFunction",
+        "id": "endexperiment_0bfcb4da",
+        "node_type": "EndExperiment",
         "position": [
-          -602.41,
-          492.34
+          57.0,
+          -18.0
         ],
         "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "loop_117b2856",
+        "node_type": "Loop",
+        "position": [
+          -461.0,
+          -168.0
+        ],
+        "state": {
+          "count": 10000,
+          "delay": 0.05
+        },
+        "device_id": null,
+        "visible_in_runner": true
+      },
+      {
+        "id": "output_611e2003",
+        "node_type": "Output",
+        "position": [
+          -636.0,
+          -274.0
+        ],
+        "state": {},
+        "device_id": "enable",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_3d86458f",
+        "node_type": "Output",
+        "position": [
+          -263.0,
+          -176.0
+        ],
+        "state": {},
+        "device_id": "step",
+        "visible_in_runner": false
+      },
+      {
+        "id": "output_507c7f21",
+        "node_type": "Output",
+        "position": [
+          150.0,
+          -163.0
+        ],
+        "state": {
+          "value": 0
+        },
+        "device_id": "step",
+        "visible_in_runner": false
+      },
+      {
+        "id": "delay_3a8cdf1b",
+        "node_type": "Delay",
+        "position": [
+          -56.0,
+          -164.0
+        ],
+        "state": {
+          "unit": "milliseconds",
+          "duration": 100.0
+        },
         "device_id": null,
         "visible_in_runner": false
       }
     ],
     "connections": [
-      {
-        "id": "conn_66ea441a",
-        "from_node": "startfunction_71aa7c2a",
-        "from_output": 0,
-        "to_node": "output_35e1cd13",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
       {
         "id": "conn_e11828be",
         "from_node": "output_35e1cd13",
@@ -145,26 +198,50 @@
         "connection_type": "exec"
       },
       {
-        "id": "conn_ff47eca2",
-        "from_node": "output_ea33a869",
+        "id": "conn_28c20814",
+        "from_node": "startexperiment_ef8180ed",
         "from_output": 0,
-        "to_node": "endfunction_c1f61fce",
+        "to_node": "output_611e2003",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_9493ceec",
-        "from_node": "waitforinput_dae1d44b",
+        "id": "conn_3160f6df",
+        "from_node": "output_611e2003",
         "from_output": 0,
-        "to_node": "output_ea33a869",
+        "to_node": "loop_117b2856",
         "to_input": 0,
         "connection_type": "exec"
       },
       {
-        "id": "conn_7663ceff",
-        "from_node": "output_63fb3406",
+        "id": "conn_aaea7c28",
+        "from_node": "loop_117b2856",
         "from_output": 0,
-        "to_node": "waitforinput_dae1d44b",
+        "to_node": "output_3d86458f",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_442a60d5",
+        "from_node": "loop_117b2856",
+        "from_output": 1,
+        "to_node": "endexperiment_0bfcb4da",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_cbcd31f1",
+        "from_node": "output_3d86458f",
+        "from_output": 0,
+        "to_node": "delay_3a8cdf1b",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "conn_353edc17",
+        "from_node": "delay_3a8cdf1b",
+        "from_output": 0,
+        "to_node": "output_507c7f21",
         "to_input": 0,
         "connection_type": "exec"
       }
