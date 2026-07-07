@@ -32,6 +32,22 @@ def test_posteriors_all_nan_returns_empty():
     assert valid.tolist() == [False, False]
 
 
+def test_posteriors_column_order_follows_classifier_classes_():
+    # classifier.classes_ is sklearn-sorted -> ["a", "b"], but the model is
+    # constructed with self.classes reversed -> ["b", "a"]. The returned
+    # probability columns must follow classifier.classes_, not self.classes.
+    x = pd.DataFrame({"f0": [0, 0, 1, 1, 0, 1], "f1": [0, 1, 0, 1, 0, 1]})
+    y = ["a", "a", "b", "b", "a", "b"]
+    clf = RandomForestClassifier(n_estimators=5, random_state=0).fit(x, y)
+    assert list(clf.classes_) == ["a", "b"]
+    m = BehaviorModel(clf, ["f0", "f1"], FeatureSpec(), 1, ("mean",), 30.0, ["b", "a"])
+    assert m.classes == ["b", "a"]
+    # A [0, 0] row is an unambiguous "a" example in the training data.
+    probs, valid = m.posteriors(pd.DataFrame({"f0": [0.0], "f1": [0.0]}))
+    assert valid.tolist() == [True]
+    assert clf.classes_[probs[0].argmax()] == "a"
+
+
 def test_posteriors_raises_when_unfitted():
     m = BehaviorModel(object(), ["f0"], FeatureSpec(), 1, ("mean",), 30.0, ["a"])
     with pytest.raises(RuntimeError):
