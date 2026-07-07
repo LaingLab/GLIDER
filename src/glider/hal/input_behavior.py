@@ -74,12 +74,12 @@ class InputBehavior:
         ``_MAX_READ_ERRORS`` consecutive read failures. ``cleanup`` runs in
         ``finally`` so a ramp motor is stopped on trigger, timeout, and error.
         """
-        start = time.time()
+        start = time.monotonic()
         errors = 0
         try:
             while True:
-                if timeout > 0 and (time.time() - start) >= timeout:
-                    raise TimeoutError()
+                if timeout > 0 and (time.monotonic() - start) >= timeout:
+                    raise TimeoutError(f"Behavior '{self.key}' timed out after {timeout}s")
                 try:
                     value = await self._read(ctx)
                     errors = 0

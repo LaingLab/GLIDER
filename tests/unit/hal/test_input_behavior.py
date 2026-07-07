@@ -89,6 +89,28 @@ async def test_read_error_raises_runtime_error():
         await beh.wait_for_input({"limit": 5}, ctx, timeout=1.0)
 
 
+async def test_consecutive_error_counter_resets_on_success():
+    # Two failures, then a successful read that reaches the trigger. The error
+    # counter must reset on the successful read, so the wait returns rather than
+    # aborting: this locks in consecutive (not cumulative) error semantics.
+    class _FlakyThenGoodDevice:
+        id = "flaky_then_good"
+
+        def __init__(self):
+            self._reads = 0
+
+        async def read(self):
+            self._reads += 1
+            if self._reads <= 2:
+                raise OSError("transient read failure")
+            return 9
+
+    beh = _ThresholdBehavior()
+    ctx = await _ctx(_FlakyThenGoodDevice())
+    value = await beh.wait_for_input({"limit": 5}, ctx, timeout=1.0)
+    assert value == 9
+
+
 async def test_cleanup_runs_on_trigger_timeout_and_error():
     calls = []
 
