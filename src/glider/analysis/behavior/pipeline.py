@@ -632,7 +632,7 @@ def cross_validate_sessions(
     n_estimators: int = 200,
     random_state: int = 42,
     class_weight: str | None = None,
-    classifier_type: str = "rf",
+    classifier_type: str = "lightgbm",
     mirror_augment: bool = False,
     merge_map: dict[str, str] | None = None,
     exclude: set[str] | None = None,
@@ -672,6 +672,10 @@ def cross_validate_sessions(
     Returns a dict of per-fold and aggregate accuracy / macro-F1, pooled
     per-class metrics + confusion, and (with background) the false-alarm
     rate. Does not fit or return a final model — it only measures.
+
+    ``classifier_type`` defaults to ``"lightgbm"`` (matching
+    :func:`train_model`) so CV measures the same backend that gets
+    deployed; pass ``"rf"`` to evaluate the RandomForest backend instead.
     """
     if not sessions:
         raise ValueError("cross_validate_sessions requires at least one session")
