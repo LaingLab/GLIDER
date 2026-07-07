@@ -723,6 +723,17 @@ class NodeEditorController(QObject):
                 )
                 for fkey, (widget, ftype) in out.items():
                     self._connect_behavior_widget(node_id, behavior.key, fkey, widget, ftype)
+
+                timeout_spin = QDoubleSpinBox()
+                timeout_spin.setRange(0.0, 3600.0)
+                timeout_spin.setDecimals(1)
+                timeout_spin.setSpecialValueText("No timeout")
+                timeout_spin.setValue((node_config.state or {}).get("timeout", 0.0))
+                timeout_spin.setSuffix(" sec")
+                timeout_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(nid, "timeout", val)
+                )
+                props_layout.addRow("Timeout:", timeout_spin)
             else:
                 self._add_divider(props_layout)
                 self._add_section_header(props_layout, "INPUT SETTINGS")

@@ -60,7 +60,11 @@ class InputBehavior:
         """Per-poll side effects on non-triggering samples. Default no-op."""
 
     async def cleanup(self, ctx: BehaviorContext) -> None:
-        """Teardown that runs on every exit. Default no-op."""
+        """Teardown that runs on every exit. Default no-op.
+
+        Runs on EVERY exit from ``wait_for_input`` — including a successful
+        trigger, not just timeout/error — so trigger-time teardown belongs here.
+        """
 
     async def _read(self, ctx: BehaviorContext) -> Any:
         if self.read_action is None:

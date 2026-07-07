@@ -371,13 +371,7 @@ class RotaryEncoderDevice(BaseDevice):
     def _accumulate(self, raw: int) -> None:
         """Add the shortest-path delta from the last reading (handles wrap)."""
         if self._last_raw is not None:
-            delta = raw - self._last_raw
-            half = self._counts_per_turn / 2
-            if delta > half:
-                delta -= self._counts_per_turn
-            elif delta < -half:
-                delta += self._counts_per_turn
-            self._total_counts += delta
+            self._total_counts += rt.shortest_delta(raw, self._last_raw, self._counts_per_turn)
         self._last_raw = raw
 
     # --- reads / actions ---
