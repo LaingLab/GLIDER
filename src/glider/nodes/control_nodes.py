@@ -226,6 +226,20 @@ class WaitForInputNode(GliderNode):
             logger.error("  No device bound to WaitForInput node")
             return
 
+        # Route to a selected device input behavior when one is chosen and
+        # available; otherwise fall through to the legacy poll path unchanged.
+        behavior_key = self._state.get("input_behavior")
+        behavior = None
+        if behavior_key:
+            for b in getattr(self._device, "input_behaviors", []):
+                if b.key == behavior_key:
+                    behavior = b
+                    break
+
+        if behavior is not None:
+            await self._run_behavior(behavior)
+            return
+
         timeout = self._state.get("timeout", 0.0)
         poll_interval = self._state.get("poll_interval", 0.05)
         self._poll_interval = poll_interval
@@ -306,6 +320,39 @@ class WaitForInputNode(GliderNode):
 
         finally:
             self._waiting = False
+
+    async def _run_behavior(self, behavior) -> None:
+        """Wait via a device-declared input behavior instead of the legacy loop.
+
+        Cleanup on timeout/error is the behavior's responsibility (its
+        ``wait_for_input`` runs ``cleanup`` in a ``finally``), so the node does
+        not stop a ramp motor on this path.
+        """
+        from glider.hal.input_behavior import BehaviorContext
+
+        timeout = self._state.get("timeout", 0.0)
+        poll = self._state.get("poll_interval", 0.05)
+        all_settings = self._state.get("behavior_settings", {})
+        # schema defaults <- saved values (saved wins)
+        settings = {f["key"]: f.get("default") for f in behavior.settings}
+        settings.update(all_settings.get(behavior.key, {}))
+
+        ctx = BehaviorContext(
+            device=self._device,
+            hardware_manager=self._hardware_manager,
+            poll_interval=poll,
+        )
+        try:
+            value = await behavior.wait_for_input(settings, ctx, timeout)
+        except TimeoutError:
+            await self._fire_exec_output("timeout")
+            return
+        self._trigger_value = value
+        if len(self._outputs) > 2:
+            self._outputs[2] = value
+        for callback in self._update_callbacks:
+            callback("value", value)
+        await self._fire_exec_output("triggered")
 
     async def _poll_device(self, timeout: float) -> None:
         """Poll the bound device until condition is met or timeout."""
