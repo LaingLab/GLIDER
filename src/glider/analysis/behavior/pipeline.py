@@ -107,7 +107,7 @@ def train_model(
     background_class_name: str = "background",
     background_subsample_ratio: float = 5.0,
     holdout_sessions: list[SessionPair] | None = None,
-    classifier_type: str = "rf",
+    classifier_type: str = "lightgbm",
     mirror_augment: bool = False,
     merge_map: dict[str, str] | None = None,
     exclude: set[str] | None = None,
@@ -176,10 +176,11 @@ def train_model(
         test on session B (a different mouse / day). When supplied,
         ``test_split`` is ignored.
     classifier_type
-        ``"rf"`` (default, ``RandomForestClassifier``) or
-        ``"lightgbm"`` (``lightgbm.LGBMClassifier``). LightGBM is
+        ``"lightgbm"`` (default, ``lightgbm.LGBMClassifier``) or
+        ``"rf"`` (``RandomForestClassifier``). LightGBM is
         usually a few percent better on tabular features and trains
-        much faster, but is an optional dependency.
+        much faster; it is the default backend and falls back to RF
+        only if not installed.
     mirror_augment
         When True, generate horizontally-mirrored copies of each
         training session (left/right keypoint pairs swapped, x-coords
@@ -1075,9 +1076,11 @@ def _build_classifier(
     random_state: int,
     class_weight: str | None,
     lgbm_reg: LgbmReg | None = None,
+    require: bool = False,
 ):
     """Construct an RF or LightGBM classifier. Falls back to RF if
-    LightGBM is requested but not installed."""
+    LightGBM is requested but not installed, unless ``require`` is True
+    (used by the hybrid model, which hard-requires LightGBM)."""
     classifier_type = (classifier_type or "rf").lower()
     if classifier_type == "lightgbm":
         try:
@@ -1100,7 +1103,11 @@ def _build_classifier(
                 min_split_gain=reg.min_split_gain,
                 verbosity=-1,
             )
-        except ImportError:
+        except ImportError as e:
+            if require:
+                raise RuntimeError(
+                    "lightgbm is required for the hybrid model; pip install lightgbm"
+                ) from e
             import warnings
 
             warnings.warn(
