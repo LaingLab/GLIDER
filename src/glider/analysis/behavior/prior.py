@@ -87,6 +87,41 @@ class KinematicPrior:
         # (not a cliff) across the regime. Guard against a degenerate span.
         self._scale = max((self._dart_thr - self._freeze_thr) / 6.0, 1e-6)
 
+    def to_dict(self) -> dict:
+        """Serialize all persistence-critical state (mirrors ``FeatureSpec.to_dict``).
+
+        Owns everything a round-trip needs: the tag map, the rules (name +
+        tag weights), the freeze/dart percentiles, and — if :meth:`calibrate`
+        has run — the calibrated thresholds and activation scale.
+        """
+        return {
+            "tag_map": {k: sorted(v) for k, v in self.tag_map.items()},
+            "rules": [[r.name, dict(r.tag_weights)] for r in self.rules],
+            "freeze_pct": float(self.freeze_pct),
+            "dart_pct": float(self.dart_pct),
+            "freeze_thr": self._freeze_thr,
+            "dart_thr": self._dart_thr,
+            "scale": self._scale,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> KinematicPrior:
+        """Rebuild a prior from :meth:`to_dict` output, restoring calibration."""
+        tag_map = {k: frozenset(v) for k, v in d["tag_map"].items()}
+        rules = tuple(Rule(str(name), dict(w)) for name, w in d.get("rules", []))
+        if not rules:
+            rules = DEFAULT_RULES
+        prior = cls(
+            tag_map=tag_map,
+            rules=rules,
+            freeze_pct=float(d.get("freeze_pct", FREEZE_PCT)),
+            dart_pct=float(d.get("dart_pct", DART_PCT)),
+        )
+        prior._freeze_thr = d.get("freeze_thr")
+        prior._dart_thr = d.get("dart_thr")
+        prior._scale = d.get("scale")
+        return prior
+
     def _activations(self, speed: np.ndarray) -> dict[str, np.ndarray]:
         """Graded freeze/dart activation in [0,1] per row.
 
