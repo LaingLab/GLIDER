@@ -52,7 +52,19 @@ class Rule:
     tag_weights: dict[str, float]  # e.g. {"stationary": +1.0, "locomotory": -1.0}
 
 
-# v1 rules — freeze and dart. Extensions (rhythmic/vertical/displacement) go here later.
+# The activation names `_activations` can currently produce. A rule's name must
+# be one of these — it selects the kinematic activation the rule grades. This is
+# the single source of truth shared by `_activations` and `KinematicPrior.__init__`
+# so the two can't silently drift.
+KNOWN_ACTIVATIONS: frozenset[str] = frozenset({"freeze", "dart"})
+
+
+# v1 rules — freeze and dart. Adding a new rule (rhythmic / vertical /
+# displacement) is NOT a data-only change today: it requires BOTH a new entry
+# here AND a matching branch in `_activations` that computes its activation from
+# the relevant kinematic signal (plus adding its name to KNOWN_ACTIVATIONS).
+# Without the activation branch, a rule name outside KNOWN_ACTIVATIONS is
+# rejected eagerly in `__init__`. The activation layer is freeze/dart-only.
 DEFAULT_RULES: tuple[Rule, ...] = (
     Rule("freeze", {"stationary": 1.0, "locomotory": -1.0}),
     Rule("dart", {"locomotory": 1.0, "stationary": -1.0}),
@@ -70,6 +82,12 @@ class KinematicPrior:
         freeze_pct: float = FREEZE_PCT,
         dart_pct: float = DART_PCT,
     ):
+        unknown = [r.name for r in rules if r.name not in KNOWN_ACTIVATIONS]
+        if unknown:
+            raise ValueError(
+                f"rule(s) {unknown} have no matching activation in _activations; "
+                f"add a branch there first. Known activations: {sorted(KNOWN_ACTIVATIONS)}"
+            )
         self.tag_map = {k: frozenset(v) for k, v in tag_map.items()}
         self.rules = rules
         self.freeze_pct, self.dart_pct = freeze_pct, dart_pct
@@ -132,7 +150,11 @@ class KinematicPrior:
             raise RuntimeError("call calibrate() first")
         freeze = np.clip((self._freeze_thr - speed) / self._scale, 0.0, 1.0)  # slow
         dart = np.clip((speed - self._dart_thr) / self._scale, 0.0, 1.0)  # fast
-        return {"freeze": freeze, "dart": dart}
+        acts = {"freeze": freeze, "dart": dart}
+        # Keep the produced keys and the advertised set in lockstep — if this
+        # ever drifts from KNOWN_ACTIVATIONS, the __init__ validation would lie.
+        assert set(acts) == KNOWN_ACTIVATIONS
+        return acts
 
     def log_prior(self, windowed: pd.DataFrame, classes: list[str]) -> np.ndarray:
         """(n_rows, n_classes) additive log-prior aligned to `classes`.
