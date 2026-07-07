@@ -109,9 +109,19 @@ def test_supervised_and_hybrid_ablate_through_metrics(hybrid_sessions):
     # Build a hybrid from the SAME base + calibrated prior as the tuned model,
     # forced to λ=0. It must reproduce the base's predictions on x_eval bit-for-bit.
     base = hybrid_result.model.base
+    base_pred = base.predict(x_eval)
     lam0 = HybridModel(base, hybrid_result.model.prior, 0.0, tag_map)
-    np.testing.assert_array_equal(lam0.predict(x_eval), base.predict(x_eval))
+    np.testing.assert_array_equal(lam0.predict(x_eval), base_pred)
+
+    # ---- 2b. Bookend: a forced λ=1 DOES move predictions end-to-end ----
+    # The exact counterpart to the λ=0-exact test — proves the prior actually
+    # engages (λ=0 ≡ base; λ=1 ≢ base), not just that the selection logic is sound.
+    lam1 = HybridModel(base, hybrid_result.model.prior, 1.0, tag_map)
+    assert (lam1.predict(x_eval) != base_pred).any()
 
     # ---- 3. No-regression guarantee on the tuned model ----
-    # The tuned λ never scores worse than the base (λ=0) on the val split.
+    # Selection-logic / no-regression guard: the tuned λ never scores worse than
+    # the base (λ=0) on the val split. Proves non-harm, NOT lift — best_lam is a
+    # max over a grid containing 0.0, so ≥ holds by construction; the λ=1 bookend
+    # above is what demonstrates the prior does something.
     assert hybrid_result.per_lambda_f1[hybrid_result.lam] >= hybrid_result.per_lambda_f1[0.0]
