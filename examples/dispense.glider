@@ -6,7 +6,7 @@
     "author": "",
     "version": "1.0.0",
     "created_at": "2026-06-18T12:37:11.500380",
-    "modified_at": "2026-07-07T11:59:57.505928",
+    "modified_at": "2026-07-07T12:33:33.500185",
     "glider_version": "1.0.0",
     "protocol": "",
     "experiment_type": "",
@@ -138,7 +138,7 @@
           -274.0
         ],
         "state": {},
-        "device_id": "enable",
+        "device_id": "direction",
         "visible_in_runner": false
       },
       {
