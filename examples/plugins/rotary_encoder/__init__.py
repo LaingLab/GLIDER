@@ -32,12 +32,140 @@ Other plugins may also expose BOARD_DRIVERS or NODE_TYPES the same way.
 import asyncio
 import logging
 
+from glider.hal import revolution_tracking as rt
 from glider.hal.base_device import BaseDevice, DeviceConfig
+from glider.hal.input_behavior import InputBehavior
 
 logger = logging.getLogger(__name__)
 
 # AS5600 raw-angle resolution (12-bit).
 _RAW_MASK = 0x0FFF
+
+
+# --- input behaviors (things the WaitForInput node can wait on) ---
+
+_RAMP_FIELDS = [
+    {"key": "ramp_down", "label": "Ramp down to landing", "type": "bool", "default": False},
+    {
+        "key": "ramp_device",
+        "label": "Ramp Device",
+        "type": "device_ref",
+        "device_filter": "PWMOutput",
+    },
+    {"key": "drive_pwm", "label": "Drive PWM", "type": "int", "default": 100, "min": 0, "max": 255},
+    {"key": "creep_pwm", "label": "Creep PWM", "type": "int", "default": 30, "min": 0, "max": 255},
+    {
+        "key": "ramp_zone",
+        "label": "Ramp Zone (counts)",
+        "type": "int",
+        "default": 512,
+        "min": 1,
+        "max": 65535,
+    },
+    {
+        "key": "counts_per_turn",
+        "label": "Counts/Turn",
+        "type": "int",
+        "default": 4096,
+        "min": 2,
+        "max": 65535,
+    },
+    {
+        "key": "land_tolerance",
+        "label": "Landing Tolerance",
+        "type": "int",
+        "default": 0,
+        "min": 0,
+        "max": 4096,
+    },
+]
+
+
+class _EncoderRampBehavior(InputBehavior):
+    """Shared ramp side-effect + cleanup for both encoder behaviors."""
+
+    read_action = "angle"  # sample the RAW sawtooth angle, not cumulative revs
+
+    def _resolve_ramp(self, settings, ctx):
+        if ctx.scratch.get("ramp_resolved"):
+            return ctx.scratch.get("ramp_device")
+        ctx.scratch["ramp_resolved"] = True
+        dev = None
+        if settings.get("ramp_down") and settings.get("ramp_device") and ctx.hardware_manager:
+            dev = ctx.hardware_manager.get_device(settings["ramp_device"])
+        ctx.scratch["ramp_device"] = dev
+        return dev
+
+    async def _write_pwm(self, ctx, value):
+        dev = ctx.scratch.get("ramp_device")
+        if dev is not None:
+            await dev.set_value(int(value))
+
+    async def cleanup(self, ctx):
+        # Stop the ramp motor on every exit (trigger/timeout/error).
+        if ctx.scratch.get("ramp_device") is not None:
+            await self._write_pwm(ctx, 0)
+
+
+class RevolutionBehavior(_EncoderRampBehavior):
+    key = "revolution"
+    label = "Revolution (Turns)"
+    settings = [
+        {
+            "key": "turns_target",
+            "label": "Turns",
+            "type": "int",
+            "default": 1,
+            "min": 1,
+            "max": 100000,
+        },
+        *_RAMP_FIELDS,
+    ]
+
+    def check(self, value, settings, ctx):
+        st = ctx.scratch.setdefault("st", rt.new_state())
+        return rt.revolution_triggered(value, settings, st)
+
+    async def on_sample(self, value, settings, ctx):
+        dev = self._resolve_ramp(settings, ctx)
+        if dev is None:
+            return
+        st = ctx.scratch["st"]
+        if st["turn_count"] < settings.get("turns_target", 1) - 1:
+            return  # only ramp on the final turn (matches legacy)
+        cpt = settings.get("counts_per_turn", 4096)
+        remaining = cpt - value if st["ramp_direction"] >= 0 else value
+        await self._write_pwm(ctx, rt.ramp_pwm(remaining, settings))
+
+
+class MoveCountsBehavior(_EncoderRampBehavior):
+    key = "counts"
+    label = "Move Counts"
+    settings = [
+        {
+            "key": "counts_target",
+            "label": "Move counts",
+            "type": "int",
+            "default": 400,
+            "min": 1,
+            "max": 10_000_000,
+        },
+        *_RAMP_FIELDS,
+    ]
+
+    def check(self, value, settings, ctx):
+        st = ctx.scratch.setdefault("st", rt.new_state())
+        return rt.counts_triggered(value, settings, st)
+
+    async def on_sample(self, value, settings, ctx):
+        dev = self._resolve_ramp(settings, ctx)
+        if dev is None:
+            return
+        st = ctx.scratch["st"]
+        target = settings.get("counts_target", 400)
+        remaining = target - abs(st["accumulated"])
+        span = min(settings.get("ramp_zone", 512), target)
+        await self._write_pwm(ctx, rt.ramp_pwm(remaining, settings, span=span))
 
 
 class RotaryEncoderDevice(BaseDevice):
@@ -102,6 +230,12 @@ class RotaryEncoderDevice(BaseDevice):
             "decimals": 3,
         },
     ]
+
+    INPUT_BEHAVIORS = [RevolutionBehavior(), MoveCountsBehavior()]
+
+    @property
+    def input_behaviors(self):
+        return self.INPUT_BEHAVIORS
 
     def __init__(self, board, config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
