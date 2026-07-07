@@ -32,12 +32,166 @@ Other plugins may also expose BOARD_DRIVERS or NODE_TYPES the same way.
 import asyncio
 import logging
 
+from glider.hal import revolution_tracking as rt
 from glider.hal.base_device import BaseDevice, DeviceConfig
+from glider.hal.input_behavior import InputBehavior
 
 logger = logging.getLogger(__name__)
 
 # AS5600 raw-angle resolution (12-bit).
 _RAW_MASK = 0x0FFF
+
+
+# --- input behaviors (things the WaitForInput node can wait on) ---
+#
+# Behavior settings schemas are entirely independent of the device
+# ``SETTINGS_SCHEMA`` above: they configure one *wait*, not the device. That is
+# why fields like ``counts_per_turn`` and ``land_tolerance`` are re-declared here
+# even though the device also has a ``counts_per_turn`` -- the WaitForInput node
+# only sees a behavior's own ``settings`` list.
+
+_RAMP_FIELDS = [
+    {"key": "ramp_down", "label": "Ramp down to landing", "type": "bool", "default": False},
+    {
+        "key": "ramp_device",
+        "label": "Ramp Device",
+        "type": "device_ref",
+        "device_filter": "PWMOutput",
+    },
+    {"key": "drive_pwm", "label": "Drive PWM", "type": "int", "default": 100, "min": 0, "max": 255},
+    {"key": "creep_pwm", "label": "Creep PWM", "type": "int", "default": 30, "min": 0, "max": 255},
+    {
+        "key": "ramp_zone",
+        "label": "Ramp Zone (counts)",
+        "type": "int",
+        "default": 512,
+        "min": 1,
+        "max": 65535,
+    },
+    {
+        "key": "counts_per_turn",
+        "label": "Counts/Turn",
+        "type": "int",
+        "default": 4096,
+        "min": 2,
+        "max": 65535,
+    },
+    {
+        "key": "land_tolerance",
+        "label": "Landing Tolerance",
+        "type": "int",
+        "default": 0,
+        "min": 0,
+        "max": 4096,
+    },
+]
+
+
+class _EncoderRampBehavior(InputBehavior):
+    """Shared ramp side-effect + cleanup for both encoder behaviors."""
+
+    read_action = "angle"  # sample the RAW sawtooth angle, not cumulative revs
+
+    def _resolve_ramp(self, settings, ctx):
+        # Memoize the lookup -- including a ``None`` result -- so a disabled or
+        # missing ramp device isn't re-resolved on every poll of the wait.
+        if ctx.scratch.get("ramp_resolved"):
+            return ctx.scratch.get("ramp_device")
+        ctx.scratch["ramp_resolved"] = True
+        dev = None
+        if settings.get("ramp_down") and settings.get("ramp_device") and ctx.hardware_manager:
+            dev = ctx.hardware_manager.get_device(settings["ramp_device"])
+        ctx.scratch["ramp_device"] = dev
+        return dev
+
+    async def _write_pwm(self, ctx, value):
+        dev = ctx.scratch.get("ramp_device")
+        if dev is not None:
+            await dev.set_value(int(value))
+
+    async def cleanup(self, ctx):
+        # Stop the ramp motor on every exit (trigger/timeout/error).
+        if ctx.scratch.get("ramp_device") is not None:
+            await self._write_pwm(ctx, 0)
+
+
+class RevolutionBehavior(_EncoderRampBehavior):
+    """Wait until the shaft has completed ``turns_target`` full revolutions.
+
+    ``turns_target`` is the number of whole turns to count (via wrap detection on
+    the raw angle) before the wait fires; on the final turn the optional ramp
+    eases the motor down as the angle approaches the wrap so it lands cleanly.
+    """
+
+    key = "revolution"
+    label = "Revolution (Turns)"
+    settings = [
+        {
+            "key": "turns_target",
+            "label": "Turns",
+            "type": "int",
+            "default": 1,
+            "min": 1,
+            "max": 100000,
+        },
+        *_RAMP_FIELDS,
+    ]
+
+    def check(self, value, settings, ctx):
+        # One behavior owns the entire ctx.scratch dict for the duration of a
+        # single wait, so its keys ("tracking_state"/"ramp_resolved"/
+        # "ramp_device") can never collide with another behavior's -- it's safe
+        # to stash freely here.
+        tracking_state = ctx.scratch.setdefault("tracking_state", rt.new_state())
+        return rt.revolution_triggered(value, settings, tracking_state)
+
+    async def on_sample(self, value, settings, ctx):
+        dev = self._resolve_ramp(settings, ctx)
+        if dev is None:
+            return
+        tracking_state = ctx.scratch["tracking_state"]
+        if tracking_state["turn_count"] < settings.get("turns_target", 1) - 1:
+            return  # ramp only during the last turn's approach to the wrap
+        cpt = settings.get("counts_per_turn", 4096)
+        remaining = cpt - value if tracking_state["ramp_direction"] >= 0 else value
+        await self._write_pwm(ctx, rt.ramp_pwm(remaining, settings))
+
+
+class MoveCountsBehavior(_EncoderRampBehavior):
+    """Wait until the shaft has moved ``counts_target`` encoder counts.
+
+    ``counts_target`` is the absolute (bidirectional) displacement in raw counts
+    to travel before the wait fires; the optional ramp decelerates the motor as
+    the accumulated displacement nears the target so it stops on the mark.
+    """
+
+    key = "counts"
+    label = "Move Counts"
+    settings = [
+        {
+            "key": "counts_target",
+            "label": "Move counts",
+            "type": "int",
+            "default": 400,
+            "min": 1,
+            "max": 10_000_000,
+        },
+        *_RAMP_FIELDS,
+    ]
+
+    def check(self, value, settings, ctx):
+        tracking_state = ctx.scratch.setdefault("tracking_state", rt.new_state())
+        return rt.counts_triggered(value, settings, tracking_state)
+
+    async def on_sample(self, value, settings, ctx):
+        dev = self._resolve_ramp(settings, ctx)
+        if dev is None:
+            return
+        tracking_state = ctx.scratch["tracking_state"]
+        target = settings.get("counts_target", 400)
+        remaining = target - abs(tracking_state["accumulated"])
+        span = min(settings.get("ramp_zone", 512), target)
+        await self._write_pwm(ctx, rt.ramp_pwm(remaining, settings, span=span))
 
 
 class RotaryEncoderDevice(BaseDevice):
@@ -102,6 +256,12 @@ class RotaryEncoderDevice(BaseDevice):
             "decimals": 3,
         },
     ]
+
+    INPUT_BEHAVIORS = [RevolutionBehavior(), MoveCountsBehavior()]
+
+    @property
+    def input_behaviors(self):
+        return self.INPUT_BEHAVIORS
 
     def __init__(self, board, config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
@@ -211,13 +371,7 @@ class RotaryEncoderDevice(BaseDevice):
     def _accumulate(self, raw: int) -> None:
         """Add the shortest-path delta from the last reading (handles wrap)."""
         if self._last_raw is not None:
-            delta = raw - self._last_raw
-            half = self._counts_per_turn / 2
-            if delta > half:
-                delta -= self._counts_per_turn
-            elif delta < -half:
-                delta += self._counts_per_turn
-            self._total_counts += delta
+            self._total_counts += rt.shortest_delta(raw, self._last_raw, self._counts_per_turn)
         self._last_raw = raw
 
     # --- reads / actions ---
