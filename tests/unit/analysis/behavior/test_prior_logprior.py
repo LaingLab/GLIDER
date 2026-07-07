@@ -60,3 +60,15 @@ def test_log_prior_requires_calibration():
     p = KinematicPrior(tag_map=TAG_MAP)
     with pytest.raises(RuntimeError):
         p.log_prior(_frame([0.0]), classes=CLASSES)
+
+
+def test_unknown_rule_name_rejected_eagerly():
+    import pytest
+
+    from glider.analysis.behavior.prior import KinematicPrior, Rule
+
+    with pytest.raises(ValueError, match="activation"):
+        KinematicPrior(
+            tag_map={"x": frozenset({"stationary"})},
+            rules=(Rule("rhythmic", {"rhythmic": 1.0}),),  # no matching activation
+        )
