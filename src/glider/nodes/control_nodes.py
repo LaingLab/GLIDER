@@ -327,6 +327,11 @@ class WaitForInputNode(GliderNode):
         Cleanup on timeout/error is the behavior's responsibility (its
         ``wait_for_input`` runs ``cleanup`` in a ``finally``), so the node does
         not stop a ramp motor on this path.
+
+        Note: unlike the legacy loop, this path does not use ``self._waiting`` to
+        break out. Aborting a wait relies on asyncio task cancellation, which
+        propagates through ``wait_for_input``'s ``finally`` -> ``cleanup``. Do
+        not "fix" the absence of a ``self._waiting`` flag here.
         """
         from glider.hal.input_behavior import BehaviorContext
 
@@ -337,6 +342,8 @@ class WaitForInputNode(GliderNode):
         settings = {f["key"]: f.get("default") for f in behavior.settings}
         settings.update(all_settings.get(behavior.key, {}))
 
+        logger.info(f"  Waiting via input behavior '{behavior.key}' (timeout: {timeout}s)")
+
         ctx = BehaviorContext(
             device=self._device,
             hardware_manager=self._hardware_manager,
@@ -345,8 +352,10 @@ class WaitForInputNode(GliderNode):
         try:
             value = await behavior.wait_for_input(settings, ctx, timeout)
         except TimeoutError:
+            logger.info(f"  Timeout waiting for input behavior '{behavior.key}'")
             await self._fire_exec_output("timeout")
             return
+        logger.info(f"  Behavior '{behavior.key}' triggered, value: {value}")
         self._trigger_value = value
         if len(self._outputs) > 2:
             self._outputs[2] = value

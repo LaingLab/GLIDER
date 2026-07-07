@@ -52,6 +52,34 @@ async def test_new_path_fires_triggered_with_value():
     assert node._outputs[2] == 6  # value output port
 
 
+async def test_uses_schema_default_when_setting_omitted():
+    # No behavior_settings at all -> the schema default (limit=5) applies.
+    node = WaitForInputNode()
+    node.bind_device(_BehaviorDevice([3, 5]))
+    node.set_state({"input_behavior": "at_least", "poll_interval": 0.0})
+    fired = _fired(node)
+    await node.execute()
+    assert ("triggered", True) in fired
+    assert node._outputs[2] == 5  # triggered on the schema default, not a saved value
+
+
+async def test_saved_setting_overrides_schema_default():
+    # Saved limit=2 differs from the default (5); saved must win.
+    node = WaitForInputNode()
+    node.bind_device(_BehaviorDevice([1, 2]))
+    node.set_state(
+        {
+            "input_behavior": "at_least",
+            "behavior_settings": {"at_least": {"limit": 2}},
+            "poll_interval": 0.0,
+        }
+    )
+    fired = _fired(node)
+    await node.execute()
+    assert ("triggered", True) in fired
+    assert node._outputs[2] == 2  # saved limit=2 beat the schema default of 5
+
+
 async def test_new_path_fires_timeout():
     node = WaitForInputNode()
     node.bind_device(_BehaviorDevice([0, 1, 2]))
