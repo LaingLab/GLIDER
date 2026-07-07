@@ -45,6 +45,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def merge_behavior_setting(state: dict, behavior_key: str, field_key: str, value):
+    """Return a state with behavior_settings[key][field]=value (read-modify-write).
+
+    Editor-side RMW so the session's existing shallow update_node_state can
+    persist a nested change without a new session method.
+    """
+    behavior_settings = dict(state.get("behavior_settings", {}))
+    per = dict(behavior_settings.get(behavior_key, {}))
+    per[field_key] = value
+    behavior_settings[behavior_key] = per
+    return {**state, "behavior_settings": behavior_settings}
+
+
 class NodeEditorController(QObject):
     """Controller for node graph callbacks and properties panel."""
 
@@ -670,209 +683,258 @@ class NodeEditorController(QObject):
             props_layout.addRow("Delay:", delay_spin)
 
         if node_type == "WaitForInput":
-            self._add_divider(props_layout)
-            self._add_section_header(props_layout, "INPUT SETTINGS")
-            mode_combo = QComboBox()
-            mode_combo.addItem("Digital (Rising Edge)", "digital")
-            mode_combo.addItem("Analog (Threshold)", "analog")
-            mode_combo.addItem("Revolution (Turns)", "revolution")
-            mode_combo.addItem("Move Counts", "counts")
+            bound = None
+            if node_config and node_config.device_id:
+                bound = self._hardware_manager.get_device(node_config.device_id)
+            behaviors = list(getattr(bound, "input_behaviors", []) or [])
 
-            saved_mode = "digital"
-            if node_config and node_config.state:
-                saved_mode = node_config.state.get("threshold_mode", "digital")
-
-            mode_idx = mode_combo.findData(saved_mode)
-            mode_combo.setCurrentIndex(mode_idx if mode_idx >= 0 else 0)
-            mode_combo.currentIndexChanged.connect(
-                lambda idx, nid=node_id, combo=mode_combo: self._on_node_property_changed(
-                    nid, "threshold_mode", combo.currentData()
+            if behaviors:
+                self._add_divider(props_layout)
+                self._add_section_header(props_layout, "INPUT BEHAVIOR")
+                beh_combo = QComboBox()
+                for b in behaviors:
+                    beh_combo.addItem(b.label, b.key)
+                saved_key = (node_config.state or {}).get("input_behavior", behaviors[0].key)
+                idx = beh_combo.findData(saved_key)
+                beh_combo.setCurrentIndex(idx if idx >= 0 else 0)
+                beh_combo.currentIndexChanged.connect(
+                    lambda _i, nid=node_id, c=beh_combo: (
+                        self._on_node_property_changed(nid, "input_behavior", c.currentData()),
+                        self._update_properties_panel(nid),
+                    )
                 )
-            )
-            props_layout.addRow("Mode:", mode_combo)
+                props_layout.addRow("Behavior:", beh_combo)
 
-            threshold_spin = QSpinBox()
-            threshold_spin.setRange(0, 65535)
-            saved_threshold = 512
-            if node_config and node_config.state:
-                saved_threshold = node_config.state.get("threshold", 512)
-            threshold_spin.setValue(saved_threshold)
-            threshold_spin.valueChanged.connect(
-                lambda val, nid=node_id: self._on_node_property_changed(nid, "threshold", val)
-            )
-            props_layout.addRow("Threshold:", threshold_spin)
-
-            direction_combo = QComboBox()
-            direction_combo.addItem("Above Threshold", "above")
-            direction_combo.addItem("Below Threshold", "below")
-
-            saved_direction = "above"
-            if node_config and node_config.state:
-                saved_direction = node_config.state.get("threshold_direction", "above")
-
-            direction_combo.setCurrentIndex(0 if saved_direction == "above" else 1)
-            direction_combo.currentIndexChanged.connect(
-                lambda idx, nid=node_id, combo=direction_combo: self._on_node_property_changed(
-                    nid, "threshold_direction", combo.currentData()
+                behavior = next(
+                    (b for b in behaviors if b.key == beh_combo.currentData()), behaviors[0]
                 )
-            )
-            props_layout.addRow("Direction:", direction_combo)
+                from glider.gui.widgets.schema_form import build_schema_widgets
 
-            # Revolution mode: how many full turns to wait for. Applies only
-            # when Mode is "Revolution (Turns)"; ignored otherwise.
-            turns_spin = QSpinBox()
-            turns_spin.setRange(1, 100000)
-            saved_turns = 1
-            if node_config and node_config.state:
-                saved_turns = node_config.state.get("turns_target", 1)
-            turns_spin.setValue(saved_turns)
-            turns_spin.valueChanged.connect(
-                lambda val, nid=node_id: self._on_node_property_changed(nid, "turns_target", val)
-            )
-            props_layout.addRow("Turns:", turns_spin)
-
-            # Move Counts mode: signed displacement to travel from the start
-            # before stopping. Applies only when Mode is "Move Counts".
-            counts_target_spin = QSpinBox()
-            counts_target_spin.setRange(1, 10_000_000)
-            saved_counts_target = 400
-            if node_config and node_config.state:
-                saved_counts_target = node_config.state.get("counts_target", 400)
-            counts_target_spin.setValue(saved_counts_target)
-            counts_target_spin.valueChanged.connect(
-                lambda val, nid=node_id: self._on_node_property_changed(nid, "counts_target", val)
-            )
-            props_layout.addRow("Move counts:", counts_target_spin)
-
-            # Revolution mode: sensor full-scale range (e.g. 4096 for the
-            # 12-bit AS5600 raw angle). A reading jump larger than half this
-            # is treated as one wrap-around / completed turn.
-            counts_spin = QSpinBox()
-            counts_spin.setRange(2, 65535)
-            saved_counts = 4096
-            if node_config and node_config.state:
-                saved_counts = node_config.state.get("counts_per_turn", 4096)
-            counts_spin.setValue(saved_counts)
-            counts_spin.valueChanged.connect(
-                lambda val, nid=node_id: self._on_node_property_changed(nid, "counts_per_turn", val)
-            )
-            props_layout.addRow("Counts/Turn:", counts_spin)
-
-            # Revolution mode "ramp down to landing": as the angle nears the
-            # wrap, ease a motor's PWM from drive speed down to a creep so it
-            # coasts almost nothing and lands on ~0. Applies only in revolution
-            # mode with a ramp device selected.
-            ramp_check = QCheckBox("Ramp down to landing (revolution)")
-            saved_ramp = False
-            if node_config and node_config.state:
-                saved_ramp = node_config.state.get("ramp_down", False)
-            ramp_check.setChecked(saved_ramp)
-            ramp_check.toggled.connect(
-                lambda checked, nid=node_id: self._on_node_property_changed(
-                    nid, "ramp_down", checked
+                saved_vals = (
+                    (node_config.state or {}).get("behavior_settings", {}).get(behavior.key, {})
                 )
-            )
-            props_layout.addRow(ramp_check)
-
-            ramp_device_combo = QComboBox()
-            ramp_device_combo.addItem("-- Ramp Device (PWM) --", None)
-            saved_ramp_device = None
-            if node_config and node_config.state:
-                saved_ramp_device = node_config.state.get("ramp_device_id")
-            ramp_current_index = 0
-            ramp_idx = 1
-            for dev_id, device in self._hardware_manager.devices.items():
-                if getattr(device, "device_type", "") != "PWMOutput":
-                    continue
-                device_name = getattr(device, "name", dev_id)
-                ramp_device_combo.addItem(f"{device_name} (PWMOutput)", dev_id)
-                if dev_id == saved_ramp_device:
-                    ramp_current_index = ramp_idx
-                ramp_idx += 1
-            ramp_device_combo.setCurrentIndex(ramp_current_index)
-            ramp_device_combo.currentIndexChanged.connect(
-                lambda idx, nid=node_id, combo=ramp_device_combo: self._on_node_property_changed(
-                    nid, "ramp_device_id", combo.currentData()
+                out: dict = {}
+                build_schema_widgets(
+                    props_layout,
+                    behavior.settings,
+                    out,
+                    values=saved_vals,
+                    devices=self._hardware_manager.devices,
                 )
-            )
-            props_layout.addRow("Ramp Device:", ramp_device_combo)
+                for fkey, (widget, ftype) in out.items():
+                    self._connect_behavior_widget(node_id, behavior.key, fkey, widget, ftype)
+            else:
+                self._add_divider(props_layout)
+                self._add_section_header(props_layout, "INPUT SETTINGS")
+                mode_combo = QComboBox()
+                mode_combo.addItem("Digital (Rising Edge)", "digital")
+                mode_combo.addItem("Analog (Threshold)", "analog")
+                mode_combo.addItem("Revolution (Turns)", "revolution")
+                mode_combo.addItem("Move Counts", "counts")
 
-            drive_pwm_spin = QSpinBox()
-            drive_pwm_spin.setRange(0, 255)
-            saved_drive_pwm = 100
-            if node_config and node_config.state:
-                saved_drive_pwm = node_config.state.get("drive_pwm", 100)
-            drive_pwm_spin.setValue(saved_drive_pwm)
-            drive_pwm_spin.valueChanged.connect(
-                lambda val, nid=node_id: self._on_node_property_changed(nid, "drive_pwm", val)
-            )
-            props_layout.addRow("Drive PWM:", drive_pwm_spin)
+                saved_mode = "digital"
+                if node_config and node_config.state:
+                    saved_mode = node_config.state.get("threshold_mode", "digital")
 
-            creep_pwm_spin = QSpinBox()
-            creep_pwm_spin.setRange(0, 255)
-            saved_creep_pwm = 30
-            if node_config and node_config.state:
-                saved_creep_pwm = node_config.state.get("creep_pwm", 30)
-            creep_pwm_spin.setValue(saved_creep_pwm)
-            creep_pwm_spin.valueChanged.connect(
-                lambda val, nid=node_id: self._on_node_property_changed(nid, "creep_pwm", val)
-            )
-            props_layout.addRow("Creep PWM:", creep_pwm_spin)
+                mode_idx = mode_combo.findData(saved_mode)
+                mode_combo.setCurrentIndex(mode_idx if mode_idx >= 0 else 0)
+                mode_combo.currentIndexChanged.connect(
+                    lambda idx, nid=node_id, combo=mode_combo: self._on_node_property_changed(
+                        nid, "threshold_mode", combo.currentData()
+                    )
+                )
+                props_layout.addRow("Mode:", mode_combo)
 
-            ramp_zone_spin = QSpinBox()
-            ramp_zone_spin.setRange(1, 65535)
-            saved_ramp_zone = 512
-            if node_config and node_config.state:
-                saved_ramp_zone = node_config.state.get("ramp_zone", 512)
-            ramp_zone_spin.setValue(saved_ramp_zone)
-            ramp_zone_spin.valueChanged.connect(
-                lambda val, nid=node_id: self._on_node_property_changed(nid, "ramp_zone", val)
-            )
-            props_layout.addRow("Ramp Zone (counts):", ramp_zone_spin)
+                threshold_spin = QSpinBox()
+                threshold_spin.setRange(0, 65535)
+                saved_threshold = 512
+                if node_config and node_config.state:
+                    saved_threshold = node_config.state.get("threshold", 512)
+                threshold_spin.setValue(saved_threshold)
+                threshold_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(nid, "threshold", val)
+                )
+                props_layout.addRow("Threshold:", threshold_spin)
 
-            # Landing tolerance: stop the moment the angle is within this many
-            # counts of 0 (either side of the wrap), instead of needing a clean
-            # 4095->0 jump. 0 disables it (pure wrap detection). Keeps the motor
-            # moving at landing, avoiding a low-PWM stall short of the target.
-            land_tol_spin = QSpinBox()
-            land_tol_spin.setRange(0, 65535)
-            saved_land_tol = 0
-            if node_config and node_config.state:
-                saved_land_tol = node_config.state.get("land_tolerance", 0)
-            land_tol_spin.setValue(saved_land_tol)
-            land_tol_spin.setSpecialValueText("Off (exact wrap)")
-            land_tol_spin.valueChanged.connect(
-                lambda val, nid=node_id: self._on_node_property_changed(nid, "land_tolerance", val)
-            )
-            props_layout.addRow("Landing tolerance:", land_tol_spin)
+                direction_combo = QComboBox()
+                direction_combo.addItem("Above Threshold", "above")
+                direction_combo.addItem("Below Threshold", "below")
 
-            timeout_spin = QDoubleSpinBox()
-            timeout_spin.setRange(0.0, 3600.0)
-            timeout_spin.setDecimals(1)
-            timeout_spin.setSpecialValueText("No timeout")
-            saved_timeout = 0.0
-            if node_config and node_config.state:
-                saved_timeout = node_config.state.get("timeout", 0.0)
-            timeout_spin.setValue(saved_timeout)
-            timeout_spin.setSuffix(" sec")
-            timeout_spin.valueChanged.connect(
-                lambda val, nid=node_id: self._on_node_property_changed(nid, "timeout", val)
-            )
-            props_layout.addRow("Timeout:", timeout_spin)
+                saved_direction = "above"
+                if node_config and node_config.state:
+                    saved_direction = node_config.state.get("threshold_direction", "above")
 
-            info_label = QLabel(
-                "Digital mode: waits for rising edge (LOW \u2192 HIGH)\n"
-                "Analog mode: waits for value to cross threshold\n"
-                "Revolution mode: counts full turns of a wrap-around "
-                "sensor (e.g. AS5600)\n"
-                "Move Counts: travels 'Move counts' of displacement from the "
-                "start, then stops (bidirectional)\n"
-                "Ramp down: eases the ramp device's PWM to a creep near the "
-                "target so the motor lands on it"
-            )
-            info_label.setWordWrap(True)
-            info_label.setProperty("textRole", "muted")
-            props_layout.addRow(info_label)
+                direction_combo.setCurrentIndex(0 if saved_direction == "above" else 1)
+                direction_combo.currentIndexChanged.connect(
+                    lambda idx, nid=node_id, combo=direction_combo: self._on_node_property_changed(
+                        nid, "threshold_direction", combo.currentData()
+                    )
+                )
+                props_layout.addRow("Direction:", direction_combo)
+
+                # Revolution mode: how many full turns to wait for. Applies only
+                # when Mode is "Revolution (Turns)"; ignored otherwise.
+                turns_spin = QSpinBox()
+                turns_spin.setRange(1, 100000)
+                saved_turns = 1
+                if node_config and node_config.state:
+                    saved_turns = node_config.state.get("turns_target", 1)
+                turns_spin.setValue(saved_turns)
+                turns_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(
+                        nid, "turns_target", val
+                    )
+                )
+                props_layout.addRow("Turns:", turns_spin)
+
+                # Move Counts mode: signed displacement to travel from the start
+                # before stopping. Applies only when Mode is "Move Counts".
+                counts_target_spin = QSpinBox()
+                counts_target_spin.setRange(1, 10_000_000)
+                saved_counts_target = 400
+                if node_config and node_config.state:
+                    saved_counts_target = node_config.state.get("counts_target", 400)
+                counts_target_spin.setValue(saved_counts_target)
+                counts_target_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(
+                        nid, "counts_target", val
+                    )
+                )
+                props_layout.addRow("Move counts:", counts_target_spin)
+
+                # Revolution mode: sensor full-scale range (e.g. 4096 for the
+                # 12-bit AS5600 raw angle). A reading jump larger than half this
+                # is treated as one wrap-around / completed turn.
+                counts_spin = QSpinBox()
+                counts_spin.setRange(2, 65535)
+                saved_counts = 4096
+                if node_config and node_config.state:
+                    saved_counts = node_config.state.get("counts_per_turn", 4096)
+                counts_spin.setValue(saved_counts)
+                counts_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(
+                        nid, "counts_per_turn", val
+                    )
+                )
+                props_layout.addRow("Counts/Turn:", counts_spin)
+
+                # Revolution mode "ramp down to landing": as the angle nears the
+                # wrap, ease a motor's PWM from drive speed down to a creep so it
+                # coasts almost nothing and lands on ~0. Applies only in revolution
+                # mode with a ramp device selected.
+                ramp_check = QCheckBox("Ramp down to landing (revolution)")
+                saved_ramp = False
+                if node_config and node_config.state:
+                    saved_ramp = node_config.state.get("ramp_down", False)
+                ramp_check.setChecked(saved_ramp)
+                ramp_check.toggled.connect(
+                    lambda checked, nid=node_id: self._on_node_property_changed(
+                        nid, "ramp_down", checked
+                    )
+                )
+                props_layout.addRow(ramp_check)
+
+                ramp_device_combo = QComboBox()
+                ramp_device_combo.addItem("-- Ramp Device (PWM) --", None)
+                saved_ramp_device = None
+                if node_config and node_config.state:
+                    saved_ramp_device = node_config.state.get("ramp_device_id")
+                ramp_current_index = 0
+                ramp_idx = 1
+                for dev_id, device in self._hardware_manager.devices.items():
+                    if getattr(device, "device_type", "") != "PWMOutput":
+                        continue
+                    device_name = getattr(device, "name", dev_id)
+                    ramp_device_combo.addItem(f"{device_name} (PWMOutput)", dev_id)
+                    if dev_id == saved_ramp_device:
+                        ramp_current_index = ramp_idx
+                    ramp_idx += 1
+                ramp_device_combo.setCurrentIndex(ramp_current_index)
+                ramp_device_combo.currentIndexChanged.connect(
+                    lambda idx, nid=node_id, combo=ramp_device_combo: self._on_node_property_changed(
+                        nid, "ramp_device_id", combo.currentData()
+                    )
+                )
+                props_layout.addRow("Ramp Device:", ramp_device_combo)
+
+                drive_pwm_spin = QSpinBox()
+                drive_pwm_spin.setRange(0, 255)
+                saved_drive_pwm = 100
+                if node_config and node_config.state:
+                    saved_drive_pwm = node_config.state.get("drive_pwm", 100)
+                drive_pwm_spin.setValue(saved_drive_pwm)
+                drive_pwm_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(nid, "drive_pwm", val)
+                )
+                props_layout.addRow("Drive PWM:", drive_pwm_spin)
+
+                creep_pwm_spin = QSpinBox()
+                creep_pwm_spin.setRange(0, 255)
+                saved_creep_pwm = 30
+                if node_config and node_config.state:
+                    saved_creep_pwm = node_config.state.get("creep_pwm", 30)
+                creep_pwm_spin.setValue(saved_creep_pwm)
+                creep_pwm_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(nid, "creep_pwm", val)
+                )
+                props_layout.addRow("Creep PWM:", creep_pwm_spin)
+
+                ramp_zone_spin = QSpinBox()
+                ramp_zone_spin.setRange(1, 65535)
+                saved_ramp_zone = 512
+                if node_config and node_config.state:
+                    saved_ramp_zone = node_config.state.get("ramp_zone", 512)
+                ramp_zone_spin.setValue(saved_ramp_zone)
+                ramp_zone_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(nid, "ramp_zone", val)
+                )
+                props_layout.addRow("Ramp Zone (counts):", ramp_zone_spin)
+
+                # Landing tolerance: stop the moment the angle is within this many
+                # counts of 0 (either side of the wrap), instead of needing a clean
+                # 4095->0 jump. 0 disables it (pure wrap detection). Keeps the motor
+                # moving at landing, avoiding a low-PWM stall short of the target.
+                land_tol_spin = QSpinBox()
+                land_tol_spin.setRange(0, 65535)
+                saved_land_tol = 0
+                if node_config and node_config.state:
+                    saved_land_tol = node_config.state.get("land_tolerance", 0)
+                land_tol_spin.setValue(saved_land_tol)
+                land_tol_spin.setSpecialValueText("Off (exact wrap)")
+                land_tol_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(
+                        nid, "land_tolerance", val
+                    )
+                )
+                props_layout.addRow("Landing tolerance:", land_tol_spin)
+
+                timeout_spin = QDoubleSpinBox()
+                timeout_spin.setRange(0.0, 3600.0)
+                timeout_spin.setDecimals(1)
+                timeout_spin.setSpecialValueText("No timeout")
+                saved_timeout = 0.0
+                if node_config and node_config.state:
+                    saved_timeout = node_config.state.get("timeout", 0.0)
+                timeout_spin.setValue(saved_timeout)
+                timeout_spin.setSuffix(" sec")
+                timeout_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(nid, "timeout", val)
+                )
+                props_layout.addRow("Timeout:", timeout_spin)
+
+                info_label = QLabel(
+                    "Digital mode: waits for rising edge (LOW \u2192 HIGH)\n"
+                    "Analog mode: waits for value to cross threshold\n"
+                    "Revolution mode: counts full turns of a wrap-around "
+                    "sensor (e.g. AS5600)\n"
+                    "Move Counts: travels 'Move counts' of displacement from the "
+                    "start, then stops (bidirectional)\n"
+                    "Ramp down: eases the ramp device's PWM to a creep near the "
+                    "target so the motor lands on it"
+                )
+                info_label.setWordWrap(True)
+                info_label.setProperty("textRole", "muted")
+                props_layout.addRow(info_label)
 
         elif node_type == "DigitalRead":
             self._add_section_header(props_layout, "DIGITAL SETTINGS")
@@ -1140,6 +1202,31 @@ class NodeEditorController(QObject):
 
             if prop_name == "function_name":
                 self.flow_functions_changed.emit()
+
+    def _connect_behavior_widget(self, node_id, behavior_key, field_key, widget, ftype):
+        """Wire a schema-form widget to persist into behavior_settings[key][field]."""
+        from glider.gui.widgets.schema_form import read_schema_widget
+
+        def _save(*_a):
+            session = self._session
+            if session is None:
+                return
+            node_config = session.get_node(node_id)
+            if node_config is None:
+                return
+            new_state = merge_behavior_setting(
+                node_config.state or {},
+                behavior_key,
+                field_key,
+                read_schema_widget(widget, ftype),
+            )
+            session.update_node_state(node_id, new_state)
+
+        for signal_name in ("valueChanged", "toggled", "currentIndexChanged", "textChanged"):
+            sig = getattr(widget, signal_name, None)
+            if sig is not None:
+                sig.connect(_save)
+                break
 
     def _browse_audio_file(self, node_id: str, line_edit: QLineEdit) -> None:
         """Open a file dialog to select an audio file."""
