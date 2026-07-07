@@ -7,7 +7,7 @@ properties panel updates, and undo/redo command integration.
 
 import logging
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def merge_behavior_setting(state: dict, behavior_key: str, field_key: str, value):
+def merge_behavior_setting(state: dict, behavior_key: str, field_key: str, value: Any) -> dict:
     """Return a state with behavior_settings[key][field]=value (read-modify-write).
 
     Editor-side RMW so the session's existing shallow update_node_state can
@@ -1227,6 +1227,14 @@ class NodeEditorController(QObject):
             if sig is not None:
                 sig.connect(_save)
                 break
+        else:
+            logger.warning(
+                "No known change signal on behavior widget for %s.%s (%s); "
+                "edits to this field will not be saved",
+                behavior_key,
+                field_key,
+                type(widget).__name__,
+            )
 
     def _browse_audio_file(self, node_id: str, line_edit: QLineEdit) -> None:
         """Open a file dialog to select an audio file."""
