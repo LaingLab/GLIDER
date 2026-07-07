@@ -57,6 +57,11 @@ def revolution_triggered(value: float, settings: dict, st: dict) -> bool:
     once the angle has been seen mid-range, and -- on the final turn -- fires the
     landing tolerance the moment the angle lands within ``land_tolerance`` of 0.
     Returns True on turns-target reached OR landing-tolerance fired.
+
+    Settings keys:
+        turns_target: turns to complete before stopping (default 1).
+        counts_per_turn: sensor full-scale range (default 4096).
+        land_tolerance: stop within this many counts of 0; 0 = off (default 0).
     """
     counts_per_turn = settings.get("counts_per_turn", 4096)
     turns_target = settings.get("turns_target", 1)
@@ -108,9 +113,14 @@ def counts_triggered(value: float, settings: dict, st: dict) -> bool:
     Accumulates wrap-corrected signed displacement from the start and stops once
     the magnitude reaches the target (less any ``land_tolerance`` to pre-empt
     coast). Bidirectional via the absolute displacement.
+
+    Settings keys:
+        counts_target: signed displacement to travel before stopping (default 400).
+        counts_per_turn: sensor full-scale range (default 4096).
+        land_tolerance: stop this many counts short of the target; 0 = off (default 0).
     """
     counts_per_turn = settings.get("counts_per_turn", 4096)
-    counts_target = settings.get("counts_target", 0)
+    counts_target = settings.get("counts_target", 400)
     land_tolerance = settings.get("land_tolerance", 0)
 
     last_value = st["last_value"]
@@ -134,6 +144,11 @@ def ramp_pwm(remaining: float, settings: dict, span: float | None = None) -> int
     length for short counts-mode moves); a span larger than the move still starts
     at full drive because ``remaining`` is clamped to non-negative. Returns the
     PWM value that would be written rather than writing it.
+
+    Settings keys:
+        drive_pwm: full-speed PWM outside the zone (default 100).
+        creep_pwm: PWM at the landing point (default 30).
+        ramp_zone: deceleration zone width when ``span`` is None (default 512).
     """
     drive_pwm = settings.get("drive_pwm", 100)
     creep_pwm = settings.get("creep_pwm", 30)
