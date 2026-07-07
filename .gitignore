@@ -193,3 +193,5 @@ docs/*
 # Pass-2 code review raw agent transcripts (kept locally for reference)
 .review-section*-raw.txt
 manuscript_figures/*
+# Git worktrees (isolated feature workspaces)
+.worktrees/
