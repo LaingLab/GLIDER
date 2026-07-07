@@ -52,3 +52,35 @@ def test_device_ref_field_lists_filtered_devices(qtbot):
     build_schema_widgets(layout, schema, out, devices=devices, values={"ramp": "a"})
     widget, ftype = out["ramp"]
     assert read_schema_widget(widget, ftype) == "a"  # only the PWM device is selectable
+
+
+def test_device_ref_unknown_saved_id_falls_back_to_none(qtbot):
+    class _Dev:
+        def __init__(self, dt, name):
+            self.device_type, self.name = dt, name
+
+    devices = {"a": _Dev("PWMOutput", "Motor")}
+    schema = [{"key": "ramp", "label": "Ramp", "type": "device_ref", "device_filter": "PWMOutput"}]
+    _w, layout = _form()
+    out = {}
+    # "gone" was saved but no longer exists -> graceful fallback to -- None --.
+    build_schema_widgets(layout, schema, out, devices=devices, values={"ramp": "gone"})
+    widget, ftype = out["ramp"]
+    assert read_schema_widget(widget, ftype) is None
+
+
+def test_enum_default_not_in_choices_falls_back_to_first(qtbot):
+    schema = [
+        {
+            "key": "mode",
+            "label": "Mode",
+            "type": "enum",
+            "choices": [["full", "Full"], ["half", "Half"]],
+            "default": "quarter",
+        }
+    ]
+    _w, layout = _form()
+    out = {}
+    build_schema_widgets(layout, schema, out)
+    widget, ftype = out["mode"]
+    assert read_schema_widget(widget, ftype) == "full"
