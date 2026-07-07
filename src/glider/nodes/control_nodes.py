@@ -10,6 +10,7 @@ import asyncio
 import logging
 import time
 
+from glider.hal import revolution_tracking as rt
 from glider.nodes.base_node import (
     GliderNode,
     NodeCategory,
@@ -316,9 +317,20 @@ class WaitForInputNode(GliderNode):
         poll_count = 0
         error_count = 0
         max_errors = 3  # Stop after 3 consecutive errors
-        last_value = None  # Track previous value for edge detection
-        turn_count = 0  # Revolution mode: completed turns so far
-        accumulated = 0.0  # Counts mode: signed displacement from the start
+        last_value = None  # digital-mode rising-edge detection
+        # Revolution/counts wrap math is delegated to the shared pure helper.
+        # `st` carries last_value/turn_count/accumulated/landing_armed/ramp_direction
+        # across poll iterations; `settings` mirrors the node's current attributes.
+        st = rt.new_state()
+        settings = {
+            "turns_target": self._turns_target,
+            "counts_per_turn": self._counts_per_turn,
+            "counts_target": self._counts_target,
+            "land_tolerance": self._land_tolerance,
+            "drive_pwm": self._drive_pwm,
+            "creep_pwm": self._creep_pwm,
+            "ramp_zone": self._ramp_zone,
+        }
 
         logger.info(f"  Starting device poll loop, device type: {type(self._device).__name__}")
 
@@ -370,63 +382,14 @@ class WaitForInputNode(GliderNode):
 
                 elif self._threshold_mode == "revolution" and isinstance(value, (int, float)):
                     # Revolution mode: count wrap-arounds of a sawtooth sensor
-                    # (e.g. AS5600 raw angle 0-4095). A reading delta whose
-                    # magnitude exceeds half the full-scale range can only be
-                    # the 4095<->0 boundary being crossed, i.e. one completed
-                    # turn. Either direction counts. The very first reading has
-                    # no predecessor, so it can never register a phantom wrap.
-                    if last_value is not None:
-                        raw_delta = value - last_value
-                        if abs(raw_delta) > self._counts_per_turn / 2:
-                            turn_count += 1
-                            logger.info(
-                                f"  Wrap detected ({last_value} -> {value}); "
-                                f"turn {turn_count}/{self._turns_target}"
-                            )
-                            if turn_count >= self._turns_target:
-                                logger.info("  TRIGGERED! Target turns reached")
-                                triggered = True
-
-                        # Signed shortest-path movement -> rotation direction, so
-                        # the ramp knows which boundary (0 or counts_per_turn) the
-                        # motor is approaching. +1 = angle rising toward the wrap,
-                        # -1 = angle falling toward 0.
-                        step = raw_delta
-                        half = self._counts_per_turn / 2
-                        if step > half:
-                            step -= self._counts_per_turn
-                        elif step < -half:
-                            step += self._counts_per_turn
-                        if step > 0:
-                            self._ramp_direction = 1
-                        elif step < 0:
-                            self._ramp_direction = -1
-
-                    # Arm tolerance landing once the angle has been seen in the
-                    # mid-range, so starting near 0 can't trigger it instantly.
-                    if 0.25 * self._counts_per_turn <= value <= 0.75 * self._counts_per_turn:
-                        self._landing_armed = True
-
-                    # Landing tolerance: on the final turn, stop the moment the
-                    # angle is within `land_tolerance` counts of 0 (either just
-                    # before the wrap, value >= counts - tol, or just after it,
-                    # value <= tol). This closes the loop directly on the signal
-                    # and -- crucially -- stops while the motor is still moving,
-                    # before the ramp eases PWM down into a stall.
-                    if (
-                        not triggered
-                        and self._land_tolerance > 0
-                        and self._landing_armed
-                        and turn_count >= self._turns_target - 1
-                        and (
-                            value <= self._land_tolerance
-                            or value >= self._counts_per_turn - self._land_tolerance
-                        )
-                    ):
-                        logger.info(
-                            f"  TRIGGERED! Within {self._land_tolerance} of 0 (value={value})"
-                        )
-                        triggered = True
+                    # (e.g. AS5600 raw angle 0-4095). The turn-counting, rotation
+                    # direction, mid-range arming and landing-tolerance math live
+                    # in the shared pure helper; `st` carries state across polls.
+                    triggered = rt.revolution_triggered(value, settings, st)
+                    # Mirror the helper's rotation direction and arm gate back
+                    # onto the node (tests assert `node._ramp_direction`).
+                    self._ramp_direction = st["ramp_direction"]
+                    self._landing_armed = st["landing_armed"]
 
                     # Ramp down to landing: on the final turn, ease the motor
                     # PWM toward a creep as the angle nears the wrap so it
@@ -434,42 +397,29 @@ class WaitForInputNode(GliderNode):
                     if (
                         not triggered
                         and self._ramp_device is not None
-                        and turn_count >= self._turns_target - 1
+                        and st["turn_count"] >= self._turns_target - 1
                     ):
                         remaining = (
                             self._counts_per_turn - value if self._ramp_direction >= 0 else value
                         )
-                        await self._apply_ramp(remaining)
+                        await self._set_ramp_pwm(rt.ramp_pwm(remaining, settings))
 
                 elif self._threshold_mode == "counts" and isinstance(value, (int, float)):
                     # Move-counts mode: accumulate signed displacement from the
                     # start (wrap-corrected) and stop once the magnitude reaches
                     # the target. Direction is whichever way the motor drives, so
                     # this is bidirectional via the absolute displacement.
-                    if last_value is not None:
-                        delta = value - last_value
-                        half = self._counts_per_turn / 2
-                        if delta > half:
-                            delta -= self._counts_per_turn
-                        elif delta < -half:
-                            delta += self._counts_per_turn
-                        accumulated += delta
-
-                    # Stop at the target, less any land_tolerance to pre-empt
-                    # coast (same idea as revolution-mode landing).
-                    stop_at = max(0, self._counts_target - self._land_tolerance)
-                    if abs(accumulated) >= stop_at:
-                        logger.info(
-                            f"  TRIGGERED! Moved {accumulated:.0f}/{self._counts_target} counts"
-                        )
-                        triggered = True
-                    elif self._ramp_device is not None:
+                    triggered = rt.counts_triggered(value, settings, st)
+                    if not triggered and self._ramp_device is not None:
                         # Clamp the deceleration zone to the move length, so a
                         # zone larger than the target still starts at drive_pwm
                         # instead of opening partway down the ramp.
-                        await self._apply_ramp(
-                            self._counts_target - abs(accumulated),
-                            span=min(self._ramp_zone, self._counts_target),
+                        await self._set_ramp_pwm(
+                            rt.ramp_pwm(
+                                self._counts_target - abs(st["accumulated"]),
+                                settings,
+                                span=min(self._ramp_zone, self._counts_target),
+                            )
                         )
 
                 if triggered:
@@ -491,25 +441,6 @@ class WaitForInputNode(GliderNode):
 
             # Wait before next poll
             await asyncio.sleep(self._poll_interval)
-
-    async def _apply_ramp(self, remaining: float, span: float | None = None) -> None:
-        """Write a decelerating PWM given counts remaining to the landing.
-
-        Outside the deceleration zone the motor runs at ``drive_pwm``; within the
-        last ``ramp_zone`` counts of the target the PWM eases linearly down to
-        ``creep_pwm``. The caller computes ``remaining`` for its mode (distance to
-        the wrap for revolution, distance to the count target for counts mode) and
-        may pass ``span`` to override the zone width (e.g. clamped to the move
-        length for short counts-mode moves).
-        """
-        span = max(1, self._ramp_zone if span is None else span)
-        remaining = max(0, remaining)
-        if remaining >= span:
-            pwm = self._drive_pwm
-        else:
-            frac = remaining / span  # 1.0 at zone entry -> 0.0 at the wrap
-            pwm = self._creep_pwm + (self._drive_pwm - self._creep_pwm) * frac
-        await self._set_ramp_pwm(pwm)
 
     async def _set_ramp_pwm(self, pwm: float) -> None:
         """Write a 0-255 PWM value to the resolved ramp device."""
