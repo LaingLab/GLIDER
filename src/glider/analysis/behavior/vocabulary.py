@@ -64,6 +64,7 @@ class Behavior:
     name: str
     hotkey: str
     color: str = ""
+    tags: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.name or not self.name.strip():
@@ -72,6 +73,7 @@ class Behavior:
             raise VocabularyError(f"hotkey must be a single character; got {self.hotkey!r}")
         if self.color and not _is_valid_hex(self.color):
             raise VocabularyError(f"color must be a hex string like '#1d4ed8'; got {self.color!r}")
+        self.tags = frozenset(str(t) for t in self.tags)
 
 
 class Vocabulary:
@@ -154,13 +156,18 @@ class Vocabulary:
         b = self._by_name.get(name)
         return b.color if b else "#94a3b8"  # slate fallback
 
+    def tag_map(self) -> dict[str, frozenset[str]]:
+        """{behavior name: tag set} — the map the hybrid prior consumes."""
+        return {b.name: b.tags for b in self._behaviors}
+
     # ------------------------------------------------------------------
     # I/O
     # ------------------------------------------------------------------
     def to_dict(self) -> dict:
         return {
             "behaviors": [
-                {"name": b.name, "hotkey": b.hotkey, "color": b.color} for b in self._behaviors
+                {"name": b.name, "hotkey": b.hotkey, "color": b.color, "tags": sorted(b.tags)}
+                for b in self._behaviors
             ]
         }
 
@@ -180,6 +187,7 @@ class Vocabulary:
                     name=str(entry["name"]),
                     hotkey=str(entry["hotkey"]),
                     color=str(entry.get("color", "")),
+                    tags=set(entry.get("tags", [])),
                 )
             )
         return v
