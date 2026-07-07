@@ -153,6 +153,32 @@ class BehaviorModel:
             labels[valid_mask] = preds
         return labels
 
+    def posteriors(self, windowed: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        """Class-aligned probabilities for the non-NaN rows.
+
+        Returns ``(probs[n_valid, n_classes], valid_mask[n_rows])`` where the
+        column order is ``self.classifier.classes_``. NaN feature rows (rolling
+        window not yet filled) are excluded — the caller emits ``""`` for them,
+        matching :meth:`predict`. The hybrid model blends these probabilities
+        with a kinematic prior.
+        """
+        if not self._is_fitted():
+            raise RuntimeError("classifier is not fitted")
+        missing = [c for c in self.feature_names if c not in windowed.columns]
+        if missing:
+            raise ValueError(
+                f"input is missing {len(missing)} expected feature columns; "
+                f"first few: {missing[:5]}"
+            )
+        df = windowed[self.feature_names]
+        valid = ~df.isna().any(axis=1).to_numpy()
+        probs = (
+            self.classifier.predict_proba(df.loc[valid])
+            if valid.any()
+            else np.empty((0, len(self.classifier.classes_)))
+        )
+        return probs, valid
+
     def predict_one(
         self,
         feature_row: np.ndarray | pd.Series,
