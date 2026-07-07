@@ -15,6 +15,14 @@ def test_behavior_carries_tags_and_round_trips():
     assert round_tripped.behavior_for_name("locomote").tags == frozenset({"locomotory"})
 
 
+def test_to_dict_serializes_tags_as_sorted_list():
+    # tags must serialize to a sorted list (JSON has no set type) so that
+    # save()/load() round-trips deterministically.
+    v = Vocabulary([Behavior(name="rest", hotkey="1", tags={"quiet", "stationary"})])
+    tags = v.to_dict()["behaviors"][0]["tags"]
+    assert tags == ["quiet", "stationary"]
+
+
 def test_tag_map_helper():
     v = Vocabulary([Behavior(name="rest", hotkey="1", tags={"stationary"})])
     assert v.tag_map() == {"rest": frozenset({"stationary"})}
