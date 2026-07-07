@@ -4,6 +4,7 @@ from glider.analysis.behavior.pipeline import _build_classifier
 
 
 def test_default_classifier_is_lightgbm():
+    pytest.importorskip("lightgbm")
     clf = _build_classifier(
         classifier_type="lightgbm",
         n_estimators=50,
