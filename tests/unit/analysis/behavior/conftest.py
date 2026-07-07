@@ -19,10 +19,6 @@ import pytest
 
 from glider.vision.pose.core import PoseData
 
-# The kinematics fixture needs LightGBM (the hybrid model hard-requires it).
-pytest.importorskip("sklearn")
-
-
 _KEYPOINT_NAMES = ["snout", "left_ear", "right_ear", "neck", "tail_base"]
 # Egocentric keypoint offsets from the body centroid (px). Fixed across
 # frames, so every keypoint shares the centroid's motion.

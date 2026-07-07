@@ -36,10 +36,13 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from glider.analysis.behavior.hybrid import HybridModel
 
 from glider.analysis.behavior.annotations import AnnotationStore
 from glider.analysis.behavior.benchmarks.metrics import macro_frame_f1
@@ -79,7 +82,7 @@ class HybridTrainResult:
     ``base_val_f1`` is the base model's (λ=0) validation macro-F1.
     """
 
-    model: Any  # HybridModel (avoids importing hybrid at module import time)
+    model: HybridModel  # imported under TYPE_CHECKING to avoid an import cycle
     lam: float
     per_lambda_f1: dict[float, float]
     n_val: int
@@ -526,17 +529,12 @@ def train_hybrid_model(
     # ---- 2. Split BEFORE fitting the λ-selection base ----
     from sklearn.model_selection import GroupShuffleSplit
 
-    # Background rows (group -1) get unique group ids so they split
-    # independently — mirrors train_model's test_split branch.
-    eff_groups = g_kept.to_numpy().copy()
-    bg_mask = eff_groups < 0
-    if bg_mask.any():
-        n_bg = int(bg_mask.sum())
-        next_id = int(eff_groups.max()) + 1 if (eff_groups >= 0).any() else 0
-        eff_groups[bg_mask] = np.arange(next_id, next_id + n_bg)
-
+    # Split on the zone group ids so adjacent windows from one labeled zone
+    # can't leak across train_core/val. Background isn't handled here
+    # (include_background=False above), so every kept row has group id >= 0 —
+    # no unique-id remap for background rows is needed (unlike train_model).
     gss = GroupShuffleSplit(n_splits=1, test_size=val_frac, random_state=random_state)
-    train_idx, val_idx = next(gss.split(x_kept, y_kept, groups=eff_groups))
+    train_idx, val_idx = next(gss.split(x_kept, y_kept, groups=g_kept.to_numpy()))
     x_train_core = x_kept.iloc[train_idx].reset_index(drop=True)
     y_train_core = y_kept.iloc[train_idx].reset_index(drop=True)
     x_val = x_kept.iloc[val_idx].reset_index(drop=True)
@@ -581,7 +579,12 @@ def train_hybrid_model(
 
     # Best λ, ties → smallest λ (so λ=0 wins on no improvement).
     best_lam = max(lam_grid, key=lambda lam: (per_lambda_f1[float(lam)], -float(lam)))
-    base_val_f1 = macro_frame_f1(gt, base_core.predict(x_val).tolist(), classes)
+    # λ=0 is exactly the base, so reuse its already-computed val F1 when the
+    # grid includes 0.0 (the default); only recompute if a caller omitted it.
+    if 0.0 in per_lambda_f1:
+        base_val_f1 = per_lambda_f1[0.0]
+    else:
+        base_val_f1 = macro_frame_f1(gt, base_core.predict(x_val).tolist(), classes)
 
     # ---- 6. Refit the shipped base on ALL kept rows; wrap at λ* ----
     shipped_base = _fit_base(x_kept, y_kept)
