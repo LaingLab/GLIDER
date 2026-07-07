@@ -44,7 +44,7 @@ def calibrate_thresholds(
     return float(np.percentile(arr, freeze_pct)), float(np.percentile(arr, dart_pct))
 
 
-@dataclass
+@dataclass(frozen=True)
 class Rule:
     """A kinematic rule: an activation name grades a set of tag weights."""
 
@@ -93,7 +93,8 @@ class KinematicPrior:
         A clipped-linear ramp: exactly 0 inside the neutral band (between the
         freeze and dart thresholds), ramping to 1 over `scale` past each edge.
         """
-        assert self._freeze_thr is not None, "call calibrate() first"
+        if self._freeze_thr is None:
+            raise RuntimeError("call calibrate() first")
         freeze = np.clip((self._freeze_thr - speed) / self._scale, 0.0, 1.0)  # slow
         dart = np.clip((speed - self._dart_thr) / self._scale, 0.0, 1.0)  # fast
         return {"freeze": freeze, "dart": dart}
@@ -103,6 +104,9 @@ class KinematicPrior:
 
         A neutral row (mid-speed) is all-zeros; the blend treats all-zeros as a
         uniform prior, so it contributes nothing there. Untagged classes stay 0.
+
+        NaN-speed rows yield NaN prior rows; the caller (`HybridModel`) masks
+        them via the `""` passthrough, so the prior is never blended for them.
         """
         speed = prior_speed(windowed)
         acts = self._activations(speed)

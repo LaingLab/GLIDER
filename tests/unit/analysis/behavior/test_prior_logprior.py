@@ -58,5 +58,5 @@ def test_log_prior_requires_calibration():
     import pytest
 
     p = KinematicPrior(tag_map=TAG_MAP)
-    with pytest.raises(AssertionError):
+    with pytest.raises(RuntimeError):
         p.log_prior(_frame([0.0]), classes=CLASSES)
