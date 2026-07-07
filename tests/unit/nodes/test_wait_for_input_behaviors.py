@@ -113,3 +113,27 @@ async def test_unknown_behavior_key_falls_back_to_legacy():
     fired = _fired(node)
     await node.execute()
     assert ("triggered", True) in fired  # legacy path ran, not an error
+
+
+async def test_defaults_to_first_behavior_when_unset_and_no_legacy_config():
+    # Behavior-declaring device, no input_behavior selected AND no legacy
+    # threshold_mode key -> default to the first declared behavior.
+    node = WaitForInputNode()
+    node.bind_device(_BehaviorDevice([0, 3, 6]))
+    node.set_state({"behavior_settings": {"at_least": {"limit": 5}}, "poll_interval": 0.0})
+    fired = _fired(node)
+    await node.execute()
+    assert ("triggered", True) in fired
+    assert node._outputs[2] == 6  # routed through the behavior, not legacy
+
+
+async def test_legacy_threshold_mode_blocks_behavior_default():
+    # No input_behavior selected but a legacy threshold_mode key is present
+    # (as every saved .glider file carries) -> stay on the legacy path; the
+    # behavior default must NOT hijack it.
+    node = WaitForInputNode()
+    node.bind_device(_BehaviorDevice([False, True]))
+    node.set_state({"threshold_mode": "digital", "poll_interval": 0.0})
+    fired = _fired(node)
+    await node.execute()
+    assert ("triggered", True) in fired  # legacy digital rising edge, not the behavior

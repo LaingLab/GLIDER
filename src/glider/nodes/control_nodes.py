@@ -229,9 +229,17 @@ class WaitForInputNode(GliderNode):
         # Route to a selected device input behavior when one is chosen and
         # available; otherwise fall through to the legacy poll path unchanged.
         behavior_key = self._state.get("input_behavior")
+        behaviors = list(getattr(self._device, "input_behaviors", []) or [])
+        # A behavior-declaring device with no explicit selection defaults to its
+        # first behavior — matching the editor's displayed default. Guarded on the
+        # absence of a legacy "threshold_mode" key so previously-saved .glider files
+        # (which always carry it) still load on the legacy path.
+        if behaviors and not behavior_key and "threshold_mode" not in self._state:
+            behavior_key = behaviors[0].key
+
         behavior = None
         if behavior_key:
-            for b in getattr(self._device, "input_behaviors", []):
+            for b in behaviors:
                 if b.key == behavior_key:
                     behavior = b
                     break
