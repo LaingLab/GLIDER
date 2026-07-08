@@ -185,7 +185,9 @@ def _plot_class_balance(summary, out_dir: Path) -> None:
     fig = _new_fig(max(6.0, 1.2 * len(classes)), 4.0)
     ax = fig.add_subplot(111)
     if per_session:
-        # Grouped bars per session so per-session skew / leakage is visible.
+        # Grouped bars per count-group so per-group skew / leakage is visible.
+        # Each entry is one per-session count group (doubled under mirror_augment,
+        # so a "group" may be one session's mirror half rather than a whole session).
         n = len(per_session)
         width = 0.8 / n
         for si, sess in enumerate(per_session):
@@ -193,7 +195,7 @@ def _plot_class_balance(summary, out_dir: Path) -> None:
                 x + (si - (n - 1) / 2) * width,
                 [sess.get(c, 0) for c in classes],
                 width,
-                label=f"session {si}",
+                label=f"group {si}",
                 color=_PALETTE[si % len(_PALETTE)],
             )
         ax.legend(fontsize=7)
