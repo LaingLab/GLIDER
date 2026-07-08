@@ -20,6 +20,7 @@ from glider.analysis.behavior.pipeline import (
     train_hybrid_model,
     train_model,
 )
+from glider.analysis.behavior.report import write_training_report
 from glider.analysis.behavior.windowing import apply_rolling
 
 __all__ = [
@@ -37,4 +38,5 @@ __all__ = [
     "fit_embedding",
     "train_hybrid_model",
     "train_model",
+    "write_training_report",
 ]
