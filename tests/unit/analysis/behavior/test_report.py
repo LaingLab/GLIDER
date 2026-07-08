@@ -1,6 +1,8 @@
 import csv
 import json
 
+import pytest
+
 from glider.analysis.behavior.pipeline import TrainResult
 from glider.analysis.behavior.report import write_training_report
 
@@ -114,3 +116,19 @@ def test_single_class_does_not_crash(tmp_path):
     }
     out = write_training_report(_train_result(summary), tmp_path / "r")
     assert (out / "class_balance.png").exists()  # renders; no importances (empty)
+
+
+def test_hybrid_report(tmp_path, hybrid_sessions):
+    pytest.importorskip("lightgbm")
+    from glider.analysis.behavior.pipeline import train_hybrid_model
+
+    sessions, tag_map = hybrid_sessions
+    res = train_hybrid_model(sessions, tag_map=tag_map, fps=30.0, random_state=0)
+    out = write_training_report(res, tmp_path / "h")
+    assert (out / "lambda_sweep.png").exists() and _is_png(out / "lambda_sweep.png")
+    assert (out / "feature_importances.png").exists() and _is_png(out / "feature_importances.png")
+    s = json.loads((out / "summary.json").read_text())
+    assert s["classifier_type"] == "LGBMClassifier" and "per_lambda_f1" in s
+    # hybrid carries no confusion/per-class:
+    assert not (out / "confusion_matrix.png").exists()
+    assert not (out / "per_class_metrics.csv").exists()
