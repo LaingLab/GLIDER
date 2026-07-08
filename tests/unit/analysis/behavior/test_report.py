@@ -70,3 +70,47 @@ def test_default_summary_skips_empty_metrics(tmp_path):
     assert not (out / "confusion_matrix.csv").exists()
     assert not (out / "per_class_metrics.csv").exists()
     assert (out / "feature_importances.csv").exists()  # top_features present
+
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def _is_png(path):
+    return path.read_bytes()[:8] == _PNG_MAGIC
+
+
+def test_trainresult_full_charts(tmp_path):
+    out = write_training_report(_train_result(_full_summary()), tmp_path / "r")
+    for name in [
+        "confusion_matrix.png",
+        "per_class_metrics.png",
+        "feature_importances.png",
+        "class_balance.png",
+    ]:
+        assert (out / name).exists() and _is_png(out / name)
+
+
+def test_default_summary_only_two_charts(tmp_path):
+    summary = {
+        "classifier_type": "LGBMClassifier",
+        "confusion_matrix": {},
+        "per_class_metrics": {},
+        "top_features": [{"feature": "f0", "importance": 1.0}],
+        "kept_label_counts": {"a": 5, "b": 3},
+    }
+    out = write_training_report(_train_result(summary), tmp_path / "r")
+    assert (out / "feature_importances.png").exists()
+    assert (out / "class_balance.png").exists()
+    assert not (out / "confusion_matrix.png").exists()
+    assert not (out / "per_class_metrics.png").exists()
+
+
+def test_single_class_does_not_crash(tmp_path):
+    summary = {
+        "confusion_matrix": {},
+        "per_class_metrics": {},
+        "top_features": [],
+        "kept_label_counts": {"only": 12},
+    }
+    out = write_training_report(_train_result(summary), tmp_path / "r")
+    assert (out / "class_balance.png").exists()  # renders; no importances (empty)
