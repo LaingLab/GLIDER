@@ -210,6 +210,26 @@ def _plot_class_balance(summary, out_dir: Path) -> None:
     _save(fig, out_dir / "class_balance.png")
 
 
+def _plot_lambda_sweep(result, out_dir: Path) -> None:
+    per = result.per_lambda_f1
+    lams = sorted(float(k) for k in per)
+    vals = [per[k] for k in lams]
+    fig = _new_fig(6.0, 4.0)
+    ax = fig.add_subplot(111)
+    ax.plot(lams, vals, "-o", color=_PALETTE[0])
+    ax.axvline(
+        float(result.lam),
+        color=_PALETTE[3],
+        linestyle="--",
+        label=f"chosen λ={result.lam:g}",
+    )
+    ax.set_xlabel("λ (prior weight)")
+    ax.set_ylabel("val macro-F1")
+    ax.set_title("Hybrid λ-sweep")
+    ax.legend()
+    _save(fig, out_dir / "lambda_sweep.png")
+
+
 def write_training_report(result, out_dir: str | Path) -> Path:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -220,6 +240,7 @@ def write_training_report(result, out_dir: str | Path) -> Path:
     _write_csvs(result, out_dir)
     if _is_hybrid(result):
         _plot_importances(result, out_dir)
+        _plot_lambda_sweep(result, out_dir)
     else:
         summary = result.summary
         _plot_confusion(summary, out_dir)
