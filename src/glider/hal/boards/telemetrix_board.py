@@ -278,6 +278,13 @@ class TelemetrixBoard(BaseBoard):
         self._pwm_pins_forced_low: set[int] = set()
         self._pin_values_lock = threading.Lock()  # Thread-safe access to _pin_values
         self._analog_map: dict[int, int] = {}  # Maps actual pin to Arduino analog number
+        # Serializes connect()/disconnect(). Their bodies await
+        # (asyncio.to_thread), so without this an auto-reconnect connect()
+        # can interleave with a manual connect/disconnect and both mutate
+        # _telemetrix_thread (stopping a mid-start thread, or clobbering a
+        # freshly started one and leaking a live serial connection). Neither
+        # method calls the other, so a non-reentrant lock is safe.
+        self._connect_lock = asyncio.Lock()
         # Main event loop for marshalling callbacks from telemetrix thread.
         # Initialized to None here; updated in connect() to capture the correct
         # (qasync) event loop that is actually running.
@@ -315,6 +322,20 @@ class TelemetrixBoard(BaseBoard):
             if self._state == BoardConnectionState.CONNECTED:
                 logger.warning("Telemetrix thread died unexpectedly - marking as disconnected")
                 self._set_state(BoardConnectionState.DISCONNECTED)
+                # The cached pin state is stale the moment the link drops
+                # (the Arduino resets on the next serial open); clear it so
+                # post-reconnect reads don't serve pre-drop values as live.
+                self._clear_pin_caches()
+                if self._auto_reconnect:
+                    # Passive disconnect (cable jostle, serial error): engage
+                    # auto-reconnect. start_reconnect() is a no-op if a
+                    # reconnect task is already running.
+                    try:
+                        self.start_reconnect()
+                    except RuntimeError:
+                        # Property polled from a context with no running event
+                        # loop; a later explicit connect() will still work.
+                        logger.warning("Auto-reconnect not started: no running event loop")
             return False
 
         return True
@@ -334,78 +355,110 @@ class TelemetrixBoard(BaseBoard):
 
     async def connect(self) -> bool:
         """Establish connection to the Arduino via Telemetrix."""
-        # Check if already connected
-        if self._state == BoardConnectionState.CONNECTED and self._telemetrix_thread is not None:
-            logger.debug(f"{self.name} is already connected")
-            return True
+        # Serialize against concurrent connect()/disconnect(): the body
+        # awaits (asyncio.to_thread), so overlapping calls would otherwise
+        # both mutate _telemetrix_thread mid-flight.
+        async with self._connect_lock:
+            # Check if already connected
+            if (
+                self._state == BoardConnectionState.CONNECTED
+                and self._telemetrix_thread is not None
+            ):
+                logger.debug(f"{self.name} is already connected")
+                return True
 
-        try:
-            self._set_state(BoardConnectionState.CONNECTING)
-            logger.info(f"Connecting to {self.name} on port {self._port or 'auto'}...")
-
-            # Capture the running event loop (qasync) for marshalling callbacks
-            # from the telemetrix thread back to the Qt/main thread.
             try:
-                self._main_loop = asyncio.get_running_loop()
-            except RuntimeError:
-                self._main_loop = None
+                self._set_state(BoardConnectionState.CONNECTING)
+                logger.info(f"Connecting to {self.name} on port {self._port or 'auto'}...")
 
-            # Import telemetrix here to allow graceful failure if not installed
-            try:
-                from telemetrix_aio import telemetrix_aio
-            except ImportError:
-                logger.error(
-                    "telemetrix-aio not installed. Install with: pip install telemetrix-aio"
+                # Capture the running event loop (qasync) for marshalling callbacks
+                # from the telemetrix thread back to the Qt/main thread.
+                try:
+                    self._main_loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    self._main_loop = None
+
+                # Import telemetrix here to allow graceful failure if not installed
+                try:
+                    from telemetrix_aio import telemetrix_aio
+                except ImportError:
+                    logger.error(
+                        "telemetrix-aio not installed. Install with: pip install telemetrix-aio"
+                    )
+                    self._set_state(BoardConnectionState.ERROR)
+                    return False
+
+                # Disconnect existing connection if any
+                if self._telemetrix_thread is not None:
+                    await asyncio.to_thread(self._telemetrix_thread.stop)
+                    self._telemetrix_thread = None
+
+                # Create and start telemetrix in a separate thread
+                # This isolates its event loop from Qt's event loop.
+                # start() blocks up to 10s on the connect handshake, so it must
+                # run in a worker thread to keep the qasync loop responsive.
+                self._telemetrix_thread = TelemetrixThread()
+                await asyncio.to_thread(
+                    self._telemetrix_thread.start, self._port, sleep_tune=0.0001
                 )
+
+                self._set_state(BoardConnectionState.CONNECTED)
+                logger.info(f"Successfully connected to {self.name}")
+                return True
+
+            except Exception as e:
+                logger.error(f"Failed to connect to {self.name}: {e}")
                 self._set_state(BoardConnectionState.ERROR)
-                return False
-
-            # Disconnect existing connection if any
-            if self._telemetrix_thread is not None:
-                self._telemetrix_thread.stop()
                 self._telemetrix_thread = None
-
-            # Create and start telemetrix in a separate thread
-            # This isolates its event loop from Qt's event loop
-            self._telemetrix_thread = TelemetrixThread()
-            self._telemetrix_thread.start(self._port, sleep_tune=0.0001)
-
-            self._set_state(BoardConnectionState.CONNECTED)
-            logger.info(f"Successfully connected to {self.name}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to connect to {self.name}: {e}")
-            self._set_state(BoardConnectionState.ERROR)
-            self._telemetrix_thread = None
-            self._notify_error(e)
-            if self._auto_reconnect:
-                self.start_reconnect()
-            return False
+                self._notify_error(e)
+                if self._auto_reconnect:
+                    self.start_reconnect()
+                return False
 
     async def disconnect(self) -> None:
         """Disconnect from the Arduino."""
+        # Cancel any pending auto-reconnect BEFORE queueing on the lock so a
+        # reconnect task waiting for the lock doesn't reconnect ahead of us.
         self.stop_reconnect()
 
-        # Disable analog reporting before shutdown to prevent KeyError
-        # in telemetrix's _analog_message when callbacks are torn down
-        if self._telemetrix_thread is not None:
-            for _actual_pin, analog_pin in self._analog_map.items():
-                try:
-                    self._call_telemetrix("disable_analog_reporting", analog_pin)
-                except Exception:
-                    pass
+        async with self._connect_lock:
+            # Disable analog reporting before shutdown to prevent KeyError
+            # in telemetrix's _analog_message when callbacks are torn down
+            if self._telemetrix_thread is not None:
+                for _actual_pin, analog_pin in self._analog_map.items():
+                    try:
+                        self._call_telemetrix("disable_analog_reporting", analog_pin)
+                    except Exception:
+                        pass
 
-        if self._telemetrix_thread is not None:
-            try:
-                self._telemetrix_thread.stop()
-            except Exception as e:
-                logger.warning(f"Error during disconnect: {e}")
-            finally:
-                self._telemetrix_thread = None
+            if self._telemetrix_thread is not None:
+                try:
+                    # stop() blocks on future.result() + thread.join(); keep it
+                    # off the event loop.
+                    await asyncio.to_thread(self._telemetrix_thread.stop)
+                except Exception as e:
+                    logger.warning(f"Error during disconnect: {e}")
+                finally:
+                    self._telemetrix_thread = None
+            # The Arduino resets when the serial port reopens, so all cached pin
+            # state is stale after a disconnect. Clearing it prevents read_digital
+            # / read_analog fallbacks from returning pre-disconnect values as live.
+            self._clear_pin_caches()
+            self._set_state(BoardConnectionState.DISCONNECTED)
+            logger.info(f"Disconnected from {self.name}")
+
+    def _clear_pin_caches(self) -> None:
+        """Drop all cached pin state (modes, values, PWM flags, analog map).
+
+        Called on any disconnect — explicit or passively detected — because
+        the Arduino resets when the serial port reopens, making every cached
+        value/mode wrong.
+        """
         self._analog_map.clear()
-        self._set_state(BoardConnectionState.DISCONNECTED)
-        logger.info(f"Disconnected from {self.name}")
+        self._pin_modes.clear()
+        self._pwm_pins_forced_low.clear()
+        with self._pin_values_lock:
+            self._pin_values.clear()
 
     def _call_telemetrix(self, method_name: str, *args, **kwargs) -> Any:
         """Call a method on telemetrix in its thread."""
@@ -423,14 +476,22 @@ class TelemetrixBoard(BaseBoard):
         try:
             if pin_type == PinType.DIGITAL:
                 if mode == PinMode.OUTPUT:
-                    self._call_telemetrix("set_pin_mode_digital_output", pin)
+                    await asyncio.to_thread(
+                        self._call_telemetrix, "set_pin_mode_digital_output", pin
+                    )
                 elif mode == PinMode.INPUT:
-                    self._call_telemetrix(
-                        "set_pin_mode_digital_input", pin, callback=self._digital_callback
+                    await asyncio.to_thread(
+                        self._call_telemetrix,
+                        "set_pin_mode_digital_input",
+                        pin,
+                        callback=self._digital_callback,
                     )
                 elif mode == PinMode.INPUT_PULLUP:
-                    self._call_telemetrix(
-                        "set_pin_mode_digital_input_pullup", pin, callback=self._digital_callback
+                    await asyncio.to_thread(
+                        self._call_telemetrix,
+                        "set_pin_mode_digital_input_pullup",
+                        pin,
+                        callback=self._digital_callback,
                     )
 
             elif pin_type == PinType.ANALOG:
@@ -442,7 +503,8 @@ class TelemetrixBoard(BaseBoard):
                     self._pin_values[pin] = 0
 
                 try:
-                    self._call_telemetrix(
+                    await asyncio.to_thread(
+                        self._call_telemetrix,
                         "set_pin_mode_analog_input",
                         analog_pin,
                         differential=1,
@@ -456,10 +518,10 @@ class TelemetrixBoard(BaseBoard):
                     raise
 
             elif pin_type == PinType.PWM:
-                self._call_telemetrix("set_pin_mode_analog_output", pin)
+                await asyncio.to_thread(self._call_telemetrix, "set_pin_mode_analog_output", pin)
 
             elif pin_type == PinType.SERVO:
-                self._call_telemetrix("set_pin_mode_servo", pin)
+                await asyncio.to_thread(self._call_telemetrix, "set_pin_mode_servo", pin)
 
             self._pin_modes[pin] = mode
             logger.debug(f"Set pin {pin} to mode {mode} type {pin_type}")
