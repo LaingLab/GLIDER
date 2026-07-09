@@ -633,9 +633,17 @@ class ExperimentSession:
         self._mark_dirty()
 
     def remove_board(self, board_id: str) -> None:
-        """Remove a board and its associated devices."""
+        """Remove a board, its associated devices, and nodes bound to them."""
+        removed_device_ids = {d.id for d in self._hardware.devices if d.board_id == board_id}
         self._hardware.boards = [b for b in self._hardware.boards if b.id != board_id]
         self._hardware.devices = [d for d in self._hardware.devices if d.board_id != board_id]
+        # Also remove nodes that reference the removed devices (mirrors
+        # remove_device); otherwise the flow keeps dangling device_id refs
+        # that silently fail to bind on the next load.
+        if removed_device_ids:
+            self._flow.nodes = [
+                n for n in self._flow.nodes if n.device_id not in removed_device_ids
+            ]
         self._mark_dirty()
 
     def get_board(self, board_id: str) -> BoardConfig | None:
