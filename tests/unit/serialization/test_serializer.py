@@ -18,6 +18,7 @@ through a real save → fresh-load → save cycle.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -245,3 +246,377 @@ def test_node_state_round_trip(
     assert (
         state.get("use_input") is False
     ), f"DelayNode use_input lost on round-trip. State: {state}"
+
+
+def test_device_round_trip_preserves_pins_board_and_settings(
+    tmp_path: Path,
+    serializer: ExperimentSerializer,
+    hardware_manager_with_mock,
+    flow_engine_with_nodes,
+):
+    """A device's pin map, owning board, name, and settings must survive
+    save -> fresh-load. The broken code read attributes that don't exist
+    on BaseDevice (.pin/.board_id/.settings) so every device saved as
+    pin=0 / board_id="" and reload raised BoardNotFoundError."""
+    hardware_manager_with_mock.add_board(board_id="board1", driver_type="mock", port=None)
+    hardware_manager_with_mock.add_device(
+        device_id="led1",
+        device_type="DigitalOutput",
+        board_id="board1",
+        pin=13,
+        name="Status LED",
+        initial_state=False,
+    )
+
+    out = tmp_path / "dev.glider"
+    serializer.save(
+        out,
+        session=ExperimentSession(),
+        flow_engine=flow_engine_with_nodes,
+        hardware_manager=hardware_manager_with_mock,
+    )
+
+    fresh_hm = HardwareManager()
+    HardwareManager.register_driver("mock", MockBoard)
+    fresh_engine = _make_engine_with_all_nodes()
+    schema = serializer.load(out)
+    serializer.apply_to_session(
+        schema,
+        session=ExperimentSession(),
+        flow_engine=fresh_engine,
+        hardware_manager=fresh_hm,
+    )
+
+    device = fresh_hm.devices.get("led1")
+    assert device is not None, f"Device lost on round-trip. Loaded: {list(fresh_hm.devices)}"
+    assert device.pins == {"output": 13}
+    assert device.board.id == "board1"
+    assert device.name == "Status LED"
+    assert device._config.settings.get("initial_state") is False
+
+
+def test_legacy_single_pin_device_file_still_loads(
+    tmp_path: Path,
+    serializer: ExperimentSerializer,
+    flow_engine_with_nodes,
+):
+    """Old .glider files store a single int `pin` per device (no `pins`
+    dict). They must still load, with the pin mapped to the conventional
+    pin name for the device type (DigitalOutput -> "output")."""
+    legacy = {
+        "schema_version": "1.0.0",
+        "metadata": {"name": "Legacy"},
+        "hardware": {
+            "boards": [{"id": "board1", "type": "mock", "port": None, "settings": {}}],
+            "devices": [
+                {
+                    "id": "led1",
+                    "type": "DigitalOutput",
+                    "board_id": "board1",
+                    "pin": 13,
+                    "name": "LED",
+                    "settings": {},
+                }
+            ],
+        },
+        "flow": {"nodes": [], "connections": []},
+        "dashboard": {"widgets": []},
+    }
+    path = tmp_path / "legacy.glider"
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    fresh_hm = HardwareManager()
+    HardwareManager.register_driver("mock", MockBoard)
+    schema = serializer.load(path)
+    serializer.apply_to_session(
+        schema,
+        session=ExperimentSession(),
+        flow_engine=flow_engine_with_nodes,
+        hardware_manager=fresh_hm,
+    )
+
+    device = fresh_hm.devices.get("led1")
+    assert device is not None
+    assert device.pins == {"output": 13}
+
+
+def test_apply_to_session_populates_session_model_so_save_as_keeps_data(
+    tmp_path: Path,
+    serializer: ExperimentSerializer,
+    hardware_manager_with_mock,
+    flow_engine_with_nodes,
+):
+    """apply_to_session must sync schema hardware/flow into the session's
+    own dataclasses (what ExperimentSession.save() serializes). Otherwise
+    a Save As after loading a .glider file writes empty sections."""
+    hardware_manager_with_mock.add_board(board_id="board1", driver_type="mock", port=None)
+    hardware_manager_with_mock.add_device(
+        device_id="led1", device_type="DigitalOutput", board_id="board1", pin=13
+    )
+    flow_engine_with_nodes.create_node(node_id="start1", node_type="StartExperiment")
+    flow_engine_with_nodes.create_node(node_id="end1", node_type="EndExperiment")
+    flow_engine_with_nodes.create_connection(
+        connection_id="c1",
+        from_node_id="start1",
+        from_output=0,
+        to_node_id="end1",
+        to_input=0,
+        connection_type="exec",
+    )
+
+    out = tmp_path / "sync.glider"
+    serializer.save(
+        out,
+        session=ExperimentSession(),
+        flow_engine=flow_engine_with_nodes,
+        hardware_manager=hardware_manager_with_mock,
+    )
+
+    fresh_session = ExperimentSession()
+    fresh_hm = HardwareManager()
+    HardwareManager.register_driver("mock", MockBoard)
+    fresh_engine = _make_engine_with_all_nodes()
+    schema = serializer.load(out)
+    serializer.apply_to_session(
+        schema,
+        session=fresh_session,
+        flow_engine=fresh_engine,
+        hardware_manager=fresh_hm,
+    )
+
+    # Session model mirrors what went into the managers
+    assert [b.id for b in fresh_session.hardware.boards] == ["board1"]
+    assert len(fresh_session.hardware.devices) == 1
+    device = fresh_session.hardware.devices[0]
+    assert device.id == "led1"
+    assert device.board_id == "board1"
+    assert device.pins == {"output": 13}
+    node_ids = {n.id for n in fresh_session.flow.nodes}
+    assert {"start1", "end1"}.issubset(node_ids)
+    assert any(
+        c.from_node == "start1" and c.to_node == "end1" for c in fresh_session.flow.connections
+    )
+
+    # A subsequent Save As must not wipe the loaded data
+    resave = tmp_path / "resave.glider"
+    fresh_session.save(str(resave))
+    data = json.loads(resave.read_text(encoding="utf-8"))
+    assert data["hardware"]["boards"], "Save As wrote an empty boards list"
+    assert data["hardware"]["devices"], "Save As wrote an empty devices list"
+    assert data["flow"]["nodes"], "Save As wrote an empty nodes list"
+    assert data["flow"]["connections"], "Save As wrote an empty connections list"
+
+
+def test_zero_pin_devices_round_trip(
+    tmp_path: Path,
+    serializer: ExperimentSerializer,
+    hardware_manager_with_mock,
+    flow_engine_with_nodes,
+):
+    """Devices with no GPIO pins (e.g. BLEWrite, required_pins == []) save
+    with pins == {} and must reload through the multi-pin path. Routing
+    them down the legacy single-pin branch calls add_device(pin=None),
+    which synthesizes {"pin": None} — and a SECOND zero-pin device then
+    collides on the phantom pin ("Pin None is already claimed")."""
+    hardware_manager_with_mock.add_board(board_id="board1", driver_type="mock", port=None)
+    hardware_manager_with_mock.add_device_multi_pin(
+        device_id="ble1",
+        device_type="BLEWrite",
+        board_id="board1",
+        pins={},
+        name="Stim A",
+        address="AA:BB:CC:DD:EE:01",
+        char_uuid="0000ffe1-0000-1000-8000-00805f9b34fb",
+    )
+    hardware_manager_with_mock.add_device_multi_pin(
+        device_id="ble2",
+        device_type="BLEWrite",
+        board_id="board1",
+        pins={},
+        name="Stim B",
+        address="AA:BB:CC:DD:EE:02",
+        char_uuid="0000ffe1-0000-1000-8000-00805f9b34fb",
+    )
+
+    out = tmp_path / "ble.glider"
+    serializer.save(
+        out,
+        session=ExperimentSession(),
+        flow_engine=flow_engine_with_nodes,
+        hardware_manager=hardware_manager_with_mock,
+    )
+
+    fresh_hm = HardwareManager()
+    HardwareManager.register_driver("mock", MockBoard)
+    fresh_engine = _make_engine_with_all_nodes()
+    schema = serializer.load(out)
+    serializer.apply_to_session(
+        schema,
+        session=ExperimentSession(),
+        flow_engine=fresh_engine,
+        hardware_manager=fresh_hm,
+    )
+
+    for device_id in ("ble1", "ble2"):
+        device = fresh_hm.devices.get(device_id)
+        assert device is not None, f"{device_id} lost on round-trip: {list(fresh_hm.devices)}"
+        assert device.pins == {}, f"{device_id} grew phantom pins: {device.pins}"
+    assert fresh_hm.devices["ble1"]._config.settings["address"] == "AA:BB:CC:DD:EE:01"
+    assert fresh_hm.devices["ble2"]._config.settings["address"] == "AA:BB:CC:DD:EE:02"
+
+
+def test_single_pin_device_dict_stays_old_version_readable(
+    tmp_path: Path,
+    serializer: ExperimentSerializer,
+    hardware_manager_with_mock,
+    flow_engine_with_nodes,
+):
+    """A single-pin device must stay openable by OLD GLIDER versions, whose
+    DeviceConfigSchema.from_dict lists "pin" in its required fields. So the
+    save emits BOTH keys: the legacy int "pin" (which old parsers read) AND
+    the current "pins" dict (which old parsers ignore as an unknown key).
+    The file must also still round-trip through the CURRENT loader, reloading
+    the device with pins == {"output": 13}."""
+    hardware_manager_with_mock.add_board(board_id="board1", driver_type="mock", port=None)
+    hardware_manager_with_mock.add_device(
+        device_id="led1", device_type="DigitalOutput", board_id="board1", pin=13
+    )
+
+    out = tmp_path / "singlepin.glider"
+    serializer.save(
+        out,
+        session=ExperimentSession(),
+        flow_engine=flow_engine_with_nodes,
+        hardware_manager=hardware_manager_with_mock,
+    )
+
+    data = json.loads(out.read_text(encoding="utf-8"))
+    saved_devices = data["hardware"]["devices"]
+    assert len(saved_devices) == 1
+    # Both keys present so old versions read `pin`, new versions read `pins`.
+    assert (
+        saved_devices[0]["pin"] == 13
+    ), f"Single-pin device dropped legacy pin: {saved_devices[0]}"
+    assert saved_devices[0]["pins"] == {"output": 13}
+
+    # And the file still round-trips through the CURRENT loader.
+    fresh_hm = HardwareManager()
+    HardwareManager.register_driver("mock", MockBoard)
+    schema = serializer.load(out)
+    serializer.apply_to_session(
+        schema,
+        session=ExperimentSession(),
+        flow_engine=_make_engine_with_all_nodes(),
+        hardware_manager=fresh_hm,
+    )
+    device = fresh_hm.devices.get("led1")
+    assert device is not None
+    assert device.pins == {"output": 13}
+
+
+def test_zero_pin_device_dict_omits_legacy_pin_key(
+    tmp_path: Path,
+    serializer: ExperimentSerializer,
+    hardware_manager_with_mock,
+    flow_engine_with_nodes,
+):
+    """A zero-pin device (e.g. BLEWrite, pins == {}) cannot be represented in
+    the old single-`pin` schema at all, so its saved dict carries NO `pin`
+    key. This is an inherent, accepted break: old versions cannot open files
+    with zero-pin devices — writing "pin": null would only make the old
+    parser fail with a misleading "Expected int, got NoneType"."""
+    hardware_manager_with_mock.add_board(board_id="board1", driver_type="mock", port=None)
+    hardware_manager_with_mock.add_device_multi_pin(
+        device_id="ble1",
+        device_type="BLEWrite",
+        board_id="board1",
+        pins={},
+        name="Stim A",
+        address="AA:BB:CC:DD:EE:01",
+        char_uuid="0000ffe1-0000-1000-8000-00805f9b34fb",
+    )
+
+    out = tmp_path / "zeropin.glider"
+    serializer.save(
+        out,
+        session=ExperimentSession(),
+        flow_engine=flow_engine_with_nodes,
+        hardware_manager=hardware_manager_with_mock,
+    )
+
+    data = json.loads(out.read_text(encoding="utf-8"))
+    saved_devices = data["hardware"]["devices"]
+    assert len(saved_devices) == 1
+    assert "pin" not in saved_devices[0], f"Zero-pin device carries legacy pin: {saved_devices[0]}"
+    assert saved_devices[0]["pins"] == {}
+
+
+def test_session_sync_excludes_nodes_the_engine_could_not_create(
+    tmp_path: Path,
+    serializer: ExperimentSerializer,
+    flow_engine_with_nodes,
+):
+    """_apply_flow_config skips nodes whose type can't be resolved; the
+    session-model sync must skip the same nodes (and their connections),
+    otherwise Save As persists phantom nodes the live engine never had."""
+    doc = {
+        "schema_version": "1.0.0",
+        "metadata": {"name": "Phantom"},
+        "hardware": {"boards": [], "devices": []},
+        "flow": {
+            "nodes": [
+                {
+                    "id": "delay1",
+                    "type": "Delay",
+                    "title": "Delay",
+                    "position": {"x": 0.0, "y": 0.0},
+                    "properties": {},
+                    "inputs": [],
+                    "outputs": [],
+                },
+                {
+                    "id": "bogus1",
+                    "type": "TotallyBogusNodeType",
+                    "title": "Bogus",
+                    "position": {"x": 10.0, "y": 10.0},
+                    "properties": {},
+                    "inputs": [],
+                    "outputs": [],
+                },
+            ],
+            "connections": [
+                {
+                    "id": "c1",
+                    "from_node": "delay1",
+                    "from_port": 0,
+                    "to_node": "bogus1",
+                    "to_port": 0,
+                    "connection_type": "exec",
+                }
+            ],
+        },
+        "dashboard": {"widgets": []},
+    }
+    path = tmp_path / "phantom.glider"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+    session = ExperimentSession()
+    schema = serializer.load(path)
+    serializer.apply_to_session(
+        schema,
+        session=session,
+        flow_engine=flow_engine_with_nodes,
+        hardware_manager=None,
+    )
+
+    # The engine only created the resolvable node
+    assert "delay1" in flow_engine_with_nodes.nodes
+    assert "bogus1" not in flow_engine_with_nodes.nodes
+
+    # The session model must agree with the engine, not the raw file
+    node_ids = {n.id for n in session.flow.nodes}
+    assert node_ids == {"delay1"}, f"Phantom node leaked into session model: {node_ids}"
+    assert session.flow.connections == [], (
+        "Connection referencing a phantom node leaked into session model: "
+        f"{session.flow.connections}"
+    )
