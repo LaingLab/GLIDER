@@ -223,6 +223,7 @@ def test_revolution_ops_need_track_flag():
 
 async def test_revolution_accumulate_and_reset():
     dev = _rev_device()  # counts_per_turn default 4096, decimals 2
+    dev._initialized = True  # execute_action now gates on initialization
     for raw in [0, 1024, 2048, 3072, 4095, 0]:  # one full forward turn
         dev._accumulate(raw)
     assert await dev.read() == 1.0  # primary = read_revolutions

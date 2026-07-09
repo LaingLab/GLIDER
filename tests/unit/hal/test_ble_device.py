@@ -8,6 +8,7 @@ even when bleak isn't installed.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 
@@ -171,6 +172,48 @@ async def test_shutdown_disconnects(fake_bleak):
     await dev.initialize()
     client = dev._client
     await dev.shutdown()
+    assert client.connected is False
+    assert dev._client is None
+
+
+async def test_write_after_shutdown_refuses(fake_bleak):
+    # An e-stop calls shutdown(); a late/queued write must NOT reconnect and
+    # re-arm the peripheral.
+    dev = _make_device()
+    await dev.initialize()
+    await dev.shutdown()
+    with pytest.raises(RuntimeError, match="not initialized"):
+        await dev.write("on")
+    # The refused write must not have opened a new connection.
+    assert dev._client is None
+    assert all(not c.connected for c in _FakeClient.instances)
+
+
+async def test_shutdown_waits_for_in_flight_write(fake_bleak):
+    dev = _make_device()
+    await dev.initialize()
+    client = dev._client
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_write(uuid, data, response=False):
+        started.set()
+        await release.wait()
+        client.writes.append((uuid, data, response))
+
+    client.write_gatt_char = slow_write
+
+    write_task = asyncio.create_task(dev.write("on"))
+    await started.wait()
+    shutdown_task = asyncio.create_task(dev.shutdown())
+    await asyncio.sleep(0.05)
+    # shutdown must block on the shared lock while the write is in flight.
+    assert not shutdown_task.done()
+
+    release.set()
+    await write_task
+    await shutdown_task
+    assert client.writes[-1][1] == b"on"
     assert client.connected is False
     assert dev._client is None
 

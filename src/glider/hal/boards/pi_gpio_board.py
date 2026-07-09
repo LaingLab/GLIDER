@@ -320,7 +320,13 @@ class PiGPIOBoard(BaseBoard):
 
     async def emergency_stop(self) -> None:
         """Set all outputs to safe state."""
+        input_modes = (PinMode.INPUT, PinMode.INPUT_PULLUP, PinMode.INPUT_PULLDOWN)
         for pin, device in self._devices.items():
+            # Inputs have no safe state to write, and gpiozero input devices
+            # expose `value` as a read-only property — the setattr fallback
+            # below would raise (and log an error) for every input on e-stop.
+            if self._pin_modes.get(pin) in input_modes:
+                continue
             try:
                 if hasattr(device, "off"):
                     await asyncio.to_thread(device.off)
