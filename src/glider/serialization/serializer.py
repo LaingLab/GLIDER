@@ -36,6 +36,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Conventional pin name per device type, used to convert legacy single-pin
+# device entries into a pins dict (mirrors HardwareManager.add_device).
+_LEGACY_PIN_NAMES = {
+    "DigitalOutput": "output",
+    "DigitalInput": "input",
+    "AnalogInput": "input",
+    "PWMOutput": "output",
+    "Servo": "signal",
+}
+
+
+def _schema_device_pins(device: DeviceConfigSchema) -> dict[str, int]:
+    """Pins dict for a device schema, converting the legacy single-pin form."""
+    if device.pins:
+        return dict(device.pins)
+    if device.pin is not None:
+        return {_LEGACY_PIN_NAMES.get(device.type, "pin"): device.pin}
+    return {}
+
+
 class ExperimentSerializer:
     """
     Serializer for GLIDER experiment files.
@@ -178,6 +198,13 @@ class ExperimentSerializer:
         """
         Apply a loaded schema to a session.
 
+        The schema is applied incrementally into the live managers (boards,
+        devices, nodes, connections); there is no rollback. If this raises
+        partway through, the hardware manager may hold partially-applied
+        state and the session model is NOT updated — callers should treat a
+        raised exception as requiring a session reset (clear the managers
+        and start over) rather than continuing with mixed state.
+
         Args:
             schema: The experiment schema to apply
             session: The session to update
@@ -196,6 +223,108 @@ class ExperimentSerializer:
         # Apply flow config
         if flow_engine:
             self._apply_flow_config(schema.flow, flow_engine)
+
+        # Sync the loaded hardware/flow into the *session model* too. The
+        # session's own dataclasses are what ExperimentSession.save() /
+        # to_dict() serialize; without this, a File > Save As after loading
+        # a .glider file writes empty hardware/flow sections (data loss),
+        # and UI reading session.hardware / session.flow sees nothing.
+        from glider.core.experiment_session import (
+            BoardConfig as SessionBoardConfig,
+        )
+        from glider.core.experiment_session import (
+            ConnectionConfig as SessionConnectionConfig,
+        )
+        from glider.core.experiment_session import (
+            DeviceConfig as SessionDeviceConfig,
+        )
+        from glider.core.experiment_session import (
+            FlowConfig as SessionFlowConfig,
+        )
+        from glider.core.experiment_session import (
+            HardwareConfig as SessionHardwareConfig,
+        )
+        from glider.core.experiment_session import (
+            NodeConfig as SessionNodeConfig,
+        )
+
+        session._hardware = SessionHardwareConfig(
+            boards=[
+                SessionBoardConfig(
+                    id=b.id,
+                    driver_type=b.type,
+                    port=b.port,
+                    settings=dict(b.settings),
+                )
+                for b in schema.hardware.boards
+            ],
+            devices=[
+                SessionDeviceConfig(
+                    id=d.id,
+                    device_type=d.type,
+                    name=d.name or d.id,
+                    board_id=d.board_id,
+                    pins=_schema_device_pins(d),
+                    settings=dict(d.settings),
+                )
+                for d in schema.hardware.devices
+            ],
+        )
+
+        flow_nodes = []
+        for n in schema.flow.nodes:
+            # _apply_flow_config skips nodes it cannot create (unknown type,
+            # create_node failure). The session model must mirror the live
+            # engine, not the raw file — otherwise a Save As persists
+            # phantom nodes the engine never had. When no engine was given,
+            # nothing was filtered, so sync the file contents unfiltered.
+            if flow_engine is not None and n.id not in flow_engine.nodes:
+                continue
+            props = n.properties or {}
+            state = props.get("state") or {}
+            if not isinstance(state, dict):
+                state = {}
+            node_type = n.type
+            if flow_engine is not None:
+                node_type = self._resolve_node_type(n.type, flow_engine) or n.type
+            flow_nodes.append(
+                SessionNodeConfig(
+                    id=n.id,
+                    node_type=node_type,
+                    position=(
+                        float(n.position.get("x", 0.0)),
+                        float(n.position.get("y", 0.0)),
+                    ),
+                    state=state,
+                    # KNOWN GAP: the .glider schema does not carry device
+                    # bindings (NodeSchema has no device_id and no node writes
+                    # one into its state), so this is None for every file that
+                    # exists today. Hardware-node device bindings are still
+                    # lost across the schema save/load path — follow-up work,
+                    # out of scope for this task.
+                    device_id=state.get("device_id"),
+                    visible_in_runner=bool(props.get("visible_in_runner", False)),
+                )
+            )
+        # Connections referencing a filtered-out node would dangle; keep
+        # only those whose both endpoints survived the node sync.
+        synced_node_ids = {node.id for node in flow_nodes}
+        session._flow = SessionFlowConfig(
+            nodes=flow_nodes,
+            connections=[
+                SessionConnectionConfig(
+                    id=c.id,
+                    from_node=c.from_node,
+                    from_output=c.from_port,
+                    to_node=c.to_node,
+                    to_input=c.to_port,
+                    connection_type=c.connection_type,
+                )
+                for c in schema.flow.connections
+                if flow_engine is None
+                or (c.from_node in synced_node_ids and c.to_node in synced_node_ids)
+            ],
+        )
 
         # Apply dashboard config
         dashboard_dict = schema.dashboard.to_dict()
@@ -255,15 +384,22 @@ class ExperimentSerializer:
             )
             boards.append(board_config)
 
-        # Extract device configs
+        # Extract device configs. Read the real BaseDevice attributes: pin
+        # assignments live in device._config.pins (dict of name -> pin), the
+        # owning board is device.board (its .id is the board id), and settings
+        # live in device._config.settings. (Earlier code read device.pin /
+        # device.board_id / device.settings — none exist on BaseDevice — so
+        # every device saved as pin=0 / board_id="" and never reloaded.)
         for device_id, device in hardware_manager.devices.items():
+            dev_config = getattr(device, "_config", None)
+            board = getattr(device, "board", None)
             device_config = DeviceConfigSchema(
                 id=device_id,
                 type=getattr(device, "device_type", "unknown"),
-                board_id=getattr(device, "board_id", ""),
-                pin=getattr(device, "pin", 0),
+                board_id=getattr(board, "id", "") if board is not None else "",
+                pins=dict(dev_config.pins) if dev_config is not None else {},
                 name=getattr(device, "name", None),
-                settings=getattr(device, "settings", {}),
+                settings=dict(dev_config.settings) if dev_config is not None else {},
             )
             devices.append(device_config)
 
@@ -417,16 +553,34 @@ class ExperimentSerializer:
                 **board_config.settings,
             )
 
-        # Add devices
+        # Add devices. Current-format files carry a pins dict (multi-pin
+        # aware, loaded via add_device_multi_pin — an empty dict is valid:
+        # zero-pin devices like BLEWrite have no GPIO pins to allocate).
+        # Legacy files carry a single int `pin` and no pins dict; ONLY that
+        # combination takes the legacy path, where add_device maps the pin
+        # to the conventional pin name ("output"/"input"/"signal"). Branching
+        # on `pins` alone would send current-format zero-pin devices through
+        # add_device(pin=None), synthesizing a phantom {"pin": None} that
+        # collides across devices ("Pin None is already claimed").
         for device_config in config.devices:
-            hardware_manager.add_device(
-                device_id=device_config.id,
-                device_type=device_config.type,
-                board_id=device_config.board_id,
-                pin=device_config.pin,
-                name=device_config.name,
-                **device_config.settings,
-            )
+            if device_config.pin is not None and not device_config.pins:
+                hardware_manager.add_device(
+                    device_id=device_config.id,
+                    device_type=device_config.type,
+                    board_id=device_config.board_id,
+                    pin=device_config.pin,
+                    name=device_config.name,
+                    **device_config.settings,
+                )
+            else:
+                hardware_manager.add_device_multi_pin(
+                    device_id=device_config.id,
+                    device_type=device_config.type,
+                    board_id=device_config.board_id,
+                    pins=device_config.pins,
+                    name=device_config.name,
+                    **device_config.settings,
+                )
 
     def _apply_flow_config(self, config: FlowConfigSchema, flow_engine: "FlowEngine") -> None:
         """Apply flow configuration to engine.
