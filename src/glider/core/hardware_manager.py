@@ -218,11 +218,19 @@ class HardwareManager:
 
         logger.info(f"Disconnecting board: {board_id}")
 
-        # Shutdown all devices on this board first
+        # Shutdown all devices on this board first. Bounded per device
+        # (mirrors emergency_stop): a wedged I/O call — e.g. a BLE shutdown
+        # waiting on a hung peripheral — must not stall board teardown.
         devices_to_shutdown = [d for d in self._devices.values() if d.board.id == board_id]
         for device in devices_to_shutdown:
             try:
-                await device.shutdown()
+                await asyncio.wait_for(device.shutdown(), timeout=DEVICE_IO_TIMEOUT_S)
+            except TimeoutError:
+                logger.warning(
+                    "Shutdown TIMED OUT after %.1fs for device %s; continuing teardown",
+                    DEVICE_IO_TIMEOUT_S,
+                    device.id,
+                )
             except Exception as e:
                 logger.warning(f"Error shutting down device {device.id}: {e}")
 
@@ -326,7 +334,15 @@ class HardwareManager:
 
         logger.info(f"Shutting down device: {device_id}")
         try:
-            await device.shutdown()
+            # Bounded (mirrors emergency_stop): a wedged I/O call must not
+            # hang the caller's teardown sequence.
+            await asyncio.wait_for(device.shutdown(), timeout=DEVICE_IO_TIMEOUT_S)
+        except TimeoutError:
+            logger.warning(
+                "Shutdown TIMED OUT after %.1fs for device %s; continuing teardown",
+                DEVICE_IO_TIMEOUT_S,
+                device_id,
+            )
         except Exception as e:
             logger.error(f"Error shutting down device {device_id}: {e}")
 

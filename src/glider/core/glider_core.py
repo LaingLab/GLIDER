@@ -77,6 +77,12 @@ class GliderCore:
         self._initialized = False
         self._shutting_down = False
         self._experiment_lock = asyncio.Lock()
+        # Strong references to fire-and-forget tasks (flow teardown, event
+        # recording). asyncio only weakly references tasks; without retaining
+        # them here, a task like _handle_flow_complete — which drives all
+        # devices to a safe LOW state — could be garbage-collected before it
+        # runs. Mirrors FlowEngine._running_tasks.
+        self._background_tasks: set[asyncio.Task] = set()
         self._recording_enabled = True  # Auto-record experiments by default
         self._video_recording_enabled = True  # Auto-record video when camera connected
         self._annotated_video_enabled = True  # Also save annotated video with tracking overlays
@@ -343,15 +349,13 @@ class GliderCore:
                 import os
 
                 filename = os.path.basename(str(value))
-                task = asyncio.create_task(
+                self._create_background_task(
                     self._data_recorder.record_event("AudioPlayback", filename)
                 )
-                task.add_done_callback(self._log_task_exception)
             elif output_name == "error" and value:
-                task = asyncio.create_task(
+                self._create_background_task(
                     self._data_recorder.record_event("AudioPlaybackError", str(value))
                 )
-                task.add_done_callback(self._log_task_exception)
 
     def _on_flow_complete(self) -> None:
         """Handle flow completion (EndExperiment reached).
@@ -377,9 +381,9 @@ class GliderCore:
             # closes it. Safe to call when not recording — it no-ops.
             self._event_logger.record_flow_marker("end")
         logger.info("Flow completed - transitioning to READY state")
-        # Schedule the async completion handler
-        task = asyncio.create_task(self._handle_flow_complete())
-        task.add_done_callback(self._log_task_exception)
+        # Schedule the async completion handler (retained in
+        # _background_tasks so it cannot be GC'd before teardown runs)
+        self._create_background_task(self._handle_flow_complete())
 
     @staticmethod
     def _log_task_exception(task: asyncio.Task) -> None:
@@ -389,6 +393,14 @@ class GliderCore:
         exc = task.exception()
         if exc is not None:
             logger.error(f"Unhandled error in background task: {exc}", exc_info=exc)
+
+    def _create_background_task(self, coro) -> asyncio.Task:
+        """Create a fire-and-forget task, retaining a strong reference until done."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        task.add_done_callback(self._log_task_exception)
+        return task
 
     async def _handle_flow_complete(self) -> None:
         """Async handler for flow completion."""
@@ -1101,6 +1113,22 @@ class GliderCore:
 
         # Shutdown multi-camera manager
         self._multi_camera_manager.shutdown()
+
+        # Drain fire-and-forget tasks BEFORE tearing down the flow engine /
+        # hardware manager: a flow-complete teardown scheduled just before
+        # shutdown (_handle_flow_complete drives all devices to a safe LOW
+        # state) must be allowed to finish rather than race the shutdown
+        # teardown over the same state. Wait first — do NOT cancel first —
+        # then cancel and await any stragglers (mirrors FlowEngine.stop()).
+        if self._background_tasks:
+            # Snapshot: done-callbacks mutate the live set.
+            pending = set(self._background_tasks)
+            _done, still_pending = await asyncio.wait(pending, timeout=5.0)
+            for task in still_pending:
+                logger.warning("Background task did not finish before shutdown; cancelling")
+                task.cancel()
+            if still_pending:
+                await asyncio.gather(*still_pending, return_exceptions=True)
 
         # Shutdown flow engine
         await self._flow_engine.shutdown()

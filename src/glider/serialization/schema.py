@@ -208,34 +208,80 @@ class BoardConfigSchema:
 
 @dataclass
 class DeviceConfigSchema:
-    """Schema for a hardware device configuration."""
+    """Schema for a hardware device configuration.
+
+    ``pins`` maps pin names (e.g. "output", "signal") to pin numbers and is
+    the current format. ``pin`` is the legacy single-pin format from older
+    .glider files; it is still read (and mapped to the conventional pin name
+    by the loader) but new saves write ``pins``.
+    """
 
     id: str
-    type: str  # e.g., "digital_output", "analog_input", "servo"
+    type: str  # e.g., "DigitalOutput", "Servo"
     board_id: str
-    pin: int
+    pin: int | None = None  # legacy single-pin format
+    pins: dict[str, int] = field(default_factory=dict)
     name: str | None = None
     settings: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return asdict(self)
+        """Convert to dictionary for JSON serialization.
+
+        Single-pin devices stay openable by OLD GLIDER versions: those
+        versions' ``from_dict`` lists ``pin`` in its required fields and
+        constructs only from known keys (ignoring the unknown ``pins``).
+        So a single-pin device emits BOTH keys — the legacy int ``pin``
+        (which old parsers read) and the current ``pins`` dict (which old
+        parsers ignore). Old and new versions both open the file.
+
+        Zero-pin and multi-pin devices cannot be represented in the old
+        single-``pin`` schema at all, so their ``pin`` key is dropped. Old
+        versions cannot open such files — an inherent, accepted break, not
+        something ``to_dict`` can paper over. Everything else matches the
+        plain ``asdict`` output.
+        """
+        data = asdict(self)
+        if len(self.pins) == 1:
+            data["pin"] = next(iter(self.pins.values()))
+        elif data.get("pin") is None:
+            data.pop("pin", None)
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], path: str = "device") -> "DeviceConfigSchema":
-        """Create from dictionary with validation."""
+        """Create from dictionary with validation.
+
+        Accepts either the ``pins`` dict format or the legacy single-``pin``
+        int format; at least one must be present.
+        """
         if not isinstance(data, dict):
             raise SchemaValidationError(f"Expected dict, got {type(data).__name__}", path)
 
-        _validate_required(data, ["id", "type", "board_id", "pin"], path)
+        _validate_required(data, ["id", "type", "board_id"], path)
         _validate_type(data["id"], str, "id", path)
         _validate_type(data["type"], str, "type", path)
         _validate_type(data["board_id"], str, "board_id", path)
 
-        if not isinstance(data["pin"], int):
-            raise SchemaValidationError(
-                f"Expected int, got {type(data['pin']).__name__}", f"{path}.pin"
-            )
+        pins_data = data.get("pins")
+        pin = data.get("pin")
+        if pins_data is None and pin is None:
+            raise SchemaValidationError("Missing required field: 'pins' (or legacy 'pin')", path)
+
+        pins: dict[str, int] = {}
+        if pins_data is not None:
+            if not isinstance(pins_data, dict):
+                raise SchemaValidationError(
+                    f"Expected dict, got {type(pins_data).__name__}", f"{path}.pins"
+                )
+            for pin_name, pin_number in pins_data.items():
+                if not isinstance(pin_name, str) or not isinstance(pin_number, int):
+                    raise SchemaValidationError(
+                        "Pins must map str pin names to int pin numbers", f"{path}.pins"
+                    )
+                pins[pin_name] = pin_number
+
+        if pin is not None and not isinstance(pin, int):
+            raise SchemaValidationError(f"Expected int, got {type(pin).__name__}", f"{path}.pin")
 
         name = data.get("name")
         if name is not None and not isinstance(name, str):
@@ -253,7 +299,8 @@ class DeviceConfigSchema:
             id=data["id"],
             type=data["type"],
             board_id=data["board_id"],
-            pin=data["pin"],
+            pin=pin,
+            pins=pins,
             name=name,
             settings=settings,
         )

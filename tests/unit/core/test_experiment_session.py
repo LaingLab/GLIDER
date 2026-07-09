@@ -8,6 +8,7 @@ from glider.core.experiment_session import (
     BoardConfig,
     DeviceConfig,
     ExperimentSession,
+    NodeConfig,
     SessionMetadata,
     SessionState,
 )
@@ -403,3 +404,45 @@ class TestSessionStateEnum:
         states = list(SessionState)
         values = [s.value for s in states]
         assert len(values) == len(set(values))
+
+
+class TestRemoveBoardFlowCleanup:
+    """remove_board must mirror remove_device's flow-node cleanup."""
+
+    def test_remove_board_removes_nodes_bound_to_its_devices(self):
+        session = ExperimentSession()
+        session.add_board(BoardConfig(id="b1", driver_type="mock"))
+        session.add_board(BoardConfig(id="b2", driver_type="mock"))
+        session.add_device(
+            DeviceConfig(
+                id="d1",
+                device_type="DigitalOutput",
+                name="LED1",
+                board_id="b1",
+                pins={"output": 13},
+            )
+        )
+        session.add_device(
+            DeviceConfig(
+                id="d2",
+                device_type="DigitalOutput",
+                name="LED2",
+                board_id="b2",
+                pins={"output": 12},
+            )
+        )
+        session.add_node(NodeConfig(id="n1", node_type="DigitalWrite", device_id="d1"))
+        session.add_node(NodeConfig(id="n2", node_type="DigitalWrite", device_id="d2"))
+        session.add_node(NodeConfig(id="n3", node_type="Delay"))
+
+        session.remove_board("b1")
+
+        # Board and its devices are gone
+        assert session.get_board("b1") is None
+        assert all(d.board_id != "b1" for d in session.hardware.devices)
+
+        # Nodes bound to the removed board's devices are gone; others remain
+        node_ids = {n.id for n in session.flow.nodes}
+        assert "n1" not in node_ids, "Node bound to removed board's device left dangling"
+        assert "n2" in node_ids
+        assert "n3" in node_ids

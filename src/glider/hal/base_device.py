@@ -191,6 +191,12 @@ class BaseDevice(ABC):
         if not self._enabled:
             raise RuntimeError(f"Device {self._name} is disabled")
 
+        if not self._initialized:
+            raise RuntimeError(
+                f"Device {self._name} is not initialized "
+                "(it may have been shut down; re-initialize before use)"
+            )
+
         if action_name not in self.actions:
             raise ValueError(f"Unknown action: {action_name}")
 
@@ -1264,15 +1270,22 @@ class BLEWriteDevice(BaseDevice):
         logger.info("BLEWrite initialized: %s char %s", self._address, self._char_uuid)
 
     async def shutdown(self) -> None:
-        """Disconnect the peripheral (safe to call before initialize)."""
-        client = self._client
-        self._client = None
+        """Disconnect the peripheral (safe to call before initialize).
+
+        Clears ``_initialized`` FIRST so a ``write()`` queued behind the lock
+        refuses to run instead of reconnecting a device that was just shut
+        down (e.g. by an emergency stop), then serializes on the same lock
+        ``write()`` uses so an in-flight write finishes before the disconnect.
+        """
         self._initialized = False
-        if client is not None:
-            try:
-                await client.disconnect()
-            except Exception as e:  # pragma: no cover - disconnect best-effort
-                logger.warning("BLEWrite: error during disconnect: %s", e)
+        async with self._lock:
+            client = self._client
+            self._client = None
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception as e:  # pragma: no cover - disconnect best-effort
+                    logger.warning("BLEWrite: error during disconnect: %s", e)
 
     async def _ensure_connected(self) -> None:
         """Open (or reopen) the BleakClient connection if not already up."""
@@ -1347,13 +1360,19 @@ class BLEWriteDevice(BaseDevice):
         command = ",".join(self._format_arg(a) for a in args if a is not None)
         data = command.encode(self._encoding)
         async with self._lock:
+            if not self._initialized:
+                raise RuntimeError(f"BLEWrite device {self._name} is not initialized")
             try:
                 await self._ensure_connected()
                 await self._client.write_gatt_char(
                     self._char_uuid, data, response=self._effective_response()
                 )
             except Exception:
-                # Link may have dropped; reconnect once and retry.
+                # Link may have dropped; reconnect once and retry — unless a
+                # shutdown ran meanwhile (e.g. e-stop), in which case
+                # reconnecting would re-arm a device that was just stopped.
+                if not self._initialized:
+                    raise
                 self._client = None
                 await self._ensure_connected()
                 await self._client.write_gatt_char(
