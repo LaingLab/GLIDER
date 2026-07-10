@@ -644,6 +644,17 @@ QWidget[runnerHeader="true"] {
     border-radius: 8px;
 }
 
+/* === Persistent Run Banner (shown across Runner pages during a live run) === */
+QWidget[runnerRunBanner="true"] {
+    background-color: #0b0f14;
+    border-top: 1px solid #1e2530;
+    border-bottom: 1px solid #1e2530;
+}
+
+QWidget[runnerRunBanner="true"] QLabel[timer="true"] {
+    color: #34d399;
+}
+
 /* === Readiness Strip (Dashboard) === */
 QWidget[readinessStrip="true"] {
     background-color: transparent;
