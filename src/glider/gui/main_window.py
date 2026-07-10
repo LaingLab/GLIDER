@@ -498,6 +498,12 @@ class MainWindow(QMainWindow):
         # Refresh hardware tree (which also triggers device combo + runner refresh)
         self._hardware_panel.refresh_tree()
 
+        # The desktop docks have now adopted the shared Hardware/Camera panels,
+        # so the runner view would render stripped. Disable the toggle action
+        # (single-mode-per-process — see _runner_view_available).
+        if getattr(self, "_switch_view_action", None) is not None:
+            self._switch_view_action.setEnabled(False)
+
     # --- Menu / Toolbar / Status bar ---
 
     def _setup_menu(self) -> None:
@@ -587,6 +593,12 @@ class MainWindow(QMainWindow):
         switch_view_action.setShortcut(QKeySequence("F11"))
         switch_view_action.triggered.connect(self._toggle_view)
         view_menu.addAction(switch_view_action)
+        # Kept so _setup_dock_widgets can disable it once the desktop docks
+        # have adopted the shared Hardware/Camera panels — see _toggle_view.
+        # On a desktop boot the docks already exist by the time this menu is
+        # built, so reflect that state immediately too.
+        switch_view_action.setEnabled(self._runner_view_available())
+        self._switch_view_action = switch_view_action
 
         view_menu.addSeparator()
 
@@ -1166,14 +1178,36 @@ class MainWindow(QMainWindow):
 
     # --- View switching ---
 
+    def _runner_view_available(self) -> bool:
+        """Whether the runner view can still be shown intact.
+
+        GLIDER is single-mode-per-process in practice. The runner shell and its
+        Setup page share the Hardware/Camera panel instances with the desktop
+        docks; once _setup_dock_widgets has run (on a runner→desktop switch) it
+        reparents those panels into the docks, leaving the runner tabs stripped.
+        So once the desktop docks exist, switching back to the runner view is
+        disallowed rather than showing an empty Camera tab + hardware section.
+        """
+        return getattr(self, "_node_library_dock", None) is None
+
     def _toggle_view(self) -> None:
         current = self._stack.currentIndex()
+        if current == 0 and not self._runner_view_available():
+            self._show_status_message(
+                "Runner view is unavailable after switching to desktop mode.", 3000
+            )
+            return
         self._stack.setCurrentIndex(1 if current == 0 else 0)
 
     def switch_to_builder(self) -> None:
         self._stack.setCurrentIndex(0)
 
     def switch_to_runner(self) -> None:
+        if not self._runner_view_available():
+            self._show_status_message(
+                "Runner view is unavailable after switching to desktop mode.", 3000
+            )
+            return
         self._stack.setCurrentIndex(1)
 
     def _set_window_size(self, width: int, height: int) -> None:
@@ -1943,6 +1977,20 @@ class MainWindow(QMainWindow):
         if not self._check_save():
             event.ignore()
             return
+
+        # Deterministically stop the CameraPanel CV thread now that we are
+        # committed to closing. Runner mode always builds a CameraPanel (nested
+        # inside RunnerShell), and its CV QThread is only stopped from
+        # CameraPanel.closeEvent/destroyed — which Qt does not fire for a nested
+        # child during MainWindow teardown. Calling close() here synchronously
+        # joins the thread (idempotent via its isRunning() guard), so the Pi
+        # kiosk-exit path can't abort with "QThread destroyed while still
+        # running".
+        if getattr(self, "_camera_panel", None) is not None:
+            try:
+                self._camera_panel.close()
+            except Exception:
+                pass
 
         async def _drain_and_shutdown() -> None:
             pending = [t for t in self._pending_tasks if not t.done()]
