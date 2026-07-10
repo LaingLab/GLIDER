@@ -468,14 +468,16 @@ def test_feature_engine_returns_none_until_history_full():
         predict_every=1,
     )
     # Fewer than 5 frames -> None (and no np.gradient crash). snout↔tail is
-    # always 20 apart, so the middle frame's body_length is 20.
+    # always 20 apart, so the middle frame's body_length is 20. The per-frame
+    # math now lives in the StreamingFeatureExtractor the engine delegates to.
     for t in range(4):
-        eng._kp_history.append(np.array([[float(t), 0.0], [t + 10.0, 0.0], [t + 20.0, 0.0]]))
-        assert eng._compute_per_frame() is None
+        assert (
+            eng._extractor.push(np.array([[float(t), 0.0], [t + 10.0, 0.0], [t + 20.0, 0.0]]))
+            is None
+        )
 
     # 5th frame fills the history -> the middle frame's features.
-    eng._kp_history.append(np.array([[4.0, 0.0], [14.0, 0.0], [24.0, 0.0]]))
-    feats = eng._compute_per_frame()
+    feats = eng._extractor.push(np.array([[4.0, 0.0], [14.0, 0.0], [24.0, 0.0]]))
     assert feats is not None
     assert "body_length" in feats
     assert feats["body_length"] == pytest.approx(20.0)
