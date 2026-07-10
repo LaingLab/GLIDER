@@ -258,11 +258,13 @@ class RunnerPanel(QWidget):
     def refresh_readiness(self) -> None:
         """Recompute board/experiment readiness and update the strip + START button."""
         r = compute_readiness(self._core)
-        running = self._state_name == "RUNNING"
+        # PAUSED is live too (auto-pause on mid-run board disconnect); the setup
+        # rows must not reappear mid-experiment.
+        live = self._state_name in ("RUNNING", "PAUSED")
         # Visibility depends on run-state, which is NOT part of `r`. Apply it BEFORE
-        # the change-guard, or entering RUNNING (readiness unchanged) would return
-        # early and never hide the strip.
-        self._readiness_strip.setVisible(not running)
+        # the change-guard, or entering a live state (readiness unchanged) would
+        # return early and never hide the strip.
+        self._readiness_strip.setVisible(not live)
         if r == getattr(self, "_last_readiness", None):
             return
         self._last_readiness = r
@@ -294,11 +296,13 @@ class RunnerPanel(QWidget):
 
         self.refresh_readiness()
 
-        # The header timer is hidden while RUNNING because the persistent run
-        # banner (shown across both Runner pages) owns the visible timer then;
-        # it is reshown once idle/stopped, where the snap-to-duration repaint
-        # below already keeps it in sync.
-        if state_name == "RUNNING":
+        # The header timer is hidden while live (RUNNING or PAUSED) because the
+        # persistent run banner (shown across both Runner pages) owns the
+        # visible timer then; it is reshown once idle/stopped, where the
+        # snap-to-duration repaint below already keeps it in sync. PAUSED counts
+        # as live: main_window auto-pauses on a mid-run board disconnect, and
+        # the banner (not the header) stays visible through that.
+        if state_name in ("RUNNING", "PAUSED"):
             self._runner_timer.hide()
         else:
             self._runner_timer.show()

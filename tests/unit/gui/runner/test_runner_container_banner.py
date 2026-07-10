@@ -27,6 +27,21 @@ def test_banner_shown_while_running(qtbot, mock_core):
     assert c._banner.isVisibleTo(c) is False
 
 
+def test_banner_shown_while_paused(qtbot, mock_core):
+    from PyQt6.QtWidgets import QWidget
+
+    from glider.gui.runner.runner_container import RunnerContainer
+
+    c = RunnerContainer(mock_core, QWidget(), QWidget())
+    qtbot.addWidget(c)
+    c.show()
+    c.update_state("PAUSED")
+    assert c._banner.isVisibleTo(c) is True
+    assert c._banner._state.text() == "PAUSED"
+    c.update_state("IDLE")
+    assert c._banner.isVisibleTo(c) is False
+
+
 def test_container_reemits_stop(qtbot, mock_core):
     from PyQt6.QtWidgets import QWidget
 
