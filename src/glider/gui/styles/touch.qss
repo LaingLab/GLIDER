@@ -644,6 +644,46 @@ QWidget[runnerHeader="true"] {
     border-radius: 8px;
 }
 
+/* === Readiness Strip (Dashboard) === */
+QWidget[readinessStrip="true"] {
+    background-color: transparent;
+}
+
+/* Blocked gate: tall, amber, tappable — the row demands attention. */
+QPushButton[readinessRow="blocked"] {
+    background-color: #fbbf24;
+    color: #1a1400;
+    font-size: 15px;
+    font-weight: bold;
+    min-height: 60px;
+    border-radius: 10px;
+    border: none;
+    text-align: left;
+    padding-left: 16px;
+}
+
+QPushButton[readinessRow="blocked"]:pressed {
+    background-color: #e0a91a;
+}
+
+/* Satisfied gate: slim green confirmation — no longer needs a tap. */
+QPushButton[readinessRow="ok"] {
+    background-color: rgba(52, 211, 153, 0.12);
+    color: #34d399;
+    font-size: 13px;
+    font-weight: bold;
+    min-height: 32px;
+    max-height: 32px;
+    border-radius: 8px;
+    border: 1px solid rgba(52, 211, 153, 0.3);
+    text-align: left;
+    padding-left: 16px;
+}
+
+QPushButton[readinessRow="ok"]:pressed {
+    background-color: rgba(52, 211, 153, 0.2);
+}
+
 QWidget[runnerControls="true"] {
     background-color: #0b0f14;
     border-radius: 12px;
