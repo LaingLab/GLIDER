@@ -52,17 +52,22 @@ class HardwarePanel(QWidget):
         session_fn,
         run_async_fn,
         parent=None,
+        show_add_buttons: bool = True,
     ):
         """
         Args:
             hardware_manager: HardwareManager instance
             session_fn: Callable that returns the current ExperimentSession (or None)
             run_async_fn: Callable to schedule async coroutines
+            show_add_buttons: Whether to show the "+ Board"/"+ Device" buttons.
+                The Runner (Pi) UI hides these since the hardware map cannot be
+                edited on-device; the desktop dock keeps the default of True.
         """
         super().__init__(parent)
         self._hardware_manager = hardware_manager
         self._session_fn = session_fn
         self._run_async = run_async_fn
+        self._show_add_buttons = show_add_buttons
         self._setup_ui()
 
     @property
@@ -81,17 +86,19 @@ class HardwarePanel(QWidget):
         self._hardware_tree.customContextMenuRequested.connect(self._on_hardware_context_menu)
         layout.addWidget(self._hardware_tree)
 
-        # Hardware buttons
-        hw_btn_layout = QHBoxLayout()
-        add_board_btn = QPushButton("+ Board")
-        add_board_btn.clicked.connect(self._on_add_board)
-        hw_btn_layout.addWidget(add_board_btn)
+        # Hardware buttons (hidden on the Runner/Pi UI, which cannot edit the
+        # hardware map on-device).
+        if self._show_add_buttons:
+            hw_btn_layout = QHBoxLayout()
+            add_board_btn = QPushButton("+ Board")
+            add_board_btn.clicked.connect(self._on_add_board)
+            hw_btn_layout.addWidget(add_board_btn)
 
-        add_device_btn = QPushButton("+ Device")
-        add_device_btn.clicked.connect(self._on_add_device)
-        hw_btn_layout.addWidget(add_device_btn)
+            add_device_btn = QPushButton("+ Device")
+            add_device_btn.clicked.connect(self._on_add_device)
+            hw_btn_layout.addWidget(add_device_btn)
 
-        layout.addLayout(hw_btn_layout)
+            layout.addLayout(hw_btn_layout)
 
     # --- Public API ---
 

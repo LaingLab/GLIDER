@@ -251,7 +251,6 @@ class MainWindow(QMainWindow):
         # Connect runner panel signals
         self._runner_panel.start_requested.connect(self._on_start_clicked)
         self._runner_panel.stop_requested.connect(self._on_stop_clicked)
-        self._runner_panel.emergency_stop_requested.connect(self._on_emergency_stop)
 
         # Runner-mode Hardware Panel (also reused by desktop dock setup — see
         # _setup_dock_widgets, which re-hosts this same instance rather than
@@ -260,6 +259,7 @@ class MainWindow(QMainWindow):
             hardware_manager=self._core.hardware_manager,
             session_fn=lambda: self._core.session,
             run_async_fn=self._run_async,
+            show_add_buttons=False,
         )
         self._hardware_panel.status_message.connect(self._show_status_message)
 
@@ -267,22 +267,21 @@ class MainWindow(QMainWindow):
         self._camera_panel = self._build_camera_panel()
 
         # Manual control page + tab container
-        from glider.gui.runner.manual_control_panel import ManualControlPanel
-        from glider.gui.runner.manual_control_runner import ManualControlRunner
+        from glider.gui.runner.device_controls import RunnerDeviceControls
         from glider.gui.runner.runner_shell import RunnerShell
 
-        self._manual_control_panel = ManualControlPanel(self._core)
-        self._manual_control_runner = ManualControlRunner(self._core)
-        self._manual_control_panel.function_run_requested.connect(self._on_manual_run)
-        self._manual_control_panel.function_run_requested_param.connect(self._on_manual_run_param)
-        self._manual_control_panel.set_digital_requested.connect(
+        self._runner_device_controls = RunnerDeviceControls(self._core.hardware_manager)
+        self._runner_device_controls.set_digital_requested.connect(
             lambda dev_id, v: self._run_async(self._drive_digital(dev_id, v))
         )
-        self._manual_control_panel.toggle_digital_requested.connect(
+        self._runner_device_controls.toggle_digital_requested.connect(
             lambda dev_id: self._run_async(self._drive_toggle(dev_id))
         )
-        self._manual_control_panel.set_pwm_requested.connect(
+        self._runner_device_controls.set_pwm_requested.connect(
             lambda dev_id, v: self._run_async(self._drive_pwm(dev_id, v))
+        )
+        self._runner_device_controls.read_requested.connect(
+            lambda dev_id: self._run_async(self._drive_read(dev_id))
         )
 
         self._runner_setup_page = RunnerSetupPage(self._core, hardware_widget=self._hardware_panel)
@@ -291,7 +290,7 @@ class MainWindow(QMainWindow):
             self._core,
             self._runner_setup_page,
             self._runner_panel,
-            self._manual_control_panel,
+            self._runner_device_controls,
             self._camera_panel,
         )
         self._runner_panel.elapsed_updated.connect(self._runner_shell.set_banner_time)
@@ -314,6 +313,7 @@ class MainWindow(QMainWindow):
         # and must NOT re-wire these, to avoid double-firing).
         self._hardware_panel.hardware_changed.connect(self._runner_panel.refresh_devices)
         self._hardware_panel.hardware_changed.connect(self._runner_setup_page.refresh)
+        self._hardware_panel.hardware_changed.connect(self._runner_device_controls.refresh)
         self._hardware_panel.refresh_tree()
 
     def _build_camera_panel(self) -> CameraPanel:
@@ -919,7 +919,7 @@ class MainWindow(QMainWindow):
         )
 
         self.session_changed.connect(lambda: self._runner_panel.update_experiment_name())
-        self.session_changed.connect(self._manual_control_panel.refresh)
+        self.session_changed.connect(self._runner_device_controls.refresh)
         self.session_changed.connect(self._runner_setup_page.refresh)
 
     @pyqtSlot(object)
@@ -1828,25 +1828,6 @@ class MainWindow(QMainWindow):
     def _on_emergency_stop(self) -> None:
         self._run_async(self._core.emergency_stop())
 
-    @pyqtSlot(str)
-    def _on_manual_run(self, start_node_id: str) -> None:
-        self._run_async(self._manual_run_async(start_node_id))
-
-    def _on_manual_run_param(self, start_node_id: str, param: dict) -> None:
-        self._run_async(self._manual_run_async(start_node_id, param))
-
-    async def _manual_run_async(self, start_node_id: str, param: dict | None = None) -> None:
-        from glider.gui.runner.manual_control_runner import RunOutcome
-
-        self._manual_control_panel.set_running(start_node_id)
-        try:
-            result = await self._manual_control_runner.run(start_node_id, param=param)
-        finally:
-            self._manual_control_panel.set_running(None)
-
-        if result.outcome is not RunOutcome.SUCCESS:
-            self._show_status_message(f"Manual run: {result.outcome.value}")
-
     async def _drive_digital(self, dev_id, value):
         from glider.core.device_drive import set_digital
 
@@ -1873,6 +1854,16 @@ class MainWindow(QMainWindow):
             await set_pwm(dev, value)
         except Exception as e:  # noqa: BLE001
             self._show_status_message(f"Device control failed: {e}")
+
+    async def _drive_read(self, dev_id):
+        from glider.core.device_drive import read_input
+
+        dev = self._core.hardware_manager.get_device(dev_id)
+        try:
+            text = await read_input(dev)
+            self._runner_device_controls.set_read_value(dev_id, text)
+        except Exception as e:  # noqa: BLE001
+            self._show_status_message(f"Read failed: {e}")
 
     def _on_help(self) -> None:
         dialog = HelpDialog(self)
