@@ -808,7 +808,7 @@ QPushButton[manualTile="assign"]:disabled {
     border-color: #1e2530;
 }
 
-/* === Runner Bottom Tab Bar (RunnerContainer) === */
+/* === Runner Bottom Tab Bar (RunnerShell) === */
 
 /* Bar: chrome strip with a divider line separating it from the page above */
 QWidget[runnerTabBar="true"] {
