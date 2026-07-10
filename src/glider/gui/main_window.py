@@ -266,8 +266,21 @@ class MainWindow(QMainWindow):
         self._manual_control_runner = ManualControlRunner(self._core)
         self._manual_control_panel.function_run_requested.connect(self._on_manual_run)
         self._manual_control_panel.function_run_requested_param.connect(self._on_manual_run_param)
+        self._manual_control_panel.set_digital_requested.connect(
+            lambda dev_id, v: self._run_async(self._drive_digital(dev_id, v))
+        )
+        self._manual_control_panel.toggle_digital_requested.connect(
+            lambda dev_id: self._run_async(self._drive_toggle(dev_id))
+        )
+        self._manual_control_panel.set_pwm_requested.connect(
+            lambda dev_id, v: self._run_async(self._drive_pwm(dev_id, v))
+        )
 
-        self._runner_container = RunnerContainer(self._runner_panel, self._manual_control_panel)
+        self._runner_container = RunnerContainer(
+            self._core, self._runner_panel, self._manual_control_panel
+        )
+        self._runner_panel.elapsed_updated.connect(self._runner_container.set_banner_time)
+        self._runner_container.stop_requested.connect(self._on_stop_clicked)
 
     def _setup_dock_widgets(self) -> None:
         """Set up dock widgets for desktop mode."""
@@ -1753,6 +1766,33 @@ class MainWindow(QMainWindow):
 
         if result.outcome is not RunOutcome.SUCCESS:
             self._show_status_message(f"Manual run: {result.outcome.value}")
+
+    async def _drive_digital(self, dev_id, value):
+        from glider.core.device_drive import set_digital
+
+        dev = self._core.hardware_manager.get_device(dev_id)
+        try:
+            await set_digital(dev, value)
+        except Exception as e:  # noqa: BLE001
+            self._show_status_message(f"Device control failed: {e}")
+
+    async def _drive_toggle(self, dev_id):
+        from glider.core.device_drive import toggle_digital
+
+        dev = self._core.hardware_manager.get_device(dev_id)
+        try:
+            await toggle_digital(dev)
+        except Exception as e:  # noqa: BLE001
+            self._show_status_message(f"Device control failed: {e}")
+
+    async def _drive_pwm(self, dev_id, value):
+        from glider.core.device_drive import set_pwm
+
+        dev = self._core.hardware_manager.get_device(dev_id)
+        try:
+            await set_pwm(dev, value)
+        except Exception as e:  # noqa: BLE001
+            self._show_status_message(f"Device control failed: {e}")
 
     def _on_help(self) -> None:
         dialog = HelpDialog(self)

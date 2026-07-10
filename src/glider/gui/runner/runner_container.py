@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
@@ -12,13 +12,23 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.runner.run_banner import RunBanner
+
 
 class RunnerContainer(QWidget):
     """Holds the existing RunnerPanel (Dashboard) and the ManualControlPanel,
-    switched by a persistent bottom tab bar."""
+    switched by a persistent bottom tab bar.
 
-    def __init__(self, dashboard_page: QWidget, manual_page: QWidget, parent=None):
+    Also owns the persistent run banner (timer/state/REC/STOP), shown across
+    both pages while the core is RUNNING so the operator never loses it when
+    switching tabs.
+    """
+
+    stop_requested = pyqtSignal()
+
+    def __init__(self, core, dashboard_page: QWidget, manual_page: QWidget, parent=None):
         super().__init__(parent)
+        self._core = core
         self._dashboard = dashboard_page
         self._manual = manual_page
         self._setup_ui()
@@ -27,6 +37,11 @@ class RunnerContainer(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+
+        self._banner = RunBanner()
+        self._banner.hide()
+        self._banner.stop_requested.connect(self.stop_requested)
+        layout.addWidget(self._banner)
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self._dashboard)  # index 0
@@ -66,8 +81,19 @@ class RunnerContainer(QWidget):
         if index == 1 and hasattr(self._manual, "refresh"):
             self._manual.refresh()
 
+    def set_banner_time(self, text: str) -> None:
+        """Forward a pre-formatted elapsed-time string to the run banner."""
+        self._banner.set_time(text)
+
     def update_state(self, state_name: str) -> None:
         """Forward state changes to both pages (each ignores what it doesn't use)."""
         for page in (self._dashboard, self._manual):
             if hasattr(page, "update_state"):
                 page.update_state(state_name)
+
+        running = state_name == "RUNNING"
+        self._banner.setVisible(running)
+        if running:
+            self._banner.set_state(
+                state_name, recording=bool(self._core.data_recorder.is_recording)
+            )
