@@ -23,6 +23,8 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.core.config import get_config
+from glider.gui.runner.readiness import compute_readiness
+from glider.gui.runner.run_timer import format_elapsed
 from glider.gui.styles import colors
 
 if TYPE_CHECKING:
@@ -45,6 +47,7 @@ class RunnerPanel(QWidget):
     help_requested = pyqtSignal()
     close_requested = pyqtSignal()
     reload_requested = pyqtSignal()
+    elapsed_updated = pyqtSignal(str)
 
     def __init__(self, core: "GliderCore", view_manager: "ViewManager", parent=None):
         super().__init__(parent)
@@ -54,6 +57,7 @@ class RunnerPanel(QWidget):
         # Store device widgets for updates
         self._runner_device_cards: dict[str, QWidget] = {}
         self._experiment_start_time: float | None = None
+        self._state_name = "IDLE"
 
         self.setObjectName("runnerView")
         self._setup_ui()
@@ -97,6 +101,42 @@ class RunnerPanel(QWidget):
         header_layout.addWidget(self._runner_menu_btn)
 
         layout.addWidget(header)
+
+        # === Readiness Strip ===
+        self._readiness_strip = QWidget()
+        self._readiness_strip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._readiness_strip.setProperty("readinessStrip", True)
+        strip_layout = QVBoxLayout(self._readiness_strip)
+        strip_layout.setContentsMargins(0, 0, 0, 0)
+        strip_layout.setSpacing(6)
+
+        self._board_row = QPushButton()
+        self._board_row.setProperty("readinessRow", "blocked")
+        self._board_row.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._board_row.clicked.connect(lambda: self.board_settings_requested.emit())
+        strip_layout.addWidget(self._board_row)
+
+        exp_row_container = QWidget()
+        exp_row_layout = QHBoxLayout(exp_row_container)
+        exp_row_layout.setContentsMargins(0, 0, 0, 0)
+        exp_row_layout.setSpacing(0)
+
+        self._exp_row = QPushButton()
+        self._exp_row.setProperty("readinessRow", "blocked")
+        self._exp_row.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._exp_row.clicked.connect(lambda: self.open_requested.emit())
+        exp_row_layout.addWidget(self._exp_row, 1)
+
+        self._reload_btn = QPushButton("⟳")
+        self._reload_btn.setProperty("buttonRole", "secondary")
+        self._reload_btn.setFixedSize(44, 44)
+        self._reload_btn.clicked.connect(lambda: self.reload_requested.emit())
+        self._reload_btn.hide()
+        exp_row_layout.addWidget(self._reload_btn)
+
+        strip_layout.addWidget(exp_row_container)
+
+        layout.addWidget(self._readiness_strip)
 
         # === Recording Indicator ===
         self._runner_recording = QLabel("\u25cf REC")
@@ -147,6 +187,7 @@ class RunnerPanel(QWidget):
         self._start_btn = QPushButton("\u25b6  START")
         self._start_btn.setFixedHeight(60)
         self._start_btn.setProperty("runnerAction", "start")
+        self._start_btn.setEnabled(False)
         self._start_btn.clicked.connect(self.start_requested.emit)
         top_row.addWidget(self._start_btn)
 
@@ -176,12 +217,19 @@ class RunnerPanel(QWidget):
         self._elapsed_timer.setInterval(config.timing.elapsed_timer_interval_ms)
         self._elapsed_timer.timeout.connect(self._update_elapsed_time)
 
+        self._readiness_timer = QTimer(self)
+        self._readiness_timer.setInterval(500)
+        self._readiness_timer.timeout.connect(self.refresh_readiness)
+        self._readiness_timer.start()
+
         # --- TEMPORARY: main-thread stall instrument (remove in Task 9) ---
         self._stall_last_tick: float | None = None
         self._stall_timer = QTimer(self)
         self._stall_timer.setInterval(50)
         self._stall_timer.timeout.connect(self._check_main_thread_stall)
         self._stall_timer.start()
+
+        self.refresh_readiness()
 
     # --- Public API ---
 
@@ -205,13 +253,55 @@ class RunnerPanel(QWidget):
             self._runner_devices_layout.insertWidget(self._runner_devices_layout.count() - 1, card)
             self._runner_device_cards[device_id] = card
 
+        self.refresh_readiness()
+
+    def refresh_readiness(self) -> None:
+        """Recompute board/experiment readiness and update the strip + START button."""
+        r = compute_readiness(self._core)
+        running = self._state_name == "RUNNING"
+        # Visibility depends on run-state, which is NOT part of `r`. Apply it BEFORE
+        # the change-guard, or entering RUNNING (readiness unchanged) would return
+        # early and never hide the strip.
+        self._readiness_strip.setVisible(not running)
+        if r == getattr(self, "_last_readiness", None):
+            return
+        self._last_readiness = r
+        self._board_row.setText(
+            f"✓ {r.board_label}" if r.board_ready else "🔌 Board not connected — tap to connect"
+        )
+        self._board_row.setProperty("readinessRow", "ok" if r.board_ready else "blocked")
+        self._exp_row.setText(
+            f"✓ {r.experiment_label or 'Experiment loaded'}"
+            if r.experiment_ready
+            else "📄 No experiment loaded — tap to open"
+        )
+        self._exp_row.setProperty("readinessRow", "ok" if r.experiment_ready else "blocked")
+        self._reload_btn.setVisible(r.experiment_ready)
+        for w in (self._board_row, self._exp_row):
+            w.style().unpolish(w)
+            w.style().polish(w)
+        self._start_btn.setEnabled(r.all_ready)
+
     def update_state(self, state_name: str) -> None:
         """Update UI based on core state changes."""
+        self._state_name = state_name
+
         # Update status label
         self._status_label.setText(state_name)
         self._status_label.setProperty("statusState", state_name)
         self._status_label.style().unpolish(self._status_label)
         self._status_label.style().polish(self._status_label)
+
+        self.refresh_readiness()
+
+        # The header timer is hidden while RUNNING because the persistent run
+        # banner (shown across both Runner pages) owns the visible timer then;
+        # it is reshown once idle/stopped, where the snap-to-duration repaint
+        # below already keeps it in sync.
+        if state_name == "RUNNING":
+            self._runner_timer.hide()
+        else:
+            self._runner_timer.show()
 
         # Update recording indicator
         if state_name == "RUNNING" and self._core.data_recorder.is_recording:
@@ -308,21 +398,10 @@ class RunnerPanel(QWidget):
         self._set_timer_display(duration)
 
     def _set_timer_display(self, elapsed: float) -> None:
-        """Format ``elapsed`` (seconds) as MM:SS.cc / HH:MM:SS.cc and paint
-        it into the timer label. Truncates toward zero so centiseconds
-        never reads ``60``."""
-        # int() truncates toward zero for non-negative floats — exactly what we want.
-        total_centiseconds = int(max(0.0, elapsed) * 100)
-        hours, rem = divmod(total_centiseconds, 360_000)
-        minutes, rem = divmod(rem, 6_000)
-        seconds, centiseconds = divmod(rem, 100)
-
-        if hours > 0:
-            time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{centiseconds:02d}"
-        else:
-            time_str = f"{minutes:02d}:{seconds:02d}.{centiseconds:02d}"
-
-        self._runner_timer.setText(time_str)
+        """Format ``elapsed`` (seconds) and paint it into the timer label."""
+        text = format_elapsed(elapsed)
+        self._runner_timer.setText(text)
+        self.elapsed_updated.emit(text)
 
     def _update_runner_device_states(self) -> None:
         """Update the device state displays in runner view."""
@@ -477,15 +556,6 @@ class RunnerPanel(QWidget):
         """Show the runner mode menu."""
         menu = QMenu(self)
 
-        open_action = menu.addAction("Open Experiment")
-        open_action.triggered.connect(self.open_requested.emit)
-
-        reload_action = menu.addAction("Reload")
-        reload_action.triggered.connect(self.reload_requested.emit)
-
-        board_action = menu.addAction("Ports")
-        board_action.triggered.connect(self.board_settings_requested.emit)
-
         desktop_action = menu.addAction("Hardware Config")
         desktop_action.triggered.connect(self.switch_to_desktop_requested.emit)
 
@@ -510,7 +580,7 @@ class RunnerPanel(QWidget):
         if we don't explicitly stop them — polluting logs and blocking
         garbage collection of this panel.
         """
-        for attr in ("_stall_timer", "_elapsed_timer", "_device_refresh_timer"):
+        for attr in ("_stall_timer", "_elapsed_timer", "_device_refresh_timer", "_readiness_timer"):
             timer = getattr(self, attr, None)
             if timer is not None:
                 try:

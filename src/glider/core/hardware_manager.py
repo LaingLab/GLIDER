@@ -100,6 +100,17 @@ class HardwareManager:
         """True if at least one registered board reports a live connection."""
         return any(board.is_connected for board in self._boards.values())
 
+    def connected_board_description(self) -> str:
+        """Human-readable label for the first connected board, or "" if none.
+
+        Format is "<name> · <port>" when a port is available, otherwise just
+        the board's name. Used by the Runner readiness strip.
+        """
+        for board in self._boards.values():
+            if board.is_connected:
+                return f"{board.name} · {board.port}" if board.port else board.name
+        return ""
+
     @property
     def devices(self) -> dict[str, BaseDevice]:
         """Dictionary of active device instances."""

@@ -20,3 +20,21 @@ async def test_registered_but_disconnected_board_returns_false():
     await board.disconnect()
     manager._boards["b1"] = board
     assert manager.is_any_board_connected() is False
+
+
+def test_connected_board_description_no_boards_returns_empty():
+    assert HardwareManager().connected_board_description() == ""
+
+
+def test_connected_board_description_includes_name_and_port():
+    manager = HardwareManager()
+    manager._boards["b1"] = MockBoard(port="COM3")
+    assert manager.connected_board_description() == f"{MockBoard().name} · COM3"
+
+
+async def test_connected_board_description_skips_disconnected_board():
+    manager = HardwareManager()
+    board = MockBoard(port="COM3")
+    await board.disconnect()
+    manager._boards["b1"] = board
+    assert manager.connected_board_description() == ""
