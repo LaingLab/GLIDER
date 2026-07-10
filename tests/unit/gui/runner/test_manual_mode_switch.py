@@ -46,6 +46,17 @@ def test_idle_shows_function_grid(qtbot, core):
     assert p._stack.currentIndex() == 0
 
 
+def test_paused_shows_device_controls(qtbot, core):
+    # A paused experiment is still live on the engine, so the Manual page must
+    # show device controls (not the function grid), matching the banner/timer.
+    from glider.gui.runner.manual_control_panel import ManualControlPanel
+
+    p = ManualControlPanel(core)
+    qtbot.addWidget(p)
+    p.update_state("PAUSED")
+    assert p._stack.currentIndex() == 1
+
+
 def test_manual_chain_running_does_not_switch(qtbot, core):
     from glider.gui.runner.manual_control_panel import ManualControlPanel
 

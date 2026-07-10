@@ -308,17 +308,20 @@ class ManualControlPanel(QWidget):
     def update_state(self, state_name: str) -> None:
         """Update the core state name and re-apply enable-state.
 
-        A recorded experiment ("RUNNING", delivered here) swaps the function
-        grid for the live-run device controls. A manual function run (see
-        set_running) never reaches this method with "RUNNING" and must not
-        switch modes.
+        A live recorded experiment swaps the function grid for the live-run
+        device controls. "Live" means RUNNING *or* PAUSED: a paused experiment
+        (e.g. an auto-pause on mid-run board disconnect) is still active on the
+        engine, so full function chains must stay unavailable here — matching
+        how the run banner, header timer, and readiness strip all treat PAUSED
+        as live. A manual function run (see set_running) never reaches this
+        method with "RUNNING"/"PAUSED" and must not switch modes.
         """
         self._state = state_name
         self._apply_enable_state()
 
-        running = state_name == "RUNNING"
-        self._stack.setCurrentIndex(1 if running else 0)
-        if running:
+        live = state_name in ("RUNNING", "PAUSED")
+        self._stack.setCurrentIndex(1 if live else 0)
+        if live:
             self._device_controls.refresh()
 
     # --- Enable-state (single source of truth) ---
