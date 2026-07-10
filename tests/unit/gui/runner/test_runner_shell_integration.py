@@ -5,16 +5,13 @@ single-tab Runner shell boots on Setup and that switching to desktop mode
 reuses (rather than duplicates) the shared HardwarePanel/CameraPanel
 instances built by ``_create_runner_view``.
 
-CameraPanel starts a QThread unconditionally in its constructor and only
-stops it from ``closeEvent``/the widget's ``destroyed`` signal. Because it is
-now nested several levels deep inside ``RunnerShell``'s QStackedWidget rather
-than owned directly by a dock, qtbot's automatic teardown (which only closes
-the widgets explicitly passed to ``addWidget``) does not reach it in time —
-the thread is still alive when the interpreter starts finalizing, which
-crashes the process. Each test therefore explicitly closes
-``w._camera_panel`` (synchronously joining its CV thread) before returning.
-This is a pre-existing CameraPanel lifecycle quirk, reproducible on main
-in desktop mode too; it is unrelated to the runner-shell wiring itself.
+CameraPanel starts a CV QThread in its constructor and only stops it from
+``closeEvent``/``destroyed``. Since it is now nested inside RunnerShell's
+QStackedWidget (not owned directly by a dock), Qt does not fire those on a
+MainWindow teardown, which used to leave the thread alive at interpreter
+finalization and crash the process. ``MainWindow.closeEvent`` now stops the
+CV thread deterministically, and pytest-qt's ``addWidget`` teardown fires
+that ``closeEvent`` — so no manual camera-panel close is needed here.
 """
 
 import asyncio
@@ -44,10 +41,7 @@ def _runner_window(qtbot):
     return w, core, loop
 
 
-def _teardown(w, core, loop):
-    # Synchronously stop CameraPanel's CV thread before shutdown/loop
-    # teardown — see module docstring.
-    w._camera_panel.close()
+def _teardown(core, loop):
     try:
         loop.run_until_complete(core.shutdown())
     finally:
@@ -60,15 +54,18 @@ def test_boots_on_setup_tab(qtbot):
     try:
         assert w._runner_shell._stack.currentIndex() == 0
     finally:
-        _teardown(w, core, loop)
+        _teardown(core, loop)
 
 
 def test_desktop_switch_no_duplicate_hardware_panel(qtbot):
     w, core, loop = _runner_window(qtbot)
     try:
         hp_id = id(w._hardware_panel)
+        cam_id = id(w._camera_panel)
         w._switch_to_desktop_mode()
         assert id(w._hardware_panel) == hp_id
         assert w._hardware_dock.widget() is w._hardware_panel
+        assert id(w._camera_panel) == cam_id
+        assert w._camera_dock.widget() is w._camera_panel
     finally:
-        _teardown(w, core, loop)
+        _teardown(core, loop)
