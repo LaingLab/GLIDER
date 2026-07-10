@@ -47,6 +47,7 @@ class RunnerPanel(QWidget):
     help_requested = pyqtSignal()
     close_requested = pyqtSignal()
     reload_requested = pyqtSignal()
+    elapsed_updated = pyqtSignal(str)
 
     def __init__(self, core: "GliderCore", view_manager: "ViewManager", parent=None):
         super().__init__(parent)
@@ -293,6 +294,15 @@ class RunnerPanel(QWidget):
 
         self.refresh_readiness()
 
+        # The header timer is hidden while RUNNING because the persistent run
+        # banner (shown across both Runner pages) owns the visible timer then;
+        # it is reshown once idle/stopped, where the snap-to-duration repaint
+        # below already keeps it in sync.
+        if state_name == "RUNNING":
+            self._runner_timer.hide()
+        else:
+            self._runner_timer.show()
+
         # Update recording indicator
         if state_name == "RUNNING" and self._core.data_recorder.is_recording:
             self._runner_recording.show()
@@ -389,7 +399,9 @@ class RunnerPanel(QWidget):
 
     def _set_timer_display(self, elapsed: float) -> None:
         """Format ``elapsed`` (seconds) and paint it into the timer label."""
-        self._runner_timer.setText(format_elapsed(elapsed))
+        text = format_elapsed(elapsed)
+        self._runner_timer.setText(text)
+        self.elapsed_updated.emit(text)
 
     def _update_runner_device_states(self) -> None:
         """Update the device state displays in runner view."""
