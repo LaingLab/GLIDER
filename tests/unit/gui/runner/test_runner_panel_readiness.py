@@ -50,6 +50,16 @@ def test_strip_hidden_while_running(qtbot, mock_core):
     assert p._readiness_strip.isVisibleTo(p) is False
 
 
+def test_strip_hidden_while_paused(qtbot, mock_core):
+    # PAUSED runs the timer-snap path (else branch); None takes its early return
+    # instead of painting a MagicMock into the timer label.
+    mock_core.last_flow_duration_s = None
+    p = _panel(qtbot, mock_core, board=True, has_start=True)
+    assert p._readiness_strip.isVisibleTo(p) is True
+    p.update_state("PAUSED")
+    assert p._readiness_strip.isVisibleTo(p) is False
+
+
 def test_experiment_row_blocked_rendering(qtbot, mock_core):
     p = _panel(qtbot, mock_core, board=True, has_start=False)
     assert p._reload_btn.isVisibleTo(p) is False

@@ -91,9 +91,12 @@ class RunnerContainer(QWidget):
             if hasattr(page, "update_state"):
                 page.update_state(state_name)
 
-        running = state_name == "RUNNING"
-        self._banner.setVisible(running)
-        if running:
+        # PAUSED is a live state (main_window auto-pauses on mid-run board
+        # disconnect); the banner carries the ONLY STOP reachable from the
+        # Manual page, so it must stay up through a pause too.
+        live = state_name in ("RUNNING", "PAUSED")
+        self._banner.setVisible(live)
+        if live:
             self._banner.set_state(
                 state_name, recording=bool(self._core.data_recorder.is_recording)
             )
