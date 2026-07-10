@@ -8,6 +8,7 @@ and quick access to camera settings.
 import asyncio
 import logging
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 import cv2
@@ -18,8 +19,10 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QProgressBar,
     QPushButton,
     QRadioButton,
@@ -42,6 +45,19 @@ if TYPE_CHECKING:
     from glider.vision.zones import ZoneConfiguration
 
 logger = logging.getLogger(__name__)
+
+
+def _picker_row(label: QLabel, button: QPushButton) -> QHBoxLayout:
+    """A file-picker row: stretched label + a tight Browse button.
+
+    Mirrors the ``_row`` helper the behavior-analysis window uses for its
+    model/YOLO pickers, keeping the Live Behavior group visually consistent
+    with the Apply tab.
+    """
+    row = QHBoxLayout()
+    row.addWidget(label, 1)
+    row.addWidget(button, 0)
+    return row
 
 
 @dataclass
@@ -100,6 +116,11 @@ class CameraPreviewWidget(QLabel):
         self._show_calibration = True
         self._zone_config: ZoneConfiguration | None = None
         self._show_zones = True
+        # Live pose-skeleton + behavior-label overlays (set by the panel from
+        # the main thread; drawn onto the BGR frame before RGB conversion).
+        self._pose_kps: np.ndarray | None = None
+        self._behavior_label = ""
+        self._vocab: list[str] | None = None
         self.setText("No Camera")
         # Prevent the widget from resizing based on pixmap content
         self.setScaledContents(False)
@@ -120,6 +141,51 @@ class CameraPreviewWidget(QLabel):
     def set_show_zones(self, show: bool) -> None:
         """Toggle zone display."""
         self._show_zones = show
+
+    def set_pose_overlay(self, keypoints: "np.ndarray | None") -> None:
+        """Set the pose skeleton to draw on the preview.
+
+        ``keypoints`` is a ``(K, 2)`` ndarray of xy pixel coords, or ``None``
+        to clear the skeleton. Main-thread only (like the other setters).
+        """
+        self._pose_kps = keypoints
+
+    def set_behavior_label(self, label: str) -> None:
+        """Set the behavior-label badge text (empty string clears it).
+
+        Main-thread only.
+        """
+        self._behavior_label = label or ""
+
+    def set_behavior_vocab(self, vocab: list[str]) -> None:
+        """Set the ordered class vocabulary for stable label colors.
+
+        The panel calls this once at Start. Main-thread only.
+        """
+        self._vocab = vocab
+
+    def _draw_overlays(self, frame: np.ndarray) -> np.ndarray:
+        """Draw the pose skeleton + behavior badge onto ``frame`` in place.
+
+        Returns the same array for chaining. No-op when no pose/label is set.
+        The overlay module is imported lazily to avoid pulling the heavy
+        behavior-analysis package at GUI import time (mirrors the lazy vision
+        imports elsewhere in this module).
+        """
+        if self._pose_kps is None and not self._behavior_label:
+            return frame
+
+        from glider.analysis.behavior.classify import overlay
+
+        if self._pose_kps is not None:
+            overlay.draw_skeleton(frame, self._pose_kps, edges=None)
+        if self._behavior_label:
+            overlay.draw_label_badge(
+                frame,
+                self._behavior_label,
+                overlay.color_for_behavior(self._behavior_label, self._vocab),
+            )
+        return frame
 
     def update_frame(self, frame: np.ndarray) -> None:
         """Update display with new frame."""
@@ -158,6 +224,13 @@ class CameraPreviewWidget(QLabel):
             display_frame = draw_zones(
                 display_frame, self._zone_config, alpha=0.3, show_labels=True
             )
+
+        # Draw pose skeleton + behavior badge if set. Copy first so we never
+        # mutate the caller's frame (zones/calibration may already have copied).
+        if self._pose_kps is not None or self._behavior_label:
+            if display_frame is frame:
+                display_frame = frame.copy()
+            display_frame = self._draw_overlays(display_frame)
 
         # Convert BGR to RGB
         rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
@@ -217,6 +290,11 @@ class CameraPanel(QWidget):
     # automatically), this ensures process_frame() runs on the worker thread.
     _process_frame_requested = pyqtSignal(object)  # FrameData -> CVWorker.process_frame
 
+    # Live-behavior worker dispatch. Like _process_frame_requested, these cross
+    # into the BehaviorInferenceWorker's thread via automatic QueuedConnections.
+    _behavior_init_requested = pyqtSignal(str, str, list)  # pkl, pt, keypoint names
+    _behavior_frame_requested = pyqtSignal(object)  # FrameData -> worker.process_frame
+
     def __init__(
         self,
         camera_manager: "CameraManager",
@@ -243,6 +321,14 @@ class CameraPanel(QWidget):
         self._multi_camera_mode = False
         self._last_frame = None
         self._frame_count = 0
+
+        # --- Live behavior inference state ---
+        # Chosen model paths (set via the pickers); both required to Start.
+        self._behavior_pkl: Path | None = None
+        self._yolo_pt: Path | None = None
+        self._behavior_thread: QThread | None = None
+        self._behavior_worker: Any | None = None
+        self._behavior_running = False
 
         # Video-file source state (offline tracking)
         from glider.vision.video_source import VideoFileSource
@@ -432,6 +518,39 @@ class CameraPanel(QWidget):
         multi_cam_layout.addStretch()
         layout.addLayout(multi_cam_layout)
 
+        # --- Live Behavior inference ---
+        behavior_group = QGroupBox("Live Behavior")
+        behavior_layout = QVBoxLayout(behavior_group)
+
+        self._behavior_model_label = QLabel("Behavior model: (none)")
+        behavior_model_btn = QPushButton("Browse…")
+        behavior_model_btn.clicked.connect(self._on_choose_behavior_model)
+        behavior_layout.addLayout(_picker_row(self._behavior_model_label, behavior_model_btn))
+
+        self._pose_model_label = QLabel("Pose model: (none)")
+        pose_model_btn = QPushButton("Browse…")
+        pose_model_btn.clicked.connect(self._on_choose_pose_model)
+        behavior_layout.addLayout(_picker_row(self._pose_model_label, pose_model_btn))
+
+        self._kp_names_edit = QLineEdit()
+        self._kp_names_edit.setPlaceholderText("nose, left_ear, right_ear, ... (comma-separated)")
+        self._kp_names_edit.textChanged.connect(self._update_live_controls_enabled)
+        kp_row = QHBoxLayout()
+        kp_row.addWidget(QLabel("Keypoint names:"))
+        kp_row.addWidget(self._kp_names_edit, 1)
+        behavior_layout.addLayout(kp_row)
+
+        kp_hint = QLabel("Names must be in the model's training order.")
+        kp_hint.setProperty("textRole", "muted")
+        behavior_layout.addWidget(kp_hint)
+
+        self._live_behavior_btn = QPushButton("Start")
+        self._live_behavior_btn.setEnabled(False)
+        self._live_behavior_btn.clicked.connect(self._toggle_live_behavior)
+        behavior_layout.addWidget(self._live_behavior_btn)
+
+        layout.addWidget(behavior_group)
+
         # Set up scroll area
         scroll_area.setWidget(content_widget)
         main_layout.addWidget(scroll_area)
@@ -476,6 +595,24 @@ class CameraPanel(QWidget):
 
     def _handle_frame_input(self, frame_data: FrameData) -> None:
         """Decide whether to process frame with CV or update UI immediately."""
+        # Fan out EVERY frame to the live-behavior worker (independent of the CV
+        # pipeline). The worker lives on its own thread, so the emit is a
+        # QueuedConnection and never blocks this handler.
+        #
+        # Do NOT decimate here: the worker's StreamingFeatureExtractor computes
+        # centered-gradient velocity/acceleration over *consecutive* frames and
+        # its SlidingFeatureBuffer rolls over consecutive frames. Skipping frames
+        # would ~Nx-inflate live kinematics and stretch the window's wall-clock
+        # span, pushing features out of the trained distribution. This mirrors
+        # the offline PoseTracker/FeatureEngine, which push every frame into the
+        # extractor and gate only the *emission* cadence. Tradeoff: if pose
+        # inference can't keep up with camera fps the queued frames back up and
+        # latency grows -- but we must not silently drop frames, because that
+        # corrupts the stateful features. (A future bounded/gap-aware path is
+        # out of scope.)
+        if self._behavior_running:
+            self._behavior_frame_requested.emit(frame_data)
+
         if self._cv_enabled_cb.isChecked() and self._cv_processor.is_initialized:
             # Offload to CV worker thread via signal (QueuedConnection ensures
             # process_frame runs on the worker thread, not the main thread)
@@ -1150,10 +1287,169 @@ class CameraPanel(QWidget):
             self._cv_thread.quit()
             self._cv_thread.wait(2000)
 
+    # ------------------------------------------------------------------
+    # Live-behavior inference (Task 5)
+    # ------------------------------------------------------------------
+
+    def _on_choose_behavior_model(self) -> None:
+        from PyQt6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose behavior model", "", "Model files (*.pkl);;All files (*)"
+        )
+        if not path:
+            return
+        self._behavior_pkl = Path(path)
+        self._behavior_model_label.setText(f"Behavior model: {path}")
+        self._update_live_controls_enabled()
+
+    def _on_choose_pose_model(self) -> None:
+        from PyQt6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose pose model", "", "Weights (*.pt);;All files (*)"
+        )
+        if not path:
+            return
+        self._yolo_pt = Path(path)
+        self._pose_model_label.setText(f"Pose model: {path}")
+        self._update_live_controls_enabled()
+
+    def _parse_keypoint_names(self) -> list[str]:
+        """Split the keypoint-names field into a trimmed, non-empty name list."""
+        return [name.strip() for name in self._kp_names_edit.text().split(",") if name.strip()]
+
+    def _update_live_controls_enabled(self) -> None:
+        """Enable the Start toggle only once both paths + names are provided.
+
+        While a run is active the button stays enabled (it becomes "Stop"), so
+        we only gate it in the stopped state.
+        """
+        if self._behavior_running:
+            return
+        ready = (
+            self._behavior_pkl is not None
+            and self._yolo_pt is not None
+            and bool(self._parse_keypoint_names())
+        )
+        self._live_behavior_btn.setEnabled(ready)
+
+    def _toggle_live_behavior(self) -> None:
+        """Start the live-behavior worker, or stop it if already running."""
+        if self._behavior_running:
+            self.stop_live_behavior()
+        else:
+            self._start_live_behavior()
+
+    def _start_live_behavior(self) -> None:
+        """Spin up the BehaviorInferenceWorker on its own thread and load models."""
+        names = self._parse_keypoint_names()
+        if self._behavior_pkl is None or self._yolo_pt is None or not names:
+            return
+
+        from glider.gui.panels.live_behavior import BehaviorInferenceWorker
+
+        self._behavior_thread = QThread()
+        self._behavior_worker = BehaviorInferenceWorker()
+        self._behavior_worker.moveToThread(self._behavior_thread)
+
+        # Result/status signals come back to the main thread (QueuedConnection).
+        self._behavior_worker.ready.connect(self._on_behavior_ready)
+        self._behavior_worker.load_failed.connect(self._on_behavior_load_failed)
+        self._behavior_worker.result_ready.connect(self._on_behavior_result)
+        # Cross into the worker thread for model loading + per-frame inference.
+        self._behavior_init_requested.connect(self._behavior_worker.initialize)
+        self._behavior_frame_requested.connect(self._behavior_worker.process_frame)
+
+        # Disabled while models load; re-enabled as "Stop" once ready, or reset
+        # to an enabled "Start" if loading fails.
+        self._live_behavior_btn.setEnabled(False)
+        self._behavior_thread.start()
+        self._behavior_init_requested.emit(str(self._behavior_pkl), str(self._yolo_pt), names)
+
+    def _on_behavior_ready(self) -> None:
+        """Models loaded successfully — go live."""
+        worker = self._behavior_worker
+        if worker is None:
+            return
+        self._preview.set_behavior_vocab(worker.classes)
+        self._behavior_running = True
+        self._live_behavior_btn.setText("Stop")
+        self._live_behavior_btn.setEnabled(True)
+
+    def _on_behavior_load_failed(self, message: str) -> None:
+        """Model loading failed — surface it and return to the stopped state."""
+        from PyQt6.QtWidgets import QMessageBox
+
+        self._teardown_behavior_thread()
+        self._behavior_running = False
+        self._live_behavior_btn.setText("Start")
+        self._update_live_controls_enabled()
+        QMessageBox.warning(self, "Live Behavior", message)
+
+    def _on_behavior_result(self, label: str, keypoints: Any) -> None:
+        """Push a classified frame's label + pose overlay onto the preview."""
+        self._preview.set_behavior_label(label)
+        self._preview.set_pose_overlay(keypoints)
+
+    def stop_live_behavior(self) -> None:
+        """Stop live inference: join the worker thread and clear overlays.
+
+        Safe to call when nothing is running (idempotent). Used by both the
+        Stop toggle and panel teardown so no worker thread outlives the panel.
+        """
+        self._behavior_running = False
+        self._teardown_behavior_thread()
+        self._preview.set_pose_overlay(None)
+        self._preview.set_behavior_label("")
+        self._live_behavior_btn.setText("Start")
+        self._update_live_controls_enabled()
+
+    def _teardown_behavior_thread(self) -> None:
+        """Disconnect + quit()/wait() the behavior worker thread (if any)."""
+        worker = self._behavior_worker
+        if worker is not None:
+            for signal, slot in (
+                (worker.ready, self._on_behavior_ready),
+                (worker.load_failed, self._on_behavior_load_failed),
+                (worker.result_ready, self._on_behavior_result),
+            ):
+                try:
+                    signal.disconnect(slot)
+                except (TypeError, RuntimeError):
+                    pass
+            for signal, slot in (
+                (self._behavior_init_requested, worker.initialize),
+                (self._behavior_frame_requested, worker.process_frame),
+            ):
+                try:
+                    signal.disconnect(slot)
+                except (TypeError, RuntimeError):
+                    pass
+
+        thread = self._behavior_thread
+        if thread is not None:
+            # Schedule the worker's deletion via the thread's finished signal
+            # *before* quit(): calling worker.deleteLater() after wait() posts
+            # the event to an already-dead event loop, so the worker may never
+            # be reclaimed. Connecting finished -> deleteLater lets Qt honour the
+            # queued deletion as the worker's loop unwinds.
+            if worker is not None:
+                thread.finished.connect(worker.deleteLater)
+            thread.quit()
+            thread.wait(5000)
+            thread.deleteLater()
+            self._behavior_thread = None
+        elif worker is not None:
+            # No thread ever started for this worker — delete it directly.
+            worker.deleteLater()
+        self._behavior_worker = None
+
     def closeEvent(self, event):
         """Clean up on close."""
         # Tear down any in-flight tracking run and release the scrub video source.
         self._teardown_run_thread()
+        self.stop_live_behavior()
         self._video_source.release()
 
         if self._preview_active:
