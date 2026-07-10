@@ -69,3 +69,11 @@ def test_desktop_switch_no_duplicate_hardware_panel(qtbot):
         assert w._camera_dock.widget() is w._camera_panel
     finally:
         _teardown(core, loop)
+
+
+def test_manual_tab_is_device_controls(qtbot):
+    w, core, loop = _runner_window(qtbot)
+    try:
+        assert w._runner_shell._stack.widget(2) is w._runner_device_controls
+    finally:
+        _teardown(core, loop)
