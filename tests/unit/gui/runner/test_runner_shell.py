@@ -62,6 +62,11 @@ def test_stop_reemits(qtbot, mock_core):
         s._banner.stop_requested.emit()
 
 
+def test_tab_bar_larger(qtbot, mock_core):
+    s = _shell(qtbot, mock_core)
+    assert s._tab_bar.minimumHeight() >= 72 or s._tab_bar.height() >= 72
+
+
 def test_set_banner_time_forwards(qtbot, mock_core):
     s = _shell(qtbot, mock_core)
     s.set_banner_time("00:07.00")

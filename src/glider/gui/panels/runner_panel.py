@@ -1,9 +1,11 @@
 """
 Runner Panel - Touch-optimized "Run" page for experiment execution.
 
-Provides device status cards, experiment controls (start/stop/e-stop),
+Provides device status cards, experiment controls (start/stop),
 and the elapsed timer. Readiness is computed here to gate START, but the
 readiness strip (tap-to-fix rows) and gear/setup menu live on the Setup page.
+Emergency stop is deliberately not offered here; it remains a desktop-only
+menu action (see MainWindow._on_emergency_stop).
 """
 
 import logging
@@ -40,7 +42,6 @@ class RunnerPanel(QWidget):
     experiment_name_changed = pyqtSignal(str)
     start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
-    emergency_stop_requested = pyqtSignal()
     elapsed_updated = pyqtSignal(str)
 
     def __init__(self, core: "GliderCore", view_manager: "ViewManager", parent=None):
@@ -129,7 +130,7 @@ class RunnerPanel(QWidget):
 
         # === Control Buttons ===
         controls = QWidget()
-        controls.setFixedHeight(160)
+        controls.setMinimumHeight(110)
         controls.setProperty("runnerControls", True)
         controls_layout = QVBoxLayout(controls)
         controls_layout.setContentsMargins(12, 12, 12, 12)
@@ -157,12 +158,6 @@ class RunnerPanel(QWidget):
         top_row.addWidget(self._stop_btn)
 
         controls_layout.addLayout(top_row)
-
-        self._emergency_btn = QPushButton("EMERGENCY STOP")
-        self._emergency_btn.setFixedHeight(60)
-        self._emergency_btn.setProperty("runnerAction", "emergency")
-        self._emergency_btn.clicked.connect(self.emergency_stop_requested.emit)
-        controls_layout.addWidget(self._emergency_btn)
 
         layout.addWidget(controls)
 

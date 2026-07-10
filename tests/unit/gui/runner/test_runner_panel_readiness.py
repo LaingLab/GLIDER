@@ -58,3 +58,12 @@ def test_header_timer_hidden_while_paused(qtbot, mock_core):
     assert p._runner_timer.isVisibleTo(p) is False
     p.update_state("IDLE")
     assert p._runner_timer.isVisibleTo(p) is True
+
+
+def test_no_emergency_button(qtbot, mock_core):
+    # EMERGENCY STOP was removed from the Run tab: it overlapped START/STOP
+    # when the controls block was too short with hardware disconnected.
+    # Emergency stop remains available from the desktop menu only.
+    p = _panel(qtbot, mock_core, board=True, has_start=True)
+    assert not hasattr(p, "_emergency_btn")
+    assert not hasattr(type(p), "emergency_stop_requested")

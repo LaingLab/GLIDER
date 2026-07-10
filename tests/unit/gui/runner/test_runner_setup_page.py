@@ -1,7 +1,8 @@
 from types import SimpleNamespace
 
 import pytest
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QGridLayout, QWidget
 
 from glider.core.experiment_session import FlowConfig, NodeConfig
 
@@ -61,6 +62,47 @@ def test_hardware_widget_embedded(qtbot):
     hw = QWidget()
     p = _page(qtbot, _core(True, True), hw=hw)
     assert p.isAncestorOf(hw)
+
+
+def test_scroll_stored_and_no_hscroll(qtbot):
+    p = _page(qtbot, _core(False, False))
+    assert p._scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+
+
+def test_file_buttons_in_grid(qtbot):
+    p = _page(qtbot, _core(False, False))
+    grid = p._new_btn.parentWidget().layout()
+    assert isinstance(grid, QGridLayout)
+    new_pos = grid.getItemPosition(grid.indexOf(p._new_btn))
+    open_pos = grid.getItemPosition(grid.indexOf(p._open_btn))
+    save_pos = grid.getItemPosition(grid.indexOf(p._save_btn))
+    save_as_pos = grid.getItemPosition(grid.indexOf(p._save_as_btn))
+    assert new_pos[0] == 0
+    assert open_pos[0] == 0
+    assert save_pos[0] == 1
+    assert save_as_pos[0] == 1
+
+
+def test_menu_button_small_and_in_status_row(qtbot):
+    p = _page(qtbot, _core(False, False))
+    assert p._menu_btn.size().width() <= 48
+    assert p._menu_btn.size().height() <= 48
+    # Lives alongside the status labels rather than as its own full-width row.
+    assert p._menu_btn.parentWidget() is p._board_status.parentWidget()
+
+
+def test_content_capped_to_viewport(qtbot):
+    p = _page(qtbot, _core(False, False))
+    p.resize(480, 800)
+    p.show()
+    QApplication.processEvents()
+    assert p._content.maximumWidth() <= p._scroll.viewport().width() + 1
+
+
+def test_menu_button_is_square(qtbot):
+    p = _page(qtbot, _core(False, False))
+    assert p._menu_btn.maximumHeight() == 40
+    assert p._menu_btn.maximumWidth() == 40
 
 
 def test_housekeeping_signals(qtbot):

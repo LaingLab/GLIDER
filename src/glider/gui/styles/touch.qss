@@ -739,75 +739,6 @@ QWidget[deviceCard="true"] { background-color: #0f1419; border: 2px solid #1e253
 /* Status indicator (dynamic property version) */
 QLabel[statusIndicator="true"] { color: #e2e8f0; padding: 4px 12px; border-radius: 4px; font-weight: bold; margin: 2px; }
 
-/* === Manual Control Tiles (ManualControlPanel) === */
-
-/* Base tile: large touch target, consistent with runner buttons */
-QPushButton[manualTile="slot"] {
-    background-color: #1e2530;
-    color: #e2e8f0;
-    border: 2px solid #2a3440;
-    border-radius: 10px;
-    font-size: 16px;
-    font-weight: bold;
-    min-height: 96px;
-}
-
-QPushButton[manualTile="slot"]:pressed {
-    background-color: #2a3440;
-}
-
-QPushButton[manualTile="slot"]:disabled {
-    background-color: #1e2530;
-    color: #475569;
-    border-color: #1e2530;
-}
-
-/* Running tile: clearly distinct — accent border + tinted background */
-QPushButton[manualTile="running"] {
-    background-color: rgba(56, 189, 248, 0.15);
-    color: #38bdf8;
-    border: 3px solid #38bdf8;
-    border-radius: 10px;
-    font-size: 16px;
-    font-weight: bold;
-    min-height: 96px;
-}
-
-/* Missing tile: muted; inline color set by widget is preserved */
-QPushButton[manualTile="missing"] {
-    background-color: #0f1419;
-    border: 2px dashed #2a3440;
-    border-radius: 10px;
-    font-size: 16px;
-    min-height: 96px;
-}
-
-QPushButton[manualTile="missing"]:disabled {
-    background-color: #0f1419;
-    border-color: #1e2530;
-}
-
-/* Assign tile: "add" affordance — dashed border, muted text */
-QPushButton[manualTile="assign"] {
-    background-color: transparent;
-    color: #718096;
-    border: 2px dashed #2a3440;
-    border-radius: 10px;
-    font-size: 16px;
-    min-height: 96px;
-}
-
-QPushButton[manualTile="assign"]:pressed {
-    background-color: #1e2530;
-    color: #94a3b8;
-    border-color: #718096;
-}
-
-QPushButton[manualTile="assign"]:disabled {
-    color: #475569;
-    border-color: #1e2530;
-}
-
 /* === Runner Bottom Tab Bar (RunnerShell) === */
 
 /* Bar: chrome strip with a divider line separating it from the page above */
@@ -827,9 +758,9 @@ QWidget[runnerTabBar="true"] QPushButton {
     border-radius: 0;
     padding: 0;
     margin: 0;
-    font-size: 15px;
+    font-size: 18px;
     font-weight: bold;
-    min-height: 56px;
+    min-height: 72px;
 }
 
 /* Hover: subtle lift (mouse / stylus) */
