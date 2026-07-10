@@ -48,3 +48,29 @@ def test_strip_hidden_while_running(qtbot, mock_core):
     assert p._readiness_strip.isVisibleTo(p) is True
     p.update_state("RUNNING")
     assert p._readiness_strip.isVisibleTo(p) is False
+
+
+def test_experiment_row_blocked_rendering(qtbot, mock_core):
+    p = _panel(qtbot, mock_core, board=True, has_start=False)
+    assert p._reload_btn.isVisibleTo(p) is False
+    assert "No experiment loaded" in p._exp_row.text()
+    assert p._exp_row.property("readinessRow") == "blocked"
+
+
+def test_experiment_row_ready_rendering(qtbot, mock_core):
+    p = _panel(qtbot, mock_core, board=True, has_start=True, name="My Exp")
+    assert p._reload_btn.isVisibleTo(p) is True
+    assert p._exp_row.text().startswith("✓")
+    assert p._exp_row.property("readinessRow") == "ok"
+
+
+def test_board_row_ready_rendering(qtbot, mock_core):
+    p = _panel(qtbot, mock_core, board=True, has_start=False)
+    assert p._board_row.property("readinessRow") == "ok"
+    assert p._board_row.text().startswith("✓")
+
+
+def test_board_row_blocked_rendering(qtbot, mock_core):
+    p = _panel(qtbot, mock_core, board=False, has_start=True)
+    assert p._board_row.property("readinessRow") == "blocked"
+    assert "Board not connected" in p._board_row.text()
