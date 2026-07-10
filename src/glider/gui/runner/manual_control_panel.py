@@ -27,11 +27,13 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QScroller,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from glider.core.graph_functions import find_run_param, list_graph_functions
+from glider.gui.runner.device_controls import RunnerDeviceControls
 from glider.gui.styles import colors
 
 if TYPE_CHECKING:
@@ -95,6 +97,12 @@ class ManualControlPanel(QWidget):
     # emits (start_node_id, param dict) for a parameterized run (e.g. N revolutions)
     function_run_requested_param = pyqtSignal(str, object)
 
+    # Re-emitted from the live-run device controls page so an external
+    # component (main_window) can wire hardware handlers in one place.
+    set_digital_requested = pyqtSignal(str, bool)
+    toggle_digital_requested = pyqtSignal(str)
+    set_pwm_requested = pyqtSignal(str, int)
+
     def __init__(self, core: GliderCore, parent: QWidget | None = None):
         super().__init__(parent)
         self._core = core
@@ -151,12 +159,32 @@ class ManualControlPanel(QWidget):
         self._content.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._content.customContextMenuRequested.connect(self._on_content_context_menu)
 
-        layout.addWidget(self._scroll, 1)
+        # Mode-aware stack: page 0 is the function grid (idle / manual runs),
+        # page 1 is the live-run device controls (recorded experiment running).
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._scroll)  # index 0
+
+        self._device_controls = RunnerDeviceControls(self._core.hardware_manager)
+        self._stack.addWidget(self._device_controls)  # index 1
+
+        self._device_controls.set_digital_requested.connect(self.set_digital_requested)
+        self._device_controls.toggle_digital_requested.connect(self.toggle_digital_requested)
+        self._device_controls.set_pwm_requested.connect(self.set_pwm_requested)
+
+        layout.addWidget(self._stack, 1)
 
     # --- Public API ---
 
     def refresh(self) -> None:
-        """Rebuild the grid from session.manual_controls (sorted by slot)."""
+        """Rebuild the grid from session.manual_controls (sorted by slot).
+
+        Mode-aware: while the live-run device controls page is showing,
+        refresh that page instead of rebuilding the (hidden) function grid.
+        """
+        if getattr(self, "_stack", None) is not None and self._stack.currentIndex() == 1:
+            self._device_controls.refresh()
+            return
+
         # Tear down old buttons/timers.
         for timer in self._press_timers.values():
             timer.stop()
@@ -278,9 +306,20 @@ class ManualControlPanel(QWidget):
         self._update_tile_labels()
 
     def update_state(self, state_name: str) -> None:
-        """Update the core state name and re-apply enable-state."""
+        """Update the core state name and re-apply enable-state.
+
+        A recorded experiment ("RUNNING", delivered here) swaps the function
+        grid for the live-run device controls. A manual function run (see
+        set_running) never reaches this method with "RUNNING" and must not
+        switch modes.
+        """
         self._state = state_name
         self._apply_enable_state()
+
+        running = state_name == "RUNNING"
+        self._stack.setCurrentIndex(1 if running else 0)
+        if running:
+            self._device_controls.refresh()
 
     # --- Enable-state (single source of truth) ---
 
