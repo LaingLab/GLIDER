@@ -39,3 +39,40 @@ async def set_pwm(device, value: int) -> None:
         await device.set_value(value)
     else:
         await device.board.write_analog(_first_pin(device), value)
+
+
+async def read_input(device) -> str:
+    """Read an input device once and return a display-ready string.
+
+    Faithful port of DeviceControlPanel._read_input_once's display logic,
+    stripped of Qt/status-label side effects. Callers own presentation and
+    error surfacing.
+    """
+    if device is None:
+        raise ValueError("no device")
+
+    if not getattr(device, "_initialized", False):
+        await device.initialize()
+
+    device_type = getattr(device, "device_type", "")
+
+    if device_type == "DigitalInput":
+        value = await device.read()
+        return "HIGH (1)" if value else "LOW (0)"
+    elif device_type == "AnalogInput":
+        raw_value = await device.read()
+        if hasattr(device, "read_voltage"):
+            voltage = await device.read_voltage()
+        else:
+            voltage = (raw_value / 1023.0) * getattr(device, "_reference_voltage", 5.0)
+        return f"{raw_value}\n{voltage:.2f}V"
+    elif device_type == "ADS1115":
+        channel = device._config.settings.get("channel", 0)
+        raw_value = await device.read(channel)
+        voltage = await device.read_voltage(channel)
+        return f"{raw_value}\n{voltage:.3f}V"
+    elif device_type == "GenericI2C":
+        value = await device.read()
+        return f"{value}\n0x{value:X}"
+    else:
+        raise ValueError(f"unsupported device type: {device_type}")

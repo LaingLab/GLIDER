@@ -76,3 +76,27 @@ def test_refresh_rebuilds_cleanly(qtbot):
     w.refresh()
     w.refresh()  # second refresh must not duplicate/leak
     assert set(w._buttons.keys()) == {"d1"}
+
+
+def test_input_device_has_read_button(qtbot):
+    from glider.gui.runner.device_controls import RunnerDeviceControls
+
+    dev = SimpleNamespace(device_type="DigitalInput", id="in1")
+    w = RunnerDeviceControls(_hw({"in1": dev}))
+    qtbot.addWidget(w)
+    w.refresh()
+    assert "in1" in w._read_buttons
+    with qtbot.waitSignal(w.read_requested) as sig:
+        w._read_buttons["in1"].click()
+    assert sig.args == ["in1"]
+
+
+def test_set_read_value_updates_label(qtbot):
+    from glider.gui.runner.device_controls import RunnerDeviceControls
+
+    dev = SimpleNamespace(device_type="AnalogInput", id="a1")
+    w = RunnerDeviceControls(_hw({"a1": dev}))
+    qtbot.addWidget(w)
+    w.refresh()
+    w.set_read_value("a1", "512\n2.50V")
+    assert "512" in w._value_labels["a1"].text()
