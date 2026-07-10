@@ -1,14 +1,17 @@
 """
 Runner Device Controls - Touch-optimized direct device drive grid.
 
-Builds one control block per controllable OUTPUT device found on the
-hardware manager: big ON / OFF / Toggle buttons for ``DigitalOutput``
-devices, and a large slider (0-255) for ``PWMOutput`` devices. Other
-device types are not rendered (deferred).
+Builds one control block per controllable device found on the hardware
+manager: big ON / OFF / Toggle buttons for ``DigitalOutput`` devices, a
+large slider (0-255) for ``PWMOutput`` devices, and a Read button + value
+label for input devices (``DigitalInput``, ``AnalogInput``, ``ADS1115``,
+``GenericI2C``). Reading is button-driven: tap Read, an external async
+handler performs the read and reports the result back via
+``set_read_value``. Other device types are not rendered (deferred).
 
 This widget is PURE UI: it does not drive any device itself. It only
 emits signals; an external async handler is responsible for calling the
-actual drive helpers.
+actual drive/read helpers.
 """
 
 from __future__ import annotations
@@ -41,6 +44,9 @@ class RunnerDeviceControls(QWidget):
     set_digital_requested = pyqtSignal(str, bool)
     toggle_digital_requested = pyqtSignal(str)
     set_pwm_requested = pyqtSignal(str, int)
+    read_requested = pyqtSignal(str)
+
+    _READABLE_DEVICE_TYPES = ("DigitalInput", "AnalogInput", "ADS1115", "GenericI2C")
 
     def __init__(self, hardware_manager: HardwareManager, parent: QWidget | None = None):
         super().__init__(parent)
@@ -48,6 +54,8 @@ class RunnerDeviceControls(QWidget):
 
         self._buttons: dict[str, dict[str, QPushButton]] = {}
         self._sliders: dict[str, QSlider] = {}
+        self._read_buttons: dict[str, QPushButton] = {}
+        self._value_labels: dict[str, QLabel] = {}
 
         self.setObjectName("runnerDeviceControls")
         self._setup_ui()
@@ -91,6 +99,8 @@ class RunnerDeviceControls(QWidget):
                 w.deleteLater()
         self._buttons.clear()
         self._sliders.clear()
+        self._read_buttons.clear()
+        self._value_labels.clear()
 
         for dev_id, device in self._hardware_manager.devices.items():
             if device.device_type == "DigitalOutput":
@@ -98,6 +108,9 @@ class RunnerDeviceControls(QWidget):
                 self._content_layout.addWidget(block)
             elif device.device_type == "PWMOutput":
                 block = self._make_pwm_block(dev_id, device)
+                self._content_layout.addWidget(block)
+            elif device.device_type in self._READABLE_DEVICE_TYPES:
+                block = self._make_input_block(dev_id, device)
                 self._content_layout.addWidget(block)
             # Other device types are not rendered (deferred).
 
@@ -154,3 +167,37 @@ class RunnerDeviceControls(QWidget):
 
         self._sliders[dev_id] = slider
         return block
+
+    def _make_input_block(self, dev_id: str, device) -> QWidget:
+        block = QWidget()
+        layout = QVBoxLayout(block)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        label = QLabel(dev_id)
+        layout.addWidget(label)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        read_btn = QPushButton("Read")
+        read_btn.setMinimumHeight(_BUTTON_MIN_HEIGHT)
+        read_btn.clicked.connect(lambda _=False, d=dev_id: self.read_requested.emit(d))
+
+        value_label = QLabel("—")
+
+        row.addWidget(read_btn)
+        row.addWidget(value_label)
+        layout.addLayout(row)
+
+        self._read_buttons[dev_id] = read_btn
+        self._value_labels[dev_id] = value_label
+        return block
+
+    # --- Public API (continued) ---
+
+    def set_read_value(self, dev_id: str, text: str) -> None:
+        """Update the displayed value for a read input block."""
+        lbl = self._value_labels.get(dev_id)
+        if lbl is not None:
+            lbl.setText(text)
