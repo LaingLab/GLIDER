@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QGridLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QGridLayout, QWidget
 
 from glider.core.experiment_session import FlowConfig, NodeConfig
 
@@ -89,6 +89,20 @@ def test_menu_button_small_and_in_status_row(qtbot):
     assert p._menu_btn.size().height() <= 48
     # Lives alongside the status labels rather than as its own full-width row.
     assert p._menu_btn.parentWidget() is p._board_status.parentWidget()
+
+
+def test_content_capped_to_viewport(qtbot):
+    p = _page(qtbot, _core(False, False))
+    p.resize(480, 800)
+    p.show()
+    QApplication.processEvents()
+    assert p._content.maximumWidth() <= p._scroll.viewport().width() + 1
+
+
+def test_menu_button_is_square(qtbot):
+    p = _page(qtbot, _core(False, False))
+    assert p._menu_btn.maximumHeight() == 40
+    assert p._menu_btn.maximumWidth() == 40
 
 
 def test_housekeeping_signals(qtbot):
