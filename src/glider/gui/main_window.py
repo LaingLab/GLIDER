@@ -47,6 +47,7 @@ from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
 from glider.gui.panels.runner_panel import RunnerPanel
+from glider.gui.runner.runner_setup_page import RunnerSetupPage
 from glider.gui.styles import colors
 from glider.gui.view_manager import ViewManager, ViewMode
 from glider.hal.base_board import BoardConnectionState
@@ -206,7 +207,7 @@ class MainWindow(QMainWindow):
         self._create_runner_view()
 
         self._stack.addWidget(self._builder_view)  # Index 0
-        self._stack.addWidget(self._runner_container)  # Index 1
+        self._stack.addWidget(self._runner_shell)  # Index 1
 
         if self._view_manager.is_runner_mode:
             self._stack.setCurrentIndex(1)
@@ -251,16 +252,24 @@ class MainWindow(QMainWindow):
         self._runner_panel.start_requested.connect(self._on_start_clicked)
         self._runner_panel.stop_requested.connect(self._on_stop_clicked)
         self._runner_panel.emergency_stop_requested.connect(self._on_emergency_stop)
-        self._runner_panel.open_requested.connect(self._on_open)
-        self._runner_panel.reload_requested.connect(lambda: self._runner_panel.refresh_devices())
-        self._runner_panel.help_requested.connect(self._on_help)
-        self._runner_panel.close_requested.connect(self.close)
-        self._runner_panel.switch_to_desktop_requested.connect(self._switch_to_desktop_mode)
+
+        # Runner-mode Hardware Panel (also reused by desktop dock setup — see
+        # _setup_dock_widgets, which re-hosts this same instance rather than
+        # constructing a second one).
+        self._hardware_panel = HardwarePanel(
+            hardware_manager=self._core.hardware_manager,
+            session_fn=lambda: self._core.session,
+            run_async_fn=self._run_async,
+        )
+        self._hardware_panel.status_message.connect(self._show_status_message)
+
+        # Runner-mode Camera Panel (also reused by desktop dock setup).
+        self._camera_panel = self._build_camera_panel()
 
         # Manual control page + tab container
         from glider.gui.runner.manual_control_panel import ManualControlPanel
         from glider.gui.runner.manual_control_runner import ManualControlRunner
-        from glider.gui.runner.runner_container import RunnerContainer
+        from glider.gui.runner.runner_shell import RunnerShell
 
         self._manual_control_panel = ManualControlPanel(self._core)
         self._manual_control_runner = ManualControlRunner(self._core)
@@ -276,11 +285,63 @@ class MainWindow(QMainWindow):
             lambda dev_id, v: self._run_async(self._drive_pwm(dev_id, v))
         )
 
-        self._runner_container = RunnerContainer(
-            self._core, self._runner_panel, self._manual_control_panel
+        self._runner_setup_page = RunnerSetupPage(self._core, hardware_widget=self._hardware_panel)
+
+        self._runner_shell = RunnerShell(
+            self._core,
+            self._runner_setup_page,
+            self._runner_panel,
+            self._manual_control_panel,
+            self._camera_panel,
         )
-        self._runner_panel.elapsed_updated.connect(self._runner_container.set_banner_time)
-        self._runner_container.stop_requested.connect(self._on_stop_clicked)
+        self._runner_panel.elapsed_updated.connect(self._runner_shell.set_banner_time)
+        self._runner_shell.stop_requested.connect(self._on_stop_clicked)
+
+        # Setup page signal wiring
+        self._runner_setup_page.new_requested.connect(self._on_new)
+        self._runner_setup_page.open_requested.connect(self._on_open)
+        self._runner_setup_page.save_requested.connect(self._on_save)
+        self._runner_setup_page.save_as_requested.connect(self._on_save_as)
+        self._runner_setup_page.help_requested.connect(self._on_help)
+        self._runner_setup_page.close_requested.connect(self.close)
+        self._runner_setup_page.switch_to_desktop_requested.connect(self._switch_to_desktop_mode)
+        self._runner_setup_page.board_settings_requested.connect(
+            self._hardware_panel.show_board_settings_dialog
+        )
+
+        # Hardware-change fan-out (owned here since the runner-mode Hardware
+        # Panel is constructed here; _setup_dock_widgets reuses this instance
+        # and must NOT re-wire these, to avoid double-firing).
+        self._hardware_panel.hardware_changed.connect(self._runner_panel.refresh_devices)
+        self._hardware_panel.hardware_changed.connect(self._runner_setup_page.refresh)
+        self._hardware_panel.refresh_tree()
+
+    def _build_camera_panel(self) -> CameraPanel:
+        """Construct and fully configure a CameraPanel.
+
+        Extracted so both the runner view and the desktop dock setup can
+        share a single CameraPanel instance instead of building duplicates.
+        """
+        camera_panel = CameraPanel(
+            self._core.camera_manager,
+            self._core.cv_processor,
+            multi_camera_manager=self._core.multi_camera_manager,
+        )
+        camera_panel.settings_requested.connect(self._on_camera_settings)
+        camera_panel.analysis_requested.connect(self._on_open_analysis_panel)
+        camera_panel.draw_zones_requested.connect(self._on_video_zones_requested)
+        camera_panel.set_video_recorder(self._core.video_recorder)
+        camera_panel.set_multi_video_recorder(self._core.multi_video_recorder)
+        camera_panel.set_tracking_logger(self._core.tracking_logger)
+        # Frame-aligned device-state CSV + per-edge event log. CameraPanel
+        # ticks both on every processed frame so the device CSV inherits the
+        # tracking CSV's `frame` column for one-key joins to the MP4.
+        camera_panel.set_data_recorder(self._core.data_recorder)
+        camera_panel.set_event_logger(self._core.event_logger)
+        camera_panel.set_calibration(self._core.calibration)
+        camera_panel._preview.set_calibration(self._core.calibration)
+        camera_panel.set_zone_configuration(self._zone_config)
+        return camera_panel
 
     def _setup_dock_widgets(self) -> None:
         """Set up dock widgets for desktop mode."""
@@ -318,13 +379,17 @@ class MainWindow(QMainWindow):
         # Wire properties dock to node editor
         self._node_editor.set_properties_dock(self._properties_dock)
 
-        # Hardware Panel dock
-        self._hardware_panel = HardwarePanel(
-            hardware_manager=self._core.hardware_manager,
-            session_fn=session_fn,
-            run_async_fn=self._run_async,
-        )
-        self._hardware_panel.status_message.connect(self._show_status_message)
+        # Hardware Panel dock. The runner view (_create_runner_view) already
+        # builds this panel unconditionally, so on the runner→desktop switch
+        # it already exists here — only construct (and wire its owner
+        # connection) if it doesn't.
+        if getattr(self, "_hardware_panel", None) is None:
+            self._hardware_panel = HardwarePanel(
+                hardware_manager=self._core.hardware_manager,
+                session_fn=session_fn,
+                run_async_fn=self._run_async,
+            )
+            self._hardware_panel.status_message.connect(self._show_status_message)
 
         self._hardware_dock = QDockWidget("Hardware", self)
         self._hardware_dock.setAllowedAreas(
@@ -354,14 +419,11 @@ class MainWindow(QMainWindow):
         self.tabifyDockWidget(self._hardware_dock, self._control_dock)
         self._node_library_dock.raise_()
 
-        # Wire hardware_changed → device control + runner refresh
+        # Wire hardware_changed → device control refresh. (hardware_changed →
+        # runner_panel.refresh_devices / runner_setup_page.refresh are wired
+        # once in _create_runner_view, which owns this HardwarePanel
+        # instance; re-adding here would double-fire.)
         self._hardware_panel.hardware_changed.connect(self._device_control_panel.refresh_devices)
-        self._hardware_panel.hardware_changed.connect(self._runner_panel.refresh_devices)
-
-        # Wire board_settings_requested from runner to hardware panel
-        self._runner_panel.board_settings_requested.connect(
-            self._hardware_panel.show_board_settings_dialog
-        )
 
         # Wire flow_functions_changed from node editor to node library
         self._node_editor.flow_functions_changed.connect(
@@ -373,25 +435,8 @@ class MainWindow(QMainWindow):
         self._camera_dock.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
         )
-        self._camera_panel = CameraPanel(
-            self._core.camera_manager,
-            self._core.cv_processor,
-            multi_camera_manager=self._core.multi_camera_manager,
-        )
-        self._camera_panel.settings_requested.connect(self._on_camera_settings)
-        self._camera_panel.analysis_requested.connect(self._on_open_analysis_panel)
-        self._camera_panel.draw_zones_requested.connect(self._on_video_zones_requested)
-        self._camera_panel.set_video_recorder(self._core.video_recorder)
-        self._camera_panel.set_multi_video_recorder(self._core.multi_video_recorder)
-        self._camera_panel.set_tracking_logger(self._core.tracking_logger)
-        # Frame-aligned device-state CSV + per-edge event log. CameraPanel
-        # ticks both on every processed frame so the device CSV inherits the
-        # tracking CSV's `frame` column for one-key joins to the MP4.
-        self._camera_panel.set_data_recorder(self._core.data_recorder)
-        self._camera_panel.set_event_logger(self._core.event_logger)
-        self._camera_panel.set_calibration(self._core.calibration)
-        self._camera_panel._preview.set_calibration(self._core.calibration)
-        self._camera_panel.set_zone_configuration(self._zone_config)
+        if getattr(self, "_camera_panel", None) is None:
+            self._camera_panel = self._build_camera_panel()
         self._camera_dock.setWidget(self._camera_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._camera_dock)
 
@@ -452,6 +497,12 @@ class MainWindow(QMainWindow):
 
         # Refresh hardware tree (which also triggers device combo + runner refresh)
         self._hardware_panel.refresh_tree()
+
+        # The desktop docks have now adopted the shared Hardware/Camera panels,
+        # so the runner view would render stripped. Disable the toggle action
+        # (single-mode-per-process — see _runner_view_available).
+        if getattr(self, "_switch_view_action", None) is not None:
+            self._switch_view_action.setEnabled(False)
 
     # --- Menu / Toolbar / Status bar ---
 
@@ -542,6 +593,12 @@ class MainWindow(QMainWindow):
         switch_view_action.setShortcut(QKeySequence("F11"))
         switch_view_action.triggered.connect(self._toggle_view)
         view_menu.addAction(switch_view_action)
+        # Kept so _setup_dock_widgets can disable it once the desktop docks
+        # have adopted the shared Hardware/Camera panels — see _toggle_view.
+        # On a desktop boot the docks already exist by the time this menu is
+        # built, so reflect that state immediately too.
+        switch_view_action.setEnabled(self._runner_view_available())
+        self._switch_view_action = switch_view_action
 
         view_menu.addSeparator()
 
@@ -863,6 +920,7 @@ class MainWindow(QMainWindow):
 
         self.session_changed.connect(lambda: self._runner_panel.update_experiment_name())
         self.session_changed.connect(self._manual_control_panel.refresh)
+        self.session_changed.connect(self._runner_setup_page.refresh)
 
     @pyqtSlot(object)
     def _on_core_state_change(self, state) -> None:
@@ -884,7 +942,7 @@ class MainWindow(QMainWindow):
         self.state_changed.emit(state_name)
 
         # Update runner panel
-        self._runner_container.update_state(state_name)
+        self._runner_shell.update_state(state_name)
 
         # Update toolbar status indicator
         if self._toolbar_status is not None:
@@ -1120,14 +1178,36 @@ class MainWindow(QMainWindow):
 
     # --- View switching ---
 
+    def _runner_view_available(self) -> bool:
+        """Whether the runner view can still be shown intact.
+
+        GLIDER is single-mode-per-process in practice. The runner shell and its
+        Setup page share the Hardware/Camera panel instances with the desktop
+        docks; once _setup_dock_widgets has run (on a runner→desktop switch) it
+        reparents those panels into the docks, leaving the runner tabs stripped.
+        So once the desktop docks exist, switching back to the runner view is
+        disallowed rather than showing an empty Camera tab + hardware section.
+        """
+        return getattr(self, "_node_library_dock", None) is None
+
     def _toggle_view(self) -> None:
         current = self._stack.currentIndex()
+        if current == 0 and not self._runner_view_available():
+            self._show_status_message(
+                "Runner view is unavailable after switching to desktop mode.", 3000
+            )
+            return
         self._stack.setCurrentIndex(1 if current == 0 else 0)
 
     def switch_to_builder(self) -> None:
         self._stack.setCurrentIndex(0)
 
     def switch_to_runner(self) -> None:
+        if not self._runner_view_available():
+            self._show_status_message(
+                "Runner view is unavailable after switching to desktop mode.", 3000
+            )
+            return
         self._stack.setCurrentIndex(1)
 
     def _set_window_size(self, width: int, height: int) -> None:
@@ -1897,6 +1977,20 @@ class MainWindow(QMainWindow):
         if not self._check_save():
             event.ignore()
             return
+
+        # Deterministically stop the CameraPanel CV thread now that we are
+        # committed to closing. Runner mode always builds a CameraPanel (nested
+        # inside RunnerShell), and its CV QThread is only stopped from
+        # CameraPanel.closeEvent/destroyed — which Qt does not fire for a nested
+        # child during MainWindow teardown. Calling close() here synchronously
+        # joins the thread (idempotent via its isRunning() guard), so the Pi
+        # kiosk-exit path can't abort with "QThread destroyed while still
+        # running".
+        if getattr(self, "_camera_panel", None) is not None:
+            try:
+                self._camera_panel.close()
+            except Exception:
+                pass
 
         async def _drain_and_shutdown() -> None:
             pending = [t for t in self._pending_tasks if not t.done()]
