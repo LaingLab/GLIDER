@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.core.config import get_config
+from glider.gui.runner.readiness import compute_readiness
 from glider.gui.runner.run_timer import format_elapsed
 from glider.gui.styles import colors
 
@@ -55,6 +56,7 @@ class RunnerPanel(QWidget):
         # Store device widgets for updates
         self._runner_device_cards: dict[str, QWidget] = {}
         self._experiment_start_time: float | None = None
+        self._state_name = "IDLE"
 
         self.setObjectName("runnerView")
         self._setup_ui()
@@ -254,10 +256,8 @@ class RunnerPanel(QWidget):
 
     def refresh_readiness(self) -> None:
         """Recompute board/experiment readiness and update the strip + START button."""
-        from glider.gui.runner.readiness import compute_readiness
-
         r = compute_readiness(self._core)
-        running = self._status_label.text() == "RUNNING"
+        running = self._state_name == "RUNNING"
         # Visibility depends on run-state, which is NOT part of `r`. Apply it BEFORE
         # the change-guard, or entering RUNNING (readiness unchanged) would return
         # early and never hide the strip.
@@ -283,6 +283,8 @@ class RunnerPanel(QWidget):
 
     def update_state(self, state_name: str) -> None:
         """Update UI based on core state changes."""
+        self._state_name = state_name
+
         # Update status label
         self._status_label.setText(state_name)
         self._status_label.setProperty("statusState", state_name)
