@@ -78,7 +78,8 @@ class RunnerSetupPage(QWidget):
             self._scroll.viewport(), QScroller.ScrollerGestureType.LeftMouseButtonGesture
         )
 
-        content = QWidget()
+        self._content = QWidget()
+        content = self._content
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(8, 8, 8, 8)
         content_layout.setSpacing(12)
@@ -93,6 +94,10 @@ class RunnerSetupPage(QWidget):
         status_row.addStretch(1)
         self._menu_btn = QPushButton("⚙")
         self._menu_btn.setFixedSize(40, 40)
+        self._menu_btn.setStyleSheet(
+            "min-width:40px; max-width:40px; min-height:40px; max-height:40px; "
+            "padding:0px; border:none;"
+        )
         self._menu_btn.clicked.connect(self._open_housekeeping_menu)
         status_row.addWidget(self._menu_btn)
         content_layout.addLayout(status_row)
@@ -136,11 +141,23 @@ class RunnerSetupPage(QWidget):
         self._connect_btn.clicked.connect(self.board_settings_requested)
 
         # 3. Hardware section.
+        hardware_widget.setMinimumWidth(0)
         content_layout.addWidget(hardware_widget)
         content_layout.addStretch(1)
 
         self._scroll.setWidget(content)
         outer.addWidget(self._scroll, 1)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_content") and hasattr(self, "_scroll"):
+            # Use the scroll area's own width rather than viewport().width():
+            # the viewport hasn't been re-laid-out yet at this point in the
+            # resize event, so it still reports a stale (pre-resize) value.
+            # The scroll area has NoFrame + zero margins, so its width is
+            # the true available width (viewport width, minus a vertical
+            # scrollbar if one becomes visible).
+            self._content.setMaximumWidth(self._scroll.width())
 
     # --- Public API ---
 
