@@ -7,7 +7,9 @@ pytestmark = pytest.mark.usefixtures("qtbot")
 def _shell(qtbot, mock_core):
     from glider.gui.runner.runner_shell import RunnerShell
 
-    s = RunnerShell(mock_core, QWidget(), QWidget(), QWidget(), QWidget())  # setup, run, manual, camera
+    s = RunnerShell(
+        mock_core, QWidget(), QWidget(), QWidget(), QWidget()
+    )  # setup, run, manual, camera
     qtbot.addWidget(s)
     s.show()
     return s
