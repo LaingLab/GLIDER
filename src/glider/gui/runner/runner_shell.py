@@ -64,13 +64,13 @@ class RunnerShell(QWidget):
         self._stack.addWidget(self._camera)  # index 3
         layout.addWidget(self._stack, 1)
 
-        tabs = QWidget()
-        tabs.setProperty("runnerTabBar", True)
+        self._tab_bar = QWidget()
+        self._tab_bar.setProperty("runnerTabBar", True)
         # Plain QWidget only paints a QSS background/border when styled-background
         # is enabled; without this the bar's top divider would not render.
-        tabs.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        tabs.setFixedHeight(56)
-        tabs_layout = QHBoxLayout(tabs)
+        self._tab_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._tab_bar.setFixedHeight(76)
+        tabs_layout = QHBoxLayout(self._tab_bar)
         tabs_layout.setContentsMargins(0, 0, 0, 0)
         tabs_layout.setSpacing(0)
 
@@ -78,11 +78,12 @@ class RunnerShell(QWidget):
         for i, label in enumerate(_TAB_LABELS):
             btn = QPushButton(label)
             btn.setCheckable(True)
+            btn.setMinimumHeight(72)
             btn.clicked.connect(lambda _checked=False, idx=i: self.select_tab(idx))
             tabs_layout.addWidget(btn, 1)  # equal-width tabs
             self._tab_btns.append(btn)
 
-        layout.addWidget(tabs)
+        layout.addWidget(self._tab_bar)
 
     def select_tab(self, index: int) -> None:
         self._stack.setCurrentIndex(index)

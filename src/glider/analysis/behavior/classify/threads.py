@@ -25,15 +25,16 @@ from pathlib import Path
 import numpy as np
 
 from glider.analysis.behavior.classify.buffer import SlidingFeatureBuffer
+from glider.analysis.behavior.classify.features_stream import StreamingFeatureExtractor
 from glider.analysis.behavior.classify.overlay import (
     color_for_behavior,
     draw_fps,
     draw_label_badge,
     draw_skeleton,
 )
-from glider.analysis.behavior.features import FeatureSpec, compute_features
+from glider.analysis.behavior.classify.pose_extract import extract_keypoints
+from glider.analysis.behavior.features import FeatureSpec
 from glider.analysis.behavior.model import BehaviorModel
-from glider.vision.pose.core import PoseData
 
 # Sentinel on every queue meaning "no more items will come".
 END_OF_STREAM = None
@@ -237,7 +238,9 @@ class PoseTracker(threading.Thread):
                     self._propagate_eos()
                     return
 
-                keypoints, confidences = self._extract_keypoints(results, k)
+                keypoints, confidences = extract_keypoints(
+                    results[0] if results else None, self.conf_threshold, k
+                )
 
                 # No confident mouse this frame → optionally save it for
                 # re-labeling (all keypoints came back NaN).
@@ -252,33 +255,6 @@ class PoseTracker(threading.Thread):
                 _put_or_drop(self.display_queue, payload, self.stop_event)
         finally:
             self._propagate_eos()
-
-    def _extract_keypoints(self, results, k: int) -> tuple[np.ndarray, np.ndarray]:
-        """Pull (K, 2) xy + (K,) confidence from a YOLO Results list.
-
-        Returns NaN-filled arrays if no detection landed. We always
-        take the first detection (Ultralytics returns one Results per
-        image — the first instance is the main subject in a single-
-        animal setup).
-        """
-        keypoints = np.full((k, 2), np.nan, dtype=np.float64)
-        confidences = np.zeros(k, dtype=np.float64)
-        if not results:
-            return keypoints, confidences
-        r = results[0]
-        kp = getattr(r, "keypoints", None)
-        if kp is None or kp.xy is None or kp.xy.shape[0] == 0:
-            return keypoints, confidences
-        xy = kp.xy[0].cpu().numpy()  # (K, 2)
-        conf = kp.conf[0].cpu().numpy() if kp.conf is not None else np.ones(xy.shape[0])
-        n = min(k, xy.shape[0])
-        keypoints[:n] = xy[:n]
-        confidences[:n] = conf[:n]
-        # Drop low-confidence keypoints to NaN so feature math doesn't
-        # use them. The conf array is preserved for the overlay's
-        # per-dot fade logic.
-        keypoints[confidences < self.conf_threshold] = np.nan
-        return keypoints, confidences
 
     def _save_undetected(self, frame_idx: int, frame_bgr: np.ndarray) -> None:
         """Write a frame with no confident detection to the undetected dir."""
@@ -351,10 +327,15 @@ class FeatureEngine(threading.Thread):
         self.stats = tuple(stats)
         self.predict_every = max(1, int(predict_every))
         self.per_frame_feature_names = list(per_frame_feature_names)
-        # Keypoint history for derivative-based features. 5 frames so the
-        # MIDDLE frame has centered velocity (±1) AND acceleration (±2),
-        # matching training's whole-session np.gradient.
-        self._kp_history: deque[np.ndarray] = deque(maxlen=5)
+        # Pure per-frame feature core: a 5-frame keypoint ring that emits the
+        # MIDDLE frame's features (centered velocity ±1, acceleration ±2),
+        # matching training's whole-session np.gradient. Extracted so a future
+        # live classifier can reuse the EXACT same math (live == offline).
+        self._extractor = StreamingFeatureExtractor(
+            spec=self.spec,
+            keypoint_names=self.keypoint_names,
+            fps=30.0,
+        )
         # Rolling buffer of per-frame features.
         self.buffer = SlidingFeatureBuffer(
             feature_names=self.per_frame_feature_names,
@@ -365,7 +346,7 @@ class FeatureEngine(threading.Thread):
         self._tick: int = 0
         # Centered-feature lag: the emitted windowed row describes the MIDDLE
         # frame, which trails the current frame by this many frames.
-        self._lag = (self._kp_history.maxlen - 1) - (self._kp_history.maxlen // 2)
+        self._lag = self._extractor.lag
         # Optional speed axis (freeze/dart heuristic), active only when both
         # absolute thresholds are given. Its per-frame label is buffered by
         # `_lag` so it aligns with the middle (posture) frame on emit.
@@ -396,13 +377,12 @@ class FeatureEngine(threading.Thread):
                     self._end()
                     return
                 frame_idx, _frame_bgr, keypoints, _confidences = item
-                self._kp_history.append(keypoints.copy())
                 if self._speed_axis:
                     spd = self._causal_speed.push(keypoints)
                     self._speed_labels.append(self._freeze_dart.push(spd))
 
                 # Compute per-frame features from the keypoint history.
-                feats = self._compute_per_frame()
+                feats = self._extractor.push(keypoints)
                 if feats is not None:
                     self.buffer.push_features(feats)
 
@@ -432,35 +412,6 @@ class FeatureEngine(threading.Thread):
                 _put_or_drop(self.classifier_queue, out, self.stop_event)
         finally:
             self._end()
-
-    def _compute_per_frame(self) -> dict[str, float] | None:
-        """Extract the MIDDLE frame's features from the keypoint history.
-
-        Training computes velocity/acceleration with ``np.gradient`` over the
-        whole session, so an interior frame uses *centered* differences. We
-        reproduce that by keeping a full 5-frame history and returning the
-        middle frame: centered velocity needs the ±1 neighbours and centered
-        acceleration the ±2, so a 5-frame window centered on the target frame
-        yields the exact training features (np.gradient is a local stencil).
-        Returns ``None`` until the history is full, so the
-        :class:`SlidingFeatureBuffer` only ever receives centered rows.
-        """
-        if len(self._kp_history) < self._kp_history.maxlen:
-            return None
-        xy = np.stack(list(self._kp_history), axis=0)
-        # Confidence isn't passed through here — the tracker already
-        # zeroed out (NaN'd) low-conf keypoints. compute_features
-        # propagates NaN through the math correctly.
-        conf = np.where(np.isnan(xy).any(axis=-1), 0.0, 1.0)
-        pose = PoseData(
-            xy=xy,
-            confidence=conf,
-            keypoint_names=self.keypoint_names,
-            fps=30.0,
-        )
-        df = compute_features(pose, spec=self.spec)
-        # Centered features live on the middle frame of the window.
-        return df.iloc[len(df) // 2].to_dict()
 
     def _end(self) -> None:
         try:
