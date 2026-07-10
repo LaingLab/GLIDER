@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.core.config import get_config
+from glider.gui.runner.run_timer import format_elapsed
 from glider.gui.styles import colors
 
 if TYPE_CHECKING:
@@ -308,21 +309,8 @@ class RunnerPanel(QWidget):
         self._set_timer_display(duration)
 
     def _set_timer_display(self, elapsed: float) -> None:
-        """Format ``elapsed`` (seconds) as MM:SS.cc / HH:MM:SS.cc and paint
-        it into the timer label. Truncates toward zero so centiseconds
-        never reads ``60``."""
-        # int() truncates toward zero for non-negative floats — exactly what we want.
-        total_centiseconds = int(max(0.0, elapsed) * 100)
-        hours, rem = divmod(total_centiseconds, 360_000)
-        minutes, rem = divmod(rem, 6_000)
-        seconds, centiseconds = divmod(rem, 100)
-
-        if hours > 0:
-            time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{centiseconds:02d}"
-        else:
-            time_str = f"{minutes:02d}:{seconds:02d}.{centiseconds:02d}"
-
-        self._runner_timer.setText(time_str)
+        """Format ``elapsed`` (seconds) and paint it into the timer label."""
+        self._runner_timer.setText(format_elapsed(elapsed))
 
     def _update_runner_device_states(self) -> None:
         """Update the device state displays in runner view."""
