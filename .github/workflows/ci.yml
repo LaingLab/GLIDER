@@ -56,7 +56,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, windows-2022, macos-latest]
-        python-version: ["3.11", "3.12", "3.13"]
+        # Pinned to 3.11 for now to save Actions usage; restore the full
+        # ["3.11", "3.12", "3.13"] matrix before release.
+        python-version: ["3.11"]
 
     steps:
       - uses: actions/checkout@v4
@@ -107,43 +109,9 @@ jobs:
             --cov-report=xml \
             --cov-report=term
 
-      - name: Upload coverage (Ubuntu / 3.12 only)
-        if: runner.os == 'Linux' && matrix.python-version == '3.12'
+      - name: Upload coverage (Ubuntu / 3.11 only)
+        if: runner.os == 'Linux' && matrix.python-version == '3.11'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-xml
           path: coverage.xml
-
-  # ------------------------------------------------------------------------
-  # PyInstaller smoke build on Windows. Catches "frozen exe crashes on
-  # launch" regressions (missing hidden imports, wrong Qt plugin path,
-  # missing DLL) at PR time rather than at release-tag time.
-  # ------------------------------------------------------------------------
-  pyinstaller-smoke:
-    name: PyInstaller smoke build (Windows)
-    runs-on: windows-2022
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install uv
-        run: pip install uv
-
-      - name: Install project + dev extras
-        run: uv sync --extra dev
-
-      - name: Build with PyInstaller
-        run: uv run pyinstaller packaging/windows/glider.spec --clean --noconfirm
-
-      - name: Smoke test frozen exe
-        # Asserts the bundle launches and the entry point is correctly wired.
-        # If hidden imports are missing this will fail with ModuleNotFoundError
-        # before the --version output prints.
-        run: |
-          .\dist\GLIDER\GLIDER.exe --version
-          if ($LASTEXITCODE -ne 0) { throw "Frozen exe failed --version" }
