@@ -251,7 +251,6 @@ class MainWindow(QMainWindow):
         # Connect runner panel signals
         self._runner_panel.start_requested.connect(self._on_start_clicked)
         self._runner_panel.stop_requested.connect(self._on_stop_clicked)
-        self._runner_panel.emergency_stop_requested.connect(self._on_emergency_stop)
 
         # Runner-mode Hardware Panel (also reused by desktop dock setup — see
         # _setup_dock_widgets, which re-hosts this same instance rather than
