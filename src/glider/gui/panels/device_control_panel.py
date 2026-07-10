@@ -26,6 +26,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.core.device_drive import set_digital, set_pwm, toggle_digital
+
 if TYPE_CHECKING:
     from glider.core.hardware_manager import HardwareManager
 
@@ -290,16 +292,7 @@ class DeviceControlPanel(QWidget):
 
         async def set_output():
             try:
-                if hasattr(device, "set_state"):
-                    await device.set_state(value)
-                elif hasattr(device, "turn_on") and hasattr(device, "turn_off"):
-                    if value:
-                        await device.turn_on()
-                    else:
-                        await device.turn_off()
-                else:
-                    pin = list(device.pins.values())[0] if device.pins else 0
-                    await device.board.write_digital(pin, value)
+                await set_digital(device, value)
 
                 state = "ON" if value else "OFF"
                 self._device_status_label.setText(f"Status: Output set to {state}")
@@ -317,12 +310,7 @@ class DeviceControlPanel(QWidget):
 
         async def toggle():
             try:
-                if hasattr(device, "toggle"):
-                    await device.toggle()
-                elif hasattr(device, "state"):
-                    new_state = not device.state
-                    if hasattr(device, "set_state"):
-                        await device.set_state(new_state)
+                await toggle_digital(device)
                 self._device_status_label.setText("Status: Output toggled")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to toggle: {e}")
@@ -350,19 +338,15 @@ class DeviceControlPanel(QWidget):
         device = self._pending_pwm_device
         value = self._pending_pwm_value
 
-        async def set_pwm():
+        async def _apply():
             try:
-                if hasattr(device, "set_value"):
-                    await device.set_value(value)
-                elif hasattr(device, "board"):
-                    pin = list(device.pins.values())[0] if device.pins else 0
-                    await device.board.write_analog(pin, value)
+                await set_pwm(device, value)
                 self._device_status_label.setText(f"Status: PWM set to {value}")
             except Exception as e:
                 logger.error(f"PWM error: {e}")
                 self._device_status_label.setText(f"Status: PWM FAILED - {e}")
 
-        self._run_async(set_pwm())
+        self._run_async(_apply())
 
     def _on_servo_changed(self, angle: int) -> None:
         """Handle servo slider change."""
