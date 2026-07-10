@@ -259,6 +259,7 @@ class MainWindow(QMainWindow):
             hardware_manager=self._core.hardware_manager,
             session_fn=lambda: self._core.session,
             run_async_fn=self._run_async,
+            show_add_buttons=False,
         )
         self._hardware_panel.status_message.connect(self._show_status_message)
 

@@ -14,12 +14,14 @@ from typing import TYPE_CHECKING
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
     QPushButton,
     QScrollArea,
     QScroller,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -66,14 +68,14 @@ class RunnerSetupPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         QScroller.grabGesture(
-            scroll.viewport(), QScroller.ScrollerGestureType.LeftMouseButtonGesture
+            self._scroll.viewport(), QScroller.ScrollerGestureType.LeftMouseButtonGesture
         )
 
         content = QWidget()
@@ -81,20 +83,31 @@ class RunnerSetupPage(QWidget):
         content_layout.setContentsMargins(8, 8, 8, 8)
         content_layout.setSpacing(12)
 
-        # 1. Status line.
+        # 1. Status line, with the housekeeping ⚙ tucked into the top-right
+        # corner instead of a giant full-width button below the content.
         status_row = QHBoxLayout()
         self._board_status = QLabel()
         self._exp_status = QLabel()
         status_row.addWidget(self._board_status)
         status_row.addWidget(self._exp_status)
         status_row.addStretch(1)
+        self._menu_btn = QPushButton("⚙")
+        self._menu_btn.setFixedSize(40, 40)
+        self._menu_btn.clicked.connect(self._open_housekeeping_menu)
+        status_row.addWidget(self._menu_btn)
         content_layout.addLayout(status_row)
 
         # 2. Experiment section.
         self._exp_name = QLabel()
         content_layout.addWidget(self._exp_name)
 
-        file_row = QHBoxLayout()
+        # File-action buttons in a 2x2 grid (plus a full-width Connect row)
+        # so the row fits Pi-width screens without clipping. Housed in its
+        # own container widget so the grid layout is directly introspectable
+        # via the buttons' parentWidget().
+        file_grid_widget = QWidget()
+        file_grid = QGridLayout(file_grid_widget)
+        file_grid.setContentsMargins(0, 0, 0, 0)
         self._new_btn = QPushButton("New")
         self._open_btn = QPushButton("Open")
         self._save_btn = QPushButton("Save")
@@ -108,8 +121,13 @@ class RunnerSetupPage(QWidget):
             self._connect_btn,
         ):
             btn.setMinimumHeight(48)
-            file_row.addWidget(btn)
-        content_layout.addLayout(file_row)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        file_grid.addWidget(self._new_btn, 0, 0)
+        file_grid.addWidget(self._open_btn, 0, 1)
+        file_grid.addWidget(self._save_btn, 1, 0)
+        file_grid.addWidget(self._save_as_btn, 1, 1)
+        file_grid.addWidget(self._connect_btn, 2, 0, 1, 2)
+        content_layout.addWidget(file_grid_widget)
 
         self._new_btn.clicked.connect(self.new_requested)
         self._open_btn.clicked.connect(self.open_requested)
@@ -121,13 +139,8 @@ class RunnerSetupPage(QWidget):
         content_layout.addWidget(hardware_widget)
         content_layout.addStretch(1)
 
-        scroll.setWidget(content)
-        outer.addWidget(scroll, 1)
-
-        # 4. Housekeeping.
-        self._menu_btn = QPushButton("⚙")
-        self._menu_btn.clicked.connect(self._open_housekeeping_menu)
-        outer.addWidget(self._menu_btn, 0)
+        self._scroll.setWidget(content)
+        outer.addWidget(self._scroll, 1)
 
     # --- Public API ---
 
