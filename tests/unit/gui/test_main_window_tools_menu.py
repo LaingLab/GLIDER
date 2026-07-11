@@ -86,3 +86,19 @@ def test_behavior_action_enabled_when_deps_present(qtbot, monkeypatch):
         assert behavior.isEnabled() is True
     finally:
         win.deleteLater()
+
+
+def test_tools_menu_has_gpu_check_action(qtbot):
+    win = _menu_only_window()
+    try:
+        tools = _find_menu(win, "Tools")
+        assert tools is not None, "Tools menu missing"
+        gpu = next(
+            (a for a in tools.actions() if "GPU / Device Check" in a.text().replace("&", "")),
+            None,
+        )
+        assert gpu is not None, "GPU / Device Check action missing"
+        # Always enabled — it reports missing torch/GPU rather than being gated.
+        assert gpu.isEnabled() is True
+    finally:
+        win.deleteLater()
