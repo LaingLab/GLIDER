@@ -1,20 +1,15 @@
-# Tag-triggered macOS build.
+# Manually-dispatched macOS build (kept as an optional CI path).
 #
-# Fires on push of any `v*` tag and produces (currently unsigned, un-notarized)
-# `GLIDER-<version>-<arch>.dmg` files attached to the matching GitHub Release —
-# one per architecture (Apple Silicon + Intel). Also runnable manually via
-# workflow_dispatch, which uploads the DMGs as downloadable artifacts instead.
-#
-# Tag format MUST be `vX.Y.Z`.
+# Release artifacts are built LOCALLY by policy — see
+# packaging/macos/build.sh. This workflow deliberately has no tag trigger so
+# cutting a release never starts a GitHub Actions build; run it manually from
+# the Actions tab if a CI build is ever wanted. Produces (currently unsigned,
+# un-notarized) GLIDER-<version>-<arch>.dmg artifacts, one per architecture
+# (Apple Silicon + Intel).
 
 name: release-macos
 
 on:
-  push:
-    tags:
-      - "v*"
-  # Allow manual runs during iteration; useful for testing spec changes
-  # without cutting a tag.
   workflow_dispatch:
 
 permissions:

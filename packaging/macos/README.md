@@ -12,12 +12,16 @@ disk image for distribution.
 
 ## How releases are cut
 
-- **Tag push** (`git tag vX.Y.Z && git push origin vX.Y.Z`) → both DMGs are
-  built and attached to a **draft** GitHub Release for that tag. A human
-  publishes the release after a smoke test.
-- **Manual** `workflow_dispatch` (Actions → *release-macos* → *Run workflow*)
-  → the DMGs upload as downloadable **artifacts**, no release created. Use this
-  to test spec changes without cutting a tag.
+Builds are **local by policy** — tagging a release does not trigger any CI
+build:
+
+1. Run `./packaging/macos/build.sh` on each target Mac (arm64 / x86_64).
+2. Tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. Attach the DMGs: `gh release create vX.Y.Z dist/GLIDER-*.dmg`.
+
+The `release-macos.yml` workflow still exists as an optional CI path, but it
+only runs when manually dispatched (Actions → *release-macos* → *Run
+workflow*) and uploads the DMGs as downloadable artifacts.
 
 ## Build locally (the preferred path)
 

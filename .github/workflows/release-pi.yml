@@ -1,20 +1,19 @@
-# Tag-triggered Raspberry Pi SD image build.
+# Manually-dispatched Raspberry Pi SD image build (kept as an optional CI path).
+#
+# Release artifacts are built LOCALLY by policy — see packaging/pi/build.sh.
+# This workflow deliberately has no tag trigger so cutting a release never
+# starts a GitHub Actions build; run it manually from the Actions tab if a CI
+# build is ever wanted.
 #
 # Uses pi-gen on a GitHub ARM runner to bake an image with GLIDER pre-
-# installed and auto-starting in Runner mode. Outputs:
+# installed and auto-starting in Runner mode. Outputs (as artifacts):
 #
 #   GLIDER-<version>-pi64.img.xz
 #   os-list.json                  (rewritten with real size/sha256/url/date)
-#
-# Both are attached to the matching draft Release for a human to smoke-test
-# before publishing.
 
 name: release-pi
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 permissions:
