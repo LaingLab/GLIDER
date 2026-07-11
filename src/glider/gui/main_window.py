@@ -751,6 +751,10 @@ class MainWindow(QMainWindow):
         help_action.triggered.connect(self._on_help)
         help_menu.addAction(help_action)
 
+        replay_tour_action = QAction("&Replay Tutorial", self)
+        replay_tour_action.triggered.connect(self._start_tour)
+        help_menu.addAction(replay_tour_action)
+
         # "Check for Updates…" uses the same checker instance as the silent
         # startup check, so an in-flight check is coalesced rather than run
         # twice. The ellipsis follows platform convention for an action that
@@ -788,6 +792,9 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main Toolbar")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
+        # Kept as attributes so the onboarding tour can spotlight the Start
+        # button (via toolbar.widgetForAction) — see tour_targets().
+        self._toolbar = toolbar
 
         new_action = toolbar.addAction("New")
         new_action.triggered.connect(self._on_new)
@@ -807,6 +814,7 @@ class MainWindow(QMainWindow):
 
         start_action = toolbar.addAction("Start")
         start_action.triggered.connect(self._on_start_clicked)
+        self._start_action = start_action
 
         stop_action = toolbar.addAction("Stop")
         stop_action.triggered.connect(self._on_stop_clicked)
@@ -1906,6 +1914,49 @@ class MainWindow(QMainWindow):
         surfaces some feedback (up-to-date, error, or update-available).
         """
         self._update_checker.check(silent=silent)
+
+    # --- Onboarding tour ---
+
+    def tour_targets(self) -> dict[str, QWidget | None]:
+        """Registry mapping tour step keys to live widgets to spotlight.
+
+        Values may be None (e.g. in runner mode the docks don't exist); the
+        tour renders those steps centered with no spotlight rather than failing.
+        """
+        start_btn: QWidget | None = None
+        toolbar = getattr(self, "_toolbar", None)
+        start_action = getattr(self, "_start_action", None)
+        if toolbar is not None and start_action is not None:
+            start_btn = toolbar.widgetForAction(start_action)
+        return {
+            "node_library": getattr(self, "_node_library_dock", None),
+            "dock_tabs": self._dock_tab_bar("Node Library"),
+            "canvas": getattr(self, "_graph_view", None),
+            "hardware": getattr(self, "_hardware_dock", None),
+            "properties": getattr(self, "_properties_dock", None),
+            "camera": getattr(self, "_camera_dock", None),
+            "run": start_btn,
+        }
+
+    def _dock_tab_bar(self, tab_title: str) -> QWidget | None:
+        """The QMainWindow-owned dock QTabBar that hosts a tab named ``tab_title``.
+
+        QMainWindow builds these tab bars when docks are tabified; there's one
+        per tabbed dock group, so we pick the group containing the given tab.
+        """
+        for tab_bar in self.findChildren(QTabBar):
+            if tab_bar.parentWidget() is not self:
+                continue
+            for i in range(tab_bar.count()):
+                if tab_bar.tabText(i).replace("&", "") == tab_title:
+                    return tab_bar
+        return None
+
+    def _start_tour(self) -> None:
+        """Launch the interactive walkthrough (Help ▸ Replay Tutorial)."""
+        from glider.gui.onboarding import start_tour
+
+        start_tour(self)
 
     def _on_gpu_check(self) -> None:
         """Show accelerator diagnostics (Tools ▸ GPU / Device Check).
