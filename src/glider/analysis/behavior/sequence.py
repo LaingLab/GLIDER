@@ -595,7 +595,18 @@ class SequenceModel:
         self.fps = float(fps)
         self.arch = dict(arch)
         self.spec = spec
-        self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        if not device:
+            # No explicit device (the SequenceModel.load path passes none):
+            # resolve inference to the best locally available accelerator
+            # (CUDA > MPS > CPU) via the pose subsystem's resolver. Without this
+            # a saved model runs on CPU even on Apple Silicon, where the Metal
+            # GPU (MPS) is available. Training keeps its own device path so its
+            # deterministic-reproducibility guarantees are unaffected.
+            from glider.vision.pose.device import resolve_device
+
+            self.device = torch.device(resolve_device(None))
+        else:
+            self.device = torch.device(device)
         members = []
         for m in self.modules:
             m.to(self.device).eval()
