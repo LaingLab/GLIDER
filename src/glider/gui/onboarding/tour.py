@@ -52,10 +52,10 @@ def golden_path_steps() -> list[TourStep]:
             "every experiment starts with a “Start Experiment” node.",
         ),
         TourStep(
-            "canvas",
-            "2 · The Canvas",
-            "This is your experiment flow. Drop nodes here and connect them "
-            "left-to-right to define what happens, and in what order.",
+            "dock_tabs",
+            "2 · Switch panels",
+            "Panels share space as tabs. Click a tab along the bottom to switch "
+            "between Node Library, Hardware, and Device Control.",
         ),
         TourStep(
             "hardware",
@@ -64,8 +64,26 @@ def golden_path_steps() -> list[TourStep]:
             "“Input” drive the pins on these boards during a run.",
         ),
         TourStep(
+            "canvas",
+            "4 · The Canvas",
+            "This is your experiment flow. Drop nodes here and connect them "
+            "left-to-right to define what happens, and in what order.",
+        ),
+        TourStep(
+            "properties",
+            "5 · Node Properties",
+            "Select a node on the canvas and its settings appear here — timings, "
+            "pins, values. This is where you configure each step.",
+        ),
+        TourStep(
+            "camera",
+            "6 · Camera & Vision",
+            "Live camera preview, recording, and computer-vision overlays live "
+            "here — track your subject and score behavior while an experiment runs.",
+        ),
+        TourStep(
             "run",
-            "4 · Run It",
+            "7 · Run It",
             "When your flow is ready, press Start to run the experiment. The "
             "status indicator turns green while it's running.",
         ),

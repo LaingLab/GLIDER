@@ -1930,10 +1930,27 @@ class MainWindow(QMainWindow):
             start_btn = toolbar.widgetForAction(start_action)
         return {
             "node_library": getattr(self, "_node_library_dock", None),
+            "dock_tabs": self._dock_tab_bar("Node Library"),
             "canvas": getattr(self, "_graph_view", None),
             "hardware": getattr(self, "_hardware_dock", None),
+            "properties": getattr(self, "_properties_dock", None),
+            "camera": getattr(self, "_camera_dock", None),
             "run": start_btn,
         }
+
+    def _dock_tab_bar(self, tab_title: str) -> QWidget | None:
+        """The QMainWindow-owned dock QTabBar that hosts a tab named ``tab_title``.
+
+        QMainWindow builds these tab bars when docks are tabified; there's one
+        per tabbed dock group, so we pick the group containing the given tab.
+        """
+        for tab_bar in self.findChildren(QTabBar):
+            if tab_bar.parentWidget() is not self:
+                continue
+            for i in range(tab_bar.count()):
+                if tab_bar.tabText(i).replace("&", "") == tab_title:
+                    return tab_bar
+        return None
 
     def _start_tour(self) -> None:
         """Launch the interactive walkthrough (Help ▸ Replay Tutorial)."""
