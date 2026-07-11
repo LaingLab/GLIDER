@@ -16,10 +16,13 @@ QMainWindow {
     background-color: #0f1419;
 }
 
+/* Blend dock separators into the panel background so butting panels read as a
+ * subtle surface step, not a contrasting hairline. The :hover cyan still
+ * reveals the drag handle when resizing docks. */
 QMainWindow::separator {
-    background-color: #1e2530;
-    width: 2px;
-    height: 2px;
+    background-color: #0f1419;
+    width: 1px;
+    height: 1px;
 }
 
 QMainWindow::separator:hover {
@@ -541,25 +544,15 @@ QLabel[subheading="true"] {
 }
 
 /* === Graphics View (Node Editor) === */
+/* No border: the canvas is delineated by its darker surface (#0a0e13 vs the
+ * #0f1419 docks), which reads as recessed depth instead of a contrasting
+ * hairline that stacks with the dock separator at panel boundaries. */
 QGraphicsView {
     background-color: #0a0e13;
-    border: 1px solid #1e2530;
-    border-radius: 4px;
+    border: none;
 }
 
 /* === Custom Classes === */
-/* Node palette */
-.NodePalette {
-    background-color: #0b0f14;
-    border-right: 1px solid #1e2530;
-}
-
-/* Property panel */
-.PropertyPanel {
-    background-color: #0b0f14;
-    border-left: 1px solid #1e2530;
-}
-
 /* Console output */
 .ConsoleOutput {
     font-family: "SF Mono", "Menlo", "Consolas", "Monaco", "Courier New";
