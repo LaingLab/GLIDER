@@ -64,9 +64,12 @@ The resulting `.img` and compressed `.img.xz` land in `pi-gen/deploy/`.
 
 ## Publishing to Raspberry Pi Imager
 
-1. Release tag triggers the Pi workflow
-   (`.github/workflows/release-pi.yml`), which uploads `GLIDER-<version>-pi64.img.xz`
-   and an updated `os-list.json` as release assets.
+1. Build the image locally (`sudo ./packaging/pi/build.sh` on an ARM64
+   Debian/Raspberry Pi OS box — builds are local by policy; tags do not
+   trigger CI) and attach `GLIDER-<version>-pi64.img.xz` plus an updated
+   `os-list.json` to the GitHub Release (`gh release upload vX.Y.Z …`).
+   The `release-pi.yml` workflow remains as an optional, manually-dispatched
+   CI path that uploads the same files as artifacts.
 2. Publish `os-list.json` to a stable URL (e.g. GitHub Pages on this repo at
    `https://lainglab.github.io/glider/os-list.json`).
 3. In Raspberry Pi Imager, users choose *Operating System → Use custom list*

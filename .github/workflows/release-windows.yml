@@ -1,18 +1,14 @@
-# Tag-triggered Windows build.
+# Manually-dispatched Windows build (kept as an optional CI path).
 #
-# Fires on push of any `v*` tag and produces a (currently unsigned)
-# `glider-setup-<version>.exe` attached to the matching GitHub Release.
-# Tag format MUST match `vX.Y.Z` for the sed step that injects the version
-# into the Inno Setup script.
+# Release artifacts are built LOCALLY by policy — see
+# packaging/windows/build.ps1. This workflow deliberately has no tag trigger
+# so cutting a release never starts a GitHub Actions build; run it manually
+# from the Actions tab if a CI build is ever wanted. Produces a (currently
+# unsigned) glider-setup-<version>.exe as a downloadable artifact.
 
 name: release-windows
 
 on:
-  push:
-    tags:
-      - "v*"
-  # Allow manual runs during iteration; useful for testing spec changes
-  # without cutting a tag.
   workflow_dispatch:
 
 permissions:
