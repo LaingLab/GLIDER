@@ -352,6 +352,9 @@ class CVProcessor:
         self._settings = settings or CVSettings()
         self._bg_subtractor: cv2.BackgroundSubtractor | None = None
         self._yolo_model = None
+        # Resolved to the best available accelerator when a YOLO model loads;
+        # stays "cpu" until then and if no GPU is present.
+        self._device: str = "cpu"
         self._tracker: ObjectTracker | None = None
         self._initialized = False
         self._lock = threading.Lock()
@@ -497,7 +500,21 @@ class CVProcessor:
 
             model_path = self._settings.model_path or "yolov8n.pt"
             self._yolo_model = YOLO(model_path)
-            logger.info(f"Loaded YOLO model: {model_path}")
+
+            # Pin inference to the best available accelerator (CUDA > MPS > CPU)
+            # so live detection uses the GPU instead of ultralytics' CPU-leaning
+            # auto-pick, which never selects MPS on Apple Silicon. Best-effort:
+            # if resolving or moving the model fails, stay on CPU rather than
+            # break the live camera.
+            try:
+                from glider.vision.pose.device import resolve_device
+
+                self._device = resolve_device(None)
+                self._yolo_model.to(self._device)
+            except Exception:
+                self._device = "cpu"
+                logger.warning("Could not select a GPU for YOLO; using CPU", exc_info=True)
+            logger.info(f"Loaded YOLO model: {model_path} (device={self._device})")
 
             # ByteTrack-specific dependency probe.
             if self._settings.backend == DetectionBackend.YOLO_BYTETRACK:
@@ -638,7 +655,12 @@ class CVProcessor:
         if self._yolo_model is None:
             return []
 
-        results = self._yolo_model(frame, conf=self._settings.confidence_threshold, verbose=False)
+        results = self._yolo_model(
+            frame,
+            conf=self._settings.confidence_threshold,
+            device=self._device,
+            verbose=False,
+        )
 
         detections = []
         for r in results:
@@ -703,6 +725,7 @@ class CVProcessor:
             conf=self._settings.confidence_threshold,
             persist=True,  # Persist tracks across frames
             tracker="bytetrack.yaml",  # Use ByteTrack
+            device=self._device,
             verbose=False,
         )
 
