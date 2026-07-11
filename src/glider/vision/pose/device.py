@@ -17,6 +17,7 @@ import cost unless inference is actually requested.
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 
@@ -213,8 +214,18 @@ def diagnose() -> list[tuple[str, str, str]]:
         return checks
     checks.append(("torch installed", "ok", info["torch_version"]))
 
-    # CPU-only build?
-    if info["torch_cpu_only_build"]:
+    # CPU-only build? On macOS every torch wheel is CUDA-less by definition
+    # (MPS is the accelerator), so "CPU-only, reinstall from cu121" would be
+    # misleading advice — report the platform fact instead.
+    if sys.platform == "darwin":
+        checks.append(
+            (
+                "torch CUDA build",
+                "info",
+                "macOS build — CUDA not applicable; MPS is the accelerator",
+            )
+        )
+    elif info["torch_cpu_only_build"]:
         checks.append(
             (
                 "torch CUDA build",
@@ -303,7 +314,10 @@ def format_gpu_info(info: dict[str, Any] | None = None) -> str:
         return "PyTorch is not installed. `pip install glider[vision]` to enable inference."
 
     lines = [f"PyTorch {info['torch_version']}"]
-    if info["torch_cpu_only_build"]:
+    if sys.platform == "darwin":
+        # macOS torch is never a CUDA build; warning about it is noise.
+        lines.append("torch macOS build — CUDA not applicable; MPS is the accelerator.")
+    elif info["torch_cpu_only_build"]:
         lines.append("⚠  CPU-only torch build (torch.version.cuda is None or +cpu).")
         lines.append("   Reinstall from https://download.pytorch.org/whl/cu121 to enable CUDA.")
     else:

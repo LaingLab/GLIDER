@@ -5,6 +5,23 @@ All notable changes to GLIDER are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-07-11
+
+### Added
+
+- **Live behavior classifier** wired into the camera panel: `LiveBehaviorClassifier` + `BehaviorInferenceWorker`, with a live == offline feature-parity test guard.
+- **Interactive onboarding tour** (`gui/onboarding/`): spotlight overlay + callout card walking new users through the Node Library, panel tabs, Hardware, canvas, Properties, Camera, and Run. Offered on first launch (Take the Tour / Skip) in Builder mode; replayable anytime from Help → Replay Tutorial.
+- **GPU/accelerator diagnostics**: `glider --gpu-check` CLI flag and Tools → GPU / Device Check menu action, reporting CUDA/MPS/CPU availability and the device inference will use.
+- **macOS packaging** (`packaging/macos/`): PyInstaller spec producing `GLIDER.app` (with camera/microphone usage descriptions) and a one-command local `build.sh` that packages `GLIDER-<version>-<arch>.dmg`. Unsigned for now; per-arch (arm64/x86_64).
+- Local Windows installer build script (`packaging/windows/build.ps1`) and local Pi image build script (`packaging/pi/build.sh`) — one-command equivalents of the CI workflows for building on your own machines.
+
+### Changed
+
+- **Apple Silicon (MPS) acceleration**: behavior-classifier inference and live YOLO detection now resolve CUDA → MPS → CPU instead of silently falling back to CPU on Macs. Training keeps its deterministic CUDA-or-CPU path.
+- HiDPI scale-factor rounding changed from `PassThrough` to `RoundPreferFloor` so 1px borders stay crisp at scaled macOS resolutions and on external displays.
+- Desktop theme: dock separators blend into the panel background, the node-editor canvas no longer draws a contrasting border, and tabbed-dock tabs stretch the full width of the tab bar.
+- `diagnose()`/`format_gpu_info()` no longer advise reinstalling a CUDA wheel on macOS (where CUDA is not applicable); they report MPS as the platform accelerator instead.
+
 ## [Unreleased] — release-prep-1.0 branch
 
 Release-readiness work for the 1.0.0 cut. See [`code-review-laing.md`](code-review-laing.md) for the engineering audit driving these changes.
