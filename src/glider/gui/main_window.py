@@ -737,6 +737,12 @@ class MainWindow(QMainWindow):
             )
         tools_menu.addAction(behavior_action)
 
+        # GPU / device diagnostics. Always enabled — it's most useful precisely
+        # when torch or a GPU is missing, and it reports that cleanly.
+        gpu_check_action = QAction("&GPU / Device Check…", self)
+        gpu_check_action.triggered.connect(self._on_gpu_check)
+        tools_menu.addAction(gpu_check_action)
+
         # Help menu
         help_menu = menubar.addMenu("&Help")
 
@@ -1900,6 +1906,38 @@ class MainWindow(QMainWindow):
         surfaces some feedback (up-to-date, error, or update-available).
         """
         self._update_checker.check(silent=silent)
+
+    def _on_gpu_check(self) -> None:
+        """Show accelerator diagnostics (Tools ▸ GPU / Device Check).
+
+        Reuses the pose subsystem's device utilities so the report matches what
+        inference resolves at runtime (CUDA > MPS > CPU). Works — and is worth
+        opening — even without torch, where it reports what's missing.
+        """
+        try:
+            from glider.vision.pose.device import diagnose, format_gpu_info, resolve_device
+        except Exception as e:  # pragma: no cover - only on a broken vision install
+            QMessageBox.warning(
+                self, "GPU / Device Check", f"Diagnostics unavailable: {e}"
+            )
+            return
+
+        marks = {"ok": "✓", "warn": "⚠", "fail": "✗", "info": "·"}
+        lines = [format_gpu_info(), ""]
+        lines += [f"{marks.get(status, '?')} {check}: {detail}" for check, status, detail in diagnose()]
+        try:
+            selected = resolve_device(None)
+        except Exception as e:
+            selected = f"unavailable ({e.__class__.__name__})"
+        lines += ["", f"Inference will use: {selected}"]
+
+        box = QMessageBox(self)
+        box.setWindowTitle("GPU / Device Check")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText("GLIDER GPU / device check")
+        box.setInformativeText("\n".join(lines))
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.exec()
 
     def _on_about(self) -> None:
         # Pull from the single source of truth so the About box never drifts
