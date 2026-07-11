@@ -504,6 +504,27 @@ class MainWindow(QMainWindow):
         if getattr(self, "_switch_view_action", None) is not None:
             self._switch_view_action.setEnabled(False)
 
+        # Tabbed docks share an auto-built QTabBar whose tabs otherwise size to
+        # their labels, leaving the strip behind them exposed. Stretch the tabs
+        # to fill the full width. Immediate + deferred because QMainWindow can
+        # rebuild the tab bar during first layout, which would drop the flag.
+        self._stretch_dock_tab_bars()
+        QTimer.singleShot(0, self._stretch_dock_tab_bars)
+
+    def _stretch_dock_tab_bars(self) -> None:
+        """Stretch tabbed-dock tabs to fill the full width of their tab bar.
+
+        When docks are tabified, QMainWindow builds a QTabBar whose tabs size to
+        their labels, leaving the strip behind them exposed. Flipping the bar to
+        expanding makes the tabs share the full width edge-to-edge. Only the
+        window's own dock tab bars are touched — panel-internal tab bars (e.g.
+        the Camera panel, the runner shell) parent to their panels, not to the
+        window.
+        """
+        for tab_bar in self.findChildren(QTabBar):
+            if tab_bar.parentWidget() is self:
+                tab_bar.setExpanding(True)
+
     # --- Menu / Toolbar / Status bar ---
 
     def _setup_menu(self) -> None:
@@ -1251,8 +1272,7 @@ class MainWindow(QMainWindow):
         for dock in docks[1:]:
             self.tabifyDockWidget(first_dock, dock)
 
-        for tab_bar in self.findChildren(QTabBar):
-            tab_bar.setExpanding(True)
+        self._stretch_dock_tab_bars()
 
         first_dock.raise_()
         self._show_status_message("Pi Touchscreen layout applied", 2000)
@@ -1304,6 +1324,8 @@ class MainWindow(QMainWindow):
 
         if getattr(self, "_files_dock", None) is not None:
             self._files_dock.setVisible(False)
+
+        self._stretch_dock_tab_bars()
 
         self._show_status_message("Default layout restored", 2000)
 

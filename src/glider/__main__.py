@@ -280,9 +280,16 @@ def main() -> int:
     _install_windows_app_id()
 
     # Create Qt application
-    # Enable high DPI support
+    # Enable high DPI support.
+    #
+    # Round fractional device-pixel ratios down to the nearest integer rather
+    # than passing them through. On macOS at a scaled ("More Space"/"Larger
+    # Text") resolution or on an external non-Retina display, PassThrough yields
+    # a fractional DPR (e.g. 1.6, 2.4) that lands 1px QSS borders on half-pixel
+    # boundaries — they get anti-aliased across two rows and read as faint,
+    # doubled hairlines around panels. RoundPreferFloor keeps hairlines crisp.
     QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        Qt.HighDpiScaleFactorRoundingPolicy.RoundPreferFloor
     )
 
     app = QApplication(sys.argv)
