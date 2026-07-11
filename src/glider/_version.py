@@ -8,4 +8,4 @@ Bump the value here when cutting a release — CI reads it via ``setuptools``
 dynamic resolution and the in-app updater compares it against GitHub Releases.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

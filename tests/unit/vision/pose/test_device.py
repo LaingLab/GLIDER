@@ -147,7 +147,12 @@ def test_format_gpu_info_cpu_only(monkeypatch):
     assert "MPS available: no" in text
 
 
-def test_format_gpu_info_with_cuda():
+def test_format_gpu_info_with_cuda(monkeypatch):
+    import sys
+
+    # Simulates a CUDA box; pin the platform so the darwin branch doesn't
+    # suppress the CUDA-build line when this test runs on a Mac.
+    monkeypatch.setattr(sys, "platform", "linux")
     info = {
         "torch_available": True,
         "torch_version": "2.3.0",
@@ -174,7 +179,11 @@ def test_format_gpu_info_with_cuda():
     assert "CUDA 12.1" in text
 
 
-def test_format_gpu_info_cpu_only_build_warns():
+def test_format_gpu_info_cpu_only_build_warns(monkeypatch):
+    import sys
+
+    # The cu121-reinstall advice only makes sense off macOS.
+    monkeypatch.setattr(sys, "platform", "linux")
     info = {
         "torch_available": True,
         "torch_version": "2.3.0+cpu",
@@ -191,10 +200,63 @@ def test_format_gpu_info_cpu_only_build_warns():
     assert "download.pytorch.org" in text
 
 
-def test_diagnose_flags_cpu_only_with_visible_gpu(monkeypatch):
-    """The classic 'gpu shows up in nvidia-smi but torch is +cpu' case."""
+def test_format_gpu_info_mac_does_not_advise_cuda_reinstall(monkeypatch):
+    """On macOS torch is never a CUDA build — no 'reinstall from cu121' noise."""
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    info = {
+        "torch_available": True,
+        "torch_version": "2.10.0",
+        "torch_build_cuda": None,
+        "torch_cpu_only_build": True,
+        "cuda_available": False,
+        "cuda_device_count": 0,
+        "cuda_devices": [],
+        "mps_available": True,
+        "nvidia_driver_visible": False,
+    }
+    text = format_gpu_info(info)
+    assert "CUDA not applicable" in text
+    assert "download.pytorch.org" not in text
+    assert "MPS available: yes" in text
+
+
+def test_diagnose_mac_reports_info_not_warn(monkeypatch):
+    import sys
+
     from glider.vision.pose import device as device_mod
 
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(
+        device_mod,
+        "gpu_info",
+        lambda: {
+            "torch_available": True,
+            "torch_version": "2.10.0",
+            "torch_build_cuda": None,
+            "torch_cpu_only_build": True,
+            "cuda_available": False,
+            "cuda_device_count": 0,
+            "cuda_devices": [],
+            "mps_available": True,
+            "nvidia_driver_visible": False,
+        },
+    )
+    checks = device_mod.diagnose()
+    statuses = {name: (status, detail) for name, status, detail in checks}
+    assert statuses["torch CUDA build"][0] == "info"
+    assert "MPS" in statuses["torch CUDA build"][1]
+    assert statuses["MPS (Apple Silicon)"][0] == "ok"
+
+
+def test_diagnose_flags_cpu_only_with_visible_gpu(monkeypatch):
+    """The classic 'gpu shows up in nvidia-smi but torch is +cpu' case."""
+    import sys
+
+    from glider.vision.pose import device as device_mod
+
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
         device_mod,
         "gpu_info",
