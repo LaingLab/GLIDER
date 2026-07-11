@@ -1917,14 +1917,14 @@ class MainWindow(QMainWindow):
         try:
             from glider.vision.pose.device import diagnose, format_gpu_info, resolve_device
         except Exception as e:  # pragma: no cover - only on a broken vision install
-            QMessageBox.warning(
-                self, "GPU / Device Check", f"Diagnostics unavailable: {e}"
-            )
+            QMessageBox.warning(self, "GPU / Device Check", f"Diagnostics unavailable: {e}")
             return
 
         marks = {"ok": "✓", "warn": "⚠", "fail": "✗", "info": "·"}
         lines = [format_gpu_info(), ""]
-        lines += [f"{marks.get(status, '?')} {check}: {detail}" for check, status, detail in diagnose()]
+        lines += [
+            f"{marks.get(status, '?')} {check}: {detail}" for check, status, detail in diagnose()
+        ]
         try:
             selected = resolve_device(None)
         except Exception as e:
