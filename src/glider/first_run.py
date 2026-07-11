@@ -1,16 +1,17 @@
 """First-launch setup: create the data directory and show a welcome dialog.
 
 The goal is to make the first launch feel like a product, not a dev script, for
-a non-technical user. Scope is deliberately tiny:
+a non-technical user:
 
 * Create the user-visible experiment-output directory if it doesn't exist.
-* Pop a small welcome dialog with two buttons:
-  **Open User Guide** (opens our docs page) and **Start** (closes the dialog).
+* Pop a small welcome dialog. In Builder mode it offers **Take the Tour**
+  (launches the interactive walkthrough from :mod:`glider.gui.onboarding`),
+  **Skip**, and **Open User Guide**; in Runner mode — where the tour's dock
+  targets don't exist — it keeps the original **Start** / **Open User Guide**
+  pair.
 * Persist a ``first_run/complete`` flag in :class:`QSettings` so subsequent
-  launches skip the welcome.
-
-That's it. No onboarding wizards, no multi-step flows — anything more ambitious
-belongs in a later milestone.
+  launches skip the welcome. (The tour records its own completion separately;
+  it stays replayable from Help → Replay Tutorial.)
 """
 
 from __future__ import annotations
@@ -72,8 +73,19 @@ def _mark_complete(settings: QSettings) -> None:
     settings.setValue(FIRST_RUN_COMPLETE_KEY, True)
 
 
-def show_welcome_dialog(parent: QWidget | None, data_dir: Path) -> None:
-    """Display a tiny welcome message telling the user where outputs live."""
+def show_welcome_dialog(
+    parent: QWidget | None,
+    data_dir: Path,
+    *,
+    offer_tour: bool = False,
+) -> str:
+    """Display the welcome message; return ``"tour"`` or ``"start"``.
+
+    With ``offer_tour`` the primary action becomes **Take the Tour** (with a
+    **Skip** escape hatch); otherwise the original single **Start** button.
+    Dismissing the dialog any other way (including via Open User Guide or the
+    window close button) counts as ``"start"``.
+    """
     box = QMessageBox(parent)
     box.setWindowTitle("Welcome to GLIDER")
     box.setIcon(QMessageBox.Icon.Information)
@@ -84,13 +96,23 @@ def show_welcome_dialog(parent: QWidget | None, data_dir: Path) -> None:
         "You can change this later from File → Preferences."
     )
     guide_btn = box.addButton("Open User Guide", QMessageBox.ButtonRole.HelpRole)
-    start_btn = box.addButton("Start", QMessageBox.ButtonRole.AcceptRole)
-    box.setDefaultButton(start_btn)
+    tour_btn = None
+    if offer_tour:
+        box.addButton("Skip", QMessageBox.ButtonRole.RejectRole)
+        tour_btn = box.addButton("Take the Tour", QMessageBox.ButtonRole.AcceptRole)
+        box.setDefaultButton(tour_btn)
+    else:
+        start_btn = box.addButton("Start", QMessageBox.ButtonRole.AcceptRole)
+        box.setDefaultButton(start_btn)
 
     box.exec()
-    if box.clickedButton() is guide_btn:
+    clicked = box.clickedButton()
+    if clicked is guide_btn:
         QDesktopServices.openUrl(QUrl(USER_GUIDE_URL))
-    del start_btn  # unused; AcceptRole is the default path
+        return "start"
+    if tour_btn is not None and clicked is tour_btn:
+        return "tour"
+    return "start"
 
 
 def run_first_run_if_needed(
@@ -108,11 +130,26 @@ def run_first_run_if_needed(
     s = settings if settings is not None else QSettings()
     data_dir = ensure_data_dir()
     if is_first_run(s):
+        # Only offer the tour where its spotlight targets exist: a Builder-mode
+        # main window with _start_tour. In Runner mode (or under a bare parent
+        # in tests) fall back to the plain welcome.
+        offer_tour = (
+            getattr(parent, "is_runner_mode", True) is False
+            and getattr(parent, "_start_tour", None) is not None
+        )
+        choice = "start"
         try:
-            show_welcome_dialog(parent, data_dir)
+            choice = show_welcome_dialog(parent, data_dir, offer_tour=offer_tour)
         finally:
             # Even if the dialog was dismissed via window-close rather than a
             # button, we want to flip the flag — never prompt the same person
             # twice.
             _mark_complete(s)
+        if choice == "tour":
+            try:
+                parent._start_tour()
+            except Exception:
+                # The tour is a nice-to-have; a failure here must never break
+                # the first launch.
+                logger.warning("Could not start the onboarding tour", exc_info=True)
     return data_dir
