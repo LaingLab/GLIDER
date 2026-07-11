@@ -114,6 +114,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable plugin loading",
     )
+    parser.add_argument(
+        "--gpu-check",
+        action="store_true",
+        help="Print GPU/accelerator diagnostics (CUDA/MPS/CPU) and exit",
+    )
     return parser.parse_args()
 
 
@@ -126,6 +131,35 @@ def setup_logging(debug: bool = False) -> None:
         # Enable detailed logging for all GLIDER modules
         for name in ["glider.core", "glider.hal", "glider.gui", "glider.plugins"]:
             logging.getLogger(name).setLevel(logging.DEBUG)
+
+
+def _print_gpu_check() -> int:
+    """Print accelerator diagnostics and exit — the handler for ``--gpu-check``.
+
+    Reuses the pose subsystem's device utilities so the report matches exactly
+    what inference resolves at runtime (CUDA > MPS > CPU). Runs before any Qt /
+    core init so it works as a quick headless diagnostic.
+    """
+    try:
+        from glider.vision.pose.device import diagnose, format_gpu_info, resolve_device
+    except Exception as e:  # pragma: no cover - only on a broken vision install
+        print(f"GPU check unavailable: could not import device utilities ({e})")
+        return 1
+
+    print("GLIDER GPU / device check")
+    print("-" * 40)
+    print(format_gpu_info())
+    print()
+    marks = {"ok": "✓", "warn": "⚠", "fail": "✗", "info": "·"}
+    for check, status, detail in diagnose():
+        print(f"  {marks.get(status, '?')} {check}: {detail}")
+    print()
+    try:
+        selected = resolve_device(None)
+    except Exception as e:
+        selected = f"unavailable ({e.__class__.__name__})"
+    print(f"Inference will use: {selected}")
+    return 0
 
 
 async def init_glider(
@@ -269,6 +303,10 @@ def main() -> int:
     """
     # Parse arguments
     args = parse_args()
+
+    # Headless diagnostic: report accelerators and exit before any Qt/core init.
+    if args.gpu_check:
+        return _print_gpu_check()
 
     # Setup logging
     setup_logging(args.debug)
