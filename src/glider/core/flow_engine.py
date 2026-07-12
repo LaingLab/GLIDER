@@ -135,6 +135,15 @@ class FlowEngine:
             self._function_runners[start_node_id] = runner
         return runner
 
+    def track_task(self, task: "asyncio.Task") -> None:
+        """Register a background task so ``clear()``/``stop()`` can cancel it.
+
+        Used by ``FlowFunctionRunner`` so an in-flight manual function run is
+        cancelled on New/Open instead of running on against a torn-down graph.
+        """
+        self._running_tasks.add(task)
+        task.add_done_callback(self._running_tasks.discard)
+
     @property
     def nodes(self) -> dict[str, Any]:
         """Dictionary of node instances."""

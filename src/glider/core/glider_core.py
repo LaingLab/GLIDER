@@ -288,6 +288,15 @@ class GliderCore:
         """Current session state."""
         return self._session.state if self._session else SessionState.IDLE
 
+    @property
+    def is_experiment_busy(self) -> bool:
+        """True while a start/stop is mid-flight (the experiment lock is held).
+
+        Lets the GUI refuse a manual function run during the window where an
+        experiment is starting but ``state`` has not yet flipped to RUNNING.
+        """
+        return self._experiment_lock.locked()
+
     def on_session_change(self, callback: Callable[[ExperimentSession], None]) -> None:
         """Register callback for session changes."""
         self._session_callbacks.append(callback)

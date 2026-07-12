@@ -65,7 +65,9 @@ class _Engine:
         return self._runner
 
 
-def _core(engine, *, connected=True):
+def _core(engine, *, connected=True, state=None, busy=False):
+    from glider.core.experiment_session import SessionState
+
     session = types.SimpleNamespace(
         flow=types.SimpleNamespace(
             nodes=[types.SimpleNamespace(id="s1", node_type="StartFunction", state={})],
@@ -81,6 +83,8 @@ def _core(engine, *, connected=True):
         flow_engine=engine,
         session=session,
         setup_flow=setup_flow,
+        state=state if state is not None else SessionState.IDLE,
+        is_experiment_busy=busy,
     )
 
 
@@ -115,6 +119,51 @@ async def test_no_hardware_is_reported_and_does_not_run():
     assert engine._runner is None  # never ran
     assert engine.nodes == {}  # never lazy-loaded
     assert any("Connect hardware" in text for text, _ in win._runner_device_controls.status)
+
+
+async def test_refuses_manual_run_during_a_real_experiment():
+    from glider.core.experiment_session import SessionState
+
+    win = _bare_window()
+    engine = _Engine()
+    win._core = _core(engine, state=SessionState.RUNNING)
+    win._runner_device_controls = _Controls()
+    win._manual_run_busy = False
+
+    await win._run_function_async("s1")
+
+    assert engine._runner is None  # never ran
+    assert engine.nodes == {}  # never lazy-loaded
+    assert any("Stop the experiment" in t for t, _ in win._runner_device_controls.status)
+
+
+async def test_refuses_manual_run_while_start_stop_in_progress():
+    win = _bare_window()
+    engine = _Engine()
+    win._core = _core(engine, busy=True)  # experiment lock held mid start/stop
+    win._runner_device_controls = _Controls()
+    win._manual_run_busy = False
+
+    await win._run_function_async("s1")
+
+    assert engine._runner is None
+    assert any("Stop the experiment" in t for t, _ in win._runner_device_controls.status)
+
+
+async def test_start_is_refused_while_a_function_is_running():
+    win = _bare_window()
+    win._manual_run_busy = True  # a manual function is in flight
+    started: list = []
+    notified: list = []
+    win._core = types.SimpleNamespace(
+        start_experiment=lambda: started.append(True),  # must NOT be awaited
+    )
+    win._notify_user = lambda *a, **k: notified.append((a, k))
+
+    await win._start_async()
+
+    assert started == []  # real start refused
+    assert notified  # operator told why
 
 
 async def test_busy_guard_blocks_a_second_run():

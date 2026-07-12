@@ -1847,6 +1847,16 @@ class MainWindow(QMainWindow):
         self._run_async(self._start_async())
 
     async def _start_async(self) -> None:
+        # A manual function run briefly forces the flow engine RUNNING to gate
+        # exec propagation; starting a real experiment on top of that would make
+        # FlowEngine.start() early-return and never run the flow. Refuse instead.
+        if self._manual_run_busy:
+            self._notify_user(
+                "Function running",
+                "A function is running on the Manual tab. Let it finish before starting.",
+                level="warning",
+            )
+            return
         try:
             rec_dir = self._core.session.metadata.recording_directory
             if rec_dir:
@@ -1921,11 +1931,21 @@ class MainWindow(QMainWindow):
         for the duration and restored after — this does not start a recorded
         experiment or change session state.
         """
+        from glider.core.experiment_session import SessionState
         from glider.core.flow_engine import FlowState
         from glider.core.graph_functions import find_run_param
 
         if self._manual_run_busy:
             self._runner_device_controls.show_status("A function is already running", level="info")
+            return
+        # A real experiment and a manual run both drive the engine's exec gate;
+        # they must not overlap. Refuse if one is live or mid-start/stop.
+        if self._core.state in (SessionState.RUNNING, SessionState.PAUSED) or (
+            self._core.is_experiment_busy
+        ):
+            self._runner_device_controls.show_status(
+                "Stop the experiment before running a function manually"
+            )
             return
         if not self._core.hardware_manager.is_any_board_connected():
             self._runner_device_controls.show_status("Connect hardware to run a function")

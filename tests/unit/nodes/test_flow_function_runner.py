@@ -18,9 +18,13 @@ class _FakeEngine:
     def __init__(self):
         self.nodes: dict = {}
         self._connections: list = []
+        self.tracked: list = []
 
     def get_node(self, nid):
         return self.nodes.get(nid)
+
+    def track_task(self, task):
+        self.tracked.append(task)
 
 
 class _Start:
@@ -121,3 +125,29 @@ async def test_clear_cancels_in_flight_tasks():
     await asyncio.sleep(0)
     assert task.cancelled() or task.cancelling()
     assert fe._function_runners == {}
+
+
+async def test_run_body_task_is_tracked_and_external_cancel_returns_false():
+    # The runner registers its body task with the engine so a graph reset
+    # (FlowEngine.clear() on New/Open) can cancel it; cancelling it out from
+    # under execute() yields a clean False rather than an escaping CancelledError.
+    eng = _wire(gate=asyncio.Event())  # gate never opens → the body hangs
+    runner = FlowFunctionRunner("start", eng)
+
+    task = asyncio.create_task(runner.execute(timeout=5))
+    await asyncio.sleep(0)  # let execute register the body task and park
+    assert len(eng.tracked) == 1  # visible to the engine for cancellation
+
+    eng.tracked[0].cancel()  # simulate FlowEngine.clear()
+    assert await task is False
+    assert runner.running is False
+
+
+async def test_track_task_lets_flow_engine_cancel_a_registered_task():
+    fe = FlowEngine()
+    task = asyncio.create_task(asyncio.sleep(10))
+    fe.track_task(task)
+    assert task in fe._running_tasks
+    fe.clear()
+    await asyncio.sleep(0)
+    assert task.cancelled() or task.cancelling()
