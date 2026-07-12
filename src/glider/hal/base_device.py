@@ -14,6 +14,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
+from glider.hal.value_spec import KIND_SWITCH, KIND_WHOLE, ActionValueSpec
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -57,6 +59,11 @@ class BaseDevice(ABC):
         self._name = name or self.device_type
         self._initialized = False
         self._enabled = True
+        # Serializes commands to THIS device across all sources (experiment
+        # flow, functions, manual controls) so their hardware steps never
+        # interleave. Held across the whole action body in execute_action.
+        # Emergency stop is intentionally exempt and does not acquire it.
+        self._command_lock = asyncio.Lock()
 
     @property
     def id(self) -> str:
@@ -201,10 +208,44 @@ class BaseDevice(ABC):
             raise ValueError(f"Unknown action: {action_name}")
 
         action = self.actions[action_name]
-        if asyncio.iscoroutinefunction(action):
-            return await action(*args, **kwargs)
-        else:
-            return await asyncio.to_thread(action, *args, **kwargs)
+        # Hold the per-device lock across the WHOLE action body (including any
+        # nested to_thread hops) so a multi-step board write cannot interleave
+        # with a concurrent command to the same device. The checks above do not
+        # await, so lock-acquisition order equals call order (FIFO).
+        async with self._command_lock:
+            if asyncio.iscoroutinefunction(action):
+                return await action(*args, **kwargs)
+            else:
+                return await asyncio.to_thread(action, *args, **kwargs)
+
+    def value_spec(self, action_name: str) -> ActionValueSpec | None:
+        """Single authority for an action's value semantics (range/unit/label).
+
+        Returns ``None`` when the action carries no value. Node property editors,
+        the generated runner controls, and write-time clamping all read range and
+        unit through this one call, so no layer keeps a private hardcoded range.
+        A declared spec (from a custom definition or a built-in) takes precedence;
+        otherwise the op-inferred fallback preserves today's behavior.
+        """
+        declared = self._declared_value_spec(action_name)
+        return declared if declared is not None else self._default_value_spec(action_name)
+
+    def _declared_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        """An explicitly declared spec for ``action_name``, or ``None`` to fall back.
+
+        Overridden by built-in device classes (e.g. the servo's angle range) and
+        by declarative devices that carry a ``value`` block. The base device
+        declares nothing.
+        """
+        return None
+
+    def _default_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        """The fallback spec used when nothing is declared (preserves today's ranges).
+
+        The base class knows no ops, so it returns ``None``; subclasses that write
+        values infer a default from the action's op and the board's capabilities.
+        """
+        return None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize device configuration to dictionary."""
@@ -245,6 +286,10 @@ class DigitalOutputDevice(BaseDevice):
             "toggle": self.toggle,
             "set": self.set_state,
         }
+
+    def _default_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        # "set" takes an on/off value; on/off/toggle take none.
+        return ActionValueSpec(KIND_SWITCH, 0, 1) if action_name == "set" else None
 
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
@@ -402,6 +447,12 @@ class AnalogInputDevice(BaseDevice):
             "read_voltage": self.read_voltage,
         }
 
+    def _default_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        if action_name == "read":
+            bits = self._board.capabilities.analog_resolution
+            return ActionValueSpec(KIND_WHOLE, 0, (1 << bits) - 1)
+        return None
+
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
         self._last_value: int | None = None
@@ -474,6 +525,14 @@ class PWMOutputDevice(BaseDevice):
             "off": self.off,
         }
 
+    def _default_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        if action_name == "set":
+            bits = self._board.capabilities.pwm_resolution
+            return ActionValueSpec(KIND_WHOLE, 0, (1 << bits) - 1)
+        if action_name == "set_percent":
+            return ActionValueSpec(KIND_WHOLE, 0, 100, unit="%")
+        return None
+
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
         self._value = 0
@@ -545,6 +604,13 @@ class ServoDevice(BaseDevice):
             "set_angle": self.set_angle,
             "center": self.center,
         }
+
+    def _declared_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        # The servo's configurable angle bounds are per-instance, so they feed a
+        # declared (not merely default) spec. "center" takes no value.
+        if action_name == "set_angle":
+            return ActionValueSpec(KIND_WHOLE, self._min_angle, self._max_angle, unit="deg")
+        return None
 
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)

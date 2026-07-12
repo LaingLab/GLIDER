@@ -35,11 +35,21 @@ Supported ops:
 
 import asyncio
 import logging
+import time
 
 from glider.hal.base_board import PinMode, PinType
 from glider.hal.base_device import BaseDevice, DeviceConfig
+from glider.hal.value_spec import KIND_WHOLE, ActionValueSpec, clamp_to_spec
 
 logger = logging.getLogger(__name__)
+
+# Log at most one clamp warning per action per this interval, so a fast wire
+# feeding an out-of-range value can't flood the log on an unattended run.
+_CLAMP_WARN_INTERVAL_S = 5.0
+
+# Default whole-number ceilings inferred from a value op's wire width when no
+# explicit declaration is present (preserves today's ranges).
+_OP_DEFAULT_MAX = {"write_byte": 0xFF, "write_word": 0xFFFF}
 
 # Standard settings injected per transport (the builder pre-fills these).
 I2C_SETTINGS = [
@@ -108,6 +118,7 @@ class DeclarativeDevice(BaseDevice):
         defn = type(self)._definition
         self._transport = defn.get("transport", "i2c")
         self._actions_def = defn.get("actions", [])
+        self._clamp_warn_at: dict[str, float] = {}
         s = config.settings
         # Resolve declared settings (schema default -> saved value).
         self._settings = {
@@ -201,12 +212,70 @@ class DeclarativeDevice(BaseDevice):
 
     # --- dispatch ---
 
+    # --- value semantics ---
+
+    def _action_def(self, action_name: str) -> dict | None:
+        return next((a for a in self._actions_def if a.get("name") == action_name), None)
+
+    def _declared_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        """Build the spec from an action's optional ``value`` block, if present."""
+        a = self._action_def(action_name)
+        v = a.get("value") if a else None
+        if not isinstance(v, dict):
+            return None
+        try:
+            return ActionValueSpec(
+                kind=str(v.get("kind", KIND_WHOLE)),
+                min=int(v["min"]),
+                max=int(v["max"]),
+                step=int(v.get("step", 1)),
+                unit=str(v.get("unit", "")),
+                label=str(v.get("label", "")),
+            )
+        except (KeyError, TypeError, ValueError):
+            # Malformed blocks are rejected at load by validate_definition; be
+            # defensive at runtime and fall back rather than crash.
+            return None
+
+    def _default_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        """Op-inferred fallback = today's ranges when nothing is declared (D8)."""
+        a = self._action_def(action_name)
+        op = a.get("op") if a else None
+        if op == "write_pwm":
+            bits = getattr(getattr(self._board, "capabilities", None), "pwm_resolution", 8)
+            return ActionValueSpec(KIND_WHOLE, 0, (1 << bits) - 1)
+        if op in _OP_DEFAULT_MAX:
+            return ActionValueSpec(KIND_WHOLE, 0, _OP_DEFAULT_MAX[op])
+        return None
+
+    def _warn_clamp(self, action_name: str, spec: ActionValueSpec) -> None:
+        now = time.monotonic()
+        if now - self._clamp_warn_at.get(action_name, 0.0) >= _CLAMP_WARN_INTERVAL_S:
+            self._clamp_warn_at[action_name] = now
+            logger.warning(
+                "Clamped out-of-range value for %s.%s to [%d, %d]",
+                self._name,
+                action_name,
+                spec.min,
+                spec.max,
+            )
+
     async def _execute(self, action_def: dict, runtime_args: tuple):
         op = action_def.get("op")
         kwargs = dict(action_def.get("params", {}))
         for i, arg_name in enumerate(action_def.get("runtime_args", [])):
             if i < len(runtime_args) and runtime_args[i] is not None:
                 kwargs[arg_name] = runtime_args[i]
+        # Clamp a value-carrying op to its declared range BEFORE dispatch, so an
+        # over-range value can never wrap (the old byte/word masks) or pass raw
+        # (pwm). clamp_to_spec raises on NaN/inf/non-numeric, rejecting the write.
+        if op in WRITE_VALUE_OPS and "value" in kwargs:
+            spec = self.value_spec(action_def.get("name", ""))
+            if spec is not None:
+                clamped, did_clamp = clamp_to_spec(kwargs["value"], spec)
+                kwargs["value"] = clamped
+                if did_clamp:
+                    self._warn_clamp(action_def.get("name", ""), spec)
         handler = getattr(self, f"_op_{op}", None)
         if handler is None:
             raise ValueError(f"Unknown op '{op}' for device '{self.device_type}'")
@@ -238,10 +307,12 @@ class DeclarativeDevice(BaseDevice):
         return (data[0] << 8) | data[1]  # big-endian
 
     async def _op_write_byte(self, register, value):
-        return await self._i2c_call("write_byte_data", int(register), int(float(value)) & 0xFF)
+        # Clamp (never mask) to the wire width — a value in range for a wider
+        # declaration than a byte is capped, not aliased to an unrelated number.
+        return await self._i2c_call("write_byte_data", int(register), max(0, min(0xFF, int(value))))
 
     async def _op_write_word(self, register, value):
-        v = int(float(value)) & 0xFFFF
+        v = max(0, min(0xFFFF, int(value)))
         return await self._i2c_call(
             "write_i2c_block_data", int(register), [(v >> 8) & 0xFF, v & 0xFF]
         )
@@ -264,7 +335,9 @@ class DeclarativeDevice(BaseDevice):
         return await self._board.read_analog(self._pin())
 
     async def _op_write_pwm(self, value):
-        await self._board.write_analog(self._pin(), int(float(value)))
+        # Already clamped to the declared range in _execute; the board driver
+        # applies the final hardware cap.
+        await self._board.write_analog(self._pin(), int(value))
 
     # --- revolution tracking ---
 
@@ -358,7 +431,38 @@ def validate_definition(definition: dict) -> list[str]:
         seen.add(an)
         if a.get("op") not in valid_ops:
             errors.append(f"Action '{an}': op {a.get('op')!r} not valid for {transport}")
+        errors.extend(f"Action '{an}': {e}" for e in _value_block_errors(a))
     return errors
+
+
+def _value_block_errors(action: dict) -> list[str]:
+    """Validate an action's optional ``value`` declaration (empty if absent/valid)."""
+    value = action.get("value")
+    if value is None:
+        return []
+    if not isinstance(value, dict):
+        return ["value must be an object with kind/min/max"]
+    # A value range only makes sense on a single-argument value-writing op —
+    # not on a no-value op (set_high) or a multi-argument action.
+    if action.get("op") not in WRITE_VALUE_OPS:
+        return ["a value range can only be set on a value-writing op"]
+    if len(action.get("runtime_args", [])) > 1:
+        return ["value ranges are not supported on multi-argument actions"]
+    for key in ("min", "max"):
+        if key not in value:
+            return [f"value missing '{key}'"]
+    try:
+        spec = ActionValueSpec(
+            kind=str(value.get("kind", KIND_WHOLE)),
+            min=int(value["min"]),
+            max=int(value["max"]),
+            step=int(value.get("step", 1)),
+            unit=str(value.get("unit", "")),
+            label=str(value.get("label", "")),
+        )
+    except (TypeError, ValueError):
+        return ["value min/max/step must be whole numbers"]
+    return spec.validate()
 
 
 def build_device_class(definition: dict) -> type:
