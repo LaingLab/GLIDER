@@ -12,6 +12,7 @@ These nodes provide the core functionality for running experiments:
 import asyncio
 import logging
 
+from glider.hal.value_spec import clamp_to_spec
 from glider.nodes.base_node import (
     GliderNode,
     NodeCategory,
@@ -167,8 +168,14 @@ class OutputNode(GliderNode):
             try:
                 device_type = getattr(self._device, "device_type", "")
                 if device_type == "PWMOutput":
-                    # PWM device: send integer value 0-255
-                    pwm_value = max(0, min(255, int(value)))
+                    # Clamp to the device's declared range (its "set" action)
+                    # rather than a hardcoded 0-255, so a higher-resolution PWM
+                    # device is not silently capped at 8-bit.
+                    spec = self._device.value_spec("set")
+                    if spec is not None:
+                        pwm_value, _ = clamp_to_spec(value, spec)
+                    else:
+                        pwm_value = max(0, int(value))
                     logger.info(f"Output: setting PWM device to {pwm_value}")
                     if hasattr(self._device, "set_value"):
                         await self._device.set_value(pwm_value)

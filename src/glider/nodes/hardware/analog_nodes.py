@@ -7,6 +7,7 @@ Nodes for analog input and PWM output operations.
 import asyncio
 from typing import Any
 
+from glider.hal.value_spec import clamp_to_spec
 from glider.nodes.base_node import (
     HardwareNode,
     NodeCategory,
@@ -82,10 +83,14 @@ class AnalogReadNode(HardwareNode):
         """Read analog value from the device."""
         if self._device:
             raw_value = await self._device.execute_action("read")
+            # Full-scale reading from the bound device's declared range rather
+            # than a hardcoded 10-bit assumption; fall back to the node's own
+            # resolution when unbound or the device declares no read range.
+            read_spec = self._device.value_spec("read")
             self.set_output(1, raw_value)
 
-            # Calculate voltage
-            max_value = 2**self._resolution - 1
+            # Calculate voltage from the device's full-scale range.
+            max_value = read_spec.max if read_spec is not None else (2**self._resolution - 1)
             voltage = (raw_value / max_value) * self._reference_voltage
             self.set_output(2, voltage)
 
@@ -210,10 +215,17 @@ class PWMWriteNode(HardwareNode):
 
     async def hardware_operation(self) -> None:
         """Write PWM value to the device."""
-        value = int(self.get_input(1))  # Input 0 is exec, 1 is value
-        value = max(0, min(255, value))
+        value = self.get_input(1)  # Input 0 is exec, 1 is value
 
         if self._device:
+            # Clamp to the bound device's declared range rather than a hardcoded
+            # 0-255: an 8-bit board still yields 0-255, a 12-bit one yields
+            # 0-4095. The device remains the single authority for its range.
+            spec = self._device.value_spec("set")
+            if spec is not None:
+                value, _ = clamp_to_spec(value, spec)
+            else:
+                value = int(value)
             await self._device.execute_action("set", value)
         else:
             self.set_error("No device bound")
