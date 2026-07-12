@@ -94,6 +94,9 @@ class RunnerDeviceControls(QWidget):
         self._widgets: dict[tuple[str, str], dict[str, QWidget]] = {}
         # function run buttons keyed by start_node_id -> (button, base_label)
         self._function_buttons: dict[str, tuple[QPushButton, str]] = {}
+        # last device-confirmed value per (dev_id, action) slider, so a failed
+        # write can revert the control to what the device actually holds
+        self._committed: dict[tuple[str, str], int] = {}
         self.setObjectName("runnerDeviceControls")
         self._setup_ui()
 
@@ -188,6 +191,7 @@ class RunnerDeviceControls(QWidget):
         self._value_labels.clear()
         self._widgets.clear()
         self._function_buttons.clear()
+        self._committed.clear()
 
         functions_section = self._make_functions_section()
         if functions_section is not None:
@@ -336,6 +340,8 @@ class RunnerDeviceControls(QWidget):
         row.addWidget(spin)
         layout.addLayout(row)
         self._widgets[(dev_id, action)] = {"spin": spin, "slider": slider}
+        # Seed the confirmed value to what the control starts at.
+        self._committed[(dev_id, action)] = spin.value()
         return block
 
     def _make_button(self, dev_id: str, action: str, spec) -> QWidget:
@@ -382,9 +388,25 @@ class RunnerDeviceControls(QWidget):
         self._status.clear()
         self._status.setVisible(False)
 
+    def on_action_succeeded(self, dev_id: str, action: str, *value) -> None:
+        """A write/command succeeded: record the confirmed slider value, clear status.
+
+        Recording the confirmed value lets a *later* failed write revert the
+        slider to what the device actually holds rather than the rejected value.
+        """
+        key = (dev_id, action)
+        widgets = self._widgets.get(key, {})
+        if value and ("spin" in widgets or "slider" in widgets):
+            try:
+                self._committed[key] = int(value[0])
+            except (TypeError, ValueError):
+                pass
+        self.clear_status()
+
     def on_action_failed(self, dev_id: str, action: str, message: str) -> None:
-        """A write failed: revert an optimistic switch and surface the failure."""
-        widgets = self._widgets.get((dev_id, action), {})
+        """A write failed: revert an optimistic control and surface the failure."""
+        key = (dev_id, action)
+        widgets = self._widgets.get(key, {})
         switch = widgets.get("switch")
         if switch is not None:
             # The switch optimistically flipped on tap; put it back.
@@ -392,6 +414,15 @@ class RunnerDeviceControls(QWidget):
             switch.setChecked(not switch.isChecked())
             switch.setText("ON" if switch.isChecked() else "OFF")
             switch.blockSignals(False)
+        elif "spin" in widgets or "slider" in widgets:
+            # The slider/spin shows the rejected value; snap it back to the last
+            # value the device confirmed so the UI can't imply a set that failed.
+            revert_to = self._committed.get(key)
+            if revert_to is not None:
+                if widgets.get("spin") is not None:
+                    _set_quiet(widgets["spin"], revert_to)
+                if widgets.get("slider") is not None:
+                    _set_quiet(widgets["slider"], revert_to)
         self.show_status(message, level="error")
 
 

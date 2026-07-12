@@ -1896,7 +1896,7 @@ class MainWindow(QMainWindow):
             return
         try:
             await dev.execute_action(action, *value)
-            self._runner_device_controls.clear_status()
+            self._runner_device_controls.on_action_succeeded(dev_id, action, *value)
         except Exception as e:  # noqa: BLE001
             self._runner_device_controls.on_action_failed(dev_id, action, f"{action} failed: {e}")
 
