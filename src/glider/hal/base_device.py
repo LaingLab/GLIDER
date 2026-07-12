@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
-from glider.hal.value_spec import ActionValueSpec
+from glider.hal.value_spec import KIND_SWITCH, KIND_WHOLE, ActionValueSpec
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +287,10 @@ class DigitalOutputDevice(BaseDevice):
             "set": self.set_state,
         }
 
+    def _default_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        # "set" takes an on/off value; on/off/toggle take none.
+        return ActionValueSpec(KIND_SWITCH, 0, 1) if action_name == "set" else None
+
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
         self._state = False
@@ -443,6 +447,12 @@ class AnalogInputDevice(BaseDevice):
             "read_voltage": self.read_voltage,
         }
 
+    def _default_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        if action_name == "read":
+            bits = self._board.capabilities.analog_resolution
+            return ActionValueSpec(KIND_WHOLE, 0, (1 << bits) - 1)
+        return None
+
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
         self._last_value: int | None = None
@@ -515,6 +525,14 @@ class PWMOutputDevice(BaseDevice):
             "off": self.off,
         }
 
+    def _default_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        if action_name == "set":
+            bits = self._board.capabilities.pwm_resolution
+            return ActionValueSpec(KIND_WHOLE, 0, (1 << bits) - 1)
+        if action_name == "set_percent":
+            return ActionValueSpec(KIND_WHOLE, 0, 100, unit="%")
+        return None
+
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
         self._value = 0
@@ -586,6 +604,13 @@ class ServoDevice(BaseDevice):
             "set_angle": self.set_angle,
             "center": self.center,
         }
+
+    def _declared_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        # The servo's configurable angle bounds are per-instance, so they feed a
+        # declared (not merely default) spec. "center" takes no value.
+        if action_name == "set_angle":
+            return ActionValueSpec(KIND_WHOLE, self._min_angle, self._max_angle, unit="deg")
+        return None
 
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
