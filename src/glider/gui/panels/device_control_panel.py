@@ -271,6 +271,12 @@ class DeviceControlPanel(QWidget):
         self._digital_widget.setVisible(is_digital_output)
         self._pwm_widget.setVisible(is_pwm_output)
         if is_pwm_output:
+            # Range from the device's declared spec, not a hardcoded 0-255, so a
+            # higher-resolution PWM board (12-bit -> 0-4095) is controllable here.
+            spec = device.value_spec("set") if hasattr(device, "value_spec") else None
+            lo, hi = (spec.min, spec.max) if spec is not None else (0, 255)
+            self._pwm_spinbox.setRange(lo, hi)
+            self._pwm_slider.setRange(lo, hi)
             current_value = getattr(device, "_value", 0)
             self._pwm_spinbox.blockSignals(True)
             self._pwm_spinbox.setValue(current_value)
