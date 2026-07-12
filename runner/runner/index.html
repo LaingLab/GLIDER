@@ -1,0 +1,1969 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="General Laboratory Interface for Design, Experimentation, and Recording — tutorials and guides for building, running, and recording experiments.">
+      
+      
+      
+        <link rel="canonical" href="https://lainglab.github.io/glider/runner/runner/">
+      
+      
+        <link rel="prev" href="../">
+      
+      
+        <link rel="next" href="../pi-kiosk/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>The Runner Screen - GLIDER</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#the-runner-screen" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="GLIDER" class="md-header__button md-logo" aria-label="GLIDER" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            GLIDER
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              The Runner Screen
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/LaingLab/glider" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    LaingLab/glider
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="GLIDER" class="md-nav__button md-logo" aria-label="GLIDER" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    GLIDER
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/LaingLab/glider" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    LaingLab/glider
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../getting-started/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/first-experiment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Your First Experiment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How GLIDER Works
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../building/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building Experiments
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Building Experiments
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../building/node-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Node Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../building/devices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices & Hardware
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../building/functions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Functions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../building/plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Devices & Plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../camera-behavior/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Camera & Behavior
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Camera & Behavior
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../camera-behavior/camera/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Camera & Recording
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../camera-behavior/tracking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tracking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../camera-behavior/behavior/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Behavior Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runner Mode
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runner Mode
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Runner Screen
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Runner Screen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#getting-oriented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Getting oriented
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-setup-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Setup tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Setup tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#status-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status line
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-housekeeping-menu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The housekeeping menu (⚙)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-file-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment file actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware-panel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware panel
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-run-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Run tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Run tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#header" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Header
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#device-status-cards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device status cards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#start-and-stop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        START and STOP
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-manual-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Manual tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Manual tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-device-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-device controls
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-functions-section" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Functions section
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-status-strip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The status strip
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-camera-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Camera tab
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-an-experiment-from-the-touchscreen" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running an experiment from the touchscreen
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pi-kiosk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Raspberry Pi Kiosk
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../reference/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/nodes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node Catalog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/devices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Device Catalog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/shortcuts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keyboard Shortcuts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#getting-oriented" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Getting oriented
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-setup-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Setup tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Setup tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#status-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status line
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-housekeeping-menu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The housekeeping menu (⚙)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experiment-file-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experiment file actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware-panel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware panel
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-run-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Run tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Run tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#header" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Header
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#device-status-cards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Device status cards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#start-and-stop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        START and STOP
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-manual-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Manual tab
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The Manual tab">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-device-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-device controls
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-functions-section" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Functions section
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-status-strip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The status strip
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-camera-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Camera tab
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-an-experiment-from-the-touchscreen" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running an experiment from the touchscreen
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="the-runner-screen">The Runner Screen<a class="headerlink" href="#the-runner-screen" title="Permanent link">&para;</a></h1>
+<p>The Runner screen is GLIDER's touchscreen layout. Everything happens on four
+tabs behind a persistent bottom tab bar: <strong>Setup</strong>, <strong>Run</strong>, <strong>Manual</strong>, and
+<strong>Camera</strong>. This page walks through each tab, the controls you'll find there,
+and how to run an experiment start to finish without a keyboard.</p>
+<h2 id="getting-oriented">Getting oriented<a class="headerlink" href="#getting-oriented" title="Permanent link">&para;</a></h2>
+<p>Two elements are always available no matter which tab you're on:</p>
+<ul>
+<li><strong>The bottom tab bar.</strong> A row of four large buttons — <strong>Setup</strong>, <strong>Run</strong>,
+  <strong>Manual</strong>, <strong>Camera</strong> — pinned to the bottom of the screen. Tap one to switch
+  tabs. The buttons are tall (sized for fingertips, not a mouse), and the
+  current tab stays highlighted.</li>
+<li><strong>The run banner.</strong> A slim strip that appears at the top of the screen while
+  an experiment is live (running or paused) and you are on a tab <em>other than</em>
+  Run. It carries the essentials with you so you never lose them: the elapsed
+  <strong>timer</strong>, the current <strong>state</strong>, a <strong>● REC</strong> indicator when recording, and a
+  <strong>■ STOP</strong> button. On the Run tab itself the banner is hidden, because the Run
+  tab already shows all of that full-size.</li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Where is the emergency stop?</p>
+<p>There is deliberately no separate emergency-stop button in Runner mode. Use
+<strong>STOP</strong> (on the Run tab or in the run banner) to end a run. A full
+emergency-stop is a Desktop-mode menu action.</p>
+</div>
+<h2 id="the-setup-tab">The Setup tab<a class="headerlink" href="#the-setup-tab" title="Permanent link">&para;</a></h2>
+<p>Setup is the landing tab and your home base between runs. It's a single
+scrollable page with four parts, top to bottom.</p>
+<h3 id="status-line">Status line<a class="headerlink" href="#status-line" title="Permanent link">&para;</a></h3>
+<p>At the top, two short status readouts tell you whether you're ready to run:</p>
+<ul>
+<li><strong>Board:</strong> either <code>✓</code> with the connected board's description, or
+  <code>✗ not connected</code>.</li>
+<li><strong>Experiment:</strong> either <code>✓</code> with the experiment's name, or <code>✗ none loaded</code>.</li>
+</ul>
+<p>These refresh automatically about twice a second, so if you plug in a board or
+open a file the status updates on its own — you don't have to reload anything.</p>
+<h3 id="the-housekeeping-menu">The housekeeping menu (⚙)<a class="headerlink" href="#the-housekeeping-menu" title="Permanent link">&para;</a></h3>
+<p>The gear button in the top-right corner opens a small menu with three items:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Help</strong></td>
+<td>Opens the in-app help.</td>
+</tr>
+<tr>
+<td><strong>Switch to Desktop</strong></td>
+<td>Leaves Runner mode for the full Desktop editor (see the caution below).</td>
+</tr>
+<tr>
+<td><strong>Exit</strong></td>
+<td>Closes GLIDER.</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">Switching to Desktop is one-way</p>
+<p>Once you switch to Desktop mode you cannot return to the Runner screen
+without restarting GLIDER. On a dedicated bench kiosk you normally leave this
+alone. See <a href="../#how-glider-chooses-runner-mode">Runner Mode</a> for why.</p>
+</div>
+<h3 id="experiment-file-actions">Experiment file actions<a class="headerlink" href="#experiment-file-actions" title="Permanent link">&para;</a></h3>
+<p>Below the experiment name is a grid of large buttons for working with
+experiment files, plus a full-width connect button:</p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>New</strong></td>
+<td>Start a fresh, empty experiment.</td>
+</tr>
+<tr>
+<td><strong>Open</strong></td>
+<td>Load an existing experiment file.</td>
+</tr>
+<tr>
+<td><strong>Save</strong></td>
+<td>Save the current experiment.</td>
+</tr>
+<tr>
+<td><strong>Save As</strong></td>
+<td>Save the current experiment under a new name.</td>
+</tr>
+<tr>
+<td><strong>Connect / Ports</strong></td>
+<td>Open the board/port settings to connect your hardware.</td>
+</tr>
+</tbody>
+</table>
+<p>An experiment is the node graph you built in Desktop mode — see
+<a href="../../building/">Building Experiments</a>. In Runner mode you load and run
+these files; you don't edit the graph.</p>
+<h3 id="hardware-panel">Hardware panel<a class="headerlink" href="#hardware-panel" title="Permanent link">&para;</a></h3>
+<p>The bottom of the Setup tab embeds the hardware panel, where connected devices
+appear. Use <strong>Connect / Ports</strong> to open the port settings if your board isn't
+showing up. For what the device types mean and how to wire them, see
+<a href="../../building/devices/">Devices &amp; Hardware</a>.</p>
+<h2 id="the-run-tab">The Run tab<a class="headerlink" href="#the-run-tab" title="Permanent link">&para;</a></h2>
+<p>The Run tab is where you start, watch, and stop a recorded experiment.</p>
+<h3 id="header">Header<a class="headerlink" href="#header" title="Permanent link">&para;</a></h3>
+<p>Across the top:</p>
+<ul>
+<li><strong>Experiment name</strong> on the left (read-only here — set it when you build or
+  save the experiment).</li>
+<li>A large <strong>elapsed timer</strong> in the middle, counting up while a run is live.</li>
+<li>A <strong>state pill</strong> on the right showing the current state (for example <code>IDLE</code>,
+  <code>RUNNING</code>, <code>PAUSED</code>).</li>
+</ul>
+<p>A <strong>● REC</strong> indicator appears while data is being recorded.</p>
+<h3 id="device-status-cards">Device status cards<a class="headerlink" href="#device-status-cards" title="Permanent link">&para;</a></h3>
+<p>The middle of the tab is a scrollable list of device cards, one per connected
+device. Each card shows the device's name, its type, a live state readout, and a
+<strong>Ready</strong> marker once the device is initialized. The readout depends on the
+device:</p>
+<ul>
+<li>A digital output reads <strong>HIGH</strong> or <strong>LOW</strong>.</li>
+<li>An analog input shows its raw reading and the equivalent voltage (for example
+  <code>512</code> / <code>2.50V</code>).</li>
+<li>Other devices show their current value.</li>
+</ul>
+<p>If nothing is connected you'll see "Connect hardware to see devices."</p>
+<h3 id="start-and-stop">START and STOP<a class="headerlink" href="#start-and-stop" title="Permanent link">&para;</a></h3>
+<p>At the bottom are two big buttons:</p>
+<ul>
+<li><strong>▶ START</strong> begins the experiment and starts recording. It is <strong>enabled only
+  when you're ready</strong> — that means a board is connected <em>and</em> a runnable
+  experiment is loaded. Until both are true, START is greyed out and a
+  <strong>"Not ready — check Setup"</strong> hint appears; go back to the Setup tab to see
+  which piece is missing.</li>
+<li><strong>■ STOP</strong> ends the run at any time.</li>
+</ul>
+<p>While a run is live the header timer hands off to the run banner, so the timer
+keeps following you if you switch to another tab.</p>
+<div class="admonition tip">
+<p class="admonition-title">Stopping loads a clean time</p>
+<p>When a flow finishes, the timer snaps to the experiment's true logical
+duration rather than the last timer tick, so repeated runs of the same flow
+report a consistent elapsed time.</p>
+</div>
+<h2 id="the-manual-tab">The Manual tab<a class="headerlink" href="#the-manual-tab" title="Permanent link">&para;</a></h2>
+<p>The Manual tab lets you drive hardware by hand — turn an output on, nudge a
+value, take a reading, or run a saved function — without starting a recorded
+experiment. The controls here are <strong>generated automatically</strong> from whatever
+devices are connected: GLIDER inspects each device's actions and builds the
+right control for each one. That means custom and plugin devices get correct,
+range-aware controls with no extra work.</p>
+<div class="admonition note">
+<p class="admonition-title">The Manual tab reflects your current hardware</p>
+<p>Every time you open the Manual tab, its controls rebuild to match what's
+connected right now. If you connect a board from the Setup tab and then tap
+Manual, the new device's controls appear.</p>
+</div>
+<h3 id="per-device-controls">Per-device controls<a class="headerlink" href="#per-device-controls" title="Permanent link">&para;</a></h3>
+<p>For each device you'll see a heading with the device's name, followed by one
+control per action:</p>
+<table>
+<thead>
+<tr>
+<th>Device action</th>
+<th>Control you get</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>An on/off (switch) action</td>
+<td>An <strong>ON/OFF toggle</strong> button. Tap to flip it.</td>
+</tr>
+<tr>
+<td>A whole-number value (e.g. an angle, a duty cycle)</td>
+<td>A <strong>slider</strong> paired with a <strong>number box</strong>. Drag the slider — the value only commits when you release, so the device doesn't ramp through every value in between — or type an exact number / nudge it by its step in the box.</td>
+</tr>
+<tr>
+<td>A very large numeric range</td>
+<td>Just the <strong>number box</strong> (a slider that fine would be unusable on a touchscreen).</td>
+</tr>
+<tr>
+<td>An action that takes no value</td>
+<td>A single <strong>command button</strong> that fires the action.</td>
+</tr>
+<tr>
+<td>A readable measurement</td>
+<td>A <strong>Read</strong> button with a value shown next to it. Tap Read to take a fresh reading.</td>
+</tr>
+</tbody>
+</table>
+<p>Redundant controls are folded away automatically: a digital output shows a
+single ON/OFF switch (not separate On, Off, and Toggle buttons), and a value
+output shows one slider rather than duplicate controls.</p>
+<p>All values are clamped to each device's declared safe range before they're sent,
+and commands to a single device are sent one at a time.</p>
+<h3 id="the-functions-section">The Functions section<a class="headerlink" href="#the-functions-section" title="Permanent link">&para;</a></h3>
+<p>If the loaded experiment defines any <strong>functions</strong> — reusable action sequences
+built as a <code>StartFunction → … → EndFunction</code> chain in the graph — a
+<strong>Functions</strong> section of large run buttons appears above the device controls.
+Tap a button to run that function once against your hardware.</p>
+<ul>
+<li>While a function runs, its button is disabled and shows <strong>"— Running…"</strong>, so
+  you can't accidentally start it twice.</li>
+<li>Some functions ask for a value first (for example, a number of revolutions).
+  A prompt appears; enter the value to run, or cancel.</li>
+<li>If a function stops responding it is cancelled automatically and a notice
+  appears in the status strip.</li>
+</ul>
+<p>Functions are for manual, one-off actions between runs. They are gated so they
+can never overlap a real experiment:</p>
+<div class="admonition warning">
+<p class="admonition-title">Functions can't run during an experiment</p>
+<p>A manual function and a recorded experiment both drive the same hardware, so
+GLIDER refuses to start a function while an experiment is running or paused,
+and refuses to start one while another function is still running. You'll see
+a message like "Stop the experiment before running a function manually." You
+also need a board connected to run a function.</p>
+</div>
+<p>To learn how functions are built, see <a href="../../building/functions/">Functions</a>.</p>
+<h3 id="the-status-strip">The status strip<a class="headerlink" href="#the-status-strip" title="Permanent link">&para;</a></h3>
+<p>A status strip sits at the bottom of the Manual tab. Because a touchscreen
+operator never sees the small status-bar messages a desktop user would, this
+strip shows failures and warnings as an icon plus text and <strong>keeps them visible
+until something replaces them</strong> — for example, if a command fails, if a value
+had to be clamped, or if a function couldn't run. If you tap an ON/OFF switch and
+the command fails, the switch flips back to its real state and the reason
+appears here.</p>
+<h2 id="the-camera-tab">The Camera tab<a class="headerlink" href="#the-camera-tab" title="Permanent link">&para;</a></h2>
+<p>The Camera tab holds GLIDER's live camera view and recording controls in the
+touchscreen layout. For how the camera, recording, and behavior tracking work,
+see <a href="../../camera-behavior/camera/">Camera &amp; Recording</a> and
+<a href="../../camera-behavior/tracking/">Tracking</a>.</p>
+<h2 id="running-an-experiment-from-the-touchscreen">Running an experiment from the touchscreen<a class="headerlink" href="#running-an-experiment-from-the-touchscreen" title="Permanent link">&para;</a></h2>
+<p>Here's the whole loop, tab by tab:</p>
+<ol>
+<li><strong>Connect your hardware.</strong> On the <strong>Setup</strong> tab, tap <strong>Connect / Ports</strong> and
+   connect your board. The <strong>Board</strong> status line should turn to <code>✓</code>.</li>
+<li><strong>Load your experiment.</strong> Still on Setup, tap <strong>Open</strong> and choose your
+   experiment file (or <strong>New</strong> to start fresh). The <strong>Experiment</strong> status line
+   should turn to <code>✓</code>.</li>
+<li><strong>(Optional) Check your rig by hand.</strong> Tap <strong>Manual</strong> and use the
+   auto-generated controls — toggle an output, nudge a value, take a reading, or
+   run a Function — to confirm everything responds before you record.</li>
+<li><strong>Start the run.</strong> Tap <strong>Run</strong>. When both Board and Experiment are ready,
+   <strong>▶ START</strong> lights up. Tap it. The timer begins, the state pill shows
+   <code>RUNNING</code>, and <strong>● REC</strong> appears while recording.</li>
+<li><strong>Watch it go.</strong> Stay on the Run tab, or move to <strong>Manual</strong> or <strong>Camera</strong> —
+   the run banner carries the timer, state, REC indicator, and <strong>STOP</strong> button
+   with you.</li>
+<li><strong>Stop when done.</strong> Tap <strong>■ STOP</strong> (on the Run tab or in the banner). The run
+   ends and the timer settles on the experiment's final duration.</li>
+</ol>
+<div class="admonition tip">
+<p class="admonition-title">First launch</p>
+<p>The very first time GLIDER starts, it shows a short welcome dialog and tells
+you where your experiments and recordings will be saved. On a touchscreen the
+dialog simply offers <strong>Start</strong> and <strong>Open User Guide</strong> — tap <strong>Start</strong> to go
+straight to the Runner screen. (The interactive spotlight walkthrough,
+<strong>Take the Tour</strong>, is offered in Desktop mode, where it can point at the
+editor's panels.)</p>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; LaingLab — MIT License
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/LaingLab/glider" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "navigation.indexes", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
