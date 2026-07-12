@@ -254,6 +254,17 @@ class GliderNode(ABC):
         """Unbind the current device."""
         self._device = None
 
+    def out_of_range_at_bind(self) -> str | None:
+        """Return a warning if a saved value is outside the bound device's range.
+
+        Called right after :meth:`bind_device` at experiment load. Nodes that
+        persist a device-bound value (e.g. Output) override this to surface a
+        stored value that a later range change put out of bounds — so it is
+        flagged at load rather than silently clamped mid-run. Default: no value
+        to check.
+        """
+        return None
+
     def enable(self) -> None:
         """Enable the node."""
         self._enabled = True

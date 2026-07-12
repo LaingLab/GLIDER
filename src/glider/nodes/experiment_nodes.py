@@ -149,6 +149,19 @@ class OutputNode(GliderNode):
         """Called when inputs change."""
         pass
 
+    def out_of_range_at_bind(self) -> str | None:
+        """Flag a saved value now outside the bound device's declared range (D11)."""
+        if self._device is None or "value" not in self._state:
+            return None
+        spec = self._device.value_spec("set")
+        value = self._state["value"]
+        if spec is not None and not spec.contains(value):
+            return (
+                f"'{self.name}': saved value {value} is outside "
+                f"{self._device.name}'s range {spec.min}–{spec.max}; it will be clamped."
+            )
+        return None
+
     async def execute(self) -> None:
         """Write the value to the bound device."""
         logger.info(f"OutputNode.execute() called, node ID: {self._glider_id}")

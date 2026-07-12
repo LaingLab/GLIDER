@@ -953,6 +953,7 @@ class MainWindow(QMainWindow):
         self.session_changed.connect(lambda: self._runner_panel.update_experiment_name())
         self.session_changed.connect(self._runner_device_controls.refresh)
         self.session_changed.connect(self._runner_setup_page.refresh)
+        self.session_changed.connect(self._surface_load_warnings)
 
     @pyqtSlot(object)
     def _on_core_state_change(self, state) -> None:
@@ -1879,6 +1880,16 @@ class MainWindow(QMainWindow):
             self._runner_device_controls.clear_status()
         except Exception as e:  # noqa: BLE001
             self._runner_device_controls.on_action_failed(dev_id, action, f"{action} failed: {e}")
+
+    def _surface_load_warnings(self) -> None:
+        """Show out-of-range-at-load warnings (D11) on the runner status strip."""
+        warnings = self._core.flow_engine.consume_load_warnings()
+        if not warnings:
+            return
+        msg = warnings[0]
+        if len(warnings) > 1:
+            msg = f"{msg}  (+{len(warnings) - 1} more)"
+        self._runner_device_controls.show_status(msg, level="warn")
 
     async def _drive_read(self, dev_id, action):
         dev = self._core.hardware_manager.get_device(dev_id)
