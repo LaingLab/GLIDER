@@ -104,7 +104,33 @@ QPushButton:pressed {
 
 QPushButton:disabled {
     background-color: #1e2530;
-    color: #475569;
+    /* Muted but still legible (was #475569, ~1.9:1) so a disconnected control's
+       label can be read by a gloved operator. */
+    color: #718096;
+}
+
+/* Runner Manual status strip: persistent icon+text notice. Level is set as a
+   dynamic property; each variant pairs a distinct tint with a text glyph so it
+   never relies on color alone. */
+QLabel#runnerStatusStrip {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #e2e8f0;
+    background-color: #1e2530;
+}
+QLabel#runnerStatusStrip[level="error"] {
+    background-color: rgba(248, 113, 113, 0.20);
+    color: #f87171;
+}
+QLabel#runnerStatusStrip[level="warn"] {
+    background-color: rgba(251, 191, 36, 0.20);
+    color: #fbbf24;
+}
+QLabel#runnerStatusStrip[level="info"] {
+    background-color: rgba(96, 165, 250, 0.18);
+    color: #93c5fd;
 }
 
 /* Primary action button */

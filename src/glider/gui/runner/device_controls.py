@@ -103,6 +103,15 @@ class RunnerDeviceControls(QWidget):
         self._scroll.setWidget(self._content)
         layout.addWidget(self._scroll, 1)
 
+        # Persistent status strip: failures and clamp/load warnings land here as
+        # icon + text and stay until superseded, since a touch-screen operator
+        # never sees a transient status-bar toast. Hidden until there's news.
+        self._status = QLabel()
+        self._status.setObjectName("runnerStatusStrip")
+        self._status.setWordWrap(True)
+        self._status.setVisible(False)
+        layout.addWidget(self._status)
+
     # --- Control planning ---
 
     def _controls_for(self, device) -> list[tuple[str, str, object]]:
@@ -276,6 +285,35 @@ class RunnerDeviceControls(QWidget):
         lbl = self._value_labels.get((dev_id, action))
         if lbl is not None:
             lbl.setText(text)
+
+    # --- Status + optimistic feedback ---
+
+    _LEVEL_ICON = {"error": "✗", "warn": "⚠", "info": "·"}
+
+    def show_status(self, text: str, level: str = "error") -> None:
+        """Show a persistent icon+text notice (text, not color alone)."""
+        self._status.setText(f"{self._LEVEL_ICON.get(level, '·')}  {text}")
+        self._status.setProperty("level", level)
+        self._status.setVisible(True)
+        # Re-polish so the dynamic 'level' property restyles the strip.
+        self._status.style().unpolish(self._status)
+        self._status.style().polish(self._status)
+
+    def clear_status(self) -> None:
+        self._status.clear()
+        self._status.setVisible(False)
+
+    def on_action_failed(self, dev_id: str, action: str, message: str) -> None:
+        """A write failed: revert an optimistic switch and surface the failure."""
+        widgets = self._widgets.get((dev_id, action), {})
+        switch = widgets.get("switch")
+        if switch is not None:
+            # The switch optimistically flipped on tap; put it back.
+            switch.blockSignals(True)
+            switch.setChecked(not switch.isChecked())
+            switch.setText("ON" if switch.isChecked() else "OFF")
+            switch.blockSignals(False)
+        self.show_status(message, level="error")
 
 
 def _title(action: str) -> str:

@@ -1870,23 +1870,26 @@ class MainWindow(QMainWindow):
         """
         dev = self._core.hardware_manager.get_device(dev_id)
         if dev is None:
-            self._show_status_message(f"Device {dev_id} is no longer available")
+            self._runner_device_controls.on_action_failed(
+                dev_id, action, f"{dev_id} is no longer available"
+            )
             return
         try:
             await dev.execute_action(action, *value)
+            self._runner_device_controls.clear_status()
         except Exception as e:  # noqa: BLE001
-            self._show_status_message(f"Device control failed: {e}")
+            self._runner_device_controls.on_action_failed(dev_id, action, f"{action} failed: {e}")
 
     async def _drive_read(self, dev_id, action):
         dev = self._core.hardware_manager.get_device(dev_id)
         if dev is None:
-            self._show_status_message(f"Device {dev_id} is no longer available")
+            self._runner_device_controls.show_status(f"{dev_id} is no longer available")
             return
         try:
             value = await dev.execute_action(action)
             self._runner_device_controls.set_read_value(dev_id, action, str(value))
         except Exception as e:  # noqa: BLE001
-            self._show_status_message(f"Read failed: {e}")
+            self._runner_device_controls.show_status(f"Read failed: {e}")
 
     def _on_help(self) -> None:
         dialog = HelpDialog(self)

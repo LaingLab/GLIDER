@@ -130,3 +130,31 @@ def test_refresh_rebuilds_cleanly(qtbot):
 def _all_widgets(w):
     w.refresh()
     return w._widgets
+
+
+# --- status strip + optimistic feedback (polish increment) -------------------
+
+
+def test_status_strip_shows_persistent_icon_text(qtbot):
+    w = _controls({})
+    qtbot.addWidget(w)
+    assert w._status.isHidden()
+    w.show_status("pump failed", level="error")
+    assert not w._status.isHidden()
+    assert "pump failed" in w._status.text()
+    assert "✗" in w._status.text()  # icon, not color alone
+    assert w._status.property("level") == "error"
+    w.clear_status()
+    assert w._status.isHidden()
+
+
+def test_failed_write_reverts_optimistic_switch_and_shows_status(qtbot):
+    dev = _dev({"set": ActionValueSpec(KIND_SWITCH, 0, 1)})
+    w = _controls({"d1": dev})
+    qtbot.addWidget(w)
+    switch = _widget(w, "d1", "set")["switch"]
+    switch.click()  # optimistic -> checked (ON)
+    assert switch.isChecked() and switch.text() == "ON"
+    w.on_action_failed("d1", "set", "set failed: boom")
+    assert not switch.isChecked() and switch.text() == "OFF"
+    assert "boom" in w._status.text() and not w._status.isHidden()
