@@ -70,7 +70,7 @@ def find_run_param(start_id: str, flow) -> RunParam | None:
                 value = int((node.state or {}).get(state_key, default) or default)
                 return RunParam(node_id=current, state_key=state_key, value=value, label=label)
         for conn in flow.connections:
-            if conn.from_node == current:
+            if conn.from_node == current and conn.connection_type != "data":
                 to_visit.append(conn.to_node)
     return None
 
@@ -117,7 +117,13 @@ def build_picker_labels(infos: list[GraphFunctionInfo]) -> list[tuple[str, str]]
 
 
 def _reaches_end_function(start_id: str, flow) -> bool:
-    """Trace exec connections from start_id to see if an EndFunction is reachable."""
+    """Whether an EndFunction is reachable from start_id along the exec chain.
+
+    Only exec connections carry execution, so a data-only path to an EndFunction
+    does not make the function runnable — following data wires here would offer a
+    button whose run can never complete. Explicit data connections are excluded;
+    exec (and any untyped) connections are followed.
+    """
     visited: set[str] = set()
     to_visit = [start_id]
     while to_visit:
@@ -129,6 +135,6 @@ def _reaches_end_function(start_id: str, flow) -> bool:
             if node.id == current and node.node_type == "EndFunction":
                 return True
         for conn in flow.connections:
-            if conn.from_node == current:
+            if conn.from_node == current and conn.connection_type != "data":
                 to_visit.append(conn.to_node)
     return False

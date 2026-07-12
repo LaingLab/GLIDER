@@ -188,7 +188,8 @@ class OutputNode(GliderNode):
                     if spec is not None:
                         pwm_value, _ = clamp_to_spec(value, spec)
                     else:
-                        pwm_value = max(0, int(value))
+                        # No declared range: keep the historical 8-bit ceiling.
+                        pwm_value = max(0, min(255, int(value)))
                     logger.info(f"Output: setting PWM device to {pwm_value}")
                     if hasattr(self._device, "set_value"):
                         await self._device.set_value(pwm_value)

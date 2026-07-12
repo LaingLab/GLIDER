@@ -110,6 +110,20 @@ def test_read_action_renders_read_button_and_updates_label(qtbot):
     assert w._value_labels[("a1", "read")].text() == "512"
 
 
+def test_read_action_with_whole_spec_still_renders_a_read_button(qtbot):
+    # AnalogInput's "read" carries a whole-number spec (its reading range, used
+    # by nodes). It must render as a Read button, not a write slider that would
+    # call read() with an argument. Regression for the ordering bug.
+    dev = _dev({"read": ActionValueSpec(KIND_WHOLE, 0, 1023)}, device_type="AnalogInput")
+    w = _controls({"a1": dev})
+    qtbot.addWidget(w)
+    roles = _widget(w, "a1", "read")
+    assert "read" in roles and "slider" not in roles
+    with qtbot.waitSignal(w.read_requested) as sig:
+        roles["read"].click()
+    assert sig.args == ["a1", "read"]
+
+
 def test_custom_device_gets_controls_automatically(qtbot):
     # A device type the old three-family grid would have dropped entirely.
     dev = _dev({"set_rate": ActionValueSpec(KIND_WHOLE, 0, 100, unit="mL/min")}, device_type="Pump")

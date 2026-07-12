@@ -72,19 +72,31 @@ async def test_concurrent_calls_serialize_never_overlap():
     assert len(active) <= 1  # never overlapped throughout
 
 
-async def test_timeout_notifies_but_waits_for_true_completion():
-    gate = asyncio.Event()
+async def test_timeout_notifies_and_cancels_so_caller_recovers():
+    # A body whose gate never opens models a hung chain (a node raised and
+    # stopped propagation, or hardware went away). The runner must notify, then
+    # cancel and return False — never leave the caller awaiting forever.
+    gate = asyncio.Event()  # deliberately never set
     runner = FlowFunctionRunner("start", _wire(gate=gate))
     notified: list = []
 
-    task = asyncio.create_task(
-        runner.execute(timeout=0.02, on_timeout=lambda: notified.append(True))
-    )
-    await asyncio.sleep(0.05)  # exceed the soft timeout
-    assert notified == [True]  # reported unresponsive...
-    assert not task.done()  # ...but did NOT return (still running)
-    gate.set()  # function truly ends
-    assert await task is True  # only now does it report completion
+    result = await runner.execute(timeout=0.02, on_timeout=lambda: notified.append(True))
+
+    assert notified == [True]  # reported unresponsive
+    assert result is False  # did not complete — it was cancelled
+    assert runner.running is False  # lock released; a later run can proceed
+
+
+async def test_recovers_and_can_run_again_after_a_timeout():
+    # After a hung run is cancelled, the same shared runner must accept a fresh
+    # invocation (the wedge bug left it permanently busy).
+    gate = asyncio.Event()
+    runner = FlowFunctionRunner("start", _wire(gate=gate))
+
+    assert await runner.execute(timeout=0.02) is False  # first run hangs → cancelled
+    gate.set()  # a later run's chain completes normally
+    assert await runner.execute(timeout=0.02) is True
+    assert runner.running is False
 
 
 async def test_missing_start_node_returns_false():

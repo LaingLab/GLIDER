@@ -617,6 +617,18 @@ class ServoDevice(BaseDevice):
         self._angle = 90
         self._min_angle = config.settings.get("min_angle", 0)
         self._max_angle = config.settings.get("max_angle", 180)
+        # Inverted/degenerate bounds would collapse both the angle clamp (always
+        # min) and the generated slider (QSlider.setRange(hi, lo) fixes the
+        # value), silently ignoring every commanded angle. Normalize to a usable
+        # range and warn rather than misbehave.
+        if self._min_angle >= self._max_angle:
+            logger.warning(
+                "Servo %s has invalid angle bounds (min=%s, max=%s); using 0..180",
+                self._name,
+                self._min_angle,
+                self._max_angle,
+            )
+            self._min_angle, self._max_angle = 0, 180
 
     @property
     def angle(self) -> int:

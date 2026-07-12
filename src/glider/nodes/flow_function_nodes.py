@@ -7,6 +7,7 @@ nodes that can be reused throughout the flow.
 """
 
 import asyncio
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -73,9 +74,11 @@ class FlowFunctionRunner:
                 if node_name in ("EndFunction", "EndFunctionNode"):
                     self._end_node_ids.append(current_id)
 
-            # Follow connections
+            # Follow execution flow only — a data wire does not carry execution,
+            # so an End reached solely by data is not a real completion point.
+            # Exclude explicit data connections; untyped/exec ones are followed.
             for conn in self._flow_engine._connections:
-                if conn["from_node"] == current_id:
+                if conn["from_node"] == current_id and conn.get("type") != "data":
                     to_visit.append(conn["to_node"])
 
     def _on_function_complete(self) -> None:
@@ -91,15 +94,17 @@ class FlowFunctionRunner:
                 end_node.set_completion_callback(callback)
 
     async def execute(self, timeout: float = 60.0, on_timeout=None) -> bool:
-        """Run the function, waiting until an EndFunction node is reached.
+        """Run the function until an EndFunction node is reached.
 
         Only one invocation runs at a time (per-function lock); a second caller
         waits its turn rather than clobbering the first's completion signal.
-        Returns True once the function has *actually* ended. If it exceeds
-        ``timeout`` it is reported unresponsive (``on_timeout`` fired) but the
-        wait continues — the caller is not told it finished while the chain may
-        still be driving hardware. Returns False only when the start node is
-        missing.
+
+        Returns ``True`` once the function has actually ended. If it exceeds
+        ``timeout`` it is reported unresponsive (``on_timeout`` fired), the run is
+        **cancelled**, and ``False`` is returned — a hung chain (a node that
+        raised and stopped propagation, or hardware that went away mid-run) can
+        never leave the caller awaiting forever. Also returns ``False`` when the
+        start node is missing.
         """
         async with self._lock:
             if not self._end_node_ids:
@@ -120,18 +125,21 @@ class FlowFunctionRunner:
                 done, _ = await asyncio.wait({run}, timeout=timeout)
                 if not done:
                     logger.warning(
-                        "FlowFunctionRunner: '%s' unresponsive after %ss (still running)",
+                        "FlowFunctionRunner: '%s' unresponsive after %ss — cancelling",
                         self._start_node_id,
                         timeout,
                     )
                     if on_timeout is not None:
                         on_timeout()
-                    await run  # re-enable only when execution has truly ended
+                    return False  # cancelled in finally; caller regains control
+                run.result()  # surface a body exception rather than swallow it
                 logger.info("FlowFunctionRunner: function execution complete")
                 return True
             finally:
                 if not run.done():
-                    run.cancel()  # cancelled caller (e.g. experiment swap) stops the body
+                    run.cancel()  # timeout / cancelled caller (New/Open) stops the body
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await run  # let cancellation unwind before releasing the lock
                 self._register_completion(None)
 
     async def _run_body(self, start_node) -> None:

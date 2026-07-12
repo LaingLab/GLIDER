@@ -150,16 +150,20 @@ class RunnerDeviceControls(QWidget):
         read_seen = False
         for action in actions:
             spec = device.value_spec(action)
-            if spec is not None and spec.kind == KIND_SWITCH:
+            # A read action is a measurement, not a command — classify it first,
+            # even though its value_spec carries the reading's range (which nodes
+            # use). Otherwise a whole-number read spec (e.g. AnalogInput "read")
+            # would render as a write slider that calls read() with an argument.
+            if action in _READ_ACTIONS or action.startswith("read"):
+                if not read_seen:  # one read display per device
+                    controls.append(("read", action, None))
+                    read_seen = True
+            elif spec is not None and spec.kind == KIND_SWITCH:
                 controls.append(("switch", action, spec))
             elif spec is not None and spec.kind == KIND_WHOLE:
                 if action in _SECONDARY and has_primary_value:
                     continue
                 controls.append(("slider", action, spec))
-            elif action in _READ_ACTIONS or action.startswith("read"):
-                if not read_seen:  # one read display per device
-                    controls.append(("read", action, None))
-                    read_seen = True
             elif action in _SWITCH_REDUNDANT and has_switch:
                 continue
             else:

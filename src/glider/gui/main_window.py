@@ -1952,8 +1952,13 @@ class MainWindow(QMainWindow):
             self._runner_device_controls.set_function_running(start_node_id, True)
             try:
                 runner = engine.get_function_runner(start_node_id)
-                await runner.execute()
-                self._runner_device_controls.clear_status()
+                completed = await runner.execute(
+                    on_timeout=lambda: self._runner_device_controls.show_status(
+                        "Function is unresponsive — cancelled", level="warn"
+                    )
+                )
+                if completed:
+                    self._runner_device_controls.clear_status()
             finally:
                 self._runner_device_controls.set_function_running(start_node_id, False)
                 engine.state = prev_state

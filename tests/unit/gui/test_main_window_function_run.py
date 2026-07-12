@@ -45,7 +45,7 @@ class _Runner:
         self._engine = engine
         self.state_during_run = None
 
-    async def execute(self):
+    async def execute(self, timeout=60.0, on_timeout=None):
         self.state_during_run = self._engine.state
         return True
 
