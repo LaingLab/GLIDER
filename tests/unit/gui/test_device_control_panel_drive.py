@@ -41,6 +41,33 @@ def _select_only_device(panel):
     panel._device_combo.setCurrentIndex(1)  # index 0 is the "-- Select Device --" placeholder
 
 
+def test_pwm_range_follows_device_value_spec(qtbot):
+    # B2: selecting a 12-bit PWM device sets the control range from its
+    # value_spec('set') (0-4095), not a hardcoded 0-255.
+    from glider.hal.value_spec import KIND_WHOLE, ActionValueSpec
+
+    class _PWM:
+        id = "pwm_1"
+        name = "motor"
+        device_type = "PWMOutput"
+        board = _Board()
+        _initialized = True
+        _value = 0
+        pins: dict = {}
+
+        def value_spec(self, action):
+            return ActionValueSpec(KIND_WHOLE, 0, 4095) if action == "set" else None
+
+    dev = _PWM()
+    panel = DeviceControlPanel(_HW(dev), run_async_fn=lambda c: None)
+    qtbot.addWidget(panel)
+    panel.refresh_devices()
+    panel._device_combo.setCurrentIndex(1)  # select the PWM device
+
+    assert panel._pwm_spinbox.maximum() == 4095
+    assert panel._pwm_slider.maximum() == 4095
+
+
 async def test_on_button_drives_device_via_set_digital(qtbot):
     device = _Device()
     scheduled = []

@@ -118,6 +118,9 @@ class FlowFunctionRunner:
 
             self._register_completion(self._on_function_complete)
             run = asyncio.ensure_future(self._run_body(start_node))
+            # Register so a graph reset (New/Open -> FlowEngine.clear()) can
+            # cancel this run instead of leaving it driving a torn-down graph.
+            self._flow_engine.track_task(run)
             try:
                 logger.info(f"FlowFunctionRunner: executing StartFunction {self._start_node_id}")
                 # The timeout wraps the WHOLE run (the body awaits the chain, so
@@ -132,6 +135,10 @@ class FlowFunctionRunner:
                     if on_timeout is not None:
                         on_timeout()
                     return False  # cancelled in finally; caller regains control
+                if run.cancelled():
+                    # A graph reset cancelled the run out from under us.
+                    logger.info("FlowFunctionRunner: '%s' run cancelled", self._start_node_id)
+                    return False
                 run.result()  # surface a body exception rather than swallow it
                 logger.info("FlowFunctionRunner: function execution complete")
                 return True

@@ -597,7 +597,14 @@ class NodeEditorController(QObject):
 
             if bound_device_type == "PWMOutput":
                 pwm_spin = QSpinBox()
-                pwm_spin.setRange(0, 255)
+                # Range from the bound device's declared spec, not a hardcoded
+                # 0-255, so a higher-resolution PWM board (12-bit -> 0-4095) is
+                # authorable and the editor matches what the node will write.
+                spec = bound_device.value_spec("set")
+                lo, hi = (spec.min, spec.max) if spec is not None else (0, 255)
+                pwm_spin.setRange(lo, hi)
+                if spec is not None:
+                    pwm_spin.setSingleStep(max(1, spec.step))
                 saved_value = 0
                 if node_config and node_config.state:
                     saved_value = node_config.state.get("value", 0)
@@ -605,7 +612,7 @@ class NodeEditorController(QObject):
                 pwm_spin.valueChanged.connect(
                     lambda val, nid=node_id: self._on_node_property_changed(nid, "value", val)
                 )
-                props_layout.addRow("PWM Value (0-255):", pwm_spin)
+                props_layout.addRow(f"PWM Value ({lo}-{hi}):", pwm_spin)
             else:
                 from PyQt6.QtWidgets import QRadioButton
 
