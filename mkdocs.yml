@@ -1,0 +1,99 @@
+site_name: GLIDER
+site_description: >-
+  General Laboratory Interface for Design, Experimentation, and Recording —
+  tutorials and guides for building, running, and recording experiments.
+site_url: https://lainglab.github.io/glider/
+repo_url: https://github.com/LaingLab/glider
+repo_name: LaingLab/glider
+edit_uri: edit/main/docs-site/
+copyright: Copyright &copy; LaingLab — MIT License
+
+docs_dir: docs-site
+site_dir: site
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.keys
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/LaingLab/glider
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - getting-started/index.md
+      - Installation: getting-started/installation.md
+      - Your First Experiment: getting-started/first-experiment.md
+      - How GLIDER Works: getting-started/concepts.md
+  - Building Experiments:
+      - building/index.md
+      - The Node Graph: building/node-graph.md
+      - Devices & Hardware: building/devices.md
+      - Functions: building/functions.md
+      - Custom Devices & Plugins: building/plugins.md
+  - Camera & Behavior:
+      - camera-behavior/index.md
+      - Camera & Recording: camera-behavior/camera.md
+      - Tracking: camera-behavior/tracking.md
+      - Behavior Analysis: camera-behavior/behavior.md
+  - Runner Mode:
+      - runner/index.md
+      - The Runner Screen: runner/runner.md
+      - Raspberry Pi Kiosk: runner/pi-kiosk.md
+  - Reference:
+      - reference/index.md
+      - Node Catalog: reference/nodes.md
+      - Device Catalog: reference/devices.md
+      - Keyboard Shortcuts: reference/shortcuts.md
+      - Troubleshooting: reference/troubleshooting.md
