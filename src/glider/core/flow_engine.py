@@ -56,6 +56,9 @@ class FlowEngine:
         #   connection_id -> (from_node_id, callback)
         self._connection_callbacks: dict[str, tuple[str, Callable[..., Any]]] = {}
         self._running_tasks: set[asyncio.Task] = set()
+        # D11: warnings collected while binding nodes (a saved value now outside
+        # its device's declared range). Consumed and shown once after a load.
+        self._load_warnings: list[str] = []
 
         # Callbacks
         self._state_callbacks: list[Callable[[FlowState], None]] = []
@@ -110,6 +113,11 @@ class FlowEngine:
     def is_running(self) -> bool:
         """Whether the flow is currently running."""
         return self._state == FlowState.RUNNING
+
+    def consume_load_warnings(self) -> list[str]:
+        """Return and clear the out-of-range-at-load warnings (D11)."""
+        warnings, self._load_warnings = self._load_warnings, []
+        return warnings
 
     @property
     def nodes(self) -> dict[str, Any]:
@@ -281,6 +289,13 @@ class FlowEngine:
             if device and hasattr(node, "bind_device"):
                 node.bind_device(device)
                 logger.info(f"Bound device '{device_id}' to node {node_id}")
+                # D11: a value saved under a device's *old* range may now be out
+                # of range. Flag it at load time (not silently mid-run); the
+                # value still clamps at execution.
+                warn = getattr(node, "out_of_range_at_bind", lambda: None)()
+                if warn:
+                    logger.warning("Out-of-range at load: %s", warn)
+                    self._load_warnings.append(warn)
             else:
                 logger.warning(
                     f"Could not bind device '{device_id}' to node {node_id} (device={device})"
