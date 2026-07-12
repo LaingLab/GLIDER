@@ -79,6 +79,11 @@ behavior = [
     "lightgbm>=4.0",          # default classifier backend; RandomForest fallback if absent
     "pyyaml>=6.0",            # behavior-analysis project files (.yaml)
 ]
+docs = [
+    # User-facing docs site (tutorials/guides), built locally and deployed to
+    # the gh-pages branch — never built on GitHub Actions.
+    "mkdocs-material>=9.5",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
