@@ -270,7 +270,9 @@ class MainWindow(QMainWindow):
         from glider.gui.runner.device_controls import RunnerDeviceControls
         from glider.gui.runner.runner_shell import RunnerShell
 
-        self._runner_device_controls = RunnerDeviceControls(self._core.hardware_manager)
+        self._runner_device_controls = RunnerDeviceControls(
+            self._core.hardware_manager, session_fn=lambda: self._core.session
+        )
         self._runner_device_controls.action_write_requested.connect(
             lambda dev_id, action, value: self._run_async(self._drive_action(dev_id, action, value))
         )
@@ -280,6 +282,13 @@ class MainWindow(QMainWindow):
         self._runner_device_controls.read_requested.connect(
             lambda dev_id, action: self._run_async(self._drive_read(dev_id, action))
         )
+        self._runner_device_controls.function_run_requested.connect(
+            lambda start_node_id: self._run_async(self._run_function_async(start_node_id))
+        )
+        # Only one manual function runs at a time: the run briefly forces the
+        # engine's exec-propagation gate to RUNNING and restores it after, so
+        # two overlapping runs would corrupt each other's saved state.
+        self._manual_run_busy = False
 
         self._runner_setup_page = RunnerSetupPage(self._core, hardware_widget=self._hardware_panel)
 
@@ -1901,6 +1910,74 @@ class MainWindow(QMainWindow):
             self._runner_device_controls.set_read_value(dev_id, action, str(value))
         except Exception as e:  # noqa: BLE001
             self._runner_device_controls.show_status(f"Read failed: {e}")
+
+    async def _run_function_async(self, start_node_id: str) -> None:
+        """Run a graph function from a Runner Functions button.
+
+        Lazily instantiates the graph if the engine is idle, optionally prompts
+        for a parameter (e.g. N revolutions), then runs the function through the
+        flow engine's shared single-in-flight runner. Exec-flow propagation is
+        gated on ``FlowState.RUNNING``, so the engine is briefly forced RUNNING
+        for the duration and restored after — this does not start a recorded
+        experiment or change session state.
+        """
+        from glider.core.flow_engine import FlowState
+        from glider.core.graph_functions import find_run_param
+
+        if self._manual_run_busy:
+            self._runner_device_controls.show_status("A function is already running", level="info")
+            return
+        if not self._core.hardware_manager.is_any_board_connected():
+            self._runner_device_controls.show_status("Connect hardware to run a function")
+            return
+
+        self._manual_run_busy = True
+        engine = self._core.flow_engine
+        try:
+            # Lazy load: instantiate the graph if idle (engine cleared on load).
+            if not engine.nodes:
+                self._core.setup_flow()
+            if engine.get_node(start_node_id) is None:
+                self._runner_device_controls.show_status("That function is no longer in the graph")
+                return
+
+            # Optional touchscreen parameter (e.g. revolutions/counts target),
+            # injected onto the live node after setup so it drives this run.
+            param = find_run_param(start_node_id, self._core.session.flow)
+            if param is not None and not self._prompt_run_param(engine, param):
+                return  # operator cancelled the prompt
+
+            prev_state = engine.state
+            engine.state = FlowState.RUNNING
+            self._runner_device_controls.set_function_running(start_node_id, True)
+            try:
+                runner = engine.get_function_runner(start_node_id)
+                await runner.execute()
+                self._runner_device_controls.clear_status()
+            finally:
+                self._runner_device_controls.set_function_running(start_node_id, False)
+                engine.state = prev_state
+        except Exception as e:  # noqa: BLE001
+            self._runner_device_controls.show_status(f"Function failed: {e}")
+        finally:
+            self._manual_run_busy = False
+
+    def _prompt_run_param(self, engine, param) -> bool:
+        """Prompt for a run parameter and inject it onto the live node.
+
+        Returns True to proceed with the run, False if the operator cancelled.
+        """
+        from PyQt6.QtWidgets import QInputDialog
+
+        value, ok = QInputDialog.getInt(
+            self, param.label, f"{param.label}:", param.value, 1, 1_000_000
+        )
+        if not ok:
+            return False
+        target = engine.get_node(param.node_id)
+        if target is not None and hasattr(target, "_state"):
+            target._state[param.state_key] = value
+        return True
 
     def _on_help(self) -> None:
         dialog = HelpDialog(self)

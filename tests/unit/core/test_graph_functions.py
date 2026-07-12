@@ -2,6 +2,7 @@
 from glider.core.experiment_session import ExperimentSession
 from glider.core.graph_functions import (
     GraphFunctionInfo,
+    build_picker_labels,
     find_run_param,
     list_graph_functions,
 )
@@ -120,3 +121,21 @@ def test_find_run_param_none_when_not_parameterizable():
         connections=[_conn("s1", "w1"), _conn("w1", "e1")],
     )
     assert find_run_param("s1", session.flow) is None
+
+
+def test_build_picker_labels_uses_plain_name_when_unique():
+    infos = [
+        GraphFunctionInfo(start_node_id="s1", name="Purge", has_end=True),
+        GraphFunctionInfo(start_node_id="s2", name="Fill", has_end=True),
+    ]
+    assert build_picker_labels(infos) == [("Purge", "s1"), ("Fill", "s2")]
+
+
+def test_build_picker_labels_disambiguates_duplicate_names_by_id_suffix():
+    infos = [
+        GraphFunctionInfo(start_node_id="node-aaaa", name="Run", has_end=True),
+        GraphFunctionInfo(start_node_id="node-bbbb", name="Run", has_end=True),
+    ]
+    labels = build_picker_labels(infos)
+    # Disambiguated by the last 4 chars of the id; still binds by full id.
+    assert labels == [("Run aaaa", "node-aaaa"), ("Run bbbb", "node-bbbb")]

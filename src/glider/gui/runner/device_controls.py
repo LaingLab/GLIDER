@@ -12,13 +12,18 @@ from that action's declared value semantics (``device.value_spec(action)``):
 * a readable action -> a Read button + value label (button-driven).
 
 Custom/declarative devices therefore gain correct, range-aware controls
-automatically. This widget is PURE UI: it emits action-generic signals; an
-external async handler dispatches them through ``device.execute_action`` (the one
-chokepoint that clamps to the declared range and serializes per device).
+automatically. When a session function (a StartFunction→EndFunction chain) is
+present, a Functions section of large run buttons is shown above the device
+controls. This widget is PURE UI: it emits action-generic signals (and a
+``function_run_requested`` signal); an external async handler dispatches device
+actions through ``device.execute_action`` (the one chokepoint that clamps to the
+declared range and serializes per device) and runs functions through the flow
+engine's shared runner.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -35,6 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.core.graph_functions import build_picker_labels, list_graph_functions
 from glider.hal.value_spec import KIND_SWITCH, KIND_WHOLE
 
 if TYPE_CHECKING:
@@ -67,15 +73,27 @@ class RunnerDeviceControls(QWidget):
     action_fire_requested = pyqtSignal(str, str)
     # (device_id, action_name) — a readable action
     read_requested = pyqtSignal(str, str)
+    # (start_node_id) — run a graph function from its tap button
+    function_run_requested = pyqtSignal(str)
 
-    def __init__(self, hardware_manager: HardwareManager, parent: QWidget | None = None):
+    def __init__(
+        self,
+        hardware_manager: HardwareManager,
+        session_fn: Callable[[], object] | None = None,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
         self._hardware_manager = hardware_manager
+        # Returns the current ExperimentSession (or None). When absent, the
+        # Functions section is never built (used by device-only tests).
+        self._session_fn = session_fn
         # value-label widgets keyed by (dev_id, action) for read display updates
         self._value_labels: dict[tuple[str, str], QLabel] = {}
         # interactive widgets keyed by (dev_id, action) -> {role: widget}, for
         # driving and for tests
         self._widgets: dict[tuple[str, str], dict[str, QWidget]] = {}
+        # function run buttons keyed by start_node_id -> (button, base_label)
+        self._function_buttons: dict[str, tuple[QPushButton, str]] = {}
         self.setObjectName("runnerDeviceControls")
         self._setup_ui()
 
@@ -151,7 +169,12 @@ class RunnerDeviceControls(QWidget):
     # --- Public API ---
 
     def refresh(self) -> None:
-        """Rebuild all device sections from ``hardware_manager.devices``."""
+        """Rebuild the Functions section and all device sections.
+
+        Functions (from the session graph) render above the device controls in
+        the single shared scroll area, so a touchscreen operator scrolls one
+        list. Both are rebuilt together since either can change on a load.
+        """
         while self._content_layout.count():
             item = self._content_layout.takeAt(0)
             w = item.widget()
@@ -160,12 +183,64 @@ class RunnerDeviceControls(QWidget):
                 w.deleteLater()
         self._value_labels.clear()
         self._widgets.clear()
+        self._function_buttons.clear()
+
+        functions_section = self._make_functions_section()
+        if functions_section is not None:
+            self._content_layout.addWidget(functions_section)
 
         for dev_id, device in self._hardware_manager.devices.items():
             section = self._make_device_section(dev_id, device)
             if section is not None:
                 self._content_layout.addWidget(section)
         self._content_layout.addStretch(1)
+
+    def _make_functions_section(self) -> QWidget | None:
+        """Build the Functions run-button section, or None when there are none.
+
+        Only complete functions (a reachable EndFunction) are offered — an
+        incomplete chain would only ever time out. Duplicate display names are
+        disambiguated; each button still binds by ``start_node_id``.
+        """
+        if self._session_fn is None:
+            return None
+        session = self._session_fn()
+        infos = [f for f in list_graph_functions(session) if f.has_end]
+        if not infos:
+            return None
+
+        section = QWidget()
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        heading = QLabel("Functions")
+        heading.setProperty("class", "device-section-header")
+        layout.addWidget(heading)
+
+        for label, start_node_id in build_picker_labels(infos):
+            btn = QPushButton(label)
+            btn.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+            btn.clicked.connect(
+                lambda _=False, sid=start_node_id: self.function_run_requested.emit(sid)
+            )
+            self._function_buttons[start_node_id] = (btn, label)
+            layout.addWidget(btn)
+        return section
+
+    def set_function_running(self, start_node_id: str, running: bool) -> None:
+        """Show a per-button running affordance (disabled + 'Running…').
+
+        Re-enabled only when the caller reports the run truly ended, so the
+        button never invites a second tap while the chain may still be driving
+        hardware.
+        """
+        entry = self._function_buttons.get(start_node_id)
+        if entry is None:
+            return
+        btn, base_label = entry
+        btn.setEnabled(not running)
+        btn.setText(f"{base_label} — Running…" if running else base_label)
 
     def _make_device_section(self, dev_id: str, device) -> QWidget | None:
         controls = self._controls_for(device)
