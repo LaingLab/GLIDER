@@ -271,17 +271,14 @@ class MainWindow(QMainWindow):
         from glider.gui.runner.runner_shell import RunnerShell
 
         self._runner_device_controls = RunnerDeviceControls(self._core.hardware_manager)
-        self._runner_device_controls.set_digital_requested.connect(
-            lambda dev_id, v: self._run_async(self._drive_digital(dev_id, v))
+        self._runner_device_controls.action_write_requested.connect(
+            lambda dev_id, action, value: self._run_async(self._drive_action(dev_id, action, value))
         )
-        self._runner_device_controls.toggle_digital_requested.connect(
-            lambda dev_id: self._run_async(self._drive_toggle(dev_id))
-        )
-        self._runner_device_controls.set_pwm_requested.connect(
-            lambda dev_id, v: self._run_async(self._drive_pwm(dev_id, v))
+        self._runner_device_controls.action_fire_requested.connect(
+            lambda dev_id, action: self._run_async(self._drive_action(dev_id, action))
         )
         self._runner_device_controls.read_requested.connect(
-            lambda dev_id: self._run_async(self._drive_read(dev_id))
+            lambda dev_id, action: self._run_async(self._drive_read(dev_id, action))
         )
 
         self._runner_setup_page = RunnerSetupPage(self._core, hardware_widget=self._hardware_panel)
@@ -1864,40 +1861,30 @@ class MainWindow(QMainWindow):
     def _on_emergency_stop(self) -> None:
         self._run_async(self._core.emergency_stop())
 
-    async def _drive_digital(self, dev_id, value):
-        from glider.core.device_drive import set_digital
+    async def _drive_action(self, dev_id, action, *value):
+        """Drive any device action from the generated runner controls.
 
+        Routes through ``execute_action`` — the one chokepoint that clamps the
+        value to the action's declared range and serializes commands per device.
+        ``value`` is empty for a no-value command action.
+        """
         dev = self._core.hardware_manager.get_device(dev_id)
+        if dev is None:
+            self._show_status_message(f"Device {dev_id} is no longer available")
+            return
         try:
-            await set_digital(dev, value)
+            await dev.execute_action(action, *value)
         except Exception as e:  # noqa: BLE001
             self._show_status_message(f"Device control failed: {e}")
 
-    async def _drive_toggle(self, dev_id):
-        from glider.core.device_drive import toggle_digital
-
+    async def _drive_read(self, dev_id, action):
         dev = self._core.hardware_manager.get_device(dev_id)
+        if dev is None:
+            self._show_status_message(f"Device {dev_id} is no longer available")
+            return
         try:
-            await toggle_digital(dev)
-        except Exception as e:  # noqa: BLE001
-            self._show_status_message(f"Device control failed: {e}")
-
-    async def _drive_pwm(self, dev_id, value):
-        from glider.core.device_drive import set_pwm
-
-        dev = self._core.hardware_manager.get_device(dev_id)
-        try:
-            await set_pwm(dev, value)
-        except Exception as e:  # noqa: BLE001
-            self._show_status_message(f"Device control failed: {e}")
-
-    async def _drive_read(self, dev_id):
-        from glider.core.device_drive import read_input
-
-        dev = self._core.hardware_manager.get_device(dev_id)
-        try:
-            text = await read_input(dev)
-            self._runner_device_controls.set_read_value(dev_id, text)
+            value = await dev.execute_action(action)
+            self._runner_device_controls.set_read_value(dev_id, action, str(value))
         except Exception as e:  # noqa: BLE001
             self._show_status_message(f"Read failed: {e}")
 
