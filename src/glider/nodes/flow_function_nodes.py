@@ -7,6 +7,7 @@ nodes that can be reused throughout the flow.
 """
 
 import asyncio
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -42,8 +43,17 @@ class FlowFunctionRunner:
         """
         self._start_node_id = start_node_id
         self._flow_engine = flow_engine
-        self._completion_event = None
+        self._completion_event: asyncio.Event | None = None
         self._end_node_ids: list[str] = []
+        # Serializes execution of THIS function across every caller (an in-graph
+        # FunctionCall and a Runner button tap share one runner, hence one lock),
+        # so two invocations can never clobber each other's completion signal.
+        self._lock = asyncio.Lock()
+
+    @property
+    def running(self) -> bool:
+        """True while an invocation of this function is in flight."""
+        return self._lock.locked()
 
     def _find_end_nodes(self) -> None:
         """Find all EndFunction nodes connected to this function's StartFunction."""
@@ -64,9 +74,11 @@ class FlowFunctionRunner:
                 if node_name in ("EndFunction", "EndFunctionNode"):
                     self._end_node_ids.append(current_id)
 
-            # Follow connections
+            # Follow execution flow only — a data wire does not carry execution,
+            # so an End reached solely by data is not a real completion point.
+            # Exclude explicit data connections; untyped/exec ones are followed.
             for conn in self._flow_engine._connections:
-                if conn["from_node"] == current_id:
+                if conn["from_node"] == current_id and conn.get("type") != "data":
                     to_visit.append(conn["to_node"])
 
     def _on_function_complete(self) -> None:
@@ -75,55 +87,70 @@ class FlowFunctionRunner:
         if self._completion_event:
             self._completion_event.set()
 
-    async def execute(self) -> bool:
-        """
-        Execute the function by triggering the StartFunction node.
-
-        Waits until an EndFunction node is reached. Returns True if the
-        function completed, False if it timed out (or the start node is
-        missing).
-        """
-        # Find EndFunction nodes if not already found
-        if not self._end_node_ids:
-            self._find_end_nodes()
-
-        # Create completion event
-        self._completion_event = asyncio.Event()
-
-        # Register completion callback on EndFunction nodes
+    def _register_completion(self, callback) -> None:
         for end_node_id in self._end_node_ids:
             end_node = self._flow_engine.get_node(end_node_id)
             if end_node and hasattr(end_node, "set_completion_callback"):
-                end_node.set_completion_callback(self._on_function_complete)
+                end_node.set_completion_callback(callback)
 
-        # Trigger the StartFunction node
-        start_node = self._flow_engine.get_node(self._start_node_id)
-        if start_node is None:
-            logger.error(f"StartFunction node not found: {self._start_node_id}")
-            return False
+    async def execute(self, timeout: float = 60.0, on_timeout=None) -> bool:
+        """Run the function until an EndFunction node is reached.
 
-        logger.info(f"FlowFunctionRunner: executing StartFunction {self._start_node_id}")
+        Only one invocation runs at a time (per-function lock); a second caller
+        waits its turn rather than clobbering the first's completion signal.
+
+        Returns ``True`` once the function has actually ended. If it exceeds
+        ``timeout`` it is reported unresponsive (``on_timeout`` fired), the run is
+        **cancelled**, and ``False`` is returned — a hung chain (a node that
+        raised and stopped propagation, or hardware that went away mid-run) can
+        never leave the caller awaiting forever. Also returns ``False`` when the
+        start node is missing.
+        """
+        async with self._lock:
+            if not self._end_node_ids:
+                self._find_end_nodes()
+            self._completion_event = asyncio.Event()
+
+            start_node = self._flow_engine.get_node(self._start_node_id)
+            if start_node is None:
+                logger.error(f"StartFunction node not found: {self._start_node_id}")
+                return False
+
+            self._register_completion(self._on_function_complete)
+            run = asyncio.ensure_future(self._run_body(start_node))
+            try:
+                logger.info(f"FlowFunctionRunner: executing StartFunction {self._start_node_id}")
+                # The timeout wraps the WHOLE run (the body awaits the chain, so
+                # a slow body must count against the timeout too).
+                done, _ = await asyncio.wait({run}, timeout=timeout)
+                if not done:
+                    logger.warning(
+                        "FlowFunctionRunner: '%s' unresponsive after %ss — cancelling",
+                        self._start_node_id,
+                        timeout,
+                    )
+                    if on_timeout is not None:
+                        on_timeout()
+                    return False  # cancelled in finally; caller regains control
+                run.result()  # surface a body exception rather than swallow it
+                logger.info("FlowFunctionRunner: function execution complete")
+                return True
+            finally:
+                if not run.done():
+                    run.cancel()  # timeout / cancelled caller (New/Open) stops the body
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await run  # let cancellation unwind before releasing the lock
+                self._register_completion(None)
+
+    async def _run_body(self, start_node) -> None:
         if hasattr(start_node, "execute"):
             if asyncio.iscoroutinefunction(start_node.execute):
                 await start_node.execute()
             else:
                 start_node.execute()
-
-        # Wait for function completion with timeout
-        completed = False
-        try:
-            await asyncio.wait_for(self._completion_event.wait(), timeout=60.0)
-            logger.info("FlowFunctionRunner: function execution complete")
-            completed = True
-        except TimeoutError:
-            logger.warning("FlowFunctionRunner: function timed out")
-        finally:
-            # Clear completion callbacks
-            for end_node_id in self._end_node_ids:
-                end_node = self._flow_engine.get_node(end_node_id)
-                if end_node and hasattr(end_node, "set_completion_callback"):
-                    end_node.set_completion_callback(None)
-        return completed
+        # The completion callback is the definitive "EndFunction reached" signal.
+        if self._completion_event is not None:
+            await self._completion_event.wait()
 
 
 class StartFunctionNode(GliderNode):

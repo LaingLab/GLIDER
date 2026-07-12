@@ -2,6 +2,7 @@
 from glider.core.experiment_session import ExperimentSession
 from glider.core.graph_functions import (
     GraphFunctionInfo,
+    build_picker_labels,
     find_run_param,
     list_graph_functions,
 )
@@ -24,14 +25,14 @@ def _node(node_id, node_type, state=None):
     }
 
 
-def _conn(from_node, to_node):
+def _conn(from_node, to_node, connection_type="exec"):
     return {
         "id": f"{from_node}->{to_node}",
         "from_node": from_node,
         "from_output": 0,
         "to_node": to_node,
         "to_input": 0,
-        "connection_type": "exec",
+        "connection_type": connection_type,
     }
 
 
@@ -45,6 +46,30 @@ def test_lists_one_entry_per_start_function_keyed_by_node_id():
     )
     result = list_graph_functions(session)
     assert result == [GraphFunctionInfo(start_node_id="s1", name="Purge", has_end=True)]
+
+
+def test_data_only_path_to_end_is_not_runnable():
+    # An EndFunction reachable only through a data wire is not really a
+    # completion point (execution flows along exec connections), so the function
+    # must report has_end=False rather than offer a button that would hang.
+    session = _session_with_flow(
+        nodes=[_node("s1", "StartFunction"), _node("e1", "EndFunction")],
+        connections=[_conn("s1", "e1", connection_type="data")],
+    )
+    [info] = list_graph_functions(session)
+    assert info.has_end is False
+
+
+def test_find_run_param_ignores_data_only_paths():
+    session = _session_with_flow(
+        nodes=[
+            _node("s1", "StartFunction"),
+            _node("w1", "WaitForInput", {"threshold_mode": "revolution", "turns_target": 3}),
+            _node("e1", "EndFunction"),
+        ],
+        connections=[_conn("s1", "w1", connection_type="data"), _conn("w1", "e1")],
+    )
+    assert find_run_param("s1", session.flow) is None
 
 
 def test_start_function_without_reachable_end_has_end_false():
@@ -120,3 +145,21 @@ def test_find_run_param_none_when_not_parameterizable():
         connections=[_conn("s1", "w1"), _conn("w1", "e1")],
     )
     assert find_run_param("s1", session.flow) is None
+
+
+def test_build_picker_labels_uses_plain_name_when_unique():
+    infos = [
+        GraphFunctionInfo(start_node_id="s1", name="Purge", has_end=True),
+        GraphFunctionInfo(start_node_id="s2", name="Fill", has_end=True),
+    ]
+    assert build_picker_labels(infos) == [("Purge", "s1"), ("Fill", "s2")]
+
+
+def test_build_picker_labels_disambiguates_duplicate_names_by_id_suffix():
+    infos = [
+        GraphFunctionInfo(start_node_id="node-aaaa", name="Run", has_end=True),
+        GraphFunctionInfo(start_node_id="node-bbbb", name="Run", has_end=True),
+    ]
+    labels = build_picker_labels(infos)
+    # Disambiguated by the last 4 chars of the id; still binds by full id.
+    assert labels == [("Run aaaa", "node-aaaa"), ("Run bbbb", "node-bbbb")]

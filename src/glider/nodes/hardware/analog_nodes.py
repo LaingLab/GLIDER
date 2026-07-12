@@ -225,7 +225,8 @@ class PWMWriteNode(HardwareNode):
             if spec is not None:
                 value, _ = clamp_to_spec(value, spec)
             else:
-                value = int(value)
+                # No declared range: keep the historical 8-bit ceiling.
+                value = max(0, min(255, int(value)))
             await self._device.execute_action("set", value)
         else:
             self.set_error("No device bound")

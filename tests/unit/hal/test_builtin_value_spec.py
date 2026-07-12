@@ -58,3 +58,13 @@ def test_servo_angle_uses_instance_bounds():
     spec = dev.value_spec("set_angle")
     assert (spec.min, spec.max, spec.unit) == (10, 170, "deg")
     assert dev.value_spec("center") is None
+
+
+def test_servo_inverted_bounds_are_normalized_to_a_valid_range():
+    # min >= max would collapse both the angle clamp and the slider; the device
+    # normalizes to 0..180 (and warns) so it stays controllable and its spec is
+    # valid rather than silently ignoring every commanded angle.
+    dev = ServoDevice(_board(), DeviceConfig(settings={"min_angle": 170, "max_angle": 10}))
+    spec = dev.value_spec("set_angle")
+    assert (spec.min, spec.max) == (0, 180)
+    assert spec.validate() == []

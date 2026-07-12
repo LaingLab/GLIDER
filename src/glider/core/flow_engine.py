@@ -59,6 +59,8 @@ class FlowEngine:
         # D11: warnings collected while binding nodes (a saved value now outside
         # its device's declared range). Consumed and shown once after a load.
         self._load_warnings: list[str] = []
+        # One shared FlowFunctionRunner per StartFunction id (single-in-flight).
+        self._function_runners: dict[str, Any] = {}
 
         # Callbacks
         self._state_callbacks: list[Callable[[FlowState], None]] = []
@@ -118,6 +120,20 @@ class FlowEngine:
         """Return and clear the out-of-range-at-load warnings (D11)."""
         warnings, self._load_warnings = self._load_warnings, []
         return warnings
+
+    def get_function_runner(self, start_node_id: str):
+        """Return the shared FlowFunctionRunner for a function (create if needed).
+
+        Used by both the in-graph FunctionCall binding and the Runner function
+        button so every caller shares one single-in-flight runner.
+        """
+        from glider.nodes.flow_function_nodes import FlowFunctionRunner
+
+        runner = self._function_runners.get(start_node_id)
+        if runner is None:
+            runner = FlowFunctionRunner(start_node_id, self)
+            self._function_runners[start_node_id] = runner
+        return runner
 
     @property
     def nodes(self) -> dict[str, Any]:
@@ -203,10 +219,10 @@ class FlowEngine:
             node: The FunctionCallNode instance
             start_node_id: ID of the StartFunction node to invoke
         """
-        from glider.nodes.flow_function_nodes import FlowFunctionRunner
-
-        # Create the runner
-        runner = FlowFunctionRunner(start_node_id, self)
+        # One shared runner per function (keyed by StartFunction id), reused by
+        # every FunctionCall node AND the Runner button, so all callers share the
+        # same single-in-flight lock and completion signal.
+        runner = self.get_function_runner(start_node_id)
 
         # Bind to the node
         if hasattr(node, "set_function_context"):
@@ -676,9 +692,17 @@ class FlowEngine:
                     pass
         self._connection_callbacks.clear()
 
+        # Cancel any in-flight execution tasks (e.g. a function still running)
+        # before dropping their nodes, so a New/Open never leaves an orphaned
+        # task driving hardware against a torn-down graph.
+        for task in self._running_tasks:
+            if not task.done():
+                task.cancel()
+
         self._nodes.clear()
         self._connections.clear()
         self._running_tasks.clear()
+        self._function_runners.clear()
         self.state = FlowState.STOPPED
 
         if self._ryvencore_available and self._session:
