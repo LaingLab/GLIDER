@@ -10,7 +10,7 @@ under qasync the asyncio loop is multiplexed with Qt's event loop, and
 several timers tick during the sleep:
 
   - ``data_recorder._sampling_loop`` at 100 ms (CSV write + flush)
-  - ``runner_panel._elapsed_timer`` at 50 ms (setText → Qt repaint)
+  - ``RunControlPanel._elapsed_timer`` at 50 ms (setText → Qt repaint)
   - ``_stall_timer`` at 50 ms
   - ``_device_refresh_timer`` at 250 ms
 

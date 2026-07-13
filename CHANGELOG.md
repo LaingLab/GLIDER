@@ -65,7 +65,8 @@ Release-readiness work for the 1.0.0 cut. See [`code-review-laing.md`](code-revi
 - `uv.lock` is now tracked (was gitignored). Reproducible installs for the application.
 - `__main__.spec` (the auto-generated PyInstaller stub at repo root) deleted. `packaging/windows/glider.spec` is the canonical spec; new contributors building locally are no longer routed to the broken stub.
 - Removed install one-liner curl-pipe-bash references from the README; the `install.sh` / `install.ps1` scripts they pointed at do not exist and the pattern is a supply-chain risk.
-- ~2,500 LOC of dead `gui/` code purged (`runner/dashboard.py`, `runner/widget_factory.py`, `widgets/touch_widgets.py`, `widgets/device_card.py`, `controllers/hardware_controller.py`, `controllers/device_control_controller.py`, `panels/experiment_panel.py`). Active runner UI is `panels/runner_panel.py`; active hardware UI is `panels/hardware_panel.py`; etc.
+- **Runner UI replaced by a customizable Dashboard.** The four-tab Runner view was replaced by a customizable 2×2 quadrant Dashboard (`gui/dashboard/`) shared by both the desktop and Pi surfaces, with bidirectional Builder↔Dashboard switching. Each quadrant hosts a user-pickable panel (camera, hardware, run control, experiment info, etc.).
+- ~2,500 LOC of dead `gui/` code purged (`runner/dashboard.py`, `runner/widget_factory.py`, `widgets/touch_widgets.py`, `widgets/device_card.py`, `controllers/hardware_controller.py`, `controllers/device_control_controller.py`, `panels/experiment_panel.py`). Active runner UI is the quadrant Dashboard in `gui/dashboard/`; active hardware UI is `panels/hardware_panel.py`; etc.
 - CI now runs unit + integration tests with coverage, type-check (mypy), lint (ruff), format check (black), and a PyInstaller smoke build that asserts `dist/glider/glider --version` succeeds.
 
 ### Removed

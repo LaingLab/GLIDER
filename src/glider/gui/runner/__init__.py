@@ -1,12 +1,19 @@
 """
 Runner subpackage.
 
-The user-facing runner UI lives in ``glider.gui.panels.runner_panel.RunnerPanel``
-(constructed inline by ``MainWindow``). Earlier exploratory `RunnerDashboard`
-and `WidgetFactory` classes were removed in the 1.0 release-prep pass — the
-inline panel proved to be the canonical implementation. This module is kept as
-a package boundary for future refactors that may want to extract the touch UI
-back out of ``MainWindow``.
+The old tabbed RunnerShell/RunnerPanel UI was removed when the dashboard
+became the sole touch-facing mode. This package now provides the smaller
+building blocks that the dashboard panels reuse rather than a standalone
+runner UI:
+
+- ``readiness.py`` — readiness computation for starting an experiment
+- ``run_timer.py`` — elapsed-time formatting
+- ``run_banner.py`` — the run status banner
+- ``device_controls.py`` — manual device controls
+- ``runner_setup_page.py`` — the experiment setup page
+
+See ``glider.gui.dashboard`` for the quadrant dashboard that hosts these
+pieces.
 """
 
 __all__: list[str] = []
