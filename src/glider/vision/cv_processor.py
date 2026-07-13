@@ -44,6 +44,94 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def resolve_model_path(model_path: str) -> tuple[str, bool]:
+    """Normalize a user-chosen model path and detect the NCNN format.
+
+    Ultralytics loads an NCNN model from the *directory* that holds
+    ``model.ncnn.param`` / ``model.ncnn.bin`` (exported as ``*_ncnn_model/``).
+    Users may point either at that folder or at the ``.param`` file itself, so
+    we normalize a ``.param`` selection to its parent directory.
+
+    Args:
+        model_path: Path the user selected (``.pt`` file, ``.param`` file, or
+            an NCNN model directory).
+
+    Returns:
+        ``(resolved_path, is_ncnn)`` where ``resolved_path`` is the path to
+        hand to ``ultralytics.YOLO`` and ``is_ncnn`` indicates the NCNN
+        (CPU-only) backend.
+    """
+    path = os.path.normpath(model_path)
+
+    # A directly-selected .param file → load its containing folder.
+    if os.path.isfile(path) and path.lower().endswith(".param"):
+        return os.path.dirname(path), True
+
+    # A directory is NCNN if it looks like an export folder or contains params.
+    if os.path.isdir(path):
+        if path.lower().endswith("_ncnn_model") or os.path.isfile(
+            os.path.join(path, "model.ncnn.param")
+        ):
+            return path, True
+
+    return path, False
+
+
+def keypoints_to_array(kp_obj: Any) -> np.ndarray:
+    """Normalize an Ultralytics per-instance keypoints object to ``(K, C)``.
+
+    Ultralytics exposes keypoints for one instance as ``(1, K, 2|3)``. We
+    prefer ``.data`` (which includes the visibility/confidence column when the
+    model provides it) and fall back to ``.xy``, then squeeze the leading
+    instance dimension so both the dot renderer and the vision-cone code see a
+    flat ``(K, 2)`` or ``(K, 3)`` array.
+    """
+    tensor = kp_obj.data if getattr(kp_obj, "data", None) is not None else kp_obj.xy
+    arr = np.asarray(tensor.cpu().numpy())
+    if arr.ndim == 3:
+        arr = arr[0]
+    return arr
+
+
+def read_ncnn_metadata_task(ncnn_dir: str) -> str | None:
+    """Read the ``task`` (e.g. ``"pose"``) from an NCNN export's metadata.yaml.
+
+    Ultralytics writes ``task`` into ``metadata.yaml`` at export time but does
+    NOT infer it when loading an NCNN directory — it warns and assumes
+    ``detect``. For a pose model that misreads keypoint channels as class
+    scores (a ``KeyError`` on the class name). We read the task here so the
+    caller can pass it explicitly to ``YOLO(path, task=...)``.
+
+    Returns the task string, or ``None`` if the file or key is absent (in
+    which case Ultralytics falls back to its own guess).
+    """
+    meta = os.path.join(ncnn_dir, "metadata.yaml")
+    if not os.path.isfile(meta):
+        return None
+    try:
+        import yaml
+
+        with open(meta) as f:
+            data = yaml.safe_load(f) or {}
+        task = data.get("task")
+        return str(task) if task else None
+    except Exception:
+        logger.warning("Could not read task from %s", meta, exc_info=True)
+        return None
+
+
+def _resolve_device_for_yolo() -> str:
+    """Resolve the best torch device for YOLO, defaulting to CPU on failure.
+
+    Wrapped in its own function (rather than inlined) so the import cost of
+    ``torch`` is only paid when a ``.pt`` model actually loads, and so tests
+    can stub device selection deterministically.
+    """
+    from glider.vision.pose.device import resolve_device
+
+    return resolve_device(None)
+
+
 class DetectionBackend(Enum):
     """Available detection backends."""
 
@@ -129,6 +217,11 @@ class CVSettings:
     overlay_thickness: int = 2
     show_labels: bool = True
     show_trails: bool = False
+    # Keypoint (pose) rendering
+    show_keypoints: bool = True
+    keypoint_radius: int = 3
+    keypoint_color: tuple[int, int, int] = (0, 0, 255)  # BGR red
+    keypoint_min_confidence: float = 0.3  # Skip keypoints below this confidence
     process_every_n_frames: int = 1  # Process CV every N frames (1 = every frame)
     # Behavior analysis settings
     behavior_enabled: bool = True
@@ -159,6 +252,10 @@ class CVSettings:
             "overlay_thickness": self.overlay_thickness,
             "show_labels": self.show_labels,
             "show_trails": self.show_trails,
+            "show_keypoints": self.show_keypoints,
+            "keypoint_radius": self.keypoint_radius,
+            "keypoint_color": self.keypoint_color,
+            "keypoint_min_confidence": self.keypoint_min_confidence,
             "process_every_n_frames": self.process_every_n_frames,
             "behavior_enabled": self.behavior_enabled,
             "freeze_threshold": self.freeze_threshold,
@@ -196,6 +293,10 @@ class CVSettings:
             overlay_thickness=data.get("overlay_thickness", 2),
             show_labels=data.get("show_labels", True),
             show_trails=data.get("show_trails", False),
+            show_keypoints=data.get("show_keypoints", True),
+            keypoint_radius=data.get("keypoint_radius", 3),
+            keypoint_color=tuple(data.get("keypoint_color", [0, 0, 255])),
+            keypoint_min_confidence=data.get("keypoint_min_confidence", 0.3),
             process_every_n_frames=data.get("process_every_n_frames", 1),
             behavior_enabled=data.get("behavior_enabled", True),
             freeze_threshold=data.get("freeze_threshold", 1.0),
@@ -498,23 +599,34 @@ class CVProcessor:
         try:
             from ultralytics import YOLO
 
-            model_path = self._settings.model_path or "yolov8n.pt"
-            self._yolo_model = YOLO(model_path)
+            raw_path = self._settings.model_path or "yolov8n.pt"
+            model_path, is_ncnn = resolve_model_path(raw_path)
 
-            # Pin inference to the best available accelerator (CUDA > MPS > CPU)
-            # so live detection uses the GPU instead of ultralytics' CPU-leaning
-            # auto-pick, which never selects MPS on Apple Silicon. Best-effort:
-            # if resolving or moving the model fails, stay on CPU rather than
-            # break the live camera.
-            try:
-                from glider.vision.pose.device import resolve_device
-
-                self._device = resolve_device(None)
-                self._yolo_model.to(self._device)
-            except Exception:
+            if is_ncnn:
+                # Ultralytics can't infer the task for an NCNN directory (it
+                # warns and assumes 'detect'), which makes a pose model misread
+                # its keypoint channels as class scores. Pass the task from the
+                # export's metadata.yaml so pose models produce keypoints.
+                task = read_ncnn_metadata_task(model_path)
+                self._yolo_model = YOLO(model_path, task=task)
+                # NCNN is a CPU-only backend; it has no torch device and calling
+                # .to() on it raises. Pin to CPU and skip the accelerator move.
                 self._device = "cpu"
-                logger.warning("Could not select a GPU for YOLO; using CPU", exc_info=True)
-            logger.info(f"Loaded YOLO model: {model_path} (device={self._device})")
+                logger.info(f"Loaded NCNN model: {model_path} (task={task}, device=cpu)")
+            else:
+                self._yolo_model = YOLO(model_path)
+                # Pin inference to the best available accelerator (CUDA > MPS >
+                # CPU) so live detection uses the GPU instead of ultralytics'
+                # CPU-leaning auto-pick, which never selects MPS on Apple
+                # Silicon. Best-effort: if resolving or moving the model fails,
+                # stay on CPU rather than break the live camera.
+                try:
+                    self._device = _resolve_device_for_yolo()
+                    self._yolo_model.to(self._device)
+                except Exception:
+                    self._device = "cpu"
+                    logger.warning("Could not select a GPU for YOLO; using CPU", exc_info=True)
+                logger.info(f"Loaded YOLO model: {model_path} (device={self._device})")
 
             # ByteTrack-specific dependency probe.
             if self._settings.backend == DetectionBackend.YOLO_BYTETRACK:
@@ -676,7 +788,7 @@ class CVProcessor:
                     bbox=(int(x1), int(y1), int(x2 - x1), int(y2 - y1)),
                 )
                 if has_keypoints and i < len(r.keypoints):
-                    det._keypoints = r.keypoints[i].xy.cpu().numpy()
+                    det._keypoints = keypoints_to_array(r.keypoints[i])
                 detections.append(det)
         return detections
 
@@ -751,7 +863,7 @@ class CVProcessor:
                     track_id=track_id,
                 )
                 if has_keypoints and i < len(r.keypoints):
-                    detection._keypoints = r.keypoints[i].xy.cpu().numpy()
+                    detection._keypoints = keypoints_to_array(r.keypoints[i])
                 detections.append(detection)
 
         return detections
@@ -904,6 +1016,10 @@ class CVProcessor:
                         output, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, thickness
                     )
 
+        # Draw pose keypoints as dots
+        if tracked and self._settings.show_keypoints:
+            self._draw_keypoints(output, tracked)
+
         # Draw vision cones based on keypoints
         if tracked and self._settings.vision_cone_enabled:
             self._draw_vision_cones(output, tracked)
@@ -913,6 +1029,38 @@ class CVProcessor:
             self._draw_behavior_overlay(output, tracked)
 
         return output
+
+    def _draw_keypoints(self, frame: np.ndarray, tracked: list[TrackedObject]) -> None:
+        """Draw pose keypoints as filled dots on tracked objects.
+
+        Each object's ``keypoints`` is an ``Nx2`` (x, y) or ``Nx3``
+        (x, y, confidence) array. Keypoints with a confidence column are
+        skipped below ``keypoint_min_confidence``. ``(0, 0)`` placeholders —
+        which pose models emit for undetected keypoints — are skipped so we
+        don't paint a dot in the frame corner.
+        """
+        color = self._settings.keypoint_color
+        radius = self._settings.keypoint_radius
+        min_conf = self._settings.keypoint_min_confidence
+        h, w = frame.shape[:2]
+
+        for obj in tracked:
+            if obj.keypoints is None:
+                continue
+            # Ultralytics emits keypoints as (1, K, 2|3) for a single instance;
+            # normalize any leading dims to a flat (K, C) list of points.
+            kps = np.asarray(obj.keypoints)
+            if kps.ndim == 0 or kps.shape[-1] < 2:
+                continue
+            kps = kps.reshape(-1, kps.shape[-1])
+            for kp in kps:
+                if kps.shape[1] >= 3 and float(kp[2]) < min_conf:
+                    continue
+                x, y = int(round(float(kp[0]))), int(round(float(kp[1])))
+                # Skip undetected-keypoint placeholders and out-of-frame points.
+                if (x <= 0 and y <= 0) or not (0 <= x < w and 0 <= y < h):
+                    continue
+                cv2.circle(frame, (x, y), radius, color, -1)
 
     def _draw_vision_cones(self, frame: np.ndarray, tracked: list[TrackedObject]) -> None:
         """

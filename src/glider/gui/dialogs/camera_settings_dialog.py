@@ -468,7 +468,7 @@ class CameraSettingsDialog(QDialog):
         model_layout = QHBoxLayout()
         model_layout.setSpacing(8)
         self._model_path_edit = QLineEdit()
-        self._model_path_edit.setPlaceholderText("YOLO model (.pt)")
+        self._model_path_edit.setPlaceholderText("YOLO model (.pt or NCNN .param)")
         model_layout.addWidget(self._model_path_edit)
 
         self._browse_model_btn = QPushButton("...")
@@ -517,6 +517,11 @@ class CameraSettingsDialog(QDialog):
         self._draw_overlays_cb = QCheckBox("Bounding Boxes")
         self._draw_overlays_cb.setChecked(True)
         overlay_layout.addRow(self._draw_overlays_cb)
+
+        self._show_keypoints_cb = QCheckBox("Keypoints")
+        self._show_keypoints_cb.setChecked(True)
+        self._show_keypoints_cb.setToolTip("Draw pose keypoints as dots (requires a pose model)")
+        overlay_layout.addRow(self._show_keypoints_cb)
 
         self._draw_tracks_cb = QCheckBox("Motion Tracks")
         self._draw_tracks_cb.setChecked(True)
@@ -987,6 +992,7 @@ class CameraSettingsDialog(QDialog):
         self._min_area_spin.setValue(self._cv_settings.min_detection_area)
         self._frame_skip_spin.setValue(self._cv_settings.process_every_n_frames)
         self._draw_overlays_cb.setChecked(self._cv_settings.draw_overlays)
+        self._show_keypoints_cb.setChecked(self._cv_settings.show_keypoints)
 
         # Tracking settings
         self._tracking_enabled_cb.setChecked(self._cv_settings.tracking_enabled)
@@ -1018,6 +1024,7 @@ class CameraSettingsDialog(QDialog):
         self._min_area_spin.setEnabled(enabled)
         self._frame_skip_spin.setEnabled(enabled)
         self._draw_overlays_cb.setEnabled(enabled)
+        self._show_keypoints_cb.setEnabled(enabled)
         self._draw_tracks_cb.setEnabled(enabled)
         self._draw_contours_cb.setEnabled(enabled)
         if enabled:
@@ -1144,9 +1151,18 @@ class CameraSettingsDialog(QDialog):
             )
 
     def _browse_model(self):
-        """Browse for YOLO model file."""
+        """Browse for a YOLO model.
+
+        Accepts a PyTorch ``.pt`` file or an NCNN export. NCNN models live in a
+        ``*_ncnn_model/`` folder; since ``getOpenFileName`` can't select a
+        folder, the user navigates into it and picks ``model.ncnn.param`` —
+        CVProcessor normalizes that to the containing folder when loading.
+        """
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select YOLO Model", "", "PyTorch Models (*.pt);;All Files (*)"
+            self,
+            "Select YOLO Model",
+            "",
+            "YOLO models (*.pt *.param);;PyTorch (*.pt);;" "NCNN param (*.param);;All Files (*)",
         )
         if path:
             self._model_path_edit.setText(path)
@@ -1204,6 +1220,7 @@ class CameraSettingsDialog(QDialog):
         self._cv_settings.min_detection_area = self._min_area_spin.value()
         self._cv_settings.process_every_n_frames = self._frame_skip_spin.value()
         self._cv_settings.draw_overlays = self._draw_overlays_cb.isChecked()
+        self._cv_settings.show_keypoints = self._show_keypoints_cb.isChecked()
         self._cv_settings.tracking_enabled = self._tracking_enabled_cb.isChecked()
         self._cv_settings.max_disappeared = self._max_disappeared_spin.value()
 
