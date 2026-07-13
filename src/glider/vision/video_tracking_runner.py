@@ -23,7 +23,12 @@ from typing import Any, TextIO
 import cv2
 import numpy as np
 
-from glider.vision.cv_processor import CVProcessor, CVSettings, TrackedObject
+from glider.vision.cv_processor import (
+    CVProcessor,
+    CVSettings,
+    TrackedObject,
+    draw_keypoints_on,
+)
 from glider.vision.tracking_logger import TrackingDataLogger
 from glider.vision.video_recorder import open_video_writer
 from glider.vision.video_source import VideoFileSource
@@ -33,6 +38,12 @@ logger = logging.getLogger(__name__)
 
 ProgressCb = Callable[[int, int], None]
 CancelCb = Callable[[], bool]
+FrameCb = Callable[[np.ndarray, int], None]
+
+# Cap live-preview updates to roughly this rate so a fast batch pass can't flood
+# the GUI thread with per-frame paint events (the source is processed as fast as
+# inference allows, not at the video's real-time fps).
+_PREVIEW_FPS = 10.0
 
 
 @dataclass
@@ -69,6 +80,7 @@ class VideoTrackingRunner:
         self,
         progress_cb: ProgressCb | None = None,
         cancel_cb: CancelCb | None = None,
+        frame_cb: FrameCb | None = None,
     ) -> Path:
         """Process the video and write artifacts; return the output directory.
 
@@ -110,6 +122,9 @@ class VideoTrackingRunner:
         fps = source.fps
         total = source.frame_count
         width, height = source.resolution
+        # Throttle live-preview callbacks to ~_PREVIEW_FPS updates per second of
+        # *source timeline*; the pass itself runs as fast as inference allows.
+        preview_stride = max(1, round(fps / _PREVIEW_FPS)) if fps and fps > 0 else 1
         # Anchor the video timeline to the file's mtime so timestamps are
         # plausible; elapsed_ms then equals frame/fps*1000 regardless of base.
         base = cfg.source_path.stat().st_mtime
@@ -170,8 +185,15 @@ class VideoTrackingRunner:
                                 [n + 1, f"{elapsed_ms:.1f}", zone.id, zone.name, tid, "exit"]
                             )
                         prev_members[zone.id] = current
-                if annotated_writer is not None:
-                    annotated_writer.write(self._annotate(frame, tracked, cfg.zone_config))
+                # Build the annotated frame once, reused by the video writer and
+                # the live preview so what you watch matches what's saved.
+                preview_due = frame_cb is not None and (n % preview_stride == 0)
+                if annotated_writer is not None or preview_due:
+                    annotated = self._annotate(frame, tracked, cfg.zone_config)
+                    if annotated_writer is not None:
+                        annotated_writer.write(annotated)
+                    if preview_due:
+                        frame_cb(annotated, n)
                 if progress_cb is not None:
                     progress_cb(n + 1, total)
         finally:
@@ -187,13 +209,13 @@ class VideoTrackingRunner:
         self._write_metadata(fps, total, (width, height))
         return cfg.output_dir
 
-    @staticmethod
     def _annotate(
+        self,
         frame: np.ndarray,
         tracked: list[TrackedObject],
         zone_config: ZoneConfiguration | None,
     ) -> np.ndarray:
-        """Return a copy of *frame* with bbox/ID overlays and zones drawn."""
+        """Return a copy of *frame* with bbox/ID, pose keypoints, and zones drawn."""
         out = frame.copy()
         for obj in tracked:
             x, y, w, h = obj.bbox
@@ -206,6 +228,16 @@ class VideoTrackingRunner:
                 0.4,
                 (0, 255, 0),
                 1,
+            )
+        # Pose keypoint dots, using the same styling as the live overlay.
+        cvs = self._cfg.cv_settings
+        if cvs.show_keypoints:
+            draw_keypoints_on(
+                out,
+                tracked,
+                color=cvs.keypoint_color,
+                radius=cvs.keypoint_radius,
+                min_confidence=cvs.keypoint_min_confidence,
             )
         if zone_config and zone_config.zones:
             out = draw_zones(out, zone_config, alpha=0.3, show_labels=True)
