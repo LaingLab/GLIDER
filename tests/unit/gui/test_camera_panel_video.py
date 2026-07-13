@@ -49,6 +49,47 @@ def _make_panel(qtbot):
     return panel
 
 
+class _FakeThread:
+    """Stand-in QThread for exercising run-lifecycle wiring without a thread."""
+
+    def quit(self):
+        pass
+
+    def wait(self, ms):
+        return True
+
+
+def test_fps_field_shows_processing_rate_during_run(qtbot):
+    import time
+
+    panel = _make_panel(qtbot)
+    # Simulate an active batch run.
+    panel._run_thread = _FakeThread()
+    panel._run_worker = None
+    panel._run_frames_done = 0
+    panel._run_fps.reset(time.perf_counter())
+
+    panel._on_run_progress(30, 100)  # 30 frames processed so far
+    time.sleep(0.02)
+    panel._update_fps_display()
+
+    text = panel._fps_label.text()
+    assert "FPS" in text
+    assert text != "-- FPS"  # a real rate was written
+
+
+def test_fps_field_cleared_after_run(qtbot):
+    panel = _make_panel(qtbot)
+    panel._run_thread = _FakeThread()
+    panel._run_worker = None
+    panel._fps_label.setText("42.0 FPS")
+
+    panel._teardown_run_thread()
+
+    assert panel._fps_label.text() == "-- FPS"
+    assert panel._run_thread is None
+
+
 def test_video_mode_toggles_controls(qtbot):
     panel = _make_panel(qtbot)
 

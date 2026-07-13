@@ -7,6 +7,7 @@ and quick access to camera settings.
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -33,6 +34,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from glider.gui.panels.fps_meter import FpsMeter
 
 if TYPE_CHECKING:
     from glider.vision.calibration import CameraCalibration
@@ -592,6 +595,10 @@ class CameraPanel(QWidget):
         # can guard safely before any run has started.
         self._run_thread = None
         self._run_worker = None
+        # Live processing-rate readout for batch tracking runs (shown in the
+        # FPS field, which is otherwise idle when there is no live camera).
+        self._run_fps = FpsMeter()
+        self._run_frames_done = 0
 
     def _handle_frame_input(self, frame_data: FrameData) -> None:
         """Decide whether to process frame with CV or update UI immediately."""
@@ -820,6 +827,14 @@ class CameraPanel(QWidget):
 
     def _update_fps_display(self) -> None:
         """Update FPS display."""
+        # During a batch-tracking run show the processing rate (frames/sec) in
+        # the same field the live camera uses — it's otherwise idle here.
+        if getattr(self, "_run_thread", None) is not None:
+            fps = self._run_fps.update(self._run_frames_done, time.perf_counter())
+            if fps is not None:
+                self._fps_label.setText(f"{fps:.1f} FPS")
+            return
+
         if self._preview_active:
             if self._multi_camera_mode and self._multi_cam:
                 # Show primary camera FPS in status bar
@@ -1229,6 +1244,9 @@ class CameraPanel(QWidget):
         self._run_progress.setValue(0)
         self._cancel_btn.setEnabled(True)
         self._run_btn.setEnabled(False)
+        # Start the live processing-rate readout for this run.
+        self._run_frames_done = 0
+        self._run_fps.reset(time.perf_counter())
         self._run_thread.start()
 
     def _on_cancel_run(self) -> None:
@@ -1239,6 +1257,9 @@ class CameraPanel(QWidget):
 
     def _on_run_progress(self, done: int, total: int) -> None:
         self._run_progress.setValue(done)
+        # Latest cumulative frame count; the FPS timer samples this to show the
+        # live processing rate (see _update_fps_display).
+        self._run_frames_done = done
 
     def _on_run_preview(self, frame: np.ndarray, frame_index: int) -> None:
         """Show a batch-tracking frame (with overlays) live as it's processed.
@@ -1290,6 +1311,8 @@ class CameraPanel(QWidget):
             self._run_thread.wait(5000)
             self._run_thread = None
             self._run_worker = None
+            # Clear the processing-rate readout now the run is over.
+            self._fps_label.setText("-- FPS")
 
     def _cleanup_cv_thread(self) -> None:
         """Ensure CV thread is stopped on destruction."""
