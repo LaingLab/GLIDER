@@ -7,6 +7,7 @@ and quick access to camera settings.
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -34,6 +35,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.panels.fps_meter import FpsMeter
+
 if TYPE_CHECKING:
     from glider.vision.calibration import CameraCalibration
     from glider.vision.camera_manager import CameraManager
@@ -42,6 +45,7 @@ if TYPE_CHECKING:
     from glider.vision.multi_video_recorder import MultiVideoRecorder
     from glider.vision.tracking_logger import TrackingDataLogger
     from glider.vision.video_recorder import VideoRecorder
+    from glider.vision.video_tracking_runner import VideoTrackingConfig
     from glider.vision.zones import ZoneConfiguration
 
 logger = logging.getLogger(__name__)
@@ -438,7 +442,9 @@ class CameraPanel(QWidget):
 
         # --- Video transport (hidden until a file loads) ---
         self._video_controls = QWidget()
-        vctl = QHBoxLayout(self._video_controls)
+        # Two stacked rows so the strip stays within a narrow (Pi) screen width
+        # instead of pushing the preview off-screen: seek on top, actions below.
+        vctl = QVBoxLayout(self._video_controls)
         vctl.setContentsMargins(0, 0, 0, 0)
         self._seek_slider = QSlider(Qt.Orientation.Horizontal)
         self._seek_slider.setEnabled(False)
@@ -447,10 +453,29 @@ class CameraPanel(QWidget):
         self._draw_zones_btn.setEnabled(False)
         self._run_btn = QPushButton("Run tracking")
         self._run_btn.setEnabled(False)
-        vctl.addWidget(self._seek_slider, 1)
-        vctl.addWidget(self._frame_label)
-        vctl.addWidget(self._draw_zones_btn)
-        vctl.addWidget(self._run_btn)
+        # Writing the annotated MP4 is software-encoded (no HW H.264 on Pi 5)
+        # and costs ~40% of the per-frame budget. Let operators skip it when
+        # they only want the tracking CSV / live preview (e.g. gauging FPS).
+        self._save_annotated_cb = QCheckBox("Save annotated video")
+        self._save_annotated_cb.setChecked(True)
+        self._save_annotated_cb.setToolTip(
+            "Encode an annotated .mp4 during the run. Uncheck for faster "
+            "processing when you only need the tracking data / live preview."
+        )
+
+        seek_row = QHBoxLayout()
+        seek_row.addWidget(self._seek_slider, 1)
+        seek_row.addWidget(self._frame_label)
+        vctl.addLayout(seek_row)
+
+        # Checkbox on its own row; the two action buttons share a row below.
+        # Keeps every row narrow enough for a ~460px Pi screen.
+        vctl.addWidget(self._save_annotated_cb)
+
+        action_row = QHBoxLayout()
+        action_row.addWidget(self._draw_zones_btn, 1)
+        action_row.addWidget(self._run_btn, 1)
+        vctl.addLayout(action_row)
         self._video_controls.setVisible(False)
         layout.addWidget(self._video_controls)
 
@@ -465,8 +490,9 @@ class CameraPanel(QWidget):
         self._progress_container.setVisible(False)
         layout.addWidget(self._progress_container)
 
-        # Control buttons
-        control_layout = QHBoxLayout()
+        # Control buttons — stacked vertically so they stay full-width and don't
+        # widen the panel past a narrow (Pi touch) screen.
+        control_layout = QVBoxLayout()
 
         self._preview_btn = QPushButton("Start Preview")
         self._preview_btn.clicked.connect(self._toggle_preview)
@@ -592,6 +618,10 @@ class CameraPanel(QWidget):
         # can guard safely before any run has started.
         self._run_thread = None
         self._run_worker = None
+        # Live processing-rate readout for batch tracking runs (shown in the
+        # FPS field, which is otherwise idle when there is no live camera).
+        self._run_fps = FpsMeter()
+        self._run_frames_done = 0
 
     def _handle_frame_input(self, frame_data: FrameData) -> None:
         """Decide whether to process frame with CV or update UI immediately."""
@@ -820,6 +850,14 @@ class CameraPanel(QWidget):
 
     def _update_fps_display(self) -> None:
         """Update FPS display."""
+        # During a batch-tracking run show the processing rate (frames/sec) in
+        # the same field the live camera uses — it's otherwise idle here.
+        if getattr(self, "_run_thread", None) is not None:
+            fps = self._run_fps.update(self._run_frames_done, time.perf_counter())
+            if fps is not None:
+                self._fps_label.setText(f"{fps:.1f} FPS")
+            return
+
         if self._preview_active:
             if self._multi_camera_mode and self._multi_cam:
                 # Show primary camera FPS in status bar
@@ -1195,12 +1233,9 @@ class CameraPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _on_run_tracking(self) -> None:
-        from pathlib import Path
-
         from PyQt6.QtWidgets import QFileDialog
 
         from glider.gui.panels.video_tracking_worker import VideoTrackingWorker
-        from glider.vision.video_tracking_runner import VideoTrackingConfig
 
         if not self._video_source.is_loaded:
             return
@@ -1208,12 +1243,7 @@ class CameraPanel(QWidget):
         if not out_dir:
             return
 
-        cfg = VideoTrackingConfig(
-            source_path=Path(self._video_source.path),
-            output_dir=Path(out_dir),
-            zone_config=self._zone_config,
-            cv_settings=replace(self._cv_processor.settings),
-        )
+        cfg = self._build_tracking_config(out_dir)
         # cv_processor=None → the runner builds a fresh CVProcessor (clean IDs).
         self._run_thread = QThread()
         self._run_worker = VideoTrackingWorker(cfg)
@@ -1229,7 +1259,29 @@ class CameraPanel(QWidget):
         self._run_progress.setValue(0)
         self._cancel_btn.setEnabled(True)
         self._run_btn.setEnabled(False)
+        # Start the live processing-rate readout for this run.
+        self._run_frames_done = 0
+        self._run_fps.reset(time.perf_counter())
         self._run_thread.start()
+
+    def _build_tracking_config(self, out_dir: str) -> "VideoTrackingConfig":
+        """Assemble the batch-tracking config from the current UI state.
+
+        Extracted from _on_run_tracking so the annotated-video toggle (and the
+        rest of the config wiring) is unit-testable without spinning up the
+        worker thread or a file dialog.
+        """
+        from pathlib import Path
+
+        from glider.vision.video_tracking_runner import VideoTrackingConfig
+
+        return VideoTrackingConfig(
+            source_path=Path(self._video_source.path),
+            output_dir=Path(out_dir),
+            zone_config=self._zone_config,
+            cv_settings=replace(self._cv_processor.settings),
+            write_annotated=self._save_annotated_cb.isChecked(),
+        )
 
     def _on_cancel_run(self) -> None:
         """Cancel the in-flight tracking run (stable slot, connected once)."""
@@ -1239,6 +1291,9 @@ class CameraPanel(QWidget):
 
     def _on_run_progress(self, done: int, total: int) -> None:
         self._run_progress.setValue(done)
+        # Latest cumulative frame count; the FPS timer samples this to show the
+        # live processing rate (see _update_fps_display).
+        self._run_frames_done = done
 
     def _on_run_preview(self, frame: np.ndarray, frame_index: int) -> None:
         """Show a batch-tracking frame (with overlays) live as it's processed.
@@ -1290,6 +1345,8 @@ class CameraPanel(QWidget):
             self._run_thread.wait(5000)
             self._run_thread = None
             self._run_worker = None
+            # Clear the processing-rate readout now the run is over.
+            self._fps_label.setText("-- FPS")
 
     def _cleanup_cv_thread(self) -> None:
         """Ensure CV thread is stopped on destruction."""
