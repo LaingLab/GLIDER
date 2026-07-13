@@ -172,3 +172,29 @@ def test_failed_write_reverts_optimistic_switch_and_shows_status(qtbot):
     w.on_action_failed("d1", "set", "set failed: boom")
     assert not switch.isChecked() and switch.text() == "OFF"
     assert "boom" in w._status.text() and not w._status.isHidden()
+
+
+def test_failed_slider_write_reverts_to_last_confirmed_value(qtbot):
+    dev = _dev({"set": ActionValueSpec(KIND_WHOLE, 0, 255)}, device_type="PWMOutput")
+    w = _controls({"pwm": dev})
+    qtbot.addWidget(w)
+    roles = _widget(w, "pwm", "set")
+    spin, slider = roles["spin"], roles["slider"]
+
+    # A write of 100 is confirmed by the device.
+    w.on_action_succeeded("pwm", "set", 100)
+
+    # The operator moves to 200, but that write fails — the control must snap
+    # back to the confirmed 100 rather than imply a set that didn't happen.
+    spin.setValue(200)
+    slider.setValue(200)
+    w.on_action_failed("pwm", "set", "set failed: boom")
+    assert spin.value() == 100 and slider.value() == 100
+    assert "boom" in w._status.text()
+
+    # A later confirmed write moves the revert target forward.
+    w.on_action_succeeded("pwm", "set", 150)
+    spin.setValue(50)
+    slider.setValue(50)
+    w.on_action_failed("pwm", "set", "set failed: again")
+    assert spin.value() == 150 and slider.value() == 150

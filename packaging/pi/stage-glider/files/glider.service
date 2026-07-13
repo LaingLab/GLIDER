@@ -16,8 +16,6 @@ Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/glider/.Xauthority
 
 # --runner forces touch/kiosk layout regardless of screen size auto-detection.
-# --no-plugins suppresses third-party plugin loading on the locked-down image;
-# remove that flag if the lab wants plugin support.
 ExecStart=/opt/glider/venv/bin/glider --runner
 
 # Restart-on-failure rather than always — if GLIDER exits cleanly (user quit

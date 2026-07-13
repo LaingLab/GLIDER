@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
-from glider.hal.value_spec import KIND_SWITCH, KIND_WHOLE, ActionValueSpec
+from glider.hal.value_spec import KIND_SWITCH, KIND_WHOLE, ActionValueSpec, clamp_to_spec
 
 logger = logging.getLogger(__name__)
 
@@ -559,9 +559,18 @@ class PWMOutputDevice(BaseDevice):
             self._initialized = False
 
     async def set_value(self, value: int) -> None:
-        """Set the raw PWM value."""
-        max_value = 2**self._board.capabilities.pwm_resolution - 1
-        value = max(0, min(value, max_value))
+        """Set the raw PWM value.
+
+        Clamps to the device's declared range via ``clamp_to_spec`` so a
+        non-finite/non-numeric value is rejected (ValueError) rather than
+        silently becoming 0 — matching the declarative-device write path.
+        """
+        spec = self.value_spec("set")
+        if spec is not None:
+            value, _ = clamp_to_spec(value, spec)
+        else:
+            max_value = 2**self._board.capabilities.pwm_resolution - 1
+            value = max(0, min(int(value), max_value))
         pin = self._config.pins["output"]
         await self._board.write_analog(pin, value)
         self._value = value
@@ -650,8 +659,17 @@ class ServoDevice(BaseDevice):
         self._initialized = False
 
     async def set_angle(self, angle: int) -> None:
-        """Set the servo angle."""
-        angle = max(self._min_angle, min(angle, self._max_angle))
+        """Set the servo angle.
+
+        Clamps to the declared angle range via ``clamp_to_spec`` so a
+        non-finite/non-numeric angle is rejected rather than silently collapsing
+        to ``min_angle``.
+        """
+        spec = self.value_spec("set_angle")
+        if spec is not None:
+            angle, _ = clamp_to_spec(angle, spec)
+        else:
+            angle = max(self._min_angle, min(int(angle), self._max_angle))
         pin = self._config.pins["signal"]
         await self._board.write_servo(pin, angle)
         self._angle = angle
