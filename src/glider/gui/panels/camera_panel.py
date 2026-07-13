@@ -442,7 +442,9 @@ class CameraPanel(QWidget):
 
         # --- Video transport (hidden until a file loads) ---
         self._video_controls = QWidget()
-        vctl = QHBoxLayout(self._video_controls)
+        # Two stacked rows so the strip stays within a narrow (Pi) screen width
+        # instead of pushing the preview off-screen: seek on top, actions below.
+        vctl = QVBoxLayout(self._video_controls)
         vctl.setContentsMargins(0, 0, 0, 0)
         self._seek_slider = QSlider(Qt.Orientation.Horizontal)
         self._seek_slider.setEnabled(False)
@@ -460,11 +462,20 @@ class CameraPanel(QWidget):
             "Encode an annotated .mp4 during the run. Uncheck for faster "
             "processing when you only need the tracking data / live preview."
         )
-        vctl.addWidget(self._seek_slider, 1)
-        vctl.addWidget(self._frame_label)
+
+        seek_row = QHBoxLayout()
+        seek_row.addWidget(self._seek_slider, 1)
+        seek_row.addWidget(self._frame_label)
+        vctl.addLayout(seek_row)
+
+        # Checkbox on its own row; the two action buttons share a row below.
+        # Keeps every row narrow enough for a ~460px Pi screen.
         vctl.addWidget(self._save_annotated_cb)
-        vctl.addWidget(self._draw_zones_btn)
-        vctl.addWidget(self._run_btn)
+
+        action_row = QHBoxLayout()
+        action_row.addWidget(self._draw_zones_btn, 1)
+        action_row.addWidget(self._run_btn, 1)
+        vctl.addLayout(action_row)
         self._video_controls.setVisible(False)
         layout.addWidget(self._video_controls)
 
@@ -479,8 +490,9 @@ class CameraPanel(QWidget):
         self._progress_container.setVisible(False)
         layout.addWidget(self._progress_container)
 
-        # Control buttons
-        control_layout = QHBoxLayout()
+        # Control buttons — stacked vertically so they stay full-width and don't
+        # widen the panel past a narrow (Pi touch) screen.
+        control_layout = QVBoxLayout()
 
         self._preview_btn = QPushButton("Start Preview")
         self._preview_btn.clicked.connect(self._toggle_preview)
