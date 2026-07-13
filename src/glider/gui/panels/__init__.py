@@ -11,7 +11,6 @@ from glider.gui.panels.node_library_panel import (
     EditableDraggableButton,
     NodeLibraryPanel,
 )
-from glider.gui.panels.runner_panel import RunnerPanel
 
 __all__ = [
     "CameraPanel",
@@ -22,5 +21,4 @@ __all__ = [
     "HardwarePanel",
     "NodeEditorController",
     "NodeLibraryPanel",
-    "RunnerPanel",
 ]

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QSplitter, QVBoxLayout, QWidget
 
 from glider.gui.dashboard.layout import (
@@ -27,6 +27,8 @@ from glider.gui.dashboard.quadrant_host import QuadrantHost
 
 class DashboardView(QWidget):
     """2x2 grid of QuadrantHosts with picker/drag swap and persistence."""
+
+    layout_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -102,6 +104,16 @@ class DashboardView(QWidget):
         if self._banner is not None and hasattr(self._banner, "set_time"):
             self._banner.set_time(text)
 
+    def update_banner(self, state_name: str, recording: bool) -> None:
+        if self._banner is None:
+            return
+        shown = {self._hosts[q].current_panel_key for q in QUADRANTS}
+        live = state_name in ("RUNNING", "PAUSED")
+        visible = live and "run_control" not in shown
+        self._banner.setVisible(visible)
+        if visible and hasattr(self._banner, "set_state"):
+            self._banner.set_state(state_name, recording=recording)
+
     # --- layout application ---
 
     def _apply_layout(self, layout: DashboardLayout, persist: bool = True) -> None:
@@ -120,6 +132,7 @@ class DashboardView(QWidget):
         self._restore_splitter_sizes(layout)
         if persist:
             self._persist()
+        self.layout_changed.emit()
 
     def _on_panel_selected(self, quadrant_id: str, panel_key: str) -> None:
         self._apply_layout(apply_pick(self._layout, quadrant_id, panel_key))
