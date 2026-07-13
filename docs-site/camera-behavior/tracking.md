@@ -52,6 +52,31 @@ YOLO weights file (`.pt`). If you don't choose one, GLIDER uses the standard
 lightweight `yolov8n.pt` model, which Ultralytics downloads automatically the
 first time it's needed.
 
+### NCNN models (faster on Raspberry Pi)
+
+PyTorch inference on the Pi runs on the CPU and can starve the interface at
+higher resolutions. For much faster live inference on ARM, export your model to
+[NCNN](https://docs.ultralytics.com/integrations/ncnn/) and point GLIDER at it:
+
+```python
+from ultralytics import YOLO
+YOLO("your_model.pt").export(format="ncnn")   # -> your_model_ncnn_model/
+```
+
+The export produces a `*_ncnn_model/` folder containing `model.ncnn.param`,
+`model.ncnn.bin`, and `metadata.yaml`. In the model picker, browse into that
+folder and select **`model.ncnn.param`** — GLIDER loads the containing folder
+and reads the task (e.g. `pose`) from `metadata.yaml`. The Pi needs the `ncnn`
+Python package installed (`pip install ncnn`).
+
+!!! warning "Keep `metadata.yaml`"
+    Always select a folder produced by Ultralytics' export, not a bare
+    `model.ncnn.param`/`.bin` pair. Without `metadata.yaml`, Ultralytics can't
+    tell a pose model from a detector and will misread keypoints.
+
+For pose models, detected keypoints are drawn as dots on the preview when
+**Overlays** are enabled (toggle with the *Show keypoints* CV setting).
+
 ### Installing Ultralytics on demand
 
 Ultralytics is not bundled with GLIDER (it is licensed under AGPL-3.0). The first
