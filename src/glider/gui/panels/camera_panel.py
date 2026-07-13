@@ -1220,6 +1220,7 @@ class CameraPanel(QWidget):
         self._run_worker.moveToThread(self._run_thread)
         self._run_thread.started.connect(self._run_worker.run)
         self._run_worker.progress.connect(self._on_run_progress)
+        self._run_worker.preview.connect(self._on_run_preview)
         self._run_worker.finished.connect(self._on_run_finished)
         self._run_worker.failed.connect(self._on_run_failed)
 
@@ -1238,6 +1239,15 @@ class CameraPanel(QWidget):
 
     def _on_run_progress(self, done: int, total: int) -> None:
         self._run_progress.setValue(done)
+
+    def _on_run_preview(self, frame: np.ndarray, frame_index: int) -> None:
+        """Show a batch-tracking frame (with overlays) live as it's processed.
+
+        Emitted from the worker thread (throttled to ~10 fps by the runner), so
+        this is a QueuedConnection onto the main thread — safe to touch the
+        preview widget here.
+        """
+        self._preview.update_frame(frame)
 
     def _on_run_finished(self, output_dir: str) -> None:
         from PyQt6.QtWidgets import QMessageBox

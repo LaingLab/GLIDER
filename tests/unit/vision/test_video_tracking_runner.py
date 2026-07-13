@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from glider.vision.cv_processor import MotionResult, TrackedObject
@@ -33,6 +34,75 @@ class FakeCV:
             centroid=(self._n * 5 + 4, 24),
         )
         return [], [obj], MotionResult(False, 0.0)
+
+
+class FakeCVKeypoints:
+    """CVProcessor stand-in that reports one object with a keypoint at (40, 30)."""
+
+    is_initialized = True
+
+    def initialize(self):  # pragma: no cover - trivial
+        return True
+
+    def reset(self):  # pragma: no cover - trivial
+        pass
+
+    def process_frame(self, frame, timestamp):
+        obj = TrackedObject(
+            track_id=1,
+            class_name="mouse",
+            bbox=(8, 8, 6, 6),
+            confidence=0.9,
+            centroid=(11, 11),
+            keypoints=np.array([[40.0, 30.0, 0.9]], dtype=np.float32),
+        )
+        return [], [obj], MotionResult(False, 0.0)
+
+
+def test_frame_cb_receives_annotated_frames(synthetic_clip: Path, tmp_path: Path):
+    """A live-preview frame_cb is called per processed frame, even with no writer."""
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = VideoTrackingConfig(
+        source_path=synthetic_clip,
+        output_dir=out,
+        zone_config=None,
+        write_tracking=False,
+        write_zone_events=False,
+        write_annotated=False,  # preview must work independently of the writer
+    )
+    seen: list[tuple[int, np.ndarray]] = []
+    VideoTrackingRunner(cfg, cv_processor=FakeCV()).run(
+        frame_cb=lambda frame, n: seen.append((n, frame.copy()))
+    )
+
+    # synthetic_clip is 12 frames at 10 fps; preview throttle at 10 fps -> stride 1.
+    assert [n for n, _ in seen] == list(range(12))
+    # Each is an annotated BGR frame the size of the source (64x48).
+    assert seen[0][1].shape == (48, 64, 3)
+    # The bbox overlay was drawn (frame is no longer all-black).
+    assert seen[0][1].any()
+
+
+def test_frame_cb_frame_includes_keypoints(synthetic_clip: Path, tmp_path: Path):
+    """The preview/annotated frame carries pose keypoint dots."""
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = VideoTrackingConfig(
+        source_path=synthetic_clip,
+        output_dir=out,
+        zone_config=None,
+        write_tracking=False,
+        write_zone_events=False,
+        write_annotated=False,
+    )
+    seen: list[np.ndarray] = []
+    VideoTrackingRunner(cfg, cv_processor=FakeCVKeypoints()).run(
+        frame_cb=lambda frame, n: seen.append(frame.copy())
+    )
+
+    # Default keypoint color is BGR red; keypoint placed at x=40, y=30.
+    assert tuple(int(c) for c in seen[0][30, 40]) == (0, 0, 255)
 
 
 def test_run_writes_tracking_csv(synthetic_clip: Path, tmp_path: Path):

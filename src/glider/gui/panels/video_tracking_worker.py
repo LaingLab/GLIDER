@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 class VideoTrackingWorker(QObject):
     progress = pyqtSignal(int, int)  # done, total
+    preview = pyqtSignal(object, int)  # annotated_frame (np.ndarray BGR), frame_index
     finished = pyqtSignal(str)  # output_dir
     failed = pyqtSignal(str)  # message
 
@@ -38,6 +39,7 @@ class VideoTrackingWorker(QObject):
             out = self._runner.run(
                 progress_cb=lambda d, t: self.progress.emit(d, t),
                 cancel_cb=lambda: self._cancelled,
+                frame_cb=lambda frame, n: self.preview.emit(frame, n),
             )
             self.finished.emit(str(out))
         except Exception as exc:  # surfaced to the panel, never crashes the UI

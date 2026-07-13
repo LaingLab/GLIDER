@@ -93,6 +93,41 @@ def keypoints_to_array(kp_obj: Any) -> np.ndarray:
     return arr
 
 
+def draw_keypoints_on(
+    frame: np.ndarray,
+    tracked: list[Any],
+    *,
+    color: tuple[int, int, int],
+    radius: int,
+    min_confidence: float,
+) -> None:
+    """Draw each tracked object's pose keypoints as filled dots on ``frame``.
+
+    Shared by the live overlay (``CVProcessor.draw_overlays``) and the batch
+    video-tracking annotation so both render keypoints identically. Each
+    object's ``keypoints`` is an ``Nx2`` (x, y) or ``Nx3`` (x, y, confidence)
+    array (possibly with a leading instance dim). Keypoints with a confidence
+    column below ``min_confidence`` are skipped, as are ``(0, 0)`` placeholders
+    (which pose models emit for undetected keypoints) and out-of-frame points.
+    """
+    h, w = frame.shape[:2]
+    for obj in tracked:
+        kps = getattr(obj, "keypoints", None)
+        if kps is None:
+            continue
+        kps = np.asarray(kps)
+        if kps.ndim == 0 or kps.shape[-1] < 2:
+            continue
+        kps = kps.reshape(-1, kps.shape[-1])
+        for kp in kps:
+            if kps.shape[1] >= 3 and float(kp[2]) < min_confidence:
+                continue
+            x, y = int(round(float(kp[0]))), int(round(float(kp[1])))
+            if (x <= 0 and y <= 0) or not (0 <= x < w and 0 <= y < h):
+                continue
+            cv2.circle(frame, (x, y), radius, color, -1)
+
+
 def read_ncnn_metadata_task(ncnn_dir: str) -> str | None:
     """Read the ``task`` (e.g. ``"pose"``) from an NCNN export's metadata.yaml.
 
@@ -1039,28 +1074,13 @@ class CVProcessor:
         which pose models emit for undetected keypoints — are skipped so we
         don't paint a dot in the frame corner.
         """
-        color = self._settings.keypoint_color
-        radius = self._settings.keypoint_radius
-        min_conf = self._settings.keypoint_min_confidence
-        h, w = frame.shape[:2]
-
-        for obj in tracked:
-            if obj.keypoints is None:
-                continue
-            # Ultralytics emits keypoints as (1, K, 2|3) for a single instance;
-            # normalize any leading dims to a flat (K, C) list of points.
-            kps = np.asarray(obj.keypoints)
-            if kps.ndim == 0 or kps.shape[-1] < 2:
-                continue
-            kps = kps.reshape(-1, kps.shape[-1])
-            for kp in kps:
-                if kps.shape[1] >= 3 and float(kp[2]) < min_conf:
-                    continue
-                x, y = int(round(float(kp[0]))), int(round(float(kp[1])))
-                # Skip undetected-keypoint placeholders and out-of-frame points.
-                if (x <= 0 and y <= 0) or not (0 <= x < w and 0 <= y < h):
-                    continue
-                cv2.circle(frame, (x, y), radius, color, -1)
+        draw_keypoints_on(
+            frame,
+            tracked,
+            color=self._settings.keypoint_color,
+            radius=self._settings.keypoint_radius,
+            min_confidence=self._settings.keypoint_min_confidence,
+        )
 
     def _draw_vision_cones(self, frame: np.ndarray, tracked: list[TrackedObject]) -> None:
         """
