@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from glider.vision.multi_video_recorder import MultiVideoRecorder
     from glider.vision.tracking_logger import TrackingDataLogger
     from glider.vision.video_recorder import VideoRecorder
+    from glider.vision.video_tracking_runner import VideoTrackingConfig
     from glider.vision.zones import ZoneConfiguration
 
 logger = logging.getLogger(__name__)
@@ -450,8 +451,18 @@ class CameraPanel(QWidget):
         self._draw_zones_btn.setEnabled(False)
         self._run_btn = QPushButton("Run tracking")
         self._run_btn.setEnabled(False)
+        # Writing the annotated MP4 is software-encoded (no HW H.264 on Pi 5)
+        # and costs ~40% of the per-frame budget. Let operators skip it when
+        # they only want the tracking CSV / live preview (e.g. gauging FPS).
+        self._save_annotated_cb = QCheckBox("Save annotated video")
+        self._save_annotated_cb.setChecked(True)
+        self._save_annotated_cb.setToolTip(
+            "Encode an annotated .mp4 during the run. Uncheck for faster "
+            "processing when you only need the tracking data / live preview."
+        )
         vctl.addWidget(self._seek_slider, 1)
         vctl.addWidget(self._frame_label)
+        vctl.addWidget(self._save_annotated_cb)
         vctl.addWidget(self._draw_zones_btn)
         vctl.addWidget(self._run_btn)
         self._video_controls.setVisible(False)
@@ -1210,12 +1221,9 @@ class CameraPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _on_run_tracking(self) -> None:
-        from pathlib import Path
-
         from PyQt6.QtWidgets import QFileDialog
 
         from glider.gui.panels.video_tracking_worker import VideoTrackingWorker
-        from glider.vision.video_tracking_runner import VideoTrackingConfig
 
         if not self._video_source.is_loaded:
             return
@@ -1223,12 +1231,7 @@ class CameraPanel(QWidget):
         if not out_dir:
             return
 
-        cfg = VideoTrackingConfig(
-            source_path=Path(self._video_source.path),
-            output_dir=Path(out_dir),
-            zone_config=self._zone_config,
-            cv_settings=replace(self._cv_processor.settings),
-        )
+        cfg = self._build_tracking_config(out_dir)
         # cv_processor=None → the runner builds a fresh CVProcessor (clean IDs).
         self._run_thread = QThread()
         self._run_worker = VideoTrackingWorker(cfg)
@@ -1248,6 +1251,25 @@ class CameraPanel(QWidget):
         self._run_frames_done = 0
         self._run_fps.reset(time.perf_counter())
         self._run_thread.start()
+
+    def _build_tracking_config(self, out_dir: str) -> "VideoTrackingConfig":
+        """Assemble the batch-tracking config from the current UI state.
+
+        Extracted from _on_run_tracking so the annotated-video toggle (and the
+        rest of the config wiring) is unit-testable without spinning up the
+        worker thread or a file dialog.
+        """
+        from pathlib import Path
+
+        from glider.vision.video_tracking_runner import VideoTrackingConfig
+
+        return VideoTrackingConfig(
+            source_path=Path(self._video_source.path),
+            output_dir=Path(out_dir),
+            zone_config=self._zone_config,
+            cv_settings=replace(self._cv_processor.settings),
+            write_annotated=self._save_annotated_cb.isChecked(),
+        )
 
     def _on_cancel_run(self) -> None:
         """Cancel the in-flight tracking run (stable slot, connected once)."""

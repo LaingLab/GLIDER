@@ -90,6 +90,41 @@ def test_fps_field_cleared_after_run(qtbot):
     assert panel._run_thread is None
 
 
+def _load_dummy_source(panel, path):
+    """Give the panel a video source with a usable .path for config building."""
+    panel._video_source = type(
+        "S",
+        (),
+        {"path": str(path), "is_loaded": True, "release": lambda self: None},
+    )()
+
+
+def test_save_annotated_default_on(qtbot):
+    panel = _make_panel(qtbot)
+    assert panel._save_annotated_cb.isChecked() is True
+
+
+def test_annotated_toggle_off_disables_writer(qtbot, tmp_path):
+    panel = _make_panel(qtbot)
+    _load_dummy_source(panel, tmp_path / "clip.mp4")
+
+    panel._save_annotated_cb.setChecked(False)
+    cfg = panel._build_tracking_config(str(tmp_path))
+    assert cfg.write_annotated is False
+
+
+def test_annotated_toggle_on_enables_writer(qtbot, tmp_path):
+    panel = _make_panel(qtbot)
+    _load_dummy_source(panel, tmp_path / "clip.mp4")
+
+    panel._save_annotated_cb.setChecked(True)
+    cfg = panel._build_tracking_config(str(tmp_path))
+    assert cfg.write_annotated is True
+    # Sanity: the rest of the config is still populated.
+    assert str(cfg.source_path).endswith("clip.mp4")
+    assert str(cfg.output_dir) == str(tmp_path)
+
+
 def test_video_mode_toggles_controls(qtbot):
     panel = _make_panel(qtbot)
 
