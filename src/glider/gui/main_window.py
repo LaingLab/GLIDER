@@ -147,6 +147,18 @@ class MainWindow(QMainWindow):
         self._analysis_dock: QDockWidget | None = None
         self._analysis_panel = None  # AnalysisPanel, imported + created lazily
 
+        # Operator (non-Builder) view. Exactly ONE of these is built, chosen by
+        # startup mode: the 4-tab RunnerShell in runner mode (Pi touchscreen),
+        # the 2x2 DashboardView in desktop mode. The other stays None, so every
+        # site that touches a mode-specific widget must guard on it.
+        self._dashboard_view = None  # DashboardView (desktop mode)
+        self._run_control_panel = None  # RunControlPanel (dashboard)
+        self._device_states_panel = None  # DeviceStatesPanel (dashboard)
+        self._experiment_info_panel = None  # ExperimentInfoPanel (dashboard)
+        self._runner_shell = None  # RunnerShell (runner mode)
+        self._runner_panel = None  # RunnerPanel — Run tab (runner mode)
+        self._runner_setup_page = None  # RunnerSetupPage — Setup tab (runner mode)
+
         # Experiment dialog
         self._experiment_dialog: ExperimentDialog | None = None
 
@@ -210,7 +222,10 @@ class MainWindow(QMainWindow):
         self._create_runner_view()
 
         self._stack.addWidget(self._builder_view)  # Index 0
-        self._stack.addWidget(self._dashboard_view)  # Index 1
+        # Index 1 is the operator view: RunnerShell (runner) or DashboardView
+        # (desktop). _create_runner_view built exactly one of them.
+        self._operator_view = self._runner_shell or self._dashboard_view
+        self._stack.addWidget(self._operator_view)  # Index 1
 
         if self._view_manager.is_runner_mode:
             self._stack.setCurrentIndex(1)
@@ -248,10 +263,23 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter)
 
     def _create_runner_view(self) -> None:
-        """Create the runner (dashboard) view.
+        """Build the operator (non-Builder) view for the detected mode.
 
-        Builds the 2x2 quadrant DashboardView from five independent panels plus
-        a persistent run banner. The dashboard owns its OWN HardwarePanel
+        Runner mode (Pi touchscreen) gets the 4-tab RunnerShell — one full-width
+        page at a time, which fits the 480px screen. Desktop mode gets the 2x2
+        DashboardView. Exactly one is built, so the panels they share
+        (CameraPanel, RunnerDeviceControls, HardwarePanel) are never double-owned.
+        """
+        if self._view_manager.is_runner_mode:
+            self._create_runner_shell_view()
+        else:
+            self._create_dashboard_view()
+
+    def _create_dashboard_view(self) -> None:
+        """Create the desktop 2x2 quadrant DashboardView.
+
+        Builds the DashboardView from five independent panels plus a persistent
+        run banner. The dashboard owns its OWN HardwarePanel
         (``_dash_hardware_panel``) so the desktop docks can build a separate one
         without stealing it. The Camera panel is (for now) the single shared
         instance the desktop camera dock also re-hosts.
@@ -336,7 +364,7 @@ class MainWindow(QMainWindow):
         # Initial camera placement: park the single CameraPanel in the dashboard
         # slot. Desktop startup later re-hosts it into the camera dock (see
         # _setup_dock_widgets), which is correct because Builder is shown then.
-        self._move_camera_to_dashboard()
+        self._move_camera_to_operator_view()
 
         # Banner show/hide re-evaluates whenever the layout changes (e.g. an
         # operator benches/unbenches Run Control mid-run). Init the cached
@@ -367,6 +395,92 @@ class MainWindow(QMainWindow):
             self._dash_hardware_panel.show_board_settings_dialog
         )
 
+    def _create_runner_shell_view(self) -> None:
+        """Create the Pi 4-tab RunnerShell view (Setup / Run / Manual / Camera).
+
+        One full-width page at a time behind a bottom tab bar, so it fits the
+        480px touchscreen. Builds the shared HardwarePanel and CameraPanel that
+        the desktop docks re-host on a runner->desktop switch (no duplicates).
+        """
+        from glider.gui.panels.runner_panel import RunnerPanel
+        from glider.gui.runner.device_controls import RunnerDeviceControls
+        from glider.gui.runner.runner_setup_page import RunnerSetupPage
+        from glider.gui.runner.runner_shell import RunnerShell
+
+        # --- Run page ---
+        self._runner_panel = RunnerPanel(self._core, self._view_manager)
+        self._runner_panel.start_requested.connect(self._on_start_clicked)
+        self._runner_panel.stop_requested.connect(self._on_stop_clicked)
+
+        # --- Shared Hardware panel (desktop docks re-host this same instance) ---
+        self._hardware_panel = HardwarePanel(
+            hardware_manager=self._core.hardware_manager,
+            session_fn=lambda: self._core.session,
+            run_async_fn=self._run_async,
+            show_add_buttons=False,
+        )
+        self._hardware_panel.status_message.connect(self._show_status_message)
+
+        # --- Shared Camera panel (the single reparented CameraPanel) ---
+        self._camera_panel = self._build_camera_panel()
+
+        # --- Manual page ---
+        self._runner_device_controls = RunnerDeviceControls(
+            self._core.hardware_manager, session_fn=lambda: self._core.session
+        )
+        self._runner_device_controls.action_write_requested.connect(
+            lambda dev_id, action, value: self._run_async(self._drive_action(dev_id, action, value))
+        )
+        self._runner_device_controls.action_fire_requested.connect(
+            lambda dev_id, action: self._run_async(self._drive_action(dev_id, action))
+        )
+        self._runner_device_controls.read_requested.connect(
+            lambda dev_id, action: self._run_async(self._drive_read(dev_id, action))
+        )
+        self._runner_device_controls.function_run_requested.connect(
+            lambda start_node_id: self._run_async(self._run_function_async(start_node_id))
+        )
+        # Only one manual function runs at a time: the run briefly forces the
+        # engine's exec-propagation gate to RUNNING and restores it after, so
+        # two overlapping runs would corrupt each other's saved state.
+        self._manual_run_busy = False
+
+        # --- Setup page ---
+        self._runner_setup_page = RunnerSetupPage(
+            self._core, hardware_widget=self._hardware_panel
+        )
+
+        # --- Shell (owns the bottom tab bar + run banner) ---
+        self._runner_shell = RunnerShell(
+            self._core,
+            self._runner_setup_page,
+            self._runner_panel,
+            self._runner_device_controls,
+            self._camera_panel,
+        )
+        self._runner_panel.elapsed_updated.connect(self._runner_shell.set_banner_time)
+        self._runner_shell.stop_requested.connect(self._on_stop_clicked)
+
+        # Setup page file-action wiring (without these the buttons are dead).
+        self._runner_setup_page.new_requested.connect(self._on_new)
+        self._runner_setup_page.open_requested.connect(self._on_open)
+        self._runner_setup_page.save_requested.connect(self._on_save)
+        self._runner_setup_page.save_as_requested.connect(self._on_save_as)
+        self._runner_setup_page.help_requested.connect(self._on_help)
+        self._runner_setup_page.close_requested.connect(self.close)
+        self._runner_setup_page.switch_to_desktop_requested.connect(self._switch_to_desktop_mode)
+        self._runner_setup_page.board_settings_requested.connect(
+            self._hardware_panel.show_board_settings_dialog
+        )
+
+        # Hardware-change fan-out (owned here since the runner-mode Hardware
+        # Panel is constructed here; _setup_dock_widgets reuses this instance
+        # and must NOT re-wire these, to avoid double-firing).
+        self._hardware_panel.hardware_changed.connect(self._runner_panel.refresh_devices)
+        self._hardware_panel.hardware_changed.connect(self._runner_setup_page.refresh)
+        self._hardware_panel.hardware_changed.connect(self._runner_device_controls.refresh)
+        self._hardware_panel.refresh_tree()
+
     def _build_camera_panel(self) -> CameraPanel:
         """Construct and fully configure a CameraPanel.
 
@@ -394,10 +508,20 @@ class MainWindow(QMainWindow):
         camera_panel.set_zone_configuration(self._zone_config)
         return camera_panel
 
-    def _move_camera_to_dashboard(self) -> None:
-        """Host the single CameraPanel in the dashboard's camera slot."""
-        if self._camera_panel is not None and self._camera_slot is not None:
-            self._camera_slot.layout().addWidget(self._camera_panel)  # reparents
+    def _move_camera_to_operator_view(self) -> None:
+        """Host the single CameraPanel in the active operator view.
+
+        Desktop mode has a dashboard camera slot; runner mode has the
+        RunnerShell's Camera tab. Only one exists, so this targets whichever is
+        built — used on entry to the operator view (including after a
+        desktop->operator switch that had moved the camera into the dock).
+        """
+        if self._camera_panel is None:
+            return
+        if self._camera_slot is not None:
+            self._camera_slot.layout().addWidget(self._camera_panel)  # dashboard slot
+        elif self._runner_shell is not None:
+            self._runner_shell.rehost_camera()  # RunnerShell Camera tab
 
     def _move_camera_to_builder(self) -> None:
         """Host the single CameraPanel in the desktop Camera dock (if it exists).
@@ -1010,10 +1134,17 @@ class MainWindow(QMainWindow):
             lambda board_id, state: self._hardware_connection_changed.emit(board_id, state)
         )
 
-        self.session_changed.connect(lambda: self._run_control_panel.update_experiment_name())
+        # _runner_device_controls is built in both operator views (shared).
         self.session_changed.connect(self._runner_device_controls.refresh)
-        self.session_changed.connect(self._experiment_info_panel.refresh)
         self.session_changed.connect(self._surface_load_warnings)
+        # Dashboard-only panels (desktop mode).
+        if self._run_control_panel is not None:
+            self.session_changed.connect(lambda: self._run_control_panel.update_experiment_name())
+        if self._experiment_info_panel is not None:
+            self.session_changed.connect(self._experiment_info_panel.refresh)
+        # Runner-only Setup page (runner mode).
+        if self._runner_setup_page is not None:
+            self.session_changed.connect(self._runner_setup_page.refresh)
 
     @pyqtSlot(object)
     def _on_core_state_change(self, state) -> None:
@@ -1034,11 +1165,14 @@ class MainWindow(QMainWindow):
         self._last_session_state = state_name
         self.state_changed.emit(state_name)
 
-        # Update dashboard panels
-        self._dashboard_view.update_state(state_name)
-        recording = bool(self._core.data_recorder.is_recording)
-        self._last_dashboard_state = (state_name, recording)
-        self._dashboard_view.update_banner(state_name, recording)
+        # Update the operator view (whichever was built for this mode).
+        if self._dashboard_view is not None:
+            self._dashboard_view.update_state(state_name)
+            recording = bool(self._core.data_recorder.is_recording)
+            self._last_dashboard_state = (state_name, recording)
+            self._dashboard_view.update_banner(state_name, recording)
+        if self._runner_shell is not None:
+            self._runner_shell.update_state(state_name)
 
         # Update toolbar status indicator
         if self._toolbar_status is not None:
@@ -1275,11 +1409,11 @@ class MainWindow(QMainWindow):
     # --- View switching ---
 
     def _enter_dashboard(self) -> None:
-        """Show the dashboard (stack index 1) and refresh its hardware-derived
+        """Show the operator view (stack index 1) and refresh its hardware-derived
         panels, so a hardware change made via the desktop dock in Builder mode is
         reflected on entry. Shared by the menu toggle and programmatic switch."""
         self._stack.setCurrentIndex(1)
-        self._move_camera_to_dashboard()
+        self._move_camera_to_operator_view()
         if self._dash_hardware_panel:
             self._dash_hardware_panel.refresh_tree()
 

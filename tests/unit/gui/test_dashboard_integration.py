@@ -95,8 +95,8 @@ def test_switch_to_desktop_mode_keeps_camera_in_dock_on_repeat(qtbot, main_windo
     cam = window._camera_panel
     window._switch_to_desktop_mode()  # first: builds docks, camera -> dock
     assert _is_descendant(cam, window._camera_dock)
-    window.switch_to_runner()  # camera -> dashboard slot
-    assert _is_descendant(cam, window._dashboard_view)
+    window.switch_to_runner()  # camera -> operator view (RunnerShell Camera tab)
+    assert _is_descendant(cam, window._runner_shell)
     window._switch_to_desktop_mode()  # repeat: docks exist; camera must STILL move to dock
     assert _is_descendant(cam, window._camera_dock)
     assert window._camera_panel is cam  # still the single instance
