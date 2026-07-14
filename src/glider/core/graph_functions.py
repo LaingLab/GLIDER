@@ -51,8 +51,10 @@ _PARAM_MODES = {
 def find_run_param(start_id: str, flow) -> RunParam | None:
     """Trace exec connections from start_id for a parameterizable WaitForInput.
 
-    Returns the first revolution- or counts-mode WaitForInput so a touchscreen
-    prompt can set its target before running, or None if the function has none.
+    Returns the first parameterizable node so a touchscreen prompt can set its
+    target before running, or None if the function has none. Two kinds qualify:
+    a revolution-/counts-mode ``WaitForInput``, or a ``Loop`` whose
+    ``prompt_count`` flag is set (prompt for the iteration count).
     """
     by_id = {node.id: node for node in flow.nodes}
     visited: set[str] = set()
@@ -69,6 +71,9 @@ def find_run_param(start_id: str, flow) -> RunParam | None:
                 state_key, default, label = _PARAM_MODES[mode]
                 value = int((node.state or {}).get(state_key, default) or default)
                 return RunParam(node_id=current, state_key=state_key, value=value, label=label)
+        if node is not None and node.node_type == "Loop" and (node.state or {}).get("prompt_count"):
+            value = int((node.state or {}).get("count", 0) or 0)
+            return RunParam(node_id=current, state_key="count", value=value, label="Iterations")
         for conn in flow.connections:
             if conn.from_node == current and conn.connection_type != "data":
                 to_visit.append(conn.to_node)

@@ -689,6 +689,21 @@ class NodeEditorController(QObject):
             )
             props_layout.addRow("Delay:", delay_spin)
 
+            # When set, running the enclosing function from a Runner/dashboard
+            # button prompts the operator for the iteration count (one-shot);
+            # find_run_param picks this Loop up via the prompt_count flag.
+            prompt_check = QCheckBox("Prompt for iterations when run")
+            saved_prompt = False
+            if node_config and node_config.state:
+                saved_prompt = node_config.state.get("prompt_count", False)
+            prompt_check.setChecked(saved_prompt)
+            prompt_check.toggled.connect(
+                lambda checked, nid=node_id: self._on_node_property_changed(
+                    nid, "prompt_count", checked
+                )
+            )
+            props_layout.addRow(prompt_check)
+
         if node_type == "WaitForInput":
             bound = None
             if node_config and node_config.device_id:

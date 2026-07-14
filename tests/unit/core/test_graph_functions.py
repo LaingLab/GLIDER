@@ -147,6 +147,48 @@ def test_find_run_param_none_when_not_parameterizable():
     assert find_run_param("s1", session.flow) is None
 
 
+def test_find_run_param_loop_prompt_count():
+    session = _session_with_flow(
+        nodes=[
+            _node("s1", "StartFunction"),
+            _node("l1", "Loop", {"count": 500, "delay": 0.01, "prompt_count": True}),
+            _node("e1", "EndFunction"),
+        ],
+        connections=[_conn("s1", "l1"), _conn("l1", "e1")],
+    )
+    rp = find_run_param("s1", session.flow)
+    assert rp is not None
+    assert (rp.node_id, rp.state_key, rp.value, rp.label) == ("l1", "count", 500, "Iterations")
+
+
+def test_find_run_param_loop_ignored_when_prompt_off():
+    session = _session_with_flow(
+        nodes=[
+            _node("s1", "StartFunction"),
+            _node("l1", "Loop", {"count": 500, "delay": 0.01}),
+            _node("e1", "EndFunction"),
+        ],
+        connections=[_conn("s1", "l1"), _conn("l1", "e1")],
+    )
+    assert find_run_param("s1", session.flow) is None
+
+
+def test_find_run_param_loop_prompt_count_defaults_when_unset():
+    # prompt_count on but no explicit count -> default (0 = infinite loop's stored
+    # value); the prompt still offers it and the min clamp makes it finite.
+    session = _session_with_flow(
+        nodes=[
+            _node("s1", "StartFunction"),
+            _node("l1", "Loop", {"prompt_count": True}),
+            _node("e1", "EndFunction"),
+        ],
+        connections=[_conn("s1", "l1"), _conn("l1", "e1")],
+    )
+    rp = find_run_param("s1", session.flow)
+    assert rp is not None
+    assert (rp.node_id, rp.state_key, rp.label) == ("l1", "count", "Iterations")
+
+
 def test_build_picker_labels_uses_plain_name_when_unique():
     infos = [
         GraphFunctionInfo(start_node_id="s1", name="Purge", has_end=True),
