@@ -11,10 +11,29 @@ Usage:
     python -m glider --file path  # Open an experiment file
 """
 
+import sys
+
+# --- Windows torch / PyQt6 DLL load-order workaround ------------------------
+# On Windows, importing PyQt6 before torch poisons torch's native library load:
+# the first ``import torch`` afterwards fails with
+# "[WinError 1114] A dynamic link library (DLL) initialization routine failed.
+#  Error loading ...\\torch\\lib\\c10.dll". GLIDER only imports torch lazily
+# (via ultralytics, deep in the vision pipeline), which always runs *after* the
+# GUI has loaded Qt — so on Windows the YOLO/keypoint model silently fails to
+# load and tracking falls back to background subtraction ("contour tracking").
+# Importing torch here, before any PyQt6 import below, loads its DLLs while the
+# order is still clean. Best-effort: torch is an optional dependency (absent on
+# minimal / Raspberry Pi installs), so any failure is swallowed and the vision
+# layer degrades exactly as it does today.
+if sys.platform == "win32":
+    try:
+        import torch  # noqa: F401  (imported for its DLL-load side effect)
+    except Exception:
+        pass
+
 import argparse
 import asyncio
 import logging
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
