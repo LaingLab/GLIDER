@@ -89,9 +89,34 @@ class ViewManager:
                 self._screen_size = QSize(1920, 1080)
         return self._screen_size
 
+    @staticmethod
+    def _is_raspberry_pi() -> bool:
+        """Whether we are running on Raspberry Pi hardware.
+
+        Same probe as glider.vision.camera_manager._is_raspberry_pi (not
+        imported from there — that module drags in cv2). The path does not
+        exist on Windows/macOS, so this is False everywhere but a Pi.
+        """
+        try:
+            with open("/proc/device-tree/model") as f:
+                return "raspberry pi" in f.read().lower()
+        except OSError:
+            return False
+
     def _detect_mode(self) -> ViewMode:
-        """Auto-detect the appropriate mode based on screen size."""
+        """Auto-detect the appropriate mode based on platform and screen size."""
         if self._detected_mode is not None:
+            return self._detected_mode
+
+        # Pi hardware is the runner box: choose RUNNER regardless of what the
+        # primary screen reports. Screen-size probing misfires on the Pi (a
+        # phantom/headless HDMI output or compositor-reported size can look
+        # like a desktop monitor), which used to squeeze the 2x2 dashboard
+        # onto the 480px touchscreen. `--builder` still overrides, since a
+        # forced mode never reaches auto-detection.
+        if self._is_raspberry_pi():
+            self._detected_mode = ViewMode.RUNNER
+            logger.info("Auto-detected Runner mode (Raspberry Pi hardware)")
             return self._detected_mode
 
         width = self.screen_size.width()

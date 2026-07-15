@@ -61,6 +61,11 @@ class DashboardView(QWidget):
 
         if self._banner is not None:
             outer.addWidget(self._banner)
+            # Hidden until a run is live with Run Control benched (see
+            # update_banner) — mirrors RunnerShell, which hides its banner at
+            # construction. Without this the banner shows on first entry in
+            # IDLE, duplicating the Run Control timer and STOP button.
+            self._banner.hide()
 
         for q in QUADRANTS:
             host = QuadrantHost(q)

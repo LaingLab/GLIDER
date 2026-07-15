@@ -72,6 +72,38 @@ def test_update_state_fans_out_including_benched(qtbot):
         assert panels[key].last_state == "RUNNING"
 
 
+def test_banner_starts_hidden(qtbot):
+    from PyQt6.QtWidgets import QWidget
+
+    banner = QWidget()
+    v = DashboardView(_panels(), save_path=None, banner=banner)
+    qtbot.addWidget(v)
+    assert banner.isHidden()
+
+
+def test_banner_only_shows_live_with_run_control_benched(qtbot):
+    from PyQt6.QtWidgets import QWidget
+
+    banner = QWidget()
+    v = DashboardView(_panels(), save_path=None, banner=banner)
+    qtbot.addWidget(v)
+
+    # Live run but Run Control on screen: no banner.
+    v.update_banner("RUNNING", recording=False)
+    assert banner.isHidden()
+
+    # Bench Run Control (pick the benched panel into its quadrant): banner
+    # carries the timer/STOP while a run is live.
+    v.host("top_left").trigger_pick("manual_controls")
+    assert v.current_layout().benched_panel() == "run_control"
+    v.update_banner("RUNNING", recording=False)
+    assert banner.isVisibleTo(v)
+
+    # Back to idle: banner hides again.
+    v.update_banner("IDLE", recording=False)
+    assert banner.isHidden()
+
+
 def test_set_banner_time_forwards_to_banner(qtbot):
     from PyQt6.QtWidgets import QLabel
 

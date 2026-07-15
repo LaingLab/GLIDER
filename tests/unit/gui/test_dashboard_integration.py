@@ -59,6 +59,20 @@ def test_toggle_view_switches_both_ways(qtbot, main_window_factory):
     assert window._stack.currentIndex() == 0
 
 
+def test_camera_dock_hidden_while_dashboard_borrows_panel(qtbot, main_window_factory):
+    window = main_window_factory(desktop_mode=True)
+    window.show()
+    window.switch_to_builder()
+    assert not window._camera_dock.isHidden()
+
+    window.switch_to_runner()  # dashboard borrows the CameraPanel
+    assert window._camera_dock.isHidden()  # empty husk must not linger
+
+    window.switch_to_builder()  # panel returns to the dock
+    assert not window._camera_dock.isHidden()
+    assert window._camera_dock.widget() is window._camera_panel
+
+
 def test_entering_dashboard_refreshes_hardware(qtbot, main_window_factory):
     window = main_window_factory(desktop_mode=True)
     calls = []

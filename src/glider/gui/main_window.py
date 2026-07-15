@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
@@ -446,9 +446,7 @@ class MainWindow(QMainWindow):
         self._manual_run_busy = False
 
         # --- Setup page ---
-        self._runner_setup_page = RunnerSetupPage(
-            self._core, hardware_widget=self._hardware_panel
-        )
+        self._runner_setup_page = RunnerSetupPage(self._core, hardware_widget=self._hardware_panel)
 
         # --- Shell (owns the bottom tab bar + run banner) ---
         self._runner_shell = RunnerShell(
@@ -520,6 +518,13 @@ class MainWindow(QMainWindow):
             return
         if self._camera_slot is not None:
             self._camera_slot.layout().addWidget(self._camera_panel)  # dashboard slot
+            # The Builder camera dock is an empty husk while the dashboard
+            # hosts the panel — hide it so it doesn't linger as a blank strip
+            # (switch_to_builder shows it again when the panel returns).
+            dock = getattr(self, "_camera_dock", None)
+            if dock is not None:
+                dock.hide()
+                self._camera_dock_hidden_for_dashboard = True
         elif self._runner_shell is not None:
             self._runner_shell.rehost_camera()  # RunnerShell Camera tab
 
@@ -532,6 +537,12 @@ class MainWindow(QMainWindow):
         dock = getattr(self, "_camera_dock", None)
         if dock is not None and self._camera_panel is not None:
             dock.setWidget(self._camera_panel)  # reparents
+            # Re-show only if the dashboard hid it (not on the startup call,
+            # which runs before the dock is added to the window) — a dock left
+            # hidden here would swallow the camera entirely.
+            if getattr(self, "_camera_dock_hidden_for_dashboard", False):
+                self._camera_dock_hidden_for_dashboard = False
+                dock.show()
 
     def _setup_dock_widgets(self) -> None:
         """Set up dock widgets for desktop mode."""
@@ -697,6 +708,32 @@ class MainWindow(QMainWindow):
         # rebuild the tab bar during first layout, which would drop the flag.
         self._stretch_dock_tab_bars()
         QTimer.singleShot(0, self._stretch_dock_tab_bars)
+
+        # Any dock show/hide moves the QMainWindow::separator positions; on
+        # Windows the 1px column at the old separator position is sometimes
+        # left unrepainted when the central widget expands over it, leaving a
+        # ghost hairline across the operator view. Heal after every change.
+        for dock in (
+            self._node_library_dock,
+            self._properties_dock,
+            self._hardware_dock,
+            self._control_dock,
+            self._camera_dock,
+            self._files_dock,
+        ):
+            dock.visibilityChanged.connect(self._heal_stale_paint)
+
+    def _heal_stale_paint(self, *_args) -> None:
+        """Schedule a deferred full-window repaint after a dock/central relayout.
+
+        On Windows, relayouts that move QMainWindow dock separators (hiding
+        docks, switching the central stack, maximize/restore) can leave the
+        1px column at an old separator position unrepainted — it shows as a
+        stale #0f1419 hairline over whatever now occupies that area. Deferred
+        so it runs after the relayout settles; update() coalesces, so repeated
+        triggers cost one repaint.
+        """
+        QTimer.singleShot(0, self.update)
 
     def _stretch_dock_tab_bars(self) -> None:
         """Stretch tabbed-dock tabs to fill the full width of their tab bar.
@@ -1416,6 +1453,7 @@ class MainWindow(QMainWindow):
         self._move_camera_to_operator_view()
         if self._dash_hardware_panel:
             self._dash_hardware_panel.refresh_tree()
+        self._heal_stale_paint()
 
     def _toggle_view(self) -> None:
         if self._stack.currentIndex() == 0:
@@ -1426,6 +1464,14 @@ class MainWindow(QMainWindow):
     def switch_to_builder(self) -> None:
         self._stack.setCurrentIndex(0)
         self._move_camera_to_builder()
+        self._heal_stale_paint()
+
+    def changeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        # Maximize/restore reflows the dock areas the same way a dock
+        # show/hide does — same stale-hairline risk, same heal.
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._heal_stale_paint()
+        super().changeEvent(event)
 
     def switch_to_runner(self) -> None:
         self._enter_dashboard()
