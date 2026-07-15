@@ -5,7 +5,28 @@ GLIDER Hardware Latency Test
 Measures end-to-end latency through the GLIDER HAL:
   Pi-to-Pi:       Pi GPIO output -> Pi GPIO input loopback
   Arduino-to-Pi:  Arduino digital write -> Pi GPIO read
-  Pi-to-Arduino:  Pi GPIO write -> Arduino digital read
+  Pi-to-Arduino:  Pi GPIO write -> Arduino input-change report (ROUND TRIP)
+
+Measurement endpoints:
+  The clock starts immediately before the GLIDER HAL write call, so every
+  result includes Python/asyncio driver overhead. This is intentional: the
+  measured quantity is end-to-end HAL latency as experienced by a GLIDER
+  flow, not bare electrical pin-to-pin latency.
+
+  Pi-to-Pi / Arduino-to-Pi: the clock stops when a busy-poll on the Pi
+  input pin first observes the rising edge.
+
+  Pi-to-Arduino: the Pi cannot observe the Arduino's input register
+  directly, so the clock stops when the Arduino's input-change report
+  arrives back at the host and the HAL pin callback fires. This is a
+  ROUND TRIP (HAL command -> Pi pin -> Arduino input scan -> serial
+  report -> host callback) and is an upper bound on the one-way
+  Pi-to-Arduino latency. Measuring true one-way latency requires
+  external instrumentation (e.g. a logic analyzer across both pins).
+
+Each test runs a number of unrecorded warm-up trials first (--warmup) so
+lazy initialization does not contaminate the statistics. Trials that time
+out are excluded from the statistics and reported separately.
 
 Wiring required:
   Pi-to-Pi:       Pi GPIO19 (output) --> wire --> Pi GPIO26 (input)
@@ -23,9 +44,15 @@ Usage:
 import argparse
 import asyncio
 import csv
+import platform
 import statistics
+import sys
 import threading
 import time
+
+# Per-trial detection timeout. A trial that exceeds this is dropped from
+# the statistics and counted separately.
+DETECT_TIMEOUT_S = 1.0
 
 
 def find_arduino_port() -> str | None:
@@ -55,7 +82,16 @@ def find_arduino_port() -> str | None:
     return None
 
 
-async def run_pi_to_pi(num_trials, output_pin, input_pin):
+def _busy_wait_for_high(detector) -> bool:
+    """Busy-poll a gpiozero input until it reads high. Returns False on timeout."""
+    deadline = time.perf_counter_ns() + int(DETECT_TIMEOUT_S * 1e9)
+    while not detector.value:
+        if time.perf_counter_ns() > deadline:
+            return False
+    return True
+
+
+async def run_pi_to_pi(num_trials, output_pin, input_pin, warmup):
     """Pi GPIO output -> Pi GPIO input loopback."""
     from gpiozero import DigitalInputDevice
 
@@ -65,31 +101,38 @@ async def run_pi_to_pi(num_trials, output_pin, input_pin):
     board = PiGPIOBoard()
     detector = None
     results = []
+    timeouts = 0
 
     try:
         if not await board.connect():
             print("ERROR: Failed to connect PiGPIOBoard")
-            return results
+            return results, timeouts
 
         await board.set_pin_mode(output_pin, PinMode.OUTPUT, PinType.DIGITAL)
         detector = DigitalInputDevice(input_pin, pull_up=False)
         await board.write_digital(output_pin, False)
-        time.sleep(0.05)
+        await asyncio.sleep(0.05)
 
         print(f"Running {num_trials} Pi-to-Pi trials (GPIO{output_pin} -> GPIO{input_pin})...")
 
-        for i in range(num_trials):
+        for i in range(-warmup, num_trials):
             await board.write_digital(output_pin, False)
-            time.sleep(0.001)
+            await asyncio.sleep(0.001)
 
             start = time.perf_counter_ns()
             await board.write_digital(output_pin, True)
-            while not detector.value:
-                pass
+            detected = _busy_wait_for_high(detector)
             end = time.perf_counter_ns()
 
+            await asyncio.sleep(0.005)
+            if i < 0:  # warm-up trial, discard
+                continue
+            if not detected:
+                timeouts += 1
+                print(f"  WARNING: Trial {i + 1} timed out")
+                continue
+
             results.append((end - start) / 1_000_000)
-            time.sleep(0.005)
 
             if (i + 1) % 100 == 0:
                 print(f"  {i + 1}/{num_trials}")
@@ -103,10 +146,10 @@ async def run_pi_to_pi(num_trials, output_pin, input_pin):
             detector.close()
         await board.disconnect()
 
-    return results
+    return results, timeouts
 
 
-async def run_arduino_to_pi(num_trials, arduino_pin, pi_input_pin, arduino_board):
+async def run_arduino_to_pi(num_trials, arduino_pin, pi_input_pin, arduino_board, warmup):
     """Arduino digital output -> Pi GPIO input."""
     from gpiozero import DigitalInputDevice
 
@@ -114,30 +157,37 @@ async def run_arduino_to_pi(num_trials, arduino_pin, pi_input_pin, arduino_board
 
     detector = None
     results = []
+    timeouts = 0
 
     try:
         await arduino_board.set_pin_mode(arduino_pin, PinMode.OUTPUT, PinType.DIGITAL)
         detector = DigitalInputDevice(pi_input_pin, pull_up=False)
         await arduino_board.write_digital(arduino_pin, False)
-        time.sleep(0.05)
+        await asyncio.sleep(0.05)
 
         print(
             f"Running {num_trials} Arduino-to-Pi trials "
             f"(D{arduino_pin} -> GPIO{pi_input_pin})..."
         )
 
-        for i in range(num_trials):
+        for i in range(-warmup, num_trials):
             await arduino_board.write_digital(arduino_pin, False)
-            time.sleep(0.005)
+            await asyncio.sleep(0.005)
 
             start = time.perf_counter_ns()
             await arduino_board.write_digital(arduino_pin, True)
-            while not detector.value:
-                pass
+            detected = _busy_wait_for_high(detector)
             end = time.perf_counter_ns()
 
+            await asyncio.sleep(0.005)
+            if i < 0:  # warm-up trial, discard
+                continue
+            if not detected:
+                timeouts += 1
+                print(f"  WARNING: Trial {i + 1} timed out")
+                continue
+
             results.append((end - start) / 1_000_000)
-            time.sleep(0.005)
 
             if (i + 1) % 100 == 0:
                 print(f"  {i + 1}/{num_trials}")
@@ -150,16 +200,25 @@ async def run_arduino_to_pi(num_trials, arduino_pin, pi_input_pin, arduino_board
         if detector:
             detector.close()
 
-    return results
+    return results, timeouts
 
 
-async def run_pi_to_arduino(num_trials, pi_output_pin, arduino_input_pin, arduino_board):
-    """Pi GPIO output -> Arduino digital input (detected via telemetrix callback)."""
+async def run_pi_to_arduino(num_trials, pi_output_pin, arduino_input_pin, arduino_board, warmup):
+    """Pi GPIO output -> Arduino input-change report (round trip).
+
+    The HAL marshals the Arduino's input-change callback onto this event
+    loop, so the wait for detection must not block the loop: a plain
+    threading.Event.wait() on the loop thread would deadlock every trial,
+    because the callback could never be delivered while we block. The wait
+    therefore runs in an executor thread while the loop stays free to
+    dispatch callbacks.
+    """
     from glider.hal.base_board import PinMode, PinType
     from glider.hal.boards.pi_gpio_board import PiGPIOBoard
 
     pi_board = PiGPIOBoard()
     results = []
+    timeouts = 0
     detected = threading.Event()
 
     def on_change(pin, value):
@@ -169,33 +228,42 @@ async def run_pi_to_arduino(num_trials, pi_output_pin, arduino_input_pin, arduin
     try:
         if not await pi_board.connect():
             print("ERROR: Failed to connect PiGPIOBoard")
-            return results
+            return results, timeouts
 
+        loop = asyncio.get_running_loop()
         await pi_board.set_pin_mode(pi_output_pin, PinMode.OUTPUT, PinType.DIGITAL)
         await arduino_board.set_pin_mode(arduino_input_pin, PinMode.INPUT, PinType.DIGITAL)
         arduino_board.register_callback(arduino_input_pin, on_change)
         await pi_board.write_digital(pi_output_pin, False)
-        time.sleep(0.05)
+        await asyncio.sleep(0.05)
 
         print(
-            f"Running {num_trials} Pi-to-Arduino trials "
+            f"Running {num_trials} Pi-to-Arduino round-trip trials "
             f"(GPIO{pi_output_pin} -> D{arduino_input_pin})..."
         )
 
-        for i in range(num_trials):
+        for i in range(-warmup, num_trials):
             await pi_board.write_digital(pi_output_pin, False)
-            time.sleep(0.005)
+            # Let the falling-edge report and any straggling callbacks from
+            # the previous trial drain through the event loop before arming
+            # the detector, so a stale rising-edge report cannot end the
+            # next trial early.
+            await asyncio.sleep(0.02)
             detected.clear()
 
             start = time.perf_counter_ns()
             await pi_board.write_digital(pi_output_pin, True)
-            if not detected.wait(timeout=1.0):
-                print(f"  WARNING: Trial {i + 1} timed out")
-                continue
+            ok = await loop.run_in_executor(None, detected.wait, DETECT_TIMEOUT_S)
             end = time.perf_counter_ns()
 
+            if i < 0:  # warm-up trial, discard
+                continue
+            if not ok:
+                timeouts += 1
+                print(f"  WARNING: Trial {i + 1} timed out")
+                continue
+
             results.append((end - start) / 1_000_000)
-            time.sleep(0.005)
 
             if (i + 1) % 100 == 0:
                 print(f"  {i + 1}/{num_trials}")
@@ -211,13 +279,14 @@ async def run_pi_to_arduino(num_trials, pi_output_pin, arduino_input_pin, arduin
             pass
         await pi_board.disconnect()
 
-    return results
+    return results, timeouts
 
 
-def print_stats(results, label):
+def print_stats(results, label, timeouts=0):
     """Print summary statistics for latency measurements."""
     if not results:
-        print(f"\n=== {label} ===\n  No results.")
+        suffix = f" ({timeouts} trials timed out.)" if timeouts else ""
+        print(f"\n=== {label} ===\n  No results.{suffix}")
         return
 
     s = sorted(results)
@@ -225,6 +294,8 @@ def print_stats(results, label):
 
     print(f"\n=== {label} ===")
     print(f"  Trials:   {n}")
+    if timeouts:
+        print(f"  Timeouts: {timeouts} (excluded from statistics)")
     print(f"  Mean:     {statistics.mean(results):.3f} ms")
     if n > 1:
         print(f"  Std Dev:  {statistics.stdev(results):.3f} ms")
@@ -263,6 +334,9 @@ async def main():
         epilog=__doc__,
     )
     parser.add_argument("--trials", type=int, default=1000, help="Trials per test (default: 1000)")
+    parser.add_argument(
+        "--warmup", type=int, default=10, help="Unrecorded warm-up trials per test (default: 10)"
+    )
     parser.add_argument("--arduino-port", type=str, default=None, help="Arduino serial port")
     parser.add_argument(
         "--tests",
@@ -279,6 +353,10 @@ async def main():
     parser.add_argument("--pta-output-pin", type=int, default=6)
     parser.add_argument("--pta-input-pin", type=int, default=8)
     args = parser.parse_args()
+
+    # Record the measurement environment for reporting alongside results.
+    print(f"Python {sys.version.split()[0]} on {platform.platform()}")
+    print(f"Trials: {args.trials}, warm-up: {args.warmup}\n")
 
     tests = set(args.tests) if args.tests else {"pi-to-pi", "arduino-to-pi", "pi-to-arduino"}
     results = {}
@@ -301,23 +379,25 @@ async def main():
 
     try:
         if "pi-to-pi" in tests:
-            r = await run_pi_to_pi(args.trials, args.pi_output_pin, args.pi_input_pin)
+            r, t = await run_pi_to_pi(
+                args.trials, args.pi_output_pin, args.pi_input_pin, args.warmup
+            )
             results["pi_to_pi_ms"] = r
-            print_stats(r, "Pi-to-Pi Latency")
+            print_stats(r, "Pi-to-Pi Latency", t)
 
         if "arduino-to-pi" in tests and arduino_board:
-            r = await run_arduino_to_pi(
-                args.trials, args.arduino_output_pin, args.atp_input_pin, arduino_board
+            r, t = await run_arduino_to_pi(
+                args.trials, args.arduino_output_pin, args.atp_input_pin, arduino_board, args.warmup
             )
             results["arduino_to_pi_ms"] = r
-            print_stats(r, "Arduino-to-Pi Latency")
+            print_stats(r, "Arduino-to-Pi Latency", t)
 
         if "pi-to-arduino" in tests and arduino_board:
-            r = await run_pi_to_arduino(
-                args.trials, args.pta_output_pin, args.pta_input_pin, arduino_board
+            r, t = await run_pi_to_arduino(
+                args.trials, args.pta_output_pin, args.pta_input_pin, arduino_board, args.warmup
             )
-            results["pi_to_arduino_ms"] = r
-            print_stats(r, "Pi-to-Arduino Latency")
+            results["pi_to_arduino_roundtrip_ms"] = r
+            print_stats(r, "Pi-to-Arduino Round-Trip Latency (command -> host notification)", t)
 
     finally:
         if arduino_board:
