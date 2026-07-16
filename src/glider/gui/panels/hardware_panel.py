@@ -410,6 +410,7 @@ class HardwarePanel(QWidget):
                 "StepperA4988",
                 ["step", "dir", "enable", "ms1", "ms2", "ms3"],
             ),
+            "Load Cell (HX711)": ("HX711", ["dout", "sck"]),
             "ADS1115 (I2C ADC)": ("ADS1115", []),
             "Generic I2C Device": ("GenericI2C", []),
             "BLE Device (write characteristic)": ("BLEWrite", []),
@@ -455,6 +456,7 @@ class HardwarePanel(QWidget):
         i2c_settings: dict[str, QWidget] = {}
         ble_settings: dict[str, QWidget] = {}
         stepper_settings: dict[str, QWidget] = {}
+        hx711_settings: dict[str, QWidget] = {}
         schema_widgets: dict[str, tuple] = {}  # plugin devices: key -> (widget, type)
 
         def update_pin_inputs():
@@ -465,6 +467,7 @@ class HardwarePanel(QWidget):
             i2c_settings.clear()
             ble_settings.clear()
             stepper_settings.clear()
+            hx711_settings.clear()
             schema_widgets.clear()
 
             ui_type = type_combo.currentText()
@@ -475,6 +478,7 @@ class HardwarePanel(QWidget):
             is_generic_i2c = device_type == "GenericI2C"
             is_ble = device_type == "BLEWrite"
             is_stepper = device_type == "StepperA4988"
+            is_hx711 = device_type == "HX711"
 
             # Plugin devices may declare a SETTINGS_SCHEMA for an auto-rendered form.
             device_class = DEVICE_REGISTRY.get(device_type)
@@ -703,6 +707,41 @@ class HardwarePanel(QWidget):
                     note.setWordWrap(True)
                     pin_layout.addRow(note)
 
+                if is_hx711:
+                    gain_combo = QComboBox()
+                    gain_combo.addItems(["128 (channel A)", "64 (channel A)", "32 (channel B)"])
+                    gain_combo.setToolTip("HX711 input channel and gain")
+                    hx711_settings["gain"] = gain_combo
+                    pin_layout.addRow("Gain:", gain_combo)
+
+                    scale_spin = QDoubleSpinBox()
+                    scale_spin.setDecimals(6)
+                    scale_spin.setRange(-1e9, 1e9)
+                    scale_spin.setValue(1.0)
+                    scale_spin.setToolTip(
+                        "Raw counts per unit (e.g. counts/gram); negative flips sign. "
+                        "Must be non-zero."
+                    )
+                    hx711_settings["scale"] = scale_spin
+                    pin_layout.addRow("Scale:", scale_spin)
+
+                    offset_spin = QDoubleSpinBox()
+                    offset_spin.setDecimals(1)
+                    offset_spin.setRange(-8388608.0, 8388607.0)
+                    offset_spin.setValue(0.0)
+                    offset_spin.setToolTip("Raw counts at zero load (set by the 'tare' action)")
+                    hx711_settings["offset"] = offset_spin
+                    pin_layout.addRow("Offset:", offset_spin)
+
+                    note = QLabel(
+                        "Read weight from the flow with a Device Read node. "
+                        "Calibrate: run action 'tare' with no load, then set "
+                        "Scale = raw counts ÷ known mass."
+                    )
+                    note.setProperty("textRole", "muted")
+                    note.setWordWrap(True)
+                    pin_layout.addRow(note)
+
         type_combo.currentTextChanged.connect(lambda: update_pin_inputs())
         update_pin_inputs()
 
@@ -760,6 +799,10 @@ class HardwarePanel(QWidget):
                 settings["steptype"] = stepper_settings["steptype"].currentText()
                 settings["step_delay"] = stepper_settings["step_delay"].value()
                 settings["auto_disable"] = stepper_settings["auto_disable"].isChecked()
+            elif device_type == "HX711" and hx711_settings:
+                settings["gain"] = int(hx711_settings["gain"].currentText().split()[0])
+                settings["scale"] = hx711_settings["scale"].value()
+                settings["offset"] = hx711_settings["offset"].value()
             elif schema_widgets:
                 # Plugin device: collect its schema-rendered settings.
                 for key, (widget, ftype) in schema_widgets.items():
@@ -904,6 +947,7 @@ class HardwarePanel(QWidget):
         is_ads1115 = device_type == "ADS1115"
         is_generic_i2c = device_type == "GenericI2C"
         is_stepper = device_type == "StepperA4988"
+        is_hx711 = device_type == "HX711"
         is_settings_device = is_ads1115 or is_generic_i2c
 
         dialog = QDialog(self)
@@ -927,6 +971,7 @@ class HardwarePanel(QWidget):
         ads1115_settings: dict[str, QSpinBox | QComboBox] = {}
         i2c_settings: dict[str, QWidget] = {}
         stepper_settings: dict[str, QWidget] = {}
+        hx711_settings: dict[str, QWidget] = {}
 
         if is_ads1115:
             addr_spin = QSpinBox()
@@ -1060,6 +1105,45 @@ class HardwarePanel(QWidget):
                 stepper_settings["auto_disable"] = hold_check
                 layout.addRow(hold_check)
 
+            if is_hx711:
+                gain_combo = QComboBox()
+                gain_options = ["128 (channel A)", "64 (channel A)", "32 (channel B)"]
+                gain_combo.addItems(gain_options)
+                gain_combo.setToolTip("HX711 input channel and gain")
+                gain_values = [128, 64, 32]
+                current_gain = int(current_settings.get("gain", 128))
+                if current_gain in gain_values:
+                    gain_combo.setCurrentIndex(gain_values.index(current_gain))
+                hx711_settings["gain"] = gain_combo
+                layout.addRow("Gain:", gain_combo)
+
+                scale_spin = QDoubleSpinBox()
+                scale_spin.setDecimals(6)
+                scale_spin.setRange(-1e9, 1e9)
+                scale_spin.setValue(float(current_settings.get("scale", 1.0)))
+                scale_spin.setToolTip(
+                    "Raw counts per unit (e.g. counts/gram); negative flips sign. "
+                    "Must be non-zero."
+                )
+                hx711_settings["scale"] = scale_spin
+                layout.addRow("Scale:", scale_spin)
+
+                offset_spin = QDoubleSpinBox()
+                offset_spin.setDecimals(1)
+                offset_spin.setRange(-8388608.0, 8388607.0)
+                offset_spin.setValue(float(current_settings.get("offset", 0.0)))
+                offset_spin.setToolTip("Raw counts at zero load (set by the 'tare' action)")
+                hx711_settings["offset"] = offset_spin
+                layout.addRow("Offset:", offset_spin)
+
+                note = QLabel(
+                    "Calibrate: run action 'tare' with no load, then set "
+                    "Scale = raw counts ÷ known mass."
+                )
+                note.setProperty("textRole", "muted")
+                note.setWordWrap(True)
+                layout.addRow(note)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -1093,8 +1177,23 @@ class HardwarePanel(QWidget):
                     "step_delay": stepper_settings["step_delay"].value(),
                     "auto_disable": stepper_settings["auto_disable"].isChecked(),
                 }
+            elif is_hx711 and hx711_settings:
+                new_settings = {
+                    "gain": int(hx711_settings["gain"].currentText().split()[0]),
+                    "scale": hx711_settings["scale"].value(),
+                    "offset": hx711_settings["offset"].value(),
+                }
 
             try:
+                # The add dialog validates by constructing the device (whose
+                # __init__ raises), but this path only mutates settings, so
+                # nothing would reject a value the device can't be built from.
+                # A zero scale saves fine and then makes the .glider file fail
+                # to load. Enforce the device's invariant here; the except
+                # below surfaces it the same way the add dialog does.
+                if is_hx711 and new_settings and new_settings["scale"] == 0:
+                    raise ValueError("Scale must be non-zero.")
+
                 device.name = new_name
 
                 if is_settings_device and new_settings:
@@ -1117,7 +1216,7 @@ class HardwarePanel(QWidget):
                     # BaseDevice.config is a guaranteed property, so no hasattr
                     # guard is needed (the is_settings_device path above uses
                     # hasattr because it may touch _config on legacy devices).
-                    if is_stepper and new_settings:
+                    if (is_stepper or is_hx711) and new_settings:
                         device.config.settings.update(new_settings)
 
                 if session:
