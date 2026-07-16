@@ -657,6 +657,14 @@ class GliderCore:
         if self._session is None:
             raise RuntimeError("No session to save")
 
+        # Runtime-mutated device settings (e.g. an HX711 tare offset) live on
+        # the device instances; the session serializes its own DeviceConfig
+        # copies. Sync any drift before saving so those mutations persist.
+        for device_id, device in self._hardware_manager.devices.items():
+            session_config = self._session.get_device(device_id)
+            if session_config is not None and session_config.settings != device.config.settings:
+                self._session.update_device(device_id, settings=dict(device.config.settings))
+
         return self._session.save(file_path)
 
     async def setup_hardware(self) -> bool:

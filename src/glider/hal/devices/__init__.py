@@ -19,12 +19,14 @@ from glider.hal.base_device import (
     ServoDevice,
     create_device_from_dict,
 )
+from glider.hal.devices.hx711 import HX711Device
 from glider.hal.devices.stepper_a4988 import StepperA4988Device
 
 # Built-in devices that live in this package (rather than base_device.py)
 # register here; this module is imported by glider.hal.__init__ so the
 # registry is populated whenever any glider.hal.* module is imported.
 DEVICE_REGISTRY["StepperA4988"] = StepperA4988Device
+DEVICE_REGISTRY["HX711"] = HX711Device
 
 __all__ = [
     "BaseDevice",
@@ -38,6 +40,7 @@ __all__ = [
     "ADS1115Device",
     "GenericI2CDevice",
     "StepperA4988Device",
+    "HX711Device",
     "DEVICE_REGISTRY",
     "create_device_from_dict",
 ]
