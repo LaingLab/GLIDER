@@ -64,6 +64,12 @@ class BaseDevice(ABC):
         # interleave. Held across the whole action body in execute_action.
         # Emergency stop is intentionally exempt and does not acquire it.
         self._command_lock = asyncio.Lock()
+        # Fired when an action mutates config.settings at runtime (e.g. an
+        # HX711 tare writing its offset). HardwareManager wires this so the
+        # session can adopt the change and mark itself dirty; without it the
+        # value lives only on the device, the close prompt never appears, and
+        # the calibration is lost on exit.
+        self._settings_changed_cb: Callable[[BaseDevice], None] | None = None
 
     @property
     def id(self) -> str:
@@ -169,6 +175,44 @@ class BaseDevice(ABC):
     async def disable(self) -> None:
         """Disable the device (stops responding to commands)."""
         self._enabled = False
+
+    def set_settings_changed_callback(
+        self, callback: Callable[["BaseDevice"], None] | None
+    ) -> None:
+        """Register the listener notified when an action mutates settings."""
+        self._settings_changed_cb = callback
+
+    def _notify_settings_changed(self) -> None:
+        """
+        Announce that this device mutated its own ``config.settings``.
+
+        Call from any action that writes a setting at runtime. Errors in the
+        listener are logged and swallowed — a bookkeeping failure must not
+        break the hardware action that triggered it.
+        """
+        if self._settings_changed_cb is None:
+            return
+        try:
+            self._settings_changed_cb(self)
+        except Exception:
+            logger.exception("Error in settings-changed callback for device %s", self._name)
+
+    def apply_settings(self, settings: dict[str, Any]) -> None:
+        """
+        Adopt edited settings on a live (already constructed) device.
+
+        The edit-device dialog calls this instead of mutating
+        ``config.settings`` directly. Devices that cache setting values at
+        construction time must override it to refresh those caches, or an edit
+        will update the saved file while the running device keeps using its
+        old values. Overrides should validate before committing so a rejected
+        edit leaves the device unchanged rather than half-applied.
+
+        Args:
+            settings: The changed keys. Merged over the existing settings, so
+                a partial dict is fine.
+        """
+        self._config.settings.update(settings)
 
     def validate_config(self) -> list[str]:
         """
