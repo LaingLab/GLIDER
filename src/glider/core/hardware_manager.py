@@ -67,7 +67,41 @@ class HardwareManager:
         self._pin_managers: dict[str, PinManager] = {}
         self._error_callbacks: list[Callable[[str, Exception], None]] = []
         self._connection_callbacks: list[Callable[[str, BoardConnectionState], None]] = []
+        # Notified with (device_id, device) when a device mutates its own
+        # settings at runtime. Attached to every device this manager tracks.
+        self._device_settings_callback: Callable[[str, BaseDevice], None] | None = None
         self._initialized = False
+
+    def register_device_settings_callback(
+        self, callback: Callable[[str, "BaseDevice"], None] | None
+    ) -> None:
+        """
+        Listen for runtime settings mutations on any tracked device.
+
+        GliderCore uses this to fold a change (e.g. an HX711 tare offset) back
+        into the session so it persists and the unsaved-changes prompt fires.
+        Applies to devices tracked after this call as well as existing ones.
+        """
+        self._device_settings_callback = callback
+        for device_id, device in self._devices.items():
+            self._wire_device_settings(device_id, device)
+
+    def _wire_device_settings(self, device_id: str, device: "BaseDevice") -> None:
+        """Point a device's settings-changed hook at our listener."""
+        if self._device_settings_callback is None:
+            device.set_settings_changed_callback(None)
+            return
+        callback = self._device_settings_callback
+        device.set_settings_changed_callback(lambda dev, _id=device_id: callback(_id, dev))
+
+    def _track_device(self, device_id: str, device: "BaseDevice") -> None:
+        """Register a device and wire its settings-changed hook.
+
+        The single place devices enter ``_devices``, so no creation path can
+        forget the hook.
+        """
+        self._devices[device_id] = device
+        self._wire_device_settings(device_id, device)
 
     @classmethod
     def register_driver(cls, name: str, driver_class: type[BaseBoard]) -> None:
@@ -292,7 +326,14 @@ class HardwareManager:
             "board_id": config.board_id,
             "config": {
                 "pins": config.pins,
-                "settings": config.settings,
+                # A COPY: from_dict stores this reference, so passing the
+                # session's own dict would make the device and the session
+                # share one object across the serialization boundary. The
+                # save-time sync then compares that dict to itself, never
+                # fires, and never marks the session dirty — so a runtime
+                # tare would leave no unsaved-changes prompt and be lost on
+                # exit.
+                "settings": dict(config.settings),
             },
         }
 
@@ -311,7 +352,7 @@ class HardwareManager:
             except PinConflictError as e:
                 raise HardwareError(str(e)) from e
 
-        self._devices[config.id] = device
+        self._track_device(config.id, device)
         logger.info(f"Created device: {device.name} (ID: {config.id})")
         return device
 
@@ -476,7 +517,7 @@ class HardwareManager:
             except PinConflictError as e:
                 raise HardwareError(str(e)) from e
 
-        self._devices[device_id] = device
+        self._track_device(device_id, device)
         logger.info(f"Added device: {device_id} (type: {device_type}, pin: {pin})")
 
     def add_device_multi_pin(
@@ -529,7 +570,7 @@ class HardwareManager:
             except PinConflictError as e:
                 raise HardwareError(str(e)) from e
 
-        self._devices[device_id] = device
+        self._track_device(device_id, device)
         if pins:
             detail = ", ".join(f"{k}={v}" for k, v in pins.items())
             logger.info(f"Added device: {device_id} (type: {device_type}, pins: {detail})")

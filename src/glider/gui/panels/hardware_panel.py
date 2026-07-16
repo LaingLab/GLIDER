@@ -936,8 +936,18 @@ class HardwarePanel(QWidget):
 
         current_name = device_config.name if device_config else getattr(device, "name", device_id)
         current_pins = device_config.pins if device_config else {}
-        current_settings = device_config.settings if device_config else {}
         device_type = device_config.device_type if device_config else type(device).__name__
+
+        # Seed from the LIVE device, not the session's copy. The two are
+        # separate dicts (add_device_multi_pin re-packs the settings as
+        # kwargs), and runtime mutations land only on the device — an HX711
+        # 'tare' writes its offset there. Seeding from the session would show
+        # a stale offset and then overwrite the real one on OK, silently
+        # discarding the calibration.
+        live_settings = getattr(getattr(device, "config", None), "settings", None)
+        if live_settings is None:
+            live_settings = device_config.settings if device_config else {}
+        current_settings = dict(live_settings)
 
         if not current_pins and hasattr(device, "pin"):
             current_pins = {"output": device.pin} if hasattr(device, "pin") else {}
@@ -1185,20 +1195,16 @@ class HardwarePanel(QWidget):
                 }
 
             try:
-                # The add dialog validates by constructing the device (whose
-                # __init__ raises), but this path only mutates settings, so
-                # nothing would reject a value the device can't be built from.
-                # A zero scale saves fine and then makes the .glider file fail
-                # to load. Enforce the device's invariant here; the except
-                # below surfaces it the same way the add dialog does.
-                if is_hx711 and new_settings and new_settings["scale"] == 0:
-                    raise ValueError("Scale must be non-zero.")
-
                 device.name = new_name
 
                 if is_settings_device and new_settings:
-                    if hasattr(device, "config") and hasattr(device.config, "settings"):
-                        device.config.settings.update(new_settings)
+                    # apply_settings so a device that caches setting values can
+                    # refresh them and reject invalid ones; the base
+                    # implementation is the plain config.settings update this
+                    # used to do. A raise here reaches the except below and is
+                    # reported the same way the add dialog reports a bad value.
+                    if hasattr(device, "apply_settings"):
+                        device.apply_settings(new_settings)
                     elif hasattr(device, "_config") and hasattr(device._config, "settings"):
                         device._config.settings.update(new_settings)
                 else:
@@ -1213,11 +1219,15 @@ class HardwarePanel(QWidget):
                     if hasattr(device, "_pins"):
                         device._pins = list(new_pins.values())
 
-                    # BaseDevice.config is a guaranteed property, so no hasattr
-                    # guard is needed (the is_settings_device path above uses
-                    # hasattr because it may touch _config on legacy devices).
+                    # apply_settings, not a bare config.settings update: the
+                    # HX711 caches gain/scale/offset at construction and those
+                    # caches are its read path, so a plain dict update would
+                    # save the new calibration to the file while the running
+                    # device kept reading at the old one. It also validates,
+                    # which is what rejects a zero scale that would otherwise
+                    # save fine and then fail to load.
                     if (is_stepper or is_hx711) and new_settings:
-                        device.config.settings.update(new_settings)
+                        device.apply_settings(new_settings)
 
                 if session:
                     session.update_device(

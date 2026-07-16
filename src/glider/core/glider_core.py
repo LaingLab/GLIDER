@@ -57,6 +57,11 @@ class GliderCore:
         # the frame-aligned data_recorder rows (camera-driven mode), this makes
         # video <-> tracking <-> device joins a single-key operation.
         self._event_logger = DeviceEventLogger(self._hardware_manager)
+        # Fold runtime settings mutations (e.g. an HX711 tare offset) back
+        # into the session as they happen, so they persist and the session
+        # goes dirty — waiting until save_session would be too late for the
+        # unsaved-changes prompt that decides whether a save happens at all.
+        self._hardware_manager.register_device_settings_callback(self._on_device_settings_changed)
 
         # Vision components
         self._camera_manager = CameraManager()
@@ -643,6 +648,14 @@ class GliderCore:
             self._hardware_manager,
         )
         logger.info(f"Saved experiment to {file_path}")
+
+    def _on_device_settings_changed(self, device_id: str, device) -> None:
+        """Adopt a device's runtime settings mutation into the session."""
+        if self._session is None:
+            return
+        if self._session.get_device(device_id) is None:
+            return  # a device the session doesn't track; nothing to persist
+        self._session.update_device(device_id, settings=dict(device.config.settings))
 
     def save_session(self, file_path: str | None = None) -> str:
         """

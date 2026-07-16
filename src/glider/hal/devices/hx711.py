@@ -56,10 +56,32 @@ CONSECUTIVE_DISCARD_WARN = 10
 # Data-ready poll interval; also bounds shutdown latency while waiting.
 READY_POLL_S = 0.001
 
+# Pause after a discarded frame. _read_frame only paces itself on the
+# data-ready wait, and a stuck-low DOUT never waits there — so without this
+# the retry loop would clock garbage frames as fast as CPython allows and peg
+# a core for the rest of the experiment. Negligible against a real frame
+# period (100 ms at 10 SPS).
+GLITCH_BACKOFF_S = 0.01
+
+# Pause after an unexpected (non-glitch) sampler error, and how many in a row
+# before the sampler gives up. Transients are survivable; a wedged line is
+# not, and spinning on it forever is worse than stopping — staleness then
+# makes every read raise, which is visible, instead of the thread dying
+# silently while the device still looks healthy.
+ERROR_BACKOFF_S = 0.5
+MAX_UNEXPECTED_ERRORS = 5
+
 # A cached sample older than this is not a reading. Generous vs. the chip's
 # slowest rate (10 SPS = 100 ms/frame) so ordinary jitter never trips it,
 # tight enough that a dead sensor surfaces in about a second.
 MAX_SAMPLE_AGE_S = 1.0
+
+# How long the read actions wait for a fresh sample before giving up. Covers
+# ~3 frame periods at the chip's slowest rate, so a read issued the instant an
+# experiment starts (before the sampler has clocked its first frame) waits
+# rather than failing. get_state does NOT wait — the recorder polls on its own
+# clock and must never be held up.
+READ_WAIT_S = 0.3
 
 TARE_SAMPLES = 5
 TARE_TIMEOUT_S = 10.0
@@ -91,15 +113,7 @@ class HX711Device(BaseDevice):
 
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
-        s = config.settings
-        gain = int(s.get("gain", 128))
-        if gain not in GAIN_PULSES:
-            raise ValueError(f"gain must be one of {sorted(GAIN_PULSES)}, got {gain}")
-        self._gain = gain
-        self._scale = float(s.get("scale", 1.0))
-        if self._scale == 0.0:
-            raise ValueError("scale must be non-zero")
-        self._offset = float(s.get("offset", 0.0))
+        self._gain, self._scale, self._offset = self._parse_settings(config.settings)
         # gpiozero handles; owned by the sampler thread after initialize().
         # Deliberately NOT stored in an attribute named ``_pins`` (see
         # stepper_a4988.py — HardwareManager overwrites ``_pins``).
@@ -112,6 +126,40 @@ class HX711Device(BaseDevice):
         # NOT named ``_state``: DataRecorder._read_device_state returns a
         # ``_state`` attribute in preference to calling get_state().
         self._latest: tuple[int, float] | None = None
+
+    # --- settings ---
+
+    @staticmethod
+    def _parse_settings(settings: dict[str, Any]) -> tuple[int, float, float]:
+        """Validate a settings dict and return ``(gain, scale, offset)``.
+
+        The single place these are interpreted, so construction and a live
+        edit cannot drift apart.
+        """
+        gain = int(settings.get("gain", 128))
+        if gain not in GAIN_PULSES:
+            raise ValueError(f"gain must be one of {sorted(GAIN_PULSES)}, got {gain}")
+        scale = float(settings.get("scale", 1.0))
+        if scale == 0.0:
+            raise ValueError("scale must be non-zero")
+        offset = float(settings.get("offset", 0.0))
+        return gain, scale, offset
+
+    def apply_settings(self, settings: dict[str, Any]) -> None:
+        """Adopt edited settings on a live device, cache included.
+
+        The cached ``_gain``/``_scale``/``_offset`` are the read path, so
+        updating only ``config.settings`` (which is what the base
+        implementation does) would leave a recalibrated device still reading
+        at its old calibration while the saved file claimed the new one.
+
+        Validation runs against the merged result BEFORE anything is
+        committed, so a rejected edit leaves the device exactly as it was
+        rather than half-applied.
+        """
+        gain, scale, offset = self._parse_settings({**self._config.settings, **settings})
+        self._config.settings.update(settings)
+        self._gain, self._scale, self._offset = gain, scale, offset
 
     # --- identity ---
 
@@ -178,11 +226,17 @@ class HX711Device(BaseDevice):
             return dout, sck
 
         self._dout, self._sck = await asyncio.to_thread(_claim)
-        self._stop_event.clear()
+        # A FRESH event, never a clear() of the old one: a straggler from a
+        # timed-out shutdown join is muted only by its (set) event, and
+        # clearing that would wake it to race this new sampler into _latest
+        # and log a spurious crash on its closed handles. The old event stays
+        # set; the straggler keeps answering to it.
+        stop_event = threading.Event()
+        self._stop_event = stop_event
         self._latest = None
         self._thread = threading.Thread(
             target=self._sampler_loop,
-            args=(self._dout, self._sck),
+            args=(self._dout, self._sck, stop_event),
             name=f"hx711-sampler-{self._name}",
             daemon=True,
         )
@@ -190,55 +244,93 @@ class HX711Device(BaseDevice):
         self._initialized = True
         logger.info("HX711 initialized on pins %s (gain %d)", self._config.pins, self._gain)
 
-    def _sampler_loop(self, dout: Any, sck: Any) -> None:
+    def _sampler_loop(self, dout: Any, sck: Any, stop_event: threading.Event) -> None:
         """Free-running sampler; sole owner of the GPIO after initialize().
 
         Paces itself on the chip's data-ready line (10 or 80 SPS, strapped on
         the breakout's RATE pin). Glitched frames are discarded. A *timing*
         glitch may have powered the chip down mid-frame, which resets it to
-        channel A / gain 128, so one dummy frame re-primes the configured gain
-        before data is trusted again; the other glitch kinds involve no
+        channel A / gain 128, so one frame is burned re-priming the configured
+        gain before data is trusted again; the other glitch kinds involve no
         power-down, and re-priming after one would throw away a good
-        conversion for nothing. Runs until the stop event is set; once it is,
+        conversion for nothing. Runs until its stop event is set; once it is,
         GPIO errors are expected (shutdown may have closed the handles) and
         exit quietly.
+
+        ``stop_event`` is passed in rather than read from ``self`` for the
+        same reason the handles are: this thread must keep answering to the
+        event it was born with. A straggler that outlives a timed-out join is
+        muted by its own set event, and a later ``initialize()`` installs a
+        fresh one — so the straggler cannot be un-muted and cannot race the
+        new sampler.
         """
         consecutive_bad = 0
-        try:
-            while not self._stop_event.is_set():
-                try:
-                    raw = self._read_frame(dout, sck)
-                except _GlitchError as e:
-                    consecutive_bad += 1
-                    if consecutive_bad == CONSECUTIVE_DISCARD_WARN:
-                        logger.warning(
-                            "HX711 %s: %d consecutive samples discarded (%s) - "
-                            "check wiring / CPU load",
-                            self._name,
-                            consecutive_bad,
-                            e,
-                        )
-                    else:
-                        logger.debug("HX711 %s: discarded sample (%s)", self._name, e)
-                    if e.powered_down:
-                        # Only a power-down resets the gain to A/128, so only
-                        # then is a dummy frame needed to re-prime it.
-                        try:
-                            self._read_frame(dout, sck)  # dummy read: re-prime gain
-                        except _GlitchError:
-                            pass
-                    continue
-                if raw is None:  # stop requested while waiting for data-ready
+        unexpected = 0
+        needs_reprime = False
+        while not stop_event.is_set():
+            try:
+                raw = self._read_frame(dout, sck, stop_event)
+            except _GlitchError as e:
+                consecutive_bad += 1
+                if consecutive_bad % CONSECUTIVE_DISCARD_WARN == 0:
+                    # Modulo, not equality: a permanent fault must keep
+                    # reporting. Firing once would leave hours of a dead
+                    # sensor logged only at debug, so a log filtered to
+                    # WARNING looks clean while nothing is being recorded.
+                    logger.warning(
+                        "HX711 %s: %d consecutive samples discarded (%s) - "
+                        "check wiring / CPU load",
+                        self._name,
+                        consecutive_bad,
+                        e,
+                    )
+                else:
+                    logger.debug("HX711 %s: discarded sample (%s)", self._name, e)
+                if e.powered_down:
+                    # Only a power-down resets the gain to A/128, so only then
+                    # must the next frame be burned re-priming it. A flag, not
+                    # an inline dummy read: if the re-priming frame ALSO
+                    # powers the chip down, the flag simply stays set and the
+                    # frame after that is burned too. Swallowing the dummy's
+                    # own glitch would leave the chip on A/128 while the
+                    # driver clocked the configured gain, and cache the result
+                    # as configured-gain data.
+                    needs_reprime = True
+                if stop_event.wait(GLITCH_BACKOFF_S):
                     break
-                consecutive_bad = 0
-                with self._sample_lock:
-                    # perf_counter, NOT monotonic: on Windows before Python
-                    # 3.13, monotonic() ticks at ~15.6 ms — coarser than a
-                    # frame period — which breaks tare's freshness gating.
-                    self._latest = (raw, time.perf_counter())
-        except Exception:
-            if not self._stop_event.is_set():
-                logger.exception("HX711 %s: sampler thread crashed", self._name)
+                continue
+            except Exception:
+                if stop_event.is_set():
+                    break  # expected: shutdown closed the handles
+                unexpected += 1
+                logger.exception("HX711 %s: unexpected sampler error", self._name)
+                if unexpected >= MAX_UNEXPECTED_ERRORS:
+                    logger.error(
+                        "HX711 %s: sampler giving up after %d consecutive errors; "
+                        "reads will now fail as stale until the device is re-initialized",
+                        self._name,
+                        unexpected,
+                    )
+                    break
+                if stop_event.wait(ERROR_BACKOFF_S):
+                    break
+                continue
+            if raw is None:  # stop requested while waiting for data-ready
+                break
+            consecutive_bad = 0
+            unexpected = 0
+            if needs_reprime:
+                # This frame re-primed the configured gain (the chip applies a
+                # pulse-count selection to the NEXT conversion), but was
+                # itself converted at the post-power-down A/128 default, so it
+                # is not a reading.
+                needs_reprime = False
+                continue
+            with self._sample_lock:
+                # perf_counter, NOT monotonic: on Windows before Python
+                # 3.13, monotonic() ticks at ~15.6 ms — coarser than a
+                # frame period — which breaks tare's freshness gating.
+                self._latest = (raw, time.perf_counter())
 
     async def shutdown(self) -> None:
         """E-stop safe state (mirrors StepperA4988Device.shutdown ordering).
@@ -283,6 +375,13 @@ class HX711Device(BaseDevice):
             await asyncio.to_thread(_release)
         finally:
             self._initialized = False
+            # Drop the cache, mirroring initialize(). get_state() checks only
+            # freshness — the DataRecorder calls it directly and never
+            # consults _initialized — so a surviving tuple would keep
+            # answering polls for MAX_SAMPLE_AGE_S after the sensor was
+            # released, writing a fabricated post-shutdown row into the CSV.
+            with self._sample_lock:
+                self._latest = None
 
     def _latest_sample(self) -> tuple[int, float] | None:
         with self._sample_lock:
@@ -305,18 +404,43 @@ class HX711Device(BaseDevice):
             return None
         return sample
 
-    def _sample_or_raise(self) -> tuple[int, float]:
-        """``_fresh_sample`` for the read actions, with a diagnostic raise."""
-        sample = self._latest_sample()
-        if sample is None:
-            raise RuntimeError(f"HX711 {self._name}: no sample received yet")
-        age = time.perf_counter() - sample[1]
-        if age > MAX_SAMPLE_AGE_S:
+    async def _await_fresh_sample(self) -> tuple[int, float]:
+        """Wait up to ``READ_WAIT_S`` for a fresh sample; raise if none comes.
+
+        A read action means "read the weight now", so waiting out a gap is
+        what the caller expects — and it is what makes the action usable at
+        experiment start, where the sampler has not yet clocked its first
+        frame (up to a full period, 100 ms at 10 SPS). Failing instantly there
+        would error the DeviceRead node, and because a node fires its exec
+        output only after the read returns, the whole downstream chain —
+        EndExperiment included — would never run.
+
+        The wait does not paper over a dead sensor: it is bounded, and a
+        genuine fault still raises with a diagnostic. ``get_state`` stays
+        non-blocking and simply reports ``None``.
+        """
+        deadline = time.perf_counter() + READ_WAIT_S
+        while True:
+            sample = self._fresh_sample()
+            if sample is not None:
+                return sample
+            if not self._initialized:
+                raise RuntimeError(f"HX711 {self._name} is not initialized")
+            if time.perf_counter() >= deadline:
+                break
+            await asyncio.sleep(0.005)
+
+        latest = self._latest_sample()
+        if latest is None:
             raise RuntimeError(
-                f"HX711 {self._name}: last sample is {age:.1f}s old - "
-                "sensor may be disconnected or overloaded"
+                f"HX711 {self._name}: no sample received within {READ_WAIT_S:.1f}s - "
+                "is the sensor connected?"
             )
-        return sample
+        age = time.perf_counter() - latest[1]
+        raise RuntimeError(
+            f"HX711 {self._name}: last sample is {age:.1f}s old - "
+            "sensor may be disconnected or overloaded"
+        )
 
     async def get_state(self) -> float | None:
         """Latest calibrated value for the DataRecorder poll.
@@ -333,7 +457,7 @@ class HX711Device(BaseDevice):
 
     # --- protocol (runs in the sampler thread) ---
 
-    def _read_frame(self, dout: Any, sck: Any) -> int | None:
+    def _read_frame(self, dout: Any, sck: Any, stop_event: threading.Event) -> int | None:
         """Block until data-ready, clock out one sample, validate it.
 
         Returns the sign-extended raw value, or ``None`` if the stop event was
@@ -342,12 +466,13 @@ class HX711Device(BaseDevice):
         60 us power-down threshold (measured conservatively — the window
         includes the GPIO call overhead, so it can only over-report), a DOUT
         line that never rose after the frame (no live chip driving it), or a
-        rail-saturated value. Handles are passed in (not read from ``self``)
-        so a concurrent ``shutdown()`` nulling the attributes cannot race the
-        loop.
+        rail-saturated value. Handles and the stop event are passed in (not
+        read from ``self``) so a concurrent ``shutdown()`` nulling the
+        attributes, or a later ``initialize()`` installing a fresh event,
+        cannot race the loop.
         """
         while dout.value:
-            if self._stop_event.wait(READY_POLL_S):
+            if stop_event.wait(READY_POLL_S):
                 return None
 
         raw = 0
@@ -392,19 +517,19 @@ class HX711Device(BaseDevice):
     # --- actions ---
 
     async def read(self) -> float:
-        """Calibrated reading ``(raw - offset) / scale`` from the cached sample.
+        """Calibrated reading ``(raw - offset) / scale``.
 
-        Raises if no sample has arrived or the cached one is stale.
+        Waits briefly for a fresh sample; raises if none arrives.
         """
-        sample = self._sample_or_raise()
+        sample = await self._await_fresh_sample()
         return (sample[0] - self._offset) / self._scale
 
     async def read_raw(self) -> int:
-        """Latest raw signed 24-bit counts from the cached sample.
+        """Latest raw signed 24-bit counts.
 
-        Raises if no sample has arrived or the cached one is stale.
+        Waits briefly for a fresh sample; raises if none arrives.
         """
-        return self._sample_or_raise()[0]
+        return (await self._await_fresh_sample())[0]
 
     async def tare(self) -> float:
         """Median of the next TARE_SAMPLES fresh samples becomes the offset.
@@ -441,6 +566,10 @@ class HX711Device(BaseDevice):
         offset = float(statistics.median(collected))
         self._offset = offset
         self._config.settings["offset"] = offset
+        # Tell the session, or the offset lives only here: it would never mark
+        # the session dirty, so closing GLIDER would not prompt to save and the
+        # calibration would be silently lost.
+        self._notify_settings_changed()
         logger.info("HX711 %s: tared, offset=%s", self._name, offset)
         return offset
 
