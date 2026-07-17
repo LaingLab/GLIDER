@@ -10,6 +10,7 @@ per keypoint per object per frame, joinable to the tracking CSV on
 from __future__ import annotations
 
 import csv
+import os
 import time
 
 import numpy as np
@@ -219,6 +220,82 @@ async def test_keypoint_names_rejected_mid_recording(tmp_path):
 
     rows = _read_keypoints(tracker.keypoints_file_path)
     assert rows[0]["keypoint"] == "nose"
+
+
+@pytest.mark.asyncio
+async def test_keypoint_fsync_cadence_is_per_frame_not_per_row(tmp_path, monkeypatch):
+    """fsync must scale with frames, not keypoint rows.
+
+    The interval constant is calibrated as "~10s at 30fps" in frames. It was
+    being applied to a row counter, and a pose session writes K rows per
+    object per frame — so with two animals and 17 keypoints it fired ~30x too
+    often, stalling the frame path on a Pi's SD card.
+    """
+    import glider.vision.tracking_logger as tl
+
+    fsynced_fds: list[int] = []
+    real_fsync = os.fsync
+    monkeypatch.setattr(tl.os, "fsync", lambda fd: (fsynced_fds.append(fd), real_fsync(fd))[1])
+    monkeypatch.setattr(tl, "_FSYNC_INTERVAL_FRAMES", 10)
+
+    kps = [[float(i), float(i), 0.9] for i in range(17)]
+
+    def two_animals():
+        return [_obj(track_id=1, keypoints=kps), _obj(track_id=2, keypoints=kps)]
+
+    tracker = TrackingDataLogger(output_dir=tmp_path)
+    tracker.set_keypoint_names([f"kp{i}" for i in range(17)])
+    await tracker.start("cadence")
+    try:
+        # Frame 1 lazily opens the keypoint stream and force-fsyncs its header.
+        tracker.log_frame(time.time(), two_animals())
+        # Track the keypoint file's own fd: the main tracking log fsyncs on the
+        # same interval, so counting all fsyncs would pass this test falsely.
+        kp_fd = tracker._kp_file.fileno()
+        fsynced_fds.clear()
+
+        # Frames 2..9. By frame 9 that's 9 x 2 x 17 = 306 keypoint rows — a
+        # row-counted threshold of 10 would have fsynced ~30 times by now.
+        for f in range(2, 10):
+            tracker.log_frame(time.time() + f * 0.033, two_animals())
+        assert tracker.keypoint_row_count == 9 * 2 * 17
+        assert kp_fd not in fsynced_fds, "keypoint fsync fired before 10 frames elapsed"
+
+        # Frame 10 reaches the interval.
+        tracker.log_frame(time.time(), two_animals())
+        assert kp_fd in fsynced_fds, "keypoint fsync must fire once the interval elapses"
+    finally:
+        await tracker.stop()
+
+
+@pytest.mark.asyncio
+async def test_keypoints_still_recorded_when_fsync_is_unsupported(tmp_path, monkeypatch):
+    """An fsync-hostile filesystem must not cost the whole keypoint stream.
+
+    The header write used to fsync inside the same broad try/except as the
+    file open, so an OSError from fsync — which the main log explicitly
+    tolerates, citing network mounts — discarded the keypoint file and latched
+    the failure for the session, losing 100% of the pose data silently while
+    the tracking CSV reported success.
+    """
+    import glider.vision.tracking_logger as tl
+
+    monkeypatch.setattr(
+        tl.os, "fsync", lambda fd: (_ for _ in ()).throw(OSError("fsync unsupported"))
+    )
+
+    tracker = TrackingDataLogger(output_dir=tmp_path)
+    tracker.set_keypoint_names(["nose"])
+    await tracker.start("no_fsync")
+    try:
+        tracker.log_frame(time.time(), [_obj(keypoints=[[1.0, 2.0, 0.9]])])
+    finally:
+        await tracker.stop()
+
+    assert tracker.keypoints_file_path is not None
+    rows = _read_keypoints(tracker.keypoints_file_path)
+    assert [r["keypoint"] for r in rows] == ["nose"]
+    assert rows[0]["x"] == "1.00"
 
 
 @pytest.mark.asyncio
