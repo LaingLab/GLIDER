@@ -42,7 +42,7 @@ async def test_cv_settings_survive_save_load(core, tmp_path):
     assert reopened.cv_processor.settings.model_path is None  # default
     await reopened.load_experiment(path)
 
-    restored = reopened.cv_processor.configured_settings
+    restored = reopened.cv_processor.settings
     assert restored.backend == DetectionBackend.YOLO_BYTETRACK
     assert restored.model_path == "/models/mouse_pose.pt"
     assert restored.keypoint_names == ["nose", "left_ear", "right_ear"]
@@ -68,12 +68,14 @@ async def test_missing_weights_do_not_destroy_the_operators_backend_choice(core,
     )
     await core.save_experiment(authored)
 
-    # Machine B: weights absent, so loading degrades the *running* backend.
+    # Machine B: weights absent, so loading degrades the *running* backend
+    # while leaving the configuration — the thing that gets saved — intact.
     machine_b = GliderCore()
     machine_b._session = ExperimentSession()
     await machine_b.load_experiment(authored)
-    assert machine_b.cv_processor.settings.backend == DetectionBackend.BACKGROUND_SUBTRACTION
-    assert machine_b.cv_processor.configured_settings.backend == DetectionBackend.YOLO_BYTETRACK
+    assert machine_b.cv_processor.active_backend == DetectionBackend.BACKGROUND_SUBTRACTION
+    assert machine_b.cv_processor.settings.backend == DetectionBackend.YOLO_BYTETRACK
+    assert machine_b.cv_processor.degradation is not None
 
     # ...and re-saving there must not write the degradation back.
     resaved = tmp_path / "resaved.glider"
