@@ -13,7 +13,7 @@ import os
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
 
@@ -313,6 +313,18 @@ class CVSettings:
     vision_cone_fov: float = 120.0  # Total field of view in degrees
     vision_cone_color: tuple[int, int, int] = (0, 255, 255)  # BGR yellow
     vision_cone_alpha: float = 0.3  # Overlay transparency
+
+    def copy(self) -> "CVSettings":
+        """Return an independent copy, safe to hand to a mutating consumer.
+
+        ``dataclasses.replace`` alone is not enough: every other field is an
+        immutable scalar or tuple, but ``keypoint_names`` is a list, and a
+        shallow copy would share it. Callers that hand these settings to
+        something that edits them — the camera settings dialog edits in place —
+        must copy first, or the edit lands on the live object and
+        ``update_settings`` can no longer tell what changed.
+        """
+        return replace(self, keypoint_names=list(self.keypoint_names))
 
     def to_dict(self) -> dict[str, Any]:
         return {
