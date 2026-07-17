@@ -13,7 +13,9 @@ import os
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TextIO
+
+import numpy as np
 
 # Frames between os.fsync() calls. ~10s at 30fps — small enough to bound
 # crash loss, large enough to avoid hammering SD cards on a Raspberry Pi.
@@ -36,6 +38,15 @@ class TrackingDataLogger:
     frame, timestamp, elapsed_ms, object_id, class, x, y, w, h, confidence,
     center_x, center_y, distance_px, distance_mm, cumulative_mm, zone_ids,
     behavioral_state, velocity_px_frame
+
+    Pose backends additionally produce a sibling ``*_keypoints.csv`` in long
+    format — one row per keypoint per object per frame:
+
+        frame, timestamp, elapsed_ms, flow_elapsed_ms, object_id,
+        keypoint, x, y, confidence
+
+    It joins to the tracking CSV on ``(frame, object_id)``, and is only
+    created for sessions that actually produce keypoints.
     """
 
     # Number of consecutive write failures tolerated before we give up on
@@ -92,6 +103,26 @@ class TrackingDataLogger:
         self._write_error_count: int = 0
         self._failed: bool = False
         self._writer_error_callback: Callable[[Exception], None] | None = None
+        # Pose keypoints go to a sibling long-format CSV rather than extra
+        # columns here: the keypoint count isn't known until the first
+        # inference, but this file's header is written and fsync'd at start().
+        # A separate file also keeps the tracking CSV byte-identical for
+        # non-pose sessions, so existing analysis scripts are unaffected.
+        # Opened lazily on the first frame that actually carries keypoints,
+        # so background-subtraction sessions never produce an empty file.
+        self._keypoint_names: list[str] = []
+        # Annotated, unlike the tracking-CSV handles above: those are bare
+        # ``= None`` so mypy infers None and every writerow on them errors
+        # (32 pre-existing errors in this file). Not fixing that here, but not
+        # adding to it either. csv.writer has no clean public type — Any.
+        self._kp_file: TextIO | None = None
+        self._kp_writer: Any = None
+        self._kp_file_path: Path | None = None
+        self._kp_row_count = 0
+        self._kp_rows_since_fsync = 0
+        # Keypoints are secondary to the tracking CSV: if this stream dies we
+        # log once and carry on rather than aborting the whole recording.
+        self._kp_failed = False
 
     @property
     def is_recording(self) -> bool:
@@ -148,6 +179,39 @@ class TrackingDataLogger:
     def file_path(self) -> Path | None:
         """Path to the current/last log file."""
         return self._file_path
+
+    @property
+    def keypoints_file_path(self) -> Path | None:
+        """Path to the sibling keypoints CSV, or None if none was written.
+
+        Stays None for sessions with no pose data — the file is only created
+        once a frame actually carries keypoints.
+        """
+        return self._kp_file_path
+
+    @property
+    def keypoint_row_count(self) -> int:
+        """Number of keypoint rows written this session."""
+        return self._kp_row_count
+
+    def set_keypoint_names(self, names: list[str] | None) -> None:
+        """Set bodypart names used to label rows in the keypoints CSV.
+
+        Names must be in the model's keypoint output order. Any keypoint
+        without a corresponding name (empty list, or a list shorter than the
+        model emits) is labelled with its positional index instead, so the
+        data is still recorded — just less legibly.
+
+        Call before ``start()``; the names are read per row, but changing them
+        mid-recording would make the file's ``keypoint`` column inconsistent.
+        """
+        if self._recording:
+            logger.warning(
+                "set_keypoint_names called while recording; keypoint labels "
+                "would change mid-file. Ignoring."
+            )
+            return
+        self._keypoint_names = [str(n) for n in (names or [])]
 
     @property
     def frame_count(self) -> int:
@@ -270,6 +334,152 @@ class TrackingDataLogger:
                 logger.debug("TrackingDataLogger: os.fsync failed", exc_info=True)
             self._frames_since_fsync = 0
 
+    @staticmethod
+    def _keypoints_path(tracking_path: Path) -> Path:
+        """Sibling path for the keypoints CSV, next to the tracking CSV.
+
+        Takes the tracking path explicitly rather than reading
+        ``self._file_path`` so the caller's None-check narrows it.
+        """
+        name = tracking_path.name
+        suffix = "_tracking.csv"
+        base = name[: -len(suffix)] if name.endswith(suffix) else tracking_path.stem
+        return tracking_path.with_name(f"{base}_keypoints.csv")
+
+    def _ensure_keypoint_writer(self) -> bool:
+        """Open the keypoints CSV on first use. Returns True if writable.
+
+        Unlike the tracking CSV there's no metadata preamble — a single
+        header row means ``pd.read_csv`` works with no ``skiprows``. The
+        session metadata lives in the sibling tracking CSV, which these rows
+        join to on ``(frame, object_id)``.
+        """
+        if self._kp_writer is not None:
+            return True
+        if self._kp_failed or self._file_path is None:
+            return False
+        try:
+            self._kp_file_path = self._keypoints_path(self._file_path)
+            self._kp_file = open(self._kp_file_path, "w", newline="", encoding="utf-8")
+            self._kp_writer = csv.writer(self._kp_file)
+            self._kp_writer.writerow(
+                [
+                    "frame",
+                    "timestamp",
+                    "elapsed_ms",
+                    "flow_elapsed_ms",
+                    "object_id",
+                    "keypoint",
+                    "x",
+                    "y",
+                    "confidence",
+                ]
+            )
+            self._kp_file.flush()
+            os.fsync(self._kp_file.fileno())
+        except Exception:
+            logger.exception(
+                "Could not open keypoints log %s; pose data will not be "
+                "recorded for this session (tracking CSV is unaffected)",
+                self._kp_file_path,
+            )
+            self._close_keypoint_writer()
+            self._kp_failed = True
+            self._kp_file_path = None
+            return False
+        logger.info("Started keypoint log: %s", self._kp_file_path)
+        return True
+
+    def _fsync_kp_if_due(self, force: bool = False) -> None:
+        """Flush/fsync the keypoints file on the same cadence as the main log.
+
+        Counted in rows rather than frames — a pose session writes one row per
+        keypoint per object, so rows accumulate K times faster than frames and
+        a frame-based interval would fsync far too often.
+        """
+        if self._kp_file is None:
+            return
+        try:
+            self._kp_file.flush()
+        except Exception:
+            logger.exception("TrackingDataLogger: keypoint flush failed")
+            return
+        if force or self._kp_rows_since_fsync >= _FSYNC_INTERVAL_FRAMES:
+            try:
+                os.fsync(self._kp_file.fileno())
+            except OSError:
+                logger.debug("TrackingDataLogger: keypoint os.fsync failed", exc_info=True)
+            self._kp_rows_since_fsync = 0
+
+    def _close_keypoint_writer(self) -> None:
+        """Close the keypoints file if open, swallowing errors."""
+        if self._kp_file is not None:
+            try:
+                self._kp_file.close()
+            except Exception:
+                logger.debug("TrackingDataLogger: keypoint close failed", exc_info=True)
+        self._kp_file = None
+        self._kp_writer = None
+
+    def _log_keypoints(
+        self,
+        obj: "TrackedObject",
+        iso_timestamp: str,
+        elapsed_ms: float,
+        flow_elapsed_cell: str,
+    ) -> None:
+        """Write one row per keypoint for a tracked object.
+
+        Records what the model emitted, unfiltered: ``keypoint_min_confidence``
+        is a *rendering* setting and must not silently drop scientific data.
+        Analysts threshold on the ``confidence`` column themselves.
+
+        Undetected keypoints — which pose models report as the ``(0, 0)``
+        placeholder, matching ``draw_keypoints_on``'s convention — are written
+        with empty ``x``/``y`` and their reported confidence. The row is kept
+        so the frame x keypoint grid stays complete and a gap is visibly a gap
+        rather than an absent row.
+        """
+        kps = np.asarray(obj.keypoints)
+        if kps.ndim == 0 or kps.shape[-1] < 2:
+            return
+        # Collapse any leading instance dim, as draw_keypoints_on does.
+        kps = kps.reshape(-1, kps.shape[-1])
+        if not self._ensure_keypoint_writer():
+            return
+
+        has_conf = kps.shape[1] >= 3
+        for idx, kp in enumerate(kps):
+            x = float(kp[0])
+            y = float(kp[1])
+            name = self._keypoint_names[idx] if idx < len(self._keypoint_names) else str(idx)
+            detected = not (x <= 0 and y <= 0)
+            try:
+                self._kp_writer.writerow(
+                    [
+                        self._frame_count,
+                        iso_timestamp,
+                        f"{elapsed_ms:.1f}",
+                        flow_elapsed_cell,
+                        obj.track_id,
+                        name,
+                        f"{x:.2f}" if detected else "",
+                        f"{y:.2f}" if detected else "",
+                        f"{float(kp[2]):.3f}" if has_conf else "",
+                    ]
+                )
+            except Exception:
+                logger.exception(
+                    "Keypoint write failed; stopping keypoint logging for this "
+                    "session (tracking CSV is unaffected)"
+                )
+                self._close_keypoint_writer()
+                self._kp_failed = True
+                return
+            self._kp_row_count += 1
+            self._kp_rows_since_fsync += 1
+        self._fsync_kp_if_due()
+
     def _generate_filename(self, experiment_name: str) -> str:
         """
         Generate filename for tracking data.
@@ -324,6 +534,14 @@ class TrackingDataLogger:
         # Clear tracking state
         self._prev_positions.clear()
         self._cumulative_distances.clear()
+
+        # Reset keypoint stream state so a previous session's failure flag or
+        # path doesn't leak into this run. The file itself stays closed until
+        # a frame actually carries keypoints.
+        self._kp_file_path = None
+        self._kp_row_count = 0
+        self._kp_rows_since_fsync = 0
+        self._kp_failed = False
 
         # Open file and create writer.  If any subsequent write raises (e.g.,
         # metadata serialization error), close the file and clear state so the
@@ -566,6 +784,12 @@ class TrackingDataLogger:
             ):
                 return  # write failure; logger may have flagged _failed
 
+            # Pose keypoints, if this backend produces them, go to the sibling
+            # long-format file. Previously they reached TrackedObject and were
+            # drawn on the live preview, then dropped without ever being saved.
+            if obj.keypoints is not None:
+                self._log_keypoints(obj, iso_timestamp, elapsed_ms, flow_elapsed_cell)
+
         # Log motion event if no objects but motion detected
         if not tracked_objects and motion_detected:
             self._safe_writerow(
@@ -713,6 +937,16 @@ class TrackingDataLogger:
             self._file.close()
             self._file = None
             self._writer = None
+
+        # Final fsync + close for the keypoint stream, if this session had one.
+        if self._kp_file is not None:
+            self._fsync_kp_if_due(force=True)
+            self._close_keypoint_writer()
+            logger.info(
+                "Stopped keypoint log (%d rows). Saved to %s",
+                self._kp_row_count,
+                self._kp_file_path,
+            )
 
         saved_path = self._file_path
         logger.info(f"Stopped tracking log. Saved to {saved_path}")
