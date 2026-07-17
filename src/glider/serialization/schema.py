@@ -13,8 +13,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Current schema version
-SCHEMA_VERSION = "1.0.0"
+# Current schema version.
+#
+# 1.1.0 adds the optional ``vision`` domain (CV backend, model path, keypoint
+# names). It's a minor bump because the block is purely additive: readers that
+# predate it ignore the key, and ``ExperimentSerializer._validate_schema``
+# only rejects a *major* version ahead of its own — so 1.0.0 installs still
+# open 1.1.0 files, just without the CV settings.
+SCHEMA_VERSION = "1.1.0"
 
 
 class SchemaValidationError(Exception):
@@ -533,6 +539,35 @@ class MetadataSchema:
 
 
 @dataclass
+class VisionConfigSchema:
+    """Schema for computer-vision configuration.
+
+    The payload is ``CVSettings.to_dict()`` carried opaquely rather than
+    mirrored field-by-field. Two reasons: this module is deliberately
+    dependency-free (importing ``cv_processor`` would drag cv2 and numpy into
+    every load of the schema), and ``CVSettings`` already owns its own
+    (de)serialization — restating its ~25 fields here would be duplication
+    that drifts the first time someone adds a setting.
+
+    Round-tripping is the caller's job: ``CVSettings.from_dict(schema.settings)``
+    on load, ``VisionConfigSchema(settings=cv.to_dict())`` on save.
+    """
+
+    settings: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return dict(self.settings)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], path: str = "vision") -> "VisionConfigSchema":
+        """Create from dictionary."""
+        if not isinstance(data, dict):
+            raise SchemaValidationError(f"Expected dict, got {type(data).__name__}", path)
+        return cls(settings=dict(data))
+
+
+@dataclass
 class ExperimentSchema:
     """
     Root schema for a GLIDER experiment file.
@@ -545,6 +580,7 @@ class ExperimentSchema:
     hardware: HardwareConfigSchema = field(default_factory=HardwareConfigSchema)
     flow: FlowConfigSchema = field(default_factory=FlowConfigSchema)
     dashboard: DashboardConfigSchema = field(default_factory=DashboardConfigSchema)
+    vision: VisionConfigSchema = field(default_factory=VisionConfigSchema)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -554,6 +590,7 @@ class ExperimentSchema:
             "hardware": self.hardware.to_dict(),
             "flow": self.flow.to_dict(),
             "dashboard": self.dashboard.to_dict(),
+            "vision": self.vision.to_dict(),
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -588,6 +625,9 @@ class ExperimentSchema:
             hardware=HardwareConfigSchema.from_dict(data.get("hardware", {}), "hardware"),
             flow=FlowConfigSchema.from_dict(data.get("flow", {}), "flow"),
             dashboard=DashboardConfigSchema.from_dict(data.get("dashboard", {}), "dashboard"),
+            # Absent in files written before 1.1.0; an empty block round-trips
+            # to CVSettings defaults.
+            vision=VisionConfigSchema.from_dict(data.get("vision", {}), "vision"),
         )
 
     @classmethod

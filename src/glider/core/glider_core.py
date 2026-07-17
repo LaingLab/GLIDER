@@ -21,7 +21,7 @@ from glider.core.hardware_manager import HardwareManager
 from glider.vision.audio_recorder import AudioRecorder, mux_audio_video
 from glider.vision.calibration import CameraCalibration
 from glider.vision.camera_manager import CameraManager
-from glider.vision.cv_processor import CVProcessor
+from glider.vision.cv_processor import CVProcessor, CVSettings
 from glider.vision.multi_camera_manager import MultiCameraManager
 from glider.vision.multi_video_recorder import MultiVideoRecorder
 from glider.vision.tracking_logger import TrackingDataLogger
@@ -625,6 +625,19 @@ class GliderCore:
             self._hardware_manager,
         )
 
+        # Apply the vision block. The serializer carries it opaquely (it must
+        # not import cv2), so the conversion back to CVSettings lives here.
+        # Absent for files written before schema 1.1.0 — leave the processor's
+        # current settings alone rather than stomping them with defaults.
+        if schema.vision.settings:
+            try:
+                self._cv_processor.update_settings(CVSettings.from_dict(schema.vision.settings))
+            except Exception:
+                logger.exception(
+                    "Could not apply vision settings from %s; keeping current CV configuration",
+                    file_path,
+                )
+
         self._notify_session_change()
         logger.info(f"Loaded experiment: {schema.metadata.name}")
 
@@ -646,6 +659,9 @@ class GliderCore:
             self._session,
             self._flow_engine,
             self._hardware_manager,
+            # configured_settings, not settings: persist the backend the
+            # operator chose, not one a failed model load degraded us to.
+            vision_settings=self._cv_processor.configured_settings.to_dict(),
         )
         logger.info(f"Saved experiment to {file_path}")
 
@@ -892,6 +908,11 @@ class GliderCore:
         # (separate from video recording so tracking works even if video recording is disabled)
         if self._cv_processing_enabled and self._camera_manager.is_connected:
             try:
+                # Hand the operator-supplied bodypart names over before start()
+                # so the keypoints CSV can label rows. Sourced from CVSettings
+                # here rather than at the settings dialog so it holds however
+                # the settings arrived — dialog, .glider load, or default.
+                self._tracking_logger.set_keypoint_names(self._cv_processor.settings.keypoint_names)
                 tracking_path = await self._tracking_logger.start(
                     experiment_name, session=self._session
                 )

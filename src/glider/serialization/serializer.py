@@ -25,6 +25,7 @@ from glider.serialization.schema import (
     NodeSchema,
     PortSchema,
     SchemaValidationError,
+    VisionConfigSchema,
 )
 
 if TYPE_CHECKING:
@@ -86,6 +87,7 @@ class ExperimentSerializer:
         session: "ExperimentSession",
         flow_engine: Optional["FlowEngine"] = None,
         hardware_manager: Optional["HardwareManager"] = None,
+        vision_settings: dict[str, Any] | None = None,
     ) -> None:
         """
         Save an experiment session to a file.
@@ -95,9 +97,15 @@ class ExperimentSerializer:
             session: The experiment session to save
             flow_engine: Optional flow engine for node/connection data
             hardware_manager: Optional hardware manager for device config
+            vision_settings: Optional ``CVSettings.to_dict()`` payload. Passed
+                as a plain dict rather than a CVSettings/CVProcessor so this
+                layer stays free of any vision (cv2/numpy) import; the caller
+                owns the conversion. Omit to write an empty vision block.
         """
         # Build schema from session
         schema = self._session_to_schema(session, flow_engine, hardware_manager)
+        if vision_settings:
+            schema.vision = VisionConfigSchema(settings=dict(vision_settings))
 
         # Update modified timestamp
         schema.update_modified()
