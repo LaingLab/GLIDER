@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
 from glider.gui.styles import colors
 from glider.vision.camera_manager import CameraSettings
-from glider.vision.cv_processor import CVSettings, DetectionBackend
+from glider.vision.cv_processor import CVSettings, DetectionBackend, parse_keypoint_names
 
 logger = logging.getLogger(__name__)
 
@@ -479,6 +479,22 @@ class CameraSettingsDialog(QDialog):
 
         self._model_path_label = QLabel("Model:")
         detection_layout.addRow(self._model_path_label, model_layout)
+
+        # Bodypart names for pose models. Pose weights don't carry keypoint
+        # names (Ultralytics `names` is the class map), so they're supplied
+        # here; they label the rows of the keypoints CSV. Left blank, the
+        # logger falls back to positional indices — data is still recorded.
+        self._keypoint_names_edit = QLineEdit()
+        self._keypoint_names_edit.setPlaceholderText(
+            "nose, left_ear, right_ear, ... (comma-separated, pose models only)"
+        )
+        self._keypoint_names_edit.setToolTip(
+            "Bodypart names in the order your pose model outputs them.\n"
+            "Used to label the keypoints CSV. Leave blank to use indices (0, 1, 2, ...).\n"
+            "Ignored by detection-only models."
+        )
+        self._keypoint_names_label = QLabel("Keypoints:")
+        detection_layout.addRow(self._keypoint_names_label, self._keypoint_names_edit)
 
         # Confidence threshold
         self._confidence_spin = QDoubleSpinBox()
@@ -988,6 +1004,9 @@ class CameraSettingsDialog(QDialog):
         if self._cv_settings.model_path:
             self._model_path_edit.setText(self._cv_settings.model_path)
 
+        if self._cv_settings.keypoint_names:
+            self._keypoint_names_edit.setText(", ".join(self._cv_settings.keypoint_names))
+
         self._confidence_spin.setValue(self._cv_settings.confidence_threshold)
         self._min_area_spin.setValue(self._cv_settings.min_detection_area)
         self._frame_skip_spin.setValue(self._cv_settings.process_every_n_frames)
@@ -1064,6 +1083,10 @@ class CameraSettingsDialog(QDialog):
         self._model_path_edit.setVisible(is_yolo)
         self._model_path_label.setVisible(is_yolo)
         self._browse_model_btn.setVisible(is_yolo)
+        # Keypoint names only mean anything for a model-backed backend; a pose
+        # model is a YOLO model here, so the gate is the same.
+        self._keypoint_names_edit.setVisible(is_yolo)
+        self._keypoint_names_label.setVisible(is_yolo)
 
     def _on_tracking_enabled_toggle(self, enabled: bool):
         """Handle tracking enabled toggle."""
@@ -1216,6 +1239,7 @@ class CameraSettingsDialog(QDialog):
         self._cv_settings.enabled = self._cv_enabled_cb.isChecked()
         self._cv_settings.backend = self._backend_combo.currentData()
         self._cv_settings.model_path = self._model_path_edit.text() or None
+        self._cv_settings.keypoint_names = parse_keypoint_names(self._keypoint_names_edit.text())
         self._cv_settings.confidence_threshold = self._confidence_spin.value()
         self._cv_settings.min_detection_area = self._min_area_spin.value()
         self._cv_settings.process_every_n_frames = self._frame_skip_spin.value()
