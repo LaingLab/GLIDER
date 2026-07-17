@@ -113,6 +113,10 @@ class MainWindow(QMainWindow):
         self._builder_view: QWidget | None = None
         self._node_library_dock: QDockWidget | None = None
         self._properties_dock: QDockWidget | None = None
+        # Per-dock visibility captured when the operator view hides the Builder
+        # docks, so switch_to_builder restores each to its prior shown/hidden
+        # state (e.g. a Files dock the user never opened stays hidden).
+        self._builder_dock_visibility: dict[str, bool] = {}
 
         # Toolbar status (initialised here so _on_core_state_change can test)
         self._toolbar_status: QLabel | None = None
@@ -543,6 +547,51 @@ class MainWindow(QMainWindow):
             if getattr(self, "_camera_dock_hidden_for_dashboard", False):
                 self._camera_dock_hidden_for_dashboard = False
                 dock.show()
+
+    # Builder-only docks that must be hidden while the operator view is shown.
+    # The camera dock is deliberately excluded — it is managed separately by the
+    # _move_camera_to_* helpers, which hide/show it as the CameraPanel moves.
+    _BUILDER_DOCK_ATTRS = (
+        "_node_library_dock",
+        "_properties_dock",
+        "_hardware_dock",
+        "_control_dock",
+        "_files_dock",
+    )
+
+    def _hide_builder_docks(self) -> None:
+        """Hide the Builder dock panels on entry to the operator view.
+
+        The docks live in the QMainWindow dock areas that surround the central
+        QStackedWidget, so switching the stack to the dashboard does not remove
+        them — without this they linger around the operator view (issue #39).
+        Each dock's shown/hidden state is captured first so switch_to_builder
+        can restore the user's exact arrangement. No-op in runner-only mode,
+        where the docks were never built.
+        """
+        saved: dict[str, bool] = {}
+        for attr in self._BUILDER_DOCK_ATTRS:
+            dock = getattr(self, attr, None)
+            if dock is None:
+                continue
+            saved[attr] = not dock.isHidden()
+            dock.hide()
+        self._builder_dock_visibility = saved
+
+    def _show_builder_docks(self) -> None:
+        """Restore Builder docks hidden by _hide_builder_docks.
+
+        Each dock returns to the visibility it had before the operator view was
+        entered. No-op if nothing was hidden (e.g. docks freshly built, or
+        runner-only mode).
+        """
+        if not self._builder_dock_visibility:
+            return
+        for attr, was_visible in self._builder_dock_visibility.items():
+            dock = getattr(self, attr, None)
+            if dock is not None:
+                dock.setVisible(was_visible)
+        self._builder_dock_visibility = {}
 
     def _setup_dock_widgets(self) -> None:
         """Set up dock widgets for desktop mode."""
@@ -1451,6 +1500,7 @@ class MainWindow(QMainWindow):
         reflected on entry. Shared by the menu toggle and programmatic switch."""
         self._stack.setCurrentIndex(1)
         self._move_camera_to_operator_view()
+        self._hide_builder_docks()
         if self._dash_hardware_panel:
             self._dash_hardware_panel.refresh_tree()
         self._heal_stale_paint()
@@ -1463,6 +1513,7 @@ class MainWindow(QMainWindow):
 
     def switch_to_builder(self) -> None:
         self._stack.setCurrentIndex(0)
+        self._show_builder_docks()
         self._move_camera_to_builder()
         self._heal_stale_paint()
 
@@ -1596,6 +1647,10 @@ class MainWindow(QMainWindow):
         # dashboard slot from switch_to_runner, so this explicit move prevents a
         # blank Camera dock. Mirrors switch_to_builder().
         self._move_camera_to_builder()
+        # Reached from the dashboard's "switch to desktop" button, which
+        # bypasses switch_to_builder — restore any docks _hide_builder_docks
+        # hid on the F11 entry into the dashboard.
+        self._show_builder_docks()
 
         screen_size = self._view_manager.screen_size
         if screen_size.width() <= 800:

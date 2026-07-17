@@ -73,6 +73,51 @@ def test_camera_dock_hidden_while_dashboard_borrows_panel(qtbot, main_window_fac
     assert window._camera_dock.widget() is window._camera_panel
 
 
+_BUILDER_DOCKS = (
+    "_node_library_dock",
+    "_properties_dock",
+    "_hardware_dock",
+    "_control_dock",
+)
+
+
+def test_builder_docks_hidden_on_runner_and_restored_on_builder(qtbot, main_window_factory):
+    window = main_window_factory(desktop_mode=True)  # builds desktop docks at startup
+    window.show()
+    window.switch_to_builder()
+    for attr in _BUILDER_DOCKS:  # a tabbed dock is shown once its group is raised
+        assert not getattr(window, attr).isHidden(), attr
+
+    window.switch_to_runner()  # issue #39: builder panels must not linger
+    for attr in _BUILDER_DOCKS:
+        assert getattr(window, attr).isHidden(), attr
+
+    window.switch_to_builder()  # docks come back with the builder view
+    for attr in _BUILDER_DOCKS:
+        assert not getattr(window, attr).isHidden(), attr
+
+
+def test_switch_to_runner_preserves_hidden_files_dock(qtbot, main_window_factory):
+    window = main_window_factory(desktop_mode=True)
+    window.show()
+    window.switch_to_builder()
+    assert window._files_dock.isHidden()  # hidden by default in desktop mode
+
+    window.switch_to_runner()
+    assert window._files_dock.isHidden()
+    window.switch_to_builder()  # a dock the user never opened stays hidden
+    assert window._files_dock.isHidden()
+
+
+def test_switch_to_desktop_mode_restores_docks_hidden_by_dashboard(qtbot, main_window_factory):
+    window = main_window_factory(desktop_mode=True)
+    window.show()
+    window._toggle_view()  # F11 into the dashboard hides the builder docks
+    assert window._node_library_dock.isHidden()
+    window._switch_to_desktop_mode()  # bypasses switch_to_builder
+    assert not window._node_library_dock.isHidden()
+
+
 def test_entering_dashboard_refreshes_hardware(qtbot, main_window_factory):
     window = main_window_factory(desktop_mode=True)
     calls = []
