@@ -13,7 +13,7 @@ import os
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
 
@@ -176,6 +176,21 @@ class DetectionBackend(Enum):
     MOTION_ONLY = auto()  # Just motion detection
 
 
+# Backends that load weights from ``CVSettings.model_path``. Changing the path
+# on one of these has to force a reload; the others ignore it entirely.
+_MODEL_BACKED_BACKENDS = frozenset({DetectionBackend.YOLO_V8, DetectionBackend.YOLO_BYTETRACK})
+
+
+def parse_keypoint_names(text: str) -> list[str]:
+    """Parse a comma-separated bodypart-name list into ``CVSettings`` form.
+
+    Blank entries are dropped and surrounding whitespace stripped, so
+    ``"nose, left_ear,, right_ear "`` yields three names. Order is
+    significant — it must match the model's keypoint output order.
+    """
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
 @dataclass
 class Detection:
     """Single detection result."""
@@ -257,6 +272,12 @@ class CVSettings:
     keypoint_radius: int = 3
     keypoint_color: tuple[int, int, int] = (0, 0, 255)  # BGR red
     keypoint_min_confidence: float = 0.3  # Skip keypoints below this confidence
+    # Bodypart names in model output order, used to label rows in the
+    # keypoints CSV. Pose weights don't carry bodypart names (Ultralytics
+    # `names` is the *class* map, not the keypoint map), so this is
+    # operator-supplied. When empty — or shorter than the model's keypoint
+    # count — the logger falls back to the positional index.
+    keypoint_names: list[str] = field(default_factory=list)
     process_every_n_frames: int = 1  # Process CV every N frames (1 = every frame)
     # Behavior analysis settings
     behavior_enabled: bool = True
@@ -291,6 +312,7 @@ class CVSettings:
             "keypoint_radius": self.keypoint_radius,
             "keypoint_color": self.keypoint_color,
             "keypoint_min_confidence": self.keypoint_min_confidence,
+            "keypoint_names": list(self.keypoint_names),
             "process_every_n_frames": self.process_every_n_frames,
             "behavior_enabled": self.behavior_enabled,
             "freeze_threshold": self.freeze_threshold,
@@ -332,6 +354,7 @@ class CVSettings:
             keypoint_radius=data.get("keypoint_radius", 3),
             keypoint_color=tuple(data.get("keypoint_color", [0, 0, 255])),
             keypoint_min_confidence=data.get("keypoint_min_confidence", 0.3),
+            keypoint_names=[str(n) for n in data.get("keypoint_names", [])],
             process_every_n_frames=data.get("process_every_n_frames", 1),
             behavior_enabled=data.get("behavior_enabled", True),
             freeze_threshold=data.get("freeze_threshold", 1.0),
@@ -486,6 +509,14 @@ class CVProcessor:
             settings: CV settings, or None for defaults
         """
         self._settings = settings or CVSettings()
+        # The backend the *operator* chose, as distinct from the one actually
+        # running. ``_load_yolo_model`` degrades ``_settings.backend`` in place
+        # when ultralytics is missing or the weights won't load — a runtime
+        # concern that must not be mistaken for configuration. Persisting
+        # ``_settings.backend`` after such a degradation would silently rewrite
+        # the operator's choice to BACKGROUND_SUBTRACTION in their .glider file
+        # (see ``configured_settings``).
+        self._requested_backend = self._settings.backend
         self._bg_subtractor: cv2.BackgroundSubtractor | None = None
         self._yolo_model = None
         # Resolved to the best available accelerator when a YOLO model loads;
@@ -523,8 +554,25 @@ class CVProcessor:
 
     @property
     def settings(self) -> CVSettings:
-        """Current CV settings."""
+        """Current CV settings, reflecting any runtime backend degradation."""
         return self._settings
+
+    @property
+    def configured_settings(self) -> CVSettings:
+        """Settings as the operator configured them — the version to persist.
+
+        Identical to :attr:`settings` except that ``backend`` is the one that
+        was *requested*, not the one running. The two diverge when a YOLO
+        backend degrades to background subtraction because ultralytics is
+        absent or the weights failed to load.
+
+        Persist this, never :attr:`settings`. Otherwise opening an experiment
+        on a machine that lacks the weights (or ultralytics — e.g. a Pi
+        opening a desktop-authored file) degrades the backend, and the next
+        save writes that degradation back to the .glider, destroying the
+        operator's model choice on every machine that opens it afterwards.
+        """
+        return replace(self._settings, backend=self._requested_backend)
 
     @property
     def behavior_analyzer(self) -> BehaviorAnalyzer:
@@ -1237,10 +1285,21 @@ class CVProcessor:
             settings: New settings to apply
         """
         old_backend = self._settings.backend
+        old_model_path = self._settings.model_path
         self._settings = settings
+        # Record the request before initialize() gets a chance to degrade it.
+        self._requested_backend = settings.backend
 
-        # Reinitialize if backend changed
-        if old_backend != settings.backend:
+        # Reinitialize if the backend changed, or if the model path changed on
+        # a model-backed backend. Previously only a backend change triggered a
+        # reload, so picking different weights in the settings dialog left the
+        # *old* model running while the UI showed the new path — silently
+        # attributing one model's detections to another.
+        backend_changed = old_backend != settings.backend
+        model_changed = (
+            old_model_path != settings.model_path and settings.backend in _MODEL_BACKED_BACKENDS
+        )
+        if backend_changed or model_changed:
             self._initialized = False
             self.initialize()
 
