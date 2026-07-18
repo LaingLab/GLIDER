@@ -87,28 +87,54 @@ class BLEDevice(BaseDevice):
 
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
-        s = config.settings
+        self._resolved_address: str | None = None
+        self._apply_setting_caches(config.settings)  # validates; sets the caches
+
+        self._client = None  # BleakClient, created in initialize()
+        self._lock = asyncio.Lock()  # serialize connect/write/read
+        # Latest notification as (decoded_value, perf_counter_ts). bleak fires
+        # the notify handler on the event loop, so a plain attribute is safe --
+        # no thread lock needed (unlike the serial/HX711 sampler threads).
+        self._latest: tuple[Any, float] | None = None
+
+    def _apply_setting_caches(self, s: dict[str, Any]) -> None:
+        """Set the settings-derived cache attributes (validates value_format first,
+        before mutating anything, so a rejected edit leaves the caches untouched)."""
+        value_format = str(s.get("value_format", "text"))
+        if value_format not in _VALUE_FORMATS:
+            raise ValueError(
+                f"value_format must be one of {_VALUE_FORMATS}, got {value_format!r}"
+            )
         self._address = str(s.get("address", "")).strip()
         self._adv_name = str(s.get("name", "")).strip()
         self._service_uuid = str(s.get("service_uuid", "")).strip() or None
         self._write_char = str(s.get("write_char_uuid", "")).strip()
         self._read_char = str(s.get("read_char_uuid", "")).strip()
         self._notify = bool(s.get("notify", False))
-        self._value_format = str(s.get("value_format", "text"))
-        if self._value_format not in _VALUE_FORMATS:
-            raise ValueError(
-                f"value_format must be one of {_VALUE_FORMATS}, got {self._value_format!r}"
-            )
+        self._value_format = value_format
         self._encoding = s.get("encoding", "utf-8")
         self._write_response = bool(s.get("write_response", False))
+        self._resolved_address = None  # re-resolve the address on next connect
 
-        self._client = None  # BleakClient, created in initialize()
-        self._lock = asyncio.Lock()  # serialize connect/write/read
-        self._resolved_address: str | None = None
-        # Latest notification as (decoded_value, perf_counter_ts). bleak fires
-        # the notify handler on the event loop, so a plain attribute is safe --
-        # no thread lock needed (unlike the serial/HX711 sampler threads).
-        self._latest: tuple[Any, float] | None = None
+    def apply_settings(self, settings: dict[str, Any]) -> None:
+        """Adopt edited settings (validated first).
+
+        BLE settings are connection/subscription/decode parameters; re-resolving
+        the address or re-subscribing can't be done safely under a live link, so
+        while the device is initialized the edit is only recorded to
+        ``config.settings`` (for the saved file) and takes effect on the next
+        initialize(). Before init, the caches are refreshed immediately. This is
+        the drift guard ``BLEWriteDevice`` and the other transport devices carry.
+        """
+        merged = {**self._config.settings, **settings}
+        if self._initialized:
+            if str(merged.get("value_format", "text")) not in _VALUE_FORMATS:
+                raise ValueError("value_format is invalid")
+            self._config.settings.update(settings)
+            logger.info("BLE %s: settings saved; reconnect to apply", self._name)
+            return
+        self._apply_setting_caches(merged)  # validates before mutating
+        self._config.settings.update(settings)
 
     # --- identity ---
 
@@ -228,6 +254,12 @@ class BLEDevice(BaseDevice):
 
     def _on_notify(self, _characteristic: Any, data: bytearray) -> None:
         """bleak notification handler: cache the latest decoded value."""
+        if not self._initialized:
+            # A notification scheduled (call_soon_threadsafe) just before
+            # shutdown must not repopulate _latest after shutdown cleared it --
+            # get_state() deliberately ignores _initialized, so a resurrected
+            # sample would be logged as a fabricated post-shutdown reading.
+            return
         try:
             value = self._decode_value(bytes(data))
         except Exception:
@@ -256,8 +288,58 @@ class BLEDevice(BaseDevice):
             return str(int(value))
         return str(value)
 
+    def _char_properties(self, char_uuid: str) -> set | None:
+        """The connected characteristic's GATT properties, or None if unknown."""
+        client = self._client
+        if client is None or not char_uuid:
+            return None
+        try:
+            char = client.services.get_characteristic(char_uuid)
+            return set(char.properties) if char is not None else None
+        except Exception:
+            return None
+
+    def _effective_response(self) -> bool:
+        """Pick the write mode, auto-detecting from the characteristic.
+
+        A characteristic that supports only one write mode is written that way;
+        when it supports both (or its properties can't be read) the configured
+        ``write_response`` preference is honored. (Ported from BLEWriteDevice.)
+        """
+        props = self._char_properties(self._write_char)
+        if props is None:
+            return self._write_response
+        has_with = "write" in props
+        has_without = "write-without-response" in props
+        if has_with and not has_without:
+            return True
+        if has_without and not has_with:
+            return False
+        return self._write_response
+
+    async def _with_retry(self, op: Callable) -> Any:
+        """Run a GATT op, reconnecting once and retrying on a dropped link.
+
+        Skips the retry if a shutdown ran in between (``_initialized`` is False),
+        so a transient failure never re-arms a device that was just stopped.
+        (Ported from BLEWriteDevice.write's retry.)
+        """
+        try:
+            await self._ensure_connected()
+            return await op()
+        except Exception:
+            if not self._initialized:
+                raise
+            self._client = None
+            await self._ensure_connected()
+            return await op()
+
     async def write(self, *args: Any) -> None:
-        """Write a command to ``write_char_uuid`` (comma-joins multiple args)."""
+        """Write a command to ``write_char_uuid`` (comma-joins multiple args).
+
+        Auto-detects the write mode from the characteristic and retries once
+        after a reconnect if the link dropped.
+        """
         if not args or all(a is None for a in args):
             raise ValueError("BLE.write: command is required")
         if not self._write_char:
@@ -267,9 +349,10 @@ class BLEDevice(BaseDevice):
         async with self._lock:
             if not self._initialized:
                 raise RuntimeError(f"BLE device {self._name} is not initialized")
-            await self._ensure_connected()
-            await self._client.write_gatt_char(
-                self._write_char, data, response=self._write_response
+            await self._with_retry(
+                lambda: self._client.write_gatt_char(
+                    self._write_char, data, response=self._effective_response()
+                )
             )
         logger.info("BLE: wrote %r to %s", command, self._write_char)
 
@@ -277,7 +360,8 @@ class BLEDevice(BaseDevice):
         """Read the value characteristic.
 
         On a notify device this returns the latest pushed value (waiting briefly
-        for the first one); otherwise it reads ``read_char_uuid`` on demand.
+        for the first one); otherwise it reads ``read_char_uuid`` on demand,
+        retrying once after a reconnect if the link dropped.
         """
         if self._notify:
             return await self._await_fresh_sample()
@@ -286,8 +370,7 @@ class BLEDevice(BaseDevice):
         async with self._lock:
             if not self._initialized:
                 raise RuntimeError(f"BLE device {self._name} is not initialized")
-            await self._ensure_connected()
-            data = await self._client.read_gatt_char(self._read_char)
+            data = await self._with_retry(lambda: self._client.read_gatt_char(self._read_char))
         return self._decode_value(bytes(data))
 
     async def _await_fresh_sample(self) -> Any:

@@ -198,6 +198,59 @@ async def test_execute_action_transfer_string_arg(fake_spidev):
     spi.writebytes.assert_called_once_with([255])
 
 
+# --- review fixes -------------------------------------------------------------
+
+
+async def test_get_state_returns_none_so_recorder_does_not_poll_the_bus(fake_spidev):
+    # #1: without get_state the DataRecorder falls through to read() and clocks
+    # an unsolicited readbytes() every tick. get_state() must short-circuit that.
+    _module, spi = fake_spidev
+    device = await _initialized()
+    assert await device.get_state() is None
+    spi.readbytes.assert_not_called()
+
+
+async def test_transfer_accepts_multiple_args_from_node_comma_split(fake_spidev):
+    # #5: DeviceAction splits "0x01,0x80" into two positional args.
+    _module, spi = fake_spidev
+    spi.xfer2.return_value = [0, 0]
+    device = await _initialized()
+    await device.execute_action("transfer", "0x01", "0x80")
+    spi.xfer2.assert_called_once_with([0x01, 0x80])
+
+
+async def test_write_accepts_multiple_args(fake_spidev):
+    _module, spi = fake_spidev
+    device = await _initialized()
+    await device.execute_action("write", 1, 2, 3)
+    spi.writebytes.assert_called_once_with([1, 2, 3])
+
+
+def test_to_byte_list_hex_strings_in_a_list():
+    # #9: a list of hex-string tokens parses like the comma-string form.
+    assert GenericSPIDevice._to_byte_list(["0x01", "0x80"]) == [0x01, 0x80]
+
+
+async def test_action_after_shutdown_raises_not_uses_closed_handle(fake_spidev):
+    # #2: _call re-checks state under the lock, so a transfer dispatched after
+    # shutdown raises cleanly instead of touching the closed handle.
+    _module, spi = fake_spidev
+    device = await _initialized()
+    await device.shutdown()
+    with pytest.raises(RuntimeError, match="not initialized"):
+        await device.transfer([0x01])
+    spi.xfer2.assert_not_called()
+
+
+async def test_apply_settings_while_initialized_saves_but_does_not_change_live_caches(fake_spidev):
+    # #B-apply: a live edit is recorded to config.settings (for the file) but the
+    # open handle's cached params stay put until reconnect.
+    device = await _initialized(settings={"spi_bus": 0, "max_speed_hz": 500000})
+    device.apply_settings({"max_speed_hz": 8_000_000})
+    assert device._config.settings["max_speed_hz"] == 8_000_000  # saved
+    assert device._max_speed_hz == 500000  # live cache unchanged until reconnect
+
+
 # --- serialization / registry -------------------------------------------------
 
 

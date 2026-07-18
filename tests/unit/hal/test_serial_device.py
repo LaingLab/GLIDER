@@ -285,6 +285,74 @@ def test_apply_settings_rejects_invalid_without_partial_apply():
     assert d.baudrate == 9600  # unchanged
 
 
+async def test_apply_settings_while_initialized_saves_but_keeps_live_caches(fake_serial):
+    # #B5: flipping stream (or any conn param) on a live device would desync the
+    # reader thread from the flag, so a live edit only records to config.settings.
+    device = await _initialized(settings={"stream": False, "baudrate": 9600})
+    device.apply_settings({"stream": True, "baudrate": 115200})
+    assert device._config.settings["baudrate"] == 115200  # saved to file
+    assert device.baudrate == 9600  # live cache unchanged
+    assert device.is_streaming is False  # reader-thread state not desynced
+
+
+# --- review fixes -------------------------------------------------------------
+
+
+async def test_read_line_raises_on_incomplete_frame(fake_serial):
+    # #4: read_until returns partial bytes (no terminator) on a timeout; that
+    # must raise, not be recorded as a truncated value.
+    _module, ser = fake_serial
+    ser.read_until.return_value = b"23.4"  # no trailing \n
+    device = await _initialized()
+    with pytest.raises(RuntimeError, match="incomplete read"):
+        await device.read_line()
+
+
+async def test_streaming_reader_discards_partial_frame(fake_serial):
+    # #4: a partial frame in the reader loop is discarded, never cached.
+    _module, ser = fake_serial
+    ser.read_until.side_effect = [b"12.3"]  # partial, then StopIteration -> handled
+
+    def _read_until(*_a, **_k):
+        import time as _t
+        _t.sleep(0.005)
+        return b"12.3"  # always partial
+
+    ser.read_until.side_effect = _read_until
+    device = await _initialized(settings={"stream": True})
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+    assert await device.get_state() is None  # nothing complete was cached
+    await device.shutdown()
+
+
+async def test_write_comma_joins_multiple_args(fake_serial):
+    # #5: node comma-split "SET,1,2" -> write("SET",1,2) must round-trip.
+    _module, ser = fake_serial
+    device = await _initialized()
+    await device.execute_action("write", "SET", 1, 2)
+    ser.write.assert_called_once_with(b"SET,1,2\n")
+
+
+async def test_streaming_reader_timeout_is_clamped(fake_serial):
+    # #6/C5: a huge user timeout must not become the reader's stop-latency.
+    _module, ser = fake_serial
+    ser.read_until.side_effect = lambda *a, **k: (__import__("time").sleep(0.005) or b"")
+    device = await _initialized(settings={"stream": True, "timeout": 60.0})
+    assert ser.timeout <= 1.0  # MAX_READER_TIMEOUT_S
+    await device.shutdown()
+
+
+async def test_action_after_shutdown_raises(fake_serial):
+    # #3: write re-checks state under the port lock, so it can't use a closed port.
+    _module, ser = fake_serial
+    device = await _initialized()
+    await device.shutdown()
+    with pytest.raises(RuntimeError, match="not initialized"):
+        await device.write("x")
+    ser.write.assert_not_called()
+
+
 # --- Serialization / registry -------------------------------------------------
 
 
