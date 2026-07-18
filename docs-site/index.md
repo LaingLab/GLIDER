@@ -10,6 +10,11 @@ finish. The same experiment can run on a full desktop or on a touchscreen
 **Runner** — a self-contained kiosk you can leave at the bench or bolt to a
 behavior rig.
 
+<figure markdown="span">
+  ![The GLIDER Builder — a visual node-graph editor](assets/screenshots/builder.png)
+  <figcaption>The Builder: design an experiment as a visual node graph, then press Start.</figcaption>
+</figure>
+
 <div class="grid cards" markdown>
 
 -   :material-rocket-launch: **New here?**
