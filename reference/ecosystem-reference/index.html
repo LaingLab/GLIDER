@@ -1,0 +1,2623 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="General Laboratory Interface for Design, Experimentation, and Recording — tutorials and guides for building, running, and recording experiments.">
+      
+      
+      
+        <link rel="canonical" href="https://lainglab.github.io/glider/reference/ecosystem-reference/">
+      
+      
+        <link rel="prev" href="../">
+      
+      
+        <link rel="next" href="../nodes/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Ecosystem Reference - GLIDER</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#glider-ecosystem-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="GLIDER" class="md-header__button md-logo" aria-label="GLIDER" data-md-component="logo">
+      
+  <img src="../../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            GLIDER
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Ecosystem Reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/LaingLab/glider" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    LaingLab/glider
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="GLIDER" class="md-nav__button md-logo" aria-label="GLIDER" data-md-component="logo">
+      
+  <img src="../../assets/logo.png" alt="logo">
+
+    </a>
+    GLIDER
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/LaingLab/glider" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    LaingLab/glider
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../getting-started/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/first-experiment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Your First Experiment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/concepts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How GLIDER Works
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../building/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building Experiments
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Building Experiments
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../building/node-graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Node Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../building/devices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Devices & Hardware
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../building/functions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Functions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../building/plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Devices & Plugins
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../camera-behavior/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Camera & Behavior
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Camera & Behavior
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../camera-behavior/camera/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Camera & Recording
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../camera-behavior/tracking/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tracking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../camera-behavior/behavior/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Behavior Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../runner/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runner Mode
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runner Mode
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner/runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Runner Screen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner/pi-kiosk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Raspberry Pi Kiosk
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ecosystem Reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ecosystem Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#glider-in-one-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GLIDER in one page
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-experiment-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The experiment lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-users-see-builder-and-runner" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What users see: Builder and Runner
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What users see: Builder and Runner">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#builder-is-the-experiment-authoring-workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Builder is the experiment-authoring workspace
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runner-is-the-touch-first-operating-workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runner is the touch-first operating workspace
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-how-glider-coordinates-the-subsystems" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture: how GLIDER coordinates the subsystems
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architecture: how GLIDER coordinates the subsystems">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#concurrency-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Concurrency model
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-saved-experiment-session-metadata-and-portability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The saved experiment: session, metadata, and portability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hardware-model-boards-devices-actions-and-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware model: boards, devices, actions, and safety
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hardware model: boards, devices, actions, and safety">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#built-in-board-and-transport-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Built-in board and transport support
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#built-in-devices-and-declarative-custom-devices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Built-in devices and declarative custom devices
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#value-ranges-and-safe-shutdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Value ranges and safe shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-flow-engine-and-node-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The flow engine and node system
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The flow engine and node system">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#core-experiment-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core experiment controls
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware-interface-and-logic-nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware, interface, and logic nodes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#camera-recording-and-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Camera, recording, and tracking
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Camera, recording, and tracking">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#camera-acquisition-and-recording" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Camera acquisition and recording
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#live-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#offline-video-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Offline video tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#behavior-analysis-annotation-training-and-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior analysis: annotation, training, and application
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Behavior analysis: annotation, training, and application">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#live-movement-state-labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live movement-state labels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supervised-behavior-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supervised behavior workflow
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extension-model-what-can-be-customized" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Extension model: what can be customized
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Extension model: what can be customized">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#no-code-device-definitions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No-code device definitions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-plugins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python plugins
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installation-environments-and-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installation, environments, and deployment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-and-evidence-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing and evidence boundaries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#claims-reviewers-may-ask-about" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Claims reviewers may ask about
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Claims reviewers may ask about">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#is-glider-no-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is GLIDER "no code"?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#does-glider-support-real-time-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does GLIDER support real-time tracking?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#does-glider-synchronize-video-and-hardware" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does GLIDER synchronize video and hardware?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#does-glider-support-arbitrary-hardware" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does GLIDER support arbitrary hardware?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#does-glider-train-pose-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does GLIDER train pose models?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-is-stored-for-reproducibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is stored for reproducibility?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#technical-reference-source-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Technical reference: source map
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maintenance-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Maintenance notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nodes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Node Catalog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Device Catalog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../shortcuts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keyboard Shortcuts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#glider-in-one-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GLIDER in one page
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-experiment-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The experiment lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-users-see-builder-and-runner" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What users see: Builder and Runner
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What users see: Builder and Runner">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#builder-is-the-experiment-authoring-workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Builder is the experiment-authoring workspace
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runner-is-the-touch-first-operating-workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runner is the touch-first operating workspace
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-how-glider-coordinates-the-subsystems" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture: how GLIDER coordinates the subsystems
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architecture: how GLIDER coordinates the subsystems">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#concurrency-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Concurrency model
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-saved-experiment-session-metadata-and-portability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The saved experiment: session, metadata, and portability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hardware-model-boards-devices-actions-and-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware model: boards, devices, actions, and safety
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Hardware model: boards, devices, actions, and safety">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#built-in-board-and-transport-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Built-in board and transport support
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#built-in-devices-and-declarative-custom-devices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Built-in devices and declarative custom devices
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#value-ranges-and-safe-shutdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Value ranges and safe shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-flow-engine-and-node-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The flow engine and node system
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The flow engine and node system">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#core-experiment-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core experiment controls
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware-interface-and-logic-nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware, interface, and logic nodes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#camera-recording-and-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Camera, recording, and tracking
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Camera, recording, and tracking">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#camera-acquisition-and-recording" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Camera acquisition and recording
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#live-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#offline-video-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Offline video tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#behavior-analysis-annotation-training-and-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior analysis: annotation, training, and application
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Behavior analysis: annotation, training, and application">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#live-movement-state-labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live movement-state labels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supervised-behavior-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supervised behavior workflow
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extension-model-what-can-be-customized" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Extension model: what can be customized
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Extension model: what can be customized">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#no-code-device-definitions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No-code device definitions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#python-plugins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python plugins
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installation-environments-and-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installation, environments, and deployment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-and-evidence-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing and evidence boundaries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#claims-reviewers-may-ask-about" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Claims reviewers may ask about
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Claims reviewers may ask about">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#is-glider-no-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Is GLIDER "no code"?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#does-glider-support-real-time-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does GLIDER support real-time tracking?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#does-glider-synchronize-video-and-hardware" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does GLIDER synchronize video and hardware?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#does-glider-support-arbitrary-hardware" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does GLIDER support arbitrary hardware?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#does-glider-train-pose-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does GLIDER train pose models?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-is-stored-for-reproducibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is stored for reproducibility?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#technical-reference-source-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Technical reference: source map
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#maintenance-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Maintenance notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="glider-ecosystem-reference">GLIDER Ecosystem Reference<a class="headerlink" href="#glider-ecosystem-reference" title="Permanent link">&para;</a></h1>
+<p>GLIDER is a cross-platform laboratory-automation application for designing, running, recording, and reviewing behavioral experiments without requiring users to write the experiment logic as code. This reference is a reviewer-facing companion to the user guides: it explains what GLIDER is, what each subsystem is responsible for, what an experiment produces, and which claims should be made with appropriate scope.</p>
+<p><strong>Audience:</strong> laboratory scientists, collaborators, reviewers, and technically literate contributors who need a durable mental model of the current system.</p>
+<p><strong>Code baseline:</strong> this document describes the repository's <code>main</code> branch at the time of writing. The package currently identifies itself as <code>0.3.0-dev</code>; installed releases and laboratory deployments may differ.</p>
+<h2 id="glider-in-one-page">GLIDER in one page<a class="headerlink" href="#glider-in-one-page" title="Permanent link">&para;</a></h2>
+<p>GLIDER addresses a practical coordination problem. A behavioral experiment often needs a reproducible protocol, hardware control, camera capture, and analysis-ready records at the same time. GLIDER keeps those concerns in one saved experiment and presents them through a visual graph rather than an imperative script.</p>
+<ul>
+<li><strong>Design:</strong> define boards and devices, configure camera and zones, and assemble a node graph in Builder mode.</li>
+<li><strong>Operate:</strong> run that same saved experiment in a desktop workspace or a touch-first Runner interface.</li>
+<li><strong>Record:</strong> write video, frame-aligned device-state data, edge/event logs, and tracking records to a selected recording directory.</li>
+<li><strong>Analyze:</strong> perform live tracking, offline video tracking, and supervised behavior classification from annotated pose data.</li>
+<li><strong>Extend:</strong> add devices without code through a declarative builder, or add Python board/device/node plugins through documented extension points.</li>
+</ul>
+<p>GLIDER is not a replacement for all real-time systems. It is designed around practical behavioral rigs and commodity hardware. Workloads that require deterministic sub-millisecond control, very high acquisition rates, or large multi-camera inference loads should be characterized on the intended hardware and may need a dedicated acquisition system.</p>
+<h2 id="the-experiment-lifecycle">The experiment lifecycle<a class="headerlink" href="#the-experiment-lifecycle" title="Permanent link">&para;</a></h2>
+<p>An experiment is a <code>.glider</code> JSON file plus the recorded artifacts created when it runs. The saved file is the portable protocol; the recording directory holds the evidence produced by a particular execution.</p>
+<p><em>Scope: the normal path from experiment design through recorded output. It omits optional plugins and offline behavior-model training.</em></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>flowchart TD
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    A[Create or open a .glider experiment] --&gt; B[Define boards and devices]
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    B --&gt; C[Configure camera, zones, and recording]
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    C --&gt; D[Build node graph and dashboard]
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    D --&gt; E[Save portable experiment configuration]
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    E --&gt; F[Connect and initialize hardware]
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    F --&gt; G[Start experiment]
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    G --&gt; H[Run execution graph]
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    G --&gt; I[Capture video and process frames when enabled]
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    G --&gt; J[Record device states and events when enabled]
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    H --&gt; K[Stop normally or request safe shutdown]
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    I --&gt; L[MP4 and tracking artifacts]
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    J --&gt; M[CSV artifacts]
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    K --&gt; L
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    K --&gt; M
+</code></pre></div>
+<p>The file captures metadata, hardware definitions, flow configuration, camera and zone settings, and dashboard layout. A recording uses a shared session epoch so that device, event, and tracking data can be related in time. When computer vision and a camera are active, device-state recording can be camera-driven, producing rows aligned to processed frames; otherwise it uses a periodic sampling loop.</p>
+<h2 id="what-users-see-builder-and-runner">What users see: Builder and Runner<a class="headerlink" href="#what-users-see-builder-and-runner" title="Permanent link">&para;</a></h2>
+<h3 id="builder-is-the-experiment-authoring-workspace">Builder is the experiment-authoring workspace<a class="headerlink" href="#builder-is-the-experiment-authoring-workspace" title="Permanent link">&para;</a></h3>
+<p>Builder mode is the full desktop interface. It provides the graph canvas, node library, hardware configuration, camera controls, device panels, and properties editors. Researchers use it to create a reproducible protocol before taking it to a rig.</p>
+<p>The graph has two connection types:</p>
+<ul>
+<li><strong>Execution wires</strong> carry the next-action signal. A run begins at <code>StartExperiment</code> and normally reaches <code>EndExperiment</code>.</li>
+<li><strong>Data wires</strong> carry values such as sensor readings, thresholds, calculated values, or node settings.</li>
+</ul>
+<p>This distinction matters in explanations of GLIDER: data flow alone does not trigger an experiment action. The execution graph supplies ordering, while data connections supply the values used by that ordering.</p>
+<h3 id="runner-is-the-touch-first-operating-workspace">Runner is the touch-first operating workspace<a class="headerlink" href="#runner-is-the-touch-first-operating-workspace" title="Permanent link">&para;</a></h3>
+<p>Runner is intended for an operator at a bench or a Raspberry Pi touchscreen. It can load the same <code>.glider</code> file but uses larger controls and a four-tab structure:</p>
+<ul>
+<li><strong>Setup</strong> loads/saves experiments and connects hardware.</li>
+<li><strong>Run</strong> starts and stops a ready experiment and shows run state.</li>
+<li><strong>Manual</strong> generates controls from a device's declared actions and ranges.</li>
+<li><strong>Camera</strong> provides the camera and recording interface.</li>
+</ul>
+<p>Runner does not create a separate kind of experiment. It is another view over the same experiment session and hardware model. Manual functions are deliberately prevented from overlapping an active experiment because both could drive the same hardware.</p>
+<h2 id="architecture-how-glider-coordinates-the-subsystems">Architecture: how GLIDER coordinates the subsystems<a class="headerlink" href="#architecture-how-glider-coordinates-the-subsystems" title="Permanent link">&para;</a></h2>
+<p><code>GliderCore</code> is the application-level coordinator. It owns the current experiment session and connects the flow engine, hardware manager, camera and recording components, serializers, and application-facing callbacks.</p>
+<p><em>Scope: the principal runtime ownership model. The chart shows responsibility boundaries, not every callback or thread.</em></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>flowchart TB
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    UI[PyQt6 Builder or Runner UI] --&gt; Core[GliderCore]
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    Core --&gt; Session[ExperimentSession]
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    Core --&gt; Flow[FlowEngine]
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    Core --&gt; Hardware[HardwareManager]
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    Core --&gt; Vision[Camera and CV services]
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    Core --&gt; Recorders[Data, event, tracking, video, and audio recorders]
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    Core --&gt; Serializer[ExperimentSerializer]
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    Session --&gt; Serializer
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    Flow --&gt; Hardware
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    Vision --&gt; Recorders
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    Hardware --&gt; Recorders
+</code></pre></div>
+<h3 id="concurrency-model">Concurrency model<a class="headerlink" href="#concurrency-model" title="Permanent link">&para;</a></h3>
+<p>GLIDER combines a Qt user interface with an asyncio event loop through <code>qasync</code>. It does not claim that every operation runs on one main-thread loop.</p>
+<ul>
+<li>Camera capture runs in a background Python thread.</li>
+<li>Live CV processing is dispatched to a dedicated Qt worker thread; the UI receives results through signals.</li>
+<li>Batch video tracking runs through a worker thread so it does not block the GUI.</li>
+<li>Telemetrix communication is isolated in a dedicated thread with its own event loop.</li>
+<li>Raspberry Pi GPIO and other blocking hardware operations are moved through <code>asyncio.to_thread</code> where required.</li>
+</ul>
+<p>This design keeps slow I/O and model work from directly freezing the interface. It does not remove the need to benchmark a particular camera, model, board, and machine combination.</p>
+<h2 id="the-saved-experiment-session-metadata-and-portability">The saved experiment: session, metadata, and portability<a class="headerlink" href="#the-saved-experiment-session-metadata-and-portability" title="Permanent link">&para;</a></h2>
+<p><code>ExperimentSession</code> is the in-memory representation of the experiment. It stores the protocol rather than a raw recording. The important configuration domains are:</p>
+<ul>
+<li><strong>Metadata:</strong> experiment name, author, protocol, experiment type, experimenter, lab, project, notes, and subjects.</li>
+<li><strong>Hardware:</strong> board definitions, logical devices, and device settings.</li>
+<li><strong>Flow:</strong> node definitions, positions, state, bindings, and connections.</li>
+<li><strong>Camera and vision:</strong> source settings, calibration, zones, tracking settings, and recording choices.</li>
+<li><strong>Dashboard:</strong> layout and controls used by the Runner-facing interface.</li>
+</ul>
+<p>The serializer validates and writes this structure as a <code>.glider</code> file. A saved file can be moved between machines, but successful execution still depends on the target machine having the needed drivers, optional dependencies, hardware access, compatible pin assignments, and any external model files.</p>
+<h2 id="hardware-model-boards-devices-actions-and-safety">Hardware model: boards, devices, actions, and safety<a class="headerlink" href="#hardware-model-boards-devices-actions-and-safety" title="Permanent link">&para;</a></h2>
+<p>GLIDER distinguishes the controller from the logical component attached to it.</p>
+<ul>
+<li>A <strong>board</strong> owns a connection and exposes physical capabilities such as digital, analog, PWM, and servo operations.</li>
+<li>A <strong>device</strong> represents a meaningful laboratory component, such as a relay, sensor, servo, stepper driver, ADC, or BLE characteristic.</li>
+<li>A <strong>node</strong> binds to a device and invokes an action without needing to know the board-specific implementation.</li>
+</ul>
+<p>This separation lets a graph express "turn the house light on" or "read the lick sensor" rather than embed a pin number in every graph node.</p>
+<h3 id="built-in-board-and-transport-support">Built-in board and transport support<a class="headerlink" href="#built-in-board-and-transport-support" title="Permanent link">&para;</a></h3>
+<p>The Python package registers built-in drivers for the following transport categories:</p>
+<table>
+<thead>
+<tr>
+<th>Driver category</th>
+<th>Typical use</th>
+<th>Important condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Arduino / Telemetrix</td>
+<td>USB-connected Arduino-class board</td>
+<td>The board needs compatible Telemetrix firmware and a usable serial connection.</td>
+</tr>
+<tr>
+<td>Raspberry Pi GPIO</td>
+<td>Direct GPIO control on a Pi</td>
+<td>Requires the Pi-specific optional dependencies and appropriate OS permissions.</td>
+</tr>
+<tr>
+<td>Bluetooth Low Energy</td>
+<td>BLE peripheral communication</td>
+<td>Requires a reachable peripheral and its address/characteristic configuration.</td>
+</tr>
+<tr>
+<td>Serial</td>
+<td>Generic serial transport</td>
+<td>Supports serial-connected devices where the selected device implementation applies.</td>
+</tr>
+<tr>
+<td>I2C / SPI devices</td>
+<td>Bus-attached devices, primarily on Linux/Pi environments</td>
+<td>These are optional, platform-dependent paths.</td>
+</tr>
+</tbody>
+</table>
+<p>The user documentation emphasizes Arduino, Raspberry Pi, and BLE because they are the primary interactive board choices. It is more accurate to describe GLIDER as supporting these built-in paths than to claim universal compatibility with any hardware attached to any board.</p>
+<h3 id="built-in-devices-and-declarative-custom-devices">Built-in devices and declarative custom devices<a class="headerlink" href="#built-in-devices-and-declarative-custom-devices" title="Permanent link">&para;</a></h3>
+<p>Built-in device types include digital and analog inputs, digital and PWM outputs, servos, a motor governor, A4988 steppers, ADS1115 ADCs, generic I2C devices, BLE write devices, serial devices, and selected transport-specific devices.</p>
+<p>The Custom Device builder covers straightforward GPIO and I2C cases without requiring Python. A user defines a transport, operations, action names, and allowed value ranges. GLIDER then exposes the device through the same generic device-action model used by built-in devices.</p>
+<h3 id="value-ranges-and-safe-shutdown">Value ranges and safe shutdown<a class="headerlink" href="#value-ranges-and-safe-shutdown" title="Permanent link">&para;</a></h3>
+<p>Each device action may declare a value specification: minimum, maximum, step, unit, or a boolean/no-value behavior. The properties panel, Runner controls, and action execution use that shared specification. Out-of-range numeric values are clamped; invalid non-finite values are rejected.</p>
+<p>The hardware manager also provides disconnect and emergency-stop paths. Safe shutdown attempts to stop devices and boards while preserving errors for reporting. The exact safe state depends on what each board and device implementation defines.</p>
+<h2 id="the-flow-engine-and-node-system">The flow engine and node system<a class="headerlink" href="#the-flow-engine-and-node-system" title="Permanent link">&para;</a></h2>
+<p>The flow engine uses <code>ryvencore</code> when available and otherwise has a limited standalone path. GLIDER registers its node classes with a central registry, reconstructs them from saved session data, binds hardware nodes to devices, and schedules execution propagation with asyncio tasks.</p>
+<h3 id="core-experiment-controls">Core experiment controls<a class="headerlink" href="#core-experiment-controls" title="Permanent link">&para;</a></h3>
+<p>Common graph nodes include:</p>
+<ul>
+<li><strong>StartExperiment / EndExperiment:</strong> define the start and normal end of a run.</li>
+<li><strong>Delay, Loop, Sequence, and Timer:</strong> supply temporal and control-flow structure.</li>
+<li><strong>WaitForInput:</strong> waits for a device condition, threshold, or supported custom behavior.</li>
+<li><strong>StartFunction, EndFunction, and FunctionCall:</strong> package and reuse named action sequences.</li>
+</ul>
+<h3 id="hardware-interface-and-logic-nodes">Hardware, interface, and logic nodes<a class="headerlink" href="#hardware-interface-and-logic-nodes" title="Permanent link">&para;</a></h3>
+<p>The catalog also includes generic Input, Output, Device Action, and Device Read nodes; digital/analog/PWM variants; audio and video playback; zone input; interface controls; and math, comparison, mapping, threshold, toggle, and PID nodes. The visible palette is intentionally smaller than the full set of node types that can be loaded from saved experiments.</p>
+<p>When explaining a protocol, distinguish the generic <code>Output</code> and <code>Input</code> nodes from device-specific behavior. The node is reusable; its behavior derives from the device it is bound to.</p>
+<h2 id="camera-recording-and-tracking">Camera, recording, and tracking<a class="headerlink" href="#camera-recording-and-tracking" title="Permanent link">&para;</a></h2>
+<h3 id="camera-acquisition-and-recording">Camera acquisition and recording<a class="headerlink" href="#camera-acquisition-and-recording" title="Permanent link">&para;</a></h3>
+<p>GLIDER manages live camera sources, including OpenCV capture and platform-specific fallbacks. It can record a primary camera or multiple cameras, subject to the selected hardware and configuration. Video output uses MP4-capable writer paths; audio can be recorded separately and may be muxed when FFmpeg is available.</p>
+<p>The normal recording products can include:</p>
+<table>
+<thead>
+<tr>
+<th>Artifact</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;experiment&gt;_&lt;timestamp&gt;.csv</code></td>
+<td>Device-state samples with metadata headers.</td>
+</tr>
+<tr>
+<td><code>&lt;experiment&gt;_&lt;timestamp&gt;_events.csv</code></td>
+<td>Device-output changes and input-edge or callback events.</td>
+</tr>
+<tr>
+<td><code>&lt;experiment&gt;_&lt;timestamp&gt;_tracking.csv</code></td>
+<td>Per-frame tracking and zone-related data.</td>
+</tr>
+<tr>
+<td><code>&lt;experiment&gt;_&lt;timestamp&gt;.mp4</code></td>
+<td>Raw video where video recording is enabled.</td>
+</tr>
+<tr>
+<td><code>&lt;experiment&gt;_&lt;timestamp&gt;_annotated.mp4</code></td>
+<td>Overlay video when annotated recording is enabled.</td>
+</tr>
+<tr>
+<td>Audio artifacts</td>
+<td>Separate audio or muxed audio/video, depending on configuration and FFmpeg availability.</td>
+</tr>
+</tbody>
+</table>
+<p>CSV files carry metadata rows before their tabular header. The analysis package can discover and load a recording directory, then join the available data, event, tracking, and video artifacts for downstream analysis.</p>
+<h3 id="live-tracking">Live tracking<a class="headerlink" href="#live-tracking" title="Permanent link">&para;</a></h3>
+<p>The vision system provides model-free background subtraction and motion-only modes, plus Ultralytics YOLO and YOLO-with-ByteTrack modes when the optional vision stack is installed. ByteTrack supplies persistent object IDs when its optional <code>lap</code> dependency is available; without it, the system degrades to plain YOLO detection rather than silently claiming stable tracks.</p>
+<p>YOLO pose models can supply keypoints. GLIDER stores operator-supplied keypoint names with the settings because a model's class names are not a reliable body-part vocabulary. GLIDER can run <code>.pt</code> models on the best available PyTorch device, preferring CUDA and then Apple MPS. It can also load an Ultralytics NCNN export; NCNN is treated as a CPU backend and relies on an exported model directory with metadata.</p>
+<p>Zones are user-drawn regions within the camera view. The CV processor determines occupancy and forwards zone state to zone nodes and recorders. A zone can therefore become a graph input, such as triggering an output when an animal enters a defined region.</p>
+<h3 id="offline-video-tracking">Offline video tracking<a class="headerlink" href="#offline-video-tracking" title="Permanent link">&para;</a></h3>
+<p>The Camera panel can process a recorded video without a live camera. The batch runner uses the video timeline rather than wall-clock processing time. Its output directory can contain a tracking CSV, zone enter/exit events, zone occupancy totals, an annotated MP4, and a <code>metadata.json</code> record of source and processing settings.</p>
+<h2 id="behavior-analysis-annotation-training-and-application">Behavior analysis: annotation, training, and application<a class="headerlink" href="#behavior-analysis-annotation-training-and-application" title="Permanent link">&para;</a></h2>
+<p>GLIDER has two distinct behavior features that should not be conflated.</p>
+<h3 id="live-movement-state-labels">Live movement-state labels<a class="headerlink" href="#live-movement-state-labels" title="Permanent link">&para;</a></h3>
+<p>The camera settings support a light-weight, rule-based live state classifier. It uses movement thresholds to label tracked objects as states such as freezing, immobile, moving, or darting. These labels are useful for immediate feedback and are stored in tracking output when enabled. They are not a trained model for complex behavior categories.</p>
+<h3 id="supervised-behavior-workflow">Supervised behavior workflow<a class="headerlink" href="#supervised-behavior-workflow" title="Permanent link">&para;</a></h3>
+<p>The Behavior Analysis tool is an optional workflow built around pose data. It proceeds in three stages:</p>
+<ol>
+<li><strong>Annotate:</strong> create a vocabulary and label selected video clips. Labels are saved alongside pose data.</li>
+<li><strong>Train:</strong> derive geometric and kinematic features from pose, summarize them over windows, and fit a Random Forest or LightGBM classifier. Whole sessions can be held out for a more credible generalization test.</li>
+<li><strong>Apply:</strong> combine a trained model bundle, YOLO pose weights, keypoint names, and new videos to make frame-level predictions.</li>
+</ol>
+<p>Applying a behavior model produces an annotated video, a raw ethogram, behavior bouts, summary statistics, and transition counts. The model bundle is local to the features, keypoint conventions, and labeled behaviors used to train it; users should validate it on recordings that represent the conditions in which they plan to use it.</p>
+<h2 id="extension-model-what-can-be-customized">Extension model: what can be customized<a class="headerlink" href="#extension-model-what-can-be-customized" title="Permanent link">&para;</a></h2>
+<p>GLIDER has two extension paths.</p>
+<h3 id="no-code-device-definitions">No-code device definitions<a class="headerlink" href="#no-code-device-definitions" title="Permanent link">&para;</a></h3>
+<p>The declarative Custom Device builder is appropriate for simple GPIO or I2C devices. It keeps the configuration as data, registers it in the local device library, and exposes actions through generic nodes and Runner controls.</p>
+<h3 id="python-plugins">Python plugins<a class="headerlink" href="#python-plugins" title="Permanent link">&para;</a></h3>
+<p>Python packages can register board drivers, device types, node types, and related UI components. Entry points use the <code>glider.driver</code>, <code>glider.device</code>, and <code>glider.node</code> groups. The project itself registers its built-in drivers through this mechanism.</p>
+<p>Directory-based plugins are also supported, but they execute Python code and are disabled by default. A laboratory must explicitly enable directory plugins in its GLIDER configuration and should load only trusted code. This safety boundary is important in reviewer-facing statements: plugin support makes extension possible; it does not make untrusted plugins safe.</p>
+<h2 id="installation-environments-and-deployment">Installation, environments, and deployment<a class="headerlink" href="#installation-environments-and-deployment" title="Permanent link">&para;</a></h2>
+<p>GLIDER requires Python 3.11 through 3.13. The base package keeps several capability groups optional so an installation can match the machine and experiment:</p>
+<table>
+<thead>
+<tr>
+<th>Extra</th>
+<th>Adds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pc</code></td>
+<td>PyQt6 and desktop audio dependencies.</td>
+</tr>
+<tr>
+<td><code>rpi</code></td>
+<td>Raspberry Pi GPIO dependencies.</td>
+</tr>
+<tr>
+<td><code>vision</code></td>
+<td>Ultralytics YOLO and ByteTrack's <code>lap</code> dependency.</td>
+</tr>
+<tr>
+<td><code>audio</code></td>
+<td>Audio recording and playback dependencies.</td>
+</tr>
+<tr>
+<td><code>i2c</code></td>
+<td>ADS1x15 and SMBus I2C support.</td>
+</tr>
+<tr>
+<td><code>spi</code></td>
+<td>Linux SPI support.</td>
+</tr>
+<tr>
+<td><code>behavior</code></td>
+<td>UMAP, HDBSCAN, scikit-learn, LightGBM, matplotlib, and YAML support.</td>
+</tr>
+<tr>
+<td><code>dev</code></td>
+<td>Development and test tooling plus the broad desktop/vision/behavior stack.</td>
+</tr>
+</tbody>
+</table>
+<p>Desktop installation targets Windows, macOS, and Linux. Raspberry Pi deployment uses system PyQt6 and a virtual environment with access to system site packages. The repository also contains packaging for a Pi kiosk image, macOS, and Windows. A prebuilt Pi kiosk can auto-start Runner mode, but deployment documentation should be checked against the particular release image rather than assumed from source alone.</p>
+<h2 id="testing-and-evidence-boundaries">Testing and evidence boundaries<a class="headerlink" href="#testing-and-evidence-boundaries" title="Permanent link">&para;</a></h2>
+<p>The repository includes unit and integration tests, mock hardware facilities, and a hardware latency test script. These are valuable evidence sources, but they answer different questions.</p>
+<ul>
+<li>Unit and integration tests demonstrate expected software behavior under their fixtures.</li>
+<li>Mock boards and devices let flows be exercised without laboratory hardware.</li>
+<li>The latency script measures a specified configuration and measurement endpoint. Its result should be reported with the wiring, board firmware, machine, trial count, warm-up policy, statistic, and whether the result is one-way or round-trip.</li>
+<li>Vision and behavior metrics should identify datasets, split strategy, labels, model versions, hardware, and error-bar definitions.</li>
+</ul>
+<p>Do not use a current repository CSV to overwrite the results in a manuscript unless it is known to be the exact dataset and protocol used for that figure. Keep the figure source data, analysis script, and caption methods together.</p>
+<h2 id="claims-reviewers-may-ask-about">Claims reviewers may ask about<a class="headerlink" href="#claims-reviewers-may-ask-about" title="Permanent link">&para;</a></h2>
+<h3 id="is-glider-no-code">Is GLIDER "no code"?<a class="headerlink" href="#is-glider-no-code" title="Permanent link">&para;</a></h3>
+<p>For common experimental protocols, users can build graphs, configure devices, draw zones, and operate runs without writing Python. The system also deliberately supports code-based extensions for laboratories that need custom drivers, devices, or nodes. "No-code experiment authoring" is precise; "no programming anywhere" is not.</p>
+<h3 id="does-glider-support-real-time-tracking">Does GLIDER support real-time tracking?<a class="headerlink" href="#does-glider-support-real-time-tracking" title="Permanent link">&para;</a></h3>
+<p>Yes, live camera processing supports background subtraction, motion detection, and optional YOLO/ByteTrack tracking. Achievable frame rate and latency depend on camera resolution, model, chosen backend, accelerator, processor, and the rest of the active workload. A real-time claim should always be tied to a benchmarked configuration.</p>
+<h3 id="does-glider-synchronize-video-and-hardware">Does GLIDER synchronize video and hardware?<a class="headerlink" href="#does-glider-synchronize-video-and-hardware" title="Permanent link">&para;</a></h3>
+<p>GLIDER records related artifacts using a common session epoch and can align device-state samples to processed camera frames when camera-driven recording is active. This is software-level synchronization and timestamp alignment. It should not be presented as a universal hardware-clock guarantee without a specific measurement and method.</p>
+<h3 id="does-glider-support-arbitrary-hardware">Does GLIDER support arbitrary hardware?<a class="headerlink" href="#does-glider-support-arbitrary-hardware" title="Permanent link">&para;</a></h3>
+<p>It supports built-in Arduino/Telemetrix, Raspberry Pi GPIO, BLE, serial, and selected bus-device paths, plus custom devices and plugins. A new hardware system may still require a compatible electrical interface, driver, device definition, firmware, or plugin.</p>
+<h3 id="does-glider-train-pose-models">Does GLIDER train pose models?<a class="headerlink" href="#does-glider-train-pose-models" title="Permanent link">&para;</a></h3>
+<p>GLIDER uses YOLO pose models for inference and consumes pose data in its behavior workflow. It supports model files trained externally, including workflows based on Ultralytics; DeepLabCut-format pose data is supported for interchange. The repository's user-facing behavior workflow trains behavior classifiers, not a general-purpose pose-estimation model trainer.</p>
+<h3 id="what-is-stored-for-reproducibility">What is stored for reproducibility?<a class="headerlink" href="#what-is-stored-for-reproducibility" title="Permanent link">&para;</a></h3>
+<p>The <code>.glider</code> file stores the experiment configuration and metadata. Recording artifacts store logs, tracking records, and media. Full reproducibility also requires preserving external model files, plugin versions, firmware versions, operating environment, camera settings, hardware wiring, and the source data/analysis used for reported figures.</p>
+<h2 id="technical-reference-source-map">Technical reference: source map<a class="headerlink" href="#technical-reference-source-map" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Primary source locations</th>
+<th>What to inspect first</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Application entry point</td>
+<td><code>src/glider/__main__.py</code></td>
+<td>CLI modes, Qt/async setup, GPU diagnostics, plugin switch.</td>
+</tr>
+<tr>
+<td>Runtime coordinator</td>
+<td><code>src/glider/core/glider_core.py</code></td>
+<td>Experiment lifecycle, recorder start/stop, subsystem wiring.</td>
+</tr>
+<tr>
+<td>Experiment model</td>
+<td><code>src/glider/core/experiment_session.py</code></td>
+<td>Saved metadata, configuration domains, serialization shape.</td>
+</tr>
+<tr>
+<td>Flow graph</td>
+<td><code>src/glider/core/flow_engine.py</code>, <code>src/glider/nodes/</code></td>
+<td>Node registration, execution/data propagation, node categories.</td>
+</tr>
+<tr>
+<td>Hardware</td>
+<td><code>src/glider/core/hardware_manager.py</code>, <code>src/glider/hal/</code></td>
+<td>Board/device lifecycle, transport implementations, action model.</td>
+</tr>
+<tr>
+<td>Recording</td>
+<td><code>src/glider/core/data_recorder.py</code>, <code>src/glider/core/event_logger.py</code>, <code>src/glider/vision/tracking_logger.py</code></td>
+<td>CSV schemas, metadata, timestamps, event capture.</td>
+</tr>
+<tr>
+<td>Camera and CV</td>
+<td><code>src/glider/vision/camera_manager.py</code>, <code>src/glider/vision/cv_processor.py</code>, <code>src/glider/gui/panels/camera_panel.py</code></td>
+<td>Capture thread, CV backends, worker dispatch, zones.</td>
+</tr>
+<tr>
+<td>Offline tracking</td>
+<td><code>src/glider/vision/video_tracking_runner.py</code></td>
+<td>Timeline-based batch processing and artifact output.</td>
+</tr>
+<tr>
+<td>Behavior analysis</td>
+<td><code>src/glider/analysis/behavior/</code>, <code>src/glider/gui/behavior/</code></td>
+<td>Annotation, features, classifier training, application.</td>
+</tr>
+<tr>
+<td>Plugins</td>
+<td><code>src/glider/plugins/plugin_manager.py</code>, <code>docs-site/building/plugins.md</code></td>
+<td>Entry points, directory-plugin opt-in, contracts.</td>
+</tr>
+<tr>
+<td>Packaging</td>
+<td><code>pyproject.toml</code>, <code>packaging/</code></td>
+<td>Dependencies, extras, drivers, desktop/Pi build paths.</td>
+</tr>
+<tr>
+<td>Tests</td>
+<td><code>tests/</code></td>
+<td>Integration coverage, mocks, and latency test protocol.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="related-documentation">Related documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../getting-started/concepts/">How GLIDER Works</a> for the short conceptual introduction.</li>
+<li><a href="../../getting-started/first-experiment/">Your First Experiment</a> for a practical graph-building walkthrough.</li>
+<li><a href="../../building/devices/">Devices and Hardware</a> and the <a href="../devices/">Device Catalog</a> for device-level reference.</li>
+<li><a href="../nodes/">Node Catalog</a> for the complete node list.</li>
+<li><a href="../../camera-behavior/tracking/">Tracking</a> and <a href="../../camera-behavior/behavior/">Behavior Analysis</a> for vision and behavior workflows.</li>
+<li><a href="../../building/plugins/">Custom Devices and Plugins</a> for the extension contract.</li>
+<li><a href="../../runner/runner/">Runner</a> and <a href="../../runner/pi-kiosk/">Raspberry Pi Kiosk</a> for operation and deployment.</li>
+</ul>
+<h2 id="maintenance-notes">Maintenance notes<a class="headerlink" href="#maintenance-notes" title="Permanent link">&para;</a></h2>
+<p>Update this reference whenever GLIDER changes its supported boards, file formats, model backends, optional extras, deployment image, or major user workflows. For a manuscript, keep benchmark methods and source data in versioned figure-specific materials; this reference explains the platform but does not replace experimental methods.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; LaingLab — MIT License
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/LaingLab/glider" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "navigation.indexes", "toc.follow", "search.suggest", "search.highlight", "content.code.copy", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
