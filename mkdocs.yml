@@ -98,6 +98,7 @@ nav:
       - Raspberry Pi Kiosk: runner/pi-kiosk.md
   - Reference:
       - reference/index.md
+      - Ecosystem Reference: reference/ecosystem-reference.md
       - Node Catalog: reference/nodes.md
       - Device Catalog: reference/devices.md
       - Keyboard Shortcuts: reference/shortcuts.md

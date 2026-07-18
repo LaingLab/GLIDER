@@ -4,6 +4,10 @@ Quick lookups for when you know roughly what you want and just need the details.
 
 <div class="grid cards" markdown>
 
+-   :material-book-open-variant: **[GLIDER Ecosystem Reference](ecosystem-reference.md)**
+
+    A system-wide guide to GLIDER's workflows, architecture, evidence boundaries, and source map.
+
 -   :material-shape-outline: **[Node Catalog](nodes.md)**
 
     Every node, grouped by category, with a one-line description.
