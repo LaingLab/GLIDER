@@ -2184,22 +2184,21 @@
 <h2 id="the-experiment-lifecycle">The experiment lifecycle<a class="headerlink" href="#the-experiment-lifecycle" title="Permanent link">&para;</a></h2>
 <p>An experiment is a <code>.glider</code> JSON file plus the recorded artifacts created when it runs. The saved file is the portable protocol; the recording directory holds the evidence produced by a particular execution.</p>
 <p><em>Scope: the normal path from experiment design through recorded output. It omits optional plugins and offline behavior-model training.</em></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>flowchart TD
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    A[Create or open a .glider experiment] --&gt; B[Define boards and devices]
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    B --&gt; C[Configure camera, zones, and recording]
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    C --&gt; D[Build node graph and dashboard]
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    D --&gt; E[Save portable experiment configuration]
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    E --&gt; F[Connect and initialize hardware]
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    F --&gt; G[Start experiment]
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    G --&gt; H[Run execution graph]
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    G --&gt; I[Capture video and process frames when enabled]
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    G --&gt; J[Record device states and events when enabled]
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    H --&gt; K[Stop normally or request safe shutdown]
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    I --&gt; L[MP4 and tracking artifacts]
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    J --&gt; M[CSV artifacts]
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    K --&gt; L
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    K --&gt; M
-</code></pre></div>
+<pre class="mermaid"><code>flowchart TD
+    A[Create or open a .glider experiment] --&gt; B[Define boards and devices]
+    B --&gt; C[Configure camera, zones, and recording]
+    C --&gt; D[Build node graph and dashboard]
+    D --&gt; E[Save portable experiment configuration]
+    E --&gt; F[Connect and initialize hardware]
+    F --&gt; G[Start experiment]
+    G --&gt; H[Run execution graph]
+    G --&gt; I[Capture video and process frames when enabled]
+    G --&gt; J[Record device states and events when enabled]
+    H --&gt; K[Stop normally or request safe shutdown]
+    I --&gt; L[MP4 and tracking artifacts]
+    J --&gt; M[CSV artifacts]
+    K --&gt; L
+    K --&gt; M</code></pre>
 <p>The file captures metadata, hardware definitions, flow configuration, camera and zone settings, and dashboard layout. A recording uses a shared session epoch so that device, event, and tracking data can be related in time. When computer vision and a camera are active, device-state recording can be camera-driven, producing rows aligned to processed frames; otherwise it uses a periodic sampling loop.</p>
 <h2 id="what-users-see-builder-and-runner">What users see: Builder and Runner<a class="headerlink" href="#what-users-see-builder-and-runner" title="Permanent link">&para;</a></h2>
 <h3 id="builder-is-the-experiment-authoring-workspace">Builder is the experiment-authoring workspace<a class="headerlink" href="#builder-is-the-experiment-authoring-workspace" title="Permanent link">&para;</a></h3>
@@ -2222,19 +2221,18 @@
 <h2 id="architecture-how-glider-coordinates-the-subsystems">Architecture: how GLIDER coordinates the subsystems<a class="headerlink" href="#architecture-how-glider-coordinates-the-subsystems" title="Permanent link">&para;</a></h2>
 <p><code>GliderCore</code> is the application-level coordinator. It owns the current experiment session and connects the flow engine, hardware manager, camera and recording components, serializers, and application-facing callbacks.</p>
 <p><em>Scope: the principal runtime ownership model. The chart shows responsibility boundaries, not every callback or thread.</em></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>flowchart TB
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    UI[PyQt6 Builder or Runner UI] --&gt; Core[GliderCore]
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    Core --&gt; Session[ExperimentSession]
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    Core --&gt; Flow[FlowEngine]
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    Core --&gt; Hardware[HardwareManager]
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    Core --&gt; Vision[Camera and CV services]
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    Core --&gt; Recorders[Data, event, tracking, video, and audio recorders]
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    Core --&gt; Serializer[ExperimentSerializer]
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    Session --&gt; Serializer
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    Flow --&gt; Hardware
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    Vision --&gt; Recorders
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    Hardware --&gt; Recorders
-</code></pre></div>
+<pre class="mermaid"><code>flowchart TB
+    UI[PyQt6 Builder or Runner UI] --&gt; Core[GliderCore]
+    Core --&gt; Session[ExperimentSession]
+    Core --&gt; Flow[FlowEngine]
+    Core --&gt; Hardware[HardwareManager]
+    Core --&gt; Vision[Camera and CV services]
+    Core --&gt; Recorders[Data, event, tracking, video, and audio recorders]
+    Core --&gt; Serializer[ExperimentSerializer]
+    Session --&gt; Serializer
+    Flow --&gt; Hardware
+    Vision --&gt; Recorders
+    Hardware --&gt; Recorders</code></pre>
 <h3 id="concurrency-model">Concurrency model<a class="headerlink" href="#concurrency-model" title="Permanent link">&para;</a></h3>
 <p>GLIDER combines a Qt user interface with an asyncio event loop through <code>qasync</code>. It does not claim that every operation runs on one main-thread loop.</p>
 <ul>
@@ -2617,6 +2615,10 @@
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+      
+        <script src="../../assets/mermaid-init.js"></script>
       
     
   </body>
