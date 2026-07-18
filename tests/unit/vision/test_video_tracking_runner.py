@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from glider.vision.cv_processor import MotionResult, TrackedObject
+from glider.vision.cv_processor import CVSettings, MotionResult, TrackedObject
 from glider.vision.video_tracking_runner import VideoTrackingConfig, VideoTrackingRunner
 from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape
 
@@ -103,6 +103,71 @@ def test_frame_cb_frame_includes_keypoints(synthetic_clip: Path, tmp_path: Path)
 
     # Default keypoint color is BGR red; keypoint placed at x=40, y=30.
     assert tuple(int(c) for c in seen[0][30, 40]) == (0, 0, 255)
+
+
+def test_batch_run_writes_keypoints_csv_with_operator_names(synthetic_clip: Path, tmp_path: Path):
+    """The batch path must honour configured bodypart names.
+
+    It carried cv_settings all the way here but never called
+    set_keypoint_names, so offline pose runs silently labelled every keypoint
+    positionally (0, 1, 2, ...) and discarded the operator's names — while the
+    live path (GliderCore) got them right. Nothing covered this path.
+    """
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = VideoTrackingConfig(
+        source_path=synthetic_clip,
+        output_dir=out,
+        zone_config=None,
+        cv_settings=CVSettings(keypoint_names=["snout"]),
+        write_tracking=True,
+        write_zone_events=False,
+        write_annotated=False,
+    )
+    VideoTrackingRunner(cfg, cv_processor=FakeCVKeypoints()).run()
+
+    keypoints = list(out.glob("*_keypoints.csv"))
+    assert len(keypoints) == 1
+    df = pd.read_csv(keypoints[0])
+    assert df["keypoint"].unique().tolist() == ["snout"]
+    assert df["x"].iloc[0] == 40.0
+    assert df["y"].iloc[0] == 30.0
+    assert len(df) == 12  # one keypoint, one object, 12 frames
+
+
+def test_batch_run_without_names_falls_back_to_indices(synthetic_clip: Path, tmp_path: Path):
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = VideoTrackingConfig(
+        source_path=synthetic_clip,
+        output_dir=out,
+        zone_config=None,
+        write_tracking=True,
+        write_zone_events=False,
+        write_annotated=False,
+    )
+    VideoTrackingRunner(cfg, cv_processor=FakeCVKeypoints()).run()
+
+    # dtype=str: an index-labelled keypoint column reads back as int otherwise.
+    df = pd.read_csv(next(iter(out.glob("*_keypoints.csv"))), dtype={"keypoint": str})
+    assert df["keypoint"].unique().tolist() == ["0"]
+
+
+def test_batch_run_without_pose_writes_no_keypoints_csv(synthetic_clip: Path, tmp_path: Path):
+    """FakeCV reports no keypoints — the file must not be created."""
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = VideoTrackingConfig(
+        source_path=synthetic_clip,
+        output_dir=out,
+        zone_config=None,
+        write_tracking=True,
+        write_zone_events=False,
+        write_annotated=False,
+    )
+    VideoTrackingRunner(cfg, cv_processor=FakeCV()).run()
+
+    assert list(out.glob("*_keypoints.csv")) == []
 
 
 def test_run_writes_tracking_csv(synthetic_clip: Path, tmp_path: Path):

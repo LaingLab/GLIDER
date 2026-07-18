@@ -7,6 +7,7 @@ and signal wiring between extracted panel components.
 
 import asyncio
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -1934,9 +1935,20 @@ class MainWindow(QMainWindow):
     # --- Camera operations ---
 
     def _on_camera_settings(self) -> None:
+        # Hand the dialog COPIES. It edits its settings objects in place, so
+        # passing the live ones let the edit land on the manager's own state
+        # before apply/update_settings ever ran — their "did anything change?"
+        # checks then compared a value to itself and always said no. Net
+        # effect: picking a new CV backend, model, or camera index in this
+        # dialog silently never took effect on the running app, while the UI
+        # and the saved .glider file both reported the new choice.
+        #
+        # replace() suffices for CameraSettings (every field is an immutable
+        # scalar or tuple); CVSettings needs .copy() because keypoint_names is
+        # a list a shallow copy would share.
         dialog = CameraSettingsDialog(
-            camera_settings=self._core.camera_manager.settings,
-            cv_settings=self._core.cv_processor.settings,
+            camera_settings=replace(self._core.camera_manager.settings),
+            cv_settings=self._core.cv_processor.settings.copy(),
             parent=self,
             view_manager=self._view_manager,
             camera_manager=self._core.camera_manager,

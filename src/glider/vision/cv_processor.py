@@ -191,6 +191,28 @@ def parse_keypoint_names(text: str) -> list[str]:
     return [part.strip() for part in text.split(",") if part.strip()]
 
 
+@dataclass(frozen=True)
+class BackendDegradation:
+    """Record of the running backend differing from the configured one.
+
+    Produced when a requested backend can't be brought up — ultralytics
+    absent, weights missing, ``lap`` not installed — and the processor falls
+    back to something it can run. This is *runtime* state: it never changes
+    ``CVSettings``, so the operator's choice survives a save and reappears on
+    a machine that can honour it.
+    """
+
+    requested: DetectionBackend
+    active: DetectionBackend
+    reason: str
+
+    def __str__(self) -> str:
+        return (
+            f"{self.requested.name} unavailable — running {self.active.name} "
+            f"instead ({self.reason})"
+        )
+
+
 @dataclass
 class Detection:
     """Single detection result."""
@@ -291,6 +313,18 @@ class CVSettings:
     vision_cone_fov: float = 120.0  # Total field of view in degrees
     vision_cone_color: tuple[int, int, int] = (0, 255, 255)  # BGR yellow
     vision_cone_alpha: float = 0.3  # Overlay transparency
+
+    def copy(self) -> "CVSettings":
+        """Return an independent copy, safe to hand to a mutating consumer.
+
+        ``dataclasses.replace`` alone is not enough: every other field is an
+        immutable scalar or tuple, but ``keypoint_names`` is a list, and a
+        shallow copy would share it. Callers that hand these settings to
+        something that edits them — the camera settings dialog edits in place —
+        must copy first, or the edit lands on the live object and
+        ``update_settings`` can no longer tell what changed.
+        """
+        return replace(self, keypoint_names=list(self.keypoint_names))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -509,14 +543,21 @@ class CVProcessor:
             settings: CV settings, or None for defaults
         """
         self._settings = settings or CVSettings()
-        # The backend the *operator* chose, as distinct from the one actually
-        # running. ``_load_yolo_model`` degrades ``_settings.backend`` in place
-        # when ultralytics is missing or the weights won't load — a runtime
-        # concern that must not be mistaken for configuration. Persisting
-        # ``_settings.backend`` after such a degradation would silently rewrite
-        # the operator's choice to BACKGROUND_SUBTRACTION in their .glider file
-        # (see ``configured_settings``).
-        self._requested_backend = self._settings.backend
+        # ``_settings`` is CONFIGURATION and is never written to from inside
+        # this class — it is what the operator chose and what gets persisted.
+        # ``_active_backend`` is RUNTIME state: the backend actually running,
+        # which ``initialize()`` may downgrade when the requested one can't be
+        # brought up. Every dispatch decision reads ``_active_backend``; only
+        # serialization and the settings dialog read ``_settings.backend``.
+        #
+        # These were previously the same field, so a failed model load rewrote
+        # the operator's choice in place. That silently destroyed it: a Pi
+        # without ultralytics would open a YOLO experiment, degrade to
+        # background subtraction, and write the degradation back on the next
+        # save — for every machine downstream.
+        self._active_backend: DetectionBackend = self._settings.backend
+        self._degradation: BackendDegradation | None = None
+        self._degradation_callbacks: list[Callable[[BackendDegradation], None]] = []
         self._bg_subtractor: cv2.BackgroundSubtractor | None = None
         self._yolo_model = None
         # Resolved to the best available accelerator when a YOLO model loads;
@@ -554,25 +595,61 @@ class CVProcessor:
 
     @property
     def settings(self) -> CVSettings:
-        """Current CV settings, reflecting any runtime backend degradation."""
+        """The operator's CV configuration. Safe to persist and to display.
+
+        ``settings.backend`` is always what was *asked for*, never what a
+        failed load left us running — see :attr:`active_backend`.
+        """
         return self._settings
 
     @property
-    def configured_settings(self) -> CVSettings:
-        """Settings as the operator configured them — the version to persist.
+    def active_backend(self) -> DetectionBackend:
+        """The backend actually running.
 
-        Identical to :attr:`settings` except that ``backend`` is the one that
-        was *requested*, not the one running. The two diverge when a YOLO
-        backend degrades to background subtraction because ultralytics is
-        absent or the weights failed to load.
-
-        Persist this, never :attr:`settings`. Otherwise opening an experiment
-        on a machine that lacks the weights (or ultralytics — e.g. a Pi
-        opening a desktop-authored file) degrades the backend, and the next
-        save writes that degradation back to the .glider, destroying the
-        operator's model choice on every machine that opens it afterwards.
+        Equals ``settings.backend`` unless a degradation occurred; see
+        :attr:`degradation`. Read this to describe current behaviour, never to
+        decide what to save or what to show pre-selected in a settings dialog.
         """
-        return replace(self._settings, backend=self._requested_backend)
+        return self._active_backend
+
+    @property
+    def degradation(self) -> BackendDegradation | None:
+        """Why the running backend differs from the configured one, if it does.
+
+        None when the configured backend is running normally. Reset on every
+        :meth:`initialize`.
+        """
+        return self._degradation
+
+    def on_backend_degraded(self, callback: Callable[[BackendDegradation], None]) -> None:
+        """Register a callback fired when a backend can't be brought up.
+
+        The fallback is otherwise only a log line, and an operator running a
+        behavioural experiment should not have to read logs to discover their
+        tracking model never loaded.
+
+        Fired from :meth:`initialize` after ``self._lock`` is released, so a
+        callback may safely re-enter the processor (e.g. read
+        :attr:`active_backend`).
+
+        .. warning::
+           **Not guaranteed to fire on the GUI thread.** ``process_frame``
+           initializes lazily if it hasn't been already, and runs on
+           ``CVWorker``'s ``QThread`` — so this can arrive on a worker thread.
+           A Qt listener must hop to the main thread (emit a signal with the
+           default ``AutoConnection``) rather than touching widgets directly.
+        """
+        self._degradation_callbacks.append(callback)
+
+    def _notify_degradation(self) -> None:
+        """Fire degradation callbacks. Must be called outside ``self._lock``."""
+        if self._degradation is None:
+            return
+        for cb in self._degradation_callbacks:
+            try:
+                cb(self._degradation)
+            except Exception:
+                logger.exception("Backend degradation callback raised")
 
     @property
     def behavior_analyzer(self) -> BehaviorAnalyzer:
@@ -637,8 +714,14 @@ class CVProcessor:
         """
         try:
             with self._lock:
+                # Start from the configured backend; _load_yolo_model may
+                # downgrade the *active* one below. Cleared first so a previous
+                # run's degradation doesn't outlive the condition that caused it.
+                self._degradation = None
+                self._active_backend = self._settings.backend
+
                 # Initialize background subtractor
-                if self._settings.backend in (
+                if self._active_backend in (
                     DetectionBackend.BACKGROUND_SUBTRACTION,
                     DetectionBackend.MOTION_ONLY,
                 ):
@@ -650,7 +733,7 @@ class CVProcessor:
                     logger.info("Initialized background subtractor")
 
                 # Initialize YOLO if selected
-                elif self._settings.backend in (
+                elif self._active_backend in (
                     DetectionBackend.YOLO_V8,
                     DetectionBackend.YOLO_BYTETRACK,
                 ):
@@ -662,11 +745,15 @@ class CVProcessor:
                     logger.info("Initialized object tracker")
 
                 self._initialized = True
-                return True
 
         except Exception as e:
             logger.error(f"CV initialization failed: {e}")
             return False
+
+        # Outside the lock: a listener reacting to this (e.g. reading
+        # active_backend to update a status bar) must not deadlock on it.
+        self._notify_degradation()
+        return True
 
     def _load_yolo_model(self) -> None:
         """Load YOLO model for detection.
@@ -712,7 +799,7 @@ class CVProcessor:
                 logger.info(f"Loaded YOLO model: {model_path} (device={self._device})")
 
             # ByteTrack-specific dependency probe.
-            if self._settings.backend == DetectionBackend.YOLO_BYTETRACK:
+            if self._active_backend == DetectionBackend.YOLO_BYTETRACK:
                 import importlib.util
 
                 if importlib.util.find_spec("lap") is None:
@@ -721,20 +808,44 @@ class CVProcessor:
                         "falling back to YOLO detection only. Install lap to "
                         "enable persistent track IDs: pip install 'lap>=0.5.12'"
                     )
-                    self._settings.backend = DetectionBackend.YOLO_V8
+                    self._degrade_to(
+                        DetectionBackend.YOLO_V8,
+                        "'lap' is not installed, so ByteTrack cannot assign "
+                        "persistent track IDs (pip install 'lap>=0.5.12')",
+                    )
         except ImportError:
             logger.warning(
                 "ultralytics not installed, falling back to background subtraction. "
                 "Install with: pip install ultralytics"
             )
-            self._settings.backend = DetectionBackend.BACKGROUND_SUBTRACTION
+            self._degrade_to(
+                DetectionBackend.BACKGROUND_SUBTRACTION,
+                "ultralytics is not installed (pip install ultralytics)",
+            )
             self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(
                 history=500, varThreshold=self._settings.motion_threshold, detectShadows=True
             )
         except Exception as e:
             logger.error(f"Failed to load YOLO model: {e}")
-            self._settings.backend = DetectionBackend.BACKGROUND_SUBTRACTION
+            self._degrade_to(
+                DetectionBackend.BACKGROUND_SUBTRACTION,
+                f"the model could not be loaded: {e}",
+            )
             self._bg_subtractor = cv2.createBackgroundSubtractorMOG2()
+
+    def _degrade_to(self, backend: DetectionBackend, reason: str) -> None:
+        """Fall back to ``backend`` at runtime, leaving configuration alone.
+
+        Records against the *configured* backend rather than the current
+        active one, so a two-step fallback (ByteTrack -> YOLO_V8 -> background
+        subtraction) still reports what the operator originally asked for.
+        """
+        self._active_backend = backend
+        self._degradation = BackendDegradation(
+            requested=self._settings.backend,
+            active=backend,
+            reason=reason,
+        )
 
     def process_frame(
         self, frame: np.ndarray, timestamp: float
@@ -766,7 +877,7 @@ class CVProcessor:
             # Apply background subtractor once per frame (it is stateful —
             # calling apply() twice corrupts the internal model).
             fg_mask = None
-            if self._bg_subtractor is not None and self._settings.backend in (
+            if self._bg_subtractor is not None and self._active_backend in (
                 DetectionBackend.BACKGROUND_SUBTRACTION,
                 DetectionBackend.MOTION_ONLY,
             ):
@@ -779,7 +890,7 @@ class CVProcessor:
             tracked = []
             if self._settings.tracking_enabled:
                 # ByteTrack provides its own tracking - convert detections to TrackedObjects
-                if self._settings.backend == DetectionBackend.YOLO_BYTETRACK:
+                if self._active_backend == DetectionBackend.YOLO_BYTETRACK:
                     tracked = self._bytetrack_to_tracked(detections)
                 elif self._tracker:
                     # Use centroid tracker for other backends
@@ -835,12 +946,16 @@ class CVProcessor:
         return detections, tracked, motion
 
     def _detect(self, frame: np.ndarray, fg_mask: np.ndarray | None = None) -> list[Detection]:
-        """Run detection on frame."""
-        if self._settings.backend == DetectionBackend.YOLO_V8 and self._yolo_model:
+        """Run detection on frame.
+
+        Dispatches on the *active* backend: if the configured one failed to
+        load we must run what we actually brought up, not what was asked for.
+        """
+        if self._active_backend == DetectionBackend.YOLO_V8 and self._yolo_model:
             return self._detect_yolo(frame)
-        elif self._settings.backend == DetectionBackend.YOLO_BYTETRACK and self._yolo_model:
+        elif self._active_backend == DetectionBackend.YOLO_BYTETRACK and self._yolo_model:
             return self._detect_yolo_bytetrack(frame)
-        elif self._settings.backend == DetectionBackend.MOTION_ONLY:
+        elif self._active_backend == DetectionBackend.MOTION_ONLY:
             return []  # Motion-only mode, no object detection
         else:
             return self._detect_background_subtraction(frame, fg_mask)
@@ -1287,8 +1402,6 @@ class CVProcessor:
         old_backend = self._settings.backend
         old_model_path = self._settings.model_path
         self._settings = settings
-        # Record the request before initialize() gets a chance to degrade it.
-        self._requested_backend = settings.backend
 
         # Reinitialize if the backend changed, or if the model path changed on
         # a model-backed backend. Previously only a backend change triggered a

@@ -659,9 +659,7 @@ class GliderCore:
             self._session,
             self._flow_engine,
             self._hardware_manager,
-            # configured_settings, not settings: persist the backend the
-            # operator chose, not one a failed model load degraded us to.
-            vision_settings=self._cv_processor.configured_settings.to_dict(),
+            vision_settings=self._cv_processor.settings.to_dict(),
         )
         logger.info(f"Saved experiment to {file_path}")
 

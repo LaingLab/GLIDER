@@ -119,7 +119,7 @@ class TrackingDataLogger:
         self._kp_writer: Any = None
         self._kp_file_path: Path | None = None
         self._kp_row_count = 0
-        self._kp_rows_since_fsync = 0
+        self._kp_frames_since_fsync = 0
         # Keypoints are secondary to the tracking CSV: if this stream dies we
         # log once and carry on rather than aborting the whole recording.
         self._kp_failed = False
@@ -376,7 +376,6 @@ class TrackingDataLogger:
                 ]
             )
             self._kp_file.flush()
-            os.fsync(self._kp_file.fileno())
         except Exception:
             logger.exception(
                 "Could not open keypoints log %s; pose data will not be "
@@ -387,15 +386,29 @@ class TrackingDataLogger:
             self._kp_failed = True
             self._kp_file_path = None
             return False
+
+        # fsync separately and non-fatally. It can fail on filesystems that
+        # don't support it (some network mounts) — the same reason
+        # _fsync_if_due tolerates it. Folding it into the block above meant a
+        # working file on such a mount was discarded and _kp_failed latched
+        # for the session, silently losing 100% of its keypoints while the
+        # tracking CSV reported success.
+        try:
+            os.fsync(self._kp_file.fileno())
+        except OSError:
+            logger.debug("TrackingDataLogger: keypoint header os.fsync failed", exc_info=True)
+
         logger.info("Started keypoint log: %s", self._kp_file_path)
         return True
 
     def _fsync_kp_if_due(self, force: bool = False) -> None:
         """Flush/fsync the keypoints file on the same cadence as the main log.
 
-        Counted in rows rather than frames — a pose session writes one row per
-        keypoint per object, so rows accumulate K times faster than frames and
-        a frame-based interval would fsync far too often.
+        Counted in frames, not rows, and called once per frame — a pose
+        session writes K rows per object per frame, so a row-counted interval
+        reusing the frame-scaled constant fired roughly 30x too often (~3x a
+        second at 30fps with two animals), stalling the frame path on SD-card
+        deployments. Frames are the unit the interval was calibrated in.
         """
         if self._kp_file is None:
             return
@@ -404,12 +417,13 @@ class TrackingDataLogger:
         except Exception:
             logger.exception("TrackingDataLogger: keypoint flush failed")
             return
-        if force or self._kp_rows_since_fsync >= _FSYNC_INTERVAL_FRAMES:
+        self._kp_frames_since_fsync += 1
+        if force or self._kp_frames_since_fsync >= _FSYNC_INTERVAL_FRAMES:
             try:
                 os.fsync(self._kp_file.fileno())
             except OSError:
                 logger.debug("TrackingDataLogger: keypoint os.fsync failed", exc_info=True)
-            self._kp_rows_since_fsync = 0
+            self._kp_frames_since_fsync = 0
 
     def _close_keypoint_writer(self) -> None:
         """Close the keypoints file if open, swallowing errors."""
@@ -477,8 +491,6 @@ class TrackingDataLogger:
                 self._kp_failed = True
                 return
             self._kp_row_count += 1
-            self._kp_rows_since_fsync += 1
-        self._fsync_kp_if_due()
 
     def _generate_filename(self, experiment_name: str) -> str:
         """
@@ -540,7 +552,7 @@ class TrackingDataLogger:
         # a frame actually carries keypoints.
         self._kp_file_path = None
         self._kp_row_count = 0
-        self._kp_rows_since_fsync = 0
+        self._kp_frames_since_fsync = 0
         self._kp_failed = False
 
         # Open file and create writer.  If any subsequent write raises (e.g.,
@@ -847,6 +859,10 @@ class TrackingDataLogger:
                 )
 
         self._fsync_if_due()
+        # Once per frame, matching the main log's cadence — not per keypoint
+        # row, which fired orders of magnitude too often. No-ops until a frame
+        # has actually opened the keypoint stream.
+        self._fsync_kp_if_due()
 
     def log_event(self, event_name: str, details: str = "") -> None:
         """

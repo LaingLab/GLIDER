@@ -134,6 +134,11 @@ class VideoTrackingRunner:
         if cfg.write_tracking:
             tracker = TrackingDataLogger(output_dir=cfg.output_dir)
             tracker.set_session_epoch(base)
+            # Mirrors GliderCore's live path: without this a batch pose run
+            # labels its keypoints positionally (0, 1, 2, ...) and quietly
+            # discards the operator's bodypart names, even though cv_settings
+            # carries them all the way here.
+            tracker.set_keypoint_names(cfg.cv_settings.keypoint_names)
             if cfg.zone_config is not None:
                 tracker.set_zone_configuration(cfg.zone_config)
                 tracker.set_frame_size(width, height)
