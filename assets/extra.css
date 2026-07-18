@@ -1,0 +1,13 @@
+/* Screenshot / figure polish */
+.md-typeset figure img {
+  border-radius: 8px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+}
+
+.md-typeset figure figcaption {
+  max-width: 40rem;
+  margin: 0.5rem auto 0;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.8rem;
+}

@@ -22,7 +22,7 @@
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
@@ -52,6 +52,8 @@
         <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
       
     
+    
+      <link rel="stylesheet" href="../../assets/extra.css">
     
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
@@ -96,8 +98,7 @@
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href="../.." title="GLIDER" class="md-header__button md-logo" aria-label="GLIDER" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+  <img src="../../assets/logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -234,8 +235,7 @@
   <label class="md-nav__title" for="__drawer">
     <a href="../.." title="GLIDER" class="md-nav__button md-logo" aria-label="GLIDER" data-md-component="logo">
       
-  
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+  <img src="../../assets/logo.png" alt="logo">
 
     </a>
     GLIDER
@@ -833,6 +833,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#ncnn-models-faster-on-raspberry-pi" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NCNN models (faster on Raspberry Pi)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#installing-ultralytics-on-demand" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1336,6 +1347,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#ncnn-models-faster-on-raspberry-pi" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NCNN models (faster on Raspberry Pi)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#installing-ultralytics-on-demand" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1506,6 +1528,26 @@ plain <strong>YOLO v8</strong> detection so you still get boxes, just without pe
 YOLO weights file (<code>.pt</code>). If you don't choose one, GLIDER uses the standard
 lightweight <code>yolov8n.pt</code> model, which Ultralytics downloads automatically the
 first time it's needed.</p>
+<h3 id="ncnn-models-faster-on-raspberry-pi">NCNN models (faster on Raspberry Pi)<a class="headerlink" href="#ncnn-models-faster-on-raspberry-pi" title="Permanent link">&para;</a></h3>
+<p>PyTorch inference on the Pi runs on the CPU and can starve the interface at
+higher resolutions. For much faster live inference on ARM, export your model to
+<a href="https://docs.ultralytics.com/integrations/ncnn/">NCNN</a> and point GLIDER at it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">ultralytics</span><span class="w"> </span><span class="kn">import</span> <span class="n">YOLO</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">YOLO</span><span class="p">(</span><span class="s2">&quot;your_model.pt&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">export</span><span class="p">(</span><span class="nb">format</span><span class="o">=</span><span class="s2">&quot;ncnn&quot;</span><span class="p">)</span>   <span class="c1"># -&gt; your_model_ncnn_model/</span>
+</code></pre></div>
+<p>The export produces a <code>*_ncnn_model/</code> folder containing <code>model.ncnn.param</code>,
+<code>model.ncnn.bin</code>, and <code>metadata.yaml</code>. In the model picker, browse into that
+folder and select <strong><code>model.ncnn.param</code></strong> — GLIDER loads the containing folder
+and reads the task (e.g. <code>pose</code>) from <code>metadata.yaml</code>. The Pi needs the <code>ncnn</code>
+Python package installed (<code>pip install ncnn</code>).</p>
+<div class="admonition warning">
+<p class="admonition-title">Keep <code>metadata.yaml</code></p>
+<p>Always select a folder produced by Ultralytics' export, not a bare
+<code>model.ncnn.param</code>/<code>.bin</code> pair. Without <code>metadata.yaml</code>, Ultralytics can't
+tell a pose model from a detector and will misread keypoints.</p>
+</div>
+<p>For pose models, detected keypoints are drawn as dots on the preview when
+<strong>Overlays</strong> are enabled (toggle with the <em>Show keypoints</em> CV setting).</p>
 <h3 id="installing-ultralytics-on-demand">Installing Ultralytics on demand<a class="headerlink" href="#installing-ultralytics-on-demand" title="Permanent link">&para;</a></h3>
 <p>Ultralytics is not bundled with GLIDER (it is licensed under AGPL-3.0). The first
 time you select a YOLO backend without it installed, GLIDER offers to install it
@@ -1526,10 +1568,10 @@ prompt entirely.</p>
 <h2 id="what-tracking-produces">What tracking produces<a class="headerlink" href="#what-tracking-produces" title="Permanent link">&para;</a></h2>
 <p>While recording (or during an offline pass), the tracking results are written to
 the <code>_tracking.csv</code> file. Its columns are:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>frame, timestamp, elapsed_ms, flow_elapsed_ms, object_id, class,
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>x, y, w, h, confidence, center_x, center_y,
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>distance_px, distance_mm, cumulative_mm,
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>zone_ids, behavioral_state, velocity_px_frame
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>frame, timestamp, elapsed_ms, flow_elapsed_ms, object_id, class,
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>x, y, w, h, confidence, center_x, center_y,
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>distance_px, distance_mm, cumulative_mm,
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>zone_ids, behavioral_state, velocity_px_frame
 </code></pre></div>
 <p>Key columns:</p>
 <table>
@@ -1660,7 +1702,7 @@ format — the pose inference itself is done by YOLO.)</p>
 <h2 id="checking-your-gpu">Checking your GPU<a class="headerlink" href="#checking-your-gpu" title="Permanent link">&para;</a></h2>
 <p>Tracking and pose models run much faster on a GPU. To see what GLIDER will use,
 open <strong>Tools ▸ GPU / Device Check…</strong>, or run it headless:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>glider<span class="w"> </span>--gpu-check
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>glider<span class="w"> </span>--gpu-check
 </code></pre></div>
 <p>The report lists your accelerator status and ends with the device inference will
 use. GLIDER prefers, in order, <strong>CUDA</strong> (NVIDIA GPU), then <strong>MPS</strong> (Apple Silicon),
