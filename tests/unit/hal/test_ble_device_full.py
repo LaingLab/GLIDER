@@ -272,6 +272,74 @@ async def test_read_on_notify_times_out_without_push(fake_bleak, monkeypatch):
         await device.read()
 
 
+# --- review fixes -------------------------------------------------------------
+
+
+def test_apply_settings_before_init_refreshes_caches():
+    d = _make_device(settings={"address": "AA", "notify": False})
+    d.apply_settings({"notify": True, "read_char_uuid": "r"})
+    assert d.is_streaming is True
+    assert d._read_char == "r"
+    assert d._config.settings["notify"] is True
+
+
+async def test_apply_settings_while_initialized_saves_but_keeps_live_caches(fake_bleak):
+    # #B4: without the drift guard, a live edit updates the file while the running
+    # device keeps its old behavior (or worse, desyncs notify from the sub state).
+    device = await _initialized({"address": "x", "notify": False})
+    device.apply_settings({"notify": True})
+    assert device._config.settings["notify"] is True  # saved
+    assert device.is_streaming is False  # live cache unchanged until reconnect
+
+
+def test_apply_settings_rejects_invalid_value_format():
+    d = _make_device(settings={"value_format": "text"})
+    with pytest.raises(ValueError):
+        d.apply_settings({"value_format": "float128"})
+    assert d._value_format == "text"  # unchanged
+
+
+async def test_write_retries_once_after_reconnect(fake_bleak):
+    # #B6: a transient link drop is retried once after a fresh reconnect.
+    _module, created = fake_bleak
+    device = await _initialized({"address": "x", "write_char_uuid": "w"})
+    first = created["client"]
+
+    def boom(*a, **k):
+        raise RuntimeError("link dropped")
+
+    first.write_gatt_char = boom
+    await device.write("ON")  # must not raise
+    new = created["client"]
+    assert new is not first  # reconnected
+    assert new.written == [("w", b"ON", False)]
+
+
+async def test_write_mode_autodetected_from_characteristic(fake_bleak):
+    # #B6: a write-only characteristic forces response=True even if the setting says False.
+    _module, created = fake_bleak
+    device = await _initialized(
+        {"address": "x", "write_char_uuid": "w", "write_response": False}
+    )
+    client = created["client"]
+    char = type("Char", (), {"properties": ["write"]})()  # supports only with-response
+    client.services = type("Svc", (), {"get_characteristic": lambda self, u: char})()
+    await device.write("ON")
+    assert client.written[-1] == ("w", b"ON", True)
+
+
+async def test_notify_after_shutdown_does_not_resurrect_latest(fake_bleak):
+    # #C6: a straggler notification scheduled just before shutdown must not
+    # repopulate the cache after shutdown cleared it.
+    _module, created = fake_bleak
+    device = await _initialized(
+        {"address": "x", "notify": True, "read_char_uuid": "r", "value_format": "int"}
+    )
+    await device.shutdown()
+    device._on_notify(object(), bytearray(b"\x05\x00"))  # arrives late
+    assert device._latest is None
+
+
 # --- serialization / registry -------------------------------------------------
 
 

@@ -45,6 +45,13 @@ MAX_SAMPLE_AGE_S = 5.0
 # How long a streaming ``read`` waits for the first fresh line before giving up.
 READ_WAIT_S = 1.0
 
+# The streaming reader's per-read timeout is clamped to this window, independent
+# of the user's ``timeout`` setting, so the reader always re-checks its stop
+# event within MAX_READER_TIMEOUT_S (bounding shutdown latency and preventing a
+# thread leak on a large user timeout) and never busy-loops on timeout=0.
+MIN_READER_TIMEOUT_S = 0.05
+MAX_READER_TIMEOUT_S = 1.0
+
 
 class GenericSerialDevice(BaseDevice):
     """A serial/UART peripheral on one host serial port.
@@ -98,7 +105,13 @@ class GenericSerialDevice(BaseDevice):
         self._stream = parsed["stream"]
 
         self._serial: Any = None  # serial.Serial handle, opened in initialize()
-        self._io_lock = threading.Lock()  # serializes writes vs the reader thread
+        # Serializes direct-handle actions (write / non-streaming read_line) with
+        # each other AND with shutdown()'s close, so the port is never closed out
+        # from under an in-flight action (emergency stop bypasses the command
+        # lock). The streaming reader thread is a separate concern -- it is
+        # stopped and joined before close; it and write() may touch the handle
+        # concurrently, which pyserial permits (one reader + one writer).
+        self._port_lock = asyncio.Lock()
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._sample_lock = threading.Lock()
@@ -144,15 +157,22 @@ class GenericSerialDevice(BaseDevice):
         }
 
     def apply_settings(self, settings: dict[str, Any]) -> None:
-        """Adopt edited settings on a live device, caches included.
+        """Adopt edited settings (validated first).
 
-        Validates the merged result BEFORE committing so a rejected edit leaves
-        the device untouched. Connection-affecting changes (port, baud, framing)
-        take effect on the next initialize(); a running connection is not
-        re-opened underneath in-flight I/O.
+        Every serial setting affects the open connection or the framing/stream
+        behavior, none of which can change safely under a live handle (e.g.
+        flipping ``stream`` would desync the running reader thread from the
+        mode flag). So while the device is initialized the edit is only recorded
+        to ``config.settings`` (for the saved file) and takes effect on the next
+        initialize(); the live caches stay consistent with the open port. Before
+        init, the caches are refreshed immediately. Validation runs against the
+        merged result first, so a rejected edit leaves the device untouched.
         """
         parsed = self._parse_settings({**self._config.settings, **settings})
         self._config.settings.update(settings)
+        if self._initialized:
+            logger.info("GenericSerial %s: settings saved; reconnect to apply", self._name)
+            return
         self._port = parsed["port"]
         self._baudrate = parsed["baudrate"]
         self._bytesize = parsed["bytesize"]
@@ -225,6 +245,13 @@ class GenericSerialDevice(BaseDevice):
         self._serial = await asyncio.to_thread(_open)
 
         if self._stream:
+            # Bound the reader's blocking read so it observes the stop event
+            # within MAX_READER_TIMEOUT_S regardless of the user's timeout (which
+            # is meaningful for request/response reads but would, at 0, busy-loop
+            # the reader, and at 60 would leak it past shutdown's join). The
+            # streaming read_line() path uses the cache, not this handle timeout.
+            reader_timeout = max(MIN_READER_TIMEOUT_S, min(self._timeout, MAX_READER_TIMEOUT_S))
+            self._serial.timeout = reader_timeout
             stop_event = threading.Event()  # fresh event per (re)init, like HX711
             self._stop_event = stop_event
             self._latest = None
@@ -245,39 +272,43 @@ class GenericSerialDevice(BaseDevice):
         )
 
     async def shutdown(self) -> None:
-        """Stop the reader (if any) and close the port.
+        """Stop the reader, wait out in-flight action I/O, then close the port.
 
-        Clears ``_initialized`` FIRST so queued actions refuse to run, then does
-        teardown inside try/finally so a failing ``close()`` still clears state
-        and drops the cache -- otherwise the device would keep reporting
-        initialized with a dead handle.
+        Order matters: clear ``_initialized`` so queued actions refuse to run;
+        stop and join the reader thread so it stops touching the handle (its
+        blocking read is bounded to <= MAX_READER_TIMEOUT_S, so the join
+        reliably succeeds); then take the port lock so an in-flight
+        ``write()``/``read_line()`` finishes before ``close()`` releases the fd.
+        Wrapped so a failing close() still clears state and drops the cache.
         """
         self._initialized = False
         try:
             self._stop_event.set()
             thread, self._thread = self._thread, None
-            ser, self._serial = self._serial, None
-
-            def _release():
-                if thread is not None:
-                    thread.join(timeout=2.0)
-                    if thread.is_alive():
-                        logger.error(
-                            "GenericSerial %s: reader thread did not exit within 2.0s; "
-                            "closing the port anyway",
-                            self._name,
-                        )
+            if thread is not None:
+                await asyncio.to_thread(self._join_reader, thread)
+            async with self._port_lock:
+                ser, self._serial = self._serial, None
                 if ser is not None:
                     try:
-                        ser.close()
-                    except Exception:
-                        pass
-
-            await asyncio.to_thread(_release)
+                        await asyncio.to_thread(ser.close)
+                    except Exception as e:  # close is best-effort
+                        logger.warning(
+                            "GenericSerial %s: error during close: %s", self._name, e
+                        )
         finally:
             self._initialized = False
             with self._sample_lock:
                 self._latest = None
+
+    def _join_reader(self, thread: threading.Thread) -> None:
+        thread.join(timeout=2.0)
+        if thread.is_alive():
+            logger.error(
+                "GenericSerial %s: reader thread did not exit within 2.0s; "
+                "closing the port anyway",
+                self._name,
+            )
 
     # --- streaming reader (runs in the reader thread) ---
 
@@ -302,6 +333,12 @@ class GenericSerialDevice(BaseDevice):
                 continue
             if not raw:
                 continue  # timed out with no data; loop re-checks the stop event
+            if not raw.endswith(term):
+                # read_until returned before the terminator (an inter-byte gap
+                # exceeded the read timeout): a partial/truncated frame. Discard
+                # it rather than caching a fabricated value.
+                logger.debug("GenericSerial %s: discarded partial frame %r", self._name, raw)
+                continue
             text = self._decode(raw)
             if text:
                 with self._sample_lock:
@@ -337,44 +374,55 @@ class GenericSerialDevice(BaseDevice):
             raise RuntimeError(f"GenericSerial {self._name} is not initialized")
         return self._serial
 
-    async def write(self, data: Any = None) -> None:
-        """Send ``data`` followed by the configured terminator.
+    @staticmethod
+    def _blocking_write(ser: Any, buf: bytes) -> None:
+        ser.write(buf)
+        ser.flush()
 
-        ``data`` is coerced to str; the terminator is appended if not already
-        present, so both ``"MEAS?"`` and ``"MEAS?\\n"`` frame correctly.
+    async def write(self, *args: Any) -> None:
+        """Send a command followed by the configured terminator.
+
+        Variadic and comma-joins its args (like ``BLEDevice.write``), so the
+        node layer's comma-split constant round-trips: ``write("SET", 1, 2)`` ->
+        ``"SET,1,2"``. The terminator is appended only if not already present,
+        so both ``"MEAS?"`` and ``"MEAS?\\n"`` frame correctly.
         """
-        if data is None:
+        if not args or all(a is None for a in args):
             raise ValueError("write requires a value")
-        ser = self._require_open()
-        payload = str(data)
+        payload = ",".join(str(a) for a in args if a is not None)
         if not payload.endswith(self._terminator):
             payload += self._terminator
         buf = payload.encode(self._encoding)
-
-        def _write():
-            with self._io_lock:
-                ser.write(buf)
-                ser.flush()
-
-        await asyncio.to_thread(_write)
+        async with self._port_lock:
+            ser = self._require_open()  # re-checked under the lock (see shutdown)
+            await asyncio.to_thread(self._blocking_write, ser, buf)
 
     async def read_line(self) -> str:
-        """Read one framed line (up to the read timeout) and return it decoded.
+        """Read one framed line and return it decoded.
 
         On a streaming device the reader thread owns the port, so this returns
-        the latest cached line instead of competing for a direct read.
+        the latest cached line. On a non-streaming device it reads directly and
+        requires the terminator to arrive within the read timeout -- a partial
+        read (terminator not seen) raises rather than returning a truncated,
+        fabricated value.
         """
         if self._stream:
             sample = await self._await_fresh_sample()
             return sample[0]
-        ser = self._require_open()
         term = self._terminator.encode(self._encoding)
-        raw = await asyncio.to_thread(ser.read_until, term)
+        async with self._port_lock:
+            ser = self._require_open()  # re-checked under the lock (see shutdown)
+            raw = await asyncio.to_thread(ser.read_until, term)
+        if not raw.endswith(term):
+            raise RuntimeError(
+                f"GenericSerial {self._name}: incomplete read (no terminator "
+                f"within {self._timeout:.2f}s)"
+            )
         return self._decode(raw)
 
-    async def query(self, data: Any = None) -> str:
-        """Write ``data``, then read one framed reply (request/response)."""
-        await self.write(data)
+    async def query(self, *args: Any) -> str:
+        """Write a command, then read one framed reply (request/response)."""
+        await self.write(*args)
         return await self.read_line()
 
     async def read(self) -> str:

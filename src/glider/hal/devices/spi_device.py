@@ -82,10 +82,19 @@ class GenericSPIDevice(BaseDevice):
         return {"spi_bus": bus, "spi_device": cs, "max_speed_hz": speed, "spi_mode": mode}
 
     def apply_settings(self, settings: dict[str, Any]) -> None:
-        """Adopt edited settings (validated first). Connection params take effect
-        on the next initialize()."""
+        """Adopt edited settings (validated first).
+
+        Every SPI setting is a connection parameter (bus/CE/speed/mode) that
+        cannot change under an open handle, so while the device is initialized
+        the edit is only recorded to ``config.settings`` (for the saved file) and
+        takes effect on the next initialize(); the live caches are left in sync
+        with the open handle. Before init, the caches are refreshed immediately.
+        """
         parsed = self._parse_settings({**self._config.settings, **settings})
         self._config.settings.update(settings)
+        if self._initialized:
+            logger.info("GenericSPI %s: settings saved; reconnect to apply", self._name)
+            return
         self._bus = parsed["spi_bus"]
         self._cs = parsed["spi_device"]
         self._max_speed_hz = parsed["max_speed_hz"]
@@ -137,7 +146,9 @@ class GenericSPIDevice(BaseDevice):
             tokens = [t for t in data.replace(",", " ").split() if t]
             items = [int(t, 0) for t in tokens]
         elif isinstance(data, (list, tuple)):
-            items = [int(x) for x in data]
+            # base-0 for str elements too, so ["0x01", "0x80"] parses like the
+            # string form (a plain list of ints is unaffected).
+            items = [int(x, 0) if isinstance(x, str) else int(x) for x in data]
         else:
             items = [int(data)]
         if not items:
@@ -155,6 +166,22 @@ class GenericSPIDevice(BaseDevice):
         if count < 1 or count > _MAX_TRANSFER:
             raise ValueError(f"length {count} out of range (1-{_MAX_TRANSFER})")
         return count
+
+    def _coerce_args(self, args: tuple, label: str = "data") -> list[int]:
+        """Turn a Device Action node's arguments into a byte list.
+
+        The node splits its constant ``arguments`` field on commas into separate
+        positional args, so a multi-byte payload like ``"0x01,0x80"`` arrives as
+        two args, not one string. One arg is a single payload (a byte list, an
+        int, or a comma/space string); multiple args are taken as the byte list
+        directly. This mirrors how ``BLEDevice.write(*args)`` tolerates the same
+        splitting.
+        """
+        if not args:
+            raise ValueError(f"{label} is required")
+        if len(args) == 1:
+            return self._to_byte_list(args[0], label)
+        return self._to_byte_list(list(args), label)
 
     # --- lifecycle ---
 
@@ -193,38 +220,57 @@ class GenericSPIDevice(BaseDevice):
         looking usable with a dead handle.
         """
         self._initialized = False
-        spi, self._spi = self._spi, None
-        try:
+        # Acquire the transfer lock so close() waits for any in-flight xfer2 /
+        # writebytes / readbytes worker to finish before the fd is released --
+        # otherwise emergency stop (which bypasses the command lock) can close
+        # the handle mid-syscall, and the freed fd number can be reused by
+        # another device's open() while the old ioctl is still running.
+        async with self._lock:
+            spi, self._spi = self._spi, None
             if spi is not None:
                 try:
                     await asyncio.to_thread(spi.close)
                 except Exception as e:  # close is best-effort
                     logger.warning("GenericSPI %s: error during close: %s", self._name, e)
-        finally:
-            self._initialized = False
+
+    async def get_state(self) -> None:
+        """No passive state -- SPI is command/response.
+
+        Returns None so the DataRecorder writes an empty cell rather than
+        falling through to read() and clocking an unsolicited bus transaction
+        every poll cycle (matching non-streaming serial's get_state).
+        """
+        return None
 
     # --- transfer plumbing ---
 
     async def _call(self, method_name: str, *args) -> Any:
-        if not self._initialized or self._spi is None:
-            raise RuntimeError(f"GenericSPI {self._name} not initialized")
-        fn = getattr(self._spi, method_name)
+        # Re-check initialized/handle INSIDE the lock: a shutdown() that runs
+        # between an action's dispatch and its lock acquisition must be seen, so
+        # we never call a method on a just-closed handle.
         async with self._lock:
+            if not self._initialized or self._spi is None:
+                raise RuntimeError(f"GenericSPI {self._name} not initialized")
+            fn = getattr(self._spi, method_name)
             return await asyncio.to_thread(fn, *args)
 
     # --- actions ---
 
-    async def transfer(self, data: Any = None) -> list[int]:
-        """Full-duplex ``xfer2``: clock ``data`` out while reading the same
-        number of bytes back. Returns the received bytes as a list of ints."""
-        payload = self._to_byte_list(data)
-        result = await self._call("xfer2", list(payload))
+    async def transfer(self, *args: Any) -> list[int]:
+        """Full-duplex ``xfer2``: clock the payload out while reading the same
+        number of bytes back. Returns the received bytes as a list of ints.
+
+        Variadic so the node layer's comma-split constant (e.g. ``"0x01,0x80"``
+        -> two args) is reassembled into one byte list.
+        """
+        payload = self._coerce_args(args)
+        result = await self._call("xfer2", payload)
         return list(result)
 
-    async def write(self, data: Any = None) -> None:
-        """Write bytes with no read (``writebytes``)."""
-        payload = self._to_byte_list(data)
-        await self._call("writebytes", list(payload))
+    async def write(self, *args: Any) -> None:
+        """Write bytes with no read (``writebytes``); variadic like transfer."""
+        payload = self._coerce_args(args)
+        await self._call("writebytes", payload)
 
     async def read(self, length: Any = 1) -> list[int]:
         """Read ``length`` bytes with no write (``readbytes``)."""
