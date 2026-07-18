@@ -17,6 +17,11 @@ When GLIDER opens in its design layout you'll see three main areas:
 
 You can show or hide these panels from the **View** menu.
 
+<figure markdown="span">
+  ![The Builder layout: Node Library on the left, the graph canvas in the center, Properties on the right](../assets/screenshots/builder.png)
+  <figcaption>Node Library (left), the canvas with a wired experiment (center), and Properties (right).</figcaption>
+</figure>
+
 !!! note "Nodes are color-coded by category"
     Every node belongs to one of three categories, shown by its color:
 

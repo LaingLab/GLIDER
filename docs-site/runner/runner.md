@@ -30,6 +30,11 @@ Two elements are always available no matter which tab you're on:
 Setup is the landing tab and your home base between runs. It's a single
 scrollable page with four parts, top to bottom.
 
+<figure markdown="span">
+  ![The Runner Setup tab: status line, large file buttons, and a hardware roster](../assets/screenshots/runner.png)
+  <figcaption>The Setup tab — status line up top, finger-sized file and connect buttons, the hardware roster, and the persistent bottom tab bar.</figcaption>
+</figure>
+
 ### Status line
 
 At the top, two short status readouts tell you whether you're ready to run:

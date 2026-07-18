@@ -17,6 +17,11 @@ GLIDER separates hardware into two layers:
 
 You add a board first, then add devices onto it.
 
+<figure markdown="span">
+  ![The Hardware panel showing a tree of boards and their devices](../assets/screenshots/hardware.png)
+  <figcaption>The Hardware panel: boards (a Raspberry Pi and an Arduino) with their devices, pins, and connection status. Use <strong>+ Board</strong> and <strong>+ Device</strong> to build the tree.</figcaption>
+</figure>
+
 ## Adding a board
 
 Open **Hardware → Add Board...**. Pick a board type:

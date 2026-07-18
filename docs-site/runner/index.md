@@ -10,6 +10,11 @@ the official 480×800 display — but it runs on any machine. GLIDER picks the
 layout automatically from the screen size, and you can always force it with a
 command-line flag.
 
+<figure markdown="span">
+  ![The Runner touchscreen layout with large tap targets](../assets/screenshots/runner.png)
+  <figcaption>Runner mode: large, finger-friendly controls and a four-tab bottom bar, built for a bench touchscreen.</figcaption>
+</figure>
+
 ## In this section
 
 - **[The Runner Screen](runner.md)** — the four tabs (Setup, Run, Manual,
