@@ -71,6 +71,13 @@ i2c = [
     # there). Installs fine on every OS for `uv sync`.
     "smbus2>=0.4.0",
 ]
+spi = [
+    # Hardware SPI via spidev (Linux/Pi-only: it wraps the spidev ioctl API).
+    # GenericSPIDevice lazy-imports it inside initialize(), so importing the
+    # module — and non-Linux dev installs — are unaffected. Not pinned into the
+    # `pc` dev extra since it does not build off-Linux.
+    "spidev>=3.5; platform_system == 'Linux'",
+]
 behavior = [
     "umap-learn>=0.5",
     "hdbscan>=0.8.33",
@@ -110,6 +117,7 @@ glider = "glider.__main__:main"
 arduino = "glider.hal.boards.telemetrix_board:TelemetrixBoard"
 raspberry_pi = "glider.hal.boards.pi_gpio_board:PiGPIOBoard"
 bluetooth = "glider.hal.boards.ble_board:BLEBoard"
+serial = "glider.hal.boards.serial_board:SerialBoard"
 
 [project.urls]
 Homepage = "https://github.com/LaingLab/glider"

@@ -145,6 +145,18 @@ class HardwarePanel(QWidget):
                         cfg = getattr(device, "_config", None)
                         settings = getattr(cfg, "settings", {}) if cfg else {}
                         pin_str = settings.get("address", "") or "no address"
+                    elif device_type == "GenericSerial":
+                        cfg = getattr(device, "_config", None)
+                        settings = getattr(cfg, "settings", {}) if cfg else {}
+                        pin_str = settings.get("port", "") or "no port"
+                    elif device_type == "BLE":
+                        cfg = getattr(device, "_config", None)
+                        settings = getattr(cfg, "settings", {}) if cfg else {}
+                        pin_str = settings.get("address") or settings.get("name") or "no address"
+                    elif device_type == "GenericSPI":
+                        cfg = getattr(device, "_config", None)
+                        settings = getattr(cfg, "settings", {}) if cfg else {}
+                        pin_str = f"bus {settings.get('spi_bus', 0)}.{settings.get('spi_device', 0)}"
                     elif pin_values:
                         pin_str = f"Pin {pin_values[0]}"
                     else:
@@ -294,7 +306,7 @@ class HardwarePanel(QWidget):
         layout = QFormLayout(dialog)
 
         type_combo = QComboBox()
-        type_combo.addItems(["telemetrix", "pigpio", "bluetooth"])
+        type_combo.addItems(["telemetrix", "pigpio", "bluetooth", "serial"])
         layout.addRow("Board Type:", type_combo)
 
         id_edit = QLineEdit()
@@ -330,11 +342,12 @@ class HardwarePanel(QWidget):
 
         layout.addRow("Serial Port:", port_layout)
 
-        # Bluetooth has no serial port; grey the row out when it's selected.
+        # Bluetooth and the Serial transport board have no board-level port
+        # (each serial device owns its own port); grey the row out for them.
         def _toggle_port_row():
-            is_serial = type_combo.currentText() != "bluetooth"
-            port_combo.setEnabled(is_serial)
-            refresh_btn.setEnabled(is_serial)
+            needs_port = type_combo.currentText() not in ("bluetooth", "serial")
+            port_combo.setEnabled(needs_port)
+            refresh_btn.setEnabled(needs_port)
 
         type_combo.currentTextChanged.connect(lambda _: _toggle_port_row())
         _toggle_port_row()
@@ -351,12 +364,13 @@ class HardwarePanel(QWidget):
 
             board_id = id_edit.text().strip() or f"board_{len(self._hardware_manager.boards)}"
             board_type = type_combo.currentText()
-            port = port_combo.currentData() if board_type != "bluetooth" else None
+            port = port_combo.currentData() if board_type not in ("bluetooth", "serial") else None
 
             driver_type = {
                 "telemetrix": "arduino",
                 "pigpio": "raspberry_pi",
                 "bluetooth": "bluetooth",
+                "serial": "serial",
             }.get(board_type, "raspberry_pi")
 
             try:
@@ -413,7 +427,10 @@ class HardwarePanel(QWidget):
             "Load Cell (HX711)": ("HX711", ["dout", "sck"]),
             "ADS1115 (I2C ADC)": ("ADS1115", []),
             "Generic I2C Device": ("GenericI2C", []),
+            "Generic SPI Device": ("GenericSPI", []),
+            "Serial / UART Device": ("GenericSerial", []),
             "BLE Device (write characteristic)": ("BLEWrite", []),
+            "BLE Device (read / notify / write)": ("BLE", []),
         }
 
         # Surface plugin-registered device types (anything in DEVICE_REGISTRY
