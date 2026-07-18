@@ -4,12 +4,10 @@ Experiment Flow Nodes - Basic nodes for experiment control.
 These nodes provide the core functionality for running experiments:
 - StartExperiment: Entry point
 - EndExperiment: Exit point
-- Delay: Wait for a duration
 - Output: Write to a device
 - Input: Read from a device
 """
 
-import asyncio
 import logging
 
 from glider.hal.value_spec import clamp_to_spec
@@ -78,55 +76,6 @@ class EndExperimentNode(GliderNode):
         """Called when this node is triggered."""
         logger.info(f"EndExperimentNode.execute() called, node ID: {self._glider_id}")
         logger.info("Experiment ended")
-
-
-class LegacyDelayNode(GliderNode):
-    """Wait for a specified duration (legacy; superseded by logic/flow_nodes.DelayNode)."""
-
-    definition = NodeDefinition(
-        name="Delay",
-        category=NodeCategory.LOGIC,
-        description="Wait for a specified duration",
-        inputs=[
-            PortDefinition("exec", PortType.EXEC, description="Execution input"),
-            PortDefinition("seconds", PortType.DATA, float, 1.0, "Duration in seconds"),
-        ],
-        outputs=[
-            PortDefinition("next", PortType.EXEC, description="Triggers after delay"),
-        ],
-    )
-
-    def update_event(self) -> None:
-        """Called when inputs change."""
-        pass
-
-    async def execute(self) -> None:
-        """Wait for the specified duration then trigger output."""
-        logger.info(f"DelayNode.execute() called, node ID: {self._glider_id}")
-        logger.info(f"  Node state: {self._state}")
-
-        # Priority: 1) Saved state, 2) Default (1.0 seconds)
-        # The state is set by the properties panel when user changes duration
-        if "duration" in self._state:
-            duration = float(self._state["duration"])
-            logger.info(f"  Using duration from state: {duration}")
-        else:
-            # No saved state, default to 1 second
-            duration = 1.0
-            logger.info(f"  Using default duration: {duration}")
-
-        logger.info(f"Delay: waiting {duration} seconds")
-        await asyncio.sleep(duration)
-        logger.info("Delay: complete")
-        await self._fire_exec_output("next")
-
-    def exec_output(self, index: int = 0) -> None:
-        """Trigger execution output."""
-        logger.info(
-            f"DelayNode.exec_output({index}) called, callbacks: {len(self._update_callbacks)}"
-        )
-        for callback in self._update_callbacks:
-            callback("next", True)
 
 
 class OutputNode(GliderNode):
