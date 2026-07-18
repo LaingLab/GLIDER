@@ -718,5 +718,12 @@ def _register_builtin_drivers():
     except ImportError:
         logger.warning("BLEBoard driver not available")
 
+    try:
+        from glider.hal.boards.serial_board import SerialBoard
+
+        HardwareManager.register_driver("serial", SerialBoard)
+    except ImportError:
+        logger.warning("SerialBoard driver not available")
+
 
 _register_builtin_drivers()
