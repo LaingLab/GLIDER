@@ -94,8 +94,8 @@ _GETTING_STARTED = """
 <b>GLIDER</b> (General Laboratory Interface for Design, Experimentation, and
 Recording) is a modular experimental orchestration platform for laboratory
 hardware control through visual flow-based programming. It supports Arduino
-(via Telemetrix), Raspberry Pi (via gpiozero), computer vision for
-tracking and behavioral analysis, and an AI assistant.
+(via Telemetrix), Raspberry Pi (via gpiozero), and computer vision for
+tracking and behavioral analysis.
 </p>
 
 <h3>Two Modes</h3>
@@ -298,8 +298,8 @@ _RUNNING_EXPERIMENTS = """
 <h3>Data Recording</h3>
 <p>GLIDER records hardware measurements to <b>CSV files</b> automatically
 during an experiment run. Use the <b>Output</b> node to log specific
-values. Recorded data can be analyzed with the built-in Analysis dialog
-or the AI Agent.</p>
+values. Recorded data can be reviewed in the built-in Analysis panel
+after a tracking run.</p>
 
 <h3>Saving &amp; Loading</h3>
 <p>Experiments are saved as <code>.glider</code> files (JSON format) containing
@@ -376,44 +376,6 @@ Recordings are saved alongside experiment data.</p>
 <p>Use the Calibration dialog to map pixel distances to physical units
 (e.g. centimeters). This enables real-world measurements in zone and
 tracking data.</p>
-"""
-
-_AI_AGENT = """
-<h2>AI Agent</h2>
-<p>GLIDER includes an AI assistant that can help you build and run
-experiments using natural language.</p>
-
-<h3>Supported Providers</h3>
-<table>
-<tr><th>Provider</th><th>Details</th></tr>
-<tr><td><b>Ollama</b></td>
-    <td>Run models locally for free. Requires Ollama installed and running
-        on your machine (<code>http://localhost:11434</code>).</td></tr>
-<tr><td><b>OpenAI</b></td>
-    <td>Cloud-hosted models. Requires an API key.</td></tr>
-</table>
-
-<h3>Configuration</h3>
-<p>Open the Agent panel and click the <b>Settings</b> (gear) icon, or go to
-the Agent Settings dialog. Choose your provider, model, and generation
-parameters.</p>
-
-<h3>What the Agent Can Do</h3>
-<ul>
-<li><b>Add boards and devices</b> &mdash; &ldquo;Add an Arduino on COM3 with
-    an LED on pin 13.&rdquo;</li>
-<li><b>Configure hardware</b> &mdash; &ldquo;Set the PWM frequency to
-    1000 Hz.&rdquo;</li>
-<li><b>Control experiments</b> &mdash; &ldquo;Start the experiment&rdquo;,
-    &ldquo;Stop recording.&rdquo;</li>
-<li><b>Explain the flow</b> &mdash; &ldquo;What does this experiment
-    do?&rdquo;</li>
-</ul>
-
-<h3>Data Analysis</h3>
-<p>Load a CSV file from the Analysis dialog and ask natural language
-questions about your data, e.g. &ldquo;What was the average temperature
-during the first 5 minutes?&rdquo;</p>
 """
 
 _KEYBOARD_SHORTCUTS = """
@@ -502,7 +464,6 @@ class HelpDialog(QDialog):
         tabs.addTab(_make_scroll_tab(_NODE_GRAPH), "Node Graph")
         tabs.addTab(_make_scroll_tab(_RUNNING_EXPERIMENTS), "Running Experiments")
         tabs.addTab(_make_scroll_tab(_CAMERA_VISION), "Camera & Vision")
-        tabs.addTab(_make_scroll_tab(_AI_AGENT), "AI Agent")
         tabs.addTab(_make_scroll_tab(_KEYBOARD_SHORTCUTS), "Shortcuts")
         tabs.addTab(_make_scroll_tab(_TROUBLESHOOTING), "Troubleshooting")
         layout.addWidget(tabs)

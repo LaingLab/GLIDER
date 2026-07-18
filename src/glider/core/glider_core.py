@@ -28,7 +28,6 @@ from glider.vision.tracking_logger import TrackingDataLogger
 from glider.vision.video_recorder import VideoRecorder
 
 if TYPE_CHECKING:
-    from glider.agent.agent_controller import AgentController
     from glider.plugins.plugin_manager import PluginManager
 
 logger = logging.getLogger(__name__)
@@ -75,9 +74,6 @@ class GliderCore:
         self._multi_camera_manager = MultiCameraManager()
         self._multi_video_recorder = MultiVideoRecorder(self._multi_camera_manager)
         self._multi_camera_enabled = False
-
-        # Agent (lazy initialization)
-        self._agent_controller: AgentController | None = None
 
         self._initialized = False
         self._shutting_down = False
@@ -217,19 +213,6 @@ class GliderCore:
         """Enable or disable multi-camera mode."""
         self._multi_camera_enabled = value
         self._multi_camera_manager.enabled = value
-
-    @property
-    def agent_controller(self) -> "AgentController":
-        """
-        Agent controller instance (lazy initialization).
-
-        Creates the agent controller on first access.
-        """
-        if self._agent_controller is None:
-            from glider.agent.agent_controller import AgentController
-
-            self._agent_controller = AgentController(self)
-        return self._agent_controller
 
     @property
     def video_recording_enabled(self) -> bool:

@@ -875,12 +875,6 @@ class MainWindow(QMainWindow):
         add_subject_action.triggered.connect(lambda: self._on_edit_subject(""))
         experiment_menu.addAction(add_subject_action)
 
-        experiment_menu.addSeparator()
-
-        analyze_data_action = QAction("&Analyze Data...", self)
-        analyze_data_action.triggered.connect(self._on_open_analysis_dialog)
-        experiment_menu.addAction(analyze_data_action)
-
         # View menu
         view_menu = menubar.addMenu("&View")
 
@@ -2033,12 +2027,6 @@ class MainWindow(QMainWindow):
         self._experiment_dialog.show()
         self._experiment_dialog.raise_()
         self._experiment_dialog.activateWindow()
-
-    def _on_open_analysis_dialog(self) -> None:
-        from glider.gui.dialogs.analysis_dialog import AnalysisDialog
-
-        dialog = AnalysisDialog(parent=self)
-        dialog.exec()
 
     def _on_new_custom_device(self) -> None:
         """Open the no-code custom device builder; refresh on save."""
