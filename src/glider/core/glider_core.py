@@ -260,6 +260,7 @@ class GliderCore:
         self._video_recorder.set_output_directory(path)
         self._multi_video_recorder.set_output_directory(path)
         self._tracking_logger.set_output_directory(path)
+        self._event_logger.set_output_directory(path)
         self._audio_recorder.set_output_directory(path)
 
     def set_recording_interval(self, interval: float) -> None:

@@ -1628,6 +1628,7 @@ class MainWindow(QMainWindow):
 
     def _switch_to_desktop_mode(self) -> None:
         """Switch from runner to desktop mode."""
+        self._view_manager.mode = ViewMode.DESKTOP
         self.setWindowFlags(Qt.WindowType.Window)
         self.showNormal()
 
@@ -1650,7 +1651,6 @@ class MainWindow(QMainWindow):
         screen_size = self._view_manager.screen_size
         if screen_size.width() <= 800:
             self.showMaximized()
-            self._set_pi_touchscreen_layout()
         else:
             self.resize(1400, 900)
 

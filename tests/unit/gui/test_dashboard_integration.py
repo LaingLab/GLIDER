@@ -116,6 +116,8 @@ def test_switch_to_desktop_mode_restores_docks_hidden_by_dashboard(qtbot, main_w
     assert window._node_library_dock.isHidden()
     window._switch_to_desktop_mode()  # bypasses switch_to_builder
     assert not window._node_library_dock.isHidden()
+    assert window._stack.currentIndex() == 0
+    assert window._view_manager.is_desktop_mode
 
 
 def test_entering_dashboard_refreshes_hardware(qtbot, main_window_factory):
