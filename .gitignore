@@ -182,6 +182,8 @@ pyrightconfig.json
 
 .claude/*
 CLAUDE.md
+AGENTS.md
+.DS_Store
 *.cpython-313.pyc
 *.glider
 # uv.lock IS tracked — reproducible installs for the application.
