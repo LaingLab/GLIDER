@@ -154,6 +154,7 @@ class NodeLibraryPanel(QWidget):
                 ("StartExperiment", "Start Experiment", "Entry point - begins the experiment flow"),
                 ("EndExperiment", "End Experiment", "Exit point - ends the experiment"),
                 ("Delay", "Delay", "Wait for a specified duration"),
+                ("Timer", "Timer", "Emit ticks at a regular interval"),
             ],
             "Functions": [
                 (

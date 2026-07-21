@@ -45,7 +45,7 @@ from glider.gui.node_graph.graph_view import NodeGraphView
 from glider.gui.panels.camera_panel import CameraPanel
 from glider.gui.panels.device_control_panel import DeviceControlPanel
 from glider.gui.panels.hardware_panel import HardwarePanel
-from glider.gui.panels.node_editor_controller import NodeEditorController
+from glider.gui.panels.node_editor_controller import NodeEditorController, node_category_for_type
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
 from glider.gui.styles import colors
 from glider.gui.view_manager import ViewManager, ViewMode
@@ -1782,32 +1782,7 @@ class MainWindow(QMainWindow):
                     )
                     display_name = f"Zone: {zone_name}"
 
-                category = "default"
-                flow_nodes = ["StartExperiment", "EndExperiment", "Delay"]
-                control_nodes = ["Loop", "WaitForInput"]
-                io_nodes = [
-                    "Output",
-                    "Input",
-                    "MotorGovernor",
-                ]
-                function_nodes = [
-                    "FunctionCall",
-                    "StartFunction",
-                    "EndFunction",
-                ]
-                interface_nodes = ["ZoneInput"]
-
-                node_type_normalized = node_type.replace(" ", "")
-                if node_type_normalized in flow_nodes:
-                    category = "logic"
-                elif node_type_normalized in control_nodes:
-                    category = "interface"
-                elif node_type_normalized in io_nodes:
-                    category = "hardware"
-                elif node_type_normalized in function_nodes:
-                    category = "logic"
-                elif node_type_normalized in interface_nodes:
-                    category = "interface"
+                category = node_category_for_type(node_type)
 
                 node_item = self._graph_view.add_node(node_config.id, display_name, x, y)
                 node_item._category = category

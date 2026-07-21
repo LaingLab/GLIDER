@@ -45,6 +45,29 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def node_category_for_type(node_type: str) -> str:
+    """Return the graph styling category for a runtime node type."""
+    normalized_type = node_type.replace(" ", "")
+    categories = {
+        "logic": {
+            "StartExperiment",
+            "EndExperiment",
+            "Delay",
+            "Timer",
+            "FunctionCall",
+            "StartFunction",
+            "EndFunction",
+        },
+        "interface": {"Loop", "WaitForInput", "ZoneInput"},
+        "hardware": {"Output", "Input", "MotorGovernor"},
+    }
+
+    for category, node_types in categories.items():
+        if normalized_type in node_types:
+            return category
+    return "default"
+
+
 def merge_behavior_setting(state: dict, behavior_key: str, field_key: str, value: Any) -> dict:
     """Return a state with behavior_settings[key][field]=value (read-modify-write).
 
@@ -128,6 +151,7 @@ class NodeEditorController(QObject):
             "StartExperiment": ([], [">next"]),
             "EndExperiment": ([">exec"], []),
             "Delay": ([">exec"], [">next"]),
+            "Timer": (["Interval", "Enabled"], [">Tick", "Count"]),
             "Loop": ([">exec"], [">body", ">done"]),
             "WaitForInput": ([">exec"], [">triggered"]),
             "Output": ([">exec"], [">next"]),
@@ -246,27 +270,9 @@ class NodeEditorController(QObject):
                 display_name = "Zone Input"
                 initial_state["zone_id"] = zone_id
 
-        node_type_normalized = actual_node_type.replace(" ", "")
-
         node_id = f"{actual_node_type.lower()}_{uuid.uuid4().hex[:8]}"
 
-        category = "default"
-        flow_nodes = ["StartExperiment", "EndExperiment", "Delay"]
-        control_nodes = ["Loop", "WaitForInput"]
-        io_nodes = ["Output", "Input", "MotorGovernor"]
-        function_nodes = ["FunctionCall", "StartFunction", "EndFunction"]
-        interface_nodes = ["ZoneInput"]
-
-        if node_type_normalized in flow_nodes:
-            category = "logic"
-        elif node_type_normalized in control_nodes:
-            category = "interface"
-        elif node_type_normalized in io_nodes:
-            category = "hardware"
-        elif node_type_normalized in function_nodes:
-            category = "logic"
-        elif node_type_normalized in interface_nodes:
-            category = "interface"
+        category = node_category_for_type(actual_node_type)
 
         node_item = self._graph_view.add_node(node_id, display_name, x, y)
         node_item._category = category

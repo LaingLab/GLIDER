@@ -5,7 +5,7 @@ what they do.
 
 !!! note "Library palette vs. the full catalog"
     The **Node Library** palette you drag from is a focused set for building
-    common experiments — **Start/End Experiment** and **Delay** (Flow),
+    common experiments — **Start/End Experiment**, **Delay**, and **Timer** (Flow),
     **Start/End Function** (Functions), **Loop** and **Wait For Input**
     (Control), **Output** and **Input** (I/O), plus **Audio**, **Video**, and
     dynamic sections for your custom devices, functions, and camera zones. The
