@@ -37,7 +37,7 @@ The Node Library groups the nodes you'll reach for most often:
 
 | Section | Nodes |
 |---|---|
-| **Flow** | Start Experiment, End Experiment, Delay |
+| **Flow** | Start Experiment, End Experiment, Delay, Timer |
 | **Functions** | Start Function, End Function |
 | **Control** | Loop, Wait For Input |
 | **I/O** | Output, Input |

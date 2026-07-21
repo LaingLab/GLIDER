@@ -709,6 +709,7 @@ class NodeGraphView(QGraphicsView):
             "End Experiment", lambda: self._add_node_at_cursor("EndExperiment", event.pos())
         )
         flow_menu.addAction("Delay", lambda: self._add_node_at_cursor("Delay", event.pos()))
+        flow_menu.addAction("Timer", lambda: self._add_node_at_cursor("Timer", event.pos()))
 
         # I/O nodes
         io_menu = add_menu.addMenu("I/O")
