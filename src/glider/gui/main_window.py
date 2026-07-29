@@ -999,6 +999,25 @@ class MainWindow(QMainWindow):
             )
         tools_menu.addAction(behavior_action)
 
+        pose_batch_action = QAction("Batch &Pose Tracking…", self)
+        pose_batch_action.setStatusTip(
+            "Run a pose model over directories of videos and write DeepLabCut CSVs"
+        )
+        pose_batch_action.triggered.connect(self._open_pose_batch)
+        # Lazy import for the same reason as the behavior probe above.
+        from glider.gui.pose_batch.availability import (
+            missing_pose_batch_deps,
+            pose_batch_available,
+        )
+
+        if not pose_batch_available():
+            pose_batch_action.setEnabled(False)
+            pose_batch_action.setToolTip(
+                "Install the vision extra: pip install glider[vision] "
+                f"(missing: {', '.join(missing_pose_batch_deps())})"
+            )
+        tools_menu.addAction(pose_batch_action)
+
         # GPU / device diagnostics. Always enabled — it's most useful precisely
         # when torch or a GPU is missing, and it reports that cleanly.
         gpu_check_action = QAction("&GPU / Device Check…", self)
@@ -1045,6 +1064,21 @@ class MainWindow(QMainWindow):
         self._behavior_window.show()
         self._behavior_window.raise_()
         self._behavior_window.activateWindow()
+
+    def _open_pose_batch(self) -> None:
+        """Open (or re-surface) the Batch Pose Tracking window.
+
+        Same lazy-import + keep-on-self pattern as the behavior window: the
+        import pulls in the pose stack (and transitively torch), so it stays
+        out of GLIDER startup.
+        """
+        from glider.gui.pose_batch.window import PoseBatchWindow
+
+        if getattr(self, "_pose_batch_window", None) is None:
+            self._pose_batch_window = PoseBatchWindow(parent=None)
+        self._pose_batch_window.show()
+        self._pose_batch_window.raise_()
+        self._pose_batch_window.activateWindow()
 
     def _setup_toolbar(self) -> None:
         """Set up the toolbar."""
