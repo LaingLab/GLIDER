@@ -88,6 +88,52 @@ def test_behavior_action_enabled_when_deps_present(qtbot, monkeypatch):
         win.deleteLater()
 
 
+def test_tools_menu_has_pose_batch_action(qtbot):
+    win = _menu_only_window()
+    try:
+        tools = _find_menu(win, "Tools")
+        assert tools is not None, "Tools menu missing"
+        labels = [a.text().replace("&", "") for a in tools.actions()]
+        assert any("Batch Pose Tracking" in label for label in labels)
+    finally:
+        win.deleteLater()
+
+
+def test_pose_batch_action_disabled_when_deps_missing(qtbot, monkeypatch):
+    from glider.gui.pose_batch import availability
+
+    monkeypatch.setattr(availability, "pose_batch_available", lambda: False)
+    monkeypatch.setattr(availability, "missing_pose_batch_deps", lambda: ["ultralytics"])
+
+    win = _menu_only_window()
+    try:
+        tools = _find_menu(win, "Tools")
+        action = next(
+            a for a in tools.actions() if "Batch Pose Tracking" in a.text().replace("&", "")
+        )
+        assert action.isEnabled() is False
+        assert "pip install glider[vision]" in action.toolTip()
+        assert "ultralytics" in action.toolTip()
+    finally:
+        win.deleteLater()
+
+
+def test_pose_batch_action_enabled_when_deps_present(qtbot, monkeypatch):
+    from glider.gui.pose_batch import availability
+
+    monkeypatch.setattr(availability, "pose_batch_available", lambda: True)
+
+    win = _menu_only_window()
+    try:
+        tools = _find_menu(win, "Tools")
+        action = next(
+            a for a in tools.actions() if "Batch Pose Tracking" in a.text().replace("&", "")
+        )
+        assert action.isEnabled() is True
+    finally:
+        win.deleteLater()
+
+
 def test_tools_menu_has_gpu_check_action(qtbot):
     win = _menu_only_window()
     try:

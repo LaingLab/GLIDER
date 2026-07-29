@@ -16,12 +16,20 @@ in this module operates on one mouse per video.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+
+class PoseCancelledError(RuntimeError):
+    """Raised when a caller's ``cancel_cb`` asks inference to stop early.
+
+    Distinct from a failure: callers treat this as "the operator stopped it",
+    not "this video is broken".
+    """
 
 
 @dataclass
@@ -143,6 +151,8 @@ def infer_video(
     verbose: bool = False,
     progress: bool = True,
     echo_device: bool = True,
+    progress_cb: Callable[[int, int], None] | None = None,
+    cancel_cb: Callable[[], bool] | None = None,
 ) -> PoseData:
     """Run an Ultralytics YOLO-pose model over a video and return PoseData.
 
@@ -179,10 +189,24 @@ def infer_video(
     echo_device
         Print the resolved device + (for CUDA) device name before inference
         starts. Helpful for confirming GPU usage in logs.
+    progress_cb
+        Called once per decoded frame as ``progress_cb(frames_done, total)``.
+        ``total`` is ``0`` when OpenCV cannot report a frame count, which
+        callers must render as indeterminate rather than as "zero frames".
+        Intended for GUI progress bars; pass ``progress=False`` alongside it.
+    cancel_cb
+        Polled once per frame. Returning ``True`` aborts the run and raises
+        :class:`PoseCancelledError`. Because Ultralytics streams results per frame,
+        a cancel lands within one frame even on a multi-hour video.
 
     Returns
     -------
     PoseData
+
+    Raises
+    ------
+    PoseCancelledError
+        If ``cancel_cb`` returned ``True`` before the video finished.
 
     Notes
     -----
@@ -235,15 +259,24 @@ def infer_video(
         verbose=verbose,
     )
 
-    if progress:
+    # Probe the frame count once; both the tqdm bar and progress_cb need it.
+    # 0 means "unknown" — some containers don't carry a reliable count.
+    total_frames = 0
+    if progress or progress_cb is not None:
         try:
             import cv2
-            from tqdm import tqdm
 
             cap = cv2.VideoCapture(str(video_path))
-            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or None
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
             cap.release()
-            results_iter = tqdm(results_iter, total=total, desc="YOLO inference")
+        except Exception:
+            total_frames = 0
+
+    if progress:
+        try:
+            from tqdm import tqdm
+
+            results_iter = tqdm(results_iter, total=total_frames or None, desc="YOLO inference")
         except Exception:
             pass
 
@@ -251,6 +284,10 @@ def infer_video(
     conf_rows: list[np.ndarray] = []
 
     for r in results_iter:
+        # Checked before decoding so a cancel doesn't pay for one more frame.
+        if cancel_cb is not None and cancel_cb():
+            raise PoseCancelledError(f"inference cancelled after {len(xy_rows)} frames")
+
         if (
             getattr(r, "keypoints", None) is None
             or r.keypoints.xy is None
@@ -258,29 +295,32 @@ def infer_video(
         ):
             xy_rows.append(np.full((n_kpts, 2), np.nan))
             conf_rows.append(np.zeros(n_kpts))
-            continue
-
-        # Highest-confidence detection on this frame.
-        if r.boxes is not None and r.boxes.conf is not None:
-            best = int(r.boxes.conf.cpu().numpy().argmax())
         else:
-            best = 0
+            # Highest-confidence detection on this frame.
+            if r.boxes is not None and r.boxes.conf is not None:
+                best = int(r.boxes.conf.cpu().numpy().argmax())
+            else:
+                best = 0
 
-        xy = r.keypoints.xy[best].cpu().numpy()
-        if r.keypoints.conf is not None:
-            cf = r.keypoints.conf[best].cpu().numpy()
-        else:
-            cf = np.ones(n_kpts)
+            xy = r.keypoints.xy[best].cpu().numpy()
+            if r.keypoints.conf is not None:
+                cf = r.keypoints.conf[best].cpu().numpy()
+            else:
+                cf = np.ones(n_kpts)
 
-        if xy.shape[0] != n_kpts:
-            raise ValueError(
-                f"model emitted {xy.shape[0]} keypoints but {n_kpts} names "
-                f"were supplied — check `keypoint_names` ordering against "
-                f"the training data.yaml"
-            )
+            if xy.shape[0] != n_kpts:
+                raise ValueError(
+                    f"model emitted {xy.shape[0]} keypoints but {n_kpts} names "
+                    f"were supplied — check `keypoint_names` ordering against "
+                    f"the training data.yaml"
+                )
 
-        xy_rows.append(np.asarray(xy, dtype=float))
-        conf_rows.append(np.asarray(cf, dtype=float))
+            xy_rows.append(np.asarray(xy, dtype=float))
+            conf_rows.append(np.asarray(cf, dtype=float))
+
+        # Single loop tail: undetected frames count toward progress too.
+        if progress_cb is not None:
+            progress_cb(len(xy_rows), total_frames)
 
     xy_arr = np.stack(xy_rows, axis=0) if xy_rows else np.zeros((0, n_kpts, 2))
     conf_arr = np.stack(conf_rows, axis=0) if conf_rows else np.zeros((0, n_kpts))

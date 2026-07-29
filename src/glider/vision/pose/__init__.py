@@ -4,8 +4,18 @@ Ported from the yolo2pose project. cv2 / ultralytics / torch are lazy-imported
 inside functions, so importing this package is cheap and dependency-light.
 """
 
-from . import dlc, viz
-from .core import PoseData, infer_video, pose_from_array
+from . import batch, dlc, viz
+from .batch import (
+    BatchEvent,
+    BatchResult,
+    EventKind,
+    FilterSettings,
+    discover_videos,
+    dlc_output_path,
+    raw_output_path,
+    run_batch,
+)
+from .core import PoseCancelledError, PoseData, infer_video, pose_from_array
 from .device import (
     format_gpu_info,
     gpu_info,
@@ -21,8 +31,18 @@ from .filtering import (
 
 __all__ = [
     "PoseData",
+    "PoseCancelledError",
     "infer_video",
     "pose_from_array",
+    "batch",
+    "BatchEvent",
+    "BatchResult",
+    "EventKind",
+    "FilterSettings",
+    "discover_videos",
+    "dlc_output_path",
+    "raw_output_path",
+    "run_batch",
     "resolve_device",
     "require_gpu_or_raise",
     "gpu_info",
