@@ -20,6 +20,7 @@ from glider.analysis.behavior.classify.speed_state import (
 from glider.analysis.behavior.classify.speed_state import (
     FREEZE_PCT_DEFAULT as FREEZE_PCT,
 )
+from glider.analysis.behavior.units import median_body_length_px
 
 
 def prior_speed(windowed: pd.DataFrame) -> np.ndarray:
@@ -94,6 +95,30 @@ class KinematicPrior:
         self._freeze_thr: float | None = None
         self._dart_thr: float | None = None
         self._scale: float | None = None
+        self._body_length_px: float | None = None
+
+    # The thresholds are the model's only human-interpretable numbers, so they
+    # are readable without reaching into private state. Units are body-lengths
+    # per frame by default — see `glider.analysis.behavior.units` to convert.
+    @property
+    def freeze_threshold(self) -> float | None:
+        """Calibrated freeze threshold, or None before :meth:`calibrate` runs."""
+        return self._freeze_thr
+
+    @property
+    def dart_threshold(self) -> float | None:
+        """Calibrated dart threshold, or None before :meth:`calibrate` runs."""
+        return self._dart_thr
+
+    @property
+    def body_length_px(self) -> float | None:
+        """Median body length (px) of the calibration frame, the unit reference.
+
+        None for bundles trained before this was recorded, or when the features
+        omit ``body_length``. Without it the thresholds cannot be expressed in
+        pixels or millimetres — only in their native per-frame unit.
+        """
+        return self._body_length_px
 
     def calibrate(self, windowed: pd.DataFrame) -> None:
         """Set freeze/dart thresholds (and activation scale) from this frame's speed."""
@@ -104,6 +129,9 @@ class KinematicPrior:
         # Scale = a fraction of the freeze..dart span, so activation is graded
         # (not a cliff) across the regime. Guard against a degenerate span.
         self._scale = max((self._dart_thr - self._freeze_thr) / 6.0, 1e-6)
+        # Captured from the SAME frame the thresholds came from, so the two can
+        # never disagree about what one body length was worth.
+        self._body_length_px = median_body_length_px(windowed)
 
     def to_dict(self) -> dict:
         """Serialize all persistence-critical state (mirrors ``FeatureSpec.to_dict``).
@@ -120,6 +148,7 @@ class KinematicPrior:
             "freeze_thr": self._freeze_thr,
             "dart_thr": self._dart_thr,
             "scale": self._scale,
+            "body_length_px": self._body_length_px,
         }
 
     @classmethod
@@ -138,6 +167,9 @@ class KinematicPrior:
         prior._freeze_thr = d.get("freeze_thr")
         prior._dart_thr = d.get("dart_thr")
         prior._scale = d.get("scale")
+        # Absent in bundles trained before the reference length was recorded;
+        # those can still report native units, just not px or mm.
+        prior._body_length_px = d.get("body_length_px")
         return prior
 
     def _activations(self, speed: np.ndarray) -> dict[str, np.ndarray]:

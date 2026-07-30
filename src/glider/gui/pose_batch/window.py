@@ -11,13 +11,15 @@ lazily inside its menu handler rather than at startup.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QSettings, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QSettings, Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -32,10 +34,14 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
+from glider.gui.pose_batch.calibration_table import CalibrationTable
+from glider.vision.calibration import CameraCalibration
+from glider.vision.calibration_set import CalibrationSet, CalibrationSetError
 from glider.vision.pose import batch as batch_core
 
 logger = logging.getLogger(__name__)
@@ -140,11 +146,19 @@ class PoseBatchWindow(QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Batch Pose Tracking")
-        self.resize(720, 640)
+        # Fits a 1080p screen (~1040px usable); the splitter below distributes
+        # whatever height that leaves the videos/calibration/log widgets.
+        self.resize(820, 900)
 
         self._model_path: Path | None = None
         self._meta = None
         self._videos: list[Path] = []
+        self._calibrations = CalibrationSet()
+        self._loaded_master: Path | None = None
+        # The last value we defaulted into the master field. While the field
+        # still holds it, the path is ours to keep in step with the videos;
+        # once it differs, the operator owns it and we never touch it again.
+        self._auto_master_text: str | None = None
         self._thread: QThread | None = None
         self._worker = None
         self._meta_thread: QThread | None = None
@@ -162,15 +176,28 @@ class PoseBatchWindow(QMainWindow):
         layout = QVBoxLayout(central)
 
         layout.addWidget(self._build_model_group())
-        layout.addWidget(self._build_sources_group(), stretch=1)
-        layout.addWidget(self._build_filter_group())
-        layout.addWidget(self._build_options_group())
-        layout.addLayout(self._build_run_bar())
 
         self._log = QPlainTextEdit()
         self._log.setReadOnly(True)
         self._log.setPlaceholderText("Progress will appear here.")
-        layout.addWidget(self._log, stretch=1)
+
+        # Videos, calibration, and the log all want more room than a fixed
+        # 900px-tall window can give all three at once. A splitter lets the
+        # operator trade space between them instead of Qt imposing a
+        # one-size-fits-all compromise that starves the calibration table.
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.setHandleWidth(1)  # every pixel matters against a 1080p ceiling
+        splitter.addWidget(self._build_sources_group())
+        splitter.addWidget(self._build_calibration_group())
+        splitter.addWidget(self._log)
+        # Calibration is the workflow's focus, so it gets the largest share;
+        # sources a moderate share; the log (least-consulted day to day) the rest.
+        splitter.setSizes([160, 260, 100])
+        layout.addWidget(splitter, stretch=1)
+
+        layout.addWidget(self._build_filter_group())
+        layout.addWidget(self._build_options_group())
+        layout.addLayout(self._build_run_bar())
 
         self.setCentralWidget(central)
 
@@ -243,6 +270,59 @@ class PoseBatchWindow(QMainWindow):
 
         self._count_label = QLabel("No videos found")
         layout.addWidget(self._count_label)
+        return group
+
+    def _build_calibration_group(self) -> QGroupBox:
+        group = QGroupBox("Pixel-to-distance calibration")
+        group.setToolTip(
+            "Every video needs a scale before the batch can run. The DLC CSVs "
+            "stay in pixels; the scale is written to the master calibration file."
+        )
+        layout = QVBoxLayout(group)
+
+        self._cal_table = CalibrationTable()
+        self._cal_table.set_calibration_set(self._calibrations)
+        self._cal_table.calibrate_requested.connect(self._open_calibration)
+        # ~4-5 rows: enough to see calibration status at a glance even if the
+        # splitter above gets dragged down to its floor.
+        self._cal_table.setMinimumHeight(140)
+        layout.addWidget(self._cal_table, stretch=1)
+
+        buttons = QHBoxLayout()
+        calibrate = QPushButton("Calibrate…")
+        calibrate.setToolTip("Calibrate the selected video (or double-click its row)")
+        calibrate.clicked.connect(self._calibrate_selected)
+        copy_btn = QPushButton("Copy to Selected")
+        copy_btn.setToolTip(
+            "Stamp one calibration onto the other selected videos — for videos "
+            "shot on the same rig at the same camera height."
+        )
+        copy_btn.clicked.connect(self._copy_calibration_to_selected)
+        clear_btn = QPushButton("Clear")
+        clear_btn.clicked.connect(self._clear_selected_calibrations)
+        for button in (calibrate, copy_btn, clear_btn):
+            buttons.addWidget(button)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+
+        master_row = QHBoxLayout()
+        self._master_field = QLineEdit()
+        self._master_field.setPlaceholderText("Master calibration file")
+        # A typed or pasted path must get the same load-if-exists treatment as
+        # Browse and Load, or Run silently overwrites a master it never read.
+        # editingFinished (not textChanged) so it fires once the path is whole.
+        self._master_field.editingFinished.connect(self._master_path_edited)
+        master_browse = QPushButton("Browse…")
+        master_browse.clicked.connect(self._choose_master_path)
+        load_master = QPushButton("Load")
+        load_master.clicked.connect(self._load_master_clicked)
+        save_master = QPushButton("Save")
+        save_master.clicked.connect(self._save_master_clicked)
+        master_row.addWidget(QLabel("Master file:"))
+        master_row.addWidget(self._master_field, stretch=1)
+        for button in (master_browse, load_master, save_master):
+            master_row.addWidget(button)
+        layout.addLayout(master_row)
         return group
 
     def _build_filter_group(self) -> QGroupBox:
@@ -356,7 +436,305 @@ class PoseBatchWindow(QMainWindow):
         self._count_label.setText(
             "No videos found" if count == 0 else f"{count} video{'s' if count != 1 else ''} found"
         )
+        self._cal_table.set_videos(self._videos)
+        self._sync_master_field()
         self._validate()
+
+    # ------------------------------------------------------------------
+    # calibration
+    # ------------------------------------------------------------------
+
+    def _open_calibration(self, video: Path) -> None:
+        """Draw measurement lines on a frame scrubbed out of *video*."""
+        from glider.gui.dialogs.calibration_dialog import CalibrationDialog
+        from glider.vision.frame_provider import VideoFrameProvider
+
+        provider = VideoFrameProvider(video)
+        if not provider.is_connected:
+            provider.release()
+            QMessageBox.warning(
+                self,
+                "Cannot Open Video",
+                f"{video.name} could not be opened for calibration.",
+            )
+            return
+
+        # Edit a copy: Cancel must leave the stored calibration untouched.
+        existing = self._calibrations.get(video)
+        working = (
+            CameraCalibration.from_dict(existing.to_dict())
+            if existing is not None
+            else CameraCalibration()
+        )
+        dialog = None
+        try:
+            dialog = CalibrationDialog(
+                frame_provider=provider,
+                calibration=working,
+                parent=self,
+                show_file_buttons=False,
+            )
+            dialog.setWindowTitle(f"Calibrate — {video.name}")
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self._calibrations.set(video, dialog.get_calibration())
+                ppm = self._calibrations.px_per_mm(video)
+                self._log.appendPlainText(
+                    f"{video.name}: {ppm:.3f} px/mm"
+                    if ppm
+                    else f"{video.name}: no usable scale drawn"
+                )
+        finally:
+            if dialog is not None:
+                # parent=self hands ownership to the window, so dropping the
+                # Python reference leaves the C++ dialog — and the full-res
+                # frame and pixmap it holds — alive for the session.
+                dialog.deleteLater()
+            provider.release()
+
+        self._cal_table.refresh()
+        self._validate()
+
+    def _calibrate_selected(self) -> None:
+        selected = self._cal_table.selected_videos()
+        if not selected:
+            QMessageBox.information(
+                self, "Calibrate", "Select a video in the calibration table first."
+            )
+            return
+        self._open_calibration(selected[0])
+
+    def _retarget_calibration(
+        self, template: CameraCalibration, video: Path
+    ) -> CameraCalibration | None:
+        """A copy of *template* reconstructed at *video*'s own resolution.
+
+        Lines are stored normalized, so on a same-rig video the ruler spans the
+        same fraction of the frame whatever the recording resolution — but
+        ``pixels_per_mm`` reconstructs pixels at ``calibration_width``. Carrying
+        the source's resolution over would report the source's scale for a video
+        that does not have it. Returns None when the video will not open, since
+        guessing its resolution is exactly the error being fixed.
+        """
+        from glider.vision.video_source import VideoFileSource
+
+        reader = VideoFileSource()
+        try:
+            if not reader.load(video):
+                return None
+            width, height = reader.resolution
+        finally:
+            reader.release()
+        if width <= 0 or height <= 0:
+            return None
+
+        # from_dict(to_dict()) is a deep copy: the videos must not share
+        # a CameraCalibration, or editing one silently edits the others.
+        copy = CameraCalibration.from_dict(template.to_dict())
+        copy.calibration_width = width
+        copy.calibration_height = height
+        return copy
+
+    def _copy_calibration_to_selected(self) -> None:
+        """Stamp the one calibrated selected video onto the rest of the selection."""
+        selected = self._cal_table.selected_videos()
+        sources = [v for v in selected if self._calibrations.px_per_mm(v) is not None]
+        if not sources:
+            QMessageBox.information(
+                self,
+                "Copy Calibration",
+                "Select one calibrated video plus the videos to copy it to.",
+            )
+            return
+
+        source = sources[0]
+        template = self._calibrations.get(source)
+        targets = [v for v in selected if v != source]
+        already = {v for v in targets if self._calibrations.px_per_mm(v) is not None}
+
+        if already and not self._confirm_overwrite(source, len(already)):
+            # Declined: filling the blanks is what "copy to selected" is for,
+            # and it is the half of the job that cannot destroy anything.
+            targets = [v for v in targets if v not in already]
+
+        filled = 0
+        overwritten = 0
+        skipped: list[Path] = []
+        for video in targets:
+            retargeted = self._retarget_calibration(template, video)
+            if retargeted is None:
+                skipped.append(video)
+                continue
+            self._calibrations.set(video, retargeted)
+            if video in already:
+                overwritten += 1
+            else:
+                filled += 1
+
+        self._log.appendPlainText(
+            f"Copied {source.name}'s calibration: {filled} uncalibrated video(s) filled, "
+            f"{overwritten} existing calibration(s) overwritten."
+        )
+        if skipped:
+            names = ", ".join(v.name for v in skipped)
+            self._log.appendPlainText(
+                f"Not copied to {len(skipped)} video(s) that could not be opened to "
+                f"read their resolution: {names}"
+            )
+        self._cal_table.refresh()
+        self._validate()
+
+    def _confirm_overwrite(self, source: Path, count: int) -> bool:
+        """Ask before replacing calibrations the operator drew themselves."""
+        answer = QMessageBox.question(
+            self,
+            "Overwrite Calibrations?",
+            f"{count} of the selected video(s) already have their own calibration.\n\n"
+            f"Overwrite them with {source.name}'s?\n"
+            "Choose No to fill only the uncalibrated videos.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _clear_selected_calibrations(self) -> None:
+        for video in self._cal_table.selected_videos():
+            self._calibrations.discard(video)
+        self._cal_table.refresh()
+        self._validate()
+
+    # ------------------------------------------------------------------
+    # master calibration file
+    # ------------------------------------------------------------------
+
+    def _default_master_path(self) -> Path | None:
+        """``pose_calibration.json`` in the videos' common parent."""
+        if not self._videos:
+            return None
+        try:
+            parent = Path(os.path.commonpath([str(v.parent) for v in self._videos]))
+        except ValueError:
+            # Videos span drive roots on Windows; commonpath refuses.
+            parent = self._videos[0].parent
+        return parent / "pose_calibration.json"
+
+    def _master_path(self) -> Path | None:
+        text = self._master_field.text().strip()
+        return Path(text) if text else self._default_master_path()
+
+    @staticmethod
+    def _exists(path: Path) -> bool:
+        """Path.exists() that also survives a path the OS rejects outright.
+
+        The field is free text, so an embedded null byte reaches here as a
+        ValueError rather than a plain "no".
+        """
+        try:
+            return path.exists()
+        except (OSError, ValueError):
+            return False
+
+    def _master_is_auto(self) -> bool:
+        """True while the field still holds a value we defaulted, not one typed."""
+        return self._master_field.text().strip() == (self._auto_master_text or "")
+
+    def _sync_master_field(self) -> None:
+        """Keep an auto-defaulted path following the videos, then load if it exists."""
+        default = self._default_master_path()
+        # Only ever re-point a path we chose: an operator's own path must not
+        # move under them, but a stale default belonging to a folder that is no
+        # longer listed would write the master where nobody will look for it.
+        if default is not None and self._master_is_auto():
+            text = str(default)
+            if text != self._master_field.text():
+                self._auto_master_text = text
+                self._master_field.setText(text)
+
+        path = self._master_path()
+        # Load an existing master once per path, so a re-run costs no re-drawing.
+        if path is not None and path != self._loaded_master and self._exists(path):
+            self._loaded_master = path
+            self._load_master(path)
+
+    def _master_path_edited(self) -> None:
+        """Route a hand-typed path through the same load-if-exists as Browse."""
+        if not self._master_field.text().strip():
+            # Cleared: hand the field back to the auto-default machinery.
+            self._auto_master_text = None
+            self._sync_master_field()
+            return
+        path = self._master_path()
+        # _loaded_master is the guard against re-loading, so a focus-out that
+        # changed nothing costs nothing and no path can reach Run unread.
+        if path is None or path == self._loaded_master or not self._exists(path):
+            return
+        self._loaded_master = path
+        self._load_master(path)
+
+    def _load_master(self, path: Path) -> None:
+        try:
+            loaded = CalibrationSet.load(path, known_videos=self._videos)
+        except CalibrationSetError as e:
+            # Never half-apply: leave the current state alone and say why.
+            self._log.appendPlainText(f"Could not read {path.name}: {e}")
+            QMessageBox.warning(self, "Calibration File", str(e))
+            return
+
+        self._calibrations.entries.update(loaded.entries)
+        self._log.appendPlainText(
+            f"Loaded calibration for {len(loaded.entries)} video(s) from {path.name}."
+        )
+        self._cal_table.refresh()
+        self._validate()
+
+    def _choose_master_path(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Master calibration file",
+            self._master_field.text(),
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if path:
+            self._master_field.setText(path)
+            self._auto_master_text = None  # deliberately chosen: stop re-defaulting it
+            self._loaded_master = None  # a new path may want loading
+            self._sync_master_field()
+
+    def _load_master_clicked(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load master calibration",
+            self._master_field.text(),
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if path:
+            self._master_field.setText(path)
+            self._auto_master_text = None  # deliberately chosen: stop re-defaulting it
+            self._loaded_master = Path(path)
+            self._load_master(Path(path))
+
+    def _save_master_clicked(self) -> None:
+        path = self._master_path()
+        if path is None or not self._videos:
+            QMessageBox.information(
+                self, "Master File", "Add videos first so the file has somewhere to go."
+            )
+            return
+        if not self._write_master(path):
+            return
+        self._log.appendPlainText(f"Wrote {path}")
+
+    def _write_master(self, path: Path) -> bool:
+        """Write the master file. Reports and returns False on failure."""
+        try:
+            # Only the listed batch: the set can also hold videos from folders
+            # visited earlier this session, which this file does not describe.
+            self._calibrations.subset(self._videos).save(path, model=self._model_path)
+        except (OSError, ValueError) as e:
+            self._log.appendPlainText(f"Could not write {path}: {e}")
+            QMessageBox.critical(self, "Master File", f"Could not write the calibration file:\n{e}")
+            return False
+        self._loaded_master = path
+        return True
 
     # ------------------------------------------------------------------
     # keypoint names
@@ -459,6 +837,10 @@ class PoseBatchWindow(QMainWindow):
             names_bad = True
         elif not self._videos:
             problem = "Add at least one video or directory."
+        else:
+            uncalibrated = self._calibrations.missing(self._videos)
+            if uncalibrated:
+                problem = f"{len(uncalibrated)} video(s) still need calibration."
 
         self._names_field.setStyleSheet(_INVALID_STYLE if names_bad else "")
         self._run_button.setEnabled(problem is None)
@@ -481,6 +863,18 @@ class PoseBatchWindow(QMainWindow):
     def _start(self) -> None:
         if self._thread is not None:
             return
+
+        # Written before inference begins — the calibration is complete and
+        # known now, so it survives a cancelled or failed batch. A path we
+        # cannot write is a reason not to start at all, rather than to discover
+        # it after an hour of GPU time.
+        master = self._master_path()
+        if master is not None and not self._write_master(master):
+            return
+
+        self._start_worker()
+
+    def _start_worker(self) -> None:
         names = self._current_names()
         device = self._device_combo.currentText()
 

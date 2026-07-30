@@ -35,7 +35,22 @@ def _is_hybrid(result) -> bool:
     return hasattr(result, "per_lambda_f1")
 
 
-def _summary_dict(result) -> dict:
+def _prior_block(result, px_per_mm: float | None = None) -> dict:
+    """The kinematic thresholds, in units a reader can actually interpret.
+
+    Stored natively as body-lengths per frame, which means nothing on its own —
+    so report the percentiles that produced them and the same numbers converted
+    to per-second, pixels, and (given a calibration) mm/s.
+    """
+    prior = result.model.prior
+    return {
+        "freeze_pct": float(prior.freeze_pct),
+        "dart_pct": float(prior.dart_pct),
+        "thresholds": result.model.describe_thresholds(px_per_mm=px_per_mm),
+    }
+
+
+def _summary_dict(result, px_per_mm: float | None = None) -> dict:
     """The dict written to summary.json for either result type."""
     if _is_hybrid(result):
         base = result.model.base
@@ -47,6 +62,7 @@ def _summary_dict(result) -> dict:
             "classes": list(base.classes),
             "feature_names": list(base.feature_names),
             "classifier_type": type(base.classifier).__name__,
+            "prior": _prior_block(result, px_per_mm),
         }
     return dict(result.summary)
 
@@ -232,11 +248,19 @@ def _plot_lambda_sweep(result, out_dir: Path) -> None:
     _save(fig, out_dir / "lambda_sweep.png")
 
 
-def write_training_report(result, out_dir: str | Path) -> Path:
+def write_training_report(result, out_dir: str | Path, *, px_per_mm: float | None = None) -> Path:
+    """Write summary.json, tidy CSVs, and charts for a training result.
+
+    ``px_per_mm`` is optional and only affects a hybrid result's reported
+    thresholds: supply the rig's scale (from a Batch Pose Tracking master
+    calibration file) to also express them in mm/s. Omit it and every other
+    unit is still reported — a training run can span sessions at different
+    scales, so there is often no single right value here.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "summary.json").write_text(
-        json.dumps(_summary_dict(result), indent=2, default=_json_default),
+        json.dumps(_summary_dict(result, px_per_mm), indent=2, default=_json_default),
         encoding="utf-8",
     )
     _write_csvs(result, out_dir)

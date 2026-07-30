@@ -4,6 +4,8 @@ Tests for glider.vision.calibration module.
 Tests camera calibration and pixel-to-real-world conversion.
 """
 
+import pytest
+
 from glider.vision.calibration import (
     CalibrationLine,
     CameraCalibration,
@@ -408,3 +410,58 @@ class TestCameraCalibration:
         # Distance of 10 pixels should be 10mm (1 pixel = 1mm at this calibration)
         dist = calibration.real_distance((0, 0), (10, 0))
         assert abs(dist - 10.0) < 1.0
+
+
+class TestDegenerateLines:
+    """A zero-length line must not drag the averaged scale toward zero."""
+
+    def test_zero_length_line_is_ignored(self):
+        calibration = CameraCalibration()
+        calibration.add_line(
+            start=(0, 240),
+            end=(640, 240),
+            length=100.0,
+            unit=LengthUnit.MILLIMETERS,
+            resolution=(640, 480),
+        )
+        # Both endpoints identical: carries no scale information.
+        calibration.add_line(
+            start=(100, 100),
+            end=(100, 100),
+            length=100.0,
+            unit=LengthUnit.MILLIMETERS,
+            resolution=(640, 480),
+        )
+        # Still 6.4, not 3.2.
+        assert calibration.pixels_per_mm == pytest.approx(6.4, abs=0.1)
+
+    def test_only_degenerate_lines_is_uncalibrated(self):
+        calibration = CameraCalibration()
+        calibration.add_line(
+            start=(10, 10),
+            end=(10, 10),
+            length=50.0,
+            unit=LengthUnit.MILLIMETERS,
+            resolution=(640, 480),
+        )
+        assert calibration.pixels_per_mm == 0.0
+
+    def test_zero_real_length_line_is_ignored(self):
+        """The other exclusion branch: real pixels, but no real-world length."""
+        calibration = CameraCalibration()
+        calibration.add_line(
+            start=(0, 240),
+            end=(640, 240),
+            length=100.0,
+            unit=LengthUnit.MILLIMETERS,
+            resolution=(640, 480),
+        )
+        # A line the operator drew but never assigned a measurement to.
+        calibration.add_line(
+            start=(0, 100),
+            end=(320, 100),
+            length=0.0,
+            unit=LengthUnit.MILLIMETERS,
+            resolution=(640, 480),
+        )
+        assert calibration.pixels_per_mm == pytest.approx(6.4, abs=0.1)
