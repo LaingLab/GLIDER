@@ -129,22 +129,24 @@ class CameraCalibration:
         """
         Calculate average pixels per millimeter from all calibration lines.
 
+        Lines carrying no scale information (zero pixel length, or no real-world
+        length) are excluded from the average rather than averaged in as a 0,
+        which would silently deflate the scale for every other line.
+
         Returns 0 if not calibrated.
         """
         if not self.lines or self.calibration_width == 0:
             return 0.0
 
-        total_ratio = 0.0
+        ratios = []
         for line in self.lines:
-            # Get pixel length at calibration resolution
             x1, y1, x2, y2 = line.get_pixel_coords(self.calibration_width, self.calibration_height)
             pixel_dist = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
             mm_dist = line.length_mm
+            if pixel_dist > 0 and mm_dist > 0:
+                ratios.append(pixel_dist / mm_dist)
 
-            if mm_dist > 0:
-                total_ratio += pixel_dist / mm_dist
-
-        return total_ratio / len(self.lines) if self.lines else 0.0
+        return sum(ratios) / len(ratios) if ratios else 0.0
 
     def add_line(
         self,
