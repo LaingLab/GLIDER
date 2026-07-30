@@ -211,3 +211,262 @@ def test_no_speed_option_leaks_into_the_pipeline_config(qtbot):
     config_fields = set(inspect.signature(LiveInferenceConfig).parameters)
     for key in emitted:
         assert key in consumed or key in config_fields, f"{key} would reach LiveInferenceConfig"
+
+
+# --------------------------------------------------------------------------
+# Classifier cadence (predict_every)
+# --------------------------------------------------------------------------
+
+
+def test_apply_tab_cadence_default_matches_the_pipeline(qtbot):
+    """The tab hardcodes the default (import-light module); pin it to the real one."""
+    from glider.analysis.behavior.classify.pipeline import LiveInferenceConfig
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    assert tab._predict_every.value() == LiveInferenceConfig.predict_every
+
+
+def test_cadence_cannot_be_set_below_every_frame(qtbot):
+    """0 would mean 'never predict'; the pipeline clamps, but don't offer it."""
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._predict_every.setValue(0)
+    assert tab._predict_every.value() == 1
+
+
+def test_cadence_hint_reports_every_frame_at_one(qtbot):
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._predict_every.setValue(1)
+    assert "every frame" in tab._cadence_hint.text()
+    tab._predict_every.setValue(3)
+    assert "every frame" not in tab._cadence_hint.text()
+
+
+def test_apply_worker_forwards_predict_every_to_classify(monkeypatch, tmp_path):
+    from glider.gui.behavior import workers
+
+    seen = {}
+    monkeypatch.setattr(workers, "classify", lambda video, **kw: seen.update(kw) or "r")
+    workers.ApplyWorker(
+        video=tmp_path / "v.mp4",
+        model_path=tmp_path / "m.pkl",
+        yolo_path=tmp_path / "y.pt",
+        keypoint_names=["a"],
+        output_dir=tmp_path / "out",
+        predict_every=1,
+    ).run()
+    assert seen["predict_every"] == 1
+
+
+def test_apply_worker_omits_predict_every_when_unset(monkeypatch, tmp_path):
+    """Unset must leave the pipeline default as the single source of truth."""
+    from glider.gui.behavior import workers
+
+    seen = {}
+    monkeypatch.setattr(workers, "classify", lambda video, **kw: seen.update(kw) or "r")
+    workers.ApplyWorker(
+        video=tmp_path / "v.mp4",
+        model_path=tmp_path / "m.pkl",
+        yolo_path=tmp_path / "y.pt",
+        keypoint_names=["a"],
+        output_dir=tmp_path / "out",
+    ).run()
+    assert "predict_every" not in seen
+
+
+def test_predict_every_is_a_real_pipeline_config_field():
+    """Regression guard: it reaches LiveInferenceConfig via classify's **opts."""
+    import inspect
+
+    from glider.analysis.behavior.classify.pipeline import LiveInferenceConfig
+
+    assert "predict_every" in inspect.signature(LiveInferenceConfig).parameters
+
+
+# --------------------------------------------------------------------------
+# Advanced LightGBM knobs
+# --------------------------------------------------------------------------
+
+
+def test_lgbm_knobs_cover_the_dataclass():
+    """The UI spec duplicates LgbmReg's defaults; pin them so they can't drift.
+
+    A new LgbmReg field that nobody adds to _LGBM_KNOBS would be silently
+    untunable from the GUI, which is exactly the bug this dialog exists to fix.
+    """
+    import dataclasses
+    import inspect
+
+    from glider.analysis.behavior.pipeline import LgbmReg, train_model
+    from glider.gui.behavior.window import _LGBM_KNOBS
+
+    knobs = {k.name: k.default for k in _LGBM_KNOBS}
+    fields = {f.name: f.default for f in dataclasses.fields(LgbmReg)}
+
+    # n_estimators is train_model's, not LgbmReg's -- everything else pairs up.
+    assert set(knobs) - {"n_estimators"} == set(fields)
+    for name, default in fields.items():
+        assert knobs[name] == pytest.approx(default), name
+    assert (
+        knobs["n_estimators"] == inspect.signature(train_model).parameters["n_estimators"].default
+    )
+
+
+def test_every_knob_default_sits_inside_its_own_range():
+    from glider.gui.behavior.window import _LGBM_KNOBS
+
+    for knob in _LGBM_KNOBS:
+        assert knob.minimum <= knob.default <= knob.maximum, knob.name
+
+
+def test_dialog_opens_on_the_defaults(qtbot):
+    from glider.gui.behavior.window import _LGBM_KNOBS, LgbmAdvancedDialog
+
+    dialog = LgbmAdvancedDialog()
+    qtbot.addWidget(dialog)
+    assert dialog.values() == {k.name: k.default for k in _LGBM_KNOBS}
+
+
+def test_dialog_round_trips_edited_values(qtbot):
+    from glider.gui.behavior.window import LgbmAdvancedDialog
+
+    dialog = LgbmAdvancedDialog({"num_leaves": 63, "learning_rate": 0.05})
+    qtbot.addWidget(dialog)
+    values = dialog.values()
+    assert values["num_leaves"] == 63
+    assert values["learning_rate"] == pytest.approx(0.05)
+    # Unspecified knobs still come back at their defaults.
+    assert values["reg_lambda"] == pytest.approx(1.0)
+
+
+def test_restore_defaults_puts_every_knob_back(qtbot):
+    from glider.gui.behavior.window import _LGBM_KNOBS, LgbmAdvancedDialog
+
+    dialog = LgbmAdvancedDialog({"num_leaves": 200, "bagging_fraction": 0.5})
+    qtbot.addWidget(dialog)
+    dialog.restore_defaults()
+    assert dialog.values() == {k.name: k.default for k in _LGBM_KNOBS}
+
+
+def test_max_depth_offers_unlimited_as_its_minimum(qtbot):
+    """-1 is a sentinel, not a depth; it must not read as a number in the UI."""
+    from glider.gui.behavior.window import LgbmAdvancedDialog
+
+    dialog = LgbmAdvancedDialog()
+    qtbot.addWidget(dialog)
+    spin = dialog._spins["max_depth"]
+    assert spin.minimum() == -1
+    assert spin.specialValueText() == "No limit"
+    assert dialog.values()["max_depth"] == -1
+
+
+def test_advanced_button_is_lightgbm_only(qtbot):
+    from glider.gui.behavior.window import TrainTab
+
+    tab = TrainTab()
+    qtbot.addWidget(tab)
+    tab._classifier_combo.setCurrentText("rf")
+    assert not tab._advanced_btn.isEnabled()
+    tab._classifier_combo.setCurrentText("lightgbm")
+    assert tab._advanced_btn.isEnabled()
+
+
+def test_untouched_knobs_send_nothing_to_train_model(qtbot):
+    """Defaults must come from the library, not be frozen in by the GUI."""
+    from glider.gui.behavior.window import TrainTab
+
+    tab = TrainTab()
+    qtbot.addWidget(tab)
+    tab._classifier_combo.setCurrentText("lightgbm")
+    assert tab._lgbm_options() == {}
+
+
+def test_accepted_knobs_become_an_lgbm_reg(qtbot):
+    from glider.analysis.behavior.pipeline import LgbmReg
+    from glider.gui.behavior.window import TrainTab
+
+    tab = TrainTab()
+    qtbot.addWidget(tab)
+    tab._classifier_combo.setCurrentText("lightgbm")
+    tab._lgbm_advanced = {
+        "n_estimators": 400,
+        "learning_rate": 0.05,
+        "num_leaves": 63,
+        "max_depth": 8,
+        "min_child_samples": 25,
+        "min_split_gain": 0.1,
+        "feature_fraction": 0.7,
+        "bagging_fraction": 0.9,
+        "reg_lambda": 2.0,
+    }
+    opts = tab._lgbm_options()
+    assert opts["n_estimators"] == 400
+    assert opts["lgbm_reg"] == LgbmReg(
+        num_leaves=63,
+        min_child_samples=25,
+        feature_fraction=0.7,
+        bagging_fraction=0.9,
+        reg_lambda=2.0,
+        learning_rate=0.05,
+        max_depth=8,
+        min_split_gain=0.1,
+    )
+
+
+def test_random_forest_run_never_carries_lgbm_knobs(qtbot):
+    """_make_classifier ignores lgbm_reg for rf; don't imply an effect."""
+    from glider.gui.behavior.window import TrainTab
+
+    tab = TrainTab()
+    qtbot.addWidget(tab)
+    tab._lgbm_advanced = {"n_estimators": 400, "num_leaves": 63}
+    tab._classifier_combo.setCurrentText("rf")
+    assert tab._lgbm_options() == {}
+
+
+def test_dialog_values_are_all_accepted_by_train_model(qtbot):
+    """GUI <-> core contract, matching the Apply tab's leak guard."""
+    import dataclasses
+    import inspect
+
+    from glider.analysis.behavior.pipeline import LgbmReg, train_model
+    from glider.gui.behavior.window import LgbmAdvancedDialog
+
+    dialog = LgbmAdvancedDialog()
+    qtbot.addWidget(dialog)
+    emitted = set(dialog.values())
+
+    accepted = set(inspect.signature(train_model).parameters)
+    lgbm_fields = {f.name for f in dataclasses.fields(LgbmReg)}
+    for key in emitted:
+        assert key in accepted or key in lgbm_fields, f"{key} reaches neither"
+
+
+def test_advanced_dialog_stores_values_on_accept(qtbot, monkeypatch):
+    from glider.gui.behavior import window as win
+
+    tab = win.TrainTab()
+    qtbot.addWidget(tab)
+    tab._classifier_combo.setCurrentText("lightgbm")
+    monkeypatch.setattr(win.LgbmAdvancedDialog, "exec", lambda self: 1)
+    tab._on_advanced()
+    assert tab._lgbm_advanced is not None
+    assert tab._lgbm_advanced["num_leaves"] == 31
+
+
+def test_advanced_dialog_discards_values_on_cancel(qtbot, monkeypatch):
+    from glider.gui.behavior import window as win
+
+    tab = win.TrainTab()
+    qtbot.addWidget(tab)
+    tab._classifier_combo.setCurrentText("lightgbm")
+    monkeypatch.setattr(win.LgbmAdvancedDialog, "exec", lambda self: 0)
+    tab._on_advanced()
+    assert tab._lgbm_advanced is None

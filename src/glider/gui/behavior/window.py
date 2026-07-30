@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import pprint
 from pathlib import Path
+from typing import NamedTuple
 
 from PyQt6.QtCore import QThread
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -36,6 +39,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSpinBox,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -46,6 +50,210 @@ from PyQt6.QtWidgets import (
 # glider.analysis.behavior.project.VIDEO_EXTS (module-level, no heavy deps).
 _VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
 _VIDEO_FILTER = "Video files (*.mp4 *.mov *.avi *.mkv *.m4v *.webm);;All files (*)"
+
+# Classifier cadence shown in the Apply tab. Mirrors
+# glider.analysis.behavior.classify.pipeline.LiveInferenceConfig.predict_every,
+# which this module can't import at module scope (it pulls in cv2/sklearn).
+# test_apply_tab_cadence_default_matches_the_pipeline pins the two together.
+_DEFAULT_PREDICT_EVERY = 3
+
+
+class _Knob(NamedTuple):
+    """One row of the advanced LightGBM dialog.
+
+    ``decimals == 0`` picks a :class:`QSpinBox` (integer knob), anything
+    higher a :class:`QDoubleSpinBox`. ``special`` is the label shown when an
+    integer knob sits at its minimum, for the knobs where the minimum is a
+    sentinel rather than a quantity (``max_depth = -1`` means "no limit").
+    """
+
+    name: str
+    label: str
+    default: float
+    minimum: float
+    maximum: float
+    decimals: int
+    step: float
+    tooltip: str
+    special: str = ""
+
+
+# The tunable LightGBM surface, in the order it reads best: capacity knobs
+# first, then the regularizers. Defaults mirror
+# glider.analysis.behavior.pipeline.LgbmReg (plus train_model's n_estimators),
+# duplicated because this module stays import-light -- importing pipeline at
+# module scope would pull sklearn/pandas into a bare [pc] install.
+# test_lgbm_knobs_cover_the_dataclass pins the names and defaults together.
+_LGBM_KNOBS: tuple[_Knob, ...] = (
+    _Knob(
+        "n_estimators",
+        "Boosting rounds:",
+        200,
+        10,
+        5000,
+        0,
+        10,
+        "How many trees are boosted in sequence. More rounds fit the training "
+        "data harder; pair a higher count with a lower learning rate.",
+    ),
+    _Knob(
+        "learning_rate",
+        "Learning rate:",
+        0.1,
+        0.001,
+        1.0,
+        3,
+        0.01,
+        "How much each tree contributes. Lower generalizes better but needs "
+        "more boosting rounds to reach the same fit.",
+    ),
+    _Knob(
+        "num_leaves",
+        "Leaves per tree:",
+        31,
+        2,
+        1024,
+        0,
+        1,
+        "Maximum leaves in one tree -- LightGBM's main capacity dial. Raising "
+        "it lets the model carve finer distinctions and overfit sooner.",
+    ),
+    _Knob(
+        "max_depth",
+        "Max tree depth:",
+        -1,
+        -1,
+        64,
+        0,
+        1,
+        "Hard cap on tree depth. -1 leaves depth unlimited (leaves-per-tree is "
+        "then the only limit); cap it to blunt deep, session-specific splits.",
+        special="No limit",
+    ),
+    _Knob(
+        "min_child_samples",
+        "Min samples per leaf:",
+        50,
+        1,
+        1000,
+        0,
+        5,
+        "Fewest training frames a leaf may cover. Raising it stops the model "
+        "memorizing rare one-off poses. Raise it if you have few labeled bouts.",
+    ),
+    _Knob(
+        "min_split_gain",
+        "Min split gain:",
+        0.0,
+        0.0,
+        10.0,
+        3,
+        0.01,
+        "Minimum improvement a split must buy to be kept. Above 0 this prunes "
+        "splits that only fit noise.",
+    ),
+    _Knob(
+        "feature_fraction",
+        "Feature fraction:",
+        0.8,
+        0.1,
+        1.0,
+        2,
+        0.05,
+        "Fraction of features each tree may sample. Below 1.0 it decorrelates "
+        "the trees, which matters because the windowed features overlap heavily.",
+    ),
+    _Knob(
+        "bagging_fraction",
+        "Row fraction:",
+        0.8,
+        0.1,
+        1.0,
+        2,
+        0.05,
+        "Fraction of training rows each tree samples. Below 1.0 adds variance "
+        "between trees and reduces overfitting.",
+    ),
+    _Knob(
+        "reg_lambda",
+        "L2 regularization:",
+        1.0,
+        0.0,
+        100.0,
+        2,
+        0.5,
+        "L2 penalty on leaf weights. Higher shrinks confident leaves toward "
+        "the mean, trading training accuracy for cross-session stability.",
+    ),
+)
+
+
+class LgbmAdvancedDialog(QDialog):
+    """Per-knob LightGBM hyperparameters, opened from the Train tab.
+
+    Deliberately a modal dialog rather than an inline group: these are
+    rarely-touched knobs where a wrong value quietly produces a worse model,
+    so they get their own surface with a tooltip per knob and a one-click
+    path back to the defaults.
+    """
+
+    def __init__(self, values: dict | None = None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Advanced LightGBM settings")
+        self._spins: dict[str, QSpinBox | QDoubleSpinBox] = {}
+        current = dict(values or {})
+
+        layout = QVBoxLayout(self)
+        blurb = QLabel(
+            "GLIDER's defaults are mildly regularized relative to stock LightGBM, "
+            "which trades training accuracy for generalization to sessions the "
+            "model has not seen. Hover a field to see what it trades off."
+        )
+        blurb.setWordWrap(True)
+        layout.addWidget(blurb)
+
+        form = QFormLayout()
+        for knob in _LGBM_KNOBS:
+            spin = self._build_spin(knob)
+            spin.setValue(current.get(knob.name, knob.default))
+            self._spins[knob.name] = spin
+            form.addRow(knob.label, spin)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.RestoreDefaults
+            | QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).clicked.connect(
+            self.restore_defaults
+        )
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def _build_spin(knob: _Knob) -> QSpinBox | QDoubleSpinBox:
+        if knob.decimals == 0:
+            spin: QSpinBox | QDoubleSpinBox = QSpinBox()
+            spin.setRange(int(knob.minimum), int(knob.maximum))
+            if knob.special:
+                spin.setSpecialValueText(knob.special)
+        else:
+            spin = QDoubleSpinBox()
+            spin.setDecimals(knob.decimals)
+            spin.setRange(float(knob.minimum), float(knob.maximum))
+        spin.setSingleStep(knob.step)
+        spin.setToolTip(knob.tooltip)
+        return spin
+
+    def restore_defaults(self) -> None:
+        for knob in _LGBM_KNOBS:
+            self._spins[knob.name].setValue(knob.default)
+
+    def values(self) -> dict:
+        """Every knob's current value, keyed by its ``train_model`` kwarg name."""
+        return {knob.name: self._spins[knob.name].value() for knob in _LGBM_KNOBS}
 
 
 class BehaviorAnalysisWindow(QMainWindow):
@@ -183,6 +391,10 @@ class TrainTab(QWidget):
         self._output_path: Path | None = None
         self._train_thread: QThread | None = None
         self._train_worker = None
+        # None until the user accepts the Advanced dialog at least once.
+        # Staying None keeps the library's own defaults the single source of
+        # truth instead of freezing today's values into every trained model.
+        self._lgbm_advanced: dict | None = None
 
         layout = QVBoxLayout(self)
 
@@ -213,17 +425,23 @@ class TrainTab(QWidget):
         options_row = QHBoxLayout()
         options_row.addWidget(QLabel("Classifier:"))
         self._classifier_combo = QComboBox()
-        # train_model(classifier_type=...) accepts exactly "rf" (default,
-        # RandomForestClassifier) or "lightgbm" (LGBMClassifier) — see
+        # train_model(classifier_type=...) accepts exactly "rf"
+        # (RandomForestClassifier) or "lightgbm" (LGBMClassifier, and the
+        # library-side default) — see
         # glider.analysis.behavior.pipeline.train_model docstring.
         self._classifier_combo.addItems(["rf", "lightgbm"])
+        self._classifier_combo.currentTextChanged.connect(self._on_classifier_changed)
         options_row.addWidget(self._classifier_combo)
+        self._advanced_btn = QPushButton("Advanced...")
+        self._advanced_btn.clicked.connect(self._on_advanced)
+        options_row.addWidget(self._advanced_btn)
         self._background_check = QCheckBox("Include background class")
         self._mirror_check = QCheckBox("Mirror augment")
         options_row.addWidget(self._background_check)
         options_row.addWidget(self._mirror_check)
         options_row.addStretch(1)
         layout.addLayout(options_row)
+        self._on_classifier_changed()
 
         self._output_label = QLabel("Model output: (none)")
         output_btn = QPushButton("Choose output file...")
@@ -242,6 +460,39 @@ class TrainTab(QWidget):
         self._results.setReadOnly(True)
         self._results.setPlaceholderText("Training results will appear here.")
         layout.addWidget(self._results, 1)
+
+    def _on_classifier_changed(self, *_args) -> None:
+        """The advanced knobs are LightGBM-only; RandomForest silently ignores them."""
+        lgbm = self._classifier_combo.currentText() == "lightgbm"
+        self._advanced_btn.setEnabled(lgbm)
+        self._advanced_btn.setToolTip(
+            "Tune LightGBM's capacity and regularization per knob."
+            if lgbm
+            else "LightGBM only — the RandomForest backend ignores these knobs."
+        )
+
+    def _on_advanced(self) -> None:
+        dialog = LgbmAdvancedDialog(self._lgbm_advanced, self)
+        if dialog.exec():
+            self._lgbm_advanced = dialog.values()
+
+    def _lgbm_options(self) -> dict:
+        """``train_model`` kwargs for the advanced knobs, or ``{}`` when untouched.
+
+        Returns nothing for the RandomForest backend even when the dialog has
+        been filled in: ``_make_classifier`` ignores ``lgbm_reg`` there, so
+        passing it would imply an effect the run won't have.
+        """
+        if not self._lgbm_advanced or self._classifier_combo.currentText() != "lightgbm":
+            return {}
+        # Imported here, not at module scope: pipeline pulls in sklearn/pandas
+        # and this window must import cleanly under a bare [pc] install.
+        from glider.analysis.behavior.pipeline import LgbmReg
+
+        values = dict(self._lgbm_advanced)
+        # n_estimators is a train_model kwarg, the rest are LgbmReg fields.
+        n_estimators = int(values.pop("n_estimators"))
+        return {"n_estimators": n_estimators, "lgbm_reg": LgbmReg(**values)}
 
     def _on_add_session(self) -> None:
         pair = _pick_session_pair(self, "training")
@@ -279,6 +530,7 @@ class TrainTab(QWidget):
             "include_background": self._background_check.isChecked(),
             "mirror_augment": self._mirror_check.isChecked(),
         }
+        options.update(self._lgbm_options())
         if self._holdout:
             options["holdout_sessions"] = list(self._holdout)
 
@@ -371,6 +623,8 @@ class ApplyTab(QWidget):
         keypoints_row.addWidget(self._keypoints_edit, 1)
         layout.addLayout(keypoints_row)
 
+        layout.addLayout(self._build_cadence_row())
+
         layout.addWidget(self._build_speed_group())
 
         self._output_label = QLabel("Output folder: (none)")
@@ -448,6 +702,45 @@ class ApplyTab(QWidget):
         self._progress.setVisible(True)
         self._keypoint_names = keypoint_names
         self._run_next()
+
+    def _build_cadence_row(self) -> QHBoxLayout:
+        """Classifier cadence: how many tracked frames per prediction.
+
+        The pipeline samples the model every 3 frames by default (~10 Hz on
+        30 fps video), which is plenty for a live overlay but coarser than
+        some analyses want. Exposed here so a per-frame ethogram is a spin
+        box rather than a code change. Bout durations are corrected for the
+        cadence downstream either way, so this trades runtime for temporal
+        resolution and nothing else.
+        """
+        self._predict_every = QSpinBox()
+        self._predict_every.setRange(1, 30)
+        self._predict_every.setValue(_DEFAULT_PREDICT_EVERY)
+        self._predict_every.setSuffix(" frame(s)")
+        self._predict_every.setToolTip(
+            "How often the behavior model is asked for a prediction.\n"
+            f"{_DEFAULT_PREDICT_EVERY} (default) is ample for scoring bouts and keeps "
+            "inference fast.\n"
+            "1 classifies every frame: one ethogram row per video frame, at "
+            "proportionally more classifier calls.\n"
+            "Pose tracking and feature extraction run on every frame regardless."
+        )
+        self._cadence_hint = QLabel()
+        self._predict_every.valueChanged.connect(self._on_cadence_changed)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Classify every:"))
+        row.addWidget(self._predict_every)
+        row.addWidget(self._cadence_hint, 1)
+        self._on_cadence_changed()
+        return row
+
+    def _on_cadence_changed(self, *_args) -> None:
+        """Restate the cadence as a rate, which is what people actually reason in."""
+        n = self._predict_every.value()
+        hz = 30.0 / n
+        every_frame = " — every frame" if n == 1 else ""
+        self._cadence_hint.setText(f"≈ {hz:.1f} predictions/s on 30 fps video{every_frame}")
 
     def _build_speed_group(self) -> QGroupBox:
         """Optional freeze/dart axis, set in real units.
@@ -598,6 +891,7 @@ class ApplyTab(QWidget):
             keypoint_names=self._keypoint_names,
             output_dir=video_output_dir,
             speed_opts=self._speed_opts(),
+            predict_every=self._predict_every.value(),
         )
         self._apply_worker.moveToThread(self._apply_thread)
         self._apply_thread.started.connect(self._apply_worker.run)
