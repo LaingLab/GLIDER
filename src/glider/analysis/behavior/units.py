@@ -181,8 +181,86 @@ def describe_speed_threshold(
     }
 
 
-def load_px_per_mm(master_path: Path | str | None, video: Path | str) -> float | None:
+def _video_resolution(video: Path | str) -> tuple[int, int] | None:
+    """``(width, height)`` from the container header, or None if unreadable."""
+    from glider.vision.video_source import VideoFileSource
+
+    source = VideoFileSource()
+    if not source.load(video):
+        return None
+    try:
+        return source.resolution
+    finally:
+        source.release()
+
+
+def _borrow_from_folder_mate(cal_set, video: Path) -> float | None:
+    """Scale from another calibrated video sitting in the same folder.
+
+    Videos in one folder are almost always one rig, one session, one camera
+    height — so requiring every single one to be drawn individually is a tax
+    with no scientific payoff. Borrowing is still gated hard: the folder-mate's
+    calibration resolution must equal this video's actual resolution, and any
+    disagreement between mates refuses rather than picks. Every borrow is
+    logged with the video it came from.
+
+    Folders are matched on name, not full path: the same share is routinely
+    addressed as both ``Z:\\...`` and ``\\\\host\\share\\...``, and those never
+    compare equal.
+    """
+    resolution = _video_resolution(video)
+    if resolution is None:
+        # Without the true resolution the scale cannot be validated, and an
+        # unvalidated borrow is exactly the wrong-millimetres bug.
+        logger.info("cannot borrow a calibration for %s: its resolution is unreadable", video)
+        return None
+
+    folder = video.parent.name.lower()
+    candidates = []
+    for stored, calibration in cal_set.entries.items():
+        if stored.parent.name.lower() != folder:
+            continue
+        if (calibration.calibration_width, calibration.calibration_height) != resolution:
+            continue
+        ppm = calibration.pixels_per_mm
+        if ppm > 0:
+            candidates.append((stored, ppm))
+
+    if not candidates:
+        return None
+    distinct = {round(ppm, 6) for _, ppm in candidates}
+    if len(distinct) > 1:
+        logger.warning(
+            "not borrowing a calibration for %s: folder-mates disagree on scale (%s px/mm)",
+            video.name,
+            ", ".join(f"{v:.4f}" for v in sorted(distinct)),
+        )
+        return None
+
+    source, ppm = candidates[0]
+    logger.info(
+        "%s has no calibration of its own; borrowed %.4f px/mm from %s "
+        "(same folder, same %dx%d resolution)",
+        video.name,
+        ppm,
+        source.name,
+        resolution[0],
+        resolution[1],
+    )
+    return ppm
+
+
+def load_px_per_mm(
+    master_path: Path | str | None,
+    video: Path | str,
+    *,
+    allow_folder_fallback: bool = True,
+) -> float | None:
     """Pixel-to-millimetre scale for *video* from a master calibration file.
+
+    Falls back to a folder-mate's calibration when *video* has none of its own
+    and the resolutions match — see :func:`_borrow_from_folder_mate`. Pass
+    ``allow_folder_fallback=False`` to require an exact per-video entry.
 
     Tolerant by design: a missing, unreadable, or malformed file, or a video the
     file does not cover, all yield None. An uncalibrated session must still be
@@ -200,4 +278,10 @@ def load_px_per_mm(master_path: Path | str | None, video: Path | str) -> float |
     except (CalibrationSetError, OSError) as e:
         logger.info("no usable calibration in %s: %s", path, e)
         return None
-    return loaded.px_per_mm(video)
+
+    direct = loaded.px_per_mm(video)
+    if direct is not None:
+        return direct
+    if not allow_folder_fallback:
+        return None
+    return _borrow_from_folder_mate(loaded, Path(video))

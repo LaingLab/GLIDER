@@ -27,6 +27,7 @@ warns.
 
 from __future__ import annotations
 
+import logging
 import warnings
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,8 @@ import pandas as pd
 
 from glider._version import __version__
 from glider.analysis.behavior.features import FeatureSpec
+
+logger = logging.getLogger(__name__)
 
 
 def _threshold_decision(
@@ -247,12 +250,14 @@ class BehaviorModel:
 
     @classmethod
     def load(cls, path: str | Path) -> BehaviorModel:
-        import joblib
-
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(path)
-        payload = joblib.load(path)
+        # Handles pre-rename (yolo2pose) bundles and ones whose optional 3D
+        # embedding cannot be rebuilt against the installed umap/numba.
+        from glider.analysis.behavior._legacy import load_bundle
+
+        payload, embedding_usable = load_bundle(path)
         if not isinstance(payload, dict) or "classifier" not in payload:
             raise ValueError(f"{path} doesn't look like a GLIDER behavior model bundle")
         _verify_library_versions(payload.get("library_versions"))
@@ -268,7 +273,9 @@ class BehaviorModel:
             library_versions=payload.get("library_versions", {}),
             # Back-compat: accept legacy yolo2pose bundles (old key name).
             glider_version=payload.get("glider_version") or payload.get("yolo2pose_version"),
-            embedding=payload.get("embedding"),
+            # A half-reconstructed embedding is worse than none: drop it so
+            # nothing downstream tries to project through a stubbed reducer.
+            embedding=payload.get("embedding") if embedding_usable else None,
         )
 
     # ------------------------------------------------------------------

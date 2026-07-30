@@ -465,20 +465,32 @@ class ApplyTab(QWidget):
             "over the postural label. Needs a pixel-to-distance calibration."
         )
         form = QFormLayout(group)
+        self._speed_form = form
 
-        self._freeze_mm_s = QDoubleSpinBox()
-        self._freeze_mm_s.setRange(0.0, 100000.0)
-        self._freeze_mm_s.setDecimals(1)
-        self._freeze_mm_s.setSuffix(" mm/s")
-        self._freeze_mm_s.setValue(10.0)
-        form.addRow("Freezing below:", self._freeze_mm_s)
+        self._speed_mode = QComboBox()
+        self._speed_mode.addItem("Absolute (cm/s)", "absolute")
+        self._speed_mode.addItem("Percentile of this video", "percentile")
+        self._speed_mode.setToolTip(
+            "Absolute is comparable across sessions but needs a calibration. "
+            "Percentile self-adjusts to each video and needs none, but the "
+            "thresholds then mean something different per recording."
+        )
+        self._speed_mode.currentIndexChanged.connect(self._on_speed_mode_changed)
+        form.addRow("Threshold mode:", self._speed_mode)
 
-        self._dart_mm_s = QDoubleSpinBox()
-        self._dart_mm_s.setRange(0.0, 100000.0)
-        self._dart_mm_s.setDecimals(1)
-        self._dart_mm_s.setSuffix(" mm/s")
-        self._dart_mm_s.setValue(150.0)
-        form.addRow("Darting above:", self._dart_mm_s)
+        self._freeze_cm_s = QDoubleSpinBox()
+        self._freeze_cm_s.setRange(0.0, 10000.0)
+        self._freeze_cm_s.setDecimals(2)
+        self._freeze_cm_s.setSuffix(" cm/s")
+        self._freeze_cm_s.setValue(1.0)
+        form.addRow("Freezing below:", self._freeze_cm_s)
+
+        self._dart_cm_s = QDoubleSpinBox()
+        self._dart_cm_s.setRange(0.0, 10000.0)
+        self._dart_cm_s.setDecimals(2)
+        self._dart_cm_s.setSuffix(" cm/s")
+        self._dart_cm_s.setValue(15.0)
+        form.addRow("Darting above:", self._dart_cm_s)
 
         row = QHBoxLayout()
         self._calibration_label = QLabel("(none)")
@@ -487,10 +499,55 @@ class ApplyTab(QWidget):
         cal_btn.clicked.connect(self._on_choose_calibration)
         row.addWidget(self._calibration_label, 1)
         row.addWidget(cal_btn)
+        self._calibration_row = row
         form.addRow("Calibration file:", row)
 
+        # Percentiles of the video's own causal-speed distribution. Defaults
+        # match the offline labeller so live and offline agree by default.
+        self._freeze_pct = QDoubleSpinBox()
+        self._freeze_pct.setRange(0.0, 100.0)
+        self._freeze_pct.setDecimals(1)
+        self._freeze_pct.setSuffix(" %")
+        self._freeze_pct.setValue(10.0)
+        form.addRow("Freezing percentile:", self._freeze_pct)
+
+        self._dart_pct = QDoubleSpinBox()
+        self._dart_pct.setRange(0.0, 100.0)
+        self._dart_pct.setDecimals(1)
+        self._dart_pct.setSuffix(" %")
+        self._dart_pct.setValue(99.5)
+        form.addRow("Darting percentile:", self._dart_pct)
+
+        # Seconds, not frames: a bout minimum is an ethological duration, and a
+        # frame count means something different at 30 vs 60 fps.
+        self._freeze_min_s = QDoubleSpinBox()
+        self._freeze_min_s.setRange(0.0, 600.0)
+        self._freeze_min_s.setDecimals(2)
+        self._freeze_min_s.setSuffix(" s")
+        self._freeze_min_s.setValue(1.0)
+        form.addRow("Freezing lasts at least:", self._freeze_min_s)
+
+        self._dart_min_s = QDoubleSpinBox()
+        self._dart_min_s.setRange(0.0, 600.0)
+        self._dart_min_s.setDecimals(2)
+        self._dart_min_s.setSuffix(" s")
+        self._dart_min_s.setValue(0.1)
+        form.addRow("Darting lasts at least:", self._dart_min_s)
+
         self._speed_group = group
+        self._on_speed_mode_changed()
         return group
+
+    def _speed_mode_value(self) -> str:
+        return self._speed_mode.currentData() or "absolute"
+
+    def _on_speed_mode_changed(self, *_args) -> None:
+        """Show only the fields the chosen mode actually uses."""
+        absolute = self._speed_mode_value() == "absolute"
+        for row in (1, 2, 3):  # cm/s pair + calibration file
+            self._speed_form.setRowVisible(row, absolute)
+        for row in (4, 5):  # percentile pair
+            self._speed_form.setRowVisible(row, not absolute)
 
     def _on_choose_calibration(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -507,11 +564,20 @@ class ApplyTab(QWidget):
         """Speed-axis kwargs for ApplyWorker, or {} when the axis is off."""
         if not self._speed_group.isChecked():
             return {}
-        return {
-            "freeze_mm_s": self._freeze_mm_s.value(),
-            "dart_mm_s": self._dart_mm_s.value(),
-            "calibration_master": self._calibration_master,
-        }
+        if self._speed_mode_value() == "percentile":
+            opts = {
+                "freeze_pct": self._freeze_pct.value(),
+                "dart_pct": self._dart_pct.value(),
+            }
+        else:
+            opts = {
+                "freeze_cm_s": self._freeze_cm_s.value(),
+                "dart_cm_s": self._dart_cm_s.value(),
+                "calibration_master": self._calibration_master,
+            }
+        opts["freeze_min_s"] = self._freeze_min_s.value()
+        opts["dart_min_s"] = self._dart_min_s.value()
+        return opts
 
     def _run_next(self) -> None:
         if not self._queue:
