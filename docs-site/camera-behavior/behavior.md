@@ -90,12 +90,14 @@ On the **Train** tab you fit a classifier from your labeled sessions:
     - `rf` — a scikit-learn **Random Forest**.
     - `lightgbm` — a **LightGBM** gradient-boosted model. (If LightGBM isn't
       available, GLIDER falls back to Random Forest automatically.)
-4. Optionally enable **Include background class** (treat unlabeled frames as a
+4. With `lightgbm` selected, **Advanced…** opens the per-knob hyperparameters —
+   see [Advanced LightGBM settings](#advanced-lightgbm-settings).
+5. Optionally enable **Include background class** (treat unlabeled frames as a
    catch-all "background" behavior) and **Mirror augment** (add left/right-mirrored
    copies of your data to make the model robust to direction).
-5. Click **Choose output file…** to pick where to save the trained model. It's
+6. Click **Choose output file…** to pick where to save the trained model. It's
    saved as a single **model bundle** (`.pkl`).
-6. Click **Fit**.
+7. Click **Fit**.
 
 When training finishes, a summary appears in the results box: how many rows were
 kept versus dropped, the classes learned, training accuracy, the most important
@@ -106,6 +108,41 @@ precision/recall/F1, and a confusion matrix.
     Without a holdout set, only training accuracy is reported, which always looks
     optimistic. Holding out one or more whole sessions gives you a realistic
     estimate of how the model will do on new recordings.
+
+### Advanced LightGBM settings
+
+Most users never need this. The defaults are already tuned to be *more*
+regularized than stock LightGBM, which deliberately gives up some training
+accuracy to generalize better to sessions the model has never seen.
+
+Reach for **Advanced…** when the training summary and your holdout scores
+disagree — near-perfect training accuracy alongside mediocre holdout accuracy
+means the model has memorized your training sessions rather than learned the
+behaviors. Every field has a tooltip explaining what it trades off, and
+**Restore Defaults** puts all of them back.
+
+| Setting | What it does | To reduce overfitting |
+| --- | --- | --- |
+| **Boosting rounds** | How many trees are boosted in sequence | Lower it, or raise it alongside a lower learning rate |
+| **Learning rate** | How much each tree contributes | Lower it, and add boosting rounds to compensate |
+| **Leaves per tree** | LightGBM's main capacity dial | Lower it |
+| **Max tree depth** | Hard cap on tree depth (`No limit` by default) | Cap it |
+| **Min samples per leaf** | Fewest training frames a leaf may cover | Raise it — especially with few labeled bouts |
+| **Min split gain** | Improvement a split must buy to be kept | Raise it above 0 |
+| **Feature fraction** | Fraction of features each tree samples | Lower it |
+| **Row fraction** | Fraction of training rows each tree samples | Lower it |
+| **L2 regularization** | Penalty on confident leaf weights | Raise it |
+
+These settings apply to LightGBM only — the Random Forest backend ignores them,
+which is why **Advanced…** is greyed out when `rf` is selected. Values you set
+are used for the runs you fit afterward; they aren't saved between sessions, and
+leaving the dialog untouched means the built-in defaults are used.
+
+!!! tip "Change one knob at a time"
+    Hyperparameter changes are only meaningful if you can measure them. Add a
+    holdout set first, note the holdout accuracy, then change a single setting
+    and re-fit. Without a holdout set you'll only see training accuracy, which
+    gets *better* as the model overfits.
 
 ### What the model learns from
 
@@ -128,11 +165,33 @@ On the **Apply** tab you score new videos with a trained model:
    recordings.
 4. In **Keypoint names**, enter the keypoint names in the model's training order,
    comma-separated (for example `nose, left_ear, right_ear, ...`).
-5. Click **Choose output folder…**, then **Run**.
+5. Optionally set **Classify every** — see [Classifier cadence](#classifier-cadence).
+6. Click **Choose output folder…**, then **Run**.
 
-GLIDER runs pose inference over each video and classifies every frame. Videos are
-processed one at a time, each writing into its own subfolder (named after the
-video) inside your output folder.
+GLIDER runs pose inference over each video and classifies it at the chosen
+cadence. Videos are processed one at a time, each writing into its own subfolder
+(named after the video) inside your output folder.
+
+### Classifier cadence
+
+**Classify every** sets how many frames pass between behavior predictions. The
+default of 3 asks the model for a label about 10 times per second on 30 fps
+video — fine resolution for scoring bouts, at a third of the inference work of
+labelling every frame.
+
+Set it to **1** when you want a label on every single frame: frame-accurate
+onset and offset times, an `ethogram_raw.csv` you can join row-for-row against
+another per-frame signal, or short behaviors whose bouts are only a few frames
+long. The cost is proportionally more classifier calls, so an Apply run takes
+longer.
+
+Two things stay true whichever value you pick:
+
+- Pose tracking and feature extraction always run on **every** frame. Only the
+  behavior prediction is sampled, so the model still sees a fully populated
+  rolling feature window.
+- Bout durations, totals, and transition counts are corrected for the cadence,
+  so `bouts.csv` and `stats.csv` report real seconds either way.
 
 ### Apply outputs
 
@@ -141,7 +200,7 @@ For each video, GLIDER writes:
 | File | Contents |
 | --- | --- |
 | `annotated.mp4` | The video with the predicted behavior drawn on each frame |
-| `ethogram_raw.csv` | The per-frame behavior label (the raw ethogram) |
+| `ethogram_raw.csv` | The raw ethogram: one row per *prediction* (`frame`, `behavior`), so one row per video frame only when **Classify every** is 1 |
 | `bouts.csv` | Continuous runs of a behavior: `state`, `duration_s` |
 | `stats.csv` | Per-behavior totals: number of bouts, total and mean/median duration, and fraction of time |
 | `transitions.csv` | How often each behavior followed each other: `from_state`, `to_state`, `count` |
