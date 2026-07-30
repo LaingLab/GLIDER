@@ -32,6 +32,100 @@ from glider.analysis.ethogram import (
 )
 
 
+def _video_fps(video: Path | str) -> float | None:
+    """Frame rate read from the container header, or None if unreadable."""
+    from glider.vision.video_source import VideoFileSource
+
+    source = VideoFileSource()
+    if not source.load(video):
+        return None
+    try:
+        fps = source.fps
+    finally:
+        source.release()
+    return fps if fps and fps > 0 else None
+
+
+def resolve_speed_thresholds(
+    video: Path | str,
+    *,
+    freeze_mm_s: float | None = None,
+    dart_mm_s: float | None = None,
+    calibration_master: Path | str | None = None,
+    px_per_mm: float | None = None,
+    fps: float | None = None,
+    freeze_threshold: float | None = None,
+    dart_threshold: float | None = None,
+) -> dict[str, float]:
+    """Freeze/dart thresholds in px/frame, ready for :class:`LiveInferenceConfig`.
+
+    Thresholds may be given either natively (``freeze_threshold`` /
+    ``dart_threshold``, px/frame) or in real units (``freeze_mm_s`` /
+    ``dart_mm_s``), never both for one run. The millimetre form is converted
+    exactly — the live detector measures raw pixel displacement, so no body
+    length is involved.
+
+    The scale comes from ``px_per_mm`` if given, else from the Batch Pose
+    Tracking master calibration file at ``calibration_master``. The frame rate
+    comes from ``fps`` if given, else from the video itself.
+
+    Returns ``{}`` when no thresholds were requested, leaving the speed axis
+    off. Raises ValueError — rather than silently disabling the axis — when
+    thresholds were asked for but cannot be honoured, because a silently
+    missing freeze/dart column is worse than a failed run.
+    """
+    from glider.analysis.behavior.units import load_px_per_mm, mm_per_s_to_px_per_frame
+
+    wants_mm = freeze_mm_s is not None or dart_mm_s is not None
+    wants_px = freeze_threshold is not None or dart_threshold is not None
+
+    if not wants_mm:
+        if not wants_px:
+            return {}
+        if freeze_threshold is None or dart_threshold is None:
+            raise ValueError(
+                "the speed axis needs both freeze_threshold and dart_threshold; "
+                "one alone would silently disable it"
+            )
+        return {
+            "freeze_threshold": float(freeze_threshold),
+            "dart_threshold": float(dart_threshold),
+        }
+
+    if wants_px:
+        raise ValueError(
+            "give freeze/dart thresholds in mm/s or in px/frame, not both "
+            "(got mm/s and px/frame for the same run)"
+        )
+    if freeze_mm_s is None or dart_mm_s is None:
+        raise ValueError(
+            "the speed axis needs both freeze_mm_s and dart_mm_s; "
+            "one alone would silently disable it"
+        )
+    if float(freeze_mm_s) >= float(dart_mm_s):
+        raise ValueError(f"freeze_mm_s ({freeze_mm_s}) must be below dart_mm_s ({dart_mm_s})")
+
+    scale = px_per_mm if px_per_mm is not None else load_px_per_mm(calibration_master, video)
+    if not scale or scale <= 0:
+        raise ValueError(
+            "mm/s thresholds need a pixel scale: pass px_per_mm, or a "
+            "calibration_master whose master file covers this video"
+        )
+
+    rate = fps if fps is not None else _video_fps(video)
+    if not rate or rate <= 0:
+        raise ValueError(
+            f"mm/s thresholds need the frame rate, and it could not be read from {video}; "
+            "pass fps explicitly"
+        )
+
+    freeze_px = mm_per_s_to_px_per_frame(freeze_mm_s, px_per_mm=scale, fps=rate)
+    dart_px = mm_per_s_to_px_per_frame(dart_mm_s, px_per_mm=scale, fps=rate)
+    if freeze_px is None or dart_px is None:  # pragma: no cover - guarded above
+        raise ValueError("could not convert the mm/s thresholds to pixels per frame")
+    return {"freeze_threshold": freeze_px, "dart_threshold": dart_px}
+
+
 @dataclass
 class EthogramResult:
     """Output of :func:`ethogram_from_labels`."""
@@ -69,6 +163,10 @@ def classify(
     output_dir,
     *,
     device=None,
+    freeze_mm_s=None,
+    dart_mm_s=None,
+    calibration_master=None,
+    px_per_mm=None,
     **opts,
 ) -> EthogramResult:
     """Run the headless apply pipeline over a recorded video and write outputs.
@@ -98,6 +196,21 @@ def classify(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_video = output_dir / "annotated.mp4"
     ethogram_csv = output_dir / "ethogram_raw.csv"
+
+    # Resolved before the pipeline starts so a bad threshold or a missing
+    # calibration fails immediately, not after a full pass of inference.
+    opts.update(
+        resolve_speed_thresholds(
+            video,
+            freeze_mm_s=freeze_mm_s,
+            dart_mm_s=dart_mm_s,
+            calibration_master=calibration_master,
+            px_per_mm=px_per_mm,
+            fps=opts.get("fps_override"),
+            freeze_threshold=opts.pop("freeze_threshold", None),
+            dart_threshold=opts.pop("dart_threshold", None),
+        )
+    )
 
     config = LiveInferenceConfig(
         source=str(video),

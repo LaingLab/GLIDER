@@ -39,6 +39,17 @@ from glider.analysis.behavior.classify.threads import (
 from glider.analysis.behavior.model import BehaviorModel
 
 
+def _is_hybrid_bundle(path) -> bool:
+    """Whether ``path`` is a HybridModel save rather than a plain bundle."""
+    try:
+        import joblib
+
+        payload = joblib.load(path)
+    except Exception:
+        return False
+    return isinstance(payload, dict) and payload.get("kind") == "hybrid"
+
+
 def _load_behavior_model(path):
     """Load either a CNN sequence bundle or a tabular BehaviorModel.
 
@@ -46,13 +57,30 @@ def _load_behavior_model(path):
     ``format`` marker; everything else is a joblib BehaviorModel. Try the
     CNN loader first and fall back — so the live command transparently
     accepts both kinds of model.
+
+    A HybridModel bundle is rejected by name. The live path has no way to
+    supply the windowed columns its kinematic prior needs, so it could only
+    ever run the base classifier — and silently doing that would leave the
+    operator believing the prior was in play when it was not.
     """
     try:
         from glider.analysis.behavior.sequence import SequenceModel
 
         return SequenceModel.load(path)
     except Exception:
+        pass
+    try:
         return BehaviorModel.load(path)
+    except Exception:
+        if _is_hybrid_bundle(path):
+            raise ValueError(
+                f"{path} is a hybrid model bundle, which the apply/live path cannot run: "
+                "its kinematic prior needs windowed features this pipeline does not "
+                "produce, so only the base classifier would apply and the prior would "
+                "be silently ignored. Train and save a plain model for apply, or set "
+                "the freeze/dart thresholds directly (freeze_mm_s / dart_mm_s)."
+            ) from None
+        raise
 
 
 def _unstreamable_feature_families(feature_names) -> list[str]:

@@ -24,7 +24,9 @@ from PyQt6.QtCore import QThread
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -331,6 +333,7 @@ class ApplyTab(QWidget):
         self._yolo_path: Path | None = None
         self._videos: list[Path] = []
         self._output_dir: Path | None = None
+        self._calibration_master: Path | None = None
         self._apply_thread: QThread | None = None
         self._apply_worker = None
         # Videos process one at a time (ApplyWorker takes a single video);
@@ -367,6 +370,8 @@ class ApplyTab(QWidget):
         keypoints_row.addWidget(QLabel("Keypoint names:"))
         keypoints_row.addWidget(self._keypoints_edit, 1)
         layout.addLayout(keypoints_row)
+
+        layout.addWidget(self._build_speed_group())
 
         self._output_label = QLabel("Output folder: (none)")
         output_btn = QPushButton("Choose output folder...")
@@ -444,6 +449,70 @@ class ApplyTab(QWidget):
         self._keypoint_names = keypoint_names
         self._run_next()
 
+    def _build_speed_group(self) -> QGroupBox:
+        """Optional freeze/dart axis, set in real units.
+
+        The live detector works in pixels per frame, which means nothing
+        physical and changes with camera height. Entering mm/s and converting
+        through the batch calibration keeps the numbers comparable across rigs
+        and sessions. Off by default — the pre-existing behaviour.
+        """
+        group = QGroupBox("Freeze / dart speed axis (optional)")
+        group.setCheckable(True)
+        group.setChecked(False)
+        group.setToolTip(
+            "Adds a speed column to the ethogram and shows freezing/darting "
+            "over the postural label. Needs a pixel-to-distance calibration."
+        )
+        form = QFormLayout(group)
+
+        self._freeze_mm_s = QDoubleSpinBox()
+        self._freeze_mm_s.setRange(0.0, 100000.0)
+        self._freeze_mm_s.setDecimals(1)
+        self._freeze_mm_s.setSuffix(" mm/s")
+        self._freeze_mm_s.setValue(10.0)
+        form.addRow("Freezing below:", self._freeze_mm_s)
+
+        self._dart_mm_s = QDoubleSpinBox()
+        self._dart_mm_s.setRange(0.0, 100000.0)
+        self._dart_mm_s.setDecimals(1)
+        self._dart_mm_s.setSuffix(" mm/s")
+        self._dart_mm_s.setValue(150.0)
+        form.addRow("Darting above:", self._dart_mm_s)
+
+        row = QHBoxLayout()
+        self._calibration_label = QLabel("(none)")
+        self._calibration_label.setWordWrap(True)
+        cal_btn = QPushButton("Choose...")
+        cal_btn.clicked.connect(self._on_choose_calibration)
+        row.addWidget(self._calibration_label, 1)
+        row.addWidget(cal_btn)
+        form.addRow("Calibration file:", row)
+
+        self._speed_group = group
+        return group
+
+    def _on_choose_calibration(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose master calibration file",
+            "",
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if path:
+            self._calibration_master = Path(path)
+            self._calibration_label.setText(str(self._calibration_master))
+
+    def _speed_opts(self) -> dict:
+        """Speed-axis kwargs for ApplyWorker, or {} when the axis is off."""
+        if not self._speed_group.isChecked():
+            return {}
+        return {
+            "freeze_mm_s": self._freeze_mm_s.value(),
+            "dart_mm_s": self._dart_mm_s.value(),
+            "calibration_master": self._calibration_master,
+        }
+
     def _run_next(self) -> None:
         if not self._queue:
             self._progress.setVisible(False)
@@ -462,6 +531,7 @@ class ApplyTab(QWidget):
             yolo_path=self._yolo_path,
             keypoint_names=self._keypoint_names,
             output_dir=video_output_dir,
+            speed_opts=self._speed_opts(),
         )
         self._apply_worker.moveToThread(self._apply_thread)
         self._apply_thread.started.connect(self._apply_worker.run)

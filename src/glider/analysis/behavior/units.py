@@ -43,6 +43,7 @@ __all__ = [
     "describe_speed_threshold",
     "load_px_per_mm",
     "median_body_length_px",
+    "mm_per_s_to_px_per_frame",
 ]
 
 # The feature column carrying absolute body length, before and after windowing.
@@ -115,6 +116,27 @@ class SpeedScale:
         if px is None or not fps or fps <= 0 or not ppm or ppm <= 0:
             return None
         return px * fps / ppm
+
+
+def mm_per_s_to_px_per_frame(
+    mm_per_s: float | None, *, px_per_mm: float | None, fps: float | None
+) -> float | None:
+    """Millimetres per second -> pixels per frame, for the live speed detector.
+
+    Exact, unlike the hybrid prior's conversion: the live
+    :class:`~glider.analysis.behavior.classify.speed_state.CausalSpeed` measures
+    raw pixel displacement with no body-length normalization, so no reference
+    body length is involved and nothing is approximated.
+
+    Returns None when any input is missing or degenerate — callers that need a
+    hard failure should check and raise with their own context.
+    """
+    speed = _finite(mm_per_s)
+    ppm = _finite(px_per_mm)
+    rate = _finite(fps)
+    if speed is None or not ppm or ppm <= 0 or not rate or rate <= 0:
+        return None
+    return speed * ppm / rate
 
 
 def median_body_length_px(frame: pd.DataFrame) -> float | None:

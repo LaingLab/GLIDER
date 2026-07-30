@@ -68,11 +68,27 @@ class TrainWorker(_BaseWorker):
 
 
 class ApplyWorker(_BaseWorker):
-    """Classify a recorded video with a trained model and write the ethogram."""
+    """Classify a recorded video with a trained model and write the ethogram.
 
-    def __init__(self, video, model_path, yolo_path, keypoint_names, output_dir, *, device=None):
+    ``speed_opts`` carries the optional freeze/dart axis — ``freeze_mm_s`` /
+    ``dart_mm_s`` plus a ``calibration_master`` or ``px_per_mm`` to convert
+    them. Empty leaves the axis off, which is the pre-existing behaviour.
+    """
+
+    def __init__(
+        self,
+        video,
+        model_path,
+        yolo_path,
+        keypoint_names,
+        output_dir,
+        *,
+        device=None,
+        speed_opts=None,
+    ):
         super().__init__()
         self._args = (video, model_path, yolo_path, keypoint_names, output_dir, device)
+        self._speed_opts = dict(speed_opts or {})
 
     def run(self) -> None:
         try:
@@ -84,6 +100,7 @@ class ApplyWorker(_BaseWorker):
                 keypoint_names=names,
                 output_dir=output_dir,
                 device=device,
+                **self._speed_opts,
             )
             self.finished.emit(result)
         except Exception as e:
