@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QSlider,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -36,7 +37,7 @@ from glider.gui.styles import colors
 from glider.vision.calibration import CameraCalibration, LengthUnit
 
 if TYPE_CHECKING:
-    from glider.vision.camera_manager import CameraManager
+    from glider.vision.frame_provider import FrameProvider
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ class CalibrationPreviewWidget(QLabel):
     def _update_display(self) -> None:
         """Update the display with frame and calibration lines."""
         if self._frame is None:
-            self.setText("No camera frame\nStart camera preview first")
+            self.setText("No frame available")
             return
 
         # Draw on a copy of the frame
@@ -331,34 +332,42 @@ class CalibrationPreviewWidget(QLabel):
 
 class CalibrationDialog(QDialog):
     """
-    Dialog for camera calibration with measurement lines.
+    Dialog for calibration with measurement lines.
 
-    Allows users to:
-    - Draw lines on camera preview
+    Draws over any :class:`~glider.vision.frame_provider.FrameProvider`, so the
+    same UI serves the live camera and a recorded video file. Allows users to:
+    - Draw lines on a captured frame
     - Assign real-world measurements to lines
     - Save/load calibration files
     """
 
     def __init__(
-        self, camera_manager: "CameraManager", calibration: CameraCalibration, parent=None
+        self,
+        frame_provider: "FrameProvider",
+        calibration: CameraCalibration,
+        parent=None,
+        *,
+        show_file_buttons: bool = True,
     ):
         super().__init__(parent)
-        self._camera = camera_manager
+        self._provider = frame_provider
         self._calibration = calibration
         self._pending_line: tuple[tuple[int, int], tuple[int, int]] | None = None
+        self._show_file_buttons = show_file_buttons
+        # A provider with a timeline (a video file) gets a scrubber; the live
+        # camera has no timeline to scrub.
+        self._seekable = (
+            hasattr(frame_provider, "seek") and getattr(frame_provider, "frame_count", 0) > 1
+        )
+        self._scrubber: QSlider | None = None
+        self._frame_label: QLabel | None = None
+        self._save_btn: QPushButton | None = None
+        self._load_btn: QPushButton | None = None
 
         self._setup_ui()
         self._update_table()
 
-        # Capture current frame
-        if self._camera.is_connected:
-            result = self._camera.get_frame()
-            if result is not None:
-                frame, timestamp = result
-                self._preview.set_frame(frame)
-                self._calibration.calibration_width = frame.shape[1]
-                self._calibration.calibration_height = frame.shape[0]
-
+        self._capture_frame(announce=False)
         self._preview.set_calibration(self._calibration)
 
     def _setup_ui(self) -> None:
@@ -384,12 +393,36 @@ class CalibrationDialog(QDialog):
         draw_layout.addWidget(self._draw_btn)
 
         self._capture_btn = QPushButton("Capture Frame")
-        self._capture_btn.clicked.connect(self._capture_frame)
+        # Not connected to _capture_frame directly: clicked() emits its
+        # `checked` bool, which is always False for a non-checkable button and
+        # would land in `announce`, silencing the "no frame" warning.
+        self._capture_btn.clicked.connect(self._on_capture_clicked)
         draw_layout.addWidget(self._capture_btn)
 
         draw_layout.addStretch()
 
         left_layout.addLayout(draw_layout)
+
+        # Frame scrubber, for sources with a timeline (video files).
+        if self._seekable:
+            scrub_row = QHBoxLayout()
+            self._scrubber = QSlider(Qt.Orientation.Horizontal)
+            # Tracking (the default) fires valueChanged for every intermediate
+            # value while the slider is being dragged; each one is a
+            # seek+decode from the nearest keyframe plus two full redraws,
+            # which visibly stalls the dialog on long recordings. With
+            # tracking off, dragging only seeks on release; setValue() and
+            # arrow-key stepping are unaffected and still emit immediately.
+            self._scrubber.setTracking(False)
+            self._scrubber.setRange(0, max(0, self._provider.frame_count - 1))
+            self._frame_label = QLabel(f"1 / {self._provider.frame_count}")
+            self._scrubber.valueChanged.connect(self._on_scrub)
+            scrub_row.addWidget(QLabel("Frame:"))
+            scrub_row.addWidget(self._scrubber, 1)
+            scrub_row.addWidget(self._frame_label)
+            left_layout.addLayout(scrub_row)
+            self._capture_btn.setText("Use This Frame")
+
         layout.addLayout(left_layout, 2)
 
         # Right side - controls and table
@@ -461,22 +494,33 @@ class CalibrationDialog(QDialog):
 
         right_layout.addWidget(info_group)
 
-        # File operations
-        file_layout = QHBoxLayout()
-
-        self._save_btn = QPushButton("Save...")
-        self._save_btn.clicked.connect(self._save_calibration)
-        file_layout.addWidget(self._save_btn)
-
-        self._load_btn = QPushButton("Load...")
-        self._load_btn.clicked.connect(self._load_calibration)
-        file_layout.addWidget(self._load_btn)
-
+        # File operations. Suppressed in the batch tool, where the master
+        # calibration file is the only artifact and a per-file save would
+        # be mistaken for it.
+        # Built once so "Clear All exists in both branches" holds structurally,
+        # not just because both branches happen to repeat the same code.
         self._clear_btn = QPushButton("Clear All")
         self._clear_btn.clicked.connect(self._clear_calibration)
-        file_layout.addWidget(self._clear_btn)
 
-        right_layout.addLayout(file_layout)
+        if self._show_file_buttons:
+            file_layout = QHBoxLayout()
+
+            self._save_btn = QPushButton("Save...")
+            self._save_btn.clicked.connect(self._save_calibration)
+            file_layout.addWidget(self._save_btn)
+
+            self._load_btn = QPushButton("Load...")
+            self._load_btn.clicked.connect(self._load_calibration)
+            file_layout.addWidget(self._load_btn)
+
+            file_layout.addWidget(self._clear_btn)
+
+            right_layout.addLayout(file_layout)
+        else:
+            clear_layout = QHBoxLayout()
+            clear_layout.addWidget(self._clear_btn)
+            clear_layout.addStretch()
+            right_layout.addLayout(clear_layout)
 
         # Dialog buttons
         dialog_btn_layout = QHBoxLayout()
@@ -532,6 +576,16 @@ class CalibrationDialog(QDialog):
             return
 
         start, end = self._pending_line
+
+        if start == end:
+            QMessageBox.warning(
+                self,
+                "Zero-Length Line",
+                "The start and end points are the same. Draw the line across a "
+                "distance you know the real length of.",
+            )
+            return
+
         name = self._name_edit.text().strip() or f"Line {len(self._calibration.lines) + 1}"
         length = self._length_spin.value()
         unit = self._unit_combo.currentData()
@@ -561,21 +615,50 @@ class CalibrationDialog(QDialog):
         self._name_edit.clear()
         self._preview._update_display()
 
-    def _capture_frame(self) -> None:
-        """Capture a new frame from camera."""
-        if not self._camera.is_connected:
-            QMessageBox.warning(
-                self, "No Camera", "Camera is not connected. Start camera preview first."
-            )
-            return
+    def _on_capture_clicked(self) -> None:
+        """Capture button handler; swallows clicked()'s bool so it can't mute warnings."""
+        self._capture_frame(announce=True)
 
-        result = self._camera.get_frame()
-        if result is not None:
-            frame, timestamp = result
-            self._preview.set_frame(frame)
-            self._calibration.calibration_width = frame.shape[1]
-            self._calibration.calibration_height = frame.shape[0]
-            self._update_info()
+    def _on_scrub(self, value: int) -> None:
+        """Seek and re-capture so the drawing surface is the frame you see.
+
+        The label only advances on a successful capture: `read_frame` can
+        silently fail (announce=False) and if the label moved regardless it
+        would read "8 / 12" while the preview still showed frame 7 - a silent
+        lie. The preview already holds this exact calibration object from
+        construction, so there's no need to reassign it here - that was just
+        an extra redraw on top of the seek+decode.
+        """
+        self._provider.seek(value)
+        if self._capture_frame(announce=False):
+            self._frame_label.setText(f"{value + 1} / {self._provider.frame_count}")
+
+    def _capture_frame(self, announce: bool = True) -> bool:
+        """Pull a fresh frame from the provider into the preview.
+
+        Returns True if a frame was captured, False otherwise.
+        """
+        if not self._provider.is_connected:
+            if announce:
+                QMessageBox.warning(
+                    self,
+                    "No Frame",
+                    "No frame is available from this source.",
+                )
+            return False
+
+        result = self._provider.get_frame()
+        if result is None:
+            if announce:
+                QMessageBox.warning(self, "No Frame", "The source did not return a frame.")
+            return False
+
+        frame, _timestamp = result
+        self._preview.set_frame(frame)
+        self._calibration.calibration_width = frame.shape[1]
+        self._calibration.calibration_height = frame.shape[0]
+        self._update_info()
+        return True
 
     def _update_table(self) -> None:
         """Update the calibration lines table."""

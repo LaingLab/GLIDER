@@ -50,6 +50,7 @@ from glider.gui.panels.node_library_panel import NodeLibraryPanel
 from glider.gui.styles import colors
 from glider.gui.view_manager import ViewManager, ViewMode
 from glider.hal.base_board import BoardConnectionState
+from glider.vision.frame_provider import CameraFrameProvider
 from glider.vision.zones import ZoneConfiguration
 
 if TYPE_CHECKING:
@@ -1968,7 +1969,7 @@ class MainWindow(QMainWindow):
 
     def _on_camera_calibration(self) -> None:
         dialog = CalibrationDialog(
-            camera_manager=self._core.camera_manager,
+            frame_provider=CameraFrameProvider(self._core.camera_manager),
             calibration=self._core.calibration,
             parent=self,
         )
