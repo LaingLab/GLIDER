@@ -160,3 +160,54 @@ def test_apply_worker_without_speed_opts_passes_nothing_extra(monkeypatch, tmp_p
         output_dir=tmp_path / "out",
     ).run()
     assert "freeze_mm_s" not in seen
+
+
+# --------------------------------------------------------------------------
+# GUI <-> core contract: every option the tab emits must be accepted downstream
+# --------------------------------------------------------------------------
+
+
+def _speed_opt_keys_for_every_mode(tab):
+    """Union of the kwargs _speed_opts() can produce across all modes."""
+    tab._speed_group.setChecked(True)
+    keys = set()
+    for i in range(tab._speed_mode.count()):
+        tab._speed_mode.setCurrentIndex(i)
+        keys |= set(tab._speed_opts())
+    return keys
+
+
+def test_classify_accepts_every_option_the_apply_tab_can_send(qtbot):
+    """Regression: freeze_pct fell through **opts into LiveInferenceConfig."""
+    import inspect
+
+    from glider.analysis.behavior.classify import classify
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    emitted = _speed_opt_keys_for_every_mode(tab)
+
+    accepted = set(inspect.signature(classify).parameters)
+    missing = sorted(emitted - accepted)
+    assert not missing, f"classify() would pass these to LiveInferenceConfig: {missing}"
+
+
+def test_no_speed_option_leaks_into_the_pipeline_config(qtbot):
+    """The config rejects unknown kwargs, so a leak is a hard failure at Run."""
+    import inspect
+
+    from glider.analysis.behavior.classify import classify
+    from glider.analysis.behavior.classify.pipeline import LiveInferenceConfig
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    emitted = _speed_opt_keys_for_every_mode(tab)
+
+    # Anything the tab emits must either be consumed by classify's own
+    # signature or be a real config field -- never silently forwarded.
+    consumed = set(inspect.signature(classify).parameters)
+    config_fields = set(inspect.signature(LiveInferenceConfig).parameters)
+    for key in emitted:
+        assert key in consumed or key in config_fields, f"{key} would reach LiveInferenceConfig"
