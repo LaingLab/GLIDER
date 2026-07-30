@@ -205,3 +205,141 @@ class TestHybridBundleIsRejectedClearly:
         path = tmp_path / "plain.pkl"
         BehaviorModel(clf, cols, FeatureSpec(), 1, ("mean",), 30.0, ["go", "rest"]).save(path)
         assert _load_behavior_model(path).__class__.__name__ == "BehaviorModel"
+
+
+class TestCentimetreThresholds:
+    def test_cm_per_second_is_ten_times_mm(self, tmp_path):
+        cm = resolve_speed_thresholds(
+            tmp_path / "v.mp4", freeze_cm_s=1.5, dart_cm_s=15.0, px_per_mm=4.0, fps=30.0
+        )
+        mm = resolve_speed_thresholds(
+            tmp_path / "v.mp4", freeze_mm_s=15.0, dart_mm_s=150.0, px_per_mm=4.0, fps=30.0
+        )
+        assert cm == mm
+
+    def test_mixing_cm_and_mm_fails_loudly(self, tmp_path):
+        with pytest.raises(ValueError, match="cm/s or mm/s"):
+            resolve_speed_thresholds(
+                tmp_path / "v.mp4", freeze_cm_s=1.5, dart_mm_s=150.0, px_per_mm=4.0, fps=30.0
+            )
+
+    def test_the_ordering_error_speaks_centimetres(self, tmp_path):
+        with pytest.raises(ValueError, match="cm/s"):
+            resolve_speed_thresholds(
+                tmp_path / "v.mp4", freeze_cm_s=20.0, dart_cm_s=15.0, px_per_mm=4.0, fps=30.0
+            )
+
+    def test_the_no_scale_error_points_at_percentiles(self, tmp_path):
+        # The operator needs to know there is a calibration-free option.
+        with pytest.raises(ValueError, match="percentile"):
+            resolve_speed_thresholds(tmp_path / "v.mp4", freeze_cm_s=1.0, dart_cm_s=15.0, fps=30.0)
+
+
+def _write_pose_csv(path, *, n_frames=200, seed=0):
+    """A DLC CSV whose keypoints drift, so the speed distribution is non-degenerate."""
+    from glider.vision.pose.core import PoseData
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    rng = np.random.default_rng(seed)
+    xy = np.cumsum(rng.normal(0, 2.0, size=(n_frames, 3, 2)), axis=0) + 100.0
+    conf = np.ones((n_frames, 3))
+    to_dlc_csv(PoseData(xy=xy, confidence=conf, keypoint_names=["a", "b", "c"], fps=30.0), path)
+    return path
+
+
+class TestPercentileThresholds:
+    def test_derived_from_the_videos_own_pose_csv(self, tmp_path):
+        video = tmp_path / "s.mp4"
+        video.write_bytes(b"")
+        pose = _write_pose_csv(tmp_path / "sDLC_exp-6.csv")
+
+        out = resolve_speed_thresholds(video, freeze_pct=10.0, dart_pct=99.5, pose_csv=pose)
+        assert out["freeze_threshold"] < out["dart_threshold"]
+        assert out["freeze_threshold"] > 0
+
+    def test_needs_no_calibration_and_no_fps(self, tmp_path):
+        # The whole point: percentiles describe the video's own distribution.
+        video = tmp_path / "s.mp4"
+        video.write_bytes(b"")
+        pose = _write_pose_csv(tmp_path / "sDLC_m.csv")
+        out = resolve_speed_thresholds(video, freeze_pct=10.0, dart_pct=99.5, pose_csv=pose)
+        assert set(out) == {"freeze_threshold", "dart_threshold"}
+
+    def test_pose_csv_is_discovered_beside_the_video(self, tmp_path):
+        video = tmp_path / "T7_5.mp4"
+        video.write_bytes(b"")
+        _write_pose_csv(tmp_path / "T7_5DLC_exp-6.csv")
+        out = resolve_speed_thresholds(video, freeze_pct=10.0, dart_pct=99.5)
+        assert out["dart_threshold"] > out["freeze_threshold"]
+
+    def test_the_raw_companion_is_not_used(self, tmp_path):
+        from glider.analysis.behavior.classify import find_pose_csv
+
+        video = tmp_path / "T7_5.mp4"
+        video.write_bytes(b"")
+        _write_pose_csv(tmp_path / "T7_5DLC_exp-6_raw.csv")
+        smoothed = _write_pose_csv(tmp_path / "T7_5DLC_exp-6.csv")
+        assert find_pose_csv(video) == smoothed
+
+    def test_missing_pose_csv_says_what_to_do(self, tmp_path):
+        video = tmp_path / "s.mp4"
+        video.write_bytes(b"")
+        with pytest.raises(ValueError, match="Batch Pose Tracking"):
+            resolve_speed_thresholds(video, freeze_pct=10.0, dart_pct=99.5)
+
+    def test_percentile_ordering_is_checked(self, tmp_path):
+        video = tmp_path / "s.mp4"
+        video.write_bytes(b"")
+        with pytest.raises(ValueError, match="below"):
+            resolve_speed_thresholds(video, freeze_pct=99.0, dart_pct=10.0)
+
+    def test_mixing_modes_fails_loudly(self, tmp_path):
+        with pytest.raises(ValueError, match="one threshold mode"):
+            resolve_speed_thresholds(
+                tmp_path / "v.mp4", freeze_pct=10.0, dart_pct=99.5, freeze_cm_s=1.0, dart_cm_s=15.0
+            )
+
+
+class TestMinimumBoutDuration:
+    def test_seconds_convert_to_frames_at_the_videos_rate(self, tmp_path):
+        out = resolve_speed_thresholds(
+            tmp_path / "v.mp4",
+            freeze_cm_s=1.0,
+            dart_cm_s=15.0,
+            px_per_mm=4.0,
+            fps=30.0,
+            freeze_min_s=1.0,
+            dart_min_s=0.1,
+        )
+        assert out["freeze_min_frames"] == 30
+        assert out["dart_min_frames"] == 3
+
+    def test_a_different_frame_rate_gives_a_different_frame_count(self, tmp_path):
+        out = resolve_speed_thresholds(
+            tmp_path / "v.mp4",
+            freeze_cm_s=1.0,
+            dart_cm_s=15.0,
+            px_per_mm=4.0,
+            fps=60.0,
+            freeze_min_s=1.0,
+        )
+        # Same ethological duration, twice the frames.
+        assert out["freeze_min_frames"] == 60
+
+    def test_omitted_durations_leave_the_defaults_alone(self, tmp_path):
+        out = resolve_speed_thresholds(
+            tmp_path / "v.mp4", freeze_cm_s=1.0, dart_cm_s=15.0, px_per_mm=4.0, fps=30.0
+        )
+        assert "freeze_min_frames" not in out
+        assert "dart_min_frames" not in out
+
+    def test_a_sub_frame_duration_still_needs_one_frame(self, tmp_path):
+        out = resolve_speed_thresholds(
+            tmp_path / "v.mp4",
+            freeze_cm_s=1.0,
+            dart_cm_s=15.0,
+            px_per_mm=4.0,
+            fps=30.0,
+            dart_min_s=0.001,
+        )
+        assert out["dart_min_frames"] == 1

@@ -46,11 +46,69 @@ def _video_fps(video: Path | str) -> float | None:
     return fps if fps and fps > 0 else None
 
 
+_MM_PER_CM = 10.0
+
+
+def find_pose_csv(video: Path | str) -> Path | None:
+    """The DeepLabCut CSV Batch Pose Tracking wrote beside *video*, if any.
+
+    Matches that tool's naming (``<stem>DLC_<model>.csv``) and ignores the
+    ``_raw`` companion, which is the unsmoothed inference.
+    """
+    video = Path(video)
+    matches = [
+        p
+        for p in sorted(video.parent.glob(f"{video.stem}DLC_*.csv"))
+        if not p.stem.endswith("_raw")
+    ]
+    return matches[0] if matches else None
+
+
+def _percentile_thresholds(
+    video: Path | str, pose_csv: Path | str | None, freeze_pct: float, dart_pct: float
+) -> tuple[float, float]:
+    """Thresholds from this video's own speed distribution, in px/frame.
+
+    Reuses the same causal speed the live detector computes, so the percentiles
+    describe exactly the signal being thresholded. Needs a pose CSV — deriving
+    it would mean a second full inference pass.
+    """
+    from glider.analysis.behavior.classify.speed_state import calibrate_speed_thresholds
+    from glider.vision.pose.dlc import from_dlc_csv
+
+    path = Path(pose_csv) if pose_csv is not None else find_pose_csv(video)
+    if path is None or not path.exists():
+        raise ValueError(
+            "percentile thresholds need this video's pose CSV, and none was found "
+            f"beside {Path(video).name}. Run Batch Pose Tracking first, or pass "
+            "pose_csv explicitly."
+        )
+    pose = from_dlc_csv(path)
+    return calibrate_speed_thresholds(pose.xy, freeze_pct=freeze_pct, dart_pct=dart_pct)
+
+
+def _min_frames(seconds: float | None, fps: float | None, *, default: int) -> int:
+    """Bout minimum in frames. Seconds are the operator-facing unit because a
+    frame count means something different at 30 vs 60 fps."""
+    if seconds is None:
+        return default
+    if not fps or fps <= 0:
+        raise ValueError("minimum bout durations are in seconds and need the frame rate")
+    return max(1, int(round(float(seconds) * float(fps))))
+
+
 def resolve_speed_thresholds(
     video: Path | str,
     *,
+    freeze_cm_s: float | None = None,
+    dart_cm_s: float | None = None,
     freeze_mm_s: float | None = None,
     dart_mm_s: float | None = None,
+    freeze_pct: float | None = None,
+    dart_pct: float | None = None,
+    pose_csv: Path | str | None = None,
+    freeze_min_s: float | None = None,
+    dart_min_s: float | None = None,
     calibration_master: Path | str | None = None,
     px_per_mm: float | None = None,
     fps: float | None = None,
@@ -59,15 +117,25 @@ def resolve_speed_thresholds(
 ) -> dict[str, float]:
     """Freeze/dart thresholds in px/frame, ready for :class:`LiveInferenceConfig`.
 
-    Thresholds may be given either natively (``freeze_threshold`` /
-    ``dart_threshold``, px/frame) or in real units (``freeze_mm_s`` /
-    ``dart_mm_s``), never both for one run. The millimetre form is converted
-    exactly — the live detector measures raw pixel displacement, so no body
-    length is involved.
+    Exactly one of three modes, never mixed:
 
-    The scale comes from ``px_per_mm`` if given, else from the Batch Pose
-    Tracking master calibration file at ``calibration_master``. The frame rate
-    comes from ``fps`` if given, else from the video itself.
+    * **absolute** — ``freeze_cm_s`` / ``dart_cm_s`` (or ``_mm_s``). Comparable
+      across sessions and rigs, and converted *exactly*: the live detector
+      measures raw pixel displacement, so no body length is involved. Needs a
+      scale, from ``px_per_mm`` or the Batch Pose Tracking master calibration
+      file at ``calibration_master``, and a frame rate, from ``fps`` or the
+      video itself.
+    * **percentile** — ``freeze_pct`` / ``dart_pct`` of this video's own causal
+      speed distribution, read from its pose CSV (found beside the video, or
+      given as ``pose_csv``). Needs no calibration at all and self-adjusts per
+      recording, but the thresholds then mean something different in each.
+    * **native** — ``freeze_threshold`` / ``dart_threshold`` already in
+      px/frame, passed straight through.
+
+    ``freeze_min_s`` / ``dart_min_s`` set the minimum bout duration in seconds,
+    converted to frames at the video's rate. Seconds rather than frames because
+    a bout minimum is an ethological duration: 30 frames means one second at
+    30 fps and half of one at 60.
 
     Returns ``{}`` when no thresholds were requested, leaving the speed axis
     off. Raises ValueError — rather than silently disabling the axis — when
@@ -76,54 +144,89 @@ def resolve_speed_thresholds(
     """
     from glider.analysis.behavior.units import load_px_per_mm, mm_per_s_to_px_per_frame
 
-    wants_mm = freeze_mm_s is not None or dart_mm_s is not None
+    # cm/s is the operator-facing unit; mm/s stays accepted for callers that
+    # already speak it. Normalise to mm/s once, here.
+    if freeze_cm_s is not None or dart_cm_s is not None:
+        if freeze_mm_s is not None or dart_mm_s is not None:
+            raise ValueError("give the absolute thresholds in cm/s or mm/s, not both")
+        freeze_mm_s = None if freeze_cm_s is None else float(freeze_cm_s) * _MM_PER_CM
+        dart_mm_s = None if dart_cm_s is None else float(dart_cm_s) * _MM_PER_CM
+
+    wants_abs = freeze_mm_s is not None or dart_mm_s is not None
+    wants_pct = freeze_pct is not None or dart_pct is not None
     wants_px = freeze_threshold is not None or dart_threshold is not None
 
-    if not wants_mm:
-        if not wants_px:
-            return {}
+    chosen = [
+        n
+        for n, on in (("absolute", wants_abs), ("percentile", wants_pct), ("native", wants_px))
+        if on
+    ]
+    if len(chosen) > 1:
+        raise ValueError(
+            "choose one threshold mode: absolute (cm/s or mm/s), percentile, or "
+            f"native px/frame — got {' + '.join(chosen)}"
+        )
+    if not chosen:
+        return {}
+
+    rate = fps if fps is not None else _video_fps(video)
+
+    if wants_px:
         if freeze_threshold is None or dart_threshold is None:
             raise ValueError(
                 "the speed axis needs both freeze_threshold and dart_threshold; "
                 "one alone would silently disable it"
             )
-        return {
-            "freeze_threshold": float(freeze_threshold),
-            "dart_threshold": float(dart_threshold),
-        }
+        freeze_px, dart_px = float(freeze_threshold), float(dart_threshold)
 
-    if wants_px:
-        raise ValueError(
-            "give freeze/dart thresholds in mm/s or in px/frame, not both "
-            "(got mm/s and px/frame for the same run)"
-        )
-    if freeze_mm_s is None or dart_mm_s is None:
-        raise ValueError(
-            "the speed axis needs both freeze_mm_s and dart_mm_s; "
-            "one alone would silently disable it"
-        )
-    if float(freeze_mm_s) >= float(dart_mm_s):
-        raise ValueError(f"freeze_mm_s ({freeze_mm_s}) must be below dart_mm_s ({dart_mm_s})")
-
-    scale = px_per_mm if px_per_mm is not None else load_px_per_mm(calibration_master, video)
-    if not scale or scale <= 0:
-        raise ValueError(
-            "mm/s thresholds need a pixel scale: pass px_per_mm, or a "
-            "calibration_master whose master file covers this video"
+    elif wants_pct:
+        if freeze_pct is None or dart_pct is None:
+            raise ValueError(
+                "the speed axis needs both freeze_pct and dart_pct; "
+                "one alone would silently disable it"
+            )
+        if float(freeze_pct) >= float(dart_pct):
+            raise ValueError(f"freeze_pct ({freeze_pct}) must be below dart_pct ({dart_pct})")
+        # Percentiles describe this video's own distribution, so they need no
+        # calibration and no frame rate.
+        freeze_px, dart_px = _percentile_thresholds(
+            video, pose_csv, float(freeze_pct), float(dart_pct)
         )
 
-    rate = fps if fps is not None else _video_fps(video)
-    if not rate or rate <= 0:
-        raise ValueError(
-            f"mm/s thresholds need the frame rate, and it could not be read from {video}; "
-            "pass fps explicitly"
-        )
+    else:
+        if freeze_mm_s is None or dart_mm_s is None:
+            raise ValueError(
+                "the speed axis needs both freeze and dart thresholds; "
+                "one alone would silently disable it"
+            )
+        if float(freeze_mm_s) >= float(dart_mm_s):
+            raise ValueError(
+                f"the freezing threshold ({freeze_mm_s / _MM_PER_CM:g} cm/s) must be "
+                f"below the darting threshold ({dart_mm_s / _MM_PER_CM:g} cm/s)"
+            )
+        scale = px_per_mm if px_per_mm is not None else load_px_per_mm(calibration_master, video)
+        if not scale or scale <= 0:
+            raise ValueError(
+                "absolute (cm/s) thresholds need a pixel scale: pass px_per_mm, or a "
+                "calibration_master whose master file covers this video — or switch "
+                "to percentile thresholds, which need no calibration"
+            )
+        if not rate or rate <= 0:
+            raise ValueError(
+                f"absolute thresholds need the frame rate, and it could not be read "
+                f"from {video}; pass fps explicitly"
+            )
+        freeze_px = mm_per_s_to_px_per_frame(freeze_mm_s, px_per_mm=scale, fps=rate)
+        dart_px = mm_per_s_to_px_per_frame(dart_mm_s, px_per_mm=scale, fps=rate)
+        if freeze_px is None or dart_px is None:  # pragma: no cover - guarded above
+            raise ValueError("could not convert the thresholds to pixels per frame")
 
-    freeze_px = mm_per_s_to_px_per_frame(freeze_mm_s, px_per_mm=scale, fps=rate)
-    dart_px = mm_per_s_to_px_per_frame(dart_mm_s, px_per_mm=scale, fps=rate)
-    if freeze_px is None or dart_px is None:  # pragma: no cover - guarded above
-        raise ValueError("could not convert the mm/s thresholds to pixels per frame")
-    return {"freeze_threshold": freeze_px, "dart_threshold": dart_px}
+    out: dict[str, float] = {"freeze_threshold": freeze_px, "dart_threshold": dart_px}
+    if freeze_min_s is not None:
+        out["freeze_min_frames"] = _min_frames(freeze_min_s, rate, default=30)
+    if dart_min_s is not None:
+        out["dart_min_frames"] = _min_frames(dart_min_s, rate, default=3)
+    return out
 
 
 @dataclass
