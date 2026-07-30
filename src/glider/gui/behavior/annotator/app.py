@@ -252,6 +252,7 @@ def run(
         clip_sampler=clip_sampler,
     )
     window_widget.show()
+    window_widget.warn_about_load_errors()
     return app.exec()
 
 

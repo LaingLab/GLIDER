@@ -1010,3 +1010,88 @@ def test_propose_clips_spatial_weight_pushes_picks_apart_spatially(tmp_path):
     assert (
         centers[-1] - centers[0] > 0.5 * n_frames
     ), "spatially-weighted sampler clustered picks in one half of the video"
+
+
+# ---------------------------------------------------------------------------
+# Unreadable annotation files
+#
+# load_csv returns an empty store for a MISSING file (the normal first-run
+# case). A malformed file is different: it holds labelling work we can't
+# read, and save_csv truncates, so treating the two the same meant the first
+# keypress destroyed the file with nothing on screen saying so.
+# ---------------------------------------------------------------------------
+
+
+def _window_over_a_corrupt_csv(qtbot, tmp_path):
+    """One video whose annotations CSV has the wrong columns entirely."""
+    from glider.gui.behavior.annotator.main_window import AnnotatorWindow
+    from glider.gui.behavior.annotator.sampler import ProposedClip
+
+    corrupt = tmp_path / "a_annotations.csv"
+    corrupt.write_text("something,else\n1,2\n")
+    video = tmp_path / "a.mp4"
+    clips = [ProposedClip(0, 5, 0, 10, 0.5, str(video))]
+
+    window = AnnotatorWindow(clips=clips, videos_meta={video: corrupt})
+    qtbot.addWidget(window)
+    return window, video, corrupt
+
+
+def test_unreadable_annotations_are_recorded_not_swallowed(qtbot, tmp_path):
+    window, video, _corrupt = _window_over_a_corrupt_csv(qtbot, tmp_path)
+
+    assert video in window.load_errors
+    assert "missing required columns" in window.load_errors[video]
+
+
+def test_a_missing_file_is_not_an_error(qtbot, tmp_path):
+    """Opening a video for the first time must stay perfectly saveable."""
+    from glider.gui.behavior.annotator.main_window import AnnotatorWindow
+    from glider.gui.behavior.annotator.sampler import ProposedClip
+
+    video = tmp_path / "fresh.mp4"
+    ann = tmp_path / "fresh_annotations.csv"  # deliberately never created
+    clips = [ProposedClip(0, 5, 0, 10, 0.5, str(video))]
+
+    window = AnnotatorWindow(clips=clips, videos_meta={video: ann})
+    qtbot.addWidget(window)
+
+    assert window.load_errors == {}
+    assert window.load_error_message() == ""
+
+
+def test_saving_never_truncates_a_file_it_could_not_read(qtbot, tmp_path):
+    """The regression: this used to overwrite the file with an empty store."""
+    window, video, corrupt = _window_over_a_corrupt_csv(qtbot, tmp_path)
+    before = corrupt.read_text()
+
+    window._save_annotations_for_video(video)
+
+    assert corrupt.read_text() == before
+    assert "unreadable" in window.save_indicator.text()
+
+
+def test_labelling_is_refused_rather_than_silently_dropped(qtbot, tmp_path, monkeypatch):
+    """Accepting labels that can never be written would cost a whole session."""
+    from glider.gui.behavior.annotator import main_window as mw
+
+    window, video, corrupt = _window_over_a_corrupt_csv(qtbot, tmp_path)
+    before = corrupt.read_text()
+
+    shown: list[str] = []
+    monkeypatch.setattr(
+        mw.QMessageBox, "warning", lambda *a, **k: shown.append(a[2] if len(a) > 2 else "")
+    )
+    window._apply_label("rearing")
+
+    assert shown and "reopen the annotator" in shown[0]
+    assert corrupt.read_text() == before
+    assert not window.stores[video]
+
+
+def test_the_warning_names_every_unreadable_file(qtbot, tmp_path):
+    window, _video, corrupt = _window_over_a_corrupt_csv(qtbot, tmp_path)
+
+    message = window.load_error_message()
+    assert corrupt.name in message
+    assert "left untouched" in message

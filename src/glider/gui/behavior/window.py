@@ -42,10 +42,15 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-# Video extensions the annotator / apply pickers accept, kept in sync with
-# glider.analysis.behavior.project.VIDEO_EXTS (module-level, no heavy deps).
-_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
-_VIDEO_FILTER = "Video files (*.mp4 *.mov *.avi *.mkv *.m4v *.webm);;All files (*)"
+from glider.vision.pose.batch import VIDEO_EXTS, VIDEO_FILTER, find_pose_csv
+
+# Video extensions and the matching dialog filter come from the pose batch
+# module rather than being restated here, so this tool and Batch Pose Tracking
+# can never disagree about what counts as a video. That module keeps its heavy
+# imports (ultralytics, torch, pandas) inside run_batch, so importing it at
+# menu-build time stays cheap.
+_VIDEO_EXTS = VIDEO_EXTS
+_VIDEO_FILTER = VIDEO_FILTER
 
 
 class BehaviorAnalysisWindow(QMainWindow):
@@ -122,15 +127,23 @@ class AnnotateTab(QWidget):
         if not videos:
             QMessageBox.warning(self, "Annotate", f"No videos found in {self._videos_dir}")
             return
-        sessions = [(v, poses_dir / f"{v.stem}.csv") for v in videos]
-        missing = [str(p) for _v, p in sessions if not p.exists()]
+        # find_pose_csv accepts both namings, so a folder Batch Pose Tracking
+        # just filled works here without the operator renaming anything.
+        located = [(v, find_pose_csv(v, poses_dir)) for v in videos]
+        missing = [v.name for v, csv in located if csv is None]
         if missing:
             QMessageBox.warning(
                 self,
                 "Annotate",
-                "Missing pose CSV(s) for:\n" + "\n".join(missing),
+                "No pose CSV found for:\n"
+                + "\n".join(missing)
+                + f"\n\nLooked in {poses_dir} for <name>.csv and "
+                "<name>DLC_<model>.csv.\n\nPose data comes from "
+                "Tools ▸ Batch Pose Tracking — run that over these videos "
+                "first, then come back here.",
             )
             return
+        sessions = [(v, csv) for v, csv in located if csv is not None]
 
         # Deferred: propose_clips_multi pulls in sklearn; AnnotatorWindow
         # pulls in cv2 via the clip player.
@@ -139,13 +152,22 @@ class AnnotateTab(QWidget):
         from glider.gui.behavior.annotator.capture_cache import VideoCaptureCache
         from glider.gui.behavior.annotator.main_window import AnnotatorWindow
         from glider.gui.behavior.annotator.sampler import propose_clips_multi
+        from glider.vision.pose.dlc import DEFAULT_FPS, fps_for_csv
+
+        # Clip lengths and the trim window are specified in seconds, so the
+        # annotator needs the rate the video was actually recorded at. Take it
+        # from what pose inference measured; fall back only for CSVs written
+        # before that was recorded.
+        rates = {fps_for_csv(csv) for _v, csv in sessions}
+        rates.discard(None)
+        fps = float(next(iter(rates))) if len(rates) == 1 else DEFAULT_FPS
 
         # Annotations live next to the POSE CSV — same place training reads
         # them from (mirrors annotator/app.py's run()).
         videos_meta = {v: annotation_path_for(p) for v, p in sessions}
         pairs = [(p, v) for v, p in sessions]  # (pose_csv, video) for the sampler
         try:
-            clips = propose_clips_multi(sessions=pairs, n_clips_total=max(50, len(pairs)))
+            clips = propose_clips_multi(sessions=pairs, n_clips_total=max(50, len(pairs)), fps=fps)
         except Exception as e:  # noqa: BLE001 - surfaced to the user, not fatal
             QMessageBox.critical(self, "Annotate", f"Could not sample clips:\n{e}")
             return
@@ -166,11 +188,13 @@ class AnnotateTab(QWidget):
         self._annotator_window = AnnotatorWindow(
             clips=clips,
             videos_meta=videos_meta,
+            fps=fps,
             vocab=vocab,
             vocab_path=vocab_path,
             capture_cache=capture_cache,
         )
         self._annotator_window.show()
+        self._annotator_window.warn_about_load_errors()
 
 
 class TrainTab(QWidget):

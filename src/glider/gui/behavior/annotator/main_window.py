@@ -121,11 +121,19 @@ class AnnotatorWindow(QMainWindow):
         # logic asks across-all-clips questions on every refresh, so the
         # cost of eager load (small CSV reads) is amortized.
         self.stores: dict[Path, AnnotationStore] = {}
+        # A file that won't parse is not the same as a file that isn't there.
+        # load_csv already returns an empty store for a missing path (the
+        # normal first-run case, which must stay saveable). A *malformed* file
+        # holds labelling work we can't read, and save_csv truncates, so the
+        # first keypress would destroy it. Record the failure instead and
+        # refuse to write over that path for the rest of the session.
+        self.load_errors: dict[Path, str] = {}
         for video_path, ann_path in self.videos_meta.items():
             try:
                 self.stores[video_path] = AnnotationStore.load_csv(ann_path)
-            except (ValueError, OverlapError):
+            except (ValueError, OverlapError, OSError) as e:
                 self.stores[video_path] = AnnotationStore()
+                self.load_errors[video_path] = str(e)
         # Map proposed-clip index → the BehaviorZone it produced. This is
         # how a clip is recognised as "labeled" now that a saved zone's
         # trimmed bounds no longer equal the proposed clip's bounds. Seeded
@@ -545,6 +553,20 @@ class AnnotatorWindow(QMainWindow):
         if not self.clips or self.current >= len(self.clips):
             return
         clip = self.clips[self.current]
+        video = Path(clip.video_path)
+        if video in self.load_errors:
+            # Refusing at the source rather than at save time: silently
+            # accepting labels that can never be written would cost the
+            # operator a whole session's work before anything said so.
+            QMessageBox.warning(
+                self,
+                "Couldn't label",
+                f"{self.videos_meta[video].name} could not be read, so labels "
+                f"for {video.name} can't be saved without overwriting it:\n\n"
+                f"{self.load_errors[video]}\n\n"
+                "Move or repair that file, then reopen the annotator.",
+            )
+            return
         store = self._store_for(clip)
         in_frame, out_frame = self.trim_bar.bounds()
         # Remove the zone previously created for THIS clip (so the user can
@@ -719,10 +741,44 @@ class AnnotatorWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
+    def load_error_message(self) -> str:
+        """Operator-facing description of the unreadable annotation files.
+
+        Empty when everything loaded. Separate from the dialog that shows it
+        so the wording can be asserted without a running event loop.
+        """
+        if not self.load_errors:
+            return ""
+        lines = [
+            f"{self.videos_meta[video].name}\n    {reason}"
+            for video, reason in sorted(self.load_errors.items())
+        ]
+        return (
+            "These annotation files could not be read, so their existing "
+            "labels are not shown:\n\n"
+            + "\n".join(lines)
+            + "\n\nThey have been left untouched — labelling these videos is "
+            "disabled so the files aren't overwritten. Move or repair them, "
+            "then reopen the annotator."
+        )
+
+    def warn_about_load_errors(self) -> bool:
+        """Show the unreadable-file warning. Returns True when one was shown."""
+        message = self.load_error_message()
+        if not message:
+            return False
+        QMessageBox.warning(self, "Annotations not loaded", message)
+        return True
+
     def _save_annotations_for_video(self, video: Path) -> None:
         """Persist the store for `video` to its annotations CSV."""
-        store = self.stores[video]
         ann_path = self.videos_meta[video]
+        if video in self.load_errors:
+            # Writing here would truncate a file we could not read, throwing
+            # away whatever labelling it holds.
+            self.save_indicator.setText(f"not saved · {ann_path.name} is unreadable")
+            return
+        store = self.stores[video]
         try:
             ann_path.parent.mkdir(parents=True, exist_ok=True)
             store.save_csv(ann_path)

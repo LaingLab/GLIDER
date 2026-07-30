@@ -24,16 +24,26 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from glider.vision.pose.core import PoseData
 
-VIDEO_EXTS = frozenset({".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv"})
+#: Video containers both halves of the pipeline accept. Single-sourced on
+#: purpose: this list used to be restated in the behavior tool with ``.webm``
+#: in place of ``.wmv``, so a folder could offer a video to one tool and hide
+#: it from the other with nothing on screen explaining the difference.
+VIDEO_EXTS = frozenset({".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv", ".webm"})
+
+#: Qt file-dialog filter over :data:`VIDEO_EXTS`, so pickers can't drift from
+#: what discovery actually accepts.
+VIDEO_FILTER = "Video files (" + " ".join(f"*{e}" for e in sorted(VIDEO_EXTS)) + ");;All files (*)"
 
 __all__ = [
     "VIDEO_EXTS",
+    "VIDEO_FILTER",
     "BatchEvent",
     "BatchResult",
     "EventKind",
     "FilterSettings",
     "discover_videos",
     "dlc_output_path",
+    "find_pose_csv",
     "raw_output_path",
     "run_batch",
 ]
@@ -74,6 +84,42 @@ def raw_output_path(video: Path, model: Path) -> Path:
     """Unfiltered companion CSV. Written only when filtering is enabled."""
     video = Path(video)
     return video.parent / f"{_output_stem(video, model)}_raw.csv"
+
+
+def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Path | None:
+    """The pose CSV belonging to *video*, or ``None`` if there isn't one.
+
+    Lives here because this module owns the output naming, and every reader
+    downstream has to recognise what :func:`run_batch` wrote. Looks in
+    *search_dir* (default: the video's own directory) for either naming in
+    use across GLIDER:
+
+    ``<stem>.csv``
+        A hand-placed file, or one exported from DeepLabCut proper. This is
+        what the annotate and train paths have always expected.
+    ``<stem>DLC_<model>.csv``
+        What :func:`run_batch` writes. The ``_raw`` companion is skipped —
+        it is the unsmoothed inference, never the one to analyse.
+
+    The exact-stem form wins when both exist, so a file the operator placed
+    deliberately is never shadowed by a batch run. When several models have
+    been run over one video the match is the alphabetically first, which is
+    at least stable across calls; naming the file explicitly is the only way
+    to choose between them.
+    """
+    video = Path(video)
+    directory = Path(search_dir) if search_dir is not None else video.parent
+    if not directory.is_dir():
+        return None
+
+    exact = directory / f"{video.stem}.csv"
+    if exact.exists():
+        return exact
+
+    matches = [
+        p for p in sorted(directory.glob(f"{video.stem}DLC_*.csv")) if not p.stem.endswith("_raw")
+    ]
+    return matches[0] if matches else None
 
 
 class EventKind(StrEnum):
