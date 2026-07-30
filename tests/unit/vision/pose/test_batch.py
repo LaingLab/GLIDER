@@ -274,3 +274,111 @@ def test_raises_inside_a_running_event_loop(videos):
 
     with pytest.raises(RuntimeError, match="event loop"):
         asyncio.run(go())
+
+
+# --------------------------------------------------------------------------
+# find_pose_csv
+#
+# The behavior tools used to look for "<stem>.csv" while run_batch wrote
+# "<stem>DLC_<model>.csv", so pointing the annotator at a folder this tool
+# had just filled reported every session as missing.
+# --------------------------------------------------------------------------
+
+
+def test_finds_the_csv_run_batch_actually_writes(tmp_path):
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    written = tmp_path / "session01DLC_exp-6.csv"
+    written.touch()
+
+    assert batch.find_pose_csv(video) == written
+
+
+def test_finds_a_plain_stem_csv(tmp_path):
+    """Hand-placed or DeepLabCut-exported files keep working."""
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    plain = tmp_path / "session01.csv"
+    plain.touch()
+
+    assert batch.find_pose_csv(video) == plain
+
+
+def test_exact_stem_wins_over_a_batch_output(tmp_path):
+    """A deliberately placed file is never shadowed by a batch run."""
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    plain = tmp_path / "session01.csv"
+    plain.touch()
+    (tmp_path / "session01DLC_exp-6.csv").touch()
+
+    assert batch.find_pose_csv(video) == plain
+
+
+def test_skips_the_raw_companion(tmp_path):
+    """_raw is the unsmoothed inference — never the one to analyse."""
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    (tmp_path / "session01DLC_exp-6_raw.csv").touch()
+    primary = tmp_path / "session01DLC_exp-6.csv"
+    primary.touch()
+
+    assert batch.find_pose_csv(video) == primary
+
+
+def test_raw_alone_is_not_a_match(tmp_path):
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    (tmp_path / "session01DLC_exp-6_raw.csv").touch()
+
+    assert batch.find_pose_csv(video) is None
+
+
+def test_returns_none_when_nothing_matches(tmp_path):
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    (tmp_path / "someone_else.csv").touch()
+
+    assert batch.find_pose_csv(video) is None
+
+
+def test_searches_a_separate_poses_dir(tmp_path):
+    """The annotator lets the operator keep poses in their own folder."""
+    videos = tmp_path / "videos"
+    poses = tmp_path / "poses"
+    videos.mkdir()
+    poses.mkdir()
+    video = videos / "session01.mp4"
+    video.touch()
+    written = poses / "session01DLC_exp-6.csv"
+    written.touch()
+
+    assert batch.find_pose_csv(video, poses) == written
+    assert batch.find_pose_csv(video) is None
+
+
+def test_missing_search_dir_is_not_an_error(tmp_path):
+    video = tmp_path / "session01.mp4"
+    video.touch()
+
+    assert batch.find_pose_csv(video, tmp_path / "nope") is None
+
+
+def test_multiple_models_resolve_deterministically(tmp_path):
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    (tmp_path / "session01DLC_zeta.csv").touch()
+    (tmp_path / "session01DLC_alpha.csv").touch()
+
+    assert batch.find_pose_csv(video) == tmp_path / "session01DLC_alpha.csv"
+
+
+def test_the_two_pipelines_agree_on_what_counts_as_a_video():
+    """Both containers used to be accepted by only one half of the pipeline."""
+    assert {".wmv", ".webm"} <= batch.VIDEO_EXTS
+
+    from glider.analysis.behavior import project
+    from glider.gui.behavior import window
+
+    assert project.VIDEO_EXTS == batch.VIDEO_EXTS
+    assert window._VIDEO_EXTS == batch.VIDEO_EXTS
