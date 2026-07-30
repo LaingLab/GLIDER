@@ -470,3 +470,110 @@ def test_advanced_dialog_discards_values_on_cancel(qtbot, monkeypatch):
     monkeypatch.setattr(win.LgbmAdvancedDialog, "exec", lambda self: 0)
     tab._on_advanced()
     assert tab._lgbm_advanced is None
+
+
+# --------------------------------------------------------------------------
+# Annotate tab: the pose-batch handoff
+#
+# Batch Pose Tracking writes "<stem>DLC_<model>.csv"; this tab used to look
+# only for "<stem>.csv", so pointing it at a folder that tool had just filled
+# reported every single video as missing its pose data.
+# --------------------------------------------------------------------------
+
+
+def _pose_batch_output(tmp_path, stem, fps=30.0):
+    """A video plus the CSV run_batch would have written beside it."""
+    import numpy as np
+
+    from glider.vision.pose.core import PoseData
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    names = ["snout", "neck", "tail_base"]
+    video = tmp_path / f"{stem}.mp4"
+    video.touch()
+    pose = PoseData(
+        xy=np.zeros((60, len(names), 2)),
+        confidence=np.ones((60, len(names))),
+        keypoint_names=names,
+        fps=fps,
+    )
+    to_dlc_csv(pose, tmp_path / f"{stem}DLC_exp-6.csv")
+    return video
+
+
+def _launch_capturing_sessions(qtbot, tmp_path, monkeypatch):
+    """Drive _on_launch, stubbing everything past pose-CSV resolution."""
+    from glider.gui.behavior import window as win_mod
+    from glider.gui.behavior.annotator import main_window as annot_mod
+    from glider.gui.behavior.annotator import sampler as sampler_mod
+
+    captured: dict = {}
+
+    def fake_propose(sessions, n_clips_total, fps=30.0, **kw):
+        captured["sessions"] = list(sessions)
+        captured["fps"] = fps
+        return []
+
+    class FakeAnnotator:
+        def __init__(self, **kw):
+            captured["annotator_kwargs"] = kw
+
+        def show(self):
+            pass
+
+        def warn_about_load_errors(self):
+            return False
+
+    warnings_shown: list[str] = []
+    monkeypatch.setattr(sampler_mod, "propose_clips_multi", fake_propose)
+    monkeypatch.setattr(annot_mod, "AnnotatorWindow", FakeAnnotator)
+    monkeypatch.setattr(
+        win_mod.QMessageBox,
+        "warning",
+        lambda *a, **k: warnings_shown.append(a[2] if len(a) > 2 else ""),
+    )
+    monkeypatch.setattr(
+        win_mod.QMessageBox,
+        "critical",
+        lambda *a, **k: warnings_shown.append(a[2] if len(a) > 2 else ""),
+    )
+
+    tab = win_mod.AnnotateTab(tmp_path)
+    qtbot.addWidget(tab)
+    tab._videos_dir = tmp_path
+    tab._on_launch()
+    return captured, warnings_shown
+
+
+def test_annotate_accepts_batch_pose_tracking_output(qtbot, tmp_path, monkeypatch):
+    """The regression: this folder used to read as 'missing pose CSV'."""
+    _pose_batch_output(tmp_path, "session01")
+
+    captured, warnings_shown = _launch_capturing_sessions(qtbot, tmp_path, monkeypatch)
+
+    assert warnings_shown == []
+    (pose_csv, video) = captured["sessions"][0]
+    assert pose_csv.name == "session01DLC_exp-6.csv"
+    assert video.name == "session01.mp4"
+
+
+def test_annotate_uses_the_recorded_frame_rate(qtbot, tmp_path, monkeypatch):
+    """A 60 fps recording must not be clipped and trimmed as though it were 30."""
+    _pose_batch_output(tmp_path, "session01", fps=60.0)
+
+    captured, warnings_shown = _launch_capturing_sessions(qtbot, tmp_path, monkeypatch)
+
+    assert warnings_shown == []
+    assert captured["fps"] == pytest.approx(60.0)
+    assert captured["annotator_kwargs"]["fps"] == pytest.approx(60.0)
+
+
+def test_annotate_still_reports_genuinely_missing_pose_data(qtbot, tmp_path, monkeypatch):
+    (tmp_path / "session01.mp4").touch()
+
+    captured, warnings_shown = _launch_capturing_sessions(qtbot, tmp_path, monkeypatch)
+
+    assert "sessions" not in captured
+    assert len(warnings_shown) == 1
+    assert "session01.mp4" in warnings_shown[0]
+    assert "Batch Pose Tracking" in warnings_shown[0]

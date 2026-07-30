@@ -34,6 +34,7 @@ the live-inference CLI without side effects.
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -59,9 +60,59 @@ from glider.analysis.behavior.windowing import (
     apply_rolling,
     apply_spectral_rolling,
 )
-from glider.vision.pose.dlc import from_dlc_csv
+from glider.vision.pose.dlc import DEFAULT_FPS, fps_for_csv, from_dlc_csv
 
 SessionPair = tuple[Path, Path]
+
+
+def resolve_sessions_fps(
+    sessions: list[SessionPair],
+    fps: float | None,
+    *,
+    holdout_sessions: list[SessionPair] | None = None,
+) -> float:
+    """The frame rate these sessions' pose CSVs should be read at.
+
+    An explicit *fps* always wins. Otherwise the rate comes from the sidecars
+    the pose writer left beside each CSV, because every windowed feature is
+    specified in seconds: reading 60 fps pose data as 30 silently computes
+    every rolling window over half the intended span, and nothing downstream
+    can detect that it happened.
+
+    Sessions have to agree. Mixing rates would give one rolling window two
+    different meanings inside a single model, which is a recording problem
+    for the caller to resolve rather than something to quietly average.
+    """
+    if fps is not None:
+        return float(fps)
+
+    by_rate: dict[float, list[str]] = {}
+    for pose_csv, _ann_csv in list(sessions) + list(holdout_sessions or []):
+        rate = fps_for_csv(Path(pose_csv))
+        if rate is not None:
+            by_rate.setdefault(round(rate, 3), []).append(Path(pose_csv).name)
+
+    if not by_rate:
+        warnings.warn(
+            f"no frame rate recorded beside these pose CSVs; assuming "
+            f"{DEFAULT_FPS} fps. Re-run Batch Pose Tracking to record the "
+            f"real rate, or pass fps= explicitly. Every window length in the "
+            f"model is in seconds, so a wrong rate rescales all of them.",
+            stacklevel=2,
+        )
+        return DEFAULT_FPS
+
+    if len(by_rate) > 1:
+        detail = "; ".join(
+            f"{rate} fps: {', '.join(sorted(names))}" for rate, names in sorted(by_rate.items())
+        )
+        raise ValueError(
+            f"these sessions were recorded at different frame rates ({detail}). "
+            f"A rolling window would mean a different duration in each one. "
+            f"Train them as separate models, or pass fps= to force one rate."
+        )
+
+    return next(iter(by_rate))
 
 
 @dataclass
@@ -119,7 +170,7 @@ def train_model(
     spec: FeatureSpec | None = None,
     window: int = 30,
     stats: tuple[str, ...] = DEFAULT_STATS,
-    fps: float = 30.0,
+    fps: float | None = None,
     n_estimators: int = 200,
     random_state: int = 42,
     test_split: float = 0.0,
@@ -237,6 +288,7 @@ def train_model(
         raise ValueError("train_model requires at least one (pose, annotations) pair")
 
     spec = spec or FeatureSpec()
+    fps = resolve_sessions_fps(sessions, fps, holdout_sessions=holdout_sessions)
 
     # ---- 1-2. Assemble features/labels, drop unusable rows, subsample bg ----
     assembled = _assemble_and_filter(
@@ -431,7 +483,7 @@ def train_model(
             import warnings
 
             warnings.warn(
-                f"embedding fit failed ({e}); model saved without a 3D " f"embedding view",
+                f"embedding fit failed ({e}); model saved without a 3D embedding view",
                 stacklevel=2,
             )
 
@@ -457,7 +509,7 @@ def train_hybrid_model(
     spec: FeatureSpec | None = None,
     window: int = 30,
     stats: tuple[str, ...] = DEFAULT_STATS,
-    fps: float = 30.0,
+    fps: float | None = None,
     n_estimators: int = 200,
     random_state: int = 42,
     class_weight: str | None = None,
@@ -505,6 +557,8 @@ def train_hybrid_model(
     spec = spec or FeatureSpec()
     if lam_grid is None:
         lam_grid = tuple(round(0.1 * i, 1) for i in range(11))
+
+    fps = resolve_sessions_fps(sessions, fps)
 
     # ---- 1. Assemble + filter (shared with train_model) ----
     assembled = _assemble_and_filter(
@@ -673,8 +727,7 @@ def _assemble_sessions(
             )
             if len(windowed) != len(labels):
                 raise RuntimeError(
-                    f"windowed length {len(windowed)} != labels length "
-                    f"{len(labels)} for {pose_csv}"
+                    f"windowed length {len(windowed)} != labels length {len(labels)} for {pose_csv}"
                 )
             bumped = group_ids.copy()
             positive = bumped >= 0
@@ -878,7 +931,7 @@ def cross_validate_sessions(
     spec: FeatureSpec | None = None,
     window: int = 30,
     stats: tuple[str, ...] = DEFAULT_STATS,
-    fps: float = 30.0,
+    fps: float | None = None,
     n_estimators: int = 200,
     random_state: int = 42,
     class_weight: str | None = None,
@@ -935,6 +988,7 @@ def cross_validate_sessions(
             "(the source video isn't mirrored)"
         )
     spec = spec or FeatureSpec()
+    fps = resolve_sessions_fps(sessions, fps)
     from sklearn.metrics import f1_score
     from sklearn.model_selection import GroupKFold
 
@@ -1018,7 +1072,7 @@ def cross_validate_sessions(
     n_unique = int(len(np.unique(sess)))
     if n_unique < 2:
         raise ValueError(
-            f"need at least 2 sessions with usable labels for " f"cross-validation; got {n_unique}"
+            f"need at least 2 sessions with usable labels for cross-validation; got {n_unique}"
         )
     n_splits = min(n_folds, n_unique)
 

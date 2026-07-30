@@ -50,18 +50,15 @@ _MM_PER_CM = 10.0
 
 
 def find_pose_csv(video: Path | str) -> Path | None:
-    """The DeepLabCut CSV Batch Pose Tracking wrote beside *video*, if any.
+    """The pose CSV sitting beside *video*, if any.
 
-    Matches that tool's naming (``<stem>DLC_<model>.csv``) and ignores the
-    ``_raw`` companion, which is the unsmoothed inference.
+    Thin re-export of :func:`glider.vision.pose.batch.find_pose_csv`, which
+    lives next to the code that chooses the output names. Kept here because
+    this name is part of the classify surface.
     """
-    video = Path(video)
-    matches = [
-        p
-        for p in sorted(video.parent.glob(f"{video.stem}DLC_*.csv"))
-        if not p.stem.endswith("_raw")
-    ]
-    return matches[0] if matches else None
+    from glider.vision.pose.batch import find_pose_csv as _find
+
+    return _find(video)
 
 
 def _percentile_thresholds(

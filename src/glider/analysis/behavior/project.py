@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
+from glider.vision.pose.batch import VIDEO_EXTS
 
 
 class ProjectError(ValueError):
@@ -95,14 +95,22 @@ class Project:
     def resolve_sessions(self) -> list[tuple[Path, Path]]:
         """Return ``(video, pose_csv)`` pairs discovered by stem.
 
-        Every video in ``videos_dir`` is paired with the expected
-        ``poses_dir/<stem>.csv``. Existence of the pose CSV is the
-        caller's concern (train requires it; review tolerates absence).
+        Every video in ``videos_dir`` is paired with its pose CSV in
+        ``poses_dir``, accepting both ``<stem>.csv`` and the
+        ``<stem>DLC_<model>.csv`` that Batch Pose Tracking writes. Videos
+        with no pose CSV at all still get the plain ``<stem>.csv`` path so
+        callers can report what they expected; existence remains the
+        caller's concern (train requires it, review tolerates absence).
         """
+        from glider.vision.pose.batch import find_pose_csv
+
         if not self.videos_dir.is_dir():
             raise ProjectError(f"videos_dir not found: {self.videos_dir}")
         videos = sorted(p for p in self.videos_dir.iterdir() if p.suffix.lower() in VIDEO_EXTS)
-        return [(v, self.poses_dir / f"{v.stem}.csv") for v in videos]
+        return [
+            (v, find_pose_csv(v, self.poses_dir) or self.poses_dir / f"{v.stem}.csv")
+            for v in videos
+        ]
 
     def resolve_holdout(self) -> list[Path]:
         """Map each holdout stem to its pose CSV. Raises if a stem matches
