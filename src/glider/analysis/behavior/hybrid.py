@@ -114,6 +114,39 @@ class HybridModel:
         labels[valid] = preds
         return labels
 
+    def describe_thresholds(
+        self, *, px_per_mm: float | None = None, body_length_px: float | None = None
+    ) -> list[dict]:
+        """The freeze/dart thresholds in every unit the references can reach.
+
+        The stored thresholds are in body-lengths per frame (or pixels per
+        frame when the features were not normalized) — not a number anyone can
+        interpret. This expresses them in the native unit per second, in
+        pixels per frame, and in mm/s.
+
+        ``px_per_mm`` comes from the Batch Pose Tracking master calibration
+        file; see :func:`glider.analysis.behavior.units.load_px_per_mm`. Without
+        it the millimetre figure is ``None`` and the rest still reports.
+
+        ``body_length_px`` overrides the reference captured at training time —
+        pass the session's own median when applying the model to an animal
+        whose size differs from the training median. The millimetre value is
+        approximate either way; see :mod:`glider.analysis.behavior.units`.
+        """
+        from glider.analysis.behavior.units import SpeedScale, describe_speed_threshold
+
+        reference = body_length_px if body_length_px is not None else self.prior.body_length_px
+        scale = SpeedScale(
+            fps=self.base.fps,
+            body_length_px=reference,
+            px_per_mm=px_per_mm,
+            normalized=self.base.spec.normalize_by_body_length,
+        )
+        return [
+            describe_speed_threshold("freeze", self.prior.freeze_threshold, scale),
+            describe_speed_threshold("dart", self.prior.dart_threshold, scale),
+        ]
+
     def save(self, path: str | Path) -> Path:
         import joblib
 

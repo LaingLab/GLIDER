@@ -1,0 +1,181 @@
+"""Real-world units for the behavior model's kinematic speed thresholds.
+
+The hybrid model's freeze/dart thresholds are stored in whatever units the
+feature pipeline produced. By default that is **body-lengths per frame**:
+:mod:`glider.analysis.behavior.features` divides keypoint speed by the animal's
+per-frame body length so the same behavior in a small and a large mouse yields
+the same feature value. With ``normalize_by_body_length=False`` the thresholds
+are instead raw **pixels per frame**. Neither is a number you can put in a paper.
+
+This module converts them. Three units, in increasing order of what they cost
+you to obtain:
+
+* ``per_second``   -- the native unit per second. Needs only the frame rate.
+* ``px_per_frame`` -- needs a reference body length in pixels (the session
+  median), and is a no-op when the features were never normalized.
+* ``mm_per_s``     -- additionally needs the pixel-to-millimetre scale, read
+  from the master calibration file the Batch Pose Tracking tool writes.
+
+Every conversion returns ``None`` rather than guessing when an input is
+missing, so an uncalibrated session still reports the units it can and simply
+omits millimetres.
+
+**The millimetre figure is approximate.** Body length varies frame to frame
+(posture, foreshortening, tracking noise), so scaling a normalized threshold
+back to absolute units uses the session's *median* body length as a single
+reference. Report it alongside the value -- :func:`describe_speed_threshold`
+returns the references it used for exactly that reason.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from dataclasses import dataclass
+from pathlib import Path
+
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "SpeedScale",
+    "describe_speed_threshold",
+    "load_px_per_mm",
+    "median_body_length_px",
+]
+
+# The feature column carrying absolute body length, before and after windowing.
+_BODY_LENGTH_COLUMNS = ("body_length", "body_length__mean")
+
+
+def _finite(value: float | None) -> float | None:
+    """The value if it is a usable finite number, else None."""
+    if value is None:
+        return None
+    v = float(value)
+    return None if math.isnan(v) or math.isinf(v) else v
+
+
+@dataclass(frozen=True)
+class SpeedScale:
+    """Converts one model's speed threshold into real-world units.
+
+    Parameters
+    ----------
+    fps
+        Frame rate the model was trained at (``BehaviorModel.fps``).
+    body_length_px
+        Session median body length in pixels, the reference for undoing the
+        body-length normalization. Ignored when ``normalized`` is False.
+    px_per_mm
+        Pixel-to-millimetre scale for the source video, from the master
+        calibration file. None when the session was never calibrated.
+    normalized
+        Whether the speeds are body-lengths/frame (the feature pipeline's
+        default) or already pixels/frame. Mirrors
+        ``FeatureSpec.normalize_by_body_length``.
+    """
+
+    fps: float
+    body_length_px: float | None = None
+    px_per_mm: float | None = None
+    normalized: bool = True
+
+    @property
+    def native_unit(self) -> str:
+        """What the stored threshold is measured in."""
+        return "bl/frame" if self.normalized else "px/frame"
+
+    def to_per_second(self, speed: float | None) -> float | None:
+        """Native unit per second. The only conversion needing no rig measurement."""
+        s = _finite(speed)
+        fps = _finite(self.fps)
+        if s is None or not fps or fps <= 0:
+            return None
+        return s * fps
+
+    def to_px_per_frame(self, speed: float | None) -> float | None:
+        """Pixels per frame, undoing the body-length normalization if present."""
+        s = _finite(speed)
+        if s is None:
+            return None
+        if not self.normalized:
+            return s  # already pixels; no reference length involved
+        length = _finite(self.body_length_px)
+        if not length or length <= 0:
+            return None
+        return s * length
+
+    def to_mm_per_s(self, speed: float | None) -> float | None:
+        """Millimetres per second. Approximate — see the module docstring."""
+        px = self.to_px_per_frame(speed)
+        fps = _finite(self.fps)
+        ppm = _finite(self.px_per_mm)
+        if px is None or not fps or fps <= 0 or not ppm or ppm <= 0:
+            return None
+        return px * fps / ppm
+
+
+def median_body_length_px(frame: pd.DataFrame) -> float | None:
+    """Session median body length in pixels, or None if unavailable.
+
+    Prefers the raw ``body_length`` feature; falls back to the windowed
+    ``body_length__mean``. Returns None when the model was trained with
+    ``include_body_length=False``, which drops the column entirely — in that
+    case there is no reference length recoverable from the features alone.
+    """
+    for column in _BODY_LENGTH_COLUMNS:
+        if column not in frame.columns:
+            continue
+        values = pd.to_numeric(frame[column], errors="coerce").dropna()
+        if values.empty:
+            continue
+        median = float(values.median())
+        if median > 0:
+            return median
+    return None
+
+
+def describe_speed_threshold(
+    name: str, value: float | None, scale: SpeedScale
+) -> dict[str, float | str | None]:
+    """One threshold expressed in every unit the scale can reach.
+
+    The reference values (``body_length_px``, ``px_per_mm``, ``fps``) are
+    included so a reader can audit the millimetre figure rather than take it on
+    faith. ``value`` is None when the prior was never calibrated.
+    """
+    return {
+        "name": name,
+        "native": _finite(value),
+        "native_unit": scale.native_unit,
+        "per_second": scale.to_per_second(value),
+        "px_per_frame": scale.to_px_per_frame(value),
+        "mm_per_s": scale.to_mm_per_s(value),
+        "body_length_px": _finite(scale.body_length_px),
+        "px_per_mm": _finite(scale.px_per_mm),
+        "fps": _finite(scale.fps),
+    }
+
+
+def load_px_per_mm(master_path: Path | str | None, video: Path | str) -> float | None:
+    """Pixel-to-millimetre scale for *video* from a master calibration file.
+
+    Tolerant by design: a missing, unreadable, or malformed file, or a video the
+    file does not cover, all yield None. An uncalibrated session must still be
+    analysable — it simply cannot report millimetres.
+    """
+    if master_path is None:
+        return None
+    path = Path(master_path)
+    # Imported lazily: this keeps `units` usable in a notebook that never
+    # touches the vision stack.
+    from glider.vision.calibration_set import CalibrationSet, CalibrationSetError
+
+    try:
+        loaded = CalibrationSet.load(path, known_videos=[Path(video)])
+    except (CalibrationSetError, OSError) as e:
+        logger.info("no usable calibration in %s: %s", path, e)
+        return None
+    return loaded.px_per_mm(video)
