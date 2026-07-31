@@ -38,6 +38,7 @@ from glider.analysis.behavior.keypoint_schema import (
     KeypointSchema,
     KeypointSchemaError,
 )
+from glider.gui.styles import colors
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ _PALETTE = [
     "#CC79A7",
     "#56B4E9",
     "#F0E442",
-    "#000000",
+    "#e2e8f0",
 ]
 
 
@@ -159,7 +160,7 @@ class KeypointEditorDialog(QDialog):
         side.addStretch(1)
         self._problem = QLabel("")
         self._problem.setWordWrap(True)
-        self._problem.setStyleSheet("color: #c0392b;")
+        self._problem.setStyleSheet(f"color: {colors.ERROR};")
         side.addWidget(self._problem)
 
         buttons = QHBoxLayout()
@@ -219,11 +220,11 @@ class KeypointEditorDialog(QDialog):
 
     def _redraw(self) -> None:
         self._scene.clear()
-        self._scene.setBackgroundBrush(QBrush(QColor("#fafafa")))
+        self._scene.setBackgroundBrush(QBrush(QColor(colors.CANVAS)))
         self._scene.addPath(
             mouse_silhouette(),
-            QPen(QColor("#9e9e9e"), 2),
-            QBrush(QColor("#e0e0e0")),
+            QPen(QColor(colors.BORDER), 2),
+            QBrush(QColor(colors.NODE_BODY)),
         )
         selected = self._current()
         font = QFont()
@@ -233,13 +234,20 @@ class KeypointEditorDialog(QDialog):
             item = _PointItem(i, self)
             colour = QColor(_PALETTE[i % len(_PALETTE)])
             item.setBrush(QBrush(colour))
-            item.setPen(QPen(QColor("#000000"), 3 if i == selected else 1))
+            # The selected point gets a bright ring rather than a heavier black
+            # outline, which would vanish against the dark figure.
+            item.setPen(
+                QPen(
+                    QColor(colors.ACCENT if i == selected else colors.CANVAS),
+                    3 if i == selected else 1,
+                )
+            )
             item.setPos(kp.x * _FIG, kp.y * _FIG)
             self._scene.addItem(item)
 
             label = QGraphicsSimpleTextItem(f"{i}:{kp.name}")
             label.setFont(font)
-            label.setBrush(QBrush(QColor("#212121")))
+            label.setBrush(QBrush(QColor(colors.TEXT_PRIMARY)))
             label.setPos(kp.x * _FIG + _DOT + 3, kp.y * _FIG - _DOT - 4)
             label.setZValue(11)
             self._scene.addItem(label)

@@ -264,7 +264,11 @@ def create_main_window(
         window.switch_to_builder()
         logger.info("Starting in Builder mode")
 
-    window.setStyleSheet(stylesheet)
+    # Applied to the application, not the window: the tool windows (Behavior
+    # Analysis, Batch Pose Tracking) are deliberately top-level and unparented,
+    # so a sheet set on MainWindow never reaches them and they render in the
+    # OS default theme instead of GLIDER's.
+    app.setStyleSheet(stylesheet)
 
     return window
 
@@ -478,10 +482,10 @@ def run_sync_fallback(app: QApplication, args: argparse.Namespace) -> int:
     window = MainWindow(core, view_manager=view_manager)
 
     if is_runner:
-        window.setStyleSheet(get_touch_stylesheet())
+        app.setStyleSheet(get_touch_stylesheet())
         window.switch_to_runner()
     else:
-        window.setStyleSheet(get_desktop_stylesheet())
+        app.setStyleSheet(get_desktop_stylesheet())
         window.switch_to_builder()
 
     window.show()

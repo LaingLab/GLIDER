@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.gui.pose_batch.calibration_table import CalibrationTable
+from glider.gui.styles import colors
 from glider.vision.calibration import CameraCalibration
 from glider.vision.calibration_set import CalibrationSet, CalibrationSetError
 from glider.vision.pose import batch as batch_core
@@ -55,7 +56,7 @@ except ImportError:  # pragma: no cover - depends on branch state
     read_pose_model_meta = None
 
 _SETTINGS_PREFIX = "pose_batch/keypoints"
-_INVALID_STYLE = "border: 1px solid #c0392b;"
+_INVALID_STYLE = f"border: 1px solid {colors.ERROR};"
 
 
 class _DropList(QListWidget):
