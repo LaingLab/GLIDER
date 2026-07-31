@@ -104,6 +104,7 @@ def resolve_speed_thresholds(
     freeze_pct: float | None = None,
     dart_pct: float | None = None,
     pose_csv: Path | str | None = None,
+    cohort_thresholds: Path | str | None = None,
     freeze_min_s: float | None = None,
     dart_min_s: float | None = None,
     calibration_master: Path | str | None = None,
@@ -152,10 +153,16 @@ def resolve_speed_thresholds(
     wants_abs = freeze_mm_s is not None or dart_mm_s is not None
     wants_pct = freeze_pct is not None or dart_pct is not None
     wants_px = freeze_threshold is not None or dart_threshold is not None
+    wants_cohort = cohort_thresholds is not None
 
     chosen = [
         n
-        for n, on in (("absolute", wants_abs), ("percentile", wants_pct), ("native", wants_px))
+        for n, on in (
+            ("absolute", wants_abs),
+            ("percentile", wants_pct),
+            ("cohort", wants_cohort),
+            ("native", wants_px),
+        )
         if on
     ]
     if len(chosen) > 1:
@@ -175,6 +182,17 @@ def resolve_speed_thresholds(
                 "one alone would silently disable it"
             )
         freeze_px, dart_px = float(freeze_threshold), float(dart_threshold)
+
+    elif wants_cohort:
+        # One physical cut-off derived from the whole cohort, converted here
+        # through THIS video's scale and rate. Per-video percentiles would
+        # judge each animal against only itself, which is circular in a
+        # treatment study.
+        from glider.analysis.behavior.cohort_speed import CohortSpeedThresholds
+
+        cohort = CohortSpeedThresholds.load(cohort_thresholds)
+        scale = px_per_mm if px_per_mm is not None else load_px_per_mm(calibration_master, video)
+        freeze_px, dart_px = cohort.to_px_per_frame(px_per_mm=scale, fps=rate)
 
     elif wants_pct:
         if freeze_pct is None or dart_pct is None:
@@ -274,6 +292,7 @@ def classify(
     dart_min_s=None,
     calibration_master=None,
     px_per_mm=None,
+    cohort_thresholds=None,
     write_annotated=False,
     **opts,
 ) -> EthogramResult:
@@ -331,6 +350,7 @@ def classify(
             freeze_pct=freeze_pct,
             dart_pct=dart_pct,
             pose_csv=pose_csv,
+            cohort_thresholds=cohort_thresholds,
             freeze_min_s=freeze_min_s,
             dart_min_s=dart_min_s,
             calibration_master=calibration_master,

@@ -613,6 +613,7 @@ class ApplyTab(QWidget):
         self._videos: list[Path] = []
         self._output_dir: Path | None = None
         self._calibration_master: Path | None = None
+        self._cohort_path: Path | None = None
         self._apply_thread: QThread | None = None
         self._apply_worker = None
         # Videos process one at a time (ApplyWorker takes a single video);
@@ -871,10 +872,13 @@ class ApplyTab(QWidget):
         self._speed_mode = QComboBox()
         self._speed_mode.addItem("Absolute (cm/s)", "absolute")
         self._speed_mode.addItem("Percentile of this video", "percentile")
+        self._speed_mode.addItem("Cohort thresholds (file)", "cohort")
         self._speed_mode.setToolTip(
             "Absolute is comparable across sessions but needs a calibration. "
             "Percentile self-adjusts to each video and needs none, but the "
-            "thresholds then mean something different per recording."
+            "thresholds then mean something different per recording -- which "
+            "is circular in a treatment study. Cohort derives one set of "
+            "cut-offs from every session at once and applies them unchanged."
         )
         self._speed_mode.currentIndexChanged.connect(self._on_speed_mode_changed)
         form.addRow("Threshold mode:", self._speed_mode)
@@ -928,6 +932,23 @@ class ApplyTab(QWidget):
         form.addRow("Darting percentile:", self._dart_pct)
         self._percentile_rows.append(form.rowCount() - 1)
 
+        cohort_row = QHBoxLayout()
+        self._cohort_label = QLabel("(none)")
+        self._cohort_label.setWordWrap(True)
+        pick = QPushButton("Choose...")
+        pick.clicked.connect(self._on_choose_cohort)
+        build = QPushButton("Compute...")
+        build.setToolTip(
+            "Pool the speed of every pose CSV in a folder and take the cohort "
+            "percentiles. Existing CSVs are used as-is, so tracking is not re-run."
+        )
+        build.clicked.connect(self._on_build_cohort)
+        cohort_row.addWidget(self._cohort_label, 1)
+        cohort_row.addWidget(pick)
+        cohort_row.addWidget(build)
+        form.addRow("Cohort file:", cohort_row)
+        self._cohort_rows = [form.rowCount() - 1]
+
         # Seconds, not frames: a bout minimum is an ethological duration, and a
         # frame count means something different at 30 vs 60 fps.
         self._freeze_min_s = QDoubleSpinBox()
@@ -948,6 +969,76 @@ class ApplyTab(QWidget):
         self._on_speed_mode_changed()
         return group
 
+    def _on_choose_cohort(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose cohort thresholds", "", "JSON Files (*.json);;All Files (*)"
+        )
+        if path:
+            self._cohort_path = Path(path)
+            self._cohort_label.setText(str(self._cohort_path))
+
+    def _on_build_cohort(self) -> None:
+        """Pool every pose CSV in a folder into one set of cut-offs.
+
+        Reads existing CSVs rather than re-tracking: a cohort that has already
+        been through Batch Pose Tracking should not pay for inference twice.
+        """
+        from glider.analysis.behavior.cohort_speed import (
+            CohortSpeedError,
+            compute_cohort_thresholds,
+        )
+
+        folder = QFileDialog.getExistingDirectory(self, "Folder of pose CSVs")
+        if not folder:
+            return
+        csvs = sorted(p for p in Path(folder).rglob("*.csv") if "DLC_" in p.stem)
+        if not csvs:
+            QMessageBox.warning(
+                self,
+                "Cohort thresholds",
+                f"No pose CSVs found under {folder}.\n\n"
+                "Run Batch Pose Tracking first, or pick the folder its CSVs were "
+                "written to.",
+            )
+            return
+
+        out, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save cohort thresholds",
+            str(Path(folder) / "cohort_speed.json"),
+            "JSON Files (*.json)",
+        )
+        if not out:
+            return
+        try:
+            thresholds = compute_cohort_thresholds(
+                csvs,
+                freeze_pct=self._freeze_pct.value(),
+                dart_pct=self._dart_pct.value(),
+                calibration_master=self._calibration_master,
+            )
+            thresholds.save(out)
+        except (CohortSpeedError, OSError) as e:
+            QMessageBox.critical(self, "Cohort thresholds", str(e))
+            return
+
+        self._cohort_path = Path(out)
+        self._cohort_label.setText(str(self._cohort_path))
+        note = (
+            ""
+            if thresholds.is_calibrated
+            else "\n\nNo calibration covered these sessions, so the thresholds are "
+            "in px/frame. That is only valid if every video shares one rig geometry."
+        )
+        QMessageBox.information(
+            self,
+            "Cohort thresholds",
+            f"Pooled {thresholds.n_samples:,} samples from "
+            f"{thresholds.n_sessions} session(s).\n\n"
+            f"freezing below {thresholds.freeze:.3f} {thresholds.unit}\n"
+            f"darting above {thresholds.dart:.3f} {thresholds.unit}{note}",
+        )
+
     def _speed_mode_value(self) -> str:
         return self._speed_mode.currentData() or "absolute"
 
@@ -956,8 +1047,11 @@ class ApplyTab(QWidget):
         absolute = self._speed_mode_value() == "absolute"
         for row in self._absolute_rows:
             self._speed_form.setRowVisible(row, absolute)
+        mode = self._speed_mode_value()
         for row in self._percentile_rows:
-            self._speed_form.setRowVisible(row, not absolute)
+            self._speed_form.setRowVisible(row, mode == "percentile")
+        for row in self._cohort_rows:
+            self._speed_form.setRowVisible(row, mode == "cohort")
         # The calibration rows stay visible in both modes: percentile
         # thresholds do not need a scale, but speed_cm_s does.
 
@@ -976,7 +1070,10 @@ class ApplyTab(QWidget):
         """Speed-axis kwargs for ApplyWorker, or {} when the axis is off."""
         if not self._speed_group.isChecked():
             return {}
-        if self._speed_mode_value() == "percentile":
+        mode = self._speed_mode_value()
+        if mode == "cohort":
+            opts = {"cohort_thresholds": self._cohort_path}
+        elif mode == "percentile":
             opts = {
                 "freeze_pct": self._freeze_pct.value(),
                 "dart_pct": self._dart_pct.value(),
