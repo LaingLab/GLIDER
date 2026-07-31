@@ -19,12 +19,62 @@ Two pieces:
 
 from __future__ import annotations
 
+import re
 from collections import deque
+from collections.abc import Sequence
 
 import numpy as np
 
 from glider.analysis.behavior.features import FeatureSpec, compute_features
 from glider.vision.pose.core import PoseData
+
+
+def expected_keypoint_order(model) -> list[str]:
+    """The keypoint names, in order, that *model* was trained with.
+
+    Recovered from the feature columns: :func:`compute_features` emits one
+    ``speed_<name>`` per keypoint in keypoint order, so first appearance in
+    ``feature_names`` reproduces the training order.
+
+    Order matters, not just the name set. With ``FeatureSpec.auto_angles`` the
+    angle features are generated from keypoint *triplets by index*, and the
+    names sitting at those indices are baked into the resulting column names
+    (``angle_body_center_at_left_ear_left_hip``). Enter the same names in a
+    different order and those columns simply never appear — they arrive as
+    NaN, every prediction comes back blank, and nothing raises. Returns ``[]``
+    when the order cannot be recovered.
+    """
+    seen: set[str] = set()
+    order: list[str] = []
+    for column in getattr(model, "feature_names", []):
+        match = re.match(r"speed_(.+?)__", column)
+        if match and match.group(1) not in seen:
+            seen.add(match.group(1))
+            order.append(match.group(1))
+    return order
+
+
+def keypoint_order_problem(model, entered: Sequence[str]) -> str | None:
+    """Why *entered* cannot produce this model's features, or None if it can.
+
+    Returns a message naming the first mismatching position, because that is
+    what the operator has to fix. None means the names are usable — it does
+    NOT promise they are attached to the right body parts, which only a look
+    at a labelled frame can confirm.
+    """
+    expected = expected_keypoint_order(model)
+    if not expected:
+        return None  # nothing to check against; don't invent a failure
+    entered = list(entered)
+    if len(entered) != len(expected):
+        return (
+            f"this model was trained with {len(expected)} keypoints but "
+            f"{len(entered)} names were entered"
+        )
+    for i, (want, got) in enumerate(zip(expected, entered, strict=True)):
+        if want != got:
+            return f"position {i} should be {want!r}, not {got!r}"
+    return None
 
 
 def derive_stream_columns(model) -> tuple[list[str], list[str]]:

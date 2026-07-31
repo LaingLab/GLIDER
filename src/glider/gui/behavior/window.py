@@ -17,6 +17,7 @@ module scope, so ``import glider.gui.behavior.window`` succeeds under a bare
 
 from __future__ import annotations
 
+import logging
 import pprint
 from pathlib import Path
 from typing import NamedTuple
@@ -47,6 +48,8 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.vision.pose.batch import VIDEO_EXTS, VIDEO_FILTER, find_pose_csv
+
+logger = logging.getLogger(__name__)
 
 # Video extensions and the matching dialog filter come from the pose batch
 # module rather than being restated here, so this tool and Batch Pose Tracking
@@ -719,6 +722,8 @@ class ApplyTab(QWidget):
         if not keypoint_names:
             QMessageBox.warning(self, "Apply", "Enter at least one keypoint name.")
             return
+        if not self._confirm_keypoints(keypoint_names):
+            return
 
         self._results.clear()
         self._queue = list(self._videos)
@@ -726,6 +731,46 @@ class ApplyTab(QWidget):
         self._progress.setVisible(True)
         self._keypoint_names = keypoint_names
         self._run_next()
+
+    def _keypoint_warning(self, keypoint_names) -> str | None:
+        """What the bundle says is wrong with these names, if anything.
+
+        Read from the behavior model itself, which records the order it was
+        trained with. Never blocks the run on its own — the labelled frame is
+        the real check, and a model we cannot introspect must not stop work.
+        """
+        try:
+            from glider.analysis.behavior.classify.features_stream import (
+                expected_keypoint_order,
+                keypoint_order_problem,
+            )
+            from glider.analysis.behavior.model import BehaviorModel
+
+            model = BehaviorModel.load(self._model_path)
+            problem = keypoint_order_problem(model, keypoint_names)
+            if problem is None:
+                return None
+            expected = expected_keypoint_order(model)
+            return f"{problem}. This model expects: {','.join(expected)}"
+        except Exception:
+            logger.debug("could not check keypoint order against the bundle", exc_info=True)
+            return None
+
+    def _confirm_keypoints(self, keypoint_names) -> bool:
+        """Show a labelled frame and require the operator to confirm it."""
+        from glider.gui.behavior.keypoint_confirm import KeypointConfirmDialog
+
+        dialog = KeypointConfirmDialog(
+            self._videos[0],
+            self._yolo_path,
+            keypoint_names,
+            parent=self,
+            warning=self._keypoint_warning(keypoint_names),
+        )
+        try:
+            return dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            dialog.deleteLater()
 
     def _build_cadence_row(self) -> QHBoxLayout:
         """Classifier cadence: how many tracked frames per prediction.
