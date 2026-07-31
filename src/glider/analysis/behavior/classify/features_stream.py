@@ -54,6 +54,29 @@ def expected_keypoint_order(model) -> list[str]:
     return order
 
 
+def pose_csv_bodyparts(pose_csv) -> list[str]:
+    """Bodypart names, in order, from a DeepLabCut CSV's header.
+
+    Reads the three header rows only — a pose CSV is large and nothing here
+    needs the data. Returns ``[]`` when the file cannot be parsed, because a
+    cross-check that cannot run must not become an error of its own.
+    """
+    import csv as _csv
+
+    try:
+        with open(pose_csv, newline="", encoding="utf-8") as f:
+            rows = [next(_csv.reader(f)) for _ in range(3)]
+    except (OSError, StopIteration, UnicodeDecodeError):
+        return []
+    # Header shape: (scorer, bodyparts, coords); column 0 is the frame index.
+    bodyparts = rows[1][1:]
+    ordered: list[str] = []
+    for name in bodyparts:
+        if name and name not in ordered:
+            ordered.append(name)
+    return ordered
+
+
 def keypoint_order_problem(model, entered: Sequence[str]) -> str | None:
     """Why *entered* cannot produce this model's features, or None if it can.
 

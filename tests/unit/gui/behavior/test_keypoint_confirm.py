@@ -196,3 +196,145 @@ def test_annotate_handles_any_keypoint_count(count):
         np.zeros((256, 256, 3), dtype=np.uint8), pts, [f"k{i}" for i in range(count)]
     )
     assert out.any()
+
+
+# --------------------------------------------------------------------------
+# The bundle is the authority: auto-fill from it, and refuse names it can't use
+# --------------------------------------------------------------------------
+
+
+def _bundle(tmp_path, names=NAMES):
+    """A real BehaviorModel bundle whose feature columns encode *names*."""
+    import pandas as pd
+    from sklearn.ensemble import RandomForestClassifier
+
+    from glider.analysis.behavior.features import FeatureSpec
+    from glider.analysis.behavior.model import BehaviorModel
+
+    cols = [f"speed_{n}__{s}" for s in ("mean", "std", "max") for n in names]
+    x = pd.DataFrame({c: [0.0, 1.0, 0.0, 1.0] for c in cols})
+    clf = RandomForestClassifier(n_estimators=4, random_state=0).fit(
+        x, ["rest", "go", "rest", "go"]
+    )
+    path = tmp_path / "bundle.pkl"
+    BehaviorModel(clf, cols, FeatureSpec(), 1, ("mean", "std", "max"), 30.0, ["go", "rest"]).save(
+        path
+    )
+    return path
+
+
+def test_choosing_a_model_fills_the_keypoint_field(qtbot, tmp_path):
+    """Not making the operator guess beats warning about a wrong guess."""
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._model_path = _bundle(tmp_path)
+    tab._autofill_keypoints()
+    assert [n.strip() for n in tab._keypoints_edit.text().split(",")] == NAMES
+
+
+def test_autofill_says_so_when_it_overwrites_typed_names(qtbot, tmp_path):
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._keypoints_edit.setText("wrong,names,here")
+    tab._model_path = _bundle(tmp_path)
+    tab._autofill_keypoints()
+    assert "set from the model bundle" in tab._results.toPlainText()
+
+
+def test_an_unreadable_bundle_leaves_the_field_alone(qtbot, tmp_path):
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._keypoints_edit.setText("a,b,c")
+    tab._model_path = tmp_path / "not_a_bundle.pkl"
+    tab._autofill_keypoints()
+    assert tab._keypoints_edit.text() == "a,b,c"
+
+
+def test_names_the_model_cannot_use_block_the_run(qtbot, tmp_path):
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._model_path = _bundle(tmp_path)
+    blocker = tab._keypoint_blocker(["right_ear", "left_ear", *NAMES[2:]])
+    assert blocker is not None
+    assert "position 0" in blocker
+    # The message must carry the fix, not just the complaint.
+    assert ",".join(NAMES) in blocker
+
+
+def test_the_expected_names_pass_the_blocker(qtbot, tmp_path):
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._model_path = _bundle(tmp_path)
+    assert tab._keypoint_blocker(NAMES) is None
+
+
+def test_an_unreadable_bundle_does_not_block(qtbot, tmp_path):
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._model_path = tmp_path / "nope.pkl"
+    assert tab._keypoint_blocker(NAMES) is None
+
+
+def test_run_refuses_when_the_bundle_vetoes(qtbot, tmp_path, monkeypatch):
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._model_path = _bundle(tmp_path)
+    tab._yolo_path = tmp_path / "y.pt"
+    tab._output_dir = tmp_path / "out"
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"")
+    tab._videos = [video]
+    tab._keypoints_edit.setText("right_ear,left_ear," + ",".join(NAMES[2:]))
+
+    monkeypatch.setattr("glider.gui.behavior.window.QMessageBox.critical", lambda *a, **k: None)
+    monkeypatch.setattr(tab, "_confirm_keypoints", lambda n: pytest.fail("should not reach"))
+    monkeypatch.setattr(tab, "_run_next", lambda: pytest.fail("run should not start"))
+    tab._on_run()
+    assert tab._run_btn.isEnabled() is True
+
+
+class TestPoseCsvCrossCheck:
+    def test_reads_bodyparts_from_a_dlc_header(self, tmp_path):
+        import numpy as np
+
+        from glider.analysis.behavior.classify.features_stream import pose_csv_bodyparts
+        from glider.vision.pose.core import PoseData
+        from glider.vision.pose.dlc import to_dlc_csv
+
+        path = tmp_path / "vDLC_m.csv"
+        to_dlc_csv(
+            PoseData(
+                xy=np.zeros((3, 3, 2)),
+                confidence=np.ones((3, 3)),
+                keypoint_names=["nose", "l_ear", "r_ear"],
+                fps=30.0,
+            ),
+            path,
+        )
+        assert pose_csv_bodyparts(path) == ["nose", "l_ear", "r_ear"]
+
+    def test_an_unreadable_csv_yields_no_names(self, tmp_path):
+        from glider.analysis.behavior.classify.features_stream import pose_csv_bodyparts
+
+        bad = tmp_path / "bad.csv"
+        bad.write_text("nonsense")
+        assert pose_csv_bodyparts(bad) == []
+
+    def test_a_missing_file_is_not_an_error(self, tmp_path):
+        from glider.analysis.behavior.classify.features_stream import pose_csv_bodyparts
+
+        assert pose_csv_bodyparts(tmp_path / "absent.csv") == []

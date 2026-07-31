@@ -699,6 +699,32 @@ class ApplyTab(QWidget):
             return
         self._model_path = Path(path)
         self._model_label.setText(f"Model bundle: {path}")
+        self._autofill_keypoints()
+
+    def _autofill_keypoints(self) -> None:
+        """Write the bundle's own keypoint order into the field.
+
+        The bundle records the order it was trained with, so there is nothing
+        for the operator to remember or retype. Not making them guess is a
+        stronger safeguard than warning about a wrong guess.
+        """
+        from glider.analysis.behavior.classify.features_stream import expected_keypoint_order
+        from glider.analysis.behavior.model import BehaviorModel
+
+        try:
+            expected = expected_keypoint_order(BehaviorModel.load(self._model_path))
+        except Exception:
+            logger.debug("could not read keypoint order from the bundle", exc_info=True)
+            return
+        if not expected:
+            return
+        current = [n.strip() for n in self._keypoints_edit.text().split(",") if n.strip()]
+        if current == expected:
+            return
+        self._keypoints_edit.setText(",".join(expected))
+        if current:
+            # Say so rather than silently rewriting something they typed.
+            self._results.append(f"Keypoint names set from the model bundle: {','.join(expected)}")
 
     def _on_choose_yolo(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -741,6 +767,12 @@ class ApplyTab(QWidget):
         if not keypoint_names:
             QMessageBox.warning(self, "Apply", "Enter at least one keypoint name.")
             return
+        blocker = self._keypoint_blocker(keypoint_names)
+        if blocker:
+            # Refused rather than warned: a wrong order produces an empty
+            # ethogram with no error, after a full inference pass per video.
+            QMessageBox.critical(self, "Keypoint names", blocker)
+            return
         if not self._confirm_keypoints(keypoint_names):
             return
 
@@ -772,6 +804,60 @@ class ApplyTab(QWidget):
         finally:
             dialog.deleteLater()
 
+    def _keypoint_blocker(self, keypoint_names) -> str | None:
+        """Why this run must not start, or None.
+
+        Only the bundle can veto: it defines which feature columns must exist,
+        so names it cannot use guarantee a blank ethogram. A pose CSV that
+        disagrees is reported by :meth:`_keypoint_warning` instead, because a
+        CSV written by our own Batch Pose Tracking inherits whatever names were
+        typed there and so is not independent evidence.
+        """
+        from glider.analysis.behavior.classify.features_stream import (
+            expected_keypoint_order,
+            keypoint_order_problem,
+        )
+        from glider.analysis.behavior.model import BehaviorModel
+
+        try:
+            model = BehaviorModel.load(self._model_path)
+        except Exception:
+            # A bundle we cannot read must not block work; the labelled-frame
+            # check still runs.
+            logger.debug("could not read the bundle to check keypoints", exc_info=True)
+            return None
+        problem = keypoint_order_problem(model, keypoint_names)
+        if problem is None:
+            return None
+        expected = expected_keypoint_order(model)
+        return (
+            f"These keypoint names cannot produce the features this model needs: "
+            f"{problem}.\n\n"
+            f"The model expects, in this order:\n{','.join(expected)}\n\n"
+            "Running anyway would spend a full pass per video and write an "
+            "ethogram with every label blank."
+        )
+
+    def _pose_csv_disagreement(self, keypoint_names) -> str | None:
+        """Whether a pose CSV beside the first video names its parts differently."""
+        from glider.analysis.behavior.classify.features_stream import pose_csv_bodyparts
+        from glider.vision.pose.batch import find_pose_csv
+
+        if not self._videos:
+            return None
+        csv_path = find_pose_csv(self._videos[0])
+        if csv_path is None:
+            return None
+        bodyparts = pose_csv_bodyparts(csv_path)
+        if not bodyparts or bodyparts == list(keypoint_names):
+            return None
+        return (
+            f"{csv_path.name} names its bodyparts {','.join(bodyparts)}, which "
+            "differs from the names being used. If that CSV came from a "
+            "different pose project, check the labels below sit on the right "
+            "body parts."
+        )
+
     def _keypoint_warning(self, keypoint_names) -> str | None:
         """What the bundle says is wrong with these names, if anything.
 
@@ -780,20 +866,9 @@ class ApplyTab(QWidget):
         the real check, and a model we cannot introspect must not stop work.
         """
         try:
-            from glider.analysis.behavior.classify.features_stream import (
-                expected_keypoint_order,
-                keypoint_order_problem,
-            )
-            from glider.analysis.behavior.model import BehaviorModel
-
-            model = BehaviorModel.load(self._model_path)
-            problem = keypoint_order_problem(model, keypoint_names)
-            if problem is None:
-                return None
-            expected = expected_keypoint_order(model)
-            return f"{problem}. This model expects: {','.join(expected)}"
+            return self._pose_csv_disagreement(keypoint_names)
         except Exception:
-            logger.debug("could not check keypoint order against the bundle", exc_info=True)
+            logger.debug("could not cross-check the pose CSV", exc_info=True)
             return None
 
     def _confirm_keypoints(self, keypoint_names) -> bool:
