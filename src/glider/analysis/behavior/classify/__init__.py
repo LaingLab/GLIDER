@@ -274,6 +274,7 @@ def classify(
     dart_min_s=None,
     calibration_master=None,
     px_per_mm=None,
+    write_annotated=False,
     **opts,
 ) -> EthogramResult:
     """Run the headless apply pipeline over a recorded video and write outputs.
@@ -301,8 +302,22 @@ def classify(
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_video = output_dir / "annotated.mp4"
+    # Encoding an annotated MP4 costs more wall-clock than the inference on a
+    # long recording, and it is a spot-checking aid rather than an analysis
+    # artifact -- so it is opt-in.
+    output_video = output_dir / "annotated.mp4" if write_annotated else None
     ethogram_csv = output_dir / "ethogram_raw.csv"
+
+    # A pixel scale is worth having even when the thresholds did not need one:
+    # percentile mode derives its cut-offs from the video's own distribution,
+    # but the operator still wants the ethogram's speed in real units.
+    from glider.analysis.behavior.units import load_px_per_mm
+
+    scale = px_per_mm if px_per_mm is not None else load_px_per_mm(calibration_master, video)
+    rate = opts.get("fps_override") or _video_fps(video)
+    if scale and scale > 0 and rate and rate > 0:
+        # px/frame -> px/s -> mm/s -> cm/s, folded into one factor.
+        opts.setdefault("cm_s_per_px_frame", rate / scale / 10.0)
 
     # Resolved before the pipeline starts so a bad threshold or a missing
     # calibration fails immediately, not after a full pass of inference.
