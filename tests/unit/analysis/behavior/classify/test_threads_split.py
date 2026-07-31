@@ -217,3 +217,85 @@ def test_pose_tracker_saves_undetected_frame(tmp_path):
     pt._save_undetected(42, np.zeros((8, 8, 3), dtype=np.uint8))
     assert (out / "undetected_0000042.png").exists()
     assert pt.n_undetected_saved == 1
+
+
+# --------------------------------------------------------------------------
+# Poses are computed anyway; keeping them saves the next inference pass
+# --------------------------------------------------------------------------
+
+
+def _tracker_with_poses(tmp_path, out, rows):
+    """Drive PoseTracker's pose buffer directly, without loading YOLO."""
+    from glider.analysis.behavior.classify.threads import PoseTracker
+
+    tracker = PoseTracker(
+        queue.Queue(),
+        queue.Queue(),
+        queue.Queue(),
+        threading.Event(),
+        "model.pt",
+        ["nose", "l_ear", "r_ear"],
+        pose_csv_out=out,
+        fps=30.0,
+    )
+    tracker._pose_rows = rows
+    tracker._write_pose_csv()
+    return tracker
+
+
+def test_tracked_poses_are_written_as_a_dlc_csv(tmp_path):
+    from glider.vision.pose.dlc import from_dlc_csv
+
+    out = tmp_path / "vDLC_exp-5.csv"
+    rows = [(i, np.full((3, 2), float(i)), np.ones(3)) for i in range(5)]
+    _tracker_with_poses(tmp_path, out, rows)
+
+    assert out.exists()
+    pose = from_dlc_csv(out)
+    assert pose.xy.shape == (5, 3, 2)
+    assert pose.keypoint_names == ["nose", "l_ear", "r_ear"]
+    # Each frame was filled with its own index, so the rows stay in order.
+    assert [pose.xy[i][0][0] for i in range(5)] == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+
+def test_dropped_frames_leave_a_gap_rather_than_shifting_the_timeline(tmp_path):
+    """DLC CSVs are positional; compacting would move every later timestamp."""
+    from glider.vision.pose.dlc import from_dlc_csv
+
+    out = tmp_path / "vDLC_exp-5.csv"
+    # Frame 1 never arrived (producer back-pressure).
+    rows = [(0, np.zeros((3, 2)), np.ones(3)), (2, np.full((3, 2), 9.0), np.ones(3))]
+    _tracker_with_poses(tmp_path, out, rows)
+
+    pose = from_dlc_csv(out)
+    assert pose.xy.shape[0] == 3
+    assert np.isnan(pose.xy[1]).all()
+    assert pose.xy[2][0][0] == 9.0
+
+
+def test_no_csv_is_written_when_none_was_asked_for(tmp_path):
+    from glider.analysis.behavior.classify.threads import PoseTracker
+
+    tracker = PoseTracker(
+        queue.Queue(),
+        queue.Queue(),
+        queue.Queue(),
+        threading.Event(),
+        "model.pt",
+        ["a", "b"],
+    )
+    tracker._pose_rows = [(0, np.zeros((2, 2)), np.ones(2))]
+    tracker._write_pose_csv()
+    assert list(tmp_path.glob("*.csv")) == []
+
+
+def test_a_failed_save_does_not_kill_the_run(tmp_path):
+    """A pose CSV is a bonus artifact; losing it must not lose the analysis."""
+    out = tmp_path / "nested" / "vDLC_exp-5.csv"
+    out.parent.mkdir()
+    out.parent.chmod(0o500)  # best-effort read-only
+    try:
+        _tracker_with_poses(tmp_path, out, [(0, np.zeros((3, 2)), np.ones(3))])
+    finally:
+        out.parent.chmod(0o700)
+    # No exception escaped; whether the write succeeded is OS-dependent.

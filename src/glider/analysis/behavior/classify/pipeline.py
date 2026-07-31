@@ -176,6 +176,9 @@ class LiveInferenceConfig:
     # leaves speed_cm_s blank -- the scale is a calibration the operator may
     # simply not have, and a guessed number in real units is worse than none.
     cm_s_per_px_frame: float | None = None
+    # Where to write the tracked poses as a DeepLabCut CSV. None = discard
+    # them, which is the old behaviour; the poses are computed either way.
+    pose_csv_out: Path | None = None
 
 
 class LiveInferencePipeline:
@@ -283,6 +286,8 @@ class LiveInferencePipeline:
             conf_threshold=config.conf_threshold,
             device=config.device,
             undetected_dir=config.undetected_dir,
+            pose_csv_out=config.pose_csv_out,
+            fps=config.fps_override or 30.0,
         )
         self.feature_engine = FeatureEngine(
             tracked_queue=self.tracked_queue,
@@ -345,6 +350,8 @@ class LiveInferencePipeline:
             conf_threshold=config.conf_threshold,
             device=config.device,
             undetected_dir=config.undetected_dir,
+            pose_csv_out=config.pose_csv_out,
+            fps=config.fps_override or 30.0,
         )
         self.seq_classifier = SequenceClassifier(
             tracked_queue=self.tracked_queue,
