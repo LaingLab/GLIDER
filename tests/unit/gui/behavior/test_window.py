@@ -613,3 +613,43 @@ def test_annotate_still_reports_genuinely_missing_pose_data(qtbot, tmp_path, mon
     assert len(warnings_shown) == 1
     assert "session01.mp4" in warnings_shown[0]
     assert "Batch Pose Tracking" in warnings_shown[0]
+
+
+def test_cohort_mode_sends_only_the_cohort_file(qtbot, tmp_path):
+    """One pooled cut-off, not per-video percentiles."""
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._speed_group.setChecked(True)
+    tab._cohort_path = tmp_path / "cohort_speed.json"
+    tab._speed_mode.setCurrentIndex(tab._speed_mode.findData("cohort"))
+
+    opts = tab._speed_opts()
+    assert opts["cohort_thresholds"] == tmp_path / "cohort_speed.json"
+    assert "freeze_pct" not in opts
+    assert "freeze_cm_s" not in opts
+
+
+def test_cohort_mode_still_sends_the_calibration(qtbot, tmp_path):
+    """Cohort cut-offs in cm/s need this video's scale to become pixels."""
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._speed_group.setChecked(True)
+    tab._calibration_master = tmp_path / "pose_calibration.json"
+    tab._speed_mode.setCurrentIndex(tab._speed_mode.findData("cohort"))
+    assert tab._speed_opts()["calibration_master"] == tmp_path / "pose_calibration.json"
+
+
+def test_switching_to_cohort_hides_the_other_modes_fields(qtbot):
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._speed_group.setChecked(True)
+    tab.show()
+    tab._speed_mode.setCurrentIndex(tab._speed_mode.findData("cohort"))
+    assert tab._freeze_cm_s.isVisible() is False
+    assert tab._freeze_pct.isVisible() is False

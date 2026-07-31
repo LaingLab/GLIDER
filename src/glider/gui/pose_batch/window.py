@@ -218,7 +218,17 @@ class PoseBatchWindow(QMainWindow):
         self._names_field = QLineEdit()
         self._names_field.setPlaceholderText("nose, l_ear, r_ear, …")
         self._names_field.textChanged.connect(self._validate)
-        form.addRow("Bodyparts:", self._names_field)
+        names_row = QHBoxLayout()
+        names_row.addWidget(self._names_field, stretch=1)
+        edit_schema = QPushButton("Edit…")
+        edit_schema.setToolTip(
+            "Arrange the bodyparts on a figure instead of typing the order, and "
+            "save the layout for reuse. These names are baked into every CSV "
+            "this batch writes, so a wrong order propagates downstream."
+        )
+        edit_schema.clicked.connect(self._edit_keypoint_schema)
+        names_row.addWidget(edit_schema)
+        form.addRow("Bodyparts:", names_row)
 
         self._names_status = QLabel("Select a model to load its keypoints.")
         self._names_status.setWordWrap(True)
@@ -781,6 +791,32 @@ class PoseBatchWindow(QMainWindow):
         self._names_field.setText(", ".join(names))
         self._names_status.setText(source)
         self._validate()
+
+    def _edit_keypoint_schema(self) -> None:
+        """Arrange the bodyparts on a figure, then write their order back.
+
+        This is where the names are first chosen and baked into every CSV the
+        batch writes, so getting the order right here stops a wrong schema
+        propagating into every downstream artifact.
+        """
+        from glider.analysis.behavior.keypoint_schema import Keypoint, KeypointSchema
+        from glider.gui.behavior.keypoint_editor import KeypointEditorDialog
+
+        current = self._current_names()
+        if current:
+            step = 1.0 / (len(current) + 1)
+            schema = KeypointSchema(
+                [Keypoint(n, 0.5, step * (i + 1)) for i, n in enumerate(current)]
+            )
+        else:
+            schema = KeypointSchema.default_mouse()
+
+        dialog = KeypointEditorDialog(schema, parent=self)
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self._names_field.setText(", ".join(dialog.names()))
+        finally:
+            dialog.deleteLater()
 
     def _settings_key(self) -> str | None:
         if self._model_path is None:
