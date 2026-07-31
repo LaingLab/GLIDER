@@ -57,8 +57,13 @@ def test_feature_engine_emits_freezing_on_still_keypoints():
         item = cq.get()
         if item is END_OF_STREAM:
             continue
-        assert len(item) == 4, "speed axis on → 4-tuple (frame, cols, row, speed)"
+        assert (
+            len(item) == 5
+        ), "speed axis on → 5-tuple (frame, cols, row, speed label, speed px/frame)"
         speed_labels.append(item[3])
+        # The numeric speed rides alongside the label so the ethogram can
+        # report a value on the frames the label leaves blank.
+        assert isinstance(item[4], float)
     assert "freezing" in speed_labels
 
 
@@ -82,19 +87,84 @@ def test_behavior_classifier_two_axis_ethogram_and_arbitration(tmp_path):
         speed_axis=True,
     )
     clf.start()
-    cq.put((0, ["a__mean"], np.array([1.0]), ""))  # posture only
-    cq.put((1, ["a__mean"], np.array([1.0]), "freezing"))  # speed overrides
-    cq.put((2, ["a__mean"], np.array([1.0]), "darting"))
+    cq.put((0, ["a__mean"], np.array([1.0]), "", 0.5))  # posture only
+    cq.put((1, ["a__mean"], np.array([1.0]), "freezing", 0.1))  # speed overrides
+    cq.put((2, ["a__mean"], np.array([1.0]), "darting", 9.0))
     cq.put(END_OF_STREAM)
     clf.join(timeout=5)
 
     rows = list(csv.reader(eth.open(newline="")))
-    assert rows[0] == ["frame", "behavior", "speed"]
-    assert rows[1] == ["0", "groom", ""]
-    assert rows[2] == ["1", "groom", "freezing"]
-    assert rows[3] == ["2", "groom", "darting"]
+    assert rows[0] == ["frame", "behavior", "speed", "speed_px_frame", "speed_cm_s"]
+    # No pixel scale was supplied, so cm/s stays blank rather than guessed --
+    # but the raw px/frame is always recorded.
+    assert rows[1] == ["0", "groom", "", "0.5000", ""]
+    assert rows[2] == ["1", "groom", "freezing", "0.1000", ""]
+    assert rows[3] == ["2", "groom", "darting", "9.0000", ""]
     # Display label arbitrates: speed wins on the last frame.
     assert latest.get()[1] == "darting"
+
+
+def test_ethogram_reports_cm_per_second_when_a_scale_is_known(tmp_path):
+    """The whole point of loading a calibration: real units per frame."""
+
+    class _StubModel:
+        feature_names = ["a__mean"]
+        classes = ["groom"]
+
+        def predict_one(self, row, confidence_threshold=0.0, class_thresholds=None):
+            return "groom"
+
+    eth = tmp_path / "etho.csv"
+    cq: queue.Queue = queue.Queue()
+    clf = BehaviorClassifier(
+        classifier_queue=cq,
+        latest_label=LatestLabel(),
+        stop_event=threading.Event(),
+        model=_StubModel(),
+        ethogram_path=eth,
+        speed_axis=True,
+        # 30 fps at 3 px/mm -> 1 px/frame is 30 px/s = 10 mm/s = 1 cm/s.
+        cm_s_per_px_frame=30.0 / 3.0 / 10.0,
+    )
+    clf.start()
+    cq.put((0, ["a__mean"], np.array([1.0]), "", 1.0))
+    cq.put((1, ["a__mean"], np.array([1.0]), "darting", 4.0))
+    cq.put(END_OF_STREAM)
+    clf.join(timeout=5)
+
+    rows = list(csv.reader(eth.open(newline="")))
+    assert rows[1][-1] == "1.0000"
+    assert rows[2][-1] == "4.0000"
+
+
+def test_a_dropout_frame_reads_as_missing_not_zero(tmp_path):
+    """NaN speed must not become a real 0.0 in the CSV."""
+
+    class _StubModel:
+        feature_names = ["a__mean"]
+        classes = ["groom"]
+
+        def predict_one(self, row, confidence_threshold=0.0, class_thresholds=None):
+            return "groom"
+
+    eth = tmp_path / "etho.csv"
+    cq: queue.Queue = queue.Queue()
+    clf = BehaviorClassifier(
+        classifier_queue=cq,
+        latest_label=LatestLabel(),
+        stop_event=threading.Event(),
+        model=_StubModel(),
+        ethogram_path=eth,
+        speed_axis=True,
+        cm_s_per_px_frame=1.0,
+    )
+    clf.start()
+    cq.put((0, ["a__mean"], np.array([1.0]), "", float("nan")))
+    cq.put(END_OF_STREAM)
+    clf.join(timeout=5)
+
+    rows = list(csv.reader(eth.open(newline="")))
+    assert rows[1] == ["0", "groom", "", "", ""]
 
 
 def test_behavior_classifier_stays_single_axis_without_speed(tmp_path):

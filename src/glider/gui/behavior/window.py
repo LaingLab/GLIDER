@@ -648,11 +648,29 @@ class ApplyTab(QWidget):
         keypoints_row = QHBoxLayout()
         keypoints_row.addWidget(QLabel("Keypoint names:"))
         keypoints_row.addWidget(self._keypoints_edit, 1)
+        edit_kp = QPushButton("Edit…")
+        edit_kp.setToolTip(
+            "Arrange the keypoints on a figure instead of typing the order, "
+            "and save the layout for reuse."
+        )
+        edit_kp.clicked.connect(self._edit_keypoint_schema)
+        keypoints_row.addWidget(edit_kp)
         layout.addLayout(keypoints_row)
 
         layout.addLayout(self._build_cadence_row())
 
         layout.addWidget(self._build_speed_group())
+
+        # Encoding an annotated MP4 costs more wall-clock than the inference
+        # itself on a long recording, and it is a spot-checking aid rather than
+        # an analysis artifact -- so it is off unless asked for.
+        self._render_video = QCheckBox("Also render an annotated video (slow)")
+        self._render_video.setChecked(False)
+        self._render_video.setToolTip(
+            "Writes annotated.mp4 beside the ethogram. Useful for checking a "
+            "single video; a large cost per video across a batch."
+        )
+        layout.addWidget(self._render_video)
 
         self._output_label = QLabel("Output folder: (none)")
         output_btn = QPushButton("Choose output folder...")
@@ -731,6 +749,27 @@ class ApplyTab(QWidget):
         self._progress.setVisible(True)
         self._keypoint_names = keypoint_names
         self._run_next()
+
+    def _edit_keypoint_schema(self) -> None:
+        """Arrange the schema on a figure, then write its order into the field."""
+        from glider.analysis.behavior.keypoint_schema import Keypoint, KeypointSchema
+        from glider.gui.behavior.keypoint_editor import KeypointEditorDialog
+
+        typed = [n.strip() for n in self._keypoints_edit.text().split(",") if n.strip()]
+        if typed:
+            # Seed from what is already in the field so the editor opens on the
+            # user's actual schema, spread down the figure to be draggable.
+            step = 1.0 / (len(typed) + 1)
+            schema = KeypointSchema([Keypoint(n, 0.5, step * (i + 1)) for i, n in enumerate(typed)])
+        else:
+            schema = KeypointSchema.default_mouse()
+
+        dialog = KeypointEditorDialog(schema, parent=self)
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self._keypoints_edit.setText(",".join(dialog.names()))
+        finally:
+            dialog.deleteLater()
 
     def _keypoint_warning(self, keypoint_names) -> str | None:
         """What the bundle says is wrong with these names, if anything.
@@ -846,6 +885,7 @@ class ApplyTab(QWidget):
         self._freeze_cm_s.setSuffix(" cm/s")
         self._freeze_cm_s.setValue(1.0)
         form.addRow("Freezing below:", self._freeze_cm_s)
+        self._absolute_rows = [form.rowCount() - 1]
 
         self._dart_cm_s = QDoubleSpinBox()
         self._dart_cm_s.setRange(0.0, 10000.0)
@@ -853,6 +893,7 @@ class ApplyTab(QWidget):
         self._dart_cm_s.setSuffix(" cm/s")
         self._dart_cm_s.setValue(15.0)
         form.addRow("Darting above:", self._dart_cm_s)
+        self._absolute_rows.append(form.rowCount() - 1)
 
         row = QHBoxLayout()
         self._calibration_label = QLabel("(none)")
@@ -863,6 +904,11 @@ class ApplyTab(QWidget):
         row.addWidget(cal_btn)
         self._calibration_row = row
         form.addRow("Calibration file:", row)
+        self._calibration_hint = QLabel(
+            "Used for cm/s thresholds, and for the ethogram's speed_cm_s " "column in either mode."
+        )
+        self._calibration_hint.setWordWrap(True)
+        form.addRow("", self._calibration_hint)
 
         # Percentiles of the video's own causal-speed distribution. Defaults
         # match the offline labeller so live and offline agree by default.
@@ -872,6 +918,7 @@ class ApplyTab(QWidget):
         self._freeze_pct.setSuffix(" %")
         self._freeze_pct.setValue(10.0)
         form.addRow("Freezing percentile:", self._freeze_pct)
+        self._percentile_rows = [form.rowCount() - 1]
 
         self._dart_pct = QDoubleSpinBox()
         self._dart_pct.setRange(0.0, 100.0)
@@ -879,6 +926,7 @@ class ApplyTab(QWidget):
         self._dart_pct.setSuffix(" %")
         self._dart_pct.setValue(99.5)
         form.addRow("Darting percentile:", self._dart_pct)
+        self._percentile_rows.append(form.rowCount() - 1)
 
         # Seconds, not frames: a bout minimum is an ethological duration, and a
         # frame count means something different at 30 vs 60 fps.
@@ -906,10 +954,12 @@ class ApplyTab(QWidget):
     def _on_speed_mode_changed(self, *_args) -> None:
         """Show only the fields the chosen mode actually uses."""
         absolute = self._speed_mode_value() == "absolute"
-        for row in (1, 2, 3):  # cm/s pair + calibration file
+        for row in self._absolute_rows:
             self._speed_form.setRowVisible(row, absolute)
-        for row in (4, 5):  # percentile pair
+        for row in self._percentile_rows:
             self._speed_form.setRowVisible(row, not absolute)
+        # The calibration rows stay visible in both modes: percentile
+        # thresholds do not need a scale, but speed_cm_s does.
 
     def _on_choose_calibration(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -935,8 +985,11 @@ class ApplyTab(QWidget):
             opts = {
                 "freeze_cm_s": self._freeze_cm_s.value(),
                 "dart_cm_s": self._dart_cm_s.value(),
-                "calibration_master": self._calibration_master,
             }
+        # Sent in BOTH modes. Percentile thresholds need no scale, but the
+        # ethogram's speed_cm_s column does, and wanting real units in the
+        # output is independent of how the cut-offs were chosen.
+        opts["calibration_master"] = self._calibration_master
         opts["freeze_min_s"] = self._freeze_min_s.value()
         opts["dart_min_s"] = self._dart_min_s.value()
         return opts

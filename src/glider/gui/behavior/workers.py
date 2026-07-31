@@ -92,10 +92,14 @@ class ApplyWorker(_BaseWorker):
         device=None,
         speed_opts=None,
         predict_every=None,
+        write_annotated=False,
     ):
         super().__init__()
         self._args = (video, model_path, yolo_path, keypoint_names, output_dir, device)
         self._speed_opts = dict(speed_opts or {})
+        # Off by default: encoding the annotated MP4 costs more than the
+        # inference on a long recording, and it is a spot-check aid.
+        self._write_annotated = bool(write_annotated)
         # None = don't pass it at all, so the pipeline default stays the single
         # source of truth for the cadence.
         self._predict_every = predict_every
@@ -113,6 +117,7 @@ class ApplyWorker(_BaseWorker):
                 keypoint_names=names,
                 output_dir=output_dir,
                 device=device,
+                write_annotated=self._write_annotated,
                 **opts,
             )
             self.finished.emit(result)

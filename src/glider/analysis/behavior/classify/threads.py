@@ -365,6 +365,11 @@ class FeatureEngine(threading.Thread):
                 dart_min_frames=dart_min_frames,
             )
             self._speed_labels: deque[str] = deque(maxlen=self._lag + 1)
+            # The numeric speed behind each label, carried alongside it so the
+            # ethogram can report a real per-frame value. The label alone is
+            # blank whenever the animal sits between the thresholds, which is
+            # most of a recording — a number is what an analysis actually wants.
+            self._speed_values: deque[float] = deque(maxlen=self._lag + 1)
 
     def run(self) -> None:
         try:
@@ -380,6 +385,7 @@ class FeatureEngine(threading.Thread):
                 if self._speed_axis:
                     spd = self._causal_speed.push(keypoints)
                     self._speed_labels.append(self._freeze_dart.push(spd))
+                    self._speed_values.append(float(spd))
 
                 # Compute per-frame features from the keypoint history.
                 feats = self._extractor.push(keypoints)
@@ -401,12 +407,10 @@ class FeatureEngine(threading.Thread):
                 if self._speed_axis:
                     # Speed label for that same middle frame = the oldest entry
                     # in the lag-sized buffer (once it has filled).
-                    speed_label = (
-                        self._speed_labels[0]
-                        if len(self._speed_labels) == self._speed_labels.maxlen
-                        else ""
-                    )
-                    out = (mid_idx, column_names, row, speed_label)
+                    filled = len(self._speed_labels) == self._speed_labels.maxlen
+                    speed_label = self._speed_labels[0] if filled else ""
+                    speed_px = self._speed_values[0] if filled else float("nan")
+                    out = (mid_idx, column_names, row, speed_label, speed_px)
                 else:
                     out = (mid_idx, column_names, row)
                 _put_or_drop(self.classifier_queue, out, self.stop_event)
@@ -446,8 +450,12 @@ class BehaviorClassifier(threading.Thread):
         class_thresholds: dict[str, float] | None = None,
         embedding_queue: queue.Queue | None = None,
         speed_axis: bool = False,
+        cm_s_per_px_frame: float | None = None,
     ):
         super().__init__(name="BehaviorClassifier", daemon=True)
+        # Set before anything can write the ethogram; None = no pixel scale
+        # was supplied, so speed_cm_s stays blank rather than guessed.
+        self.cm_s_per_px_frame = cm_s_per_px_frame
         self.classifier_queue = classifier_queue
         self.latest_label = latest_label
         self.stop_event = stop_event
@@ -468,8 +476,19 @@ class BehaviorClassifier(threading.Thread):
         # Two-axis output: when on, write a (posture, speed) ethogram and let
         # the speed axis win the displayed label.
         self.speed_axis = bool(speed_axis)
-        # Buffered (frame_idx, posture, speed) rows for the ethogram CSV.
-        self._ethogram: list[tuple[int, str, str]] = []
+        # Buffered (frame_idx, posture, speed label, speed px/frame) rows.
+        self._ethogram: list[tuple[int, str, str, float]] = []
+
+    def _to_cm_s(self, px_per_frame: float) -> float:
+        """Pixels/frame -> cm/s, or NaN when no pixel scale was supplied.
+
+        One precomputed factor rather than carrying fps and px_per_mm down
+        here separately; the caller knows both and neither varies per frame.
+        """
+        factor = getattr(self, "cm_s_per_px_frame", None)
+        if not factor:
+            return float("nan")
+        return float(px_per_frame) * float(factor)
 
     def run(self) -> None:
 
@@ -482,11 +501,14 @@ class BehaviorClassifier(threading.Thread):
                     continue
                 if item is END_OF_STREAM:
                     return
-                if len(item) == 4:
+                if len(item) == 5:
+                    frame_idx, column_names, row, speed_label, speed_px = item
+                elif len(item) == 4:
                     frame_idx, column_names, row, speed_label = item
+                    speed_px = float("nan")
                 else:
                     frame_idx, column_names, row = item
-                    speed_label = ""
+                    speed_label, speed_px = "", float("nan")
                 # Map the row into the model's expected column order.
                 # The FeatureEngine builds column_names in its own
                 # configured order; if it matches, this is a no-op.
@@ -513,7 +535,7 @@ class BehaviorClassifier(threading.Thread):
                     # falling behind never stalls predictions.
                     _put_or_drop(self.embedding_queue, (aligned, label), self.stop_event)
                 if self.ethogram_path is not None:
-                    self._ethogram.append((int(frame_idx), label, speed_label))
+                    self._ethogram.append((int(frame_idx), label, speed_label, speed_px))
         finally:
             if self.ethogram_path is not None and self._ethogram:
                 self._write_ethogram()
@@ -526,12 +548,15 @@ class BehaviorClassifier(threading.Thread):
             with self.ethogram_path.open("w", newline="") as f:
                 w = csv.writer(f)
                 if self.speed_axis:
-                    w.writerow(["frame", "behavior", "speed"])
-                    for fidx, lab, spd in self._ethogram:
-                        w.writerow([fidx, lab, spd])
+                    # speed         -- freezing/darting, blank in the neutral band
+                    # speed_px_frame-- always present, the raw measured signal
+                    # speed_cm_s    -- only when a pixel scale was supplied
+                    w.writerow(["frame", "behavior", "speed", "speed_px_frame", "speed_cm_s"])
+                    for fidx, lab, spd, px in self._ethogram:
+                        w.writerow([fidx, lab, spd, _fmt(px), _fmt(self._to_cm_s(px))])
                 else:
                     w.writerow(["frame", "behavior"])
-                    for fidx, lab, _spd in self._ethogram:
+                    for fidx, lab, _spd, _px in self._ethogram:
                         w.writerow([fidx, lab])
         except OSError:
             # Don't crash the pipeline on a save failure; the user will
@@ -746,6 +771,16 @@ class DisplayConsumer(threading.Thread):
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _fmt(value: float) -> str:
+    """CSV cell for a float: blank for NaN, so an unmeasured frame reads as
+    missing rather than as a real zero."""
+    import math
+
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    return f"{float(value):.4f}"
 
 
 def _put_or_drop(

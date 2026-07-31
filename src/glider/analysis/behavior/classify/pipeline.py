@@ -172,6 +172,10 @@ class LiveInferenceConfig:
     dart_threshold: float | None = None
     freeze_min_frames: int = 30
     dart_min_frames: int = 3
+    # Multiply a px/frame speed by this to get cm/s in the ethogram. None
+    # leaves speed_cm_s blank -- the scale is a calibration the operator may
+    # simply not have, and a guessed number in real units is worse than none.
+    cm_s_per_px_frame: float | None = None
 
 
 class LiveInferencePipeline:
@@ -307,6 +311,7 @@ class LiveInferencePipeline:
             smooth_window=config.smooth_window,
             embedding_queue=self.embedding_queue,
             speed_axis=(config.freeze_threshold is not None and config.dart_threshold is not None),
+            cm_s_per_px_frame=config.cm_s_per_px_frame,
         )
         self.display = DisplayConsumer(
             display_queue=self.display_queue,

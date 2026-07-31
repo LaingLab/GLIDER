@@ -71,13 +71,12 @@ def test_thresholds_are_entered_in_centimetres_not_pixels(qtbot):
     assert tab._dart_cm_s.suffix().strip() == "cm/s"
 
 
-def test_percentile_mode_sends_percentiles_and_no_calibration(qtbot, tmp_path):
+def test_percentile_mode_sends_percentiles_not_absolute_thresholds(qtbot, tmp_path):
     from glider.gui.behavior.window import ApplyTab
 
     tab = ApplyTab()
     qtbot.addWidget(tab)
     tab._speed_group.setChecked(True)
-    tab._calibration_master = tmp_path / "ignored.json"
     tab._speed_mode.setCurrentIndex(tab._speed_mode.findData("percentile"))
     tab._freeze_pct.setValue(5.0)
     tab._dart_pct.setValue(99.0)
@@ -85,9 +84,46 @@ def test_percentile_mode_sends_percentiles_and_no_calibration(qtbot, tmp_path):
     opts = tab._speed_opts()
     assert opts["freeze_pct"] == pytest.approx(5.0)
     assert opts["dart_pct"] == pytest.approx(99.0)
-    # Percentiles need no scale, so the calibration must not be sent.
-    assert "calibration_master" not in opts
     assert "freeze_cm_s" not in opts
+
+
+def test_the_calibration_is_sent_in_percentile_mode_too(qtbot, tmp_path):
+    """Percentile thresholds need no scale, but the ethogram's cm/s does."""
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._speed_group.setChecked(True)
+    tab._calibration_master = tmp_path / "pose_calibration.json"
+    for mode in ("absolute", "percentile"):
+        tab._speed_mode.setCurrentIndex(tab._speed_mode.findData(mode))
+        opts = tab._speed_opts()
+        assert opts["calibration_master"] == tmp_path / "pose_calibration.json", mode
+
+
+def test_the_annotated_video_is_off_by_default(qtbot):
+    """Encoding it costs more than the inference on a long recording."""
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    assert tab._render_video.isChecked() is False
+
+
+def test_the_video_toggle_reaches_the_worker(qtbot, tmp_path, monkeypatch):
+    from glider.gui.behavior import workers
+
+    seen = {}
+    monkeypatch.setattr(workers, "classify", lambda video, **kw: seen.update(kw) or "r")
+    workers.ApplyWorker(
+        video=tmp_path / "v.mp4",
+        model_path=tmp_path / "m.pkl",
+        yolo_path=tmp_path / "y.pt",
+        keypoint_names=["a"],
+        output_dir=tmp_path / "out",
+        write_annotated=True,
+    ).run()
+    assert seen["write_annotated"] is True
 
 
 def test_minimum_durations_are_sent_in_seconds_in_both_modes(qtbot):
@@ -552,7 +588,7 @@ def test_annotate_accepts_batch_pose_tracking_output(qtbot, tmp_path, monkeypatc
     captured, warnings_shown = _launch_capturing_sessions(qtbot, tmp_path, monkeypatch)
 
     assert warnings_shown == []
-    (pose_csv, video) = captured["sessions"][0]
+    pose_csv, video = captured["sessions"][0]
     assert pose_csv.name == "session01DLC_exp-6.csv"
     assert video.name == "session01.mp4"
 
