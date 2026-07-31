@@ -16,6 +16,7 @@ is the right behaviour for live video.
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import time
@@ -35,6 +36,8 @@ from glider.analysis.behavior.classify.overlay import (
 from glider.analysis.behavior.classify.pose_extract import extract_keypoints
 from glider.analysis.behavior.features import FeatureSpec
 from glider.analysis.behavior.model import BehaviorModel
+
+logger = logging.getLogger(__name__)
 
 # Sentinel on every queue meaning "no more items will come".
 END_OF_STREAM = None
@@ -180,8 +183,16 @@ class PoseTracker(threading.Thread):
         conf_threshold: float = 0.25,
         device: str | None = None,
         undetected_dir: Path | None = None,
+        pose_csv_out: Path | None = None,
+        fps: float = 30.0,
     ):
         super().__init__(name="PoseTracker", daemon=True)
+        # Poses are computed anyway; writing them costs one CSV and saves the
+        # whole inference pass next time they are wanted -- for percentile or
+        # cohort thresholds, or any downstream analysis.
+        self.pose_csv_out = Path(pose_csv_out) if pose_csv_out else None
+        self.fps = float(fps)
+        self._pose_rows: list[tuple[int, np.ndarray, np.ndarray]] = []
         self.raw_queue = raw_queue
         self.tracked_queue = tracked_queue
         self.display_queue = display_queue
@@ -247,6 +258,11 @@ class PoseTracker(threading.Thread):
                 if self.undetected_dir is not None and bool(np.isnan(keypoints).all()):
                     self._save_undetected(frame_idx, frame_bgr)
 
+                if self.pose_csv_out is not None:
+                    # Recorded before the queues, so a frame dropped under
+                    # back-pressure downstream is still in the pose record.
+                    self._pose_rows.append((frame_idx, keypoints, confidences))
+
                 payload = (frame_idx, frame_bgr, keypoints, confidences)
                 # Push to both downstream queues; ignore Full timeouts
                 # because we'd rather drop a frame than block the YOLO
@@ -254,7 +270,42 @@ class PoseTracker(threading.Thread):
                 _put_or_drop(self.tracked_queue, payload, self.stop_event)
                 _put_or_drop(self.display_queue, payload, self.stop_event)
         finally:
+            self._write_pose_csv()
             self._propagate_eos()
+
+    def _write_pose_csv(self) -> None:
+        """Write the tracked poses as a DeepLabCut CSV, if one was asked for.
+
+        Frames the producer dropped leave gaps in the index, so the array is
+        laid out over the full range and missing frames stay NaN — DLC CSVs are
+        positional, and silently compacting them would shift every timestamp.
+        """
+        if self.pose_csv_out is None or not self._pose_rows:
+            return
+        try:
+            from glider.vision.pose.core import PoseData
+            from glider.vision.pose.dlc import to_dlc_csv
+
+            n_frames = max(idx for idx, _, _ in self._pose_rows) + 1
+            k = len(self.keypoint_names)
+            xy = np.full((n_frames, k, 2), np.nan)
+            conf = np.zeros((n_frames, k))
+            for idx, keypoints, confidences in self._pose_rows:
+                xy[idx] = keypoints
+                conf[idx] = confidences
+
+            self.pose_csv_out.parent.mkdir(parents=True, exist_ok=True)
+            to_dlc_csv(
+                PoseData(
+                    xy=xy,
+                    confidence=conf,
+                    keypoint_names=self.keypoint_names,
+                    fps=self.fps,
+                ),
+                self.pose_csv_out,
+            )
+        except Exception:  # noqa: BLE001 - a failed save must not fail the run
+            logger.warning("could not write pose CSV to %s", self.pose_csv_out, exc_info=True)
 
     def _save_undetected(self, frame_idx: int, frame_bgr: np.ndarray) -> None:
         """Write a frame with no confident detection to the undetected dir."""

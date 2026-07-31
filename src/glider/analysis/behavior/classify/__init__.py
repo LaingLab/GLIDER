@@ -294,6 +294,7 @@ def classify(
     px_per_mm=None,
     cohort_thresholds=None,
     write_annotated=False,
+    write_pose_csv=True,
     **opts,
 ) -> EthogramResult:
     """Run the headless apply pipeline over a recorded video and write outputs.
@@ -326,6 +327,12 @@ def classify(
     # artifact -- so it is opt-in.
     output_video = output_dir / "annotated.mp4" if write_annotated else None
     ethogram_csv = output_dir / "ethogram_raw.csv"
+    # Named the way Batch Pose Tracking names its output, so the same
+    # discovery and cohort tooling recognises it. The poses are computed
+    # regardless; keeping them saves the whole pass next time.
+    pose_csv_out = (
+        output_dir / f"{Path(video).stem}DLC_{Path(yolo_path).stem}.csv" if write_pose_csv else None
+    )
 
     # A pixel scale is worth having even when the thresholds did not need one:
     # percentile mode derives its cut-offs from the video's own distribution,
@@ -369,6 +376,7 @@ def classify(
         display=False,
         output_video=output_video,
         ethogram_csv=ethogram_csv,
+        pose_csv_out=pose_csv_out,
         device=device,
         **opts,
     )
