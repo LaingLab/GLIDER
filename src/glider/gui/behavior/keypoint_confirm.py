@@ -27,6 +27,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from glider.gui.styles import colors
+
 logger = logging.getLogger(__name__)
 
 # Okabe-Ito, so adjacent keypoints stay distinguishable for colourblind users.
@@ -152,7 +154,7 @@ class KeypointConfirmDialog(QDialog):
         if warning:
             self._warning = QLabel(f"⚠ {warning}")
             self._warning.setWordWrap(True)
-            self._warning.setStyleSheet("color: #c0392b; font-weight: bold;")
+            self._warning.setStyleSheet(f"color: {colors.ERROR}; font-weight: bold;")
             layout.addWidget(self._warning)
 
         self._image = QLabel("Loading a frame and running the pose model…")
