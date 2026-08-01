@@ -126,3 +126,37 @@ class ApplyWorker(_BaseWorker):
             self.finished.emit(result)
         except Exception as e:
             self.failed.emit(str(e))
+
+
+class CohortSpeedWorker(_BaseWorker):
+    """Pool a cohort's pose CSVs into one set of freeze/dart thresholds.
+
+    On a worker thread because it is not fast: a session is ~5 s of per-frame
+    Python, so a 22-video cohort is minutes. Run on the UI thread it stops Qt
+    pumping events, Windows paints the window "Not Responding", and the
+    operator reasonably concludes it crashed and kills it before it saves.
+    """
+
+    def __init__(self, pose_csvs, output, *, freeze_pct, dart_pct, calibration_master=None):
+        super().__init__()
+        self._pose_csvs = list(pose_csvs)
+        self._output = output
+        self._freeze_pct = float(freeze_pct)
+        self._dart_pct = float(dart_pct)
+        self._calibration_master = calibration_master
+
+    def run(self) -> None:
+        try:
+            from glider.analysis.behavior.cohort_speed import compute_cohort_thresholds
+
+            thresholds = compute_cohort_thresholds(
+                self._pose_csvs,
+                freeze_pct=self._freeze_pct,
+                dart_pct=self._dart_pct,
+                calibration_master=self._calibration_master,
+                progress=lambda done, total, _name: self.progress.emit(done, total),
+            )
+            thresholds.save(self._output)
+            self.finished.emit(thresholds)
+        except Exception as e:
+            self.failed.emit(str(e))
