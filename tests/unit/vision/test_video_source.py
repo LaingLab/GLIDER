@@ -4,7 +4,17 @@ from pathlib import Path
 
 import numpy as np
 
-from glider.vision.video_source import VideoFileSource
+from glider.vision.video_source import VideoFileSource, video_resolution
+
+
+def test_video_resolution_reads_the_header(synthetic_clip: Path):
+    assert video_resolution(synthetic_clip) == (64, 48)
+
+
+def test_video_resolution_is_none_when_unreadable(tmp_path: Path):
+    """None is meaningful: callers size an arena with it, and a wrong size is
+    worse than an absent one."""
+    assert video_resolution(tmp_path / "nope.avi") is None
 
 
 def test_load_reports_metadata(synthetic_clip: Path):

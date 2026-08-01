@@ -64,6 +64,19 @@ def write_pose_meta(pose: PoseData, csv_path: str | Path) -> Path:
         "keypoint_names": list(pose.keypoint_names),
         "n_frames": int(pose.n_frames),
     }
+    # Frame size, when the producer knew it. Pose coordinates are pixels, so
+    # anything drawing them without the video -- the analysis viewer -- needs
+    # the canvas they were measured on. Omitted rather than guessed when
+    # unknown: inferring it from the coordinate range would silently shrink
+    # the arena to whatever the animal happened to visit.
+    resolution = pose.metadata.get("resolution") if pose.metadata else None
+    if resolution:
+        try:
+            width, height = (int(v) for v in resolution)
+            if width > 0 and height > 0:
+                payload["resolution"] = [width, height]
+        except (TypeError, ValueError):
+            pass
     try:
         path.write_text(json.dumps(payload, indent=2) + "\n")
     except OSError as e:  # pragma: no cover - depends on filesystem state
@@ -87,6 +100,48 @@ def read_pose_meta(csv_path: str | Path) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def resolution_for_csv(csv_path: str | Path) -> tuple[int, int] | None:
+    """``(width, height)`` recorded beside a pose CSV, or None if unknown.
+
+    None is meaningful: a viewer drawing keypoints without the video must say
+    it cannot size the arena rather than invent one.
+    """
+    data = read_pose_meta(csv_path)
+    if not data:
+        return None
+    value = data.get("resolution")
+    try:
+        width, height = (int(v) for v in value)
+    except (TypeError, ValueError):
+        return None
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def backfill_resolution(csv_path: str | Path, resolution) -> bool:
+    """Add a resolution to an existing sidecar. True if it was written.
+
+    Sidecars written before the field existed are otherwise unusable by the
+    analysis viewer, and re-running inference to recover a number the video
+    already knows would be absurd.
+    """
+    path = meta_path(csv_path)
+    data = read_pose_meta(csv_path)
+    if data is None:
+        return False
+    try:
+        width, height = (int(v) for v in resolution)
+    except (TypeError, ValueError):
+        return False
+    if width <= 0 or height <= 0:
+        return False
+    data["resolution"] = [width, height]
+    try:
+        path.write_text(json.dumps(data, indent=2) + "\n")
+    except OSError:
+        return False
+    return True
 
 
 def fps_for_csv(csv_path: str | Path) -> float | None:

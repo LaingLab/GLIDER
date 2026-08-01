@@ -232,6 +232,7 @@ def infer_video(
         source = f"yolo_{model_path.stem}"
 
     from glider.vision.pose.device import gpu_info, resolve_device
+    from glider.vision.video_source import video_resolution
 
     resolved_device = resolve_device(device, require_gpu=require_gpu)
 
@@ -336,5 +337,8 @@ def infer_video(
             "video_path": str(video_path),
             "conf_threshold": conf,
             "device": resolved_device,
+            # Pose coordinates are pixels; a viewer without the video needs
+            # the canvas they were measured on to place them.
+            "resolution": video_resolution(video_path),
         },
     )

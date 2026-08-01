@@ -22,6 +22,23 @@ logger = logging.getLogger(__name__)
 _DEFAULT_FPS = 30.0
 
 
+def video_resolution(path: Path | str) -> tuple[int, int] | None:
+    """``(width, height)`` from a video's header, or None if unreadable.
+
+    A header read, so it costs nothing next to decoding. None is meaningful
+    and must not be papered over with a default: callers use this to size an
+    arena, and a wrong size is worse than an absent one.
+    """
+    source = VideoFileSource()
+    if not source.load(path):
+        return None
+    try:
+        width, height = source.resolution
+    finally:
+        source.release()
+    return (width, height) if width > 0 and height > 0 else None
+
+
 class VideoFileSource:
     """Open a video file and read frames by index or sequentially."""
 

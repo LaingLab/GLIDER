@@ -1019,6 +1019,20 @@ class MainWindow(QMainWindow):
             )
         tools_menu.addAction(pose_batch_action)
 
+        review_action = QAction("&Session Review…", self)
+        review_action.setStatusTip(
+            "Scrub an analysed session, select a window, and read what is in it"
+        )
+        review_action.triggered.connect(self._open_session_review)
+        # Shares the behavior extra's probe: it reads the same outputs.
+        if not behavior_available():
+            review_action.setEnabled(False)
+            review_action.setToolTip(
+                "Install the behavior extra: pip install glider[behavior] "
+                f"(missing: {', '.join(missing_behavior_deps())})"
+            )
+        tools_menu.addAction(review_action)
+
         # GPU / device diagnostics. Always enabled — it's most useful precisely
         # when torch or a GPU is missing, and it reports that cleanly.
         gpu_check_action = QAction("&GPU / Device Check…", self)
@@ -1080,6 +1094,20 @@ class MainWindow(QMainWindow):
         self._pose_batch_window.show()
         self._pose_batch_window.raise_()
         self._pose_batch_window.activateWindow()
+
+    def _open_session_review(self) -> None:
+        """Open (or re-surface) the session review window.
+
+        Same lazy-import + keep-on-self pattern as the other tool windows, so
+        the pandas/pose imports stay out of GLIDER startup.
+        """
+        from glider.gui.behavior.analysis_window import AnalysisWindow
+
+        if getattr(self, "_session_review_window", None) is None:
+            self._session_review_window = AnalysisWindow(parent=None)
+        self._session_review_window.show()
+        self._session_review_window.raise_()
+        self._session_review_window.activateWindow()
 
     def _setup_toolbar(self) -> None:
         """Set up the toolbar."""
