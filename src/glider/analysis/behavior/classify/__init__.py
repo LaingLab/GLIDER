@@ -295,6 +295,8 @@ def classify(
     cohort_thresholds=None,
     write_annotated=False,
     write_pose_csv=True,
+    pose_csv_in=None,
+    reuse_existing_poses=False,
     **opts,
 ) -> EthogramResult:
     """Run the headless apply pipeline over a recorded video and write outputs.
@@ -333,6 +335,19 @@ def classify(
     pose_csv_out = (
         output_dir / f"{Path(video).stem}DLC_{Path(yolo_path).stem}.csv" if write_pose_csv else None
     )
+
+    # Reuse poses rather than re-deriving them. Running the pose model again
+    # to reproduce numbers Batch Pose Tracking already wrote is the single
+    # biggest avoidable cost in an apply run. Resolved before anything
+    # expensive starts, so a missing file fails immediately.
+    if pose_csv_in is None and reuse_existing_poses:
+        pose_csv_in = find_pose_csv(video)
+    if pose_csv_in is not None:
+        pose_csv_in = Path(pose_csv_in)
+        if not pose_csv_in.exists():
+            raise ValueError(f"pose CSV not found: {pose_csv_in}")
+        # Nothing new was tracked, so there is nothing new to write.
+        pose_csv_out = None
 
     # A pixel scale is worth having even when the thresholds did not need one:
     # percentile mode derives its cut-offs from the video's own distribution,
@@ -377,6 +392,7 @@ def classify(
         output_video=output_video,
         ethogram_csv=ethogram_csv,
         pose_csv_out=pose_csv_out,
+        pose_csv_in=pose_csv_in,
         device=device,
         **opts,
     )

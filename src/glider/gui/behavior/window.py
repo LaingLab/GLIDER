@@ -665,6 +665,17 @@ class ApplyTab(QWidget):
         # Encoding an annotated MP4 costs more wall-clock than the inference
         # itself on a long recording, and it is a spot-checking aid rather than
         # an analysis artifact -- so it is off unless asked for.
+        # Checked by default: Batch Pose Tracking has usually already produced
+        # these, and re-deriving them is the biggest avoidable cost in a run.
+        self._reuse_poses = QCheckBox("Reuse pose CSVs found beside each video (skips tracking)")
+        self._reuse_poses.setChecked(True)
+        self._reuse_poses.setToolTip(
+            "Reads the poses Batch Pose Tracking already wrote instead of "
+            "running the pose model again. Falls back to tracking for any "
+            "video without one."
+        )
+        layout.addWidget(self._reuse_poses)
+
         self._render_video = QCheckBox("Also render an annotated video (slow)")
         self._render_video.setChecked(False)
         self._render_video.setToolTip(

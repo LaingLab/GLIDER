@@ -335,6 +335,94 @@ class PoseTracker(threading.Thread):
 # ---------------------------------------------------------------------------
 
 
+class PoseReplay(threading.Thread):
+    """A :class:`PoseTracker` that reads poses from a CSV instead of running YOLO.
+
+    Batch Pose Tracking has usually already tracked these videos, and running
+    the pose model a second time to produce the same numbers is the single
+    most expensive thing the apply path does. This is a drop-in for the
+    tracker: same queues, same payload shape, so the feature engine, the
+    annotated video and the ethogram are all unaffected.
+
+    Frames still flow through ``raw_queue`` because the annotated video needs
+    them, and pairing is by frame index -- a pose CSV is positional, so row N
+    describes frame N. A frame with no row (the CSV is shorter, or the row is
+    all-NaN) is passed on with NaN keypoints, exactly as an undetected frame
+    would be.
+    """
+
+    def __init__(
+        self,
+        raw_queue: queue.Queue,
+        tracked_queue: queue.Queue,
+        display_queue: queue.Queue,
+        stop_event: threading.Event,
+        pose_csv: str | Path,
+        keypoint_names: list[str],
+    ):
+        super().__init__(name="PoseReplay", daemon=True)
+        self.raw_queue = raw_queue
+        self.tracked_queue = tracked_queue
+        self.display_queue = display_queue
+        self.stop_event = stop_event
+        self.pose_csv = Path(pose_csv)
+        self.keypoint_names = list(keypoint_names)
+        self.error: str | None = None
+        self.n_frames_without_pose = 0
+
+    def run(self) -> None:
+        try:
+            xy, conf = self._load()
+        except Exception as e:  # noqa: BLE001 - surfaced through self.error
+            self.error = f"could not read {self.pose_csv.name}: {e}"
+            self._propagate_eos()
+            return
+
+        n_rows = xy.shape[0]
+        k = len(self.keypoint_names)
+        blank = np.full((k, 2), np.nan)
+        blank_conf = np.zeros(k)
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    item = self.raw_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if item is END_OF_STREAM:
+                    return
+                frame_idx, frame_bgr = item
+                if 0 <= frame_idx < n_rows:
+                    keypoints, confidences = xy[frame_idx], conf[frame_idx]
+                else:
+                    # The CSV ran out before the video did.
+                    self.n_frames_without_pose += 1
+                    keypoints, confidences = blank, blank_conf
+                payload = (frame_idx, frame_bgr, keypoints, confidences)
+                _put_or_drop(self.tracked_queue, payload, self.stop_event)
+                _put_or_drop(self.display_queue, payload, self.stop_event)
+        finally:
+            self._propagate_eos()
+
+    def _load(self):
+        from glider.vision.pose.dlc import from_dlc_csv
+
+        pose = from_dlc_csv(self.pose_csv)
+        if len(pose.keypoint_names) != len(self.keypoint_names):
+            raise ValueError(
+                f"it has {len(pose.keypoint_names)} keypoints "
+                f"({', '.join(pose.keypoint_names)}) but {len(self.keypoint_names)} "
+                "names are configured; the features would not line up"
+            )
+        return pose.xy, pose.confidence
+
+    def _propagate_eos(self) -> None:
+        for q in (self.tracked_queue, self.display_queue):
+            try:
+                q.put(END_OF_STREAM, timeout=1.0)
+            except queue.Full:
+                pass
+
+
 class FeatureEngine(threading.Thread):
     """Per-frame features → sliding buffer → emit rolling row to classifier.
 

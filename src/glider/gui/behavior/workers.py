@@ -93,6 +93,7 @@ class ApplyWorker(_BaseWorker):
         speed_opts=None,
         predict_every=None,
         write_annotated=False,
+        reuse_existing_poses=False,
     ):
         super().__init__()
         self._args = (video, model_path, yolo_path, keypoint_names, output_dir, device)
@@ -100,6 +101,7 @@ class ApplyWorker(_BaseWorker):
         # Off by default: encoding the annotated MP4 costs more than the
         # inference on a long recording, and it is a spot-check aid.
         self._write_annotated = bool(write_annotated)
+        self._reuse_existing_poses = bool(reuse_existing_poses)
         # None = don't pass it at all, so the pipeline default stays the single
         # source of truth for the cadence.
         self._predict_every = predict_every
@@ -118,6 +120,7 @@ class ApplyWorker(_BaseWorker):
                 output_dir=output_dir,
                 device=device,
                 write_annotated=self._write_annotated,
+                reuse_existing_poses=self._reuse_existing_poses,
                 **opts,
             )
             self.finished.emit(result)
