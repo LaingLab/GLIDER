@@ -32,6 +32,7 @@ from glider.analysis.behavior.classify.threads import (
     DisplayConsumer,
     FeatureEngine,
     LatestLabel,
+    PoseReplay,
     PoseTracker,
     SequenceClassifier,
     VideoProducer,
@@ -179,6 +180,41 @@ class LiveInferenceConfig:
     # Where to write the tracked poses as a DeepLabCut CSV. None = discard
     # them, which is the old behaviour; the poses are computed either way.
     pose_csv_out: Path | None = None
+    # Read poses from this CSV instead of running the pose model. The single
+    # biggest cost in an apply run is re-deriving poses that Batch Pose
+    # Tracking already computed.
+    pose_csv_in: Path | None = None
+
+
+def _make_tracker(config, raw_queue, tracked_queue, display_queue, stop_event):
+    """PoseReplay when a pose CSV was supplied, else the YOLO PoseTracker.
+
+    Both present the same queues and payload shape, so nothing downstream --
+    features, annotated video, ethogram -- can tell which one ran.
+    """
+    if config.pose_csv_in:
+        return PoseReplay(
+            raw_queue=raw_queue,
+            tracked_queue=tracked_queue,
+            display_queue=display_queue,
+            stop_event=stop_event,
+            pose_csv=config.pose_csv_in,
+            keypoint_names=config.keypoint_names,
+        )
+    return PoseTracker(
+        raw_queue=raw_queue,
+        tracked_queue=tracked_queue,
+        display_queue=display_queue,
+        stop_event=stop_event,
+        yolo_model_path=config.yolo_model_path,
+        keypoint_names=config.keypoint_names,
+        conf_threshold=config.conf_threshold,
+        device=config.device,
+        undetected_dir=config.undetected_dir,
+        # Never re-write a CSV we just read from.
+        pose_csv_out=None if config.pose_csv_in else config.pose_csv_out,
+        fps=config.fps_override or 30.0,
+    )
 
 
 class LiveInferencePipeline:
@@ -276,18 +312,8 @@ class LiveInferencePipeline:
             realtime=config.realtime,
             fps_override=config.fps_override,
         )
-        self.tracker = PoseTracker(
-            raw_queue=self.raw_queue,
-            tracked_queue=self.tracked_queue,
-            display_queue=self.display_queue,
-            stop_event=self.stop_event,
-            yolo_model_path=config.yolo_model_path,
-            keypoint_names=config.keypoint_names,
-            conf_threshold=config.conf_threshold,
-            device=config.device,
-            undetected_dir=config.undetected_dir,
-            pose_csv_out=config.pose_csv_out,
-            fps=config.fps_override or 30.0,
+        self.tracker = _make_tracker(
+            config, self.raw_queue, self.tracked_queue, self.display_queue, self.stop_event
         )
         self.feature_engine = FeatureEngine(
             tracked_queue=self.tracked_queue,
@@ -340,18 +366,8 @@ class LiveInferencePipeline:
             realtime=config.realtime,
             fps_override=config.fps_override,
         )
-        self.tracker = PoseTracker(
-            raw_queue=self.raw_queue,
-            tracked_queue=self.tracked_queue,
-            display_queue=self.display_queue,
-            stop_event=self.stop_event,
-            yolo_model_path=config.yolo_model_path,
-            keypoint_names=config.keypoint_names,
-            conf_threshold=config.conf_threshold,
-            device=config.device,
-            undetected_dir=config.undetected_dir,
-            pose_csv_out=config.pose_csv_out,
-            fps=config.fps_override or 30.0,
+        self.tracker = _make_tracker(
+            config, self.raw_queue, self.tracked_queue, self.display_queue, self.stop_event
         )
         self.seq_classifier = SequenceClassifier(
             tracked_queue=self.tracked_queue,
