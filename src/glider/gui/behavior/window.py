@@ -614,6 +614,8 @@ class ApplyTab(QWidget):
         self._output_dir: Path | None = None
         self._calibration_master: Path | None = None
         self._cohort_path: Path | None = None
+        self._cohort_thread: QThread | None = None
+        self._cohort_worker = None
         self._apply_thread: QThread | None = None
         self._apply_worker = None
         # Videos process one at a time (ApplyWorker takes a single video);
@@ -1068,12 +1070,9 @@ class ApplyTab(QWidget):
 
         Reads existing CSVs rather than re-tracking: a cohort that has already
         been through Batch Pose Tracking should not pay for inference twice.
+        The pooling runs on a worker thread — it is minutes of work on a real
+        cohort, and a UI frozen that long is indistinguishable from a crash.
         """
-        from glider.analysis.behavior.cohort_speed import (
-            CohortSpeedError,
-            compute_cohort_thresholds,
-        )
-
         folder = QFileDialog.getExistingDirectory(self, "Folder of pose CSVs")
         if not folder:
             return
@@ -1096,19 +1095,47 @@ class ApplyTab(QWidget):
         )
         if not out:
             return
-        try:
-            thresholds = compute_cohort_thresholds(
-                csvs,
-                freeze_pct=self._freeze_pct.value(),
-                dart_pct=self._dart_pct.value(),
-                calibration_master=self._calibration_master,
-            )
-            thresholds.save(out)
-        except (CohortSpeedError, OSError) as e:
-            QMessageBox.critical(self, "Cohort thresholds", str(e))
-            return
 
-        self._cohort_path = Path(out)
+        from glider.gui.behavior.workers import CohortSpeedWorker
+
+        self._results.append(
+            f"Pooling speed from {len(csvs)} session(s)… this takes a minute or two."
+        )
+        self._progress.setVisible(True)
+        self._progress.setRange(0, len(csvs))
+        self._progress.setValue(0)
+        self._run_btn.setEnabled(False)
+
+        self._cohort_thread = QThread()
+        self._cohort_worker = CohortSpeedWorker(
+            csvs,
+            out,
+            freeze_pct=self._freeze_pct.value(),
+            dart_pct=self._dart_pct.value(),
+            calibration_master=self._calibration_master,
+        )
+        self._cohort_worker.moveToThread(self._cohort_thread)
+        self._cohort_thread.started.connect(self._cohort_worker.run)
+        self._cohort_worker.progress.connect(lambda done, _total: self._progress.setValue(done))
+        self._cohort_worker.finished.connect(
+            lambda thresholds, path=out: self._on_cohort_done(thresholds, path)
+        )
+        self._cohort_worker.failed.connect(self._on_cohort_failed)
+        # The thread retires itself rather than being parented to this widget:
+        # closing the tab mid-pool would otherwise destroy a running QThread.
+        self._cohort_worker.finished.connect(self._cohort_thread.quit)
+        self._cohort_worker.failed.connect(self._cohort_thread.quit)
+        self._cohort_thread.finished.connect(self._cohort_worker.deleteLater)
+        self._cohort_thread.finished.connect(self._cohort_thread.deleteLater)
+        self._cohort_thread.start()
+
+    def _end_cohort_run(self) -> None:
+        self._progress.setVisible(False)
+        self._run_btn.setEnabled(True)
+
+    def _on_cohort_done(self, thresholds, path) -> None:
+        self._end_cohort_run()
+        self._cohort_path = Path(path)
         self._cohort_label.setText(str(self._cohort_path))
         note = (
             ""
@@ -1116,14 +1143,19 @@ class ApplyTab(QWidget):
             else "\n\nNo calibration covered these sessions, so the thresholds are "
             "in px/frame. That is only valid if every video shares one rig geometry."
         )
-        QMessageBox.information(
-            self,
-            "Cohort thresholds",
+        summary = (
             f"Pooled {thresholds.n_samples:,} samples from "
             f"{thresholds.n_sessions} session(s).\n\n"
             f"freezing below {thresholds.freeze:.3f} {thresholds.unit}\n"
-            f"darting above {thresholds.dart:.3f} {thresholds.unit}{note}",
+            f"darting above {thresholds.dart:.3f} {thresholds.unit}{note}"
         )
+        self._results.append(summary.replace("\n", " "))
+        QMessageBox.information(self, "Cohort thresholds", summary)
+
+    def _on_cohort_failed(self, message: str) -> None:
+        self._end_cohort_run()
+        self._results.append(f"Cohort thresholds failed: {message}")
+        QMessageBox.critical(self, "Cohort thresholds", message)
 
     def _speed_mode_value(self) -> str:
         return self._speed_mode.currentData() or "absolute"

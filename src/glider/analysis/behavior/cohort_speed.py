@@ -72,6 +72,19 @@ def video_for_pose_csv(pose_csv: Path | str) -> Path | None:
     return None
 
 
+def _causal_speeds(pose) -> np.ndarray:
+    """Causal per-frame speed in px/frame, dropouts and frame 0 removed.
+
+    Frame 0 is 0 by construction (no predecessor) and would drag the freeze
+    percentile toward zero.
+    """
+    from glider.analysis.behavior.classify.speed_state import CausalSpeed
+
+    causal = CausalSpeed()
+    speeds = np.asarray([causal.push(xy) for xy in pose.xy], dtype=np.float64)
+    return speeds[1:][np.isfinite(speeds[1:])]
+
+
 def session_speeds(
     pose_csv: Path | str,
     *,
@@ -84,14 +97,10 @@ def session_speeds(
     raw px/frame. Frame 0 (always 0 by construction) and dropout frames are
     excluded so they cannot drag a percentile.
     """
-    from glider.analysis.behavior.classify.speed_state import CausalSpeed
     from glider.vision.pose.dlc import from_dlc_csv
 
     pose = from_dlc_csv(Path(pose_csv))
-    causal = CausalSpeed()
-    speeds = np.asarray([causal.push(xy) for xy in pose.xy], dtype=np.float64)
-    speeds = speeds[1:]  # frame 0 has no predecessor
-    speeds = speeds[np.isfinite(speeds)]
+    speeds = _causal_speeds(pose)
 
     rate = fps if fps is not None else getattr(pose, "fps", None)
     if px_per_mm and px_per_mm > 0 and rate and rate > 0:
@@ -209,8 +218,13 @@ def compute_cohort_thresholds(
     calibration_master: Path | str | None = None,
     px_per_mm: float | None = None,
     fps: float | None = None,
+    progress=None,
 ) -> CohortSpeedThresholds:
     """Pool the speed of every session and take the cohort percentiles.
+
+    ``progress`` is called as ``progress(done, total, name)`` before each
+    session. Reading a cohort takes minutes, so a caller with a UI needs to be
+    able to report it rather than appear hung.
 
     A pixel scale is looked up per session (explicit ``px_per_mm`` first, then
     the master calibration file for that session's video). If every session
@@ -226,26 +240,37 @@ def compute_cohort_thresholds(
     if float(freeze_pct) >= float(dart_pct):
         raise CohortSpeedError(f"freeze_pct ({freeze_pct}) must be below dart_pct ({dart_pct})")
 
-    per_session: list[tuple[np.ndarray, str]] = []
+    # Each session is read ONCE. The raw px/frame speeds are kept alongside the
+    # scale that would convert them, so falling back to pixels is arithmetic
+    # rather than a second pass over hundreds of megabytes of CSV.
+    per_session: list[tuple[np.ndarray, float | None]] = []
     uncalibrated: list[str] = []
-    for path in paths:
+    for i, path in enumerate(paths, 1):
+        if progress is not None:
+            progress(i, len(paths), path.name)
         video = video_for_pose_csv(path)
         scale = px_per_mm
         if scale is None and video is not None:
             scale = load_px_per_mm(calibration_master, video)
-        speeds, unit = session_speeds(path, px_per_mm=scale, fps=fps)
+        # One read per session: the CSVs are ~15 MB each and the per-frame
+        # causal speed is the expensive part, so nothing may re-open them.
+        from glider.vision.pose.dlc import from_dlc_csv
+
+        pose = from_dlc_csv(path)
+        speeds = _causal_speeds(pose)
         if speeds.size == 0:
             logger.warning("no usable speed samples in %s; skipping", path)
             continue
-        if unit == PX_PER_FRAME:
+        rate = fps if fps is not None else getattr(pose, "fps", None)
+        usable = scale if (scale and scale > 0 and rate and rate > 0) else None
+        if usable is None:
             uncalibrated.append(path.name)
-        per_session.append((speeds, unit))
+        per_session.append((speeds, None if usable is None else float(rate) / usable / 10.0))
 
     if not per_session:
         raise CohortSpeedError("no session produced any usable speed samples")
 
     if uncalibrated:
-        # Recompute everything unscaled rather than pool mixed units.
         logger.warning(
             "pooling in %s: %d of %d session(s) had no pixel scale (%s). "
             "This is only valid if every video shares one rig geometry.",
@@ -254,12 +279,10 @@ def compute_cohort_thresholds(
             len(paths),
             ", ".join(uncalibrated[:3]) + ("…" if len(uncalibrated) > 3 else ""),
         )
-        pooled = np.concatenate(
-            [session_speeds(p, px_per_mm=None, fps=fps)[0] for p in paths if p.exists()]
-        )
+        pooled = np.concatenate([s for s, _ in per_session])
         unit = PX_PER_FRAME
     else:
-        pooled = np.concatenate([s for s, _ in per_session])
+        pooled = np.concatenate([s * factor for s, factor in per_session])
         unit = CM_PER_S
 
     pooled = pooled[np.isfinite(pooled)]

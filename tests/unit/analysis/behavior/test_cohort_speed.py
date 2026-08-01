@@ -8,6 +8,7 @@ tests pin that one pooled set of cut-offs is produced instead.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -204,3 +205,45 @@ class TestApplyingToOneVideo:
             n_samples=10,
         )
         assert t.to_px_per_frame() == (2.0, 18.0)
+
+
+class TestCostAndProgress:
+    """Pooling a real cohort is minutes of work, so waste and silence matter."""
+
+    def test_each_session_is_read_exactly_once(self, tmp_path, monkeypatch):
+        """The uncalibrated fallback used to re-read and recompute everything."""
+        import glider.vision.pose.dlc as dlc_mod
+        from glider.analysis.behavior import cohort_speed
+
+        a = _pose_csv(tmp_path / "aDLC_m.csv", n=60)
+        b = _pose_csv(tmp_path / "bDLC_m.csv", n=60, seed=2)
+
+        reads: list[str] = []
+        real = dlc_mod.from_dlc_csv
+
+        def counting(path, *args, **kwargs):
+            reads.append(Path(path).name)
+            return real(path, *args, **kwargs)
+
+        monkeypatch.setattr(dlc_mod, "from_dlc_csv", counting)
+        # No calibration, so this takes the fallback path.
+        cohort_speed.compute_cohort_thresholds([a, b])
+        assert reads.count("aDLC_m.csv") == 1, reads
+        assert reads.count("bDLC_m.csv") == 1, reads
+
+    def test_progress_is_reported_per_session(self, tmp_path):
+        a = _pose_csv(tmp_path / "aDLC_m.csv", n=40)
+        b = _pose_csv(tmp_path / "bDLC_m.csv", n=40, seed=2)
+        seen = []
+        compute_cohort_thresholds([a, b], progress=lambda d, t, name: seen.append((d, t, name)))
+        assert [(d, t) for d, t, _ in seen] == [(1, 2), (2, 2)]
+        assert seen[0][2] == "aDLC_m.csv"
+
+    def test_calibrated_pooling_still_lands_in_centimetres(self, tmp_path):
+        """The single-pass rewrite scales after reading rather than during."""
+        a = _pose_csv(tmp_path / "aDLC_m.csv", n=60)
+        px = compute_cohort_thresholds([a])
+        cm = compute_cohort_thresholds([a], px_per_mm=4.0, fps=30.0)
+        assert px.unit == PX_PER_FRAME and cm.unit == CM_PER_S
+        # 1 px/frame at 4 px/mm and 30 fps = 0.75 cm/s.
+        assert cm.dart == pytest.approx(px.dart * 0.75, rel=1e-6)

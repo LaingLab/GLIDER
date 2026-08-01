@@ -653,3 +653,62 @@ def test_switching_to_cohort_hides_the_other_modes_fields(qtbot):
     tab._speed_mode.setCurrentIndex(tab._speed_mode.findData("cohort"))
     assert tab._freeze_cm_s.isVisible() is False
     assert tab._freeze_pct.isVisible() is False
+
+
+# --------------------------------------------------------------------------
+# Cohort pooling must not run on the UI thread
+# --------------------------------------------------------------------------
+
+
+def test_cohort_pooling_runs_on_a_worker_not_the_ui_thread():
+    """A real cohort is minutes of work; a frozen UI reads as a crash."""
+    import inspect
+
+    from glider.gui.behavior.window import ApplyTab
+
+    source = inspect.getsource(ApplyTab._on_build_cohort)
+    assert "CohortSpeedWorker" in source
+    assert "moveToThread" in source
+    # The blocking call must not be made inline any more.
+    assert "compute_cohort_thresholds(" not in source
+
+
+def test_the_cohort_worker_saves_and_reports(tmp_path, monkeypatch):
+    from glider.gui.behavior import workers
+
+    class _Result:
+        n_samples, n_sessions, freeze, dart = 10, 2, 0.1, 5.0
+        unit, is_calibrated = "cm/s", True
+        saved_to = None
+
+        def save(self, path):
+            type(self).saved_to = path
+
+    monkeypatch.setattr(
+        "glider.analysis.behavior.cohort_speed.compute_cohort_thresholds",
+        lambda *a, **k: _Result(),
+    )
+    worker = workers.CohortSpeedWorker(
+        [tmp_path / "aDLC_m.csv"], tmp_path / "cohort.json", freeze_pct=10.0, dart_pct=99.5
+    )
+    done = []
+    worker.finished.connect(done.append)
+    worker.run()
+    assert done, "finished never fired"
+    assert _Result.saved_to == tmp_path / "cohort.json"
+
+
+def test_a_cohort_failure_is_reported_not_raised(tmp_path, monkeypatch):
+    from glider.gui.behavior import workers
+
+    def boom(*a, **k):
+        raise ValueError("no usable speed samples")
+
+    monkeypatch.setattr("glider.analysis.behavior.cohort_speed.compute_cohort_thresholds", boom)
+    worker = workers.CohortSpeedWorker(
+        [tmp_path / "a.csv"], tmp_path / "out.json", freeze_pct=10.0, dart_pct=99.5
+    )
+    failures = []
+    worker.failed.connect(failures.append)
+    worker.run()  # must not raise out of the thread
+    assert failures == ["no usable speed samples"]
