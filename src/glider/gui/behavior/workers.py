@@ -94,6 +94,7 @@ class ApplyWorker(_BaseWorker):
         predict_every=None,
         write_annotated=False,
         reuse_existing_poses=False,
+        pose_dir=None,
     ):
         super().__init__()
         self._args = (video, model_path, yolo_path, keypoint_names, output_dir, device)
@@ -102,6 +103,8 @@ class ApplyWorker(_BaseWorker):
         # inference on a long recording, and it is a spot-check aid.
         self._write_annotated = bool(write_annotated)
         self._reuse_existing_poses = bool(reuse_existing_poses)
+        # Where to look for those poses. None = beside each video.
+        self._pose_dir = pose_dir
         # None = don't pass it at all, so the pipeline default stays the single
         # source of truth for the cadence.
         self._predict_every = predict_every
@@ -121,6 +124,7 @@ class ApplyWorker(_BaseWorker):
                 device=device,
                 write_annotated=self._write_annotated,
                 reuse_existing_poses=self._reuse_existing_poses,
+                pose_dir=self._pose_dir,
                 **opts,
             )
             self.finished.emit(result)
