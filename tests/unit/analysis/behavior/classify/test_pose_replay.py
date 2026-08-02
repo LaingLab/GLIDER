@@ -147,6 +147,72 @@ class TestClassifyWiring:
         # Nothing new was tracked, so nothing new should be written.
         assert seen["pose_csv_out"] is None
 
+    def test_reuse_finds_poses_in_a_separate_folder(self, tmp_path, monkeypatch):
+        """Batch Pose Tracking writes where it was pointed, not beside the
+        videos; copying a CSV per video by hand is the thing to avoid."""
+        from glider.analysis.behavior import classify as classify_mod
+        from glider.analysis.behavior.classify import batch as batch_mod
+        from glider.analysis.behavior.classify import pipeline as pipeline_mod
+
+        videos = tmp_path / "videos"
+        poses = tmp_path / "poses"
+        videos.mkdir()
+        poses.mkdir()
+        video = videos / "T7_5.mp4"
+        video.write_bytes(b"")
+        _pose_csv(poses / "T7_5DLC_exp-5.csv")
+
+        seen = {}
+        monkeypatch.setattr(pipeline_mod, "_load_behavior_model", lambda _p: object())
+
+        def _fake_batch(config, _ethogram, _model):
+            seen["pose_csv_in"] = config.pose_csv_in
+            raise RuntimeError("stop before running")
+
+        monkeypatch.setattr(batch_mod, "batch_apply", _fake_batch)
+        with pytest.raises(RuntimeError):
+            classify_mod.classify(
+                video,
+                model_path=tmp_path / "m.pkl",
+                yolo_path=tmp_path / "exp-5.pt",
+                keypoint_names=NAMES,
+                output_dir=tmp_path / "out",
+                reuse_existing_poses=True,
+                pose_dir=poses,
+            )
+        assert seen["pose_csv_in"] == poses / "T7_5DLC_exp-5.csv"
+
+    def test_without_a_pose_dir_a_foreign_folder_is_not_searched(self, tmp_path, monkeypatch):
+        """Reuse must not silently pick up an unrelated video's poses."""
+        from glider.analysis.behavior import classify as classify_mod
+
+        videos = tmp_path / "videos"
+        poses = tmp_path / "poses"
+        videos.mkdir()
+        poses.mkdir()
+        video = videos / "T7_5.mp4"
+        video.write_bytes(b"")
+        _pose_csv(poses / "T7_5DLC_exp-5.csv")
+
+        seen = {}
+
+        class _Pipeline:
+            def __init__(self, config, **_kw):
+                seen["pose_csv_in"] = config.pose_csv_in
+                raise RuntimeError("stop")
+
+        monkeypatch.setattr(classify_mod, "LiveInferencePipeline", _Pipeline)
+        with pytest.raises(RuntimeError):
+            classify_mod.classify(
+                video,
+                model_path=tmp_path / "m.pkl",
+                yolo_path=tmp_path / "exp-5.pt",
+                keypoint_names=NAMES,
+                output_dir=tmp_path / "out",
+                reuse_existing_poses=True,
+            )
+        assert seen["pose_csv_in"] is None
+
     def test_without_reuse_the_pose_model_still_runs(self, tmp_path, monkeypatch):
         from glider.analysis.behavior import classify as classify_mod
 

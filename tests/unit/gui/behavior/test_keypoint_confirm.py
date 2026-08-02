@@ -147,6 +147,7 @@ class TestRunIsGated:
         tab._output_dir = tmp_path / "out"
         video = tmp_path / "v.mp4"
         video.write_bytes(b"")
+        _pose_csv_for(video)
         tab._videos = [video]
         tab._keypoints_edit.setText(",".join(NAMES))
         return tab
@@ -201,6 +202,28 @@ def test_annotate_handles_any_keypoint_count(count):
 # --------------------------------------------------------------------------
 # The bundle is the authority: auto-fill from it, and refuse names it can't use
 # --------------------------------------------------------------------------
+
+
+def _pose_csv_for(video, names=NAMES):
+    """A real DLC CSV beside *video*, so pose reuse finds it.
+
+    Without one the Apply tab asks whether to track from scratch, which is the
+    right question for an operator and a modal dialog for a test.
+    """
+    from glider.vision.pose.core import PoseData
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    path = video.parent / f"{video.stem}DLC_exp-7.csv"
+    to_dlc_csv(
+        PoseData(
+            xy=np.zeros((3, len(names), 2)),
+            confidence=np.ones((3, len(names))),
+            keypoint_names=list(names),
+            fps=30.0,
+        ),
+        path,
+    )
+    return path
 
 
 def _bundle(tmp_path, names=NAMES):
@@ -297,6 +320,7 @@ def test_run_refuses_when_the_bundle_vetoes(qtbot, tmp_path, monkeypatch):
     tab._output_dir = tmp_path / "out"
     video = tmp_path / "v.mp4"
     video.write_bytes(b"")
+    _pose_csv_for(video)
     tab._videos = [video]
     tab._keypoints_edit.setText("right_ear,left_ear," + ",".join(NAMES[2:]))
 

@@ -642,7 +642,7 @@ class ApplyTab(QWidget):
         add_videos_btn = QPushButton("Add video(s)...")
         add_videos_btn.clicked.connect(self._on_add_videos)
         remove_video_btn = QPushButton("Remove selected")
-        remove_video_btn.clicked.connect(lambda: _remove_selected(self._videos_list, self._videos))
+        remove_video_btn.clicked.connect(self._on_remove_video)
         videos_layout.addLayout(_row(add_videos_btn, remove_video_btn))
         layout.addWidget(videos_group)
 
@@ -669,14 +669,35 @@ class ApplyTab(QWidget):
         # an analysis artifact -- so it is off unless asked for.
         # Checked by default: Batch Pose Tracking has usually already produced
         # these, and re-deriving them is the biggest avoidable cost in a run.
-        self._reuse_poses = QCheckBox("Reuse pose CSVs found beside each video (skips tracking)")
+        self._reuse_poses = QCheckBox("Reuse already-tracked pose CSVs (skips tracking)")
         self._reuse_poses.setChecked(True)
         self._reuse_poses.setToolTip(
             "Reads the poses Batch Pose Tracking already wrote instead of "
-            "running the pose model again. Falls back to tracking for any "
-            "video without one."
+            "running the pose model again — by far the biggest cost in a run. "
+            "Falls back to tracking for any video without one."
         )
+        self._reuse_poses.toggled.connect(self._on_reuse_toggled)
         layout.addWidget(self._reuse_poses)
+
+        # Batch Pose Tracking writes its CSVs wherever it was pointed, which
+        # is routinely a poses folder rather than beside the videos. Matching
+        # by name from one folder beats copying a CSV per video by hand.
+        self._pose_dir: Path | None = None
+        self._pose_dir_label = QLabel("Pose CSV folder: beside each video")
+        # Not wrapped: a UNC share path is long enough to wrap to four lines
+        # and shove the buttons around. The tail identifies the folder; the
+        # tooltip carries the whole thing.
+        self._pose_dir_label.setWordWrap(False)
+        self._pose_dir_btn = QPushButton("Choose pose CSV folder…")
+        self._pose_dir_btn.clicked.connect(self._on_choose_pose_dir)
+        self._pose_dir_clear = QPushButton("Use video folder")
+        self._pose_dir_clear.clicked.connect(self._on_clear_pose_dir)
+        pose_row = _row(self._pose_dir_label, self._pose_dir_btn)
+        pose_row.addWidget(self._pose_dir_clear)
+        layout.addLayout(pose_row)
+        self._pose_match_label = QLabel("")
+        self._pose_match_label.setWordWrap(True)
+        layout.addWidget(self._pose_match_label)
 
         self._render_video = QCheckBox("Also render an annotated video (slow)")
         self._render_video.setChecked(False)
@@ -753,6 +774,102 @@ class ApplyTab(QWidget):
         for path in paths:
             self._videos.append(Path(path))
             self._videos_list.addItem(path)
+        self._refresh_pose_match()
+
+    def _confirm_unmatched_poses(self) -> bool:
+        """Ask before tracking videos whose poses could not be found.
+
+        Falling back to tracking is the documented behaviour, but it is also
+        the difference between seconds and tens of minutes per video, and a
+        misspelt folder looks exactly like a slow run. Default is No.
+        """
+        if not self._reuse_poses.isChecked():
+            return True
+        _matched, unmatched = self._match_poses()
+        if not unmatched:
+            return True
+        where = str(self._pose_dir) if self._pose_dir else "each video's own folder"
+        names = "\n".join(f"  {v.name}" for v in unmatched[:12])
+        more = f"\n  ...and {len(unmatched) - 12} more" if len(unmatched) > 12 else ""
+        answer = QMessageBox.question(
+            self,
+            "Pose CSVs not found",
+            f"No pose CSV was found for {len(unmatched)} of {len(self._videos)} "
+            f"video(s) in {where}:\n\n{names}{more}\n\n"
+            "Those will be tracked from scratch, which takes far longer than "
+            "reusing existing poses. Looked for <name>.csv and "
+            "<name>DLC_<model>.csv.\n\nRun anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _on_remove_video(self) -> None:
+        _remove_selected(self._videos_list, self._videos)
+        self._refresh_pose_match()
+
+    # ------------------------------------------------------------------
+    # Pose CSV folder
+    # ------------------------------------------------------------------
+
+    def _on_choose_pose_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Folder of pose CSVs")
+        if not path:
+            return
+        self._pose_dir = Path(path)
+        self._pose_dir_label.setText(f"Pose CSV folder: {_short_path(self._pose_dir)}")
+        self._pose_dir_label.setToolTip(path)
+        self._refresh_pose_match()
+
+    def _on_clear_pose_dir(self) -> None:
+        self._pose_dir = None
+        self._pose_dir_label.setText("Pose CSV folder: beside each video")
+        self._pose_dir_label.setToolTip("")
+        self._refresh_pose_match()
+
+    def _on_reuse_toggled(self, checked: bool) -> None:
+        for w in (self._pose_dir_label, self._pose_dir_btn, self._pose_dir_clear):
+            w.setEnabled(checked)
+        self._refresh_pose_match()
+
+    def _match_poses(self) -> tuple[list[Path], list[Path]]:
+        """``(matched, unmatched)`` videos for the current folder setting."""
+        matched, unmatched = [], []
+        for video in self._videos:
+            try:
+                found = find_pose_csv(video, self._pose_dir)
+            except OSError:  # an unreachable share must not break the summary
+                found = None
+            (matched if found is not None else unmatched).append(video)
+        return matched, unmatched
+
+    def _refresh_pose_match(self) -> None:
+        """Say how many videos this folder covers, before anything is run.
+
+        Worth showing continuously rather than at Run: an unmatched video
+        silently costs a full tracking pass, which is the single most
+        expensive thing an apply run can do.
+        """
+        if not self._reuse_poses.isChecked():
+            self._pose_match_label.setText("Tracking will run for every video.")
+            return
+        if not self._videos:
+            self._pose_match_label.setText("")
+            return
+        matched, unmatched = self._match_poses()
+        where = _short_path(self._pose_dir) if self._pose_dir else "each video's own folder"
+        self._pose_match_label.setToolTip(str(self._pose_dir) if self._pose_dir else "")
+        if not unmatched:
+            self._pose_match_label.setText(
+                f"Matched a pose CSV for all {len(matched)} video(s) in {where}."
+            )
+            return
+        names = ", ".join(v.name for v in unmatched[:4])
+        more = f" (+{len(unmatched) - 4} more)" if len(unmatched) > 4 else ""
+        self._pose_match_label.setText(
+            f"Matched {len(matched)} of {len(self._videos)} in {where}. "
+            f"No pose CSV for: {names}{more} — those would be tracked from scratch."
+        )
 
     def _on_choose_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose output folder")
@@ -779,6 +896,8 @@ class ApplyTab(QWidget):
         ]
         if not keypoint_names:
             QMessageBox.warning(self, "Apply", "Enter at least one keypoint name.")
+            return
+        if not self._confirm_unmatched_poses():
             return
         blocker = self._keypoint_blocker(keypoint_names)
         if blocker:
@@ -852,13 +971,19 @@ class ApplyTab(QWidget):
         )
 
     def _pose_csv_disagreement(self, keypoint_names) -> str | None:
-        """Whether a pose CSV beside the first video names its parts differently."""
+        """Whether the first video's pose CSV names its parts differently.
+
+        Looks in the chosen pose folder, not just beside the video: pointing
+        the run at a folder elsewhere would otherwise silently retire this
+        cross-check exactly when it is most useful, since a foreign folder is
+        the likeliest source of foreign keypoint names.
+        """
         from glider.analysis.behavior.classify.features_stream import pose_csv_bodyparts
         from glider.vision.pose.batch import find_pose_csv
 
         if not self._videos:
             return None
-        csv_path = find_pose_csv(self._videos[0])
+        csv_path = find_pose_csv(self._videos[0], self._pose_dir)
         if csv_path is None:
             return None
         bodyparts = pose_csv_bodyparts(csv_path)
@@ -1229,6 +1354,9 @@ class ApplyTab(QWidget):
             output_dir=video_output_dir,
             speed_opts=self._speed_opts(),
             predict_every=self._predict_every.value(),
+            reuse_existing_poses=self._reuse_poses.isChecked(),
+            pose_dir=self._pose_dir if self._reuse_poses.isChecked() else None,
+            write_annotated=self._render_video.isChecked(),
         )
         self._apply_worker.moveToThread(self._apply_thread)
         self._apply_thread.started.connect(self._apply_worker.run)
@@ -1285,6 +1413,16 @@ class ApplyTab(QWidget):
 # ---------------------------------------------------------------------------
 # Small shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _short_path(path: Path, keep: int = 3) -> str:
+    """The tail of a path, enough to recognise it without filling a row.
+
+    Lab paths are UNC shares nested several folders deep; the last few
+    components are what tells one cohort from another.
+    """
+    parts = Path(path).parts
+    return str(path) if len(parts) <= keep else "…" + "\\".join(parts[-keep:])
 
 
 def _row(*widgets: QWidget) -> QHBoxLayout:

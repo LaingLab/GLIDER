@@ -49,16 +49,17 @@ def _video_fps(video: Path | str) -> float | None:
 _MM_PER_CM = 10.0
 
 
-def find_pose_csv(video: Path | str) -> Path | None:
-    """The pose CSV sitting beside *video*, if any.
+def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Path | None:
+    """The pose CSV belonging to *video*, if any.
 
     Thin re-export of :func:`glider.vision.pose.batch.find_pose_csv`, which
     lives next to the code that chooses the output names. Kept here because
-    this name is part of the classify surface.
+    this name is part of the classify surface. ``search_dir`` defaults to the
+    video's own directory.
     """
     from glider.vision.pose.batch import find_pose_csv as _find
 
-    return _find(video)
+    return _find(video, search_dir)
 
 
 def _percentile_thresholds(
@@ -297,6 +298,7 @@ def classify(
     write_pose_csv=True,
     pose_csv_in=None,
     reuse_existing_poses=False,
+    pose_dir=None,
     model=None,
     **opts,
 ) -> EthogramResult:
@@ -346,8 +348,12 @@ def classify(
     # to reproduce numbers Batch Pose Tracking already wrote is the single
     # biggest avoidable cost in an apply run. Resolved before anything
     # expensive starts, so a missing file fails immediately.
+    # ``pose_dir`` lets one folder of pose CSVs serve a whole cohort. Batch
+    # Pose Tracking writes them wherever the operator pointed it, which is
+    # routinely not beside the videos, and copying 30 CSVs by hand to satisfy
+    # a default is a chore that invites mistakes.
     if pose_csv_in is None and reuse_existing_poses:
-        pose_csv_in = find_pose_csv(video)
+        pose_csv_in = find_pose_csv(video, pose_dir)
     if pose_csv_in is not None:
         pose_csv_in = Path(pose_csv_in)
         if not pose_csv_in.exists():
