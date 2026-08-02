@@ -15,6 +15,7 @@ importing this module — which the GUI does while building menus — stays chea
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -23,6 +24,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from glider.vision.pose.core import PoseData
+
+logger = logging.getLogger(__name__)
 
 #: Video containers both halves of the pipeline accept. Single-sourced on
 #: purpose: this list used to be restated in the behavior tool with ``.webm``
@@ -103,9 +106,10 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
 
     The exact-stem form wins when both exist, so a file the operator placed
     deliberately is never shadowed by a batch run. When several models have
-    been run over one video the match is the alphabetically first, which is
-    at least stable across calls; naming the file explicitly is the only way
-    to choose between them.
+    been run over one video the most recently written wins, and the choice is
+    logged: alphabetical order would silently prefer ``exp-5`` over ``exp-7``,
+    quietly scoring a cohort with a superseded pose model. Naming the file
+    explicitly is still the only way to be certain.
     """
     video = Path(video)
     directory = Path(search_dir) if search_dir is not None else video.parent
@@ -119,7 +123,28 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     matches = [
         p for p in sorted(directory.glob(f"{video.stem}DLC_*.csv")) if not p.stem.endswith("_raw")
     ]
-    return matches[0] if matches else None
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+
+    # Newest wins. mtime can be unreadable on a share mid-copy; those sort
+    # last rather than raising, so a transient stat error cannot pick the file.
+    def _mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return float("-inf")
+
+    chosen = max(matches, key=_mtime)
+    logger.info(
+        "%s has %d pose CSVs (%s); using the most recent, %s",
+        video.name,
+        len(matches),
+        ", ".join(p.name for p in matches),
+        chosen.name,
+    )
+    return chosen
 
 
 class EventKind(StrEnum):

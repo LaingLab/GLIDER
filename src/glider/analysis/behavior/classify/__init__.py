@@ -26,10 +26,15 @@ from glider.analysis.behavior.classify.pipeline import (
     LiveInferencePipeline,
 )
 from glider.analysis.ethogram import (
+    UNSCORED,
     compute_bouts,
     compute_intervals,
     compute_state_transitions,
 )
+
+#: How unscored time is named in stats.csv. A blank cell reads as a bug and
+#: sorts like a behavior; this says what it is.
+UNSCORED_LABEL = "(unscored)"
 
 
 def _video_fps(video: Path | str) -> float | None:
@@ -299,6 +304,7 @@ def classify(
     pose_csv_in=None,
     reuse_existing_poses=False,
     pose_dir=None,
+    min_bout_s=None,
     model=None,
     **opts,
 ) -> EthogramResult:
@@ -455,24 +461,40 @@ def classify(
 
     result = ethogram_from_labels(labels, fps=effective_fps)
 
-    # bouts.csv: one row per bout (state, duration_s).
+    # bouts.csv: one row per bout (state, duration_s). Unscored frames are the
+    # absence of a label, not a behavior, so they get no bouts — otherwise
+    # "how long is a grooming bout" is answered partly by tracking dropout.
+    #
+    # min_bout_s drops bouts below an ethological floor. It filters the
+    # summaries only: ethogram_raw.csv keeps every frame as classified, so
+    # the decision stays visible and reversible rather than baked into the
+    # one artifact everything else is derived from.
+    floor_ms = float(min_bout_s) * 1000.0 if min_bout_s else 0.0
     bout_rows = [
         {"state": state, "duration_s": duration_ms / 1000.0}
         for state, series in result.bouts.items()
+        if state != UNSCORED
         for duration_ms in series
+        if duration_ms >= floor_ms
     ]
     pd.DataFrame(bout_rows, columns=["state", "duration_s"]).to_csv(
         output_dir / "bouts.csv", index=False
     )
 
-    # stats.csv: per-state summary derived from the bouts dict.
+    # stats.csv: per-state summary. Unscored time is still reported, under an
+    # explicit name rather than a blank one, so the fractions account for the
+    # whole session and coverage is visible instead of implied.
     total_session_s = len(labels) / effective_fps if effective_fps else 0.0
     stats_rows = []
     for state, series in result.bouts.items():
+        if floor_ms and state != UNSCORED:
+            series = series[series >= floor_ms]
+        if series.empty:
+            continue
         total_s = series.sum() / 1000.0
         stats_rows.append(
             {
-                "state": state,
+                "state": UNSCORED_LABEL if state == UNSCORED else state,
                 "n_bouts": len(series),
                 "total_s": total_s,
                 "fraction": total_s / total_session_s if total_session_s else 0.0,

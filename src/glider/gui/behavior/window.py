@@ -65,6 +65,13 @@ _VIDEO_FILTER = VIDEO_FILTER
 # test_apply_tab_cadence_default_matches_the_pipeline pins the two together.
 _DEFAULT_PREDICT_EVERY = 3
 
+# Majority-vote window over the classifier's predictions. The pipeline's own
+# default is 1 (off) for backwards compatibility; the Apply tab defaults to 5
+# because a per-frame classifier flickers about ten times faster than a mouse
+# changes behavior, and at 5 the time budget shifts by <0.5 percentage points
+# while the switch rate roughly halves.
+_DEFAULT_SMOOTH_WINDOW = 5
+
 
 class _Knob(NamedTuple):
     """One row of the advanced LightGBM dialog.
@@ -661,6 +668,7 @@ class ApplyTab(QWidget):
         layout.addLayout(keypoints_row)
 
         layout.addLayout(self._build_cadence_row())
+        layout.addWidget(self._build_stability_group())
 
         layout.addWidget(self._build_speed_group())
 
@@ -804,6 +812,55 @@ class ApplyTab(QWidget):
         )
         return answer == QMessageBox.StandardButton.Yes
 
+    def _scale_advisories(self) -> list[str]:
+        """Quiet mis-scalings worth knowing about before a cohort is scored.
+
+        Both failures produce a plausible ethogram rather than an error, so
+        nothing downstream will ever flag them. Never raises: a diagnostic
+        that breaks a run is worse than one that stays silent.
+        """
+        from glider.analysis.behavior.scale_guard import (
+            calibration_spread_warning,
+            scale_warning,
+        )
+
+        messages: list[str] = []
+        try:
+            if self._videos and self._model_path is not None:
+                pose_csv = find_pose_csv(self._videos[0], self._pose_dir)
+                if pose_csv is not None:
+                    from glider.analysis.behavior.classify.pipeline import _load_behavior_model
+                    from glider.vision.pose.dlc import from_dlc_csv
+
+                    message = scale_warning(
+                        _load_behavior_model(self._model_path), from_dlc_csv(pose_csv)
+                    )
+                    if message:
+                        messages.append(message)
+        except Exception:  # noqa: BLE001 - advisory only
+            logger.debug("scale check skipped", exc_info=True)
+        try:
+            if self._calibration_master is not None:
+                message = calibration_spread_warning(self._calibration_master)
+                if message:
+                    messages.append(message)
+        except Exception:  # noqa: BLE001 - advisory only
+            logger.debug("calibration spread check skipped", exc_info=True)
+        return messages
+
+    def _confirm_scale_advisories(self) -> bool:
+        messages = self._scale_advisories()
+        if not messages:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Before running",
+            "\n\n———\n\n".join(messages) + "\n\nRun anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
     def _on_remove_video(self) -> None:
         _remove_selected(self._videos_list, self._videos)
         self._refresh_pose_match()
@@ -898,6 +955,8 @@ class ApplyTab(QWidget):
             QMessageBox.warning(self, "Apply", "Enter at least one keypoint name.")
             return
         if not self._confirm_unmatched_poses():
+            return
+        if not self._confirm_scale_advisories():
             return
         blocker = self._keypoint_blocker(keypoint_names)
         if blocker:
@@ -1056,6 +1115,51 @@ class ApplyTab(QWidget):
         row.addWidget(self._cadence_hint, 1)
         self._on_cadence_changed()
         return row
+
+    def _build_stability_group(self) -> QGroupBox:
+        """How much frame-to-frame flicker to absorb before reporting bouts.
+
+        A per-frame classifier switches label far more often than an animal
+        switches behavior — measured at ~100 switches/minute on a real
+        cohort, with a median bout of 0.17 s. The time budget (fraction of
+        session per behavior) is barely affected by that, but every
+        bout-level number — counts, mean and median duration, the transition
+        matrix — is dominated by it. Both knobs exist in the pipeline; until
+        now neither was reachable from here.
+        """
+        group = QGroupBox("Label stability")
+        form = QFormLayout(group)
+
+        self._smooth_window = QSpinBox()
+        self._smooth_window.setRange(1, 61)
+        self._smooth_window.setValue(_DEFAULT_SMOOTH_WINDOW)
+        self._smooth_window.setSingleStep(2)
+        self._smooth_window.setSuffix(" prediction(s)")
+        self._smooth_window.setToolTip(
+            "Majority vote over the last N predictions.\n"
+            "1 = off (raw per-prediction labels).\n"
+            f"{_DEFAULT_SMOOTH_WINDOW} (default) roughly halves the switch rate while moving "
+            "each behavior's share of the session by well under a percentage point.\n"
+            "Applies to the ethogram, bouts, stats and the annotated video alike."
+        )
+        form.addRow("Majority-vote smoothing:", self._smooth_window)
+
+        self._min_bout_s = QDoubleSpinBox()
+        self._min_bout_s.setRange(0.0, 10.0)
+        self._min_bout_s.setValue(0.0)
+        self._min_bout_s.setSingleStep(0.1)
+        self._min_bout_s.setDecimals(2)
+        self._min_bout_s.setSuffix(" s")
+        self._min_bout_s.setSpecialValueText("off")
+        self._min_bout_s.setToolTip(
+            "Discard bouts shorter than this from bouts.csv and stats.csv.\n"
+            "Off by default: it changes what counts as a bout, which is a "
+            "scoring decision, not a display one.\n"
+            "The per-frame ethogram_raw.csv is never altered — this only "
+            "filters the summaries, so the raw record stays auditable."
+        )
+        form.addRow("Minimum bout duration:", self._min_bout_s)
+        return group
 
     def _on_cadence_changed(self, *_args) -> None:
         """Restate the cadence as a rate, which is what people actually reason in."""
@@ -1357,6 +1461,8 @@ class ApplyTab(QWidget):
             reuse_existing_poses=self._reuse_poses.isChecked(),
             pose_dir=self._pose_dir if self._reuse_poses.isChecked() else None,
             write_annotated=self._render_video.isChecked(),
+            smooth_window=self._smooth_window.value(),
+            min_bout_s=self._min_bout_s.value() or None,
         )
         self._apply_worker.moveToThread(self._apply_thread)
         self._apply_thread.started.connect(self._apply_worker.run)

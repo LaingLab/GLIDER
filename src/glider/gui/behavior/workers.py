@@ -95,6 +95,8 @@ class ApplyWorker(_BaseWorker):
         write_annotated=False,
         reuse_existing_poses=False,
         pose_dir=None,
+        smooth_window=None,
+        min_bout_s=None,
     ):
         super().__init__()
         self._args = (video, model_path, yolo_path, keypoint_names, output_dir, device)
@@ -105,6 +107,10 @@ class ApplyWorker(_BaseWorker):
         self._reuse_existing_poses = bool(reuse_existing_poses)
         # Where to look for those poses. None = beside each video.
         self._pose_dir = pose_dir
+        # None for both = leave the pipeline defaults as the single source of
+        # truth, exactly as predict_every does below.
+        self._smooth_window = smooth_window
+        self._min_bout_s = min_bout_s
         # None = don't pass it at all, so the pipeline default stays the single
         # source of truth for the cadence.
         self._predict_every = predict_every
@@ -115,6 +121,8 @@ class ApplyWorker(_BaseWorker):
             opts = dict(self._speed_opts)
             if self._predict_every is not None:
                 opts["predict_every"] = int(self._predict_every)
+            if self._smooth_window is not None:
+                opts["smooth_window"] = int(self._smooth_window)
             result = classify(
                 video,
                 model_path=model_path,
@@ -125,6 +133,7 @@ class ApplyWorker(_BaseWorker):
                 write_annotated=self._write_annotated,
                 reuse_existing_poses=self._reuse_existing_poses,
                 pose_dir=self._pose_dir,
+                min_bout_s=self._min_bout_s,
                 **opts,
             )
             self.finished.emit(result)
