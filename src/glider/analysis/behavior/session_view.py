@@ -23,6 +23,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from glider.analysis.ethogram import UNSCORED
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["SegmentStats", "SessionView", "SessionViewError"]
@@ -231,18 +233,28 @@ class SessionView:
         )
         intervals = compute_intervals(tracking)
         durations = compute_bouts(intervals)
-        total = sum(float(s.sum()) for s in durations.values()) or 1.0
+        # The window, not the sum of scored bouts, so a session with dropout
+        # reports fractions that still add up to its real duration.
+        window_ms = sum(float(s.sum()) for s in durations.values()) or 1.0
         rows = []
         for state, series in durations.items():
+            if state == UNSCORED:
+                # Not a behavior: it is the classifier declining to answer.
+                continue
+            # compute_bouts speaks milliseconds; these columns are seconds.
             rows.append(
                 {
                     "state": state,
                     "n_bouts": int(len(series)),
-                    "total_s": float(series.sum()),
-                    "fraction": float(series.sum()) / total,
-                    "mean_s": float(series.mean()) if len(series) else 0.0,
-                    "median_s": float(series.median()) if len(series) else 0.0,
+                    "total_s": float(series.sum()) / 1000.0,
+                    "fraction": float(series.sum()) / window_ms,
+                    "mean_s": float(series.mean()) / 1000.0 if len(series) else 0.0,
+                    "median_s": float(series.median()) / 1000.0 if len(series) else 0.0,
                 }
+            )
+        if not rows:
+            return pd.DataFrame(
+                columns=["state", "n_bouts", "total_s", "fraction", "mean_s", "median_s"]
             )
         return pd.DataFrame(rows).sort_values("total_s", ascending=False, ignore_index=True)
 

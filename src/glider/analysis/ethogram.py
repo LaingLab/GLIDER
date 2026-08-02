@@ -79,12 +79,22 @@ def compute_intervals(
     change_points = np.flatnonzero(states[1:] != states[:-1]) + 1
     boundaries = np.concatenate([[0], change_points, [len(states)]])
 
+    # ``end_ms`` is the moment the run *ended*, not the timestamp of its last
+    # sample — i.e. intervals are half-open [start, end). Using the last
+    # sample's own timestamp would charge a run of n samples only n-1 sample
+    # periods, so every bout came out exactly one frame short, a single-sample
+    # bout came out as 0 ms, and the durations summed to less than the
+    # session. For every run but the final one that end is the next run's
+    # start, which needs no assumption about the sampling rate; only the last
+    # one needs a period, taken as the median gap so jitter cannot skew it.
+    period = float(np.median(np.diff(times))) if len(times) > 1 else 0.0
+
     rows = []
     for i in range(len(boundaries) - 1):
         start_idx = boundaries[i]
-        end_idx = boundaries[i + 1] - 1
+        next_idx = boundaries[i + 1]
         start_ms = times[start_idx]
-        end_ms = times[end_idx]
+        end_ms = times[next_idx] if next_idx < len(times) else times[-1] + period
         rows.append(
             {
                 "object_id": object_id,
@@ -127,13 +137,40 @@ def compute_bouts(
     }
 
 
-def compute_state_transitions(intervals: pd.DataFrame) -> pd.DataFrame:
+#: The state a classifier emits when it declines to score a frame. It is the
+#: absence of a label, not a behavior, so bout and transition statistics have
+#: to exclude it — otherwise "how long does grooming last" is answered partly
+#: by how often tracking dropped out.
+UNSCORED = ""
+
+
+def scored_only(intervals: pd.DataFrame, *, unscored: str = UNSCORED) -> pd.DataFrame:
+    """Intervals with unscored gaps removed.
+
+    Note this does NOT bridge across a gap: ``groom, unscored, groom`` stays
+    two grooming bouts. Merging them would assert that the behavior continued
+    through frames the classifier explicitly refused to label.
+    """
+    if intervals.empty or "state" not in intervals.columns:
+        return intervals
+    return intervals[intervals["state"] != unscored].reset_index(drop=True)
+
+
+def compute_state_transitions(
+    intervals: pd.DataFrame, *, unscored: str | None = UNSCORED
+) -> pd.DataFrame:
     """Count transitions between consecutive states.
 
     For an interval sequence ``[resting, active, resting, locomotion]``
     the result is one row each for ``(resting → active)``, ``(active →
     resting)``, ``(resting → locomotion)``. Repeated transitions
     aggregate into the ``count`` column.
+
+    ``unscored`` names the non-label a classifier emits for frames it would
+    not score; transitions into or out of it are dropped, because neither
+    end is a behavior. They are dropped rather than bridged: what happened
+    across an unscored gap is exactly what is unknown. Pass ``None`` to keep
+    every pair, which is what a hand-scored ethogram wants.
 
     Returns:
         DataFrame with columns ``from_state, to_state, count``. Empty
@@ -145,4 +182,8 @@ def compute_state_transitions(intervals: pd.DataFrame) -> pd.DataFrame:
     from_states = intervals["state"].iloc[:-1].reset_index(drop=True)
     to_states = intervals["state"].iloc[1:].reset_index(drop=True)
     pairs = pd.DataFrame({"from_state": from_states, "to_state": to_states})
+    if unscored is not None:
+        pairs = pairs[(pairs["from_state"] != unscored) & (pairs["to_state"] != unscored)]
+    if pairs.empty:
+        return pd.DataFrame(columns=["from_state", "to_state", "count"])
     return pairs.groupby(["from_state", "to_state"]).size().reset_index(name="count")

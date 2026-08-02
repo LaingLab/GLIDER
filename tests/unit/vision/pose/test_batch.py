@@ -382,3 +382,61 @@ def test_the_two_pipelines_agree_on_what_counts_as_a_video():
 
     assert project.VIDEO_EXTS == batch.VIDEO_EXTS
     assert window._VIDEO_EXTS == batch.VIDEO_EXTS
+
+
+# --------------------------------------------------------------------------
+# Several models over one video
+#
+# Alphabetical order silently prefers exp-5 over exp-7, scoring a cohort with
+# a superseded pose model and reporting nothing.
+# --------------------------------------------------------------------------
+
+
+def _touch_at(path, when):
+    import os
+
+    path.touch()
+    os.utime(path, (when, when))
+    return path
+
+
+def test_the_newest_model_output_wins_not_the_first_alphabetically(tmp_path):
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    old = _touch_at(tmp_path / "session01DLC_exp-5.csv", 1_000_000)
+    new = _touch_at(tmp_path / "session01DLC_exp-7.csv", 2_000_000)
+
+    assert batch.find_pose_csv(video) == new
+    assert old.exists()  # nothing is removed, only deselected
+
+
+def test_newest_wins_even_when_it_sorts_first(tmp_path):
+    """The tie-break must be time, not a different alphabetical accident."""
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    _touch_at(tmp_path / "session01DLC_zzz.csv", 1_000_000)
+    new = _touch_at(tmp_path / "session01DLC_aaa.csv", 2_000_000)
+
+    assert batch.find_pose_csv(video) == new
+
+
+def test_the_choice_is_logged(tmp_path, caplog):
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    _touch_at(tmp_path / "session01DLC_exp-5.csv", 1_000_000)
+    _touch_at(tmp_path / "session01DLC_exp-7.csv", 2_000_000)
+
+    with caplog.at_level("INFO", logger="glider.vision.pose.batch"):
+        batch.find_pose_csv(video)
+    assert "exp-7" in caplog.text
+    assert "exp-5" in caplog.text  # both candidates named, so the pick is auditable
+
+
+def test_a_single_candidate_is_not_logged_as_ambiguous(tmp_path, caplog):
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    only = _touch_at(tmp_path / "session01DLC_exp-7.csv", 1_000_000)
+
+    with caplog.at_level("INFO", logger="glider.vision.pose.batch"):
+        assert batch.find_pose_csv(video) == only
+    assert caplog.text == ""

@@ -81,12 +81,17 @@ def test_classify_maps_config_reads_csv_and_writes_outputs(tmp_path, monkeypatch
     assert len(bouts) == 3
     assert set(bouts["state"]) == {"rear", "groom"}
 
-    # stats.csv: durations in seconds. The groom run spans frames 2->4 at
-    # 30 fps == 2/30 s; n_bouts counts runs, not frames.
+    # stats.csv: durations in seconds. The groom run covers frames 2, 3 and 4
+    # at 30 fps, so it occupies 3/30 s — a run of n frames is charged n frame
+    # periods, not n-1. n_bouts counts runs, not frames.
     groom = stats.set_index("state").loc["groom"]
     assert groom["n_bouts"] == 1
-    assert groom["total_s"] == pytest.approx(2 / 30.0)
-    assert groom["mean_s"] == pytest.approx(2 / 30.0)
+    assert groom["total_s"] == pytest.approx(3 / 30.0)
+    assert groom["mean_s"] == pytest.approx(3 / 30.0)
+
+    # Every frame is accounted for: nothing falls between the bouts.
+    assert stats["total_s"].sum() == pytest.approx(6 / 30.0)
+    assert stats["fraction"].sum() == pytest.approx(1.0)
 
     assert set(transitions.columns) >= {"from_state", "to_state", "count"}
 

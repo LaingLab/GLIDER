@@ -176,3 +176,51 @@ class TestSegmentStats:
         before = list(view.labels)
         view.segment_stats(0, 150)
         assert view.labels == before
+
+
+class TestBoutTableUnits:
+    """The columns are named `_s`; compute_bouts speaks milliseconds."""
+
+    def _view(self, tmp_path, labels):
+        folder = tmp_path / "v"
+        folder.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame({"frame": range(len(labels)), "behavior": labels}).to_csv(
+            folder / "ethogram_raw.csv", index=False
+        )
+        return SessionView.load(folder / "ethogram_raw.csv")
+
+    def test_durations_are_seconds_not_milliseconds(self, tmp_path):
+        # 90 frames at 30 fps is 3 s, not 3000.
+        view = self._view(tmp_path, ["groom"] * 90 + ["locomote"] * 90)
+        bouts = view.segment_stats(0, 179).bouts.set_index("state")
+        assert bouts.loc["groom", "total_s"] == pytest.approx(3.0)
+        assert bouts.loc["groom", "mean_s"] == pytest.approx(3.0)
+        assert bouts.loc["groom", "median_s"] == pytest.approx(3.0)
+
+    def test_the_totals_add_up_to_the_window(self, tmp_path):
+        view = self._view(tmp_path, ["groom"] * 90 + ["locomote"] * 90)
+        stats = view.segment_stats(0, 179)
+        assert stats.bouts["total_s"].sum() == pytest.approx(stats.duration_s)
+        assert stats.bouts["fraction"].sum() == pytest.approx(1.0)
+
+    def test_unscored_frames_get_no_bout_row(self, tmp_path):
+        view = self._view(tmp_path, ["groom"] * 30 + [""] * 30 + ["groom"] * 30)
+        bouts = view.segment_stats(0, 89).bouts
+        assert list(bouts["state"]) == ["groom"]
+        # Not bridged: two separate grooming bouts either side of the gap.
+        assert int(bouts.iloc[0]["n_bouts"]) == 2
+        # The gap still counts against the fraction of the window.
+        assert bouts.iloc[0]["fraction"] == pytest.approx(2 / 3)
+
+    def test_an_entirely_unscored_window_yields_an_empty_table(self, tmp_path):
+        view = self._view(tmp_path, [""] * 60)
+        bouts = view.segment_stats(0, 59).bouts
+        assert bouts.empty
+        assert list(bouts.columns) == [
+            "state",
+            "n_bouts",
+            "total_s",
+            "fraction",
+            "mean_s",
+            "median_s",
+        ]

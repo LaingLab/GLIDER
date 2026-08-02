@@ -258,3 +258,70 @@ class TestTheKeypointCrossCheck:
         _pose_csv(poses, "t0", names=NAMES)
         tab._pose_dir = poses
         assert tab._pose_csv_disagreement(NAMES) is None
+
+
+class TestLabelStabilityControls:
+    """Both knobs existed in the pipeline; neither was reachable from here.
+
+    A per-frame classifier switches label ~10x more often than a mouse
+    changes behavior, so every bout-level number was at the mercy of a
+    default nobody could see or change.
+    """
+
+    def test_smoothing_defaults_to_absorbing_flicker(self, tab):
+        assert tab._smooth_window.value() > 1
+
+    def test_the_minimum_bout_filter_is_off_by_default(self, tab):
+        """What counts as a bout is a scoring decision, not a default."""
+        assert tab._min_bout_s.value() == 0.0
+
+    def test_both_reach_the_worker(self, tab, tmp_path, monkeypatch):
+        tab._videos = [_video(tmp_path / "videos", "t0")]
+        tab._smooth_window.setValue(7)
+        tab._min_bout_s.setValue(0.5)
+        seen = TestTheRunActuallyUsesTheseSettings()._capture_worker_kwargs(
+            tab, tmp_path, monkeypatch
+        )
+        assert seen["smooth_window"] == 7
+        assert seen["min_bout_s"] == pytest.approx(0.5)
+
+    def test_a_zero_minimum_is_passed_as_no_filter(self, tab, tmp_path, monkeypatch):
+        tab._videos = [_video(tmp_path / "videos", "t0")]
+        seen = TestTheRunActuallyUsesTheseSettings()._capture_worker_kwargs(
+            tab, tmp_path, monkeypatch
+        )
+        assert seen["min_bout_s"] is None
+
+
+class TestScaleAdvisories:
+    def test_nothing_to_say_asks_nothing(self, tab, tmp_path, monkeypatch):
+        monkeypatch.setattr(tab, "_scale_advisories", list)
+        monkeypatch.setattr(
+            "glider.gui.behavior.window.QMessageBox.question",
+            lambda *a, **k: pytest.fail("no advisory, no dialog"),
+        )
+        assert tab._confirm_scale_advisories() is True
+
+    def test_an_advisory_is_shown_and_can_be_declined(self, tab, monkeypatch):
+        from PyQt6.QtWidgets import QMessageBox
+
+        monkeypatch.setattr(tab, "_scale_advisories", lambda: ["the animal is tiny"])
+        seen = {}
+
+        def question(_parent, _title, text, _buttons, default):
+            seen.update(text=text, default=default)
+            return QMessageBox.StandardButton.No
+
+        monkeypatch.setattr("glider.gui.behavior.window.QMessageBox.question", question)
+        assert tab._confirm_scale_advisories() is False
+        assert "the animal is tiny" in seen["text"]
+        # Advisory, not a hazard: proceeding is the default here.
+        assert seen["default"] == QMessageBox.StandardButton.Yes
+
+    def test_a_broken_check_never_blocks_a_run(self, tab, tmp_path, monkeypatch):
+        """A diagnostic that breaks a run is worse than one that stays quiet."""
+        tab._videos = [_video(tmp_path / "videos", "t0")]
+        _pose_csv(tmp_path / "videos", "t0")
+        tab._model_path = tmp_path / "not-a-bundle.pkl"
+        tab._model_path.write_text("garbage")
+        assert tab._scale_advisories() == []
