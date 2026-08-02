@@ -220,7 +220,15 @@ def _make_tracker(config, raw_queue, tracked_queue, display_queue, stop_event):
 class LiveInferencePipeline:
     """Owns the queues + threads + shared state for one run."""
 
-    def __init__(self, config: LiveInferenceConfig):
+    def __init__(self, config: LiveInferenceConfig, model=None):
+        """``model`` lets a caller that already loaded the bundle hand it over.
+
+        Loading some bundles twice in one process has been observed to corrupt
+        native memory (the umap/pynndescent index in a bundle that cannot be
+        rebuilt fails *during* unpickling, and the second attempt takes the
+        process down in unrelated C code). Reusing the loaded object avoids
+        that entirely, and saves several seconds per video besides.
+        """
         self.config = config
         self.stop_event = threading.Event()
         self.latest_label = LatestLabel()
@@ -233,7 +241,9 @@ class LiveInferencePipeline:
 
         # Load the behavior model up front so we fail loudly if it's
         # missing — before we spin up any threads.
-        self.model = _load_behavior_model(config.behavior_model_path)
+        self.model = (
+            model if model is not None else _load_behavior_model(config.behavior_model_path)
+        )
 
         # CNN sequence models take a separate, simpler thread path (raw
         # keypoint window → egocentric → predict_window); no tabular feature

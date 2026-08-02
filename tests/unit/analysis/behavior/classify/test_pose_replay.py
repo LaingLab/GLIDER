@@ -107,21 +107,33 @@ def test_downstream_always_sees_end_of_stream(tmp_path):
 
 class TestClassifyWiring:
     def test_reuse_picks_up_a_csv_beside_the_video(self, tmp_path, monkeypatch):
+        """With poses on disk and no annotated video, the batch path takes it.
+
+        Every frame is already known, so there is nothing to stream; the
+        streaming pipeline must not even be constructed.
+        """
         from glider.analysis.behavior import classify as classify_mod
+        from glider.analysis.behavior.classify import batch as batch_mod
+        from glider.analysis.behavior.classify import pipeline as pipeline_mod
 
         video = tmp_path / "T7_5.mp4"
         video.write_bytes(b"")
         _pose_csv(tmp_path / "T7_5DLC_exp-5.csv")
 
         seen = {}
+        monkeypatch.setattr(pipeline_mod, "_load_behavior_model", lambda _p: object())
 
-        class _Pipeline:
-            def __init__(self, config):
-                seen["pose_csv_in"] = config.pose_csv_in
-                seen["pose_csv_out"] = config.pose_csv_out
-                raise RuntimeError("stop before running")
+        def _fake_batch(config, _ethogram, _model):
+            seen["pose_csv_in"] = config.pose_csv_in
+            seen["pose_csv_out"] = config.pose_csv_out
+            raise RuntimeError("stop before running")
 
-        monkeypatch.setattr(classify_mod, "LiveInferencePipeline", _Pipeline)
+        monkeypatch.setattr(batch_mod, "batch_apply", _fake_batch)
+        monkeypatch.setattr(
+            classify_mod,
+            "LiveInferencePipeline",
+            lambda *a, **k: pytest.fail("the streaming pipeline should not be built"),
+        )
         with pytest.raises(RuntimeError):
             classify_mod.classify(
                 video,
