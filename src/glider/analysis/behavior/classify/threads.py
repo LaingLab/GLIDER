@@ -193,6 +193,9 @@ class PoseTracker(threading.Thread):
         self.pose_csv_out = Path(pose_csv_out) if pose_csv_out else None
         self.fps = float(fps)
         self._pose_rows: list[tuple[int, np.ndarray, np.ndarray]] = []
+        # Frame size, learned from the first frame. Recorded with the poses so
+        # the analysis viewer can draw them without the video.
+        self._frame_size: tuple[int, int] | None = None
         self.raw_queue = raw_queue
         self.tracked_queue = tracked_queue
         self.display_queue = display_queue
@@ -258,6 +261,8 @@ class PoseTracker(threading.Thread):
                 if self.undetected_dir is not None and bool(np.isnan(keypoints).all()):
                     self._save_undetected(frame_idx, frame_bgr)
 
+                if self._frame_size is None and frame_bgr is not None:
+                    self._frame_size = (frame_bgr.shape[1], frame_bgr.shape[0])
                 if self.pose_csv_out is not None:
                     # Recorded before the queues, so a frame dropped under
                     # back-pressure downstream is still in the pose record.
@@ -301,6 +306,7 @@ class PoseTracker(threading.Thread):
                     confidence=conf,
                     keypoint_names=self.keypoint_names,
                     fps=self.fps,
+                    metadata={"resolution": self._frame_size},
                 ),
                 self.pose_csv_out,
             )

@@ -181,19 +181,6 @@ def describe_speed_threshold(
     }
 
 
-def _video_resolution(video: Path | str) -> tuple[int, int] | None:
-    """``(width, height)`` from the container header, or None if unreadable."""
-    from glider.vision.video_source import VideoFileSource
-
-    source = VideoFileSource()
-    if not source.load(video):
-        return None
-    try:
-        return source.resolution
-    finally:
-        source.release()
-
-
 def _borrow_from_folder_mate(cal_set, video: Path) -> float | None:
     """Scale from another calibrated video sitting in the same folder.
 
@@ -208,7 +195,9 @@ def _borrow_from_folder_mate(cal_set, video: Path) -> float | None:
     addressed as both ``Z:\\...`` and ``\\\\host\\share\\...``, and those never
     compare equal.
     """
-    resolution = _video_resolution(video)
+    from glider.vision.video_source import video_resolution
+
+    resolution = video_resolution(video)
     if resolution is None:
         # Without the true resolution the scale cannot be validated, and an
         # unvalidated borrow is exactly the wrong-millimetres bug.

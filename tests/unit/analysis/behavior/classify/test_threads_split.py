@@ -224,7 +224,7 @@ def test_pose_tracker_saves_undetected_frame(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def _tracker_with_poses(tmp_path, out, rows):
+def _tracker_with_poses(tmp_path, out, rows, frame_size=None):
     """Drive PoseTracker's pose buffer directly, without loading YOLO."""
     from glider.analysis.behavior.classify.threads import PoseTracker
 
@@ -239,6 +239,7 @@ def _tracker_with_poses(tmp_path, out, rows):
         fps=30.0,
     )
     tracker._pose_rows = rows
+    tracker._frame_size = frame_size
     tracker._write_pose_csv()
     return tracker
 
@@ -256,6 +257,29 @@ def test_tracked_poses_are_written_as_a_dlc_csv(tmp_path):
     assert pose.keypoint_names == ["nose", "l_ear", "r_ear"]
     # Each frame was filled with its own index, so the rows stay in order.
     assert [pose.xy[i][0][0] for i in range(5)] == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+
+def test_the_frame_size_is_recorded_with_the_poses(tmp_path):
+    """The review window draws these coordinates without the video, so it
+    needs the canvas they were measured on."""
+    from glider.vision.pose.dlc import resolution_for_csv
+
+    out = tmp_path / "vDLC_exp-5.csv"
+    tracker = _tracker_with_poses(
+        tmp_path, out, [(0, np.zeros((3, 2)), np.ones(3))], frame_size=(1280, 960)
+    )
+    assert tracker._frame_size == (1280, 960)
+    assert resolution_for_csv(out) == (1280, 960)
+
+
+def test_an_unknown_frame_size_leaves_the_sidecar_silent(tmp_path):
+    """A tracker that never saw a frame must not invent a resolution."""
+    from glider.vision.pose.dlc import resolution_for_csv
+
+    out = tmp_path / "vDLC_exp-5.csv"
+    _tracker_with_poses(tmp_path, out, [(0, np.zeros((3, 2)), np.ones(3))])
+
+    assert resolution_for_csv(out) is None
 
 
 def test_dropped_frames_leave_a_gap_rather_than_shifting_the_timeline(tmp_path):

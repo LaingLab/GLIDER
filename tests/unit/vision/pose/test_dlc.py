@@ -136,3 +136,88 @@ def test_fps_for_csv_distinguishes_unknown_from_thirty(synthetic_pose, tmp_path)
 
     assert dlc_io.fps_for_csv(known) == pytest.approx(30.0)
     assert dlc_io.fps_for_csv(unknown) is None
+
+
+# --------------------------------------------------------------------------
+# Frame-size sidecar
+#
+# Pose coordinates are pixels in the source video. Anything drawing them
+# *without* that video — the session review window — needs the canvas they
+# were measured on, and must be told when nobody recorded it rather than be
+# handed a guess.
+# --------------------------------------------------------------------------
+
+
+def _pose(kpt_names, **metadata):
+    from glider.vision.pose.core import PoseData
+
+    return PoseData(
+        xy=np.zeros((10, len(kpt_names), 2)),
+        confidence=np.ones((10, len(kpt_names))),
+        keypoint_names=kpt_names,
+        fps=30.0,
+        metadata=metadata,
+    )
+
+
+def test_the_resolution_is_recorded_when_the_producer_knew_it(kpt_names, tmp_path):
+    out = tmp_path / "out.csv"
+    dlc_io.to_dlc_csv(_pose(kpt_names, resolution=(1280, 960)), out)
+
+    assert dlc_io.read_pose_meta(out)["resolution"] == [1280, 960]
+    assert dlc_io.resolution_for_csv(out) == (1280, 960)
+
+
+def test_an_unknown_resolution_is_omitted_rather_than_guessed(kpt_names, tmp_path):
+    """Inferring it from the coordinate range would shrink the arena to
+    wherever the animal happened to go."""
+    out = tmp_path / "out.csv"
+    dlc_io.to_dlc_csv(_pose(kpt_names), out)
+
+    assert "resolution" not in dlc_io.read_pose_meta(out)
+    assert dlc_io.resolution_for_csv(out) is None
+
+
+@pytest.mark.parametrize("bad", [None, (0, 480), (640, 0), ("a", "b"), (640,), 640])
+def test_a_nonsense_resolution_is_refused_not_written(kpt_names, tmp_path, bad):
+    out = tmp_path / "out.csv"
+    dlc_io.to_dlc_csv(_pose(kpt_names, resolution=bad), out)
+
+    assert dlc_io.resolution_for_csv(out) is None
+
+
+def test_resolution_for_a_csv_with_no_sidecar_is_none(synthetic_pose, tmp_path):
+    out = tmp_path / "out.csv"
+    dlc_io.to_dlc_csv(synthetic_pose, out, write_meta=False)
+
+    assert dlc_io.resolution_for_csv(out) is None
+
+
+def test_backfill_adds_a_resolution_to_an_older_sidecar(kpt_names, tmp_path):
+    """Re-running hours of inference to recover a number the video already
+    knows would be absurd."""
+    out = tmp_path / "out.csv"
+    dlc_io.to_dlc_csv(_pose(kpt_names), out)
+
+    assert dlc_io.backfill_resolution(out, (800, 600)) is True
+    assert dlc_io.resolution_for_csv(out) == (800, 600)
+    # The rest of the sidecar survives the rewrite.
+    assert dlc_io.fps_for_csv(out) == pytest.approx(30.0)
+    assert dlc_io.read_pose_meta(out)["keypoint_names"] == kpt_names
+
+
+def test_backfill_refuses_when_there_is_no_sidecar_to_amend(synthetic_pose, tmp_path):
+    out = tmp_path / "out.csv"
+    dlc_io.to_dlc_csv(synthetic_pose, out, write_meta=False)
+
+    assert dlc_io.backfill_resolution(out, (800, 600)) is False
+    assert not dlc_io.meta_path(out).exists()
+
+
+@pytest.mark.parametrize("bad", [(0, 600), (800, -1), ("x", "y"), None])
+def test_backfill_refuses_a_nonsense_resolution(kpt_names, tmp_path, bad):
+    out = tmp_path / "out.csv"
+    dlc_io.to_dlc_csv(_pose(kpt_names, resolution=(640, 480)), out)
+
+    assert dlc_io.backfill_resolution(out, bad) is False
+    assert dlc_io.resolution_for_csv(out) == (640, 480)  # unchanged
