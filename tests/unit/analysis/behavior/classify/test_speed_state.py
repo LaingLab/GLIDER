@@ -114,3 +114,52 @@ def test_calibrate_thresholds_are_speed_percentiles():
     assert fz == np.percentile([1.0, 2.0, 3.0, 4.0], 25)
     assert dt == np.percentile([1.0, 2.0, 3.0, 4.0], 75)
     assert fz < dt
+
+
+class TestDropoutAtTheStart:
+    """A dropped opening frame must not blank the whole session's speed axis.
+
+    Found on a real 45,000-frame session whose frame 0 was undetected: every
+    subsequent speed came back NaN, so freeze/dart was silently empty for that
+    animal while the other 29 in the cohort looked fine.
+    """
+
+    def _walker(self, n=40, step=3.0):
+        return [np.full((5, 2), i * step) for i in range(n)]
+
+    def test_an_all_nan_first_frame_still_yields_speeds(self):
+        from glider.analysis.behavior.classify.speed_state import CausalSpeed
+
+        frames = self._walker()
+        frames[0] = np.full((5, 2), np.nan)
+        causal = CausalSpeed()
+        speeds = [causal.push(f) for f in frames]
+        assert np.isnan(speeds[0])
+        finite = [s for s in speeds[1:] if not np.isnan(s)]
+        assert len(finite) > len(frames) // 2
+        assert max(finite) > 0
+
+    def test_a_run_of_dropped_opening_frames_recovers(self):
+        from glider.analysis.behavior.classify.speed_state import CausalSpeed
+
+        frames = self._walker()
+        for i in range(6):
+            frames[i] = np.full((5, 2), np.nan)
+        causal = CausalSpeed()
+        speeds = [causal.push(f) for f in frames]
+        assert all(np.isnan(s) for s in speeds[:6])
+        assert any(not np.isnan(s) for s in speeds[6:])
+
+    def test_a_clean_first_frame_is_unchanged(self):
+        from glider.analysis.behavior.classify.speed_state import CausalSpeed
+
+        assert CausalSpeed().push(np.zeros((5, 2))) == 0.0
+
+    def test_dropout_in_the_middle_still_only_gaps(self):
+        from glider.analysis.behavior.classify.speed_state import CausalSpeed
+
+        frames = self._walker()
+        frames[20] = np.full((5, 2), np.nan)
+        causal = CausalSpeed()
+        speeds = [causal.push(f) for f in frames]
+        assert not np.isnan(speeds[-1])

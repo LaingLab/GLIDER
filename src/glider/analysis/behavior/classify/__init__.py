@@ -297,6 +297,7 @@ def classify(
     write_pose_csv=True,
     pose_csv_in=None,
     reuse_existing_poses=False,
+    model=None,
     **opts,
 ) -> EthogramResult:
     """Run the headless apply pipeline over a recorded video and write outputs.
@@ -317,6 +318,11 @@ def classify(
     ``output_dir`` (created if missing), alongside the pipeline's own
     ``annotated.mp4`` / ``ethogram_raw.csv``. Returns the
     :class:`EthogramResult`.
+
+    ``model`` accepts an already-loaded bundle. Scoring many videos in one
+    process otherwise re-reads it per video, which is both slow (seconds each)
+    and, for bundles carrying an unrebuildable umap index, a way to corrupt
+    native memory by unpickling the same broken object repeatedly.
 
     Extra ``LiveInferenceConfig`` knobs (e.g. ``conf_threshold``,
     ``smooth_window``, ``predict_every``, ``behavior_confidence_threshold``,
@@ -396,8 +402,27 @@ def classify(
         device=device,
         **opts,
     )
-    pipeline = LiveInferencePipeline(config)
-    pipeline.run()
+    # With the poses already tracked and no annotated video to render, every
+    # frame is known up front and there is nothing to stream. Scoring the
+    # session in one vectorised pass is ~700x faster than pushing it through
+    # the realtime threads, and it computes `body_angular_velocity` over the
+    # whole session the way training does -- the five-frame streaming window
+    # cannot, because angle unwrapping is cumulative, not a local stencil.
+    pipeline = None
+    used_batch = False
+    if pose_csv_in is not None and output_video is None:
+        from glider.analysis.behavior.classify import batch as _batch
+        from glider.analysis.behavior.classify.pipeline import _load_behavior_model
+
+        if model is None:
+            model = _load_behavior_model(model_path)
+        used_batch = _batch.batch_apply(config, ethogram_csv, model)
+    if not used_batch:
+        # Hand over the bundle only if we already loaded it: unpickling some
+        # bundles twice in one process corrupts native memory.
+        handover = {"model": model} if model is not None else {}
+        pipeline = LiveInferencePipeline(config, **handover)
+        pipeline.run()
 
     # The classifier threads only write the ethogram CSV once at least one
     # prediction has been buffered. A too-short clip (never fills the feature
@@ -416,7 +441,9 @@ def classify(
             raise RuntimeError(f"classify(): pipeline produced no ethogram output: {err}")
         labels = []
 
-    video_fps = getattr(pipeline.producer, "fps", None) or config.fps_override or 30.0
+    video_fps = (
+        getattr(getattr(pipeline, "producer", None), "fps", None) or config.fps_override or rate
+    )
     predict_every = max(1, int(config.predict_every))
     effective_fps = video_fps / predict_every
 

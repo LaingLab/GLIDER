@@ -124,7 +124,15 @@ class CausalSpeed:
             warnings.filterwarnings("ignore", r"All-NaN slice encountered", RuntimeWarning)
             smoothed = np.nanmedian(np.stack(self._coords, axis=0), axis=0)  # (K, 2)
 
-        if self._prev_smoothed is None:
+        # Seed (or re-seed) the reference. An all-NaN reference can never
+        # produce a finite displacement again, and the dropout branch below
+        # deliberately does not advance it — so accepting one would make a
+        # single dropped opening frame silently blank the speed axis for the
+        # entire session, which is exactly what it did.
+        if self._prev_smoothed is None or np.all(np.isnan(self._prev_smoothed)):
+            if np.all(np.isnan(smoothed)):
+                self._speeds.append(np.nan)
+                return float("nan")
             self._prev_smoothed = smoothed
             self._speeds.append(0.0)
             return 0.0
