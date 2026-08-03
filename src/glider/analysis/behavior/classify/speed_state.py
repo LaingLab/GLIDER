@@ -213,6 +213,31 @@ class CausalSpeed:
         return float(np.mean(valid)) if valid else float("nan")
 
 
+def causal_speed_series(
+    xy_frames,
+    *,
+    coord_smooth: int = 5,
+    speed_smooth: int = 3,
+) -> np.ndarray:
+    """The whole causal speed trace: one px/frame value per input frame.
+
+    :class:`CausalSpeed` is a streaming object, so every consumer that wants
+    the trace over a recording has written the same three-line loop. Two of
+    them then diverged in what they did next -- the cohort thresholds drop
+    frame 0 and the dropouts before taking percentiles, while a per-frame
+    readout must keep every frame at its own index or it cannot be indexed by
+    frame at all.
+
+    This returns the trace *unfiltered*: frame 0 is the ``0.0`` it is by
+    construction, and a dropout is a ``NaN`` sitting at its own index. Callers
+    that want the pooled-percentile view filter it themselves; that way the
+    signal has one definition and the filtering is visible at the point it
+    matters.
+    """
+    causal = CausalSpeed(coord_smooth=coord_smooth, speed_smooth=speed_smooth)
+    return np.asarray([causal.push(xy) for xy in xy_frames], dtype=np.float64)
+
+
 def calibrate_speed_thresholds(
     xy_frames,
     *,

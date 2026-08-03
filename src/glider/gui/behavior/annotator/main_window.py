@@ -29,7 +29,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -60,9 +60,12 @@ from glider.analysis.behavior.vocabulary import (
 )
 from glider.gui.behavior.annotator.clip_player import ClipPlayer
 from glider.gui.behavior.annotator.sampler import ProposedClip
+from glider.gui.behavior.annotator.speed_source import SpeedCache, load_session_speed
+from glider.gui.behavior.annotator.speed_trace import SpeedTrace
 from glider.gui.behavior.annotator.trim_bar import TrimBar, compute_window
 
 if TYPE_CHECKING:
+    from glider.analysis.behavior.cohort_speed import CohortSpeedThresholds
     from glider.gui.behavior.annotator.capture_cache import VideoCaptureCache
 
 
@@ -86,6 +89,43 @@ def _next_free_hotkey(vocab: Vocabulary) -> str:
     return ""
 
 
+class _SpeedWorker(QObject):
+    """Parses one video's pose CSV off the UI thread.
+
+    Parsing a 17 MB CSV takes a second or two. Doing that inline once per
+    video turns a labelling session into thirty short freezes, which reads as
+    the application hanging rather than as work being done.
+
+    Deliberately self-contained: it is given the paths it needs and reports
+    back by signal, rather than holding the window and calling into it. A
+    worker that reaches back into a window the user has since closed is
+    touching a deleted C++ object from another thread, which does not raise —
+    it takes the process down.
+    """
+
+    loaded = pyqtSignal(object, object)  # video, SessionSpeed
+    failed = pyqtSignal(object, str)  # video, reason
+    finished = pyqtSignal()
+
+    def __init__(self, video: Path, pose_csv: Path, px_per_mm: float | None):
+        super().__init__()
+        self._video = Path(video)
+        self._pose_csv = Path(pose_csv)
+        self._px_per_mm = px_per_mm
+
+    def run(self) -> None:
+        try:
+            session = load_session_speed(self._pose_csv, px_per_mm=self._px_per_mm)
+        except Exception as e:  # noqa: BLE001 - reported, never fatal
+            self.failed.emit(self._video, f"{type(e).__name__}: {e}")
+        else:
+            self.loaded.emit(self._video, session)
+        finally:
+            # Always emitted: a worker that dies silently would leave the
+            # trace saying "loading…" for the rest of the session.
+            self.finished.emit()
+
+
 class AnnotatorWindow(QMainWindow):
     """Clip-by-clip labelling UI."""
 
@@ -98,6 +138,9 @@ class AnnotatorWindow(QMainWindow):
         vocab_path: Path | None = None,
         capture_cache: VideoCaptureCache | None = None,
         clip_sampler: Callable[[int], list[ProposedClip]] | None = None,
+        pose_csvs: dict[Path, Path] | None = None,
+        cohort: CohortSpeedThresholds | None = None,
+        px_per_mm: dict[Path, float] | None = None,
     ):
         super().__init__()
         self.setWindowTitle("Behavior Annotator")
@@ -134,6 +177,17 @@ class AnnotatorWindow(QMainWindow):
             except (ValueError, OverlapError, OSError) as e:
                 self.stores[video_path] = AnnotationStore()
                 self.load_errors[video_path] = str(e)
+        # Speed trace. Entirely optional: with no pose CSVs the widget stays
+        # hidden and nothing else about the window changes, which is what
+        # every caller predating this feature relies on.
+        self.pose_csvs: dict[Path, Path] = {Path(v): Path(p) for v, p in (pose_csvs or {}).items()}
+        self.cohort = cohort
+        self.px_per_mm: dict[Path, float] = {
+            Path(v): float(s) for v, s in (px_per_mm or {}).items()
+        }
+        self.speed_cache = SpeedCache()
+        self._speed_threads: list[QThread] = []
+
         # Map proposed-clip index → the BehaviorZone it produced. This is
         # how a clip is recognised as "labeled" now that a saved zone's
         # trimmed bounds no longer equal the proposed clip's bounds. Seeded
@@ -193,6 +247,19 @@ class AnnotatorWindow(QMainWindow):
         self.trim_bar = TrimBar()
         self.trim_bar.bounds_changed.connect(self._on_trim_changed)
         main.addWidget(self.trim_bar)
+        # Speed trace, directly under the trim bar and sharing its frame
+        # window, so a peak in the trace sits above the frames that produced
+        # it. Hidden unless this session was given pose data.
+        self.speed_trace = SpeedTrace()
+        # Whether the feature is on for this session -- NOT whether the widget
+        # is currently on screen. isVisible() is false until the window is
+        # shown, so gating the logic on it would leave the trace unconfigured
+        # for the first clip and blank behind a hidden parent.
+        self._speed_enabled = bool(self.pose_csvs)
+        self.speed_trace.setVisible(self._speed_enabled)
+        main.addWidget(self.speed_trace)
+        self.clip.frame_changed.connect(self._on_player_frame)
+
         self.trim_hint = QLabel("trim: drag handles · [ ] in · { } out")
         self.trim_hint.setStyleSheet("color: #9ca3af; font-size: 11px;")
         self.trim_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -690,6 +757,111 @@ class AnnotatorWindow(QMainWindow):
                 self._clip_zone[i] = best
 
     # ------------------------------------------------------------------
+    # Speed trace
+    # ------------------------------------------------------------------
+    def _on_player_frame(self, frame: int) -> None:
+        """Move the playhead to the frame the viewer is actually looking at."""
+        if self._speed_enabled:
+            self.speed_trace.set_playhead(int(frame))
+
+    def _load_speed_now(self, video: Path) -> None:
+        """Compute one video's speed trace and file the result. Blocking.
+
+        Separated from the threading so the expensive work is testable
+        synchronously and the worker below is a thin shell around it. Failure
+        is recorded rather than raised: a session with one unreadable pose CSV
+        must keep labelling, just without a trace for that video.
+        """
+        video = Path(video)
+        pose_csv = self.pose_csvs.get(video)
+        if pose_csv is None:
+            self.speed_cache.fail(video, "no pose CSV for this video")
+            return
+        try:
+            session = load_session_speed(pose_csv, px_per_mm=self.px_per_mm.get(video))
+        except Exception as e:  # noqa: BLE001 - shown in the trace, never fatal
+            self.speed_cache.fail(video, f"{type(e).__name__}: {e}")
+            return
+        self.speed_cache.store(video, session)
+
+    def _ensure_speed_loaded(self, video: Path) -> None:
+        """Start a background load for ``video`` if nothing has yet.
+
+        :meth:`SpeedCache.begin` is the gate, so landing on a second clip from
+        the same video does not start a second parse of a 17 MB CSV, and a
+        video already known bad is not retried.
+        """
+        video = Path(video)
+        if not self.pose_csvs:
+            return
+        pose_csv = self.pose_csvs.get(video)
+        if pose_csv is None:
+            return
+        if not self.speed_cache.begin(video):
+            return
+
+        thread = QThread(self)
+        worker = _SpeedWorker(video, pose_csv, self.px_per_mm.get(video))
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        # Bound methods, so Qt drops the connections when this window is
+        # destroyed rather than delivering into a dead object.
+        worker.loaded.connect(self._on_speed_loaded)
+        worker.failed.connect(self._on_speed_failed)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._speed_threads.append(thread)
+        thread.start()
+
+    def _on_speed_loaded(self, video, session) -> None:
+        self.speed_cache.store(video, session)
+        self._refresh_speed_trace()
+
+    def _on_speed_failed(self, video, reason: str) -> None:
+        self.speed_cache.fail(video, reason)
+        self._refresh_speed_trace()
+
+    def _stop_speed_threads(self) -> None:
+        """Let every in-flight parse finish before this window goes away.
+
+        Qt aborts the process when a running QThread is destroyed, so closing
+        the annotator while a pose CSV is still being read must not simply
+        drop the thread on the floor.
+        """
+        for thread in list(self._speed_threads):
+            if thread is None:
+                continue
+            try:
+                thread.quit()
+                thread.wait(5000)
+            except RuntimeError:
+                # Already deleted by deleteLater; nothing left to wait for.
+                pass
+        self._speed_threads.clear()
+
+    def _refresh_speed_trace(self) -> None:
+        """Point the trace at the current clip's video, window and thresholds."""
+        if not self._speed_enabled or not self.clips:
+            return
+        if self.current >= len(self.clips):
+            return
+        video = self._current_video_path()
+        state = self.speed_cache.state(video)
+        if state == "ready":
+            self.speed_trace.set_session(self.speed_cache.get(video))
+        elif state == "failed":
+            self.speed_trace.set_failed(self.speed_cache.error(video) or "unavailable")
+        elif state == "loading":
+            self.speed_trace.set_loading()
+        else:
+            self.speed_trace.set_session(None)
+
+        self.speed_trace.set_window(self.trim_bar._win_start, self.trim_bar._win_end)
+        if self.cohort is not None:
+            self.speed_trace.set_thresholds(self.cohort.freeze, self.cohort.dart, self.cohort.unit)
+
+    # ------------------------------------------------------------------
     # Render-more (review mode)
     # ------------------------------------------------------------------
     def _on_render_more_clicked(self) -> None:
@@ -941,6 +1113,10 @@ class AnnotatorWindow(QMainWindow):
             self.trim_bar.set_bounds(clip.start_frame, clip.end_frame)
         in_f, out_f = self.trim_bar.bounds()
         self._update_caption()
+        # Speed for this clip's video: start the load if this is the first
+        # clip from it, then point the trace at the window either way.
+        self._ensure_speed_loaded(self._current_video_path())
+        self._refresh_speed_trace()
         # Switch the player to the (trimmed) clip span.
         ok = self.clip.set_clip(
             video_path=clip.video_path,
@@ -956,6 +1132,7 @@ class AnnotatorWindow(QMainWindow):
         the trim live, and update the on-screen frame readout."""
         self.clip.set_loop_bounds(int(in_frame), int(out_frame))
         self._update_caption()
+        self._refresh_speed_trace()
 
     def _set_big_label(self, label: str | None) -> None:
         """Show the current clip's label big in the top-right, tinted by its
@@ -972,6 +1149,9 @@ class AnnotatorWindow(QMainWindow):
     # Cleanup
     # ------------------------------------------------------------------
     def closeEvent(self, event) -> None:
+        # Wait for any in-flight pose parse FIRST. Qt aborts the process when
+        # a running QThread is destroyed, and this window owns them.
+        self._stop_speed_threads()
         # Release any privately-owned capture in the player (no-op for
         # cache-owned captures — see ClipPlayer.release()).
         try:

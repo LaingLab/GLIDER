@@ -100,6 +100,64 @@ def test_causal_speed_full_dropout_is_nan():
 
 
 # ---------------------------------------------------------------------------
+# causal_speed_series: the whole trace, one value per frame
+#
+# The annotator's speed trace indexes by frame, so it needs every frame kept
+# in place -- including frame 0 and the NaN dropouts that the threshold
+# pooling drops. One definition of the signal, two consumers.
+# ---------------------------------------------------------------------------
+
+
+def test_causal_speed_series_is_one_value_per_frame():
+    from glider.analysis.behavior.classify.speed_state import causal_speed_series
+
+    frames = np.zeros((7, 2, 2))
+    assert causal_speed_series(frames).shape == (7,)
+
+
+def test_causal_speed_series_matches_pushing_frames_one_at_a_time():
+    """The trace must BE the streamed signal, not an approximation of it."""
+    from glider.analysis.behavior.classify.speed_state import causal_speed_series
+
+    rng = np.random.default_rng(0)
+    frames = rng.normal(size=(40, 3, 2)) * 5.0
+
+    cs = CausalSpeed()
+    expected = np.array([cs.push(f) for f in frames])
+
+    np.testing.assert_allclose(causal_speed_series(frames), expected)
+
+
+def test_causal_speed_series_keeps_frame_zero():
+    """Frame 0 is 0.0 by construction and must stay at index 0, not be dropped."""
+    from glider.analysis.behavior.classify.speed_state import causal_speed_series
+
+    frames = np.array([[[0.0, 0.0]], [[3.0, 4.0]], [[6.0, 8.0]]])
+    series = causal_speed_series(frames, coord_smooth=1, speed_smooth=1)
+    assert series[0] == 0.0
+    assert series[1] == 5.0
+
+
+def test_causal_speed_series_keeps_dropouts_in_place():
+    """A dropout must stay a NaN at its own index so the trace shows a gap."""
+    from glider.analysis.behavior.classify.speed_state import causal_speed_series
+
+    frames = np.array(
+        [[[0.0, 0.0]], [[1.0, 0.0]], [[np.nan, np.nan]], [[3.0, 0.0]]],
+    )
+    series = causal_speed_series(frames, coord_smooth=1, speed_smooth=1)
+    assert np.isnan(series[2])
+    assert not np.isnan(series[1])
+    assert series.size == 4
+
+
+def test_causal_speed_series_handles_no_frames():
+    from glider.analysis.behavior.classify.speed_state import causal_speed_series
+
+    assert causal_speed_series(np.zeros((0, 3, 2))).shape == (0,)
+
+
+# ---------------------------------------------------------------------------
 # calibrate_speed_thresholds: once-per-rig absolute thresholds
 # ---------------------------------------------------------------------------
 

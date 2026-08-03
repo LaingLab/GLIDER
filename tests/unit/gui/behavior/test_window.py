@@ -798,6 +798,117 @@ def test_review_mode_also_wires_up_the_render_more_button(qtbot, tmp_path, monke
     assert callable(captured["annotator_kwargs"]["clip_sampler"])
 
 
+def test_annotate_passes_pose_csvs_to_the_annotator(qtbot, tmp_path, monkeypatch):
+    """The trace needs pose data; the tab already resolved it for the sampler."""
+    _pose_batch_output(tmp_path, "session01")
+
+    captured, _ = _launch_annotate(qtbot, tmp_path, monkeypatch)
+
+    pose_csvs = captured["annotator_kwargs"]["pose_csvs"]
+    assert list(pose_csvs.values())[0].name == "session01DLC_exp-6.csv"
+
+
+def test_annotate_sends_no_cohort_when_none_is_chosen(qtbot, tmp_path, monkeypatch):
+    _pose_batch_output(tmp_path, "session01")
+
+    captured, _ = _launch_annotate(qtbot, tmp_path, monkeypatch)
+
+    assert captured["annotator_kwargs"]["cohort"] is None
+    assert captured["annotator_kwargs"]["px_per_mm"] == {}
+
+
+def test_annotate_loads_and_forwards_a_cohort_threshold_file(qtbot, tmp_path, monkeypatch):
+    from glider.analysis.behavior.cohort_speed import CohortSpeedThresholds
+
+    _pose_batch_output(tmp_path, "session01")
+    cohort_path = tmp_path / "cohort_speed.json"
+    CohortSpeedThresholds(
+        freeze=0.5,
+        dart=27.7,
+        unit="cm/s",
+        freeze_pct=10.0,
+        dart_pct=99.5,
+        n_sessions=30,
+        n_samples=1000,
+    ).save(cohort_path)
+
+    captured, warnings_shown = _launch_annotate(
+        qtbot,
+        tmp_path,
+        monkeypatch,
+        configure=lambda t: setattr(t, "_cohort_path", cohort_path),
+    )
+
+    assert warnings_shown == []
+    cohort = captured["annotator_kwargs"]["cohort"]
+    assert (cohort.freeze, cohort.dart, cohort.unit) == (0.5, 27.7, "cm/s")
+
+
+def test_a_broken_cohort_file_warns_and_does_not_block_labelling(qtbot, tmp_path, monkeypatch):
+    """A bad threshold file costs you the lines, not the session."""
+    _pose_batch_output(tmp_path, "session01")
+    bad = tmp_path / "cohort_speed.json"
+    bad.write_text("{not json", encoding="utf-8")
+
+    captured, warnings_shown = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: setattr(t, "_cohort_path", bad)
+    )
+
+    assert len(warnings_shown) == 1
+    assert "cohort" in warnings_shown[0].lower()
+    # The annotator still opened, just without thresholds.
+    assert captured["annotator_kwargs"]["cohort"] is None
+
+
+def test_annotate_resolves_a_pixel_scale_per_video(qtbot, tmp_path, monkeypatch):
+    """cm/s needs each video's own scale, looked up the way apply does."""
+    from glider.analysis.behavior import units as units_mod
+
+    _pose_batch_output(tmp_path, "session01")
+    master = tmp_path / "pose_calibration.json"
+    master.touch()
+    monkeypatch.setattr(units_mod, "load_px_per_mm", lambda _m, _v: 1.35)
+
+    captured, _ = _launch_annotate(
+        qtbot,
+        tmp_path,
+        monkeypatch,
+        configure=lambda t: setattr(t, "_calibration_master", master),
+    )
+
+    assert list(captured["annotator_kwargs"]["px_per_mm"].values()) == [1.35]
+
+
+def test_an_uncalibrated_video_is_simply_absent_from_the_scales(qtbot, tmp_path, monkeypatch):
+    """No scale means a px/frame trace for that video, not a crash."""
+    from glider.analysis.behavior import units as units_mod
+
+    _pose_batch_output(tmp_path, "session01")
+    master = tmp_path / "pose_calibration.json"
+    master.touch()
+    monkeypatch.setattr(units_mod, "load_px_per_mm", lambda _m, _v: None)
+
+    captured, _ = _launch_annotate(
+        qtbot,
+        tmp_path,
+        monkeypatch,
+        configure=lambda t: setattr(t, "_calibration_master", master),
+    )
+
+    assert captured["annotator_kwargs"]["px_per_mm"] == {}
+
+
+def test_turning_the_trace_off_sends_no_pose_csvs(qtbot, tmp_path, monkeypatch):
+    """Opting out must skip the pose reads entirely, not just hide a widget."""
+    _pose_batch_output(tmp_path, "session01")
+
+    captured, _ = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._speed_check.setChecked(False)
+    )
+
+    assert captured["annotator_kwargs"]["pose_csvs"] == {}
+
+
 def test_cohort_mode_sends_only_the_cohort_file(qtbot, tmp_path):
     """One pooled cut-off, not per-video percentiles."""
     from glider.gui.behavior.window import ApplyTab

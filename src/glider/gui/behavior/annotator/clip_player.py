@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QLabel, QSizePolicy
 
@@ -38,6 +38,14 @@ if TYPE_CHECKING:
 
 class ClipPlayer(QLabel):
     """Looping clip viewer. One clip at a time, plays on repeat."""
+
+    #: The frame index just put on screen. Emitted on every displayed frame,
+    #: including the seek back to the loop start. Anything drawn alongside the
+    #: video (the speed trace's playhead) has to follow the frame the viewer
+    #: is actually looking at, not the decoder's read-ahead position -- cv2
+    #: advances POS_FRAMES past the frame it just handed back, so those two
+    #: differ by one and the wrong choice puts the playhead permanently off.
+    frame_changed = pyqtSignal(int)
 
     def __init__(
         self,
@@ -175,8 +183,10 @@ class ClipPlayer(QLabel):
         ok, frame_bgr = self._cap.read()
         if ok and frame_bgr is not None:
             self._display_bgr(frame_bgr)
-            # cv2 advances POS_FRAMES on read; track that.
+            # cv2 advances POS_FRAMES on read; track that. The frame now on
+            # screen is _start_frame, which is what listeners are told.
             self._current_frame = self._start_frame + 1
+            self.frame_changed.emit(self._start_frame)
 
     def _on_tick(self) -> None:
         if self._cap is None:
@@ -191,8 +201,10 @@ class ClipPlayer(QLabel):
             # Reached end of file unexpectedly; treat as end-of-clip.
             self._seek_to_start()
             return
+        shown = self._current_frame
         self._current_frame += 1
         self._display_bgr(frame_bgr)
+        self.frame_changed.emit(shown)
 
     def _stop_timer(self) -> None:
         if self._timer.isActive():

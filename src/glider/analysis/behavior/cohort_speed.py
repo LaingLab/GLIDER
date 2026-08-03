@@ -96,10 +96,9 @@ def _causal_speeds(pose, frame_range: tuple[int, int] | None = None) -> np.ndarr
     thresholds would be derived from a signal the apply run never produces —
     and the apply run windows the same way, for the same reason.
     """
-    from glider.analysis.behavior.classify.speed_state import CausalSpeed
+    from glider.analysis.behavior.classify.speed_state import causal_speed_series
 
-    causal = CausalSpeed()
-    speeds = np.asarray([causal.push(xy) for xy in pose.xy], dtype=np.float64)
+    speeds = causal_speed_series(pose.xy)
     keep = np.zeros(speeds.size, dtype=bool)
     first, last = frame_range if frame_range is not None else (0, speeds.size - 1)
     first = max(first, 1)  # frame 0 is 0 by construction
