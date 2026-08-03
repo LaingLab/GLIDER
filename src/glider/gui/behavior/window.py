@@ -350,6 +350,29 @@ class AnnotateTab(QWidget):
         )
         layout.addWidget(self._skip_labelled_check)
 
+        # Speed trace. On by default: the labeller is judging speed either
+        # way, and doing it against the numbers the scoring run uses is the
+        # whole point. Opting out skips reading pose data altogether.
+        self._speed_check = QCheckBox("Show speed trace under the clip")
+        self._speed_check.setChecked(True)
+        self._speed_check.setToolTip(
+            "Draw each clip's speed beside the video. Reads the pose CSVs,\n"
+            "which is why it can be turned off."
+        )
+        layout.addWidget(self._speed_check)
+
+        self._cohort_path: Path | None = None
+        self._cohort_label = QLabel("Speed thresholds: (none — trace has no reference lines)")
+        cohort_btn = QPushButton("Choose cohort thresholds...")
+        cohort_btn.clicked.connect(self._on_choose_cohort)
+        layout.addLayout(_row(self._cohort_label, cohort_btn))
+
+        self._calibration_master: Path | None = None
+        self._calibration_label = QLabel("Calibration: (none — trace in px/frame)")
+        calib_btn = QPushButton("Choose calibration...")
+        calib_btn.clicked.connect(self._on_choose_calibration)
+        layout.addLayout(_row(self._calibration_label, calib_btn))
+
         self._launch_btn = QPushButton("Launch annotator")
         self._launch_btn.clicked.connect(self._on_launch)
         layout.addWidget(self._launch_btn)
@@ -359,6 +382,24 @@ class AnnotateTab(QWidget):
         """Review mode replays saved zones, so the sampling controls don't apply."""
         for widget in (self._clip_count, self._clip_count_label, self._skip_labelled_check):
             widget.setEnabled(not reviewing)
+
+    def _on_choose_cohort(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose cohort threshold file", "", "Cohort thresholds (*.json)"
+        )
+        if not path:
+            return
+        self._cohort_path = Path(path)
+        self._cohort_label.setText(f"Speed thresholds: {Path(path).name}")
+
+    def _on_choose_calibration(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose calibration file", "", "Calibration (*.json)"
+        )
+        if not path:
+            return
+        self._calibration_master = Path(path)
+        self._calibration_label.setText(f"Calibration: {Path(path).name}")
 
     def _on_choose_videos(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose videos folder")
@@ -405,6 +446,11 @@ class AnnotateTab(QWidget):
         # Deferred: propose_clips_multi pulls in sklearn; AnnotatorWindow
         # pulls in cv2 via the clip player.
         from glider.analysis.behavior.annotations import AnnotationStore
+        from glider.analysis.behavior.cohort_speed import (
+            CohortSpeedError,
+            CohortSpeedThresholds,
+        )
+        from glider.analysis.behavior.units import load_px_per_mm
         from glider.analysis.behavior.vocabulary import Vocabulary
         from glider.gui.behavior.annotator.app import (
             annotation_path_for,
@@ -472,6 +518,31 @@ class AnnotateTab(QWidget):
         # session can never be extended.
         clip_sampler = make_more_sampler(sessions, fps=fps)
 
+        # Speed trace inputs. All three are optional and independent: no pose
+        # CSVs means no trace, no cohort file means no reference lines, no
+        # calibration means the trace is in px/frame.
+        pose_csvs: dict[Path, Path] = {}
+        scales: dict[Path, float] = {}
+        cohort = None
+        if self._speed_check.isChecked():
+            pose_csvs = dict(sessions)
+            if self._calibration_master is not None:
+                for video, _pose in sessions:
+                    scale = load_px_per_mm(self._calibration_master, video)
+                    if scale and scale > 0:
+                        scales[video] = float(scale)
+            if self._cohort_path is not None:
+                try:
+                    cohort = CohortSpeedThresholds.load(self._cohort_path)
+                except CohortSpeedError as e:
+                    # Costs the reference lines, not the labelling session.
+                    QMessageBox.warning(
+                        self,
+                        "Annotate",
+                        f"Could not read the cohort threshold file:\n{e}\n\n"
+                        "Opening without speed reference lines.",
+                    )
+
         # Vocabulary fallback: a sibling of the first video, same rule as
         # annotator/app.py's run().
         vocab = Vocabulary()
@@ -493,6 +564,9 @@ class AnnotateTab(QWidget):
             vocab_path=vocab_path,
             capture_cache=capture_cache,
             clip_sampler=clip_sampler,
+            pose_csvs=pose_csvs,
+            cohort=cohort,
+            px_per_mm=scales,
         )
         self._annotator_window.show()
         self._annotator_window.warn_about_load_errors()

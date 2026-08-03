@@ -107,6 +107,9 @@ def run(
     min_frame_gap: int | None = None,
     review: bool = False,
     exclude_labeled: bool = False,
+    cohort_thresholds: str | Path | None = None,
+    calibration_master: str | Path | None = None,
+    show_speed: bool = True,
     argv: Sequence[str] | None = None,
 ) -> int:
     """Launch the annotator GUI on one or more (video, pose_csv) sessions.
@@ -238,6 +241,33 @@ def run(
 
     capture_cache = VideoCaptureCache(max_open=3)
 
+    # Speed trace inputs. Each is independent and optional: no pose CSV means
+    # no trace for that video, no cohort file means no reference lines, no
+    # calibration means the trace stays in px/frame.
+    pose_csvs: dict[Path, Path] = {}
+    scales: dict[Path, float] = {}
+    cohort = None
+    if show_speed:
+        from glider.analysis.behavior.units import load_px_per_mm
+
+        pose_csvs = {v: p for v, p in sessions if Path(p).exists()}
+        if calibration_master is not None:
+            for video in pose_csvs:
+                scale = load_px_per_mm(calibration_master, video)
+                if scale and scale > 0:
+                    scales[video] = float(scale)
+        if cohort_thresholds is not None:
+            from glider.analysis.behavior.cohort_speed import (
+                CohortSpeedError,
+                CohortSpeedThresholds,
+            )
+
+            try:
+                cohort = CohortSpeedThresholds.load(cohort_thresholds)
+                print(f"  speed reference: {cohort.describe()}")
+            except CohortSpeedError as e:
+                print(f"  warning: couldn't read cohort thresholds: {e}")
+
     # Deferred so the PyQt6 ImportError check above can run first — importing
     # AnnotatorWindow at module top would pull PyQt6 and produce a less
     # friendly traceback for users who haven't installed the [ui] extra.
@@ -254,6 +284,9 @@ def run(
         vocab_path=resolved_vocab_path,
         capture_cache=capture_cache,
         clip_sampler=clip_sampler,
+        pose_csvs=pose_csvs,
+        cohort=cohort,
+        px_per_mm=scales,
     )
     window_widget.show()
     window_widget.warn_about_load_errors()

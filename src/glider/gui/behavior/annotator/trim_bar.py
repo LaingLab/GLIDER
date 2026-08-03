@@ -36,6 +36,34 @@ def compute_window(
     return win_start, win_end
 
 
+# Padding on each end of the painted track. Shared, because anything drawn
+# beneath the trim bar has to use the same mapping or it will not line up.
+TRACK_MARGIN = 10
+
+
+def track_width(width: int, margin: int = TRACK_MARGIN) -> int:
+    """Usable track width for a widget ``width`` px wide."""
+    return max(1, int(width) - 2 * int(margin))
+
+
+def frame_to_x(
+    frame: int,
+    win_start: int,
+    win_end: int,
+    width: int,
+    margin: int = TRACK_MARGIN,
+) -> int:
+    """Pixel x for ``frame`` within the window ``[win_start, win_end)``.
+
+    Pure, and shared by :class:`TrimBar` and the speed trace drawn under it.
+    A second copy of this arithmetic is how two stacked timelines drift a few
+    pixels apart and stop meaning the same thing.
+    """
+    span = max(1, int(win_end) - int(win_start))
+    frac = (frame - int(win_start)) / span
+    return int(int(margin) + frac * track_width(width, margin))
+
+
 def clamp_trim_bounds(
     in_frame: int,
     out_frame: int,
@@ -68,7 +96,7 @@ except ImportError:  # pragma: no cover - exercised only in no-UI installs
 
 if _HAVE_QT:
 
-    _MARGIN = 10  # px padding on each end of the track
+    _MARGIN = TRACK_MARGIN  # kept as a local alias; the constant is shared
 
     class TrimBar(QWidget):
         """Timeline track with draggable IN/OUT handles over a padded window.
@@ -125,12 +153,10 @@ if _HAVE_QT:
 
         # ---- frame <-> pixel mapping ----
         def _track_width(self) -> int:
-            return max(1, self.width() - 2 * _MARGIN)
+            return track_width(self.width())
 
         def _frame_to_x(self, frame: int) -> int:
-            span = max(1, self._win_end - self._win_start)
-            frac = (frame - self._win_start) / span
-            return int(_MARGIN + frac * self._track_width())
+            return frame_to_x(frame, self._win_start, self._win_end, self.width())
 
         def _x_to_frame(self, x: int) -> int:
             span = max(1, self._win_end - self._win_start)
