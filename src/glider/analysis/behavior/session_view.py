@@ -27,11 +27,92 @@ from glider.analysis.ethogram import UNSCORED
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["SegmentStats", "SessionView", "SessionViewError"]
+__all__ = ["SegmentStats", "SessionView", "SessionViewError", "find_session_poses"]
 
 
 class SessionViewError(ValueError):
     """A session's files could not be loaded."""
+
+
+#: How far up from the ethogram to look for the poses. An apply run writes
+#: ``<output>/<video stem>/ethogram_raw.csv`` while the poses usually stay
+#: with the videos, which is commonly the grandparent of that folder.
+_SEARCH_LEVELS = 3
+
+
+def _find_upward(start: Path, name: str) -> Path | None:
+    """``name`` in *start* or a few folders above it, or None.
+
+    Outputs are written into a subfolder per video, so the rig-level files an
+    apply run used — the master calibration in particular — normally sit a
+    level or two up rather than beside the ethogram.
+    """
+    folder = start
+    for _ in range(_SEARCH_LEVELS + 1):
+        candidate = folder / name
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            return None
+        if folder == folder.parent:
+            break
+        folder = folder.parent
+    return None
+
+
+def find_session_poses(ethogram_csv: Path | str) -> Path | None:
+    """The pose CSV belonging to an apply run's ethogram, if it can be found.
+
+    Resolution order, most trustworthy first:
+
+    1. The path recorded in ``run.json`` beside the ethogram. Reusing already
+       tracked poses copies nothing into the output folder — the CSV is tens
+       of megabytes — so the recorded path is the only thing that knows where
+       they went.
+    2. A pose CSV sitting beside the ethogram, which is what a run that did
+       its own tracking leaves.
+    3. A pose CSV named for this session, in the folders above. The output
+       folder is named after the video, so the search is anchored on that
+       stem: it can find ``videos/t4.csv`` from ``videos/out/t4/`` but can
+       never pick up a different animal's poses.
+    """
+    ethogram_csv = Path(ethogram_csv)
+    folder = ethogram_csv.parent
+
+    from glider.analysis.behavior.classify import read_run_manifest
+
+    manifest = read_run_manifest(folder) or {}
+    recorded = manifest.get("pose_csv")
+    if recorded:
+        path = Path(recorded)
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            logger.info("the pose CSV recorded in run.json is unreachable: %s", recorded)
+
+    beside = sorted(folder.glob("*DLC_*.csv"))
+    if beside:
+        return beside[0]
+
+    # The output folder carries the video's name; so does the pose CSV.
+    from glider.vision.pose.batch import find_pose_csv
+
+    stem = folder.name
+    parent = folder.parent
+    for _ in range(_SEARCH_LEVELS):
+        if not parent or parent == parent.parent:
+            break
+        try:
+            found = find_pose_csv(parent / f"{stem}.mp4", parent)
+        except OSError:
+            found = None
+        if found is not None:
+            logger.info("found %s for %s by searching upward", found.name, ethogram_csv)
+            return found
+        parent = parent.parent
+    return None
 
 
 @dataclass
@@ -109,9 +190,7 @@ class SessionView:
         from glider.vision.pose.dlc import from_dlc_csv, resolution_for_csv
 
         if pose_csv is None:
-            # An apply run writes the poses beside the ethogram.
-            candidates = sorted(ethogram_csv.parent.glob("*DLC_*.csv"))
-            pose_csv = candidates[0] if candidates else None
+            pose_csv = find_session_poses(ethogram_csv)
         if pose_csv is None:
             return
         try:
@@ -128,19 +207,37 @@ class SessionView:
             self.body_axis = (0, len(self.keypoint_names) - 1)
 
     def _load_scale(self, calibration_master, video, ethogram_csv: Path) -> None:
+        from glider.analysis.behavior.classify import read_run_manifest
         from glider.analysis.behavior.units import load_px_per_mm
 
         if calibration_master is None:
-            beside = ethogram_csv.parent / "pose_calibration.json"
-            calibration_master = beside if beside.exists() else None
+            # The run recorded the scale it actually used, which beats
+            # re-deriving one and beats searching for the file.
+            recorded = (read_run_manifest(ethogram_csv.parent) or {}).get("px_per_mm")
+            if recorded:
+                self.px_per_mm = float(recorded)
+                return
+            calibration_master = _find_upward(ethogram_csv.parent, "pose_calibration.json")
         if calibration_master is None:
             return
-        target = video
-        if target is None:
-            # The ethogram lives in <output>/<video stem>/, so the folder names
-            # the session even when the video itself is elsewhere.
-            target = ethogram_csv.parent / f"{ethogram_csv.parent.name}.mp4"
-        self.px_per_mm = load_px_per_mm(calibration_master, target)
+        # The ethogram lives in <output>/<video stem>/, so the folder names the
+        # session — but the video itself is almost never in there. Look where
+        # the session's other files actually turned up: beside its poses, then
+        # beside the calibration that covers it. Handing the lookup a path
+        # inside the output folder finds nothing and silently costs the
+        # real-world units.
+        stem = ethogram_csv.parent.name
+        candidates = [video] if video is not None else []
+        if self.pose_path is not None:
+            candidates.append(self.pose_path.parent / f"{stem}.mp4")
+        candidates.append(Path(calibration_master).parent / f"{stem}.mp4")
+        candidates.append(ethogram_csv.parent / f"{stem}.mp4")
+
+        for target in candidates:
+            scale = load_px_per_mm(calibration_master, target)
+            if scale:
+                self.px_per_mm = float(scale)
+                return
 
     # ------------------------------------------------------------------
     # geometry
@@ -162,7 +259,13 @@ class SessionView:
         """
         if self.xy is None:
             return None
-        with np.errstate(invalid="ignore"):
+        import warnings
+
+        with warnings.catch_warnings():
+            # A fully dropped frame is an all-NaN slice; NaN is the right
+            # answer for it, so the warning is noise on every session with
+            # any dropout at all.
+            warnings.filterwarnings("ignore", r"Mean of empty slice", RuntimeWarning)
             return np.nanmean(self.xy, axis=1)
 
     def label_at(self, frame: int) -> str:

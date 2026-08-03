@@ -282,10 +282,18 @@ class KeypointCanvas(QWidget):
         if self._view is None:
             return "Load a session"
         if self._view.xy is None:
-            return "No pose CSV was found beside this ethogram, so there is nothing to draw."
+            return (
+                "No pose CSV could be found for this session.\n\n"
+                "Looked at the path recorded in run.json, then beside the "
+                "ethogram, then for a CSV named after this session in the "
+                "folders above.\n\n"
+                "Use “Choose pose CSV…” above to point at it."
+            )
         return (
             "This session's pose sidecar records no resolution, so the arena "
-            "cannot be sized. Re-run tracking, or add it to the .meta.json."
+            "cannot be sized.\n\n"
+            "Use “Set arena size from video…” above to read it from the "
+            "source video — it is stored, so this is a one-off."
         )
 
 
@@ -297,6 +305,7 @@ class AnalysisWindow(QMainWindow):
         self.setWindowTitle("Behavior Analysis — session review")
         self.resize(1020, 720)
         self._view: SessionView | None = None
+        self._ethogram_csv: Path | None = None
         self._frame = 0
 
         central = QWidget()
@@ -310,6 +319,13 @@ class AnalysisWindow(QMainWindow):
         # Runs made before the sidecar carried a resolution can still be
         # viewed: the video knows the number, so offer to read it from there
         # rather than make the operator re-run hours of inference.
+        # Poses are looked for automatically, but a cohort can be laid out in
+        # ways no search should guess at. This is the escape hatch.
+        self._pick_poses = QPushButton("Choose pose CSV…")
+        self._pick_poses.clicked.connect(self._choose_pose_csv)
+        self._pick_poses.setVisible(False)
+        top.addWidget(self._pick_poses)
+
         self._fix_resolution = QPushButton("Set arena size from video…")
         self._fix_resolution.clicked.connect(self._resolution_from_video)
         self._fix_resolution.setVisible(False)
@@ -380,25 +396,42 @@ class AnalysisWindow(QMainWindow):
         if path:
             self.load(Path(path))
 
-    def load(self, ethogram_csv: Path) -> None:
-        """Load a session and everything sitting beside it."""
+    def load(self, ethogram_csv: Path, *, pose_csv: Path | None = None) -> None:
+        """Load a session and everything belonging to it."""
         try:
-            view = SessionView.load(ethogram_csv)
+            view = SessionView.load(ethogram_csv, pose_csv=pose_csv)
         except SessionViewError as e:
             QMessageBox.critical(self, "Open session", str(e))
             return
         self._view = view
+        self._ethogram_csv = Path(ethogram_csv)
         self._path_label.setText(str(ethogram_csv))
         self._bar.set_view(view)
         self._canvas.set_view(view)
         self._apply_trail()
         self._set_frame(0)
+        self._pick_poses.setVisible(view.xy is None)
         self._fix_resolution.setVisible(view.xy is not None and view.resolution is None)
+        found = f"  Poses: {view.pose_path.name}." if view.pose_path else "  No poses found."
         self._summary.setText(
             f"{view.n_rows:,} scored rows at {view.fps:.2f} fps "
             f"({view.duration_s / 60:.1f} min)."
+            + found
             + ("" if view.px_per_mm else "  No calibration found: distances unavailable.")
         )
+
+    def _choose_pose_csv(self) -> None:
+        """Point the session at its poses when discovery could not."""
+        if self._ethogram_csv is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Pose CSV for this session",
+            str(self._ethogram_csv.parent),
+            "Pose CSV (*.csv);;All Files (*)",
+        )
+        if path:
+            self.load(self._ethogram_csv, pose_csv=Path(path))
 
     def _resolution_from_video(self) -> None:
         """Recover the arena size from the source video and keep it."""

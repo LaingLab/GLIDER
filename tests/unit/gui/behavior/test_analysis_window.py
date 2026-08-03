@@ -284,3 +284,82 @@ class TestAnalysisWindow:
         bad.write_text("a,b\n1,2\n")
         win.load(bad)
         assert shown and win._view is None
+
+
+class TestWhenPosesAreElsewhere:
+    """Reusing tracked poses writes none into the output folder, so the
+    window has to say what to do rather than just draw nothing."""
+
+    def _session_without_poses(self, tmp_path):
+        folder = tmp_path / "outputs" / "t4"
+        folder.mkdir(parents=True)
+        pd.DataFrame({"frame": range(30), "behavior": ["groom"] * 30}).to_csv(
+            folder / "ethogram_raw.csv", index=False
+        )
+        return folder / "ethogram_raw.csv"
+
+    def test_the_picker_appears_only_when_poses_are_missing(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(self._session_without_poses(tmp_path))
+        assert win._pick_poses.isVisibleTo(win) is True
+
+        win.load(_session(tmp_path / "with_poses"))
+        assert win._pick_poses.isVisibleTo(win) is False
+
+    def test_the_blank_canvas_points_at_the_button(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(self._session_without_poses(tmp_path))
+        why = win._canvas._why_blank()
+        assert "Choose pose CSV" in why
+        assert "run.json" in why  # says where it looked, not just that it failed
+
+    def test_choosing_a_csv_loads_it(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        etho = self._session_without_poses(tmp_path)
+        win.load(etho)
+        assert win._view.xy is None
+
+        # A pose CSV somewhere the search would never look.
+        elsewhere = tmp_path / "somewhere" / "else"
+        elsewhere.mkdir(parents=True)
+        from glider.vision.pose.core import PoseData
+        from glider.vision.pose.dlc import to_dlc_csv
+
+        chosen = elsewhere / "whatever.csv"
+        to_dlc_csv(
+            PoseData(
+                xy=np.zeros((30, len(NAMES), 2)),
+                confidence=np.ones((30, len(NAMES))),
+                keypoint_names=NAMES,
+                fps=30.0,
+            ),
+            chosen,
+        )
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getOpenFileName",
+            lambda *a, **k: (str(chosen), ""),
+        )
+        win._choose_pose_csv()
+        assert win._view.xy is not None
+        assert win._view.pose_path == chosen
+        assert win._pick_poses.isVisibleTo(win) is False
+
+    def test_the_summary_names_the_pose_file_that_was_used(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        assert "vDLC_exp-7.csv" in win._summary.text()
+
+    def test_cancelling_the_picker_changes_nothing(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(self._session_without_poses(tmp_path))
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getOpenFileName",
+            lambda *a, **k: ("", ""),
+        )
+        win._choose_pose_csv()
+        assert win._view.xy is None
