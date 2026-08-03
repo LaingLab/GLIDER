@@ -363,3 +363,157 @@ class TestWhenPosesAreElsewhere:
         )
         win._choose_pose_csv()
         assert win._view.xy is None
+
+
+def _key(win, key, modifier=Qt.KeyboardModifier.NoModifier):
+    from PyQt6.QtGui import QKeyEvent
+
+    win.keyPressEvent(QKeyEvent(QKeyEvent.Type.KeyPress, key, modifier))
+
+
+class TestKeyboardScrubbing:
+    """One pixel of a 45,000-frame bar is tens of frames, so a bout boundary
+    cannot be found with the mouse at all."""
+
+    def _win(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        win._set_frame(150)
+        return win
+
+    def test_right_advances_exactly_one_frame(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_Right)
+        assert win._frame == 151
+
+    def test_left_steps_back_one_frame(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_Left)
+        assert win._frame == 149
+
+    def test_shift_steps_ten(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_Right, Qt.KeyboardModifier.ShiftModifier)
+        assert win._frame == 160
+
+    def test_ctrl_steps_one_second(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_Right, Qt.KeyboardModifier.ControlModifier)
+        assert win._frame == 180  # 30 fps
+
+    def test_stepping_past_the_end_holds_there(self, qtbot, tmp_path):
+        """Wrapping to the start would read as a glitch."""
+        win = self._win(qtbot, tmp_path)
+        win._set_frame(299)
+        _key(win, Qt.Key.Key_Right)
+        assert win._frame == 299
+
+    def test_stepping_before_the_start_holds_at_zero(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._set_frame(0)
+        _key(win, Qt.Key.Key_Left)
+        assert win._frame == 0
+
+    def test_home_and_end_jump_to_the_edges(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_End)
+        assert win._frame == 299
+        _key(win, Qt.Key.Key_Home)
+        assert win._frame == 0
+
+    def test_space_toggles_playback(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_Space)
+        assert win._timer.isActive() is True
+        _key(win, Qt.Key.Key_Space)
+        assert win._timer.isActive() is False
+
+    def test_stepping_stops_playback(self, qtbot, tmp_path):
+        """Nudging a frame while playing should leave you on that frame."""
+        win = self._win(qtbot, tmp_path)
+        win._toggle_play()
+        _key(win, Qt.Key.Key_Right)
+        assert win._timer.isActive() is False
+        assert win._play.text() == "Play"
+
+    def test_keys_are_inert_before_a_session_is_loaded(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        _key(win, Qt.Key.Key_Right)  # must not raise
+        assert win._frame == 0
+
+
+class TestTheSpeedAxisIsShown:
+    def _session_with_speed(self, tmp_path, n=300):
+        folder = tmp_path / "sp"
+        folder.mkdir(parents=True, exist_ok=True)
+        speed = [""] * n
+        for i in range(100, 160):
+            speed[i] = "freezing"
+        pd.DataFrame(
+            {
+                "frame": range(n),
+                "behavior": ["groom"] * n,
+                "speed": speed,
+                "speed_px_frame": [0.4] * n,
+                "speed_cm_s": [1.2] * n,
+            }
+        ).to_csv(folder / "ethogram_raw.csv", index=False)
+        return folder / "ethogram_raw.csv"
+
+    def test_the_bar_paints_a_second_lane(self, qtbot, tmp_path):
+        bar = EthogramBar()
+        qtbot.addWidget(bar)
+        bar.resize(300, 46)
+        bar.set_view(SessionView.load(self._session_with_speed(tmp_path)))
+        image = bar.grab().toImage()
+        # Same column, two lanes: posture on top, freezing beneath it.
+        assert image.pixelColor(130, 10) != image.pixelColor(130, 42)
+
+    def test_a_session_without_a_speed_axis_uses_the_full_height(self, qtbot, tmp_path):
+        bar = EthogramBar()
+        qtbot.addWidget(bar)
+        bar.resize(300, 46)
+        bar.set_view(SessionView.load(_session(tmp_path / "plain")))
+        image = bar.grab().toImage()
+        assert image.pixelColor(130, 10) == image.pixelColor(130, 42)
+
+    def test_freeze_bouts_reach_the_table(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(self._session_with_speed(tmp_path))
+        win._bar.set_selection(0, 299)
+        states = {win._bouts.item(r, 0).text() for r in range(win._bouts.rowCount())}
+        assert "freezing" in states
+        assert "groom" in states
+        assert "— speed axis —" in states  # the two are stacked, never summed
+
+
+class TestVideoPlayback:
+    def test_the_video_toggle_is_disabled_without_one(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        assert win._video_on.isEnabled() is False
+
+    def test_a_video_enables_the_toggle_and_is_named(self, qtbot, tmp_path):
+        import cv2
+
+        folder = tmp_path / "v"
+        etho = _session(folder)
+        clip = folder / "v.mp4"
+        writer = cv2.VideoWriter(str(clip), cv2.VideoWriter_fourcc(*"MJPG"), 30.0, (64, 48))
+        for i in range(300):
+            writer.write(np.full((48, 64, 3), i % 255, dtype=np.uint8))
+        writer.release()
+
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(etho)
+        assert win._view.video_path == clip
+        assert win._video_on.isEnabled() is True
+        assert "v.mp4" in win._summary.text()
+        # And it actually decodes.
+        assert win._canvas._frame_image(10) is not None
+        win._canvas._close_reader()

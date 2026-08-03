@@ -92,6 +92,70 @@ class FreezeDartDetector:
         return NONE
 
 
+def speed_axis_offline(
+    speeds,
+    freeze_threshold: float,
+    dart_threshold: float,
+    *,
+    freeze_min_frames: int = 30,
+    dart_min_frames: int = 3,
+    dart_merge_gap: int = 0,
+) -> list[str]:
+    """Freeze/dart labels for a whole speed trace, with the runs kept whole.
+
+    :class:`FreezeDartDetector` cannot label a bout until it has watched the
+    bout happen, so it reports a run of *n* frames as *n - min_frames + 1*.
+    That is unavoidable for a live overlay and simply wrong for a recording,
+    where every frame is known before anything is written: a one-second freeze
+    came out as a single frame, and across a 30-animal cohort more than half
+    of all freezing time went unreported.
+
+    The minimum duration is a filter on which runs count, not a haircut on the
+    ones that do — matching the offline detector this axis was ported from,
+    which keeps every zone at least ``min_frames`` long in full.
+
+    ``dart_merge_gap`` optionally joins dart bursts separated by fewer than
+    that many frames, which the original applied at 24 (0.8 s) to treat a
+    stutter of bursts as one dart. Off by default: it changes what counts as
+    one dart, which is a scoring decision rather than a correction.
+    """
+    values = np.asarray(speeds, dtype=np.float64)
+    valid = np.isfinite(values)
+    below = (values < freeze_threshold) & valid
+    above = (values > dart_threshold) & valid
+
+    labels = [NONE] * values.size
+    for start, end in _zones(below):
+        if end - start >= freeze_min_frames:
+            labels[start:end] = [FREEZING] * (end - start)
+    darts = [z for z in _zones(above) if z[1] - z[0] >= dart_min_frames]
+    if dart_merge_gap > 0:
+        darts = _merge_close(darts, dart_merge_gap)
+    for start, end in darts:
+        labels[start:end] = [DARTING] * (end - start)
+    return labels
+
+
+def _zones(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Contiguous True runs as half-open ``(start, end)`` pairs."""
+    if mask.size == 0:
+        return []
+    padded = np.concatenate([[False], mask, [False]])
+    edges = np.flatnonzero(padded[1:] != padded[:-1])
+    return list(zip(edges[::2].tolist(), edges[1::2].tolist(), strict=True))
+
+
+def _merge_close(zones: list[tuple[int, int]], max_gap: int) -> list[tuple[int, int]]:
+    """Join zones separated by fewer than ``max_gap`` frames."""
+    merged: list[tuple[int, int]] = []
+    for start, end in zones:
+        if merged and start - merged[-1][1] < max_gap:
+            merged[-1] = (merged[-1][0], end)
+        else:
+            merged.append((start, end))
+    return merged
+
+
 class CausalSpeed:
     """Streaming causal mean-keypoint speed (px/frame), mirroring ``freeze.py``.
 

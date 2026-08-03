@@ -76,29 +76,38 @@ def _stream_lag(history: int = _STREAM_HISTORY) -> int:
     return (history - 1) - (history // 2)
 
 
-def _speed_axis(pose_xy, freeze_threshold, dart_threshold, freeze_min_frames, dart_min_frames):
-    """Per-frame ``(speed_label, speed_px)`` from the live detector objects.
+def _speed_axis(
+    pose_xy,
+    freeze_threshold,
+    dart_threshold,
+    freeze_min_frames,
+    dart_min_frames,
+    dart_merge_gap=0,
+):
+    """Per-frame ``(speed_label, speed_px)`` for a recorded session.
 
-    Causal by construction — each frame's smoothed speed depends on the frames
-    before it — so this stays a loop. Reusing ``CausalSpeed`` and
-    ``FreezeDartDetector`` rather than vectorising them keeps the freeze/dart
-    definition in exactly one place.
+    The speed itself is causal by construction — each frame's smoothed value
+    depends on the frames before it — so that stays a loop over the very same
+    ``CausalSpeed`` the live path uses, keeping one definition of the signal.
+
+    The labelling does not stay online. ``FreezeDartDetector`` cannot name a
+    bout until it has watched the whole minimum duration elapse, which is
+    unavoidable live and wrong here: every frame is known before anything is
+    written, so a run that qualifies is labelled from its first frame rather
+    than from its thirtieth.
     """
-    from glider.analysis.behavior.classify.speed_state import CausalSpeed, FreezeDartDetector
+    from glider.analysis.behavior.classify.speed_state import CausalSpeed, speed_axis_offline
 
     causal = CausalSpeed()
-    detector = FreezeDartDetector(
+    values = [float(causal.push(frame)) for frame in pose_xy]
+    labels = speed_axis_offline(
+        values,
         freeze_threshold,
         dart_threshold,
         freeze_min_frames=freeze_min_frames,
         dart_min_frames=dart_min_frames,
+        dart_merge_gap=dart_merge_gap,
     )
-    labels: list[str] = []
-    values: list[float] = []
-    for frame in pose_xy:
-        speed = causal.push(frame)
-        labels.append(detector.push(speed))
-        values.append(float(speed))
     return labels, values
 
 
