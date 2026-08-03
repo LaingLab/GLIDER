@@ -634,3 +634,99 @@ class TestACohortOfSessions:
         assert win._export_btn.isEnabled() is False
         win._bar.set_selection(0, 99)
         assert win._export_btn.isEnabled() is True
+
+
+class TestZonesInTheWindow:
+    """The spatial suite existed but could not be reached from a video-derived
+    session at all — no time in zone, no entries, no heatmap."""
+
+    def _zones(self):
+        from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape
+
+        config = ZoneConfiguration()
+        config.add_zone(
+            Zone(
+                id="centre",
+                name="centre",
+                shape=ZoneShape.RECTANGLE,
+                vertices=[(0.25, 0.25), (0.75, 0.75)],
+            )
+        )
+        return config
+
+    def _win(self, qtbot, tmp_path, with_zones=True):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        if with_zones:
+            win._zones = self._zones()
+            win._canvas.set_zones(win._zones)
+        return win
+
+    def test_the_zone_table_fills_on_selection(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        assert win._zone_table.rowCount() >= 1
+        assert "Zones (" in win._tables.tabText(2)
+
+    def test_without_zones_the_table_stays_empty(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path, with_zones=False)
+        win._bar.set_selection(0, 299)
+        assert win._zone_table.rowCount() == 0
+        assert win._tables.tabText(2) == "Zones"
+
+    def test_zone_columns_reach_the_cohort_export(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        out = tmp_path / "window.csv"
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: (str(out), ""),
+        )
+        win._export_window()
+        written = pd.read_csv(out)
+        zone_cols = [c for c in written.columns if c.startswith("zone_")]
+        assert any(c.endswith("_s") for c in zone_cols)
+        assert any(c.endswith("_entries") for c in zone_cols)
+        assert any(c.endswith("_latency_s") for c in zone_cols)
+
+    def test_the_heatmap_is_off_until_asked_for(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        assert win._canvas._heatmap is None
+
+    def test_the_heatmap_appears_for_the_selected_window(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        assert win._canvas._heatmap is not None
+
+    def test_turning_it_off_clears_the_overlay(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        win._heatmap_on.setChecked(False)
+        assert win._canvas._heatmap is None
+
+    def test_the_canvas_paints_with_zones_and_heatmap(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        # The canvas is laid out by the window, so pin that it paints rather
+        # than what size the layout gave it.
+        image = win._canvas.grab().toImage()
+        assert image.width() > 0 and image.height() > 0
+
+    def test_a_session_without_poses_does_not_break_zones(self, qtbot, tmp_path):
+        folder = tmp_path / "nop"
+        folder.mkdir()
+        pd.DataFrame({"frame": range(60), "behavior": ["groom"] * 60}).to_csv(
+            folder / "ethogram_raw.csv", index=False
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(folder / "ethogram_raw.csv")
+        win._zones = self._zones()
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 59)  # must not raise
+        assert win._zone_table.rowCount() == 0

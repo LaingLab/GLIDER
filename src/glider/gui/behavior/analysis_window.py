@@ -219,6 +219,8 @@ class KeypointCanvas(QWidget):
         self._trail_s = _TRAIL_DEFAULT_S
         self._show_trail = True
         self._show_video = True
+        self._zones = None
+        self._heatmap = None
         self._reader = None  # VideoFileSource, opened lazily
         self._cached: tuple[int, QImage] | None = None
 
@@ -234,6 +236,41 @@ class KeypointCanvas(QWidget):
 
     def set_show_video(self, enabled: bool) -> None:
         self._show_video = bool(enabled)
+        self.update()
+
+    def set_zones(self, zones) -> None:
+        """Outline a zone configuration over the arena."""
+        self._zones = zones
+        self.update()
+
+    def set_heatmap(self, grid) -> None:
+        """Show (or clear, with None) an occupancy histogram over the arena.
+
+        ``grid`` is the ``(nx, ny)`` array ``compute_occupancy`` returns, in
+        the same pixel space the arena is drawn in.
+        """
+        self._heatmap = None
+        if grid is None or not getattr(grid, "size", 0) or not np.isfinite(grid).any():
+            self.update()
+            return
+        peak = float(grid.max())
+        if peak <= 0:
+            self.update()
+            return
+        # Normalised to its own peak, so a short window is still readable;
+        # this is a picture of where time went, not an absolute count.
+        normalised = np.clip(grid / peak, 0.0, 1.0)
+        nx, ny = normalised.shape
+        rgba = np.zeros((ny, nx, 4), dtype=np.uint8)
+        accent = QColor(colors.ACCENT)
+        rgba[..., 0] = accent.red()
+        rgba[..., 1] = accent.green()
+        rgba[..., 2] = accent.blue()
+        # Transposed because histogram2d's first axis is x and an image's is y.
+        alpha = (np.sqrt(normalised.T) * 210).astype(np.uint8)
+        alpha[normalised.T <= 0] = 0  # never-visited cells stay clear
+        rgba[..., 3] = alpha
+        self._heatmap = QImage(rgba.tobytes(), nx, ny, 4 * nx, QImage.Format.Format_RGBA8888).copy()
         self.update()
 
     def has_video(self) -> bool:
@@ -317,8 +354,11 @@ class KeypointCanvas(QWidget):
         image = self._frame_image(self._frame)
         if image is not None:
             painter.drawImage(arena, image)
+        if self._heatmap is not None:
+            painter.drawImage(arena, self._heatmap)
         painter.setPen(QPen(QColor(colors.BORDER), 1))
         painter.drawRect(arena)
+        self._paint_zones(painter, arena)
 
         def to_widget(point):
             return QPointF(point[0] * scale + dx, point[1] * scale + dy)
@@ -349,6 +389,35 @@ class KeypointCanvas(QWidget):
             Qt.AlignmentFlag.AlignLeft,
             f"frame {self._frame}   {label or '(unscored)'}",
         )
+
+    def _paint_zones(self, painter, arena: QRectF) -> None:
+        """Outline each zone in the colour the live overlay draws it in.
+
+        Zone geometry is normalised, so it maps onto whatever rectangle the
+        arena occupies on screen without knowing the resolution.
+        """
+        if self._zones is None:
+            return
+        for zone in getattr(self._zones, "zones", []):
+            if not zone.vertices:
+                continue
+            b, g, r = zone.color
+            painter.setPen(QPen(QColor(r, g, b), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            points = [
+                QPointF(arena.x() + vx * arena.width(), arena.y() + vy * arena.height())
+                for vx, vy in zone.vertices
+            ]
+            name = str(getattr(zone.shape, "value", zone.shape)).lower()
+            if name == "rectangle" and len(points) >= 2:
+                painter.drawRect(QRectF(points[0], points[1]).normalized())
+            elif name == "circle" and len(points) >= 2:
+                radius = (
+                    (points[1].x() - points[0].x()) ** 2 + (points[1].y() - points[0].y()) ** 2
+                ) ** 0.5
+                painter.drawEllipse(points[0], radius, radius)
+            elif len(points) >= 3:
+                painter.drawPolygon(*points)
 
     def _why_blank(self) -> str:
         if self._view is None:
@@ -395,6 +464,15 @@ class AnalysisWindow(QMainWindow):
         # almost always "what did these thirty animals do between minutes two
         # and seven", and answering it one file at a time invites the window
         # to drift between them.
+        self._zones = None
+        zones_btn = QPushButton("Load zones…")
+        zones_btn.setToolTip(
+            "A zone configuration from the zone editor. Time in zone, entries "
+            "and latency are then reported for the selected window, for every "
+            "loaded session."
+        )
+        zones_btn.clicked.connect(self._load_zones)
+
         open_folder_btn = QPushButton("Open cohort folder…")
         open_folder_btn.setToolTip(
             "Load every ethogram beneath a folder. The selected window then "
@@ -425,6 +503,7 @@ class AnalysisWindow(QMainWindow):
         top.addWidget(self._fix_resolution)
         top.addWidget(open_btn)
         top.addWidget(open_folder_btn)
+        top.addWidget(zones_btn)
         layout.addLayout(top)
 
         self._canvas = KeypointCanvas()
@@ -464,9 +543,16 @@ class AnalysisWindow(QMainWindow):
         )
         self._cohort_table.verticalHeader().setVisible(False)
 
+        self._zone_table = QTableWidget(0, 6)
+        self._zone_table.setHorizontalHeaderLabels(
+            ["Zone", "Time (s)", "Fraction", "Entries", "Mean bout (s)", "Latency (s)"]
+        )
+        self._zone_table.verticalHeader().setVisible(False)
+
         self._tables = QTabWidget()
         self._tables.addTab(self._bouts, "This session")
         self._tables.addTab(self._cohort_table, "Cohort")
+        self._tables.addTab(self._zone_table, "Zones")
         layout.addWidget(self._tables, 1)
 
         export_row = QHBoxLayout()
@@ -501,6 +587,13 @@ class AnalysisWindow(QMainWindow):
         )
         self._video_on.toggled.connect(self._canvas.set_show_video)
         row.addWidget(self._video_on)
+
+        self._heatmap_on = QCheckBox("Heatmap")
+        self._heatmap_on.setToolTip(
+            "Where the animal spent the selected window, binned over the arena."
+        )
+        self._heatmap_on.toggled.connect(self._apply_heatmap)
+        row.addWidget(self._heatmap_on)
 
         self._trail_on = QCheckBox("Centroid trail")
         self._trail_on.setChecked(True)
@@ -744,6 +837,24 @@ class AnalysisWindow(QMainWindow):
             seconds = self._frame / self._view.fps
             self._clock.setText(f"{int(seconds) // 60:d}:{seconds % 60:05.2f}")
 
+    def _apply_heatmap(self, *_args) -> None:
+        """Bin the selected window, or clear the overlay."""
+        selection = self._bar.selection()
+        if not self._heatmap_on.isChecked() or self._view is None or selection is None:
+            self._canvas.set_heatmap(None)
+            return
+        from glider.analysis.behavior.spatial import SpatialError, occupancy_grid
+
+        try:
+            grid, _x, _y = occupancy_grid(
+                self._view, bins=60, start_frame=selection[0], end_frame=selection[1]
+            )
+        except SpatialError as e:
+            logger.info("no heatmap for this session: %s", e)
+            self._canvas.set_heatmap(None)
+            return
+        self._canvas.set_heatmap(grid)
+
     def _apply_trail(self, *_args) -> None:
         self._canvas.set_trail(self._trail_s.value(), self._trail_on.isChecked())
 
@@ -779,7 +890,67 @@ class AnalysisWindow(QMainWindow):
         self._fill_bouts(stats)
         self._summary.setText(self._describe(stats))
         self._fill_cohort(start, end)
+        self._fill_zones(start, end)
+        self._apply_heatmap()
         self._export_btn.setEnabled(True)
+
+    def _load_zones(self) -> None:
+        """Load a zone configuration and re-report the current window."""
+        from glider.analysis.behavior.spatial import SpatialError, load_zones
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Zone configuration", "", "Zone files (*.json);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            self._zones = load_zones(path)
+        except SpatialError as e:
+            QMessageBox.critical(self, "Load zones", str(e))
+            return
+        names = [z.name for z in self._zones.zones]
+        self._summary.setText(
+            f"{self._summary.text()}\nZones: {', '.join(names) or '(none defined)'}"
+        )
+        self._canvas.set_zones(self._zones)
+        selection = self._bar.selection()
+        if selection is not None:
+            self._on_selection(*selection)
+
+    def zone_rows(self, start: int, end: int, view=None):
+        """Per-zone occupancy for a window, or an empty frame without zones."""
+        import pandas as pd
+
+        from glider.analysis.behavior.spatial import SpatialError, zone_occupancy
+
+        target = view if view is not None else self._view
+        if self._zones is None or target is None:
+            return pd.DataFrame()
+        try:
+            return zone_occupancy(target, self._zones, start_frame=start, end_frame=end)
+        except SpatialError as e:
+            logger.info("no zone occupancy for this session: %s", e)
+            return pd.DataFrame()
+
+    def _fill_zones(self, start: int, end: int) -> None:
+        rows = self.zone_rows(start, end)
+        self._zone_table.setRowCount(len(rows))
+        for r, (_, row) in enumerate(rows.iterrows()):
+            latency = row["latency_s"]
+            values = [
+                str(row["zone"]),
+                f"{row['total_s']:.2f}",
+                f"{100 * row['fraction']:.1f}%",
+                str(int(row["n_entries"])),
+                f"{row['mean_bout_s']:.2f}",
+                "never" if latency != latency else f"{latency:.2f}",
+            ]
+            for c, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if c:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._zone_table.setItem(r, c, item)
+        self._tables.setTabText(2, f"Zones ({len(rows)})" if len(rows) else "Zones")
 
     def cohort_rows(self, start: int, end: int) -> list[dict]:
         """The selected window, per loaded session.
@@ -821,9 +992,29 @@ class AnalysisWindow(QMainWindow):
                             stats.bouts["state"], stats.bouts["total_s"], strict=True
                         )
                     },
+                    **self._zone_columns(start, end, view),
                 }
             )
         return rows
+
+    def _zone_columns(self, start: int, end: int, view) -> dict:
+        """Time, fraction and entries per zone, flattened onto a session row.
+
+        Flat columns rather than a nested table because this is what gets
+        exported and pasted into a statistics package: one row per animal,
+        one column per measure.
+        """
+        zones = self.zone_rows(start, end, view)
+        if zones.empty:
+            return {}
+        out: dict[str, float] = {}
+        for _, row in zones.iterrows():
+            zone = str(row["zone"]).replace(" ", "_")
+            out[f"zone_{zone}_s"] = float(row["total_s"])
+            out[f"zone_{zone}_frac"] = float(row["fraction"])
+            out[f"zone_{zone}_entries"] = int(row["n_entries"])
+            out[f"zone_{zone}_latency_s"] = float(row["latency_s"])
+        return out
 
     def _fill_cohort(self, start: int, end: int) -> None:
         rows = self.cohort_rows(start, end)
