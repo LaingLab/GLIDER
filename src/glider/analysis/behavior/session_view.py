@@ -219,9 +219,13 @@ class SessionView:
     pose_path: Path | None = None  # which CSV the poses came from
     video_path: Path | None = None  # a video to scrub alongside, if one exists
     video_frames: int = 0  # its length, for the alignment check
-    # The freeze/dart axis, as the run scored it. Independent of `labels`:
-    # a frame can be both grooming and freezing.
+    # The freeze/dart axis as the run scored it. `labels` already has it
+    # folded in — an animal cannot be darting and digging at once — so this
+    # is kept to show where the override applied, not as a rival answer.
     speed_labels: list[str] = field(default_factory=list)
+    #: What the classifier alone said, before the speed axis overrode it.
+    #: Empty for ethograms written before the two were resolved.
+    postural_labels: list[str] = field(default_factory=list)
     speed_px: np.ndarray | None = None
     speed_cm_s: np.ndarray | None = None
 
@@ -271,6 +275,13 @@ class SessionView:
         speed_labels = [
             ("" if pd.isna(v) else str(v)) for v in etho.get("speed", pd.Series(dtype=object))
         ]
+        # `behavior` is the resolved label — the speed axis overrides posture
+        # where it fired, because an animal cannot be darting and digging at
+        # once. What the classifier alone said is kept beside it.
+        postural_labels = [
+            ("" if pd.isna(v) else str(v))
+            for v in etho.get("behavior_postural", pd.Series(dtype=object))
+        ]
         speed_px = _numeric_column(etho, "speed_px_frame", len(labels))
         speed_cm_s = _numeric_column(etho, "speed_cm_s", len(labels))
 
@@ -280,6 +291,7 @@ class SessionView:
             fps=30.0,
             source=ethogram_csv,
             speed_labels=speed_labels,
+            postural_labels=postural_labels,
             speed_px=speed_px,
             speed_cm_s=speed_cm_s,
         )
@@ -447,10 +459,10 @@ class SessionView:
         duration = (end_frame - start_frame + 1) / self.fps if self.fps else 0.0
 
         bouts = self._bout_table(labels, compute_intervals, compute_bouts)
-        # The speed axis is scored independently of posture, so it gets its
-        # own table rather than being mixed into the behaviour one — a frame
-        # can be both grooming and freezing, and summing them as if they were
-        # alternatives would double-count the window.
+        # The speed axis on its own. `bouts` already counts freezing and
+        # darting, since the resolved label folds them in; this table answers
+        # the narrower question of how much of the window the speed axis
+        # claimed, so the two must not be added together.
         speed_bouts = self._bout_table(
             [self.speed_labels[i] for i in rows] if self.speed_labels else [],
             compute_intervals,
@@ -565,7 +577,41 @@ class SessionView:
         return max(1, stride)
 
     def _window_thresholds(self, start_frame, end_frame, freeze_pct, dart_pct):
-        """What this window alone would have chosen as freeze/dart cut-offs."""
+        """What this window alone would have chosen as freeze/dart cut-offs.
+
+        Prefers the speed the run recorded, for the same reason
+        :meth:`_locomotion` does — it is the signal the real thresholds were
+        applied to — and because re-deriving it is a per-frame Python loop
+        that dominated everything else here: on a thirty-session cohort it
+        was a second per session, so selecting a window took half a minute
+        for a number the cohort table does not even display.
+        """
+        rows = np.where((self.frames >= start_frame) & (self.frames <= end_frame))[0]
+        if self.speed_cm_s is not None and rows.size:
+            recorded = self.speed_cm_s[rows]
+            recorded = recorded[np.isfinite(recorded)]
+            if recorded.size:
+                return (
+                    float(np.percentile(recorded, freeze_pct)),
+                    float(np.percentile(recorded, dart_pct)),
+                    "cm/s",
+                )
+        if self.speed_px is not None and rows.size:
+            recorded = self.speed_px[rows]
+            recorded = recorded[np.isfinite(recorded)]
+            if recorded.size:
+                scale = (
+                    self.fps / self.px_per_mm / 10.0
+                    if (self.px_per_mm and self.px_per_mm > 0 and self.fps)
+                    else 1.0
+                )
+                unit = "cm/s" if scale != 1.0 else "px/frame"
+                return (
+                    float(np.percentile(recorded, freeze_pct) * scale),
+                    float(np.percentile(recorded, dart_pct) * scale),
+                    unit,
+                )
+
         if self.xy is None:
             return None, None, ""
         from glider.analysis.behavior.classify.speed_state import CausalSpeed

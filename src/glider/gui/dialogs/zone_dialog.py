@@ -388,7 +388,7 @@ class ZoneDialog(QDialog):
 
     def __init__(
         self,
-        camera_manager: "CameraManager",
+        camera_manager: "CameraManager | None",
         zone_config: ZoneConfiguration,
         parent=None,
         frame: "np.ndarray | None" = None,
@@ -406,7 +406,7 @@ class ZoneDialog(QDialog):
         # Seed the canvas. An explicit frame (e.g. a scrubbed video frame) takes
         # precedence over the live camera, so zones can be drawn offline.
         initial = frame
-        if initial is None and self._camera.is_connected:
+        if initial is None and self._camera is not None and self._camera.is_connected:
             result = self._camera.get_frame()
             if result is not None:
                 initial, _timestamp = result
@@ -693,6 +693,18 @@ class ZoneDialog(QDialog):
 
     def _capture_frame(self) -> None:
         """Capture a new frame from camera."""
+        if self._camera is None:
+            # Opened on a still frame — a recorded session being reviewed, say.
+            # Re-grabbing is the caller's job there: scrub to the frame you
+            # want and open the editor again.
+            QMessageBox.information(
+                self,
+                "No camera",
+                "These zones are being drawn on a still frame, so there is "
+                "nothing to re-capture from.\n\nScrub to the frame you want "
+                "and open the zone editor again.",
+            )
+            return
         if not self._camera.is_connected:
             QMessageBox.warning(
                 self, "No Camera", "Camera is not connected. Start camera preview first."

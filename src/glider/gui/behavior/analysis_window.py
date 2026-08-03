@@ -26,6 +26,7 @@ from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPen
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
@@ -105,35 +106,48 @@ class EthogramBar(QWidget):
 
     # ------------------------------------------------------------------
 
-    def _total_frames(self) -> int:
+    def frame_bounds(self) -> tuple[int, int]:
+        """``(first, last)`` frame the ethogram actually covers.
+
+        A windowed run scores minutes two to seven, so its ethogram starts at
+        frame 3600 — and a timeline drawn from zero would spend its first
+        eighth showing nothing, with a playhead that scrubs through frames no
+        one scored. The timeline is the ethogram, so it starts where the
+        ethogram starts.
+        """
         if self._view is None or self._view.n_rows == 0:
-            return 0
-        return int(self._view.frames[-1]) + 1
+            return 0, 0
+        return int(self._view.frames[0]), int(self._view.frames[-1])
+
+    def _span(self) -> int:
+        first, last = self.frame_bounds()
+        return max(0, last - first + 1)
 
     def _frame_at(self, x: float) -> int:
-        total = self._total_frames()
-        if total == 0 or self.width() <= 0:
-            return 0
-        return max(0, min(total - 1, int(x / self.width() * total)))
+        first, last = self.frame_bounds()
+        span = self._span()
+        if span == 0 or self.width() <= 0:
+            return first
+        return max(first, min(last, first + int(x / self.width() * span)))
 
     def _x_of(self, frame: int) -> float:
-        total = self._total_frames()
-        return 0.0 if total == 0 else frame / total * self.width()
+        first, _last = self.frame_bounds()
+        span = self._span()
+        return 0.0 if span == 0 else (frame - first) / span * self.width()
 
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(colors.BASE))
-        total = self._total_frames()
-        if self._view is None or total == 0:
+        if self._view is None or self._span() == 0:
             painter.setPen(QPen(QColor(colors.TEXT_MUTED)))
             painter.drawText(
                 self.rect(), Qt.AlignmentFlag.AlignCenter, "Load a session to see its ethogram"
             )
             return
 
-        # Freezing/darting is a second, independent scoring of the same
-        # frames, so it gets its own lane rather than overwriting the posture
-        # it co-occurs with — a frame can be both grooming and freezing.
+        # The top lane is the resolved behaviour, which already has the
+        # speed axis folded in. The second lane is that axis on its own, so
+        # where the override took effect stays visible rather than implied.
         speed = self._view.speed_labels if self._view.has_speed_axis else []
         posture_height = self.height() * (0.68 if speed else 1.0)
 
@@ -242,6 +256,23 @@ class KeypointCanvas(QWidget):
         """Outline a zone configuration over the arena."""
         self._zones = zones
         self.update()
+
+    def current_frame(self):
+        """The decoded BGR frame on screen, or None without a video.
+
+        Decoded regardless of the video toggle: the zone editor wants the
+        arena whether or not the operator is looking at it right now.
+        """
+        if self._view is None or self._view.video_path is None:
+            return None
+        was_showing, self._show_video = self._show_video, True
+        try:
+            self._frame_image(self._frame)  # populates the cache and the reader
+            if self._reader is None:
+                return None
+            return self._reader.read_frame(self._frame)
+        finally:
+            self._show_video = was_showing
 
     def set_heatmap(self, grid) -> None:
         """Show (or clear, with None) an occupancy histogram over the arena.
@@ -451,6 +482,8 @@ class AnalysisWindow(QMainWindow):
         # Every loaded session, in the order they were found. The canvas shows
         # one of them; the window applies to all of them.
         self._cohort: list[tuple[Path, SessionView]] = []
+        # (key, rows) for the cohort table — see cohort_rows.
+        self._cohort_cache: tuple[tuple, list[dict]] | None = None
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -465,6 +498,13 @@ class AnalysisWindow(QMainWindow):
         # and seven", and answering it one file at a time invites the window
         # to drift between them.
         self._zones = None
+        draw_zones_btn = QPushButton("Draw zones…")
+        draw_zones_btn.setToolTip(
+            "Draw zones on the frame currently shown, using the same editor "
+            "the live rig uses. Needs a video for this session."
+        )
+        draw_zones_btn.clicked.connect(self._draw_zones)
+
         zones_btn = QPushButton("Load zones…")
         zones_btn.setToolTip(
             "A zone configuration from the zone editor. Time in zone, entries "
@@ -503,6 +543,7 @@ class AnalysisWindow(QMainWindow):
         top.addWidget(self._fix_resolution)
         top.addWidget(open_btn)
         top.addWidget(open_folder_btn)
+        top.addWidget(draw_zones_btn)
         top.addWidget(zones_btn)
         layout.addLayout(top)
 
@@ -648,7 +689,7 @@ class AnalysisWindow(QMainWindow):
         self._bar.set_view(view)
         self._canvas.set_view(view)
         self._apply_trail()
-        self._set_frame(0)
+        self._set_frame(self._bar.frame_bounds()[0])
         self._pick_poses.setVisible(view.xy is None)
         self._fix_resolution.setVisible(view.xy is not None and view.resolution is None)
 
@@ -702,9 +743,9 @@ class AnalysisWindow(QMainWindow):
             event.accept()
             return
 
-        last = int(self._view.frames[-1]) if self._view.n_rows else 0
+        first, last = self._bar.frame_bounds()
         if key == Qt.Key.Key_Home:
-            target = int(self._view.frames[0]) if self._view.n_rows else 0
+            target = first
         elif key == Qt.Key.Key_End:
             target = last
         else:
@@ -723,7 +764,7 @@ class AnalysisWindow(QMainWindow):
         # that jumps from the last frame to the first reads as a glitch.
         self._timer.stop()
         self._play.setText("Play")
-        self._set_frame(max(0, min(last, target)))
+        self._set_frame(max(first, min(last, target)))
         event.accept()
 
     def _open_folder(self) -> None:
@@ -872,8 +913,8 @@ class AnalysisWindow(QMainWindow):
     def _advance(self) -> None:
         if self._view is None:
             return
-        total = int(self._view.frames[-1]) + 1 if self._view.n_rows else 0
-        if self._frame + 1 >= total:
+        _first, last = self._bar.frame_bounds()
+        if self._frame + 1 > last:
             self._timer.stop()
             self._play.setText("Play")
             return
@@ -894,6 +935,49 @@ class AnalysisWindow(QMainWindow):
         self._apply_heatmap()
         self._export_btn.setEnabled(True)
 
+    def _draw_zones(self) -> None:
+        """Open the zone editor on the frame currently on screen.
+
+        The same editor the live rig uses, seeded with a still instead of a
+        camera — zones drawn against the arena the animal was actually in
+        beat zones drawn from memory against a blank canvas.
+        """
+        frame = self._canvas.current_frame()
+        if frame is None:
+            QMessageBox.warning(
+                self,
+                "Draw zones",
+                "Zones are drawn on a video frame, and no video was found for "
+                "this session.\n\nUse “Load zones…” to bring in a "
+                "configuration drawn elsewhere.",
+            )
+            return
+
+        from glider.gui.dialogs.zone_dialog import ZoneDialog
+        from glider.vision.zones import ZoneConfiguration
+
+        config = self._zones if self._zones is not None else ZoneConfiguration()
+        dialog = ZoneDialog(None, config, parent=self, frame=frame)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            self._zones = dialog.get_zone_configuration()
+        finally:
+            dialog.deleteLater()
+        self._adopt_zones()
+
+    def _adopt_zones(self) -> None:
+        """Show the current zones and re-report the selected window."""
+        names = [z.name for z in getattr(self._zones, "zones", [])]
+        self._canvas.set_zones(self._zones)
+        self._invalidate_cohort_cache()
+        self._summary.setText(
+            f"{self._summary.text()}\nZones: {', '.join(names) or '(none defined)'}"
+        )
+        selection = self._bar.selection()
+        if selection is not None:
+            self._on_selection(*selection)
+
     def _load_zones(self) -> None:
         """Load a zone configuration and re-report the current window."""
         from glider.analysis.behavior.spatial import SpatialError, load_zones
@@ -908,14 +992,7 @@ class AnalysisWindow(QMainWindow):
         except SpatialError as e:
             QMessageBox.critical(self, "Load zones", str(e))
             return
-        names = [z.name for z in self._zones.zones]
-        self._summary.setText(
-            f"{self._summary.text()}\nZones: {', '.join(names) or '(none defined)'}"
-        )
-        self._canvas.set_zones(self._zones)
-        selection = self._bar.selection()
-        if selection is not None:
-            self._on_selection(*selection)
+        self._adopt_zones()
 
     def zone_rows(self, start: int, end: int, view=None):
         """Per-zone occupancy for a window, or an empty frame without zones."""
@@ -952,13 +1029,26 @@ class AnalysisWindow(QMainWindow):
                 self._zone_table.setItem(r, c, item)
         self._tables.setTabText(2, f"Zones ({len(rows)})" if len(rows) else "Zones")
 
+    def _invalidate_cohort_cache(self) -> None:
+        self._cohort_cache = None
+
     def cohort_rows(self, start: int, end: int) -> list[dict]:
         """The selected window, per loaded session.
 
         The same frame window is applied to every session rather than a
         per-session fraction: "minutes two to seven" has to mean the same
         stretch in each animal or the comparison is not one.
+
+        Cached on the window and the zones, because that is all it depends
+        on. Switching which session is *shown* changes nothing here, and
+        recomputing thirty sessions — each a pass over 45,000 frames — to
+        redraw a table that did not change made flicking between animals feel
+        like the app had hung.
         """
+        key = (start, end, id(self._zones), len(self._cohort))
+        if self._cohort_cache is not None and self._cohort_cache[0] == key:
+            return self._cohort_cache[1]
+
         rows = []
         for path, view in self._cohort:
             stats = view.segment_stats(start, end)
@@ -995,6 +1085,7 @@ class AnalysisWindow(QMainWindow):
                     **self._zone_columns(start, end, view),
                 }
             )
+        self._cohort_cache = (key, rows)
         return rows
 
     def _zone_columns(self, start: int, end: int, view) -> dict:

@@ -238,6 +238,7 @@ class TestEthogramFile:
         assert list(df.columns) == [
             "frame",
             "behavior",
+            "behavior_postural",
             "speed",
             "speed_px_frame",
             "speed_cm_s",
@@ -326,3 +327,48 @@ class TestAnalysingOnlyAWindow:
         pose = _pose(n=300)
         rows = classify_pose_data(pose, _model(pose), predict_every=1)
         assert len(rows.frames) > 250
+
+
+class TestTheSpeedAxisOverridesPosture:
+    """An animal cannot be darting and digging at the same instant.
+
+    The two scorings are computed independently — one from posture, one from a
+    thresholded speed trace — and where they disagree the speed axis is the
+    stronger claim: a direct measurement of the body moving, against a
+    classifier's guess about what the body is doing.
+    """
+
+    def _rows(self, **kw):
+        pose = _pose(n=200, seed=7)
+        return classify_pose_data(pose, _model(pose, seed=7), predict_every=1, **kw)
+
+    def test_a_speed_label_wins_where_it_fired(self):
+        rows = self._rows(freeze_threshold=1e9, dart_threshold=1e9 + 1)  # freeze everywhere
+        assert set(rows.labels) == {"freezing"}
+
+    def test_posture_survives_where_the_speed_axis_is_silent(self):
+        rows = self._rows(freeze_threshold=-1.0, dart_threshold=1e18)  # never fires
+        assert "freezing" not in rows.labels
+        assert "darting" not in rows.labels
+        assert rows.labels == rows.postural_labels
+
+    def test_the_classifier_label_is_kept_beside_it(self):
+        """The override is a reading of the data; a reading must be reversible."""
+        rows = self._rows(freeze_threshold=1e9, dart_threshold=1e9 + 1)
+        assert set(rows.labels) == {"freezing"}
+        assert "freezing" not in rows.postural_labels
+
+    def test_without_a_speed_axis_nothing_is_overridden(self):
+        rows = self._rows()
+        assert rows.speed_labels == []
+        assert rows.labels == rows.postural_labels
+
+    def test_resolve_is_positionwise(self):
+        from glider.analysis.behavior.classify.batch import resolve_labels
+
+        assert resolve_labels(["a", "b", "c"], ["", "freezing", ""]) == ["a", "freezing", "c"]
+
+    def test_resolve_without_a_speed_axis_is_a_passthrough(self):
+        from glider.analysis.behavior.classify.batch import resolve_labels
+
+        assert resolve_labels(["a", "b"], []) == ["a", "b"]

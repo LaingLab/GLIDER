@@ -204,3 +204,52 @@ class TestOccupancyGrid:
         view = _view(tmp_path, [320] * 50, [240] * 50)
         grid, _x, _y = occupancy_grid(view, bins=10, start_frame=0, end_frame=9)
         assert grid.sum() == 10
+
+
+class TestVectorisedMembershipMatchesTheScalarForm:
+    """The fast path must agree with Zone.contains_point exactly.
+
+    A cohort is thirty sessions of ~45,000 frames, so the scalar form is over
+    a million Python-level calls per window change — but a faster answer that
+    disagrees at a boundary is worse than a slow one.
+    """
+
+    def _agree(self, zone, n=2000, seed=0):
+        from glider.analysis.behavior.spatial import _zone_mask
+
+        rng = np.random.default_rng(seed)
+        xs, ys = rng.random(n), rng.random(n)
+        fast = _zone_mask(zone, xs, ys)
+        slow = np.array([zone.contains_point(x, y) for x, y in zip(xs, ys, strict=True)])
+        assert np.array_equal(fast, slow)
+
+    def test_rectangles_agree(self):
+        self._agree(
+            Zone(id="r", name="r", shape=ZoneShape.RECTANGLE, vertices=[(0.2, 0.3), (0.8, 0.6)])
+        )
+
+    def test_rectangles_agree_with_reversed_corners(self):
+        self._agree(
+            Zone(id="r", name="r", shape=ZoneShape.RECTANGLE, vertices=[(0.8, 0.6), (0.2, 0.3)])
+        )
+
+    def test_circles_agree(self):
+        self._agree(
+            Zone(id="c", name="c", shape=ZoneShape.CIRCLE, vertices=[(0.5, 0.5), (0.5, 0.8)])
+        )
+
+    def test_polygons_agree(self):
+        self._agree(
+            Zone(
+                id="p",
+                name="p",
+                shape=ZoneShape.POLYGON,
+                vertices=[(0.2, 0.2), (0.8, 0.25), (0.7, 0.75), (0.25, 0.7)],
+            )
+        )
+
+    def test_a_degenerate_zone_contains_nothing(self):
+        from glider.analysis.behavior.spatial import _zone_mask
+
+        zone = Zone(id="d", name="d", shape=ZoneShape.RECTANGLE, vertices=[])
+        assert not _zone_mask(zone, np.array([0.5]), np.array([0.5])).any()

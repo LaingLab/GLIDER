@@ -132,13 +132,63 @@ def _zone_ids(track: np.ndarray, zones, resolution) -> list[str]:
         return [""] * len(track)
 
     width, height = resolution
+    xs = track[:, 0] / width
+    ys = track[:, 1] / height
+    finite = np.isfinite(xs) & np.isfinite(ys)
+
+    # One vectorised membership test per zone rather than one scalar call per
+    # frame. A cohort is thirty sessions of ~45,000 frames, so the scalar form
+    # is over a million Python-level point-in-shape calls every time a window
+    # changes — which is what made the table feel like a hang.
+    # ``_zone_mask`` is checked against Zone.contains_point in the tests, so
+    # the two cannot drift apart.
+    per_zone = [(zone.name, _zone_mask(zone, xs, ys) & finite) for zone in zones.zones]
+
     out: list[str] = []
-    for x, y in track:
-        if not (np.isfinite(x) and np.isfinite(y)):
+    for i in range(len(track)):
+        if not finite[i]:
             out.append("")  # a dropped frame is not "outside every zone"
             continue
-        out.append(",".join(zones.get_zone_names_for_point(x / width, y / height)))
+        out.append(",".join(name for name, mask in per_zone if mask[i]))
     return out
+
+
+def _zone_mask(zone, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+    """Boolean membership for every point at once, mirroring Zone geometry."""
+    from glider.vision.zones import ZoneShape
+
+    verts = zone.vertices
+    if not verts:
+        return np.zeros(xs.shape, dtype=bool)
+
+    if zone.shape == ZoneShape.RECTANGLE:
+        if len(verts) < 2:
+            return np.zeros(xs.shape, dtype=bool)
+        (x1, y1), (x2, y2) = verts[0], verts[1]
+        return (xs >= min(x1, x2)) & (xs <= max(x1, x2)) & (ys >= min(y1, y2)) & (ys <= max(y1, y2))
+
+    if zone.shape == ZoneShape.CIRCLE:
+        if len(verts) < 2:
+            return np.zeros(xs.shape, dtype=bool)
+        (cx, cy), (rx, ry) = verts[0], verts[1]
+        radius = np.hypot(rx - cx, ry - cy)
+        return np.hypot(xs - cx, ys - cy) <= radius
+
+    if zone.shape == ZoneShape.POLYGON and len(verts) >= 3:
+        # cv2.pointPolygonTest over the same integer-scaled vertices the
+        # scalar path uses, so boundary cases land identically.
+        import cv2
+
+        scale = 10000
+        pts = np.array([(int(vx * scale), int(vy * scale)) for vx, vy in verts], dtype=np.int32)
+        mask = np.zeros(xs.shape, dtype=bool)
+        for i, (x, y) in enumerate(zip(xs, ys, strict=True)):
+            if not (np.isfinite(x) and np.isfinite(y)):
+                continue
+            mask[i] = cv2.pointPolygonTest(pts, (int(x * scale), int(y * scale)), False) >= 0
+        return mask
+
+    return np.zeros(xs.shape, dtype=bool)
 
 
 def zone_occupancy(

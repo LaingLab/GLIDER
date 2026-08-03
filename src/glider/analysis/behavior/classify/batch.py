@@ -62,7 +62,8 @@ class EthogramRows:
     """The rows an apply run writes, plus what the caller needs to time them."""
 
     frames: list[int]
-    labels: list[str]
+    labels: list[str]  # resolved: the speed axis overrides posture where it fired
+    postural_labels: list[str] = field(default_factory=list)  # the classifier alone
     speed_labels: list[str] = field(default_factory=list)
     speed_px: list[float] = field(default_factory=list)
     n_source_frames: int = 0
@@ -236,11 +237,32 @@ def classify_pose_data(
 
     return EthogramRows(
         frames=frames,
-        labels=labels,
+        labels=resolve_labels(labels, speed_out),
+        postural_labels=labels,
         speed_labels=speed_out,
         speed_px=speed_px_out,
         n_source_frames=n_frames,
     )
+
+
+def resolve_labels(postural: list[str], speed: list[str]) -> list[str]:
+    """One label per frame, with the speed axis winning where it fired.
+
+    An animal cannot be darting and digging at the same instant. The two
+    scorings are computed independently — one from posture, one from a
+    thresholded speed trace — and where they disagree the speed axis is the
+    stronger claim: it is a direct measurement of the body moving, while the
+    postural label is a classifier's guess about what the body is doing.
+
+    So the ethogram carries the resolved label, and the classifier's own
+    output is kept alongside it rather than discarded — the override is a
+    reading of the data, and a reading should be reversible.
+    """
+    if not speed:
+        return list(postural)
+    return [
+        speed[i] or postural[i] if i < len(speed) else postural[i] for i in range(len(postural))
+    ]
 
 
 def write_ethogram_csv(path, rows: EthogramRows, *, speed_axis: bool, cm_s_per_px_frame=None):
@@ -253,11 +275,33 @@ def write_ethogram_csv(path, rows: EthogramRows, *, speed_axis: bool, cm_s_per_p
     with path.open("w", newline="") as f:
         w = csv.writer(f)
         if speed_axis:
-            w.writerow(["frame", "behavior", "speed", "speed_px_frame", "speed_cm_s"])
+            # `behavior` is the resolved label; `behavior_postural` is what the
+            # classifier alone said, kept so the override can be undone and so
+            # a disagreement between the two axes stays visible.
+            w.writerow(
+                [
+                    "frame",
+                    "behavior",
+                    "behavior_postural",
+                    "speed",
+                    "speed_px_frame",
+                    "speed_cm_s",
+                ]
+            )
+            postural = rows.postural_labels or rows.labels
             for i, frame in enumerate(rows.frames):
                 px = rows.speed_px[i]
                 cm = px * cm_s_per_px_frame if cm_s_per_px_frame else float("nan")
-                w.writerow([frame, rows.labels[i], rows.speed_labels[i], _fmt(px), _fmt(cm)])
+                w.writerow(
+                    [
+                        frame,
+                        rows.labels[i],
+                        postural[i],
+                        rows.speed_labels[i],
+                        _fmt(px),
+                        _fmt(cm),
+                    ]
+                )
         else:
             w.writerow(["frame", "behavior"])
             for i, frame in enumerate(rows.frames):
