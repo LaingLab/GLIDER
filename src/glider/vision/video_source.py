@@ -48,6 +48,9 @@ class VideoFileSource:
         self._frame_count = 0
         self._fps = _DEFAULT_FPS
         self._resolution = (0, 0)
+        # Where the decoder sits, so read_frame can skip the seek when the
+        # caller walks forward. -1 = unknown, always seek.
+        self._next_index = -1
 
     def load(self, path: Path | str) -> bool:
         """Open ``path``. Returns False (and stays unloaded) if it cannot be
@@ -75,6 +78,7 @@ class VideoFileSource:
         self._frame_count = frame_count
         self._fps = float(fps)
         self._resolution = (width, height)
+        self._next_index = 0
         return True
 
     @property
@@ -99,12 +103,23 @@ class VideoFileSource:
 
     def read_frame(self, n: int) -> np.ndarray | None:
         """Seek to frame ``n`` and return it (BGR), or None. For scrubbing;
-        seeking is frame-approximate on some codecs, which is fine here."""
+        seeking is frame-approximate on some codecs, which is fine here.
+
+        Asking for the frame straight after the last one skips the seek and
+        just decodes onward. Playing a session back is a run of consecutive
+        reads, and on a long-GOP codec every seek re-decodes from the previous
+        keyframe — so the fast path is the difference between smooth playback
+        and a slideshow. Semantics are unchanged; only the cost is.
+        """
         if self._cap is None:
             return None
         n = max(0, min(int(n), self._frame_count - 1))
-        self._cap.set(cv2.CAP_PROP_POS_FRAMES, n)
+        if n != self._next_index:
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, n)
         ok, frame = self._cap.read()
+        # Track where the decoder now sits. A failed read leaves the position
+        # unknowable, so force a seek next time rather than guess.
+        self._next_index = n + 1 if ok else -1
         return frame if ok else None
 
     def frames(self) -> Iterator[tuple[int, np.ndarray]]:
@@ -113,6 +128,7 @@ class VideoFileSource:
         if self._cap is None:
             return
         self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        self._next_index = -1  # this generator drives the decoder, not read_frame
         n = 0
         while True:
             ok, frame = self._cap.read()
@@ -129,3 +145,4 @@ class VideoFileSource:
         self._frame_count = 0
         self._fps = _DEFAULT_FPS
         self._resolution = (0, 0)
+        self._next_index = -1

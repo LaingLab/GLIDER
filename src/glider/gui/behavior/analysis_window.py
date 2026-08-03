@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QPainter, QPen
+from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPen
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
@@ -129,20 +129,15 @@ class EthogramBar(QWidget):
             )
             return
 
-        # One rect per run of identical labels, so a long recording paints in
-        # a few dozen fills rather than tens of thousands.
-        frames, labels = self._view.frames, self._view.labels
-        run_start, run_label = 0, labels[0]
-        for i in range(1, len(labels) + 1):
-            if i < len(labels) and labels[i] == run_label:
-                continue
-            x0 = self._x_of(int(frames[run_start]))
-            x1 = self._x_of(int(frames[i - 1]) + 1)
-            painter.fillRect(
-                QRectF(x0, 0, max(1.0, x1 - x0), self.height()), behavior_qcolor(run_label)
-            )
-            if i < len(labels):
-                run_start, run_label = i, labels[i]
+        # Freezing/darting is a second, independent scoring of the same
+        # frames, so it gets its own lane rather than overwriting the posture
+        # it co-occurs with — a frame can be both grooming and freezing.
+        speed = self._view.speed_labels if self._view.has_speed_axis else []
+        posture_height = self.height() * (0.68 if speed else 1.0)
+
+        self._paint_lane(painter, self._view.labels, 0.0, posture_height)
+        if speed:
+            self._paint_lane(painter, speed, posture_height, self.height() - posture_height)
 
         if self._selection is not None:
             start, end = self._selection
@@ -158,6 +153,21 @@ class EthogramBar(QWidget):
         painter.setPen(QPen(QColor(colors.TEXT_PRIMARY), 2))
         x = self._x_of(self._frame)
         painter.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+
+    def _paint_lane(self, painter, labels, top: float, height: float) -> None:
+        """One run-length band per label run, across the full width."""
+        if height <= 0 or not labels:
+            return
+        frames = self._view.frames
+        run_start, run_label = 0, labels[0]
+        for i in range(1, len(labels) + 1):
+            if i < len(labels) and labels[i] == run_label:
+                continue
+            x0 = self._x_of(int(frames[run_start]))
+            x1 = self._x_of(int(frames[i - 1]) + 1)
+            painter.fillRect(QRectF(x0, top, max(1.0, x1 - x0), height), behavior_qcolor(run_label))
+            if i < len(labels):
+                run_start, run_label = i, labels[i]
 
     # ------------------------------------------------------------------
 
@@ -206,11 +216,62 @@ class KeypointCanvas(QWidget):
         self._frame = 0
         self._trail_s = _TRAIL_DEFAULT_S
         self._show_trail = True
+        self._show_video = True
+        self._reader = None  # VideoFileSource, opened lazily
+        self._cached: tuple[int, QImage] | None = None
 
     def set_view(self, view: SessionView | None) -> None:
+        self._close_reader()
         self._view = view
         self._frame = 0
         self.update()
+
+    # ------------------------------------------------------------------
+    # video
+    # ------------------------------------------------------------------
+
+    def set_show_video(self, enabled: bool) -> None:
+        self._show_video = bool(enabled)
+        self.update()
+
+    def has_video(self) -> bool:
+        return self._view is not None and self._view.video_path is not None
+
+    def _close_reader(self) -> None:
+        if self._reader is not None:
+            self._reader.release()
+            self._reader = None
+        self._cached = None
+
+    def _frame_image(self, index: int) -> QImage | None:
+        """The video frame for *index*, as a QImage, or None.
+
+        Decoded on demand and cached by index: a repaint from resizing or a
+        selection change must not cost another decode, and scrubbing one frame
+        at a time is a sequential read rather than a seek.
+        """
+        if not self._show_video or self._view is None or self._view.video_path is None:
+            return None
+        if self._cached is not None and self._cached[0] == index:
+            return self._cached[1]
+        if self._reader is None:
+            from glider.vision.video_source import VideoFileSource
+
+            reader = VideoFileSource()
+            if not reader.load(self._view.video_path):
+                logger.info("could not open %s for playback", self._view.video_path)
+                self._view.video_path = None  # stop retrying every repaint
+                return None
+            self._reader = reader
+        frame = self._reader.read_frame(index)
+        if frame is None:
+            return None
+        # cv2 gives BGR; copy because the QImage must own its buffer once the
+        # numpy array goes out of scope.
+        height, width = frame.shape[:2]
+        image = QImage(frame.data, width, height, 3 * width, QImage.Format.Format_BGR888).copy()
+        self._cached = (index, image)
+        return image
 
     def set_frame(self, frame: int) -> None:
         self._frame = int(frame)
@@ -234,7 +295,11 @@ class KeypointCanvas(QWidget):
         painter.fillRect(self.rect(), QColor(colors.CANVAS))
 
         transform = self._transform()
-        if self._view is None or self._view.xy is None or transform is None:
+        if (
+            self._view is None
+            or transform is None
+            or (self._view.xy is None and not self.has_video())
+        ):
             painter.setPen(QPen(QColor(colors.TEXT_MUTED)))
             painter.drawText(
                 self.rect(),
@@ -245,13 +310,18 @@ class KeypointCanvas(QWidget):
 
         scale, dx, dy = transform
         width, height = self._view.resolution
+        arena = QRectF(dx, dy, width * scale, height * scale)
+
+        image = self._frame_image(self._frame)
+        if image is not None:
+            painter.drawImage(arena, image)
         painter.setPen(QPen(QColor(colors.BORDER), 1))
-        painter.drawRect(QRectF(dx, dy, width * scale, height * scale))
+        painter.drawRect(arena)
 
         def to_widget(point):
             return QPointF(point[0] * scale + dx, point[1] * scale + dy)
 
-        if self._show_trail:
+        if self._show_trail and self._view.xy is not None:
             trail = self._view.trail(self._frame, self._trail_s)
             if trail is not None and len(trail) > 1:
                 # Fade the tail so recent travel reads as the leading edge.
@@ -260,7 +330,7 @@ class KeypointCanvas(QWidget):
                     painter.setPen(QPen(colors.qcolor_with_alpha(QColor(colors.ACCENT), alpha), 2))
                     painter.drawLine(to_widget(trail[i - 1]), to_widget(trail[i]))
 
-        if 0 <= self._frame < len(self._view.xy):
+        if self._view.xy is not None and 0 <= self._frame < len(self._view.xy):
             points = self._view.xy[self._frame]
             names = self._view.keypoint_names
             for i, point in enumerate(points):
@@ -366,6 +436,16 @@ class AnalysisWindow(QMainWindow):
         self._play.clicked.connect(self._toggle_play)
         row.addWidget(self._play)
 
+        self._video_on = QCheckBox("Video")
+        self._video_on.setChecked(True)
+        self._video_on.setEnabled(False)
+        self._video_on.setToolTip(
+            "Draw the session's video behind the keypoints. Enabled when a "
+            "video for this session can be found."
+        )
+        self._video_on.toggled.connect(self._canvas.set_show_video)
+        row.addWidget(self._video_on)
+
         self._trail_on = QCheckBox("Centroid trail")
         self._trail_on.setChecked(True)
         self._trail_on.toggled.connect(self._apply_trail)
@@ -412,13 +492,80 @@ class AnalysisWindow(QMainWindow):
         self._set_frame(0)
         self._pick_poses.setVisible(view.xy is None)
         self._fix_resolution.setVisible(view.xy is not None and view.resolution is None)
+
+        has_video = view.video_path is not None
+        self._video_on.setEnabled(has_video)
+        self._canvas.set_show_video(has_video and self._video_on.isChecked())
+
         found = f"  Poses: {view.pose_path.name}." if view.pose_path else "  No poses found."
+        if has_video:
+            found += f"  Video: {view.video_path.name}."
+            if not view.video_is_aligned:
+                # The annotated video is written from a queue that drops
+                # frames, so a short file means every later frame is offset by
+                # an unknown amount. Say so rather than scrub it confidently.
+                found += (
+                    f"  ⚠ It has {view.video_frames:,} frames against the session's "
+                    f"{int(view.frames[-1]) + 1:,}, so frames may not line up."
+                )
         self._summary.setText(
             f"{view.n_rows:,} scored rows at {view.fps:.2f} fps "
             f"({view.duration_s / 60:.1f} min)."
             + found
             + ("" if view.px_per_mm else "  No calibration found: distances unavailable.")
         )
+
+    def keyPressEvent(self, event):
+        """Frame-accurate scrubbing from the keyboard.
+
+        Dragging the ethogram is fast but coarse — on a 45,000-frame session
+        one pixel is tens of frames, so a bout boundary cannot be found with
+        the mouse at all. Left/Right step exactly one frame; shift steps ten
+        and ctrl a second, for covering ground without losing precision.
+        """
+        if self._view is None:
+            super().keyPressEvent(event)
+            return
+
+        key = event.key()
+        if key not in (
+            Qt.Key.Key_Left,
+            Qt.Key.Key_Right,
+            Qt.Key.Key_Home,
+            Qt.Key.Key_End,
+            Qt.Key.Key_Space,
+        ):
+            super().keyPressEvent(event)
+            return
+
+        if key == Qt.Key.Key_Space:
+            self._toggle_play()
+            event.accept()
+            return
+
+        last = int(self._view.frames[-1]) if self._view.n_rows else 0
+        if key == Qt.Key.Key_Home:
+            target = int(self._view.frames[0]) if self._view.n_rows else 0
+        elif key == Qt.Key.Key_End:
+            target = last
+        else:
+            modifiers = event.modifiers()
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                step = max(1, int(round(self._view.fps)))
+            elif modifiers & Qt.KeyboardModifier.ShiftModifier:
+                step = 10
+            else:
+                step = 1
+            if key == Qt.Key.Key_Left:
+                step = -step
+            target = self._frame + step
+
+        # Stepping past either end holds there rather than wrapping: a scrub
+        # that jumps from the last frame to the first reads as a glitch.
+        self._timer.stop()
+        self._play.setText("Play")
+        self._set_frame(max(0, min(last, target)))
+        event.accept()
 
     def _choose_pose_csv(self) -> None:
         """Point the session at its poses when discovery could not."""
@@ -530,17 +677,29 @@ class AnalysisWindow(QMainWindow):
         return f"Frames {span}\n{movement}\n{thresholds}"
 
     def _fill_bouts(self, stats) -> None:
+        # Posture and speed are independent scorings of the same frames, so
+        # they are stacked with a divider rather than summed into one list:
+        # their fractions each run to 1 over the window, and adding them
+        # would double-count it.
+        import pandas as pd
+
         rows = stats.bouts
+        if not stats.speed_bouts.empty:
+            divider = pd.DataFrame([{**dict.fromkeys(rows.columns), "state": "— speed axis —"}])
+            rows = pd.concat([rows, divider, stats.speed_bouts], ignore_index=True)
         self._bouts.setRowCount(len(rows))
         for r, (_, row) in enumerate(rows.iterrows()):
-            values = [
-                str(row["state"] or "(unscored)"),
-                str(int(row["n_bouts"])),
-                f"{row['total_s']:.2f}",
-                f"{100 * row['fraction']:.1f}%",
-                f"{row['mean_s']:.2f}",
-                f"{row['median_s']:.2f}",
-            ]
+            if pd.isna(row["n_bouts"]):  # the divider carries no numbers
+                values = [str(row["state"]), "", "", "", "", ""]
+            else:
+                values = [
+                    str(row["state"] or "(unscored)"),
+                    str(int(row["n_bouts"])),
+                    f"{row['total_s']:.2f}",
+                    f"{100 * row['fraction']:.1f}%",
+                    f"{row['mean_s']:.2f}",
+                    f"{row['median_s']:.2f}",
+                ]
             for c, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if c:
@@ -549,6 +708,7 @@ class AnalysisWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._timer.stop()
+        self._canvas._close_reader()
         super().closeEvent(event)
 
 

@@ -27,7 +27,13 @@ from glider.analysis.ethogram import UNSCORED
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["SegmentStats", "SessionView", "SessionViewError", "find_session_poses"]
+__all__ = [
+    "SegmentStats",
+    "SessionView",
+    "SessionViewError",
+    "find_session_poses",
+    "find_session_video",
+]
 
 
 class SessionViewError(ValueError):
@@ -38,6 +44,27 @@ class SessionViewError(ValueError):
 #: ``<output>/<video stem>/ethogram_raw.csv`` while the poses usually stay
 #: with the videos, which is commonly the grandparent of that folder.
 _SEARCH_LEVELS = 3
+
+#: Frames by which a video may fall short of the session and still be treated
+#: as frame-aligned. A couple of trailing frames go missing whenever a writer
+#: closes before the last ones arrive; more than that is dropped frames, which
+#: shift everything after them.
+_ALIGNMENT_SLACK = 5
+
+
+def _numeric_column(frame: pd.DataFrame, name: str, length: int) -> np.ndarray | None:
+    """A float column from an ethogram, or None if it isn't there.
+
+    Blank cells are NaN, not zero: the writer leaves a cell empty when the
+    value was unknown (a dropout frame, or no pixel scale), and reading that
+    as a real 0.0 would put a motionless animal in every distance total.
+    """
+    if name not in frame.columns:
+        return None
+    values = pd.to_numeric(frame[name], errors="coerce").to_numpy(dtype=float)
+    if values.size != length:
+        return None
+    return None if np.isnan(values).all() else values
 
 
 def _find_upward(start: Path, name: str) -> Path | None:
@@ -59,6 +86,49 @@ def _find_upward(start: Path, name: str) -> Path | None:
             break
         folder = folder.parent
     return None
+
+
+def find_session_video(ethogram_csv: Path | str, pose_path: Path | None = None) -> Path | None:
+    """A video whose frame *n* is this session's frame *n*, if one exists.
+
+    The source video is preferred over the run's own ``annotated.mp4``, which
+    is not safe to scrub by index: the annotated file is written from the
+    display queue, and that queue drops frames under back-pressure without
+    padding the output. A run that dropped nine frames of forty-five thousand
+    yields a video whose every later frame is nine early — a drift nothing on
+    screen would reveal. The annotated file is still offered as a fallback,
+    and :func:`video_is_aligned` is what decides whether to believe it.
+    """
+    ethogram_csv = Path(ethogram_csv)
+    folder = ethogram_csv.parent
+
+    from glider.analysis.behavior.classify import read_run_manifest
+
+    recorded = (read_run_manifest(folder) or {}).get("video")
+    if recorded:
+        try:
+            if Path(recorded).is_file():
+                return Path(recorded)
+        except OSError:
+            logger.info("the video recorded in run.json is unreachable: %s", recorded)
+
+    stem = folder.name
+    roots = [pose_path.parent] if pose_path is not None else []
+    roots += [folder, folder.parent, folder.parent.parent]
+    for root in roots:
+        for suffix in (".mp4", ".avi", ".mov", ".mkv"):
+            candidate = root / f"{stem}{suffix}"
+            try:
+                if candidate.is_file():
+                    return candidate
+            except OSError:
+                continue
+
+    annotated = folder / "annotated.mp4"
+    try:
+        return annotated if annotated.is_file() else None
+    except OSError:
+        return None
 
 
 def find_session_poses(ethogram_csv: Path | str) -> Path | None:
@@ -124,6 +194,7 @@ class SegmentStats:
     fps: float
     duration_s: float
     bouts: pd.DataFrame  # state, n_bouts, total_s, fraction, mean_s, median_s
+    speed_bouts: pd.DataFrame  # the same, for freezing/darting
     distance_cm: float | None
     mean_speed_cm_s: float | None
     peak_speed_cm_s: float | None
@@ -146,6 +217,18 @@ class SessionView:
     body_axis: tuple[int, int] = (0, -1)
     source: Path | None = None
     pose_path: Path | None = None  # which CSV the poses came from
+    video_path: Path | None = None  # a video to scrub alongside, if one exists
+    video_frames: int = 0  # its length, for the alignment check
+    # The freeze/dart axis, as the run scored it. Independent of `labels`:
+    # a frame can be both grooming and freezing.
+    speed_labels: list[str] = field(default_factory=list)
+    speed_px: np.ndarray | None = None
+    speed_cm_s: np.ndarray | None = None
+
+    @property
+    def has_speed_axis(self) -> bool:
+        """Whether this run scored freezing/darting at all."""
+        return any(self.speed_labels)
 
     # ------------------------------------------------------------------
     # loading
@@ -181,10 +264,68 @@ class SessionView:
             etho["frame"].to_numpy(dtype=int) if "frame" in etho.columns else np.arange(len(labels))
         )
 
-        view = cls(labels=labels, frames=frames, fps=30.0, source=ethogram_csv)
+        # The freeze/dart axis is a second, independent scoring of the same
+        # frames — the run wrote it as its own columns precisely because it is
+        # not one of the postural classes. Reading only `behavior` throws it
+        # away, and then recomputes a speed the file already contains.
+        speed_labels = [
+            ("" if pd.isna(v) else str(v)) for v in etho.get("speed", pd.Series(dtype=object))
+        ]
+        speed_px = _numeric_column(etho, "speed_px_frame", len(labels))
+        speed_cm_s = _numeric_column(etho, "speed_cm_s", len(labels))
+
+        view = cls(
+            labels=labels,
+            frames=frames,
+            fps=30.0,
+            source=ethogram_csv,
+            speed_labels=speed_labels,
+            speed_px=speed_px,
+            speed_cm_s=speed_cm_s,
+        )
         view._load_poses(ethogram_csv, pose_csv)
         view._load_scale(calibration_master, video, ethogram_csv)
+        view._load_video(ethogram_csv, video)
         return view
+
+    def _load_video(self, ethogram_csv: Path, video: Path | str | None) -> None:
+        """Find a video to scrub alongside the ethogram, and measure it."""
+        from glider.vision.video_source import VideoFileSource
+
+        path = (
+            Path(video) if video is not None else find_session_video(ethogram_csv, self.pose_path)
+        )
+        if path is None:
+            return
+        source = VideoFileSource()
+        if not source.load(path):
+            logger.info("found %s but could not open it", path)
+            return
+        try:
+            self.video_path = path
+            self.video_frames = int(source.frame_count)
+            # The video is the authority on its own size; a pose sidecar that
+            # never recorded one no longer costs the arena.
+            if self.resolution is None and all(source.resolution):
+                self.resolution = source.resolution
+        finally:
+            source.release()
+
+    @property
+    def video_is_aligned(self) -> bool:
+        """Whether video frame *n* is this session's frame *n*.
+
+        A run's ``annotated.mp4`` is written from a queue that drops frames
+        under load, so it can be shorter than the session by an unknown amount
+        — and every frame after the first drop is then offset. Short by a hair
+        is normal (the last frames arrive after the writer closes); short by
+        more means the indices no longer line up and the viewer must say so
+        rather than show a confidently wrong frame.
+        """
+        if not self.video_frames or self.n_rows == 0:
+            return False
+        expected = int(self.frames[-1]) + 1
+        return abs(self.video_frames - expected) <= _ALIGNMENT_SLACK
 
     def _load_poses(self, ethogram_csv: Path, pose_csv: Path | str | None) -> None:
         from glider.vision.pose.dlc import from_dlc_csv, resolution_for_csv
@@ -306,6 +447,15 @@ class SessionView:
         duration = (end_frame - start_frame + 1) / self.fps if self.fps else 0.0
 
         bouts = self._bout_table(labels, compute_intervals, compute_bouts)
+        # The speed axis is scored independently of posture, so it gets its
+        # own table rather than being mixed into the behaviour one — a frame
+        # can be both grooming and freezing, and summing them as if they were
+        # alternatives would double-count the window.
+        speed_bouts = self._bout_table(
+            [self.speed_labels[i] for i in rows] if self.speed_labels else [],
+            compute_intervals,
+            compute_bouts,
+        )
         distance, mean_speed, peak_speed = self._locomotion(start_frame, end_frame)
         freeze, dart, unit = self._window_thresholds(start_frame, end_frame, freeze_pct, dart_pct)
         return SegmentStats(
@@ -314,6 +464,7 @@ class SessionView:
             fps=self.fps,
             duration_s=duration,
             bouts=bouts,
+            speed_bouts=speed_bouts,
             distance_cm=distance,
             mean_speed_cm_s=mean_speed,
             peak_speed_cm_s=peak_speed,
@@ -362,7 +513,19 @@ class SessionView:
         return pd.DataFrame(rows).sort_values("total_s", ascending=False, ignore_index=True)
 
     def _locomotion(self, start_frame: int, end_frame: int):
-        """``(distance_cm, mean_cm_s, peak_cm_s)`` — None without a calibration."""
+        """``(distance_cm, mean_cm_s, peak_cm_s)`` — None without a calibration.
+
+        Prefers the speed the run itself recorded. That column is the signal
+        the freeze/dart thresholds were actually applied to — smoothed exactly
+        as the detector smooths it — so deriving a second, subtly different
+        speed here would let the reported mean disagree with the freezing the
+        same window is showing. Falls back to the centroid track for ethograms
+        written before the column existed.
+        """
+        recorded = self._recorded_speed(start_frame, end_frame)
+        if recorded is not None:
+            return recorded
+
         centre = self.centroid()
         if centre is None or not self.px_per_mm or self.px_per_mm <= 0:
             return None, None, None
@@ -375,6 +538,31 @@ class SessionView:
         steps_cm = steps_px / self.px_per_mm / 10.0
         speeds = steps_cm * self.fps
         return float(steps_cm.sum()), float(speeds.mean()), float(speeds.max())
+
+    def _recorded_speed(self, start_frame: int, end_frame: int):
+        """Locomotion from the ethogram's own ``speed_cm_s``, or None."""
+        if self.speed_cm_s is None:
+            return None
+        rows = np.where((self.frames >= start_frame) & (self.frames <= end_frame))[0]
+        if rows.size == 0:
+            return None
+        speeds = self.speed_cm_s[rows]
+        speeds = speeds[np.isfinite(speeds)]
+        if speeds.size == 0:
+            return None
+        # cm/s sampled per row; each row covers one row-period of the session.
+        rows_per_second = self.fps / max(1, self._row_stride())
+        if rows_per_second <= 0:
+            return None
+        distance = float(speeds.sum() / rows_per_second)
+        return distance, float(speeds.mean()), float(speeds.max())
+
+    def _row_stride(self) -> int:
+        """Frames between consecutive ethogram rows (the classifier cadence)."""
+        if self.n_rows < 2:
+            return 1
+        stride = int(np.median(np.diff(self.frames)))
+        return max(1, stride)
 
     def _window_thresholds(self, start_frame, end_frame, freeze_pct, dart_pct):
         """What this window alone would have chosen as freeze/dart cut-offs."""

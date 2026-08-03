@@ -308,3 +308,139 @@ def _write_pose_csv(path, n=30):
         path,
     )
     return path
+
+
+def _clip(path, n=40, size=(64, 48), fps=30.0):
+    """A tiny real video, so frame counts and decoding are not simulated."""
+    import cv2
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), fps, size)
+    for i in range(n):
+        frame = np.full((size[1], size[0], 3), i * 3 % 255, dtype=np.uint8)
+        writer.write(frame)
+    writer.release()
+    return path
+
+
+class TestFindingTheVideo:
+    def _session(self, tmp_path, rows=40):
+        out = tmp_path / "videos" / "outputs" / "t8"
+        out.mkdir(parents=True)
+        pd.DataFrame({"frame": range(rows), "behavior": ["groom"] * rows}).to_csv(
+            out / "ethogram_raw.csv", index=False
+        )
+        return out / "ethogram_raw.csv"
+
+    def test_the_source_video_beside_the_videos_is_found(self, tmp_path):
+        etho = self._session(tmp_path)
+        clip = _clip(tmp_path / "videos" / "t8.mp4")
+        view = SessionView.load(etho)
+        assert view.video_path == clip
+        assert view.video_frames == 40
+
+    def test_the_source_video_is_preferred_over_the_annotated_one(self, tmp_path):
+        """annotated.mp4 is written from a queue that drops frames, so its
+        indices cannot be trusted when a frame-aligned original exists."""
+        etho = self._session(tmp_path)
+        source = _clip(tmp_path / "videos" / "t8.mp4")
+        _clip(etho.parent / "annotated.mp4", n=31)
+        assert SessionView.load(etho).video_path == source
+
+    def test_the_annotated_video_is_used_when_there_is_nothing_else(self, tmp_path):
+        etho = self._session(tmp_path)
+        annotated = _clip(etho.parent / "annotated.mp4")
+        assert SessionView.load(etho).video_path == annotated
+
+    def test_a_full_length_video_reads_as_aligned(self, tmp_path):
+        etho = self._session(tmp_path)
+        _clip(tmp_path / "videos" / "t8.mp4", n=40)
+        assert SessionView.load(etho).video_is_aligned is True
+
+    def test_a_video_missing_many_frames_is_not_trusted(self, tmp_path):
+        """Dropped frames shift every later index by an unknown amount."""
+        etho = self._session(tmp_path)
+        _clip(etho.parent / "annotated.mp4", n=25)
+        view = SessionView.load(etho)
+        assert view.video_path is not None
+        assert view.video_is_aligned is False
+
+    def test_a_couple_of_missing_tail_frames_is_still_aligned(self, tmp_path):
+        etho = self._session(tmp_path)
+        _clip(etho.parent / "annotated.mp4", n=38)
+        assert SessionView.load(etho).video_is_aligned is True
+
+    def test_the_video_supplies_a_resolution_the_sidecar_lacks(self, tmp_path):
+        etho = self._session(tmp_path)
+        _clip(tmp_path / "videos" / "t8.mp4", size=(64, 48))
+        assert SessionView.load(etho).resolution == (64, 48)
+
+    def test_no_video_is_not_an_error(self, tmp_path):
+        view = SessionView.load(self._session(tmp_path))
+        assert view.video_path is None
+        assert view.video_is_aligned is False
+
+
+class TestTheSpeedAxis:
+    def _session(self, tmp_path, *, with_speed=True, n=120):
+        out = tmp_path / "out" / "t2"
+        out.mkdir(parents=True)
+        # Freezing for a second in the middle, darting for a moment after.
+        speed = [""] * n
+        for i in range(30, 60):
+            speed[i] = "freezing"
+        for i in range(70, 76):
+            speed[i] = "darting"
+        columns = {"frame": range(n), "behavior": ["groom"] * n}
+        if with_speed:
+            columns["speed"] = speed
+            columns["speed_px_frame"] = [0.5] * n
+            columns["speed_cm_s"] = [1.5] * n
+        pd.DataFrame(columns).to_csv(out / "ethogram_raw.csv", index=False)
+        return out / "ethogram_raw.csv"
+
+    def test_the_speed_column_is_loaded(self, tmp_path):
+        view = SessionView.load(self._session(tmp_path))
+        assert view.has_speed_axis is True
+        assert view.speed_labels[45] == "freezing"
+        assert view.speed_labels[0] == ""
+
+    def test_an_ethogram_without_the_column_has_no_speed_axis(self, tmp_path):
+        view = SessionView.load(self._session(tmp_path, with_speed=False))
+        assert view.has_speed_axis is False
+        assert view.speed_cm_s is None
+
+    def test_freeze_and_dart_bouts_are_reported_separately(self, tmp_path):
+        view = SessionView.load(self._session(tmp_path))
+        stats = view.segment_stats(0, 119)
+        states = dict(zip(stats.speed_bouts["state"], stats.speed_bouts["n_bouts"], strict=True))
+        assert states == {"freezing": 1, "darting": 1}
+        # Posture is untouched by it: the two axes describe the same frames.
+        assert list(stats.bouts["state"]) == ["groom"]
+
+    def test_a_freezing_bout_is_measured_in_seconds(self, tmp_path):
+        view = SessionView.load(self._session(tmp_path))
+        stats = view.segment_stats(0, 119)
+        freezing = stats.speed_bouts.set_index("state").loc["freezing"]
+        assert freezing["total_s"] == pytest.approx(30 / 30.0)  # 30 frames at 30 fps
+
+    def test_the_two_axes_are_not_summed(self, tmp_path):
+        """A frame can be both grooming and freezing; adding the fractions
+        would report more than the window contains."""
+        view = SessionView.load(self._session(tmp_path))
+        stats = view.segment_stats(0, 119)
+        assert stats.bouts["fraction"].sum() == pytest.approx(1.0)
+        assert stats.speed_bouts["fraction"].sum() < 1.0
+
+    def test_locomotion_uses_the_recorded_speed(self, tmp_path):
+        """The recorded column is the signal the thresholds were applied to;
+        deriving a second one lets the mean disagree with the freezing shown."""
+        view = SessionView.load(self._session(tmp_path))
+        stats = view.segment_stats(0, 119)
+        assert stats.mean_speed_cm_s == pytest.approx(1.5)
+        # 1.5 cm/s held for 120 frames at 30 fps = 4 s = 6 cm.
+        assert stats.distance_cm == pytest.approx(6.0)
+
+    def test_without_the_column_it_falls_back_to_the_centroid(self, tmp_path):
+        view = SessionView.load(self._session(tmp_path, with_speed=False))
+        assert view.segment_stats(0, 119).mean_speed_cm_s is None
