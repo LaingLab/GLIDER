@@ -517,3 +517,216 @@ class TestVideoPlayback:
         # And it actually decodes.
         assert win._canvas._frame_image(10) is not None
         win._canvas._close_reader()
+
+
+class TestACohortOfSessions:
+    """A cohort is the unit of analysis, not a session — the question is
+    almost always what thirty animals did over the same stretch."""
+
+    def _cohort(self, tmp_path, n=4, rows=300):
+        ethograms = []
+        for i in range(n):
+            folder = tmp_path / "outputs" / f"t{i}"
+            folder.mkdir(parents=True)
+            # Different behaviour per animal, same length.
+            labels = (["groom"] * (50 + 20 * i) + ["locomote"] * rows)[:rows]
+            speed = [""] * rows
+            for f in range(100, 100 + 30 * (i + 1)):
+                speed[f] = "freezing"
+            pd.DataFrame(
+                {
+                    "frame": range(rows),
+                    "behavior": labels,
+                    "speed": speed,
+                    "speed_px_frame": [0.4] * rows,
+                    "speed_cm_s": [1.2] * rows,
+                }
+            ).to_csv(folder / "ethogram_raw.csv", index=False)
+            ethograms.append(folder / "ethogram_raw.csv")
+        return ethograms
+
+    def test_many_sessions_load_at_once(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        assert len(win._cohort) == 4
+        assert win._sessions.count() == 4
+
+    def test_the_picker_hides_for_a_single_session(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        assert win._sessions.isVisibleTo(win) is False
+
+    def test_switching_session_keeps_the_window(self, qtbot, tmp_path):
+        """The window is the question; changing which animal answers it must
+        not silently reset it."""
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        win._bar.set_selection(100, 199)
+        win._sessions.setCurrentIndex(2)
+        assert win._bar.selection() == (100, 199)
+        assert win._view is win._cohort[2][1]
+
+    def test_the_same_window_is_applied_to_every_session(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        rows = win.cohort_rows(100, 199)
+        assert len(rows) == 4
+        assert {r["session"] for r in rows} == {"t0", "t1", "t2", "t3"}
+        assert all(r["duration_s"] == pytest.approx(100 / 30.0) for r in rows)
+
+    def test_freezing_is_reported_per_session(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        rows = {r["session"]: r for r in win.cohort_rows(0, 299)}
+        # Animal i freezes for 30*(i+1) frames.
+        assert rows["t0"]["freezing_s"] == pytest.approx(30 / 30.0)
+        assert rows["t3"]["freezing_s"] == pytest.approx(120 / 30.0)
+
+    def test_the_cohort_table_fills_on_selection(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        win._bar.set_selection(0, 299)
+        assert win._cohort_table.rowCount() == 4
+        assert "Cohort (4)" == win._tables.tabText(1)
+
+    def test_one_unreadable_session_does_not_lose_the_rest(self, qtbot, tmp_path, monkeypatch):
+        ethograms = self._cohort(tmp_path)
+        bad = tmp_path / "outputs" / "broken" / "ethogram_raw.csv"
+        bad.parent.mkdir(parents=True)
+        bad.write_text("a,b\n1,2\n")
+        warned = []
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QMessageBox.warning",
+            lambda *a, **k: warned.append(a[-1]),
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many([*ethograms, bad])
+        assert len(win._cohort) == 4
+        assert warned and "broken" in warned[0]
+
+    def test_export_writes_a_row_per_session(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        win._bar.set_selection(0, 299)
+        out = tmp_path / "window_summary.csv"
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: (str(out), ""),
+        )
+        win._export_window()
+        written = pd.read_csv(out)
+        assert len(written) == 4
+        assert {"session", "start_frame", "end_frame", "freezing_s"} <= set(written.columns)
+        assert (written["start_frame"] == 0).all()
+
+    def test_export_is_disabled_until_a_window_is_chosen(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        assert win._export_btn.isEnabled() is False
+        win._bar.set_selection(0, 99)
+        assert win._export_btn.isEnabled() is True
+
+
+class TestZonesInTheWindow:
+    """The spatial suite existed but could not be reached from a video-derived
+    session at all — no time in zone, no entries, no heatmap."""
+
+    def _zones(self):
+        from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape
+
+        config = ZoneConfiguration()
+        config.add_zone(
+            Zone(
+                id="centre",
+                name="centre",
+                shape=ZoneShape.RECTANGLE,
+                vertices=[(0.25, 0.25), (0.75, 0.75)],
+            )
+        )
+        return config
+
+    def _win(self, qtbot, tmp_path, with_zones=True):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        if with_zones:
+            win._zones = self._zones()
+            win._canvas.set_zones(win._zones)
+        return win
+
+    def test_the_zone_table_fills_on_selection(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        assert win._zone_table.rowCount() >= 1
+        assert "Zones (" in win._tables.tabText(2)
+
+    def test_without_zones_the_table_stays_empty(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path, with_zones=False)
+        win._bar.set_selection(0, 299)
+        assert win._zone_table.rowCount() == 0
+        assert win._tables.tabText(2) == "Zones"
+
+    def test_zone_columns_reach_the_cohort_export(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        out = tmp_path / "window.csv"
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: (str(out), ""),
+        )
+        win._export_window()
+        written = pd.read_csv(out)
+        zone_cols = [c for c in written.columns if c.startswith("zone_")]
+        assert any(c.endswith("_s") for c in zone_cols)
+        assert any(c.endswith("_entries") for c in zone_cols)
+        assert any(c.endswith("_latency_s") for c in zone_cols)
+
+    def test_the_heatmap_is_off_until_asked_for(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        assert win._canvas._heatmap is None
+
+    def test_the_heatmap_appears_for_the_selected_window(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        assert win._canvas._heatmap is not None
+
+    def test_turning_it_off_clears_the_overlay(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        win._heatmap_on.setChecked(False)
+        assert win._canvas._heatmap is None
+
+    def test_the_canvas_paints_with_zones_and_heatmap(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        # The canvas is laid out by the window, so pin that it paints rather
+        # than what size the layout gave it.
+        image = win._canvas.grab().toImage()
+        assert image.width() > 0 and image.height() > 0
+
+    def test_a_session_without_poses_does_not_break_zones(self, qtbot, tmp_path):
+        folder = tmp_path / "nop"
+        folder.mkdir()
+        pd.DataFrame({"frame": range(60), "behavior": ["groom"] * 60}).to_csv(
+            folder / "ethogram_raw.csv", index=False
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(folder / "ethogram_raw.csv")
+        win._zones = self._zones()
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 59)  # must not raise
+        assert win._zone_table.rowCount() == 0

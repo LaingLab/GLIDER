@@ -157,13 +157,26 @@ class CohortSpeedWorker(_BaseWorker):
     operator reasonably concludes it crashed and kills it before it saves.
     """
 
-    def __init__(self, pose_csvs, output, *, freeze_pct, dart_pct, calibration_master=None):
+    def __init__(
+        self,
+        pose_csvs,
+        output,
+        *,
+        freeze_pct,
+        dart_pct,
+        calibration_master=None,
+        start_s=None,
+        end_s=None,
+    ):
         super().__init__()
         self._pose_csvs = list(pose_csvs)
         self._output = output
         self._freeze_pct = float(freeze_pct)
         self._dart_pct = float(dart_pct)
         self._calibration_master = calibration_master
+        # Pool the same stretch the run will score; see _on_compute_cohort.
+        self._start_s = start_s
+        self._end_s = end_s
 
     def run(self) -> None:
         try:
@@ -174,6 +187,8 @@ class CohortSpeedWorker(_BaseWorker):
                 freeze_pct=self._freeze_pct,
                 dart_pct=self._dart_pct,
                 calibration_master=self._calibration_master,
+                start_s=self._start_s,
+                end_s=self._end_s,
                 progress=lambda done, total, _name: self.progress.emit(done, total),
             )
             thresholds.save(self._output)

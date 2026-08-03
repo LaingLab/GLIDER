@@ -247,3 +247,109 @@ class TestCostAndProgress:
         assert px.unit == PX_PER_FRAME and cm.unit == CM_PER_S
         # 1 px/frame at 4 px/mm and 30 fps = 0.75 cm/s.
         assert cm.dart == pytest.approx(px.dart * 0.75, rel=1e-6)
+
+
+class TestPoolingOnlyAWindow:
+    """Thresholds describe the behaviour they are applied to.
+
+    A run that scores minutes 2-7 thresholded against the whole recording is
+    not a rounding difference: on a real 30-animal cohort the freezing cut-off
+    moved 34% between the two, because the settling-in period the ethogram
+    never covers is where the stillest frames are.
+    """
+
+    def _session(self, tmp_path, name="s1", n=600, fps=30.0):
+        """A session that is still for its first third, then moves."""
+        from glider.vision.pose.core import PoseData
+        from glider.vision.pose.dlc import to_dlc_csv
+
+        xy = np.zeros((n, 3, 2))
+        moving = np.arange(n) >= n // 3
+        xy[:, :, 0] = np.where(moving, np.arange(n) * 4.0, 0.0)[:, None]
+        path = tmp_path / f"{name}DLC_m.csv"
+        to_dlc_csv(
+            PoseData(
+                xy=xy,
+                confidence=np.ones((n, 3)),
+                keypoint_names=["a", "b", "c"],
+                fps=fps,
+            ),
+            path,
+        )
+        return path
+
+    def test_a_window_excludes_the_still_opening(self, tmp_path):
+        path = self._session(tmp_path)
+        whole, _ = session_speeds(path)
+        # The first third is motionless; skipping it must raise the floor.
+        windowed, _ = session_speeds(path, start_s=10.0)
+        assert windowed.min() > whole.min()
+
+    def test_the_window_is_in_seconds_at_each_session_rate(self, tmp_path):
+        fast = self._session(tmp_path, name="fast", n=600, fps=60.0)
+        # 2 s at 60 fps is 120 frames; at 30 fps it would be 60.
+        speeds, _ = session_speeds(fast, start_s=2.0, end_s=4.0)
+        assert 110 <= speeds.size <= 121
+
+    def test_the_causal_filter_is_not_restarted_at_the_window(self, tmp_path):
+        """Its value inside the window depends on the frames before it, and
+        the apply run windows the same way."""
+        from glider.analysis.behavior.classify.speed_state import CausalSpeed
+        from glider.vision.pose.dlc import from_dlc_csv
+
+        path = self._session(tmp_path)
+        pose = from_dlc_csv(path)
+        causal = CausalSpeed()
+        full = np.array([causal.push(f) for f in pose.xy])
+
+        windowed, _ = session_speeds(path, start_s=5.0, end_s=6.0)
+        first, last = int(round(5.0 * 30)), int(round(6.0 * 30)) - 1
+        expected = full[first : last + 1]
+        expected = expected[np.isfinite(expected)]
+        assert windowed == pytest.approx(expected)
+
+    def test_the_window_is_recorded_in_the_file(self, tmp_path):
+        paths = [self._session(tmp_path, name=f"s{i}") for i in range(3)]
+        thresholds = compute_cohort_thresholds(paths, start_s=2.0, end_s=8.0)
+        assert thresholds.start_s == pytest.approx(2.0)
+        assert thresholds.end_s == pytest.approx(8.0)
+        assert thresholds.window == (2.0, 8.0)
+        assert "min" in thresholds.describe_window()
+
+    def test_the_window_survives_a_round_trip(self, tmp_path):
+        paths = [self._session(tmp_path, name=f"s{i}") for i in range(3)]
+        out = tmp_path / "cohort.json"
+        compute_cohort_thresholds(paths, start_s=2.0, end_s=8.0).save(out)
+        assert CohortSpeedThresholds.load(out).window == (2.0, 8.0)
+
+    def test_no_window_means_the_whole_recording(self, tmp_path):
+        paths = [self._session(tmp_path, name=f"s{i}") for i in range(3)]
+        thresholds = compute_cohort_thresholds(paths)
+        assert thresholds.window is None
+        assert thresholds.describe_window() == "the whole recording"
+
+    def test_a_file_written_before_windowing_reads_as_whole(self, tmp_path):
+        """Absent fields mean exactly what they say."""
+        import json
+
+        path = tmp_path / "old.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "unit": "cm/s",
+                    "freeze": 0.4,
+                    "dart": 27.0,
+                    "freeze_pct": 10.0,
+                    "dart_pct": 99.5,
+                    "n_sessions": 30,
+                    "n_samples": 1000,
+                    "sources": [],
+                }
+            )
+        )
+        assert CohortSpeedThresholds.load(path).window is None
+
+    def test_a_backwards_window_is_refused(self, tmp_path):
+        with pytest.raises(CohortSpeedError, match="ends before it starts"):
+            compute_cohort_thresholds([self._session(tmp_path)], start_s=8.0, end_s=2.0)
