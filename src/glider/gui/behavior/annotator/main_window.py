@@ -187,6 +187,7 @@ class AnnotatorWindow(QMainWindow):
         }
         self.speed_cache = SpeedCache()
         self._speed_threads: list[QThread] = []
+        self._speed_workers: list[_SpeedWorker] = []
 
         # Map proposed-clip index → the BehaviorZone it produced. This is
         # how a clip is recognised as "labeled" now that a saved zone's
@@ -811,8 +812,19 @@ class AnnotatorWindow(QMainWindow):
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        # Keep the worker alive. It has no parent (moveToThread does not set
+        # one), so once this method returns the only Python reference would be
+        # gone, PyQt would drop the underlying C++ object, and
+        # thread.started would fire into nothing -- leaving the trace on
+        # "loading pose data…" for the rest of the session.
+        self._speed_workers.append(worker)
+        worker.finished.connect(lambda w=worker: self._forget_speed_worker(w))
         self._speed_threads.append(thread)
         thread.start()
+
+    def _forget_speed_worker(self, worker: _SpeedWorker) -> None:
+        if worker in self._speed_workers:
+            self._speed_workers.remove(worker)
 
     def _on_speed_loaded(self, video, session) -> None:
         self.speed_cache.store(video, session)
@@ -839,6 +851,9 @@ class AnnotatorWindow(QMainWindow):
                 # Already deleted by deleteLater; nothing left to wait for.
                 pass
         self._speed_threads.clear()
+        # Safe only after every thread above has stopped: these are the
+        # objects those threads were running.
+        self._speed_workers.clear()
 
     def _refresh_speed_trace(self) -> None:
         """Point the trace at the current clip's video, window and thresholds."""
