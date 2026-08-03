@@ -530,10 +530,11 @@ def classify(
     result.transitions.to_csv(output_dir / "transitions.csv", index=False)
 
     # The freeze/dart axis scores the same frames independently of posture, so
-    # it gets its own files rather than extra rows in stats.csv: a frame can be
-    # both grooming and freezing, and one table holding both would have
-    # fractions summing past the session. Until now it reached neither, and
-    # lived only in ethogram_raw.csv for the operator to parse by hand.
+    # it gets its own files rather than extra rows in stats.csv. stats.csv
+    # already counts freezing and darting, because the resolved behaviour
+    # folds them in; these answer the narrower question of what the speed axis
+    # alone claimed, so the two must not be added together. Until now the axis
+    # reached neither, and lived only in ethogram_raw.csv.
     if any(speed_labels):
         _write_axis_summary(output_dir, speed_labels, effective_fps, floor_ms, prefix="speed")
 

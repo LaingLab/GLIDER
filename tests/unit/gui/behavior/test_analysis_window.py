@@ -730,3 +730,124 @@ class TestZonesInTheWindow:
         win._heatmap_on.setChecked(True)
         win._bar.set_selection(0, 59)  # must not raise
         assert win._zone_table.rowCount() == 0
+
+
+def _windowed_session(tmp_path, first=3600, n=9000):
+    """An ethogram that starts partway into its video, as a windowed run does."""
+    folder = tmp_path / "outputs" / "t9"
+    folder.mkdir(parents=True)
+    pd.DataFrame({"frame": range(first, first + n), "behavior": ["groom"] * n}).to_csv(
+        folder / "ethogram_raw.csv", index=False
+    )
+    return folder / "ethogram_raw.csv"
+
+
+class TestTheTimelineCoversTheEthogram:
+    """A run that scored minutes 2-7 has no frames before 3600, and a
+    timeline drawn from zero spends its first eighth showing nothing."""
+
+    def test_the_bar_starts_where_the_ethogram_starts(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_windowed_session(tmp_path))
+        assert win._bar.frame_bounds() == (3600, 12599)
+
+    def test_the_playhead_opens_on_the_first_scored_frame(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_windowed_session(tmp_path))
+        assert win._frame == 3600
+
+    def test_clicking_the_far_left_lands_on_the_first_frame(self, qtbot, tmp_path):
+        bar = EthogramBar()
+        qtbot.addWidget(bar)
+        bar.resize(300, 46)
+        bar.set_view(SessionView.load(_windowed_session(tmp_path)))
+        assert bar._frame_at(0.0) == 3600
+        # 9000 frames across 300 px is 30 frames per pixel, so the rightmost
+        # pixel lands inside the final 30 rather than exactly on the last.
+        assert 12570 <= bar._frame_at(299.9) <= 12599
+
+    def test_the_scored_range_fills_the_width(self, qtbot, tmp_path):
+        bar = EthogramBar()
+        qtbot.addWidget(bar)
+        bar.resize(300, 46)
+        bar.set_view(SessionView.load(_windowed_session(tmp_path)))
+        assert bar._x_of(3600) == pytest.approx(0.0)
+        assert bar._x_of(12599) == pytest.approx(300.0, abs=0.5)
+
+    def test_stepping_left_holds_at_the_first_scored_frame(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_windowed_session(tmp_path))
+        _key(win, Qt.Key.Key_Left)
+        assert win._frame == 3600
+
+    def test_playback_stops_at_the_last_scored_frame(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_windowed_session(tmp_path))
+        win._set_frame(12599)
+        win._toggle_play()
+        win._advance()
+        assert win._timer.isActive() is False
+
+    def test_a_whole_session_is_unaffected(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        assert win._bar.frame_bounds() == (0, 299)
+        assert win._frame == 0
+
+
+class TestSwitchingSessionsIsCheap:
+    """Recomputing thirty sessions to redraw a table that did not change made
+    flicking between animals feel like the app had hung."""
+
+    def _cohort(self, tmp_path, n=4, rows=300):
+        out = []
+        for i in range(n):
+            folder = tmp_path / "outputs" / f"t{i}"
+            folder.mkdir(parents=True)
+            pd.DataFrame({"frame": range(rows), "behavior": ["groom"] * rows}).to_csv(
+                folder / "ethogram_raw.csv", index=False
+            )
+            out.append(folder / "ethogram_raw.csv")
+        return out
+
+    def test_the_cohort_table_is_computed_once_per_window(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+
+        calls = []
+        original = SessionView.segment_stats
+        monkeypatch.setattr(
+            SessionView,
+            "segment_stats",
+            lambda self, *a, **k: (calls.append(1), original(self, *a, **k))[1],
+        )
+        win._bar.set_selection(0, 299)
+        after_first = len(calls)
+        win._sessions.setCurrentIndex(2)
+        win._sessions.setCurrentIndex(3)
+        # Switching costs the shown session only, not the cohort again.
+        assert len(calls) - after_first <= 2
+
+    def test_changing_the_window_does_recompute(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        win._bar.set_selection(0, 299)
+        first = win.cohort_rows(0, 299)
+        assert win.cohort_rows(0, 299) is first  # cached
+        assert win.cohort_rows(0, 199) is not first  # different window
+
+    def test_loading_a_new_cohort_drops_the_cache(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path, n=4))
+        win._bar.set_selection(0, 299)
+        win.cohort_rows(0, 299)
+        win.load_many(self._cohort(tmp_path / "second", n=2))
+        assert len(win.cohort_rows(0, 299)) == 2
