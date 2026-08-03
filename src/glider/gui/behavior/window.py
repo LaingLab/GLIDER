@@ -296,6 +296,10 @@ class BehaviorAnalysisWindow(QMainWindow):
 class AnnotateTab(QWidget):
     """Pick a videos folder + pose-CSV folder and launch the clip annotator."""
 
+    # The clip queue the tab asked for before it was configurable. Kept as the
+    # default so an existing habit produces an unchanged session.
+    DEFAULT_CLIP_COUNT = 50
+
     def __init__(self, project_dir: Path, parent=None):
         super().__init__(parent)
         self.project_dir = Path(project_dir)
@@ -316,10 +320,45 @@ class AnnotateTab(QWidget):
         poses_btn.clicked.connect(self._on_choose_poses)
         layout.addLayout(_row(self._poses_label, poses_btn))
 
+        # Reviewing existing work and sampling new material are the two
+        # reasons to open the annotator, and the tab could only do the second.
+        self._review_check = QCheckBox("Review annotations already saved for these videos")
+        self._review_check.setToolTip(
+            "Replay every saved behavior zone instead of sampling new clips.\n"
+            "Zones are read from <pose CSV folder>/<name>_annotations.csv — the\n"
+            "same files training reads."
+        )
+        self._review_check.toggled.connect(self._on_review_toggled)
+        layout.addWidget(self._review_check)
+
+        self._clip_count = QSpinBox()
+        # A 30-video cohort wants four figures of clips, so the ceiling has to
+        # be well clear of anything a labeller would actually ask for.
+        self._clip_count.setRange(1, 100_000)
+        self._clip_count.setValue(self.DEFAULT_CLIP_COUNT)
+        self._clip_count.setToolTip(
+            "Total clips sampled across ALL videos, not per video.\n"
+            "Raised to the number of videos if you ask for fewer."
+        )
+        self._clip_count_label = QLabel("Clips to sample (across all videos):")
+        layout.addLayout(_row(self._clip_count_label, self._clip_count))
+
+        self._skip_labelled_check = QCheckBox("Skip regions already labelled")
+        self._skip_labelled_check.setToolTip(
+            "Keep the sampler off frames you have already annotated, so a\n"
+            "second pass over a cohort proposes new material."
+        )
+        layout.addWidget(self._skip_labelled_check)
+
         self._launch_btn = QPushButton("Launch annotator")
         self._launch_btn.clicked.connect(self._on_launch)
         layout.addWidget(self._launch_btn)
         layout.addStretch(1)
+
+    def _on_review_toggled(self, reviewing: bool) -> None:
+        """Review mode replays saved zones, so the sampling controls don't apply."""
+        for widget in (self._clip_count, self._clip_count_label, self._skip_labelled_check):
+            widget.setEnabled(not reviewing)
 
     def _on_choose_videos(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose videos folder")
@@ -365,8 +404,13 @@ class AnnotateTab(QWidget):
 
         # Deferred: propose_clips_multi pulls in sklearn; AnnotatorWindow
         # pulls in cv2 via the clip player.
+        from glider.analysis.behavior.annotations import AnnotationStore
         from glider.analysis.behavior.vocabulary import Vocabulary
-        from glider.gui.behavior.annotator.app import annotation_path_for
+        from glider.gui.behavior.annotator.app import (
+            annotation_path_for,
+            build_review_clips,
+            make_more_sampler,
+        )
         from glider.gui.behavior.annotator.capture_cache import VideoCaptureCache
         from glider.gui.behavior.annotator.main_window import AnnotatorWindow
         from glider.gui.behavior.annotator.sampler import propose_clips_multi
@@ -385,10 +429,48 @@ class AnnotateTab(QWidget):
         videos_meta = {v: annotation_path_for(p) for v, p in sessions}
         pairs = [(p, v) for v, p in sessions]  # (pose_csv, video) for the sampler
         try:
-            clips = propose_clips_multi(sessions=pairs, n_clips_total=max(50, len(pairs)), fps=fps)
+            if self._review_check.isChecked():
+                # Every saved zone becomes a replayable clip. Nothing is
+                # sampled: the point is to see the work already on disk.
+                clips = build_review_clips(videos_meta, fps)
+                if not clips:
+                    QMessageBox.warning(
+                        self,
+                        "Annotate",
+                        "Review mode found no annotations for these videos.\n\n"
+                        f"Looked for <name>_annotations.csv in {poses_dir}.\n\n"
+                        "Uncheck 'Review annotations already saved' to sample "
+                        "fresh clips and start labelling.",
+                    )
+                    return
+            else:
+                # propose_clips_multi refuses a total below the video count,
+                # and a labeller asking for "10 clips" across 30 videos means
+                # "a few", not "crash".
+                n_total = max(int(self._clip_count.value()), len(pairs))
+                exclude_zones = None
+                if self._skip_labelled_check.isChecked():
+                    exclude_zones = [
+                        [
+                            (z.start_frame, z.end_frame)
+                            for z in AnnotationStore.load_csv(videos_meta[video])
+                        ]
+                        for _pose_csv, video in pairs
+                    ]
+                clips = propose_clips_multi(
+                    sessions=pairs,
+                    n_clips_total=n_total,
+                    fps=fps,
+                    exclude_zones_by_session=exclude_zones,
+                )
         except Exception as e:  # noqa: BLE001 - surfaced to the user, not fatal
-            QMessageBox.critical(self, "Annotate", f"Could not sample clips:\n{e}")
+            QMessageBox.critical(self, "Annotate", f"Could not build the clip list:\n{e}")
             return
+
+        # The window's "render more" button only exists when it is given a
+        # sampler; without one, a review session is a dead end and a sampled
+        # session can never be extended.
+        clip_sampler = make_more_sampler(sessions, fps=fps)
 
         # Vocabulary fallback: a sibling of the first video, same rule as
         # annotator/app.py's run().
@@ -410,6 +492,7 @@ class AnnotateTab(QWidget):
             vocab=vocab,
             vocab_path=vocab_path,
             capture_cache=capture_cache,
+            clip_sampler=clip_sampler,
         )
         self._annotator_window.show()
         self._annotator_window.warn_about_load_errors()
