@@ -41,10 +41,28 @@ qasync_hiddenimports = collect_submodules("qasync")
 # importing cv2` into a predictable, reproducible binary on disk.
 cv2_binaries = collect_dynamic_libs("cv2")
 
+# The [behavior] stack. Every one of these is lazy-imported inside a function
+# so that a bare [pc] install stays importable, which also means PyInstaller's
+# static analysis never sees them and silently ships a build without them.
+#
+# That is not a degraded build, it is a dark one: behavior_available() probes
+# for umap and hdbscan before enabling the Behavior Analysis menu at all, so a
+# bundle missing them disables the entire feature — Apply, Session Review and
+# the annotator — with no error anywhere to explain why. joblib is how model
+# bundles are read, so without it nothing could be loaded even if the menu
+# opened. Collected explicitly, and pinned by a test over this spec.
+behavior_datas, behavior_binaries, behavior_hiddenimports = [], [], []
+for _package in ("umap", "hdbscan", "joblib", "lightgbm", "sklearn", "yaml"):
+    _datas, _binaries, _hidden = collect_all(_package)
+    behavior_datas += _datas
+    behavior_binaries += _binaries
+    behavior_hiddenimports += _hidden
+
 hiddenimports = (
     glider_hiddenimports
     + ryvencore_hiddenimports
     + qasync_hiddenimports
+    + behavior_hiddenimports
     + [
         # Driver entry points are registered in pyproject.toml via the
         # "glider.driver" group. At runtime they're looked up by string, so
@@ -83,8 +101,8 @@ excludes = [
 a = Analysis(
     ["../../src/glider/__main__.py"],
     pathex=["../../src"],
-    binaries=glider_binaries + cv2_binaries,
-    datas=glider_datas,
+    binaries=glider_binaries + cv2_binaries + behavior_binaries,
+    datas=glider_datas + behavior_datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
