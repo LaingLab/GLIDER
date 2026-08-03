@@ -668,6 +668,7 @@ class ApplyTab(QWidget):
         layout.addLayout(keypoints_row)
 
         layout.addLayout(self._build_cadence_row())
+        layout.addLayout(self._build_time_range_row())
         layout.addWidget(self._build_stability_group())
 
         layout.addWidget(self._build_speed_group())
@@ -1116,6 +1117,76 @@ class ApplyTab(QWidget):
         self._on_cadence_changed()
         return row
 
+    def _build_time_range_row(self) -> QHBoxLayout:
+        """Score only part of each recording — a drug window, a post-stimulus
+        period — instead of all of it.
+
+        In minutes rather than frames, and resolved per video against that
+        video's own rate, so one setting means the same clock time across a
+        cohort filmed at different frame rates. Everything upstream of the
+        prediction still runs over the whole recording, so the window's first
+        frames are scored exactly as a whole-session run would have scored
+        them rather than from a cold start.
+        """
+        self._range_on = QCheckBox("Analyse only")
+        self._range_on.setToolTip(
+            "Score a stretch of each video instead of all of it.\n"
+            "Applies to every selected video, measured from its own start."
+        )
+        self._range_on.toggled.connect(self._on_range_toggled)
+
+        self._range_start = QDoubleSpinBox()
+        self._range_start.setRange(0.0, 600.0)
+        self._range_start.setDecimals(2)
+        self._range_start.setSingleStep(0.5)
+        self._range_start.setSuffix(" min")
+        self._range_end = QDoubleSpinBox()
+        self._range_end.setRange(0.0, 600.0)
+        self._range_end.setDecimals(2)
+        self._range_end.setSingleStep(0.5)
+        self._range_end.setValue(5.0)
+        self._range_end.setSuffix(" min")
+        self._range_end.setSpecialValueText("to the end")
+        for spin in (self._range_start, self._range_end):
+            spin.setEnabled(False)
+            spin.valueChanged.connect(self._on_range_changed)
+
+        self._range_hint = QLabel("")
+        self._range_hint.setWordWrap(True)
+
+        row = QHBoxLayout()
+        row.addWidget(self._range_on)
+        row.addWidget(self._range_start)
+        row.addWidget(QLabel("to"))
+        row.addWidget(self._range_end)
+        row.addWidget(self._range_hint, 1)
+        return row
+
+    def _on_range_toggled(self, checked: bool) -> None:
+        self._range_start.setEnabled(checked)
+        self._range_end.setEnabled(checked)
+        self._on_range_changed()
+
+    def _on_range_changed(self, *_args) -> None:
+        if not self._range_on.isChecked():
+            self._range_hint.setText("whole recording")
+            return
+        start, end = self._range_start.value(), self._range_end.value()
+        if end and end <= start:
+            self._range_hint.setText("⚠ the window ends before it starts")
+            return
+        span = f"{(end - start) * 60:.0f} s of each video" if end else "to the end of each video"
+        self._range_hint.setText(span)
+
+    def _time_range(self) -> tuple[float | None, float | None]:
+        """``(start_s, end_s)`` for classify(), or ``(None, None)``."""
+        if not self._range_on.isChecked():
+            return None, None
+        start = self._range_start.value() * 60.0
+        end = self._range_end.value() * 60.0
+        # The end spin's minimum doubles as "to the end", so 0 means open.
+        return (start or None) if start else 0.0, (end or None)
+
     def _build_stability_group(self) -> QGroupBox:
         """How much frame-to-frame flicker to absorb before reporting bouts.
 
@@ -1448,6 +1519,7 @@ class ApplyTab(QWidget):
 
         video = self._queue.pop(0)
         video_output_dir = self._output_dir / video.stem
+        start_s, end_s = self._time_range()
 
         self._apply_thread = QThread()
         self._apply_worker = ApplyWorker(
@@ -1463,6 +1535,8 @@ class ApplyTab(QWidget):
             write_annotated=self._render_video.isChecked(),
             smooth_window=self._smooth_window.value(),
             min_bout_s=self._min_bout_s.value() or None,
+            start_s=start_s,
+            end_s=end_s,
         )
         self._apply_worker.moveToThread(self._apply_thread)
         self._apply_thread.started.connect(self._apply_worker.run)

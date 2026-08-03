@@ -123,7 +123,7 @@ class TestClassifyWiring:
         seen = {}
         monkeypatch.setattr(pipeline_mod, "_load_behavior_model", lambda _p: object())
 
-        def _fake_batch(config, _ethogram, _model):
+        def _fake_batch(config, _ethogram, _model, **_kw):
             seen["pose_csv_in"] = config.pose_csv_in
             seen["pose_csv_out"] = config.pose_csv_out
             raise RuntimeError("stop before running")
@@ -165,7 +165,7 @@ class TestClassifyWiring:
         seen = {}
         monkeypatch.setattr(pipeline_mod, "_load_behavior_model", lambda _p: object())
 
-        def _fake_batch(config, _ethogram, _model):
+        def _fake_batch(config, _ethogram, _model, **_kw):
             seen["pose_csv_in"] = config.pose_csv_in
             raise RuntimeError("stop before running")
 
