@@ -144,6 +144,28 @@ class TestFolderMateScale:
         cal_set.save(master)
         assert load_px_per_mm(master, target) is None
 
+    @pytest.mark.parametrize(
+        ("stored", "expected"),
+        [
+            (r"\\130.74.60.149\lainglab\Garrett\5 mgkg final mp4\T12_5.avi", "5 mgkg final mp4"),
+            (r"Z:\Lab Members\Garrett\5 mgkg final mp4\T12_5.avi", "5 mgkg final mp4"),
+            ("/mnt/lainglab/Garrett/5 mgkg final mp4/T12_5.avi", "5 mgkg final mp4"),
+            (r"C:\data\RIG\a.avi", "rig"),
+            ("bare.avi", ""),
+        ],
+    )
+    def test_folder_name_is_read_whichever_separator_wrote_the_path(self, stored, expected):
+        """A calibration master written on Windows must still match on Linux.
+
+        pathlib does not treat a backslash as a separator on POSIX, so a
+        stored ``\\\\host\\share\\folder\\clip.avi`` parses as ONE component and
+        ``parent.name`` comes back empty -- every folder comparison then
+        silently fails and no scale is ever borrowed.
+        """
+        from glider.analysis.behavior.units import _folder_name
+
+        assert _folder_name(stored) == expected
+
     def test_matches_folders_by_name_across_unc_and_drive_letters(self, tmp_path):
         """The same share is routinely addressed as Z:\\... and \\\\host\\share\\..."""
         folder = tmp_path / "5 mgkg final mp4"
