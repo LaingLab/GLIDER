@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
 
 from glider.gui.pose_batch.calibration_table import CalibrationTable
 from glider.gui.styles import colors
+from glider.gui.widgets import BusyProgress
 from glider.vision.calibration import CameraCalibration
 from glider.vision.calibration_set import CalibrationSet, CalibrationSetError
 from glider.vision.pose import batch as batch_core
@@ -397,7 +398,9 @@ class PoseBatchWindow(QMainWindow):
         self._overall_bar.setFormat("%v / %m videos")
         layout.addWidget(self._overall_bar)
 
-        self._video_bar = QProgressBar()
+        # Per-video: OpenCV cannot always report a frame count, so this one
+        # falls back to the busy indicator when the total is unknown.
+        self._video_bar = BusyProgress()
         self._video_bar.setFormat("%v / %m frames")
         layout.addWidget(self._video_bar)
         return layout

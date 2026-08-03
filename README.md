@@ -1,4 +1,19 @@
-# General Laboratory Interface for Design, Experimentation, and Recording
+<p align="center">
+  <img src="docs-site/assets/mouse-run.svg" width="150" height="150"
+       alt="A mouse running in an exercise wheel">
+</p>
+
+<h1 align="center">GLIDER</h1>
+
+<p align="center">
+  <b>G</b>eneral <b>L</b>aboratory <b>I</b>nterface for
+  <b>D</b>esign, <b>E</b>xperimentation, and <b>R</b>ecording
+</p>
+
+<p align="center">
+  Laboratory automation driven from a visual, node-based flow editor —
+  hardware control, camera tracking, and behavior analysis in one place.
+</p>
 
 #### Documentation Coming Soon...
 

@@ -10,4 +10,6 @@ reduce drift between two parallel runner implementations.
 Add new shared widgets here only when at least two panels need them.
 """
 
-__all__: list[str] = []
+from glider.gui.widgets.mouse_runner import BusyIndicator, BusyProgress, MouseRunner
+
+__all__: list[str] = ["BusyIndicator", "BusyProgress", "MouseRunner"]

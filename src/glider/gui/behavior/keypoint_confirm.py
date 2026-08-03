@@ -24,10 +24,12 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
 )
 
 from glider.gui.styles import colors
+from glider.gui.widgets import BusyIndicator
 
 logger = logging.getLogger(__name__)
 
@@ -157,10 +159,18 @@ class KeypointConfirmDialog(QDialog):
             self._warning.setStyleSheet(f"color: {colors.ERROR}; font-weight: bold;")
             layout.addWidget(self._warning)
 
-        self._image = QLabel("Loading a frame and running the pose model…")
+        self._image = QLabel()
         self._image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._image.setMinimumSize(480, 360)
-        layout.addWidget(self._image, 1)
+
+        # Two states share this area: the busy indicator while torch loads and
+        # the model runs, then the annotated frame — or, if that fails, an
+        # explanation in its place.
+        self._busy = BusyIndicator("Loading a frame and running the pose model…")
+        self._preview = QStackedWidget()
+        self._preview.addWidget(self._busy)
+        self._preview.addWidget(self._image)
+        self._preview.setMinimumSize(480, 360)
+        layout.addWidget(self._preview, 1)
 
         self._legend = QLabel(", ".join(f"{i}:{n}" for i, n in enumerate(self._names)))
         self._legend.setWordWrap(True)
@@ -219,6 +229,7 @@ class KeypointConfirmDialog(QDialog):
         self.show_frame(annotate_keypoints(frame, points, self._names))
 
     def _on_failed(self, message: str) -> None:
+        self._preview.setCurrentWidget(self._image)
         self._image.setText(
             f"Could not preview keypoints:\n{message}\n\n"
             "You can still run, but the labels have not been checked."
@@ -232,6 +243,8 @@ class KeypointConfirmDialog(QDialog):
         rgb = np.ascontiguousarray(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB))
         h, w = rgb.shape[:2]
         image = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
+        # Switch pages first so the label has its final size to scale into.
+        self._preview.setCurrentWidget(self._image)
         self._image.setPixmap(
             QPixmap.fromImage(image).scaled(
                 self._image.size(),

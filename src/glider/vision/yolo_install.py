@@ -39,7 +39,6 @@ from PyQt6.QtWidgets import (
     QDialog,
     QLabel,
     QMessageBox,
-    QProgressBar,
     QVBoxLayout,
     QWidget,
 )
@@ -145,9 +144,9 @@ class _InstallWorker(QThread):
 class _InstallProgressDialog(QDialog):
     """Modal progress dialog shown while pip is running.
 
-    Indeterminate progress bar — pip's line-by-line output is noisy and not
-    worth parsing for a progress percentage. We just show "Installing…" and
-    rely on the subprocess timeout to bound the worst case.
+    Busy indicator rather than a progress bar — pip's line-by-line output is
+    noisy and not worth parsing for a percentage. We just show "Installing…"
+    and rely on the subprocess timeout to bound the worst case.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -165,9 +164,11 @@ class _InstallProgressDialog(QDialog):
                 "This may take several minutes — ~700 MB will be downloaded."
             )
         )
-        bar = QProgressBar()
-        bar.setRange(0, 0)  # indeterminate "spinner" mode
-        layout.addWidget(bar)
+        # No percentage is available here — pip reports nothing we can parse —
+        # so this is a pure "still working" state.
+        from glider.gui.widgets import BusyIndicator
+
+        layout.addWidget(BusyIndicator("Installing…", size=110))
         # Intentionally no Cancel button — killing pip mid-install leaves the
         # environment in an inconsistent state. Users who really want out can
         # close the app.

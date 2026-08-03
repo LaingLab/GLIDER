@@ -38,7 +38,6 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QSpinBox,
     QTabWidget,
@@ -47,6 +46,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.widgets import BusyProgress
 from glider.vision.pose.batch import VIDEO_EXTS, VIDEO_FILTER, find_pose_csv
 
 logger = logging.getLogger(__name__)
@@ -486,7 +486,7 @@ class TrainTab(QWidget):
         self._fit_btn.clicked.connect(self._on_fit)
         layout.addWidget(self._fit_btn)
 
-        self._progress = QProgressBar()
+        self._progress = BusyProgress()
         self._progress.setVisible(False)
         layout.addWidget(self._progress)
 
@@ -725,7 +725,7 @@ class ApplyTab(QWidget):
         self._run_btn.clicked.connect(self._on_run)
         layout.addWidget(self._run_btn)
 
-        self._progress = QProgressBar()
+        self._progress = BusyProgress()
         self._progress.setVisible(False)
         layout.addWidget(self._progress)
 
