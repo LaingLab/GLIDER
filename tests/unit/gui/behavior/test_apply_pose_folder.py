@@ -384,3 +384,65 @@ class TestTheTimeRange:
         )
         assert seen["start_s"] is None
         assert seen["end_s"] is None
+
+
+class TestCohortWindowConsistency:
+    """Thresholds describe the stretch they were pooled over, so a run that
+    scores a different one is comparing against the wrong distribution — and
+    nothing in the output would look wrong."""
+
+    def _cohort_file(self, path, start_s=None, end_s=None):
+        import json
+
+        payload = {
+            "schema_version": 1,
+            "unit": "cm/s",
+            "freeze": 0.41,
+            "dart": 27.1,
+            "freeze_pct": 10.0,
+            "dart_pct": 99.5,
+            "n_sessions": 30,
+            "n_samples": 1000,
+            "sources": [],
+        }
+        if start_s is not None:
+            payload["start_s"] = start_s
+        if end_s is not None:
+            payload["end_s"] = end_s
+        path.write_text(json.dumps(payload))
+        return path
+
+    def test_matching_windows_say_nothing(self, tab, tmp_path):
+        tab._cohort_path = self._cohort_file(tmp_path / "c.json", 120.0, 420.0)
+        tab._range_on.setChecked(True)
+        tab._range_start.setValue(2.0)
+        tab._range_end.setValue(7.0)
+        assert tab._cohort_window_mismatch() is None
+
+    def test_a_whole_recording_pool_with_a_windowed_run_is_flagged(self, tab, tmp_path):
+        tab._cohort_path = self._cohort_file(tmp_path / "c.json")
+        tab._range_on.setChecked(True)
+        tab._range_start.setValue(2.0)
+        tab._range_end.setValue(7.0)
+        message = tab._cohort_window_mismatch()
+        assert message is not None
+        assert "whole recording" in message
+        assert "2–7" in message
+
+    def test_a_windowed_pool_with_a_whole_run_is_flagged(self, tab, tmp_path):
+        tab._cohort_path = self._cohort_file(tmp_path / "c.json", 120.0, 420.0)
+        assert "whole recording" in tab._cohort_window_mismatch()
+
+    def test_both_whole_says_nothing(self, tab, tmp_path):
+        tab._cohort_path = self._cohort_file(tmp_path / "c.json")
+        assert tab._cohort_window_mismatch() is None
+
+    def test_no_cohort_file_says_nothing(self, tab):
+        assert tab._cohort_path is None
+        assert tab._cohort_window_mismatch() is None
+
+    def test_an_unreadable_cohort_file_never_blocks(self, tab, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json")
+        tab._cohort_path = bad
+        assert tab._cohort_window_mismatch() is None

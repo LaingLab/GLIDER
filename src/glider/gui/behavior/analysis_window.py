@@ -25,6 +25,7 @@ from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPen
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
@@ -35,6 +36,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -377,6 +379,9 @@ class AnalysisWindow(QMainWindow):
         self._view: SessionView | None = None
         self._ethogram_csv: Path | None = None
         self._frame = 0
+        # Every loaded session, in the order they were found. The canvas shows
+        # one of them; the window applies to all of them.
+        self._cohort: list[tuple[Path, SessionView]] = []
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -386,6 +391,22 @@ class AnalysisWindow(QMainWindow):
         self._path_label.setWordWrap(True)
         open_btn = QPushButton("Open ethogram…")
         open_btn.clicked.connect(self._open)
+        # A cohort is the unit of analysis, not a session: the question is
+        # almost always "what did these thirty animals do between minutes two
+        # and seven", and answering it one file at a time invites the window
+        # to drift between them.
+        open_folder_btn = QPushButton("Open cohort folder…")
+        open_folder_btn.setToolTip(
+            "Load every ethogram beneath a folder. The selected window then "
+            "applies to all of them at once."
+        )
+        open_folder_btn.clicked.connect(self._open_folder)
+
+        self._sessions = QComboBox()
+        self._sessions.setMinimumWidth(180)
+        self._sessions.setToolTip("Which loaded session the canvas and timeline show")
+        self._sessions.currentIndexChanged.connect(self._on_session_picked)
+        self._sessions.setVisible(False)
         # Runs made before the sidecar carried a resolution can still be
         # viewed: the video knows the number, so offer to read it from there
         # rather than make the operator re-run hours of inference.
@@ -400,8 +421,10 @@ class AnalysisWindow(QMainWindow):
         self._fix_resolution.clicked.connect(self._resolution_from_video)
         self._fix_resolution.setVisible(False)
         top.addWidget(self._path_label, 1)
+        top.addWidget(self._sessions)
         top.addWidget(self._fix_resolution)
         top.addWidget(open_btn)
+        top.addWidget(open_folder_btn)
         layout.addLayout(top)
 
         self._canvas = KeypointCanvas()
@@ -423,7 +446,40 @@ class AnalysisWindow(QMainWindow):
             ["Behavior", "Bouts", "Total (s)", "Fraction", "Mean (s)", "Median (s)"]
         )
         self._bouts.verticalHeader().setVisible(False)
-        layout.addWidget(self._bouts, 1)
+
+        # Per-session rows for the same window. The cohort is the unit of
+        # analysis, and a per-animal breakdown is what gets exported — so it
+        # sits beside the shown session rather than replacing it.
+        self._cohort_table = QTableWidget(0, 7)
+        self._cohort_table.setHorizontalHeaderLabels(
+            [
+                "Session",
+                "Scored",
+                "Distance (cm)",
+                "Mean (cm/s)",
+                "Freezing (s)",
+                "Darting (s)",
+                "Top behavior",
+            ]
+        )
+        self._cohort_table.verticalHeader().setVisible(False)
+
+        self._tables = QTabWidget()
+        self._tables.addTab(self._bouts, "This session")
+        self._tables.addTab(self._cohort_table, "Cohort")
+        layout.addWidget(self._tables, 1)
+
+        export_row = QHBoxLayout()
+        export_row.addStretch(1)
+        self._export_btn = QPushButton("Export window…")
+        self._export_btn.setToolTip(
+            "Write the selected window's per-session numbers to a CSV, so the "
+            "table on screen and the one in the analysis are the same table."
+        )
+        self._export_btn.clicked.connect(self._export_window)
+        self._export_btn.setEnabled(False)
+        export_row.addWidget(self._export_btn)
+        layout.addLayout(export_row)
 
         self.setCentralWidget(central)
 
@@ -477,12 +533,22 @@ class AnalysisWindow(QMainWindow):
             self.load(Path(path))
 
     def load(self, ethogram_csv: Path, *, pose_csv: Path | None = None) -> None:
-        """Load a session and everything belonging to it."""
+        """Load a single session, replacing whatever was open."""
         try:
             view = SessionView.load(ethogram_csv, pose_csv=pose_csv)
         except SessionViewError as e:
             QMessageBox.critical(self, "Open session", str(e))
             return
+        self._cohort = [(Path(ethogram_csv), view)]
+        self._sessions.blockSignals(True)
+        self._sessions.clear()
+        self._sessions.addItem(Path(ethogram_csv).parent.name)
+        self._sessions.blockSignals(False)
+        self._sessions.setVisible(False)
+        self._adopt(Path(ethogram_csv), view)
+
+    def _adopt(self, ethogram_csv: Path, view: SessionView) -> None:
+        """Show an already-loaded session."""
         self._view = view
         self._ethogram_csv = Path(ethogram_csv)
         self._path_label.setText(str(ethogram_csv))
@@ -566,6 +632,65 @@ class AnalysisWindow(QMainWindow):
         self._play.setText("Play")
         self._set_frame(max(0, min(last, target)))
         event.accept()
+
+    def _open_folder(self) -> None:
+        """Load every ethogram beneath a folder as one cohort."""
+        folder = QFileDialog.getExistingDirectory(self, "Folder of apply-run outputs")
+        if not folder:
+            return
+        found = sorted(Path(folder).rglob("ethogram_raw.csv"))
+        if not found:
+            QMessageBox.warning(
+                self,
+                "Open cohort",
+                f"No ethogram_raw.csv found under {folder}.\n\n"
+                "Pick the output folder an apply run wrote to — each session "
+                "lives in its own subfolder there.",
+            )
+            return
+        self.load_many(found)
+
+    def load_many(self, ethograms: list[Path]) -> None:
+        """Load a cohort. The first becomes the shown session."""
+        loaded: list[tuple[Path, SessionView]] = []
+        failed: list[str] = []
+        for path in ethograms:
+            try:
+                loaded.append((path, SessionView.load(path)))
+            except SessionViewError as e:  # one bad file must not lose the rest
+                failed.append(f"{path.parent.name}: {e}")
+        if not loaded:
+            QMessageBox.critical(self, "Open cohort", "\n".join(failed) or "nothing loaded")
+            return
+
+        self._cohort = loaded
+        self._sessions.blockSignals(True)
+        self._sessions.clear()
+        self._sessions.addItems([p.parent.name for p, _ in loaded])
+        self._sessions.blockSignals(False)
+        self._sessions.setVisible(len(loaded) > 1)
+        self._show_session(0)
+        if failed:
+            QMessageBox.warning(
+                self,
+                "Open cohort",
+                f"Loaded {len(loaded)}; {len(failed)} could not be read:\n\n"
+                + "\n".join(failed[:8]),
+            )
+
+    def _on_session_picked(self, index: int) -> None:
+        if 0 <= index < len(self._cohort):
+            self._show_session(index)
+
+    def _show_session(self, index: int) -> None:
+        """Put one of the loaded sessions on screen, keeping the window."""
+        path, view = self._cohort[index]
+        selection = self._bar.selection()
+        self._adopt(path, view)
+        if selection is not None:
+            # The window is the question being asked; switching which animal
+            # answers it must not silently reset it.
+            self._bar.set_selection(*selection)
 
     def _choose_pose_csv(self) -> None:
         """Point the session at its poses when discovery could not."""
@@ -653,6 +778,96 @@ class AnalysisWindow(QMainWindow):
         stats = self._view.segment_stats(start, end)
         self._fill_bouts(stats)
         self._summary.setText(self._describe(stats))
+        self._fill_cohort(start, end)
+        self._export_btn.setEnabled(True)
+
+    def cohort_rows(self, start: int, end: int) -> list[dict]:
+        """The selected window, per loaded session.
+
+        The same frame window is applied to every session rather than a
+        per-session fraction: "minutes two to seven" has to mean the same
+        stretch in each animal or the comparison is not one.
+        """
+        rows = []
+        for path, view in self._cohort:
+            stats = view.segment_stats(start, end)
+            scored = [lab for lab in view.labels if lab]
+            top = ""
+            if not stats.bouts.empty:
+                top = str(stats.bouts.iloc[0]["state"])
+            speed = stats.speed_bouts.set_index("state") if not stats.speed_bouts.empty else None
+            rows.append(
+                {
+                    "session": path.parent.name,
+                    "scored_rows": len(scored),
+                    "duration_s": stats.duration_s,
+                    "distance_cm": stats.distance_cm,
+                    "mean_cm_s": stats.mean_speed_cm_s,
+                    "peak_cm_s": stats.peak_speed_cm_s,
+                    "freezing_s": (
+                        float(speed.loc["freezing", "total_s"])
+                        if speed is not None and "freezing" in speed.index
+                        else 0.0
+                    ),
+                    "darting_s": (
+                        float(speed.loc["darting", "total_s"])
+                        if speed is not None and "darting" in speed.index
+                        else 0.0
+                    ),
+                    "top_behavior": top,
+                    **{
+                        f"{state}_s": float(total)
+                        for state, total in zip(
+                            stats.bouts["state"], stats.bouts["total_s"], strict=True
+                        )
+                    },
+                }
+            )
+        return rows
+
+    def _fill_cohort(self, start: int, end: int) -> None:
+        rows = self.cohort_rows(start, end)
+        self._cohort_table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            values = [
+                row["session"],
+                f"{row['scored_rows']:,}",
+                "—" if row["distance_cm"] is None else f"{row['distance_cm']:.1f}",
+                "—" if row["mean_cm_s"] is None else f"{row['mean_cm_s']:.2f}",
+                f"{row['freezing_s']:.2f}",
+                f"{row['darting_s']:.2f}",
+                row["top_behavior"] or "—",
+            ]
+            for c, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if c:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._cohort_table.setItem(r, c, item)
+        self._tables.setTabText(1, f"Cohort ({len(rows)})")
+
+    def _export_window(self) -> None:
+        """Write the per-session window table to CSV."""
+        selection = self._bar.selection()
+        if selection is None or not self._cohort:
+            return
+        default = self._cohort[0][0].parent.parent / "window_summary.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export window summary", str(default), "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+        import pandas as pd
+
+        start, end = selection
+        frame = pd.DataFrame(self.cohort_rows(start, end))
+        frame.insert(1, "start_frame", start)
+        frame.insert(2, "end_frame", end)
+        try:
+            frame.to_csv(path, index=False)
+        except OSError as e:
+            QMessageBox.critical(self, "Export window", f"Could not write {path}: {e}")
+            return
+        self._summary.setText(f"{self._summary.text()}\nWrote {path}")
 
     def _describe(self, stats) -> str:
         span = (

@@ -847,7 +847,47 @@ class ApplyTab(QWidget):
                     messages.append(message)
         except Exception:  # noqa: BLE001 - advisory only
             logger.debug("calibration spread check skipped", exc_info=True)
+        message = self._cohort_window_mismatch()
+        if message:
+            messages.append(message)
         return messages
+
+    def _cohort_window_mismatch(self) -> str | None:
+        """Whether the cohort thresholds cover a different stretch than this run.
+
+        Freezing is a percentile of the pooled speed, so it moves with the
+        stretch it was pooled over — by a third on a real cohort between
+        whole recordings and minutes two to seven. Scoring one window against
+        another's cut-offs is not an error and produces no symptom, which is
+        exactly why it is worth saying out loud.
+        """
+        if self._cohort_path is None:
+            return None
+        try:
+            from glider.analysis.behavior.cohort_speed import CohortSpeedThresholds
+
+            thresholds = CohortSpeedThresholds.load(self._cohort_path)
+        except Exception:  # noqa: BLE001 - advisory only
+            logger.debug("could not read the cohort thresholds", exc_info=True)
+            return None
+
+        start_s, end_s = self._time_range()
+        run_window = None if start_s is None and end_s is None else (start_s, end_s)
+        if run_window == thresholds.window:
+            return None
+        run_described = "the whole recording"
+        if run_window is not None:
+            tail = f"{end_s / 60:g} min" if end_s is not None else "the end"
+            run_described = f"{(start_s or 0.0) / 60:g}–{tail}"
+        return (
+            f"The cohort thresholds were pooled over {thresholds.describe_window()}, "
+            f"but this run scores {run_described}.\n\n"
+            "Freezing is a percentile of the pooled speed, so it moves with the "
+            "stretch it came from — on a 30-animal cohort the freezing cut-off "
+            "differed by a third between the whole recording and minutes 2–7. "
+            "Nothing will look wrong in the output.\n\n"
+            "Re-pool the thresholds over the same window, or clear the window."
+        )
 
     def _confirm_scale_advisories(self) -> bool:
         messages = self._scale_advisories()
@@ -1398,13 +1438,30 @@ class ApplyTab(QWidget):
 
         from glider.gui.behavior.workers import CohortSpeedWorker
 
+        window = "the whole recording"
+        if self._range_on.isChecked():
+            end = self._range_end.value()
+            window = (
+                f"minutes {self._range_start.value():g}–{end:g}"
+                if end
+                else f"minute {self._range_start.value():g} to the end"
+            )
         self._results.append(
-            f"Pooling speed from {len(csvs)} session(s)… this takes a minute or two."
+            f"Pooling speed from {len(csvs)} session(s) over {window}… "
+            "this takes a minute or two."
         )
         self._progress.setVisible(True)
         self._progress.setRange(0, len(csvs))
         self._progress.setValue(0)
         self._run_btn.setEnabled(False)
+
+        # Pool the same stretch the run will score. Thresholds describe the
+        # behaviour they are applied to, and the two windows disagreeing is
+        # not a small effect: on a real cohort, pooling whole recordings and
+        # scoring minutes two to seven moved the freezing cut-off by a third,
+        # because the settling-in period the ethogram never covers is where
+        # the stillest frames are.
+        start_s, end_s = self._time_range()
 
         self._cohort_thread = QThread()
         self._cohort_worker = CohortSpeedWorker(
@@ -1413,6 +1470,8 @@ class ApplyTab(QWidget):
             freeze_pct=self._freeze_pct.value(),
             dart_pct=self._dart_pct.value(),
             calibration_master=self._calibration_master,
+            start_s=start_s,
+            end_s=end_s,
         )
         self._cohort_worker.moveToThread(self._cohort_thread)
         self._cohort_thread.started.connect(self._cohort_worker.run)
