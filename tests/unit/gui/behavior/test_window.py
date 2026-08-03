@@ -712,3 +712,121 @@ def test_a_cohort_failure_is_reported_not_raised(tmp_path, monkeypatch):
     worker.failed.connect(failures.append)
     worker.run()  # must not raise out of the thread
     assert failures == ["no usable speed samples"]
+
+
+# --------------------------------------------------------------------------
+# Apply tab: neither model is unconditionally required
+# --------------------------------------------------------------------------
+
+
+def _apply_tab(qtbot, tmp_path, *, videos=(), poses=True):
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._output_dir = tmp_path / "out"
+    for name in videos:
+        video = tmp_path / name
+        video.write_bytes(b"")
+        tab._videos.append(video)
+        if poses:
+            (tmp_path / f"{video.stem}DLC_yolo.csv").write_text("scorer\n")
+    return tab
+
+
+def test_a_run_with_no_model_bundle_needs_the_speed_axis(qtbot, tmp_path):
+    """Without a classifier there must be something else doing the scoring."""
+    tab = _apply_tab(qtbot, tmp_path, videos=["a.mp4"])
+    tab._yolo_path = tmp_path / "y.pt"
+    assert "speed axis" in (tab._run_blocker() or "")
+
+
+def test_freezing_alone_is_enough_to_run_without_a_model(qtbot, tmp_path):
+    tab = _apply_tab(qtbot, tmp_path, videos=["a.mp4"])
+    tab._yolo_path = tmp_path / "y.pt"
+    tab._speed_group.setChecked(True)
+    tab._score_darting.setChecked(False)
+    assert tab._run_blocker() is None
+
+
+def test_scoring_neither_half_is_not_a_run(qtbot, tmp_path):
+    tab = _apply_tab(qtbot, tmp_path, videos=["a.mp4"])
+    tab._yolo_path = tmp_path / "y.pt"
+    tab._speed_group.setChecked(True)
+    tab._score_freezing.setChecked(False)
+    tab._score_darting.setChecked(False)
+    assert "freezing, darting, or both" in (tab._run_blocker() or "")
+
+
+def test_a_speed_only_run_cannot_ask_for_an_annotated_video(qtbot, tmp_path):
+    """The overlay draws predicted labels, and there is no model to predict."""
+    tab = _apply_tab(qtbot, tmp_path, videos=["a.mp4"])
+    tab._yolo_path = tmp_path / "y.pt"
+    tab._speed_group.setChecked(True)
+    tab._render_video.setChecked(True)
+    assert "annotated video" in (tab._run_blocker() or "")
+
+
+def test_weights_are_not_needed_when_every_video_has_poses(qtbot, tmp_path):
+    tab = _apply_tab(qtbot, tmp_path, videos=["a.mp4", "b.mp4"])
+    tab._model_path = tmp_path / "m.pkl"
+    assert tab._run_blocker() is None
+
+
+def test_weights_are_demanded_for_a_video_with_no_poses(qtbot, tmp_path):
+    tab = _apply_tab(qtbot, tmp_path, videos=["a.mp4"], poses=False)
+    tab._model_path = tmp_path / "m.pkl"
+    blocker = tab._run_blocker() or ""
+    assert "YOLO weights" in blocker
+    assert "a.mp4" in blocker
+
+
+def test_turning_pose_reuse_off_makes_the_weights_required_again(qtbot, tmp_path):
+    """Every video is tracked then, poses on disk or not."""
+    tab = _apply_tab(qtbot, tmp_path, videos=["a.mp4"])
+    tab._model_path = tmp_path / "m.pkl"
+    tab._reuse_poses.setChecked(False)
+    assert "YOLO weights" in (tab._run_blocker() or "")
+
+
+def test_clearing_the_model_returns_to_a_speed_only_run(qtbot, tmp_path):
+    tab = _apply_tab(qtbot, tmp_path)
+    tab._model_path = tmp_path / "m.pkl"
+    tab._on_clear_model()
+    assert tab._model_path is None
+    assert "freezing" in tab._model_label.text()
+
+
+def test_an_unscored_behaviour_sends_no_threshold(qtbot):
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._speed_group.setChecked(True)
+    tab._score_darting.setChecked(False)
+    opts = tab._speed_opts()
+    assert opts["score_darting"] is False
+    assert opts["dart_cm_s"] is None
+    assert "dart_min_s" not in opts
+
+
+def test_the_threshold_for_an_unscored_behaviour_is_hidden(qtbot):
+    """A setting with no meaning invites tuning that changes nothing."""
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._speed_group.setChecked(True)
+    tab._score_darting.setChecked(False)
+    assert tab._speed_form.isRowVisible(tab._freeze_abs_row)
+    assert not tab._speed_form.isRowVisible(tab._dart_abs_row)
+    assert not tab._speed_form.isRowVisible(tab._dart_min_row)
+
+
+def test_cohort_mode_without_a_file_is_refused_not_run_silently(qtbot, tmp_path):
+    """A missing cohort file would leave the axis absent from every ethogram."""
+    tab = _apply_tab(qtbot, tmp_path, videos=["a.mp4"])
+    tab._model_path = tmp_path / "m.pkl"
+    tab._speed_group.setChecked(True)
+    tab._speed_mode.setCurrentIndex(tab._speed_mode.findData("cohort"))
+    assert "cut-offs from a file" in (tab._run_blocker() or "")

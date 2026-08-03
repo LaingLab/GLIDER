@@ -444,50 +444,51 @@ class TestKeyboardScrubbing:
         assert win._frame == 0
 
 
-class TestTheSpeedAxisIsShown:
-    def _session_with_speed(self, tmp_path, n=300):
+class TestTheTimelineHasOneLane:
+    """Freezing and darting are values of the behaviour, not a parallel
+    track, so a second lane would draw the same frames twice."""
+
+    def _session_with_freezing(self, tmp_path, n=300):
         folder = tmp_path / "sp"
         folder.mkdir(parents=True, exist_ok=True)
-        speed = [""] * n
+        labels = ["groom"] * n
         for i in range(100, 160):
-            speed[i] = "freezing"
+            labels[i] = "freezing"
         pd.DataFrame(
             {
                 "frame": range(n),
-                "behavior": ["groom"] * n,
-                "speed": speed,
+                "behavior": labels,
                 "speed_px_frame": [0.4] * n,
                 "speed_cm_s": [1.2] * n,
             }
         ).to_csv(folder / "ethogram_raw.csv", index=False)
         return folder / "ethogram_raw.csv"
 
-    def test_the_bar_paints_a_second_lane(self, qtbot, tmp_path):
+    def test_the_bar_paints_one_full_height_lane(self, qtbot, tmp_path):
         bar = EthogramBar()
         qtbot.addWidget(bar)
         bar.resize(300, 46)
-        bar.set_view(SessionView.load(self._session_with_speed(tmp_path)))
+        bar.set_view(SessionView.load(self._session_with_freezing(tmp_path)))
         image = bar.grab().toImage()
-        # Same column, two lanes: posture on top, freezing beneath it.
-        assert image.pixelColor(130, 10) != image.pixelColor(130, 42)
+        # Same column top and bottom: one behaviour, one band.
+        assert image.pixelColor(130, 8) == image.pixelColor(130, 40)
 
-    def test_a_session_without_a_speed_axis_uses_the_full_height(self, qtbot, tmp_path):
+    def test_freezing_is_drawn_in_its_own_colour(self, qtbot, tmp_path):
         bar = EthogramBar()
         qtbot.addWidget(bar)
         bar.resize(300, 46)
-        bar.set_view(SessionView.load(_session(tmp_path / "plain")))
+        bar.set_view(SessionView.load(self._session_with_freezing(tmp_path)))
         image = bar.grab().toImage()
-        assert image.pixelColor(130, 10) == image.pixelColor(130, 42)
+        # frames 100-159 of 300 sit around x=130; grooming is elsewhere.
+        assert image.pixelColor(130, 20) != image.pixelColor(20, 20)
 
-    def test_freeze_bouts_reach_the_table(self, qtbot, tmp_path):
+    def test_freeze_bouts_reach_the_one_table(self, qtbot, tmp_path):
         win = AnalysisWindow()
         qtbot.addWidget(win)
-        win.load(self._session_with_speed(tmp_path))
+        win.load(self._session_with_freezing(tmp_path))
         win._bar.set_selection(0, 299)
         states = {win._bouts.item(r, 0).text() for r in range(win._bouts.rowCount())}
-        assert "freezing" in states
-        assert "groom" in states
-        assert "— speed axis —" in states  # the two are stacked, never summed
+        assert states == {"groom", "freezing"}
 
 
 class TestVideoPlayback:
@@ -530,14 +531,12 @@ class TestACohortOfSessions:
             folder.mkdir(parents=True)
             # Different behaviour per animal, same length.
             labels = (["groom"] * (50 + 20 * i) + ["locomote"] * rows)[:rows]
-            speed = [""] * rows
             for f in range(100, 100 + 30 * (i + 1)):
-                speed[f] = "freezing"
+                labels[f] = "freezing"
             pd.DataFrame(
                 {
                     "frame": range(rows),
                     "behavior": labels,
-                    "speed": speed,
                     "speed_px_frame": [0.4] * rows,
                     "speed_cm_s": [1.2] * rows,
                 }

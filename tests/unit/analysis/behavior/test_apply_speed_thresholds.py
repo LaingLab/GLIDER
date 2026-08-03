@@ -343,3 +343,93 @@ class TestMinimumBoutDuration:
             dart_min_s=0.001,
         )
         assert out["dart_min_frames"] == 1
+
+
+class TestScoringOneBehaviourOnly:
+    """A run may be about freezing, or about darting, and not both.
+
+    The default is still both-or-neither: one threshold arriving alone is far
+    more often a forgotten flag than a decision, and a silently missing half
+    of the axis is worse than a failed run. Saying which halves are being
+    scored is what makes it a decision — and then the other half must be off
+    everywhere, not merely unset, so nothing downstream can apply a stale
+    number to a behaviour nobody calibrated.
+    """
+
+    def test_freezing_alone_disables_darting_in_absolute_mode(self, tmp_path):
+        out = resolve_speed_thresholds(
+            tmp_path / "v.mp4",
+            freeze_cm_s=1.0,
+            px_per_mm=4.0,
+            fps=30.0,
+            score_darting=False,
+        )
+        assert out["freeze_threshold"] == pytest.approx(40.0 / 30.0)
+        assert out["dart_threshold"] == float("inf")
+
+    def test_darting_alone_disables_freezing_in_absolute_mode(self, tmp_path):
+        out = resolve_speed_thresholds(
+            tmp_path / "v.mp4",
+            dart_cm_s=15.0,
+            px_per_mm=4.0,
+            fps=30.0,
+            score_freezing=False,
+        )
+        assert out["dart_threshold"] == pytest.approx(20.0)
+        assert out["freeze_threshold"] == float("-inf")
+
+    def test_native_thresholds_honour_the_same_choice(self, tmp_path):
+        out = resolve_speed_thresholds(
+            tmp_path / "v.mp4", freeze_threshold=2.0, score_darting=False
+        )
+        assert out == {"freeze_threshold": 2.0, "dart_threshold": float("inf")}
+
+    def test_a_missing_threshold_for_a_scored_behaviour_still_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="both"):
+            resolve_speed_thresholds(tmp_path / "v.mp4", freeze_threshold=2.0)
+
+    def test_scoring_neither_leaves_the_axis_off(self, tmp_path):
+        out = resolve_speed_thresholds(
+            tmp_path / "v.mp4",
+            freeze_threshold=2.0,
+            dart_threshold=18.0,
+            score_freezing=False,
+            score_darting=False,
+        )
+        assert out == {}
+
+    def test_the_ordering_check_does_not_fire_on_one_side(self, tmp_path):
+        """Nothing to order when only one cut-off exists."""
+        out = resolve_speed_thresholds(
+            tmp_path / "v.mp4",
+            freeze_cm_s=100.0,  # well above any sane darting threshold
+            px_per_mm=4.0,
+            fps=30.0,
+            score_darting=False,
+        )
+        assert out["freeze_threshold"] == pytest.approx(4000.0 / 30.0)
+
+    def test_a_cohort_file_can_still_be_read_one_sided(self, tmp_path):
+        import json
+
+        path = tmp_path / "cohort.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "freeze": 1.0,
+                    "dart": 15.0,
+                    "unit": "cm/s",
+                    "n_sessions": 3,
+                }
+            ),
+        )
+        out = resolve_speed_thresholds(
+            tmp_path / "v.mp4",
+            cohort_thresholds=path,
+            px_per_mm=4.0,
+            fps=30.0,
+            score_darting=False,
+        )
+        assert out["freeze_threshold"] == pytest.approx(40.0 / 30.0)
+        assert out["dart_threshold"] == float("inf")

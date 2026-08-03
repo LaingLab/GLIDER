@@ -145,15 +145,10 @@ class EthogramBar(QWidget):
             )
             return
 
-        # The top lane is the resolved behaviour, which already has the
-        # speed axis folded in. The second lane is that axis on its own, so
-        # where the override took effect stays visible rather than implied.
-        speed = self._view.speed_labels if self._view.has_speed_axis else []
-        posture_height = self.height() * (0.68 if speed else 1.0)
-
-        self._paint_lane(painter, self._view.labels, 0.0, posture_height)
-        if speed:
-            self._paint_lane(painter, speed, posture_height, self.height() - posture_height)
+        # One lane, because there is one behaviour per frame. Freezing and
+        # darting are values of it, not a parallel track: a second lane would
+        # be drawing the same frames twice.
+        self._paint_lane(painter, self._view.labels, 0.0, float(self.height()))
 
         if self._selection is not None:
             start, end = self._selection
@@ -1056,7 +1051,15 @@ class AnalysisWindow(QMainWindow):
             top = ""
             if not stats.bouts.empty:
                 top = str(stats.bouts.iloc[0]["state"])
-            speed = stats.speed_bouts.set_index("state") if not stats.speed_bouts.empty else None
+            # Freezing and darting are ordinary states of `bouts` now, so
+            # they are read from there rather than from a parallel table.
+            by_state = stats.bouts.set_index("state") if not stats.bouts.empty else None
+
+            def total(state, table=by_state):
+                if table is None or state not in table.index:
+                    return 0.0
+                return float(table.loc[state, "total_s"])
+
             rows.append(
                 {
                     "session": path.parent.name,
@@ -1065,16 +1068,8 @@ class AnalysisWindow(QMainWindow):
                     "distance_cm": stats.distance_cm,
                     "mean_cm_s": stats.mean_speed_cm_s,
                     "peak_cm_s": stats.peak_speed_cm_s,
-                    "freezing_s": (
-                        float(speed.loc["freezing", "total_s"])
-                        if speed is not None and "freezing" in speed.index
-                        else 0.0
-                    ),
-                    "darting_s": (
-                        float(speed.loc["darting", "total_s"])
-                        if speed is not None and "darting" in speed.index
-                        else 0.0
-                    ),
+                    "freezing_s": total("freezing"),
+                    "darting_s": total("darting"),
                     "top_behavior": top,
                     **{
                         f"{state}_s": float(total)
@@ -1174,29 +1169,17 @@ class AnalysisWindow(QMainWindow):
         return f"Frames {span}\n{movement}\n{thresholds}"
 
     def _fill_bouts(self, stats) -> None:
-        # Posture and speed are independent scorings of the same frames, so
-        # they are stacked with a divider rather than summed into one list:
-        # their fractions each run to 1 over the window, and adding them
-        # would double-count it.
-        import pandas as pd
-
         rows = stats.bouts
-        if not stats.speed_bouts.empty:
-            divider = pd.DataFrame([{**dict.fromkeys(rows.columns), "state": "— speed axis —"}])
-            rows = pd.concat([rows, divider, stats.speed_bouts], ignore_index=True)
         self._bouts.setRowCount(len(rows))
         for r, (_, row) in enumerate(rows.iterrows()):
-            if pd.isna(row["n_bouts"]):  # the divider carries no numbers
-                values = [str(row["state"]), "", "", "", "", ""]
-            else:
-                values = [
-                    str(row["state"] or "(unscored)"),
-                    str(int(row["n_bouts"])),
-                    f"{row['total_s']:.2f}",
-                    f"{100 * row['fraction']:.1f}%",
-                    f"{row['mean_s']:.2f}",
-                    f"{row['median_s']:.2f}",
-                ]
+            values = [
+                str(row["state"] or "(unscored)"),
+                str(int(row["n_bouts"])),
+                f"{row['total_s']:.2f}",
+                f"{100 * row['fraction']:.1f}%",
+                f"{row['mean_s']:.2f}",
+                f"{row['median_s']:.2f}",
+            ]
             for c, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if c:

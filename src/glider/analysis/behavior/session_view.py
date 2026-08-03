@@ -194,7 +194,6 @@ class SegmentStats:
     fps: float
     duration_s: float
     bouts: pd.DataFrame  # state, n_bouts, total_s, fraction, mean_s, median_s
-    speed_bouts: pd.DataFrame  # the same, for freezing/darting
     distance_cm: float | None
     mean_speed_cm_s: float | None
     peak_speed_cm_s: float | None
@@ -219,20 +218,11 @@ class SessionView:
     pose_path: Path | None = None  # which CSV the poses came from
     video_path: Path | None = None  # a video to scrub alongside, if one exists
     video_frames: int = 0  # its length, for the alignment check
-    # The freeze/dart axis as the run scored it. `labels` already has it
-    # folded in — an animal cannot be darting and digging at once — so this
-    # is kept to show where the override applied, not as a rival answer.
-    speed_labels: list[str] = field(default_factory=list)
-    #: What the classifier alone said, before the speed axis overrode it.
-    #: Empty for ethograms written before the two were resolved.
-    postural_labels: list[str] = field(default_factory=list)
+    # The measured speed behind the labels. Not a second scoring: `labels`
+    # already has freezing and darting folded in, and these are what distance
+    # and velocity are computed from.
     speed_px: np.ndarray | None = None
     speed_cm_s: np.ndarray | None = None
-
-    @property
-    def has_speed_axis(self) -> bool:
-        """Whether this run scored freezing/darting at all."""
-        return any(self.speed_labels)
 
     # ------------------------------------------------------------------
     # loading
@@ -268,20 +258,6 @@ class SessionView:
             etho["frame"].to_numpy(dtype=int) if "frame" in etho.columns else np.arange(len(labels))
         )
 
-        # The freeze/dart axis is a second, independent scoring of the same
-        # frames — the run wrote it as its own columns precisely because it is
-        # not one of the postural classes. Reading only `behavior` throws it
-        # away, and then recomputes a speed the file already contains.
-        speed_labels = [
-            ("" if pd.isna(v) else str(v)) for v in etho.get("speed", pd.Series(dtype=object))
-        ]
-        # `behavior` is the resolved label — the speed axis overrides posture
-        # where it fired, because an animal cannot be darting and digging at
-        # once. What the classifier alone said is kept beside it.
-        postural_labels = [
-            ("" if pd.isna(v) else str(v))
-            for v in etho.get("behavior_postural", pd.Series(dtype=object))
-        ]
         speed_px = _numeric_column(etho, "speed_px_frame", len(labels))
         speed_cm_s = _numeric_column(etho, "speed_cm_s", len(labels))
 
@@ -290,8 +266,6 @@ class SessionView:
             frames=frames,
             fps=30.0,
             source=ethogram_csv,
-            speed_labels=speed_labels,
-            postural_labels=postural_labels,
             speed_px=speed_px,
             speed_cm_s=speed_cm_s,
         )
@@ -459,15 +433,6 @@ class SessionView:
         duration = (end_frame - start_frame + 1) / self.fps if self.fps else 0.0
 
         bouts = self._bout_table(labels, compute_intervals, compute_bouts)
-        # The speed axis on its own. `bouts` already counts freezing and
-        # darting, since the resolved label folds them in; this table answers
-        # the narrower question of how much of the window the speed axis
-        # claimed, so the two must not be added together.
-        speed_bouts = self._bout_table(
-            [self.speed_labels[i] for i in rows] if self.speed_labels else [],
-            compute_intervals,
-            compute_bouts,
-        )
         distance, mean_speed, peak_speed = self._locomotion(start_frame, end_frame)
         freeze, dart, unit = self._window_thresholds(start_frame, end_frame, freeze_pct, dart_pct)
         return SegmentStats(
@@ -476,7 +441,6 @@ class SessionView:
             fps=self.fps,
             duration_s=duration,
             bouts=bouts,
-            speed_bouts=speed_bouts,
             distance_cm=distance,
             mean_speed_cm_s=mean_speed,
             peak_speed_cm_s=peak_speed,

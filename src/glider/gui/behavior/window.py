@@ -632,15 +632,36 @@ class ApplyTab(QWidget):
 
         layout = QVBoxLayout(self)
 
-        self._model_label = QLabel("Model bundle: (none)")
+        # Both models are optional, and the labels say so where the operator
+        # is deciding: no bundle scores freezing/darting alone, and no weights
+        # is fine as long as the poses already exist. Clearing is offered
+        # because choosing one is otherwise irreversible, and switching to a
+        # speed-only run after picking a bundle is a normal thing to want.
+        self._model_label = QLabel("Model bundle: (none — scores freezing/darting only)")
         model_btn = QPushButton("Choose model bundle...")
         model_btn.clicked.connect(self._on_choose_model)
-        layout.addLayout(_row(self._model_label, model_btn))
+        model_clear = QPushButton("Clear")
+        model_clear.setToolTip(
+            "Run without a behaviour model: freezing and darting are read from "
+            "the speed trace, which needs no classifier."
+        )
+        model_clear.clicked.connect(self._on_clear_model)
+        model_row = _row(self._model_label, model_btn)
+        model_row.addWidget(model_clear)
+        layout.addLayout(model_row)
 
-        self._yolo_label = QLabel("YOLO weights: (none)")
+        self._yolo_label = QLabel("YOLO weights: (none — needed only to track poses)")
         yolo_btn = QPushButton("Choose YOLO weights...")
         yolo_btn.clicked.connect(self._on_choose_yolo)
-        layout.addLayout(_row(self._yolo_label, yolo_btn))
+        yolo_clear = QPushButton("Clear")
+        yolo_clear.setToolTip(
+            "Only tracking uses the pose weights. A run whose videos all have "
+            "a pose CSV never needs them."
+        )
+        yolo_clear.clicked.connect(self._on_clear_yolo)
+        yolo_row = _row(self._yolo_label, yolo_btn)
+        yolo_row.addWidget(yolo_clear)
+        layout.addLayout(yolo_row)
 
         videos_group = QGroupBox("Video(s) to classify")
         videos_layout = QVBoxLayout(videos_group)
@@ -743,6 +764,14 @@ class ApplyTab(QWidget):
         self._model_path = Path(path)
         self._model_label.setText(f"Model bundle: {path}")
         self._autofill_keypoints()
+
+    def _on_clear_model(self) -> None:
+        self._model_path = None
+        self._model_label.setText("Model bundle: (none — scores freezing/darting only)")
+
+    def _on_clear_yolo(self) -> None:
+        self._yolo_path = None
+        self._yolo_label.setText("YOLO weights: (none — needed only to track poses)")
 
     def _autofill_keypoints(self) -> None:
         """Write the bundle's own keypoint order into the field.
@@ -976,12 +1005,65 @@ class ApplyTab(QWidget):
         self._output_dir = Path(path)
         self._output_label.setText(f"Output folder: {path}")
 
-    def _on_run(self) -> None:
+    def _needs_tracking(self) -> list[Path]:
+        """Videos this run would have to track, because no pose CSV covers them."""
+        if not self._reuse_poses.isChecked():
+            return list(self._videos)
+        return self._match_poses()[1]
+
+    def _run_blocker(self) -> str | None:
+        """Why this run cannot start yet, or None.
+
+        Neither model is unconditionally required. Without a behaviour bundle
+        the run scores freezing and darting alone, which is the whole analysis
+        for plenty of work and needs no classifier. Without pose weights it
+        scores keypoints that are already on disk, and tracking is the only
+        thing the weights were for. Each is required exactly when something
+        the run must do actually depends on it.
+        """
         if self._model_path is None:
-            QMessageBox.warning(self, "Apply", "Choose a model bundle first.")
-            return
-        if self._yolo_path is None:
-            QMessageBox.warning(self, "Apply", "Choose YOLO weights first.")
+            if not self._speed_group.isChecked():
+                return (
+                    "Choose a model bundle — or, to score freezing and darting "
+                    "with no model at all, turn on the freeze/dart speed axis "
+                    "and set its thresholds."
+                )
+            if not (self._score_freezing.isChecked() or self._score_darting.isChecked()):
+                return (
+                    "A run with no model bundle scores the speed axis, so tick "
+                    "freezing, darting, or both."
+                )
+            if self._render_video.isChecked():
+                return (
+                    "An annotated video draws the model's labels on each frame, "
+                    "so it needs a model bundle. Untick it, or choose one."
+                )
+        if (
+            self._speed_group.isChecked()
+            and self._speed_mode_value() == "cohort"
+            and self._cohort_path is None
+        ):
+            # Otherwise the axis is simply absent from every ethogram, which
+            # looks like a run that scored nothing rather than one that was
+            # never told where its cut-offs live.
+            return (
+                "Cohort mode takes its cut-offs from a file — choose or compute "
+                "one, or switch the threshold mode."
+            )
+        untracked = self._needs_tracking()
+        if self._yolo_path is None and untracked:
+            names = ", ".join(v.name for v in untracked[:4])
+            more = f" (+{len(untracked) - 4} more)" if len(untracked) > 4 else ""
+            return (
+                f"Choose YOLO weights: {len(untracked)} video(s) have no pose CSV "
+                f"to score and would have to be tracked — {names}{more}."
+            )
+        return None
+
+    def _on_run(self) -> None:
+        blocker = self._run_blocker()
+        if blocker:
+            QMessageBox.warning(self, "Apply", blocker)
             return
         if not self._videos:
             QMessageBox.warning(self, "Apply", "Add at least one video first.")
@@ -1051,6 +1133,8 @@ class ApplyTab(QWidget):
         )
         from glider.analysis.behavior.model import BehaviorModel
 
+        if self._model_path is None:
+            return None  # a speed-only run has no bundle to disagree with
         try:
             model = BehaviorModel.load(self._model_path)
         except Exception:
@@ -1110,8 +1194,20 @@ class ApplyTab(QWidget):
             return None
 
     def _confirm_keypoints(self, keypoint_names) -> bool:
-        """Show a labelled frame and require the operator to confirm it."""
+        """Show a labelled frame and require the operator to confirm it.
+
+        Labelled from the pose CSV this video will actually be scored from,
+        when there is one: those are the coordinates in question, and reading
+        them costs nothing next to loading torch to re-derive them.
+        """
         from glider.gui.behavior.keypoint_confirm import KeypointConfirmDialog
+
+        pose_csv = None
+        if self._reuse_poses.isChecked():
+            try:
+                pose_csv = find_pose_csv(self._videos[0], self._pose_dir)
+            except OSError:  # an unreachable share falls back to the pose model
+                pose_csv = None
 
         dialog = KeypointConfirmDialog(
             self._videos[0],
@@ -1119,6 +1215,7 @@ class ApplyTab(QWidget):
             keypoint_names,
             parent=self,
             warning=self._keypoint_warning(keypoint_names),
+            pose_csv=pose_csv,
         )
         try:
             return dialog.exec() == QDialog.DialogCode.Accepted
@@ -1311,13 +1408,33 @@ class ApplyTab(QWidget):
         self._speed_mode.currentIndexChanged.connect(self._on_speed_mode_changed)
         form.addRow("Threshold mode:", self._speed_mode)
 
+        # Which of the two this run is about. Both by default, but a fear-
+        # conditioning session scores freezing and has no darting cut-off
+        # anyone could defend — and scoring one it cannot justify is worse
+        # than scoring neither.
+        self._score_freezing = QCheckBox("Freezing")
+        self._score_freezing.setChecked(True)
+        self._score_darting = QCheckBox("Darting")
+        self._score_darting.setChecked(True)
+        for box in (self._score_freezing, self._score_darting):
+            box.setToolTip(
+                "Untick one to leave it out of the ethogram entirely. Its "
+                "threshold is then neither needed nor applied."
+            )
+            box.toggled.connect(self._on_speed_mode_changed)
+        score_row = QHBoxLayout()
+        score_row.addWidget(self._score_freezing)
+        score_row.addWidget(self._score_darting)
+        score_row.addStretch(1)
+        form.addRow("Score:", score_row)
+
         self._freeze_cm_s = QDoubleSpinBox()
         self._freeze_cm_s.setRange(0.0, 10000.0)
         self._freeze_cm_s.setDecimals(2)
         self._freeze_cm_s.setSuffix(" cm/s")
         self._freeze_cm_s.setValue(1.0)
         form.addRow("Freezing below:", self._freeze_cm_s)
-        self._absolute_rows = [form.rowCount() - 1]
+        self._freeze_abs_row = form.rowCount() - 1
 
         self._dart_cm_s = QDoubleSpinBox()
         self._dart_cm_s.setRange(0.0, 10000.0)
@@ -1325,7 +1442,7 @@ class ApplyTab(QWidget):
         self._dart_cm_s.setSuffix(" cm/s")
         self._dart_cm_s.setValue(15.0)
         form.addRow("Darting above:", self._dart_cm_s)
-        self._absolute_rows.append(form.rowCount() - 1)
+        self._dart_abs_row = form.rowCount() - 1
 
         row = QHBoxLayout()
         self._calibration_label = QLabel("(none)")
@@ -1350,7 +1467,7 @@ class ApplyTab(QWidget):
         self._freeze_pct.setSuffix(" %")
         self._freeze_pct.setValue(10.0)
         form.addRow("Freezing percentile:", self._freeze_pct)
-        self._percentile_rows = [form.rowCount() - 1]
+        self._freeze_pct_row = form.rowCount() - 1
 
         self._dart_pct = QDoubleSpinBox()
         self._dart_pct.setRange(0.0, 100.0)
@@ -1358,7 +1475,7 @@ class ApplyTab(QWidget):
         self._dart_pct.setSuffix(" %")
         self._dart_pct.setValue(99.5)
         form.addRow("Darting percentile:", self._dart_pct)
-        self._percentile_rows.append(form.rowCount() - 1)
+        self._dart_pct_row = form.rowCount() - 1
 
         cohort_row = QHBoxLayout()
         self._cohort_label = QLabel("(none)")
@@ -1385,6 +1502,7 @@ class ApplyTab(QWidget):
         self._freeze_min_s.setSuffix(" s")
         self._freeze_min_s.setValue(1.0)
         form.addRow("Freezing lasts at least:", self._freeze_min_s)
+        self._freeze_min_row = form.rowCount() - 1
 
         self._dart_min_s = QDoubleSpinBox()
         self._dart_min_s.setRange(0.0, 600.0)
@@ -1392,6 +1510,7 @@ class ApplyTab(QWidget):
         self._dart_min_s.setSuffix(" s")
         self._dart_min_s.setValue(0.1)
         form.addRow("Darting lasts at least:", self._dart_min_s)
+        self._dart_min_row = form.rowCount() - 1
 
         self._speed_group = group
         self._on_speed_mode_changed()
@@ -1520,16 +1639,27 @@ class ApplyTab(QWidget):
         return self._speed_mode.currentData() or "absolute"
 
     def _on_speed_mode_changed(self, *_args) -> None:
-        """Show only the fields the chosen mode actually uses."""
-        absolute = self._speed_mode_value() == "absolute"
-        for row in self._absolute_rows:
-            self._speed_form.setRowVisible(row, absolute)
+        """Show only the fields the chosen mode and the ticked halves use.
+
+        A threshold for a behaviour this run is not scoring is not a setting
+        with a bad value — it is a setting with no meaning, and leaving it on
+        screen invites someone to tune it and wonder why nothing changed.
+        """
         mode = self._speed_mode_value()
-        for row in self._percentile_rows:
-            self._speed_form.setRowVisible(row, mode == "percentile")
+        freezing = self._score_freezing.isChecked()
+        darting = self._score_darting.isChecked()
+        for row, visible in (
+            (self._freeze_abs_row, mode == "absolute" and freezing),
+            (self._dart_abs_row, mode == "absolute" and darting),
+            (self._freeze_pct_row, mode == "percentile" and freezing),
+            (self._dart_pct_row, mode == "percentile" and darting),
+            (self._freeze_min_row, freezing),
+            (self._dart_min_row, darting),
+        ):
+            self._speed_form.setRowVisible(row, visible)
         for row in self._cohort_rows:
             self._speed_form.setRowVisible(row, mode == "cohort")
-        # The calibration rows stay visible in both modes: percentile
+        # The calibration rows stay visible in every mode: percentile
         # thresholds do not need a scale, but speed_cm_s does.
 
     def _on_choose_calibration(self) -> None:
@@ -1547,25 +1677,35 @@ class ApplyTab(QWidget):
         """Speed-axis kwargs for ApplyWorker, or {} when the axis is off."""
         if not self._speed_group.isChecked():
             return {}
+        freezing = self._score_freezing.isChecked()
+        darting = self._score_darting.isChecked()
+        if not (freezing or darting):
+            return {}
         mode = self._speed_mode_value()
         if mode == "cohort":
             opts = {"cohort_thresholds": self._cohort_path}
         elif mode == "percentile":
+            # A side that is not being scored sends no threshold at all, so
+            # nothing downstream has a stale number it could apply by mistake.
             opts = {
-                "freeze_pct": self._freeze_pct.value(),
-                "dart_pct": self._dart_pct.value(),
+                "freeze_pct": self._freeze_pct.value() if freezing else None,
+                "dart_pct": self._dart_pct.value() if darting else None,
             }
         else:
             opts = {
-                "freeze_cm_s": self._freeze_cm_s.value(),
-                "dart_cm_s": self._dart_cm_s.value(),
+                "freeze_cm_s": self._freeze_cm_s.value() if freezing else None,
+                "dart_cm_s": self._dart_cm_s.value() if darting else None,
             }
-        # Sent in BOTH modes. Percentile thresholds need no scale, but the
+        opts["score_freezing"] = freezing
+        opts["score_darting"] = darting
+        # Sent in every mode. Percentile thresholds need no scale, but the
         # ethogram's speed_cm_s column does, and wanting real units in the
         # output is independent of how the cut-offs were chosen.
         opts["calibration_master"] = self._calibration_master
-        opts["freeze_min_s"] = self._freeze_min_s.value()
-        opts["dart_min_s"] = self._dart_min_s.value()
+        if freezing:
+            opts["freeze_min_s"] = self._freeze_min_s.value()
+        if darting:
+            opts["dart_min_s"] = self._dart_min_s.value()
         return opts
 
     def _run_next(self) -> None:

@@ -381,66 +381,55 @@ class TestFindingTheVideo:
         assert view.video_is_aligned is False
 
 
-class TestTheSpeedAxis:
+class TestFreezingIsAnOrdinaryLabel:
+    """One column, one behaviour per frame. Freezing and darting arrive in
+    `behavior` already, so nothing here treats them specially."""
+
     def _session(self, tmp_path, *, with_speed=True, n=120):
         out = tmp_path / "out" / "t2"
         out.mkdir(parents=True)
-        # Freezing for a second in the middle, darting for a moment after.
-        speed = [""] * n
-        for i in range(30, 60):
-            speed[i] = "freezing"
-        for i in range(70, 76):
-            speed[i] = "darting"
-        columns = {"frame": range(n), "behavior": ["groom"] * n}
+        labels = ["groom"] * n
         if with_speed:
-            columns["speed"] = speed
+            for i in range(30, 60):
+                labels[i] = "freezing"
+            for i in range(70, 76):
+                labels[i] = "darting"
+        columns = {"frame": range(n), "behavior": labels}
+        if with_speed:
             columns["speed_px_frame"] = [0.5] * n
             columns["speed_cm_s"] = [1.5] * n
         pd.DataFrame(columns).to_csv(out / "ethogram_raw.csv", index=False)
         return out / "ethogram_raw.csv"
 
-    def test_the_speed_column_is_loaded(self, tmp_path):
+    def test_freezing_is_a_behaviour_like_any_other(self, tmp_path):
         view = SessionView.load(self._session(tmp_path))
-        assert view.has_speed_axis is True
-        assert view.speed_labels[45] == "freezing"
-        assert view.speed_labels[0] == ""
+        assert view.labels[45] == "freezing"
+        assert view.labels[72] == "darting"
+        assert view.labels[0] == "groom"
 
-    def test_an_ethogram_without_the_column_has_no_speed_axis(self, tmp_path):
+    def test_its_bouts_are_in_the_one_table(self, tmp_path):
+        view = SessionView.load(self._session(tmp_path))
+        bouts = view.segment_stats(0, 119).bouts.set_index("state")
+        assert int(bouts.loc["freezing", "n_bouts"]) == 1
+        assert bouts.loc["freezing", "total_s"] == pytest.approx(30 / 30.0)
+
+    def test_the_fractions_still_cover_the_window_exactly_once(self, tmp_path):
+        """Nothing is double-counted, because there is only one scoring."""
+        view = SessionView.load(self._session(tmp_path))
+        assert view.segment_stats(0, 119).bouts["fraction"].sum() == pytest.approx(1.0)
+
+    def test_there_is_no_second_label_track(self, tmp_path):
+        view = SessionView.load(self._session(tmp_path))
+        assert not hasattr(view, "speed_labels")
+        assert not hasattr(view, "postural_labels")
+
+    def test_the_measured_speed_is_still_loaded(self, tmp_path):
+        """The numbers stay — distance and velocity are computed from them."""
+        view = SessionView.load(self._session(tmp_path))
+        assert view.speed_cm_s is not None
+        assert view.segment_stats(0, 119).mean_speed_cm_s == pytest.approx(1.5)
+
+    def test_without_the_speed_columns_there_is_no_distance(self, tmp_path):
         view = SessionView.load(self._session(tmp_path, with_speed=False))
-        assert view.has_speed_axis is False
         assert view.speed_cm_s is None
-
-    def test_freeze_and_dart_bouts_are_reported_separately(self, tmp_path):
-        view = SessionView.load(self._session(tmp_path))
-        stats = view.segment_stats(0, 119)
-        states = dict(zip(stats.speed_bouts["state"], stats.speed_bouts["n_bouts"], strict=True))
-        assert states == {"freezing": 1, "darting": 1}
-        # Posture is untouched by it: the two axes describe the same frames.
-        assert list(stats.bouts["state"]) == ["groom"]
-
-    def test_a_freezing_bout_is_measured_in_seconds(self, tmp_path):
-        view = SessionView.load(self._session(tmp_path))
-        stats = view.segment_stats(0, 119)
-        freezing = stats.speed_bouts.set_index("state").loc["freezing"]
-        assert freezing["total_s"] == pytest.approx(30 / 30.0)  # 30 frames at 30 fps
-
-    def test_the_two_axes_are_not_summed(self, tmp_path):
-        """A frame can be both grooming and freezing; adding the fractions
-        would report more than the window contains."""
-        view = SessionView.load(self._session(tmp_path))
-        stats = view.segment_stats(0, 119)
-        assert stats.bouts["fraction"].sum() == pytest.approx(1.0)
-        assert stats.speed_bouts["fraction"].sum() < 1.0
-
-    def test_locomotion_uses_the_recorded_speed(self, tmp_path):
-        """The recorded column is the signal the thresholds were applied to;
-        deriving a second one lets the mean disagree with the freezing shown."""
-        view = SessionView.load(self._session(tmp_path))
-        stats = view.segment_stats(0, 119)
-        assert stats.mean_speed_cm_s == pytest.approx(1.5)
-        # 1.5 cm/s held for 120 frames at 30 fps = 4 s = 6 cm.
-        assert stats.distance_cm == pytest.approx(6.0)
-
-    def test_without_the_column_it_falls_back_to_the_centroid(self, tmp_path):
-        view = SessionView.load(self._session(tmp_path, with_speed=False))
         assert view.segment_stats(0, 119).mean_speed_cm_s is None

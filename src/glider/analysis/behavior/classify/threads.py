@@ -693,26 +693,14 @@ class BehaviorClassifier(threading.Thread):
             with self.ethogram_path.open("w", newline="") as f:
                 w = csv.writer(f)
                 if self.speed_axis:
-                    # behavior          -- the resolved label: an animal cannot
-                    #                      be darting and digging at once, so
-                    #                      the speed axis wins where it fired
-                    # behavior_postural -- what the classifier alone said, kept
-                    #                      so the override stays reversible
-                    # speed             -- freezing/darting, blank in the neutral band
-                    # speed_px_frame    -- always present, the raw measured signal
-                    # speed_cm_s        -- only when a pixel scale was supplied
-                    w.writerow(
-                        [
-                            "frame",
-                            "behavior",
-                            "behavior_postural",
-                            "speed",
-                            "speed_px_frame",
-                            "speed_cm_s",
-                        ]
-                    )
+                    # behavior       -- one label per frame. An animal cannot be
+                    #                   darting and digging at once, so the
+                    #                   speed axis wins where it fired.
+                    # speed_px_frame -- always present, the raw measured signal
+                    # speed_cm_s     -- only when a pixel scale was supplied
+                    w.writerow(["frame", "behavior", "speed_px_frame", "speed_cm_s"])
                     for fidx, lab, spd, px in self._ethogram:
-                        w.writerow([fidx, spd or lab, lab, spd, _fmt(px), _fmt(self._to_cm_s(px))])
+                        w.writerow([fidx, spd or lab, _fmt(px), _fmt(self._to_cm_s(px))])
                 else:
                     w.writerow(["frame", "behavior"])
                     for fidx, lab, _spd, _px in self._ethogram:
