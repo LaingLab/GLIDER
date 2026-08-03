@@ -117,8 +117,13 @@ class LiveInferenceConfig:
 
     source: str | int  # video path or camera index
     keypoint_names: list[str]
-    yolo_model_path: str | Path
-    behavior_model_path: str | Path
+    # Both are None-able because the vectorised apply path in `.batch` needs
+    # neither: poses already on disk make the tracker redundant, and a
+    # speed-only run (freezing/darting from the speed trace alone) has no
+    # behaviour model to load. The streaming pipeline below still requires
+    # both, and says so when it is handed neither.
+    yolo_model_path: str | Path | None
+    behavior_model_path: str | Path | None
     # Optional sinks. At least one of display / output_video should be on
     # for there to be a point in running, but the orchestrator doesn't
     # enforce that — running headless with just an ethogram CSV is fine.
@@ -240,7 +245,15 @@ class LiveInferencePipeline:
         self.classifier_queue: queue.Queue = queue.Queue(maxsize=CLASSIFIER_QUEUE_MAX)
 
         # Load the behavior model up front so we fail loudly if it's
-        # missing — before we spin up any threads.
+        # missing — before we spin up any threads. Streaming a video without
+        # one is not a mode: every frame here goes through the classifier.
+        # Speed-only runs are served by `.batch`, which never gets this far.
+        if model is None and config.behavior_model_path is None:
+            raise ValueError(
+                "the streaming pipeline classifies every frame, so it needs a "
+                "behaviour model; a speed-only run scores poses on disk through "
+                "glider.analysis.behavior.classify.batch instead"
+            )
         self.model = (
             model if model is not None else _load_behavior_model(config.behavior_model_path)
         )

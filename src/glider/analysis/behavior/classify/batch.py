@@ -49,7 +49,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["EthogramRows", "classify_pose_data"]
+__all__ = ["EthogramRows", "classify_pose_data", "speed_only_pose_data"]
 
 # The streaming extractor emits the middle row of a 5-frame history, so its
 # output trails the current frame by this much. Imported rather than repeated
@@ -109,6 +109,88 @@ def _speed_axis(
         dart_merge_gap=dart_merge_gap,
     )
     return labels, values
+
+
+def speed_only_pose_data(
+    pose,
+    *,
+    predict_every: int = 1,
+    smooth_window: int = 1,
+    freeze_threshold: float | None = None,
+    dart_threshold: float | None = None,
+    freeze_min_frames: int = 30,
+    dart_min_frames: int = 3,
+    dart_merge_gap: int = 0,
+    frame_range: tuple[int, int] | None = None,
+) -> EthogramRows:
+    """Freezing and darting alone, with no behaviour model involved.
+
+    Plenty of work only wants immobility — fear conditioning scores freezing
+    and nothing else — and requiring a trained classifier for that means
+    training a classifier to answer a question about a speed trace. The speed
+    axis is a threshold on measured displacement; it never needed the model.
+
+    So this is the same arithmetic the full path runs, minus the classifier:
+    poses in, causal speed, thresholds, one label per frame. Nothing is
+    stubbed, and the resulting ethogram has the same columns as any other, so
+    everything downstream — bouts, stats, the review window — is unchanged.
+
+    Either threshold may be omitted, which scores the other alone: a freezing
+    study has no darting cut-off to defend, and inventing one would put a
+    behaviour in the ethogram that nobody calibrated. An omitted side becomes
+    an infinity, so its comparison is simply never true.
+    """
+    if freeze_threshold is None and dart_threshold is None:
+        raise ValueError(
+            "a speed-only run is defined by its thresholds, so at least one of "
+            "a freezing or a darting threshold is required"
+        )
+    # `speed_axis_offline` tests `speed < freeze` and `speed > dart`, so these
+    # sentinels switch a side off without a branch anywhere downstream.
+    freeze_threshold = float("-inf") if freeze_threshold is None else freeze_threshold
+    dart_threshold = float("inf") if dart_threshold is None else dart_threshold
+    predict_every = max(1, int(predict_every))
+    lag = _stream_lag()
+    n_frames = len(pose.xy)
+
+    speed_labels_all, speed_values_all = _speed_axis(
+        pose.xy,
+        freeze_threshold,
+        dart_threshold,
+        freeze_min_frames,
+        dart_min_frames,
+        dart_merge_gap,
+    )
+
+    # Same emission rule as the classified path, so a speed-only ethogram and
+    # a full one line up frame for frame and can be compared directly.
+    emit_frames = np.arange(lag, max(lag, n_frames - lag))
+    keep = (emit_frames + lag + 1) % predict_every == 0
+    if frame_range is not None:
+        first, last = frame_range
+        keep &= (emit_frames >= first) & (emit_frames <= last)
+
+    from glider.analysis.behavior.classify.smoothing import MajorityVoteSmoother
+
+    smoother = MajorityVoteSmoother(window=smooth_window)
+    frames, labels, speed_out, speed_px_out = [], [], [], []
+    for row_idx in np.nonzero(keep)[0]:
+        frame = int(emit_frames[row_idx])
+        frames.append(frame)
+        label = speed_labels_all[frame] if frame < len(speed_labels_all) else ""
+        labels.append(smoother.push(label))
+        speed_out.append(label)
+        speed_px_out.append(
+            speed_values_all[frame] if frame < len(speed_values_all) else float("nan")
+        )
+
+    return EthogramRows(
+        frames=frames,
+        labels=labels,
+        speed_labels=speed_out,
+        speed_px=speed_px_out,
+        n_source_frames=n_frames,
+    )
 
 
 def classify_pose_data(
@@ -289,8 +371,13 @@ def write_ethogram_csv(path, rows: EthogramRows, *, speed_axis: bool, cm_s_per_p
                 w.writerow([frame, rows.labels[i]])
 
 
-def batch_apply(config, ethogram_csv, model, frame_range=None) -> bool:
+def batch_apply(config, ethogram_csv, model, frame_range=None, pose=None) -> bool:
     """Score ``config``'s pose CSV in one pass and write the ethogram.
+
+    ``model=None`` scores the speed axis alone — see
+    :func:`speed_only_pose_data`. ``pose`` accepts already-loaded
+    :class:`PoseData` instead of a CSV, for a caller that just tracked the
+    video and would otherwise write keypoints out only to read them back.
 
     Returns False when this run needs the streaming pipeline after all — an
     annotated video, a CNN sequence model, or spectral features. Never
@@ -301,16 +388,40 @@ def batch_apply(config, ethogram_csv, model, frame_range=None) -> bool:
 
     from glider.vision.pose.dlc import from_dlc_csv
 
-    if config.pose_csv_in is None or config.output_video is not None:
+    if (config.pose_csv_in is None and pose is None) or config.output_video is not None:
         return False
     # A CNN sequence model classifies raw keypoint windows, not tabular
-    # rolling features, so none of this applies to it.
-    if not all(hasattr(model, a) for a in ("spec", "window", "stats", "feature_names")):
+    # rolling features, so none of this applies to it. `model is None` is not
+    # that case — it is a speed-only run, which needs no model at all.
+    if model is not None and not all(
+        hasattr(model, a) for a in ("spec", "window", "stats", "feature_names")
+    ):
         return False
 
-    pose = from_dlc_csv(Path(config.pose_csv_in))
+    if pose is None:
+        pose = from_dlc_csv(Path(config.pose_csv_in))
     if config.fps_override:
         pose.fps = float(config.fps_override)
+
+    if model is None:
+        rows = speed_only_pose_data(
+            pose,
+            predict_every=config.predict_every,
+            smooth_window=config.smooth_window,
+            freeze_threshold=config.freeze_threshold,
+            dart_threshold=config.dart_threshold,
+            freeze_min_frames=config.freeze_min_frames,
+            dart_min_frames=config.dart_min_frames,
+            frame_range=frame_range,
+        )
+        write_ethogram_csv(
+            Path(ethogram_csv),
+            rows,
+            speed_axis=True,
+            cm_s_per_px_frame=config.cm_s_per_px_frame,
+        )
+        return True
+
     try:
         rows = classify_pose_data(
             pose,

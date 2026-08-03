@@ -365,3 +365,108 @@ class TestTheSpeedAxisOverridesPosture:
         from glider.analysis.behavior.classify.batch import resolve_labels
 
         assert resolve_labels(["a", "b"], []) == ["a", "b"]
+
+
+class TestSpeedOnly:
+    """Freezing and darting with no behaviour model in the picture.
+
+    Plenty of work — fear conditioning above all — scores immobility and
+    nothing else. Requiring a trained classifier for that means training a
+    classifier to answer a question about a speed trace, so this path takes
+    poses in and thresholds out with no model involved. What it must not do
+    is score *differently*: the rows have to land on the same frames, in the
+    same cadence, with the same labels the full path would have written where
+    the speed axis fired.
+    """
+
+    def _rows(self, **kw):
+        from glider.analysis.behavior.classify.batch import speed_only_pose_data
+
+        pose = _pose(n=200, seed=7)
+        kw.setdefault("freeze_threshold", 1e9)
+        kw.setdefault("dart_threshold", 1e9 + 1)
+        return speed_only_pose_data(pose, predict_every=1, **kw)
+
+    def test_the_speed_axis_alone_labels_the_ethogram(self):
+        assert set(self._rows().labels) == {"freezing"}
+
+    def test_the_frames_match_the_classified_path_exactly(self):
+        """Same emission rule, so a speed-only run compares row for row."""
+        from glider.analysis.behavior.classify.batch import speed_only_pose_data
+
+        pose = _pose(n=200, seed=7)
+        full = classify_pose_data(
+            pose, _model(pose, seed=7), predict_every=3, freeze_threshold=1.0, dart_threshold=8.0
+        )
+        speed = speed_only_pose_data(
+            pose, predict_every=3, freeze_threshold=1.0, dart_threshold=8.0
+        )
+        assert speed.frames == full.frames
+        assert speed.n_source_frames == full.n_source_frames
+
+    def test_the_labels_match_the_classified_path_where_speed_fired(self):
+        from glider.analysis.behavior.classify.batch import speed_only_pose_data
+
+        pose = _pose(n=200, seed=7)
+        full = classify_pose_data(
+            pose, _model(pose, seed=7), predict_every=1, freeze_threshold=2.0, dart_threshold=4.0
+        )
+        speed = speed_only_pose_data(
+            pose, predict_every=1, freeze_threshold=2.0, dart_threshold=4.0
+        )
+        fired = [i for i, lab in enumerate(full.speed_labels) if lab]
+        assert fired, "the fixture must actually trigger the speed axis"
+        assert [speed.labels[i] for i in fired] == [full.labels[i] for i in fired]
+
+    def test_the_speed_column_is_still_recorded(self):
+        rows = self._rows()
+        assert len(rows.speed_px) == len(rows.frames)
+        assert any(np.isfinite(v) for v in rows.speed_px)
+
+    def test_freezing_alone_never_names_darting(self):
+        """A fear-conditioning run has no darting cut-off to defend."""
+        rows = self._rows(freeze_threshold=1e9, dart_threshold=None)
+        assert "darting" not in rows.labels
+        assert set(rows.labels) == {"freezing"}
+
+    def test_darting_alone_never_names_freezing(self):
+        rows = self._rows(freeze_threshold=None, dart_threshold=-1.0)
+        assert "freezing" not in rows.labels
+        assert set(rows.labels) == {"darting"}
+
+    def test_no_threshold_at_all_is_refused(self):
+        with pytest.raises(ValueError, match="at least one"):
+            self._rows(freeze_threshold=None, dart_threshold=None)
+
+    def test_batch_apply_writes_the_ethogram_with_no_model(self, tmp_path):
+        from glider.vision.pose.dlc import to_dlc_csv
+
+        pose_csv = tmp_path / "poses.csv"
+        to_dlc_csv(_pose(n=200, seed=7), pose_csv)
+
+        class Config(TestWhenBatchDeclines._Config):
+            pass
+
+        config = Config()
+        config.pose_csv_in = str(pose_csv)
+        config.freeze_threshold = 1e9
+        config.dart_threshold = 1e9 + 1
+        out = tmp_path / "ethogram_raw.csv"
+        assert batch_apply(config, out, None) is True
+        df = pd.read_csv(out, keep_default_na=False)
+        assert list(df.columns) == ["frame", "behavior", "speed_px_frame", "speed_cm_s"]
+        assert set(df["behavior"]) == {"freezing"}
+
+    def test_batch_apply_accepts_poses_it_was_handed(self, tmp_path):
+        """A caller that just tracked the video should not write and re-read."""
+
+        class Config(TestWhenBatchDeclines._Config):
+            pass
+
+        config = Config()
+        config.pose_csv_in = None
+        config.freeze_threshold = 1e9
+        config.dart_threshold = 1e9 + 1
+        out = tmp_path / "ethogram_raw.csv"
+        assert batch_apply(config, out, None, pose=_pose(n=200, seed=7)) is True
+        assert set(pd.read_csv(out, keep_default_na=False)["behavior"]) == {"freezing"}

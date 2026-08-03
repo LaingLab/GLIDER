@@ -108,19 +108,62 @@ def first_detected_frame(video, yolo_path, *, max_frames: int = 90, stride: int 
     return None
 
 
+def first_tracked_frame(video, pose_csv):
+    """``(frame, keypoints)`` from an already-tracked pose CSV, or None.
+
+    The same picture as :func:`first_detected_frame` without loading torch,
+    and it is what the run will actually score: these are the coordinates the
+    ethogram is built from, rather than a second opinion from a fresh pose
+    pass. It is also the only source available when a run supplies poses and
+    no weights.
+
+    Prefers the first frame where every keypoint was found — a partial
+    detection labels only some of the names, which is the least useful frame
+    to check an ordering against — and settles for the fullest frame if no
+    frame is complete.
+    """
+    from pathlib import Path
+
+    from glider.vision.pose.dlc import from_dlc_csv
+
+    xy = np.asarray(from_dlc_csv(Path(pose_csv)).xy, dtype=float)  # (frames, K, 2)
+    if xy.ndim != 3 or xy.shape[0] == 0:
+        return None
+    found = np.isfinite(xy).all(axis=2)  # (frames, K)
+    counts = found.sum(axis=1)
+    if not counts.any():
+        return None
+    complete = np.flatnonzero(counts == xy.shape[1])
+    index = int(complete[0]) if complete.size else int(np.argmax(counts))
+
+    cap = cv2.VideoCapture(str(video))
+    try:
+        if not cap.isOpened():
+            return None
+        cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+        ok, frame = cap.read()
+    finally:
+        cap.release()
+    return (frame, xy[index]) if ok else None
+
+
 class _PreviewWorker(QObject):
-    """Runs the pose model off the UI thread; loading torch takes seconds."""
+    """Finds the preview frame off the UI thread; loading torch takes seconds."""
 
     done = pyqtSignal(object)  # (frame, keypoints) | None
     failed = pyqtSignal(str)
 
-    def __init__(self, video, yolo_path):
+    def __init__(self, video, yolo_path, pose_csv=None):
         super().__init__()
         self._video, self._yolo = video, yolo_path
+        self._pose_csv = pose_csv
 
     def run(self) -> None:
         try:
-            self.done.emit(first_detected_frame(self._video, self._yolo))
+            if self._pose_csv is not None:
+                self.done.emit(first_tracked_frame(self._video, self._pose_csv))
+            else:
+                self.done.emit(first_detected_frame(self._video, self._yolo))
         except Exception as e:  # never let it kill the thread
             logger.warning("keypoint preview failed", exc_info=True)
             self.failed.emit(str(e))
@@ -134,7 +177,22 @@ class KeypointConfirmDialog(QDialog):
     video and produces an empty ethogram with no error to explain it.
     """
 
-    def __init__(self, video, yolo_path, names, parent=None, *, warning: str | None = None):
+    def __init__(
+        self,
+        video,
+        yolo_path,
+        names,
+        parent=None,
+        *,
+        warning: str | None = None,
+        pose_csv=None,
+    ):
+        """``pose_csv`` labels a frame from poses already on disk.
+
+        Preferred when the run has them: it shows the very coordinates that
+        will be scored, skips a torch load, and works for a run that supplied
+        poses and no weights — which has no pose model to ask.
+        """
         super().__init__(parent)
         self.setWindowTitle("Confirm keypoint labels")
         self._names = list(names)
@@ -178,6 +236,7 @@ class KeypointConfirmDialog(QDialog):
         layout.addLayout(buttons)
 
         self._video, self._yolo_path = video, yolo_path
+        self._pose_csv = pose_csv
         self._started = False
 
     # ------------------------------------------------------------------
@@ -200,7 +259,7 @@ class KeypointConfirmDialog(QDialog):
         # and quit()/wait() cannot help, because quit only ends an event loop
         # and the worker is inside a blocking predict() call.
         self._thread = QThread()
-        self._worker = _PreviewWorker(video, yolo_path)
+        self._worker = _PreviewWorker(video, yolo_path, self._pose_csv)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.done.connect(self._on_done)
@@ -256,4 +315,5 @@ __all__ = [
     "KeypointConfirmDialog",
     "annotate_keypoints",
     "first_detected_frame",
+    "first_tracked_frame",
 ]

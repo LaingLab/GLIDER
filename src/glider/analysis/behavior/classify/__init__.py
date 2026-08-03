@@ -54,7 +54,49 @@ def _video_fps(video: Path | str) -> float | None:
     return fps if fps and fps > 0 else None
 
 
+def _track_poses(config, pose_csv_out):
+    """Keypoints for a speed-only run that has none on disk.
+
+    The streaming pipeline is not an option here — it classifies every frame,
+    and this mode has no classifier — so tracking happens as its own pass and
+    the result is handed to the vectorised scorer in memory. It is still
+    written out when the run asked for a pose CSV, both because the operator
+    asked and because it turns the next run of this video into a replay.
+    """
+    from glider.vision.pose.core import infer_video
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    pose = infer_video(
+        config.yolo_model_path,
+        config.source,
+        config.keypoint_names,
+        conf=config.conf_threshold,
+        fps=config.fps_override,
+        device=config.device,
+        progress=False,
+    )
+    if pose_csv_out is not None:
+        to_dlc_csv(pose, pose_csv_out)
+    return pose
+
+
 _MM_PER_CM = 10.0
+
+# The speed axis tests ``speed < freeze`` and ``speed > dart``, so an infinity
+# on either side is a threshold no measurement can satisfy — the way a run that
+# scores only freezing turns darting off, without a mode flag threaded through
+# every layer that touches a threshold.
+_FREEZE_OFF = float("-inf")
+_DART_OFF = float("inf")
+
+
+def _reportable(value):
+    """A threshold as JSON: the disabled sentinels record as ``null``."""
+    import math
+
+    if value is None or (isinstance(value, float) and not math.isfinite(value)):
+        return None
+    return value
 
 
 def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Path | None:
@@ -121,6 +163,8 @@ def resolve_speed_thresholds(
     fps: float | None = None,
     freeze_threshold: float | None = None,
     dart_threshold: float | None = None,
+    score_freezing: bool = True,
+    score_darting: bool = True,
 ) -> dict[str, float]:
     """Freeze/dart thresholds in px/frame, ready for :class:`LiveInferenceConfig`.
 
@@ -148,6 +192,14 @@ def resolve_speed_thresholds(
     off. Raises ValueError — rather than silently disabling the axis — when
     thresholds were asked for but cannot be honoured, because a silently
     missing freeze/dart column is worse than a failed run.
+
+    ``score_freezing`` / ``score_darting`` choose which of the two the run is
+    actually about. Both, by default: a threshold is normally required on each
+    side, because one alone is more often a forgotten flag than a decision. A
+    fear-conditioning session is the other case — it scores freezing, and there
+    is no darting cut-off anyone could defend — so turning a side off here
+    disables it explicitly, whatever the mode, and the caller supplies nothing
+    for it. With both off there is no axis, and ``{}`` comes back.
     """
     from glider.analysis.behavior.units import load_px_per_mm, mm_per_s_to_px_per_frame
 
@@ -158,6 +210,9 @@ def resolve_speed_thresholds(
             raise ValueError("give the absolute thresholds in cm/s or mm/s, not both")
         freeze_mm_s = None if freeze_cm_s is None else float(freeze_cm_s) * _MM_PER_CM
         dart_mm_s = None if dart_cm_s is None else float(dart_cm_s) * _MM_PER_CM
+
+    if not score_freezing and not score_darting:
+        return {}
 
     wants_abs = freeze_mm_s is not None or dart_mm_s is not None
     wants_pct = freeze_pct is not None or dart_pct is not None
@@ -185,12 +240,15 @@ def resolve_speed_thresholds(
     rate = fps if fps is not None else _video_fps(video)
 
     if wants_px:
-        if freeze_threshold is None or dart_threshold is None:
+        if (score_freezing and freeze_threshold is None) or (
+            score_darting and dart_threshold is None
+        ):
             raise ValueError(
                 "the speed axis needs both freeze_threshold and dart_threshold; "
                 "one alone would silently disable it"
             )
-        freeze_px, dart_px = float(freeze_threshold), float(dart_threshold)
+        freeze_px = float(freeze_threshold) if score_freezing else _FREEZE_OFF
+        dart_px = float(dart_threshold) if score_darting else _DART_OFF
 
     elif wants_cohort:
         # One physical cut-off derived from the whole cohort, converted here
@@ -202,28 +260,43 @@ def resolve_speed_thresholds(
         cohort = CohortSpeedThresholds.load(cohort_thresholds)
         scale = px_per_mm if px_per_mm is not None else load_px_per_mm(calibration_master, video)
         freeze_px, dart_px = cohort.to_px_per_frame(px_per_mm=scale, fps=rate)
+        # The file always carries both; the run may still be about one.
+        freeze_px = freeze_px if score_freezing else _FREEZE_OFF
+        dart_px = dart_px if score_darting else _DART_OFF
 
     elif wants_pct:
-        if freeze_pct is None or dart_pct is None:
+        if (score_freezing and freeze_pct is None) or (score_darting and dart_pct is None):
             raise ValueError(
                 "the speed axis needs both freeze_pct and dart_pct; "
                 "one alone would silently disable it"
             )
-        if float(freeze_pct) >= float(dart_pct):
+        if score_freezing and score_darting and float(freeze_pct) >= float(dart_pct):
             raise ValueError(f"freeze_pct ({freeze_pct}) must be below dart_pct ({dart_pct})")
-        # Percentiles describe this video's own distribution, so they need no
-        # calibration and no frame rate.
-        freeze_px, dart_px = _percentile_thresholds(
-            video, pose_csv, float(freeze_pct), float(dart_pct)
+        from glider.analysis.behavior.classify.speed_state import (
+            DART_PCT_DEFAULT,
+            FREEZE_PCT_DEFAULT,
         )
 
+        # Percentiles describe this video's own distribution, so they need no
+        # calibration and no frame rate. Both are evaluated in the one pass
+        # over the speed trace even when the run is about one of them; the
+        # other is then switched off rather than reported.
+        freeze_px, dart_px = _percentile_thresholds(
+            video,
+            pose_csv,
+            float(freeze_pct) if score_freezing else FREEZE_PCT_DEFAULT,
+            float(dart_pct) if score_darting else DART_PCT_DEFAULT,
+        )
+        freeze_px = freeze_px if score_freezing else _FREEZE_OFF
+        dart_px = dart_px if score_darting else _DART_OFF
+
     else:
-        if freeze_mm_s is None or dart_mm_s is None:
+        if (score_freezing and freeze_mm_s is None) or (score_darting and dart_mm_s is None):
             raise ValueError(
                 "the speed axis needs both freeze and dart thresholds; "
                 "one alone would silently disable it"
             )
-        if float(freeze_mm_s) >= float(dart_mm_s):
+        if score_freezing and score_darting and float(freeze_mm_s) >= float(dart_mm_s):
             raise ValueError(
                 f"the freezing threshold ({freeze_mm_s / _MM_PER_CM:g} cm/s) must be "
                 f"below the darting threshold ({dart_mm_s / _MM_PER_CM:g} cm/s)"
@@ -240,8 +313,16 @@ def resolve_speed_thresholds(
                 f"absolute thresholds need the frame rate, and it could not be read "
                 f"from {video}; pass fps explicitly"
             )
-        freeze_px = mm_per_s_to_px_per_frame(freeze_mm_s, px_per_mm=scale, fps=rate)
-        dart_px = mm_per_s_to_px_per_frame(dart_mm_s, px_per_mm=scale, fps=rate)
+        freeze_px = (
+            mm_per_s_to_px_per_frame(freeze_mm_s, px_per_mm=scale, fps=rate)
+            if score_freezing
+            else _FREEZE_OFF
+        )
+        dart_px = (
+            mm_per_s_to_px_per_frame(dart_mm_s, px_per_mm=scale, fps=rate)
+            if score_darting
+            else _DART_OFF
+        )
         if freeze_px is None or dart_px is None:  # pragma: no cover - guarded above
             raise ValueError("could not convert the thresholds to pixels per frame")
 
@@ -296,6 +377,8 @@ def classify(
     dart_mm_s=None,
     freeze_pct=None,
     dart_pct=None,
+    score_freezing=True,
+    score_darting=True,
     pose_csv=None,
     freeze_min_s=None,
     dart_min_s=None,
@@ -337,6 +420,23 @@ def classify(
     and, for bundles carrying an unrebuildable umap index, a way to corrupt
     native memory by unpickling the same broken object repeatedly.
 
+    Both model paths are optional, for two independent reasons:
+
+    ``model_path=None`` (and no ``model``) is a **speed-only** run: freezing
+    and darting scored from the speed trace, with no behaviour classifier
+    involved. Fear-conditioning work that only wants immobility should not
+    have to train a classifier first. It needs both speed thresholds, and it
+    goes through the vectorised path, so an annotated video cannot be
+    requested at the same time.
+
+    ``yolo_path=None`` is valid whenever the poses already exist — supplied
+    through ``pose_csv_in``, or found by ``reuse_existing_poses``/``pose_dir``.
+    Tracking is the only thing the weights are for, and re-deriving keypoints
+    that are already on disk is the most expensive way to reproduce a number.
+
+    ``score_freezing`` / ``score_darting`` pick which halves of the speed axis
+    this run is about; see :func:`resolve_speed_thresholds`.
+
     Extra ``LiveInferenceConfig`` knobs (e.g. ``conf_threshold``,
     ``smooth_window``, ``predict_every``, ``behavior_confidence_threshold``,
     ``fps_override``) can be passed through ``**opts``.
@@ -352,8 +452,21 @@ def classify(
     # discovery and cohort tooling recognises it. The poses are computed
     # regardless; keeping them saves the whole pass next time.
     pose_csv_out = (
-        output_dir / f"{Path(video).stem}DLC_{Path(yolo_path).stem}.csv" if write_pose_csv else None
+        output_dir / f"{Path(video).stem}DLC_{Path(yolo_path).stem}.csv"
+        if write_pose_csv and yolo_path is not None
+        else None
     )
+
+    # No classifier means a speed-only run: freezing and darting off the speed
+    # trace. Decided here because it changes what the run needs (thresholds,
+    # not a bundle) and what it can produce (no annotated video, since the
+    # renderer draws predicted labels).
+    speed_only = model is None and model_path is None
+    if speed_only and output_video is not None:
+        raise ValueError(
+            "an annotated video draws the classifier's labels, so it cannot be "
+            "written by a speed-only run"
+        )
 
     # Reuse poses rather than re-deriving them. Running the pose model again
     # to reproduce numbers Batch Pose Tracking already wrote is the single
@@ -371,6 +484,13 @@ def classify(
             raise ValueError(f"pose CSV not found: {pose_csv_in}")
         # Nothing new was tracked, so there is nothing new to write.
         pose_csv_out = None
+    elif yolo_path is None:
+        # The weights track keypoints and nothing else. Without them and
+        # without poses there is no source of coordinates at all.
+        raise ValueError(
+            f"no poses for {Path(video).name}: pass pose weights to track them, "
+            "or a pose CSV (pose_csv_in / pose_dir) to score the ones you have"
+        )
 
     # A pixel scale is worth having even when the thresholds did not need one:
     # percentile mode derives its cut-offs from the video's own distribution,
@@ -403,8 +523,18 @@ def classify(
             fps=opts.get("fps_override"),
             freeze_threshold=opts.pop("freeze_threshold", None),
             dart_threshold=opts.pop("dart_threshold", None),
+            score_freezing=score_freezing,
+            score_darting=score_darting,
         )
     )
+    if speed_only and opts.get("freeze_threshold") is None:
+        # Checked before anything expensive: with no classifier and no
+        # thresholds there is nothing left to score, and finding that out
+        # after a pass of pose tracking would be a waste of an hour.
+        raise ValueError(
+            "a speed-only run scores freezing and darting, so it needs a "
+            "freezing or a darting threshold"
+        )
 
     config = LiveInferenceConfig(
         source=str(video),
@@ -433,7 +563,18 @@ def classify(
 
     pipeline = None
     used_batch = False
-    if pose_csv_in is not None and output_video is None:
+    if speed_only:
+        from glider.analysis.behavior.classify import batch as _batch
+
+        # A speed-only run still needs coordinates. With none on disk the
+        # weights track them here, in one pass, and the result goes straight
+        # into the vectorised scorer — the streaming pipeline can't serve this
+        # mode at all, since every one of its frames goes to a classifier.
+        pose = None if pose_csv_in is not None else _track_poses(config, pose_csv_out)
+        used_batch = _batch.batch_apply(
+            config, ethogram_csv, None, frame_range=frame_range, pose=pose
+        )
+    elif pose_csv_in is not None and output_video is None:
         from glider.analysis.behavior.classify import batch as _batch
         from glider.analysis.behavior.classify.pipeline import _load_behavior_model
 
@@ -475,6 +616,14 @@ def classify(
     video_fps = (
         getattr(getattr(pipeline, "producer", None), "fps", None) or config.fps_override or rate
     )
+    if not video_fps:
+        # Every duration below is frames divided by this. The batch path never
+        # opens the video, so an unreadable header only surfaces here — as an
+        # arithmetic error on None, unless it is named.
+        raise RuntimeError(
+            f"could not read the frame rate of {Path(video).name}, so no duration "
+            "in the ethogram would mean anything; pass fps_override"
+        )
     predict_every = max(1, int(config.predict_every))
     effective_fps = video_fps / predict_every
 
@@ -551,11 +700,12 @@ def classify(
         predict_every=predict_every,
         smooth_window=config.smooth_window,
         min_bout_s=min_bout_s,
-        freeze_threshold=config.freeze_threshold,
-        dart_threshold=config.dart_threshold,
+        freeze_threshold=_reportable(config.freeze_threshold),
+        dart_threshold=_reportable(config.dart_threshold),
         cm_s_per_px_frame=config.cm_s_per_px_frame,
         px_per_mm=scale,
         used_batch=used_batch,
+        speed_only=speed_only,
     )
 
     return result

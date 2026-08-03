@@ -362,3 +362,62 @@ class TestPoseCsvCrossCheck:
         from glider.analysis.behavior.classify.features_stream import pose_csv_bodyparts
 
         assert pose_csv_bodyparts(tmp_path / "absent.csv") == []
+
+
+class TestLabellingFromPosesAlreadyOnDisk:
+    """The frame can come from the pose CSV instead of a fresh YOLO pass.
+
+    Better when there is one: those are the coordinates the run will actually
+    score, so the check is of the mapping in force rather than of a second
+    opinion. It is also the only source available to a run that supplied poses
+    and no weights, which has no pose model to ask.
+    """
+
+    def _pose_csv(self, path, *, blank_until=0, n=12):
+        import numpy as np
+
+        from glider.vision.pose.core import PoseData
+        from glider.vision.pose.dlc import to_dlc_csv
+
+        xy = np.tile(np.array([[10.0, 12.0], [20.0, 22.0], [30.0, 32.0]]), (n, 1, 1))
+        xy[:blank_until] = np.nan
+        conf = np.where(np.isnan(xy).any(axis=-1), 0.0, 1.0)
+        return to_dlc_csv(
+            PoseData(xy=xy, confidence=conf, keypoint_names=NAMES[:3], fps=10.0), path
+        )
+
+    def test_the_first_complete_frame_is_used(self, tmp_path, synthetic_clip):
+        from glider.gui.behavior.keypoint_confirm import first_tracked_frame
+
+        csv_path = self._pose_csv(tmp_path / "poses.csv")
+        frame, points = first_tracked_frame(synthetic_clip, csv_path)
+        assert frame is not None
+        assert points.shape == (3, 2)
+        assert points[0].tolist() == [10.0, 12.0]
+
+    def test_frames_with_no_detection_are_skipped(self, tmp_path, synthetic_clip):
+        """A partial frame labels only some of the names, which checks nothing."""
+        import numpy as np
+
+        from glider.gui.behavior.keypoint_confirm import first_tracked_frame
+
+        csv_path = self._pose_csv(tmp_path / "poses.csv", blank_until=4)
+        _frame, points = first_tracked_frame(synthetic_clip, csv_path)
+        assert np.isfinite(points).all()
+
+    def test_poses_with_nothing_tracked_yield_nothing(self, tmp_path, synthetic_clip):
+        from glider.gui.behavior.keypoint_confirm import first_tracked_frame
+
+        csv_path = self._pose_csv(tmp_path / "poses.csv", blank_until=12)
+        assert first_tracked_frame(synthetic_clip, csv_path) is None
+
+    def test_the_dialog_prefers_the_csv_over_the_pose_model(self, tmp_path, qtbot):
+        """No torch load, and no weights needed, when the poses are there."""
+        from glider.gui.behavior import keypoint_confirm as mod
+
+        called = []
+        csv_path = self._pose_csv(tmp_path / "poses.csv")
+        worker = mod._PreviewWorker(tmp_path / "clip.avi", None, csv_path)
+        worker.done.connect(lambda r: called.append(r))
+        worker.run()
+        assert len(called) == 1  # no ultralytics import, no yolo path used
