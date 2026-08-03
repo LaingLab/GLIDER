@@ -140,6 +140,31 @@ def test_a_failed_load_is_not_retried_on_every_clip(tmp_path, qtbot):
     assert w.speed_cache.begin(video) is False
 
 
+def test_the_background_load_actually_finishes(tmp_path, qtbot):
+    """End to end through the worker thread, not the synchronous shortcut.
+
+    Every other test here calls _load_speed_now directly, which is the part
+    that does the arithmetic -- it never proves the thread starts, runs, and
+    reports back. That gap let the trace sit on "loading pose data…" forever.
+    """
+    pose = _pose_csv(tmp_path, "a.csv")
+    video = tmp_path / "a.mp4"
+    ann = tmp_path / "a_annotations.csv"
+    AnnotationStore().save_csv(ann)
+    w = AnnotatorWindow(
+        clips=[ProposedClip(0, 50, 40, 60, 0.7, str(video))],
+        videos_meta={video: ann},
+        pose_csvs={video: pose},
+    )
+    qtbot.addWidget(w)
+
+    # __init__ -> _refresh_clip already kicked the load off.
+    qtbot.waitUntil(lambda: w.speed_cache.state(video) == "ready", timeout=10000)
+
+    assert w.speed_trace.has_data() is True
+    w.close()
+
+
 def test_closing_with_a_load_in_flight_stops_the_thread(tmp_path, qtbot):
     """Qt aborts the process if a running QThread is destroyed.
 
