@@ -623,18 +623,18 @@ def test_build_review_clips_loads_zones(tmp_path):
     assert {(c.start_frame, c.end_frame) for c in clips} == {(100, 120), (200, 230)}
 
 
-def test_make_more_sampler_advances_seed(tmp_path):
+def testmake_more_sampler_advances_seed(tmp_path):
     """The render-more sampler returns clips and advances its seed each call
     so repeated presses surface different picks."""
     from glider.analysis.behavior.features import FeatureSpec
-    from glider.gui.behavior.annotator.app import _make_more_sampler
+    from glider.gui.behavior.annotator.app import make_more_sampler
     from glider.vision.pose.dlc import to_dlc_csv
 
     pose = _make_three_regime_pose()
     pose_csv = tmp_path / "s.csv"
     to_dlc_csv(pose, pose_csv)
     video = tmp_path / "s.mp4"
-    sampler = _make_more_sampler(
+    sampler = make_more_sampler(
         [(video, pose_csv)],
         spec=FeatureSpec(body_axis=(0, pose.n_keypoints - 1)),
         window=15,

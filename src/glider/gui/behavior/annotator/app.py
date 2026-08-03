@@ -58,19 +58,23 @@ def build_review_clips(videos_meta: dict[Path, Path], fps: float) -> list[Propos
     return clips
 
 
-def _make_more_sampler(
+def make_more_sampler(
     pose_sessions: list[tuple[Path, Path]],  # (video, pose_csv) pairs
     *,
-    spec: FeatureSpec,
-    window: int,
-    fps: float,
-    spatial_weight: float,
-    min_frame_gap: int | None,
-    base_seed: int,
+    spec: FeatureSpec | None = None,
+    window: int = 30,
+    fps: float = 30.0,
+    spatial_weight: float = 1.0,
+    min_frame_gap: int | None = None,
+    base_seed: int = 1042,
 ):
     """Return a ``sample(n) -> list[ProposedClip]`` callable for the
     render-more button. Each call advances the seed so repeated presses
-    surface different picks."""
+    surface different picks.
+
+    Defaults match the annotator's own, so a caller that exposes none of the
+    sampling knobs (the Behavior Analysis window's Annotate tab) still gets
+    the button rather than having to restate them."""
     pairs = [(p, v) for v, p in pose_sessions]  # (pose_csv, video) for sampler
     state = {"seed": int(base_seed)}
 
@@ -149,7 +153,7 @@ def run(
         print(f"  review mode: loaded {len(clips)} labelled clip(s)")
         pose_sessions = [(v, p) for v, p in sessions if Path(p).exists()]
         if pose_sessions:
-            clip_sampler = _make_more_sampler(
+            clip_sampler = make_more_sampler(
                 pose_sessions,
                 spec=spec,
                 window=window,

@@ -7,6 +7,8 @@ torch, a GPU, or a real video file.
 from __future__ import annotations
 
 import asyncio
+import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -324,6 +326,35 @@ def test_skips_the_raw_companion(tmp_path):
     primary.touch()
 
     assert batch.find_pose_csv(video) == primary
+
+
+def test_skips_the_annotations_companion(tmp_path):
+    """The annotator writes "<pose stem>_annotations.csv" beside the pose CSV.
+
+    For a batch-named folder that is "<stem>DLC_<model>_annotations.csv", which
+    matches the same glob and — being written later — won the most-recent tie
+    break. The second launch on any annotated batch folder then read a file of
+    behavior zones as though it were pose data.
+    """
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    primary = tmp_path / "session01DLC_exp-6.csv"
+    primary.touch()
+    annotations = tmp_path / "session01DLC_exp-6_annotations.csv"
+    annotations.touch()
+    # Make the decoy unambiguously newer, which is how it wins on a real disk.
+    os.utime(annotations, (time.time() + 60, time.time() + 60))
+
+    assert batch.find_pose_csv(video) == primary
+
+
+def test_annotations_alone_is_not_a_match(tmp_path):
+    """With the pose CSV gone, an annotations file must not stand in for it."""
+    video = tmp_path / "session01.mp4"
+    video.touch()
+    (tmp_path / "session01DLC_exp-6_annotations.csv").touch()
+
+    assert batch.find_pose_csv(video) is None
 
 
 def test_raw_alone_is_not_a_match(tmp_path):

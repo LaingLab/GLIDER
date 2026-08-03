@@ -89,6 +89,11 @@ def raw_output_path(video: Path, model: Path) -> Path:
     return video.parent / f"{_output_stem(video, model)}_raw.csv"
 
 
+# Stem suffixes that share the "<stem>DLC_<model>" prefix but are not pose
+# data. Anything a tool writes beside a pose CSV using its stem belongs here.
+_NOT_POSE_SUFFIXES = ("_raw", "_annotations")
+
+
 def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Path | None:
     """The pose CSV belonging to *video*, or ``None`` if there isn't one.
 
@@ -101,8 +106,13 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
         A hand-placed file, or one exported from DeepLabCut proper. This is
         what the annotate and train paths have always expected.
     ``<stem>DLC_<model>.csv``
-        What :func:`run_batch` writes. The ``_raw`` companion is skipped —
-        it is the unsmoothed inference, never the one to analyse.
+        What :func:`run_batch` writes. Companions that share this prefix but
+        are not pose data are skipped (see :data:`_NOT_POSE_SUFFIXES`):
+        ``_raw`` is the unsmoothed inference, never the one to analyse, and
+        ``_annotations`` is the annotator's behavior zones. The latter is
+        written *after* the pose CSV, so before it was excluded it won the
+        most-recent tie-break and every reader downstream — annotate, train,
+        apply — was handed a file of labels in place of keypoints.
 
     The exact-stem form wins when both exist, so a file the operator placed
     deliberately is never shadowed by a batch run. When several models have
@@ -121,7 +131,9 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
         return exact
 
     matches = [
-        p for p in sorted(directory.glob(f"{video.stem}DLC_*.csv")) if not p.stem.endswith("_raw")
+        p
+        for p in sorted(directory.glob(f"{video.stem}DLC_*.csv"))
+        if not p.stem.endswith(_NOT_POSE_SUFFIXES)
     ]
     if not matches:
         return None

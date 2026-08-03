@@ -615,6 +615,189 @@ def test_annotate_still_reports_genuinely_missing_pose_data(qtbot, tmp_path, mon
     assert "Batch Pose Tracking" in warnings_shown[0]
 
 
+# --------------------------------------------------------------------------
+# Annotate tab: reviewing what is already labelled, and asking for more clips
+#
+# The tab used to hardcode `n_clips_total=max(50, len(videos))` and had no way
+# to reach existing annotations at all. Pointed at a 30-video cohort with 2,352
+# saved zones it opened a queue of 50 freshly-sampled clips, so the labelling
+# work already on disk was invisible.
+# --------------------------------------------------------------------------
+
+
+def _saved_zones(tmp_path, stem, spans, behavior="walking"):
+    """Write an annotations CSV beside the pose CSV, where training reads it."""
+    from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
+    from glider.gui.behavior.annotator.app import annotation_path_for
+
+    store = AnnotationStore()
+    for start, end in spans:
+        store.add(BehaviorZone(behavior=behavior, start_frame=start, end_frame=end))
+    store.save_csv(annotation_path_for(tmp_path / f"{stem}DLC_exp-6.csv"))
+    return store
+
+
+def _launch_annotate(qtbot, tmp_path, monkeypatch, configure=None):
+    """Drive _on_launch with the sampler and annotator stubbed out.
+
+    ``configure(tab)`` runs after construction so a test can set the new
+    controls before launching.
+    """
+    from glider.gui.behavior import window as win_mod
+    from glider.gui.behavior.annotator import main_window as annot_mod
+    from glider.gui.behavior.annotator import sampler as sampler_mod
+
+    captured: dict = {}
+
+    def fake_propose(sessions, n_clips_total, fps=30.0, **kw):
+        captured["sessions"] = list(sessions)
+        captured["n_clips_total"] = n_clips_total
+        captured["exclude_zones_by_session"] = kw.get("exclude_zones_by_session")
+        return []
+
+    class FakeAnnotator:
+        def __init__(self, **kw):
+            captured["annotator_kwargs"] = kw
+
+        def show(self):
+            pass
+
+        def warn_about_load_errors(self):
+            return False
+
+    warnings_shown: list[str] = []
+    monkeypatch.setattr(sampler_mod, "propose_clips_multi", fake_propose)
+    monkeypatch.setattr(annot_mod, "AnnotatorWindow", FakeAnnotator)
+    for kind in ("warning", "critical"):
+        monkeypatch.setattr(
+            win_mod.QMessageBox,
+            kind,
+            lambda *a, **k: warnings_shown.append(a[2] if len(a) > 2 else ""),
+        )
+
+    tab = win_mod.AnnotateTab(tmp_path)
+    qtbot.addWidget(tab)
+    tab._videos_dir = tmp_path
+    if configure is not None:
+        configure(tab)
+    tab._on_launch()
+    return captured, warnings_shown
+
+
+def test_annotate_clip_count_defaults_to_fifty(qtbot, tmp_path, monkeypatch):
+    """The old hardcode becomes the default, so nothing changes unasked."""
+    _pose_batch_output(tmp_path, "session01")
+
+    captured, warnings_shown = _launch_annotate(qtbot, tmp_path, monkeypatch)
+
+    assert warnings_shown == []
+    assert captured["n_clips_total"] == 50
+
+
+def test_annotate_clip_count_is_configurable(qtbot, tmp_path, monkeypatch):
+    """A 30-video cohort needs far more than 50 clips to label usefully."""
+    _pose_batch_output(tmp_path, "session01")
+
+    captured, _ = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(1000)
+    )
+
+    assert captured["n_clips_total"] == 1000
+
+
+def test_annotate_clip_count_never_drops_below_the_video_count(qtbot, tmp_path, monkeypatch):
+    """propose_clips_multi rejects n_clips_total < len(sessions); don't hand it one."""
+    for i in range(3):
+        _pose_batch_output(tmp_path, f"session{i:02d}")
+
+    captured, warnings_shown = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(1)
+    )
+
+    assert warnings_shown == []
+    assert captured["n_clips_total"] == 3
+
+
+def test_review_mode_loads_every_saved_zone(qtbot, tmp_path, monkeypatch):
+    """The bug: 2,352 saved zones were on disk and none of them reached the queue."""
+    _pose_batch_output(tmp_path, "session01")
+    _pose_batch_output(tmp_path, "session02")
+    _saved_zones(tmp_path, "session01", [(0, 10), (20, 30), (40, 50)])
+    _saved_zones(tmp_path, "session02", [(5, 15), (25, 35)])
+
+    captured, warnings_shown = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
+    )
+
+    assert warnings_shown == []
+    # Sampling is skipped entirely in review mode.
+    assert "n_clips_total" not in captured
+    clips = captured["annotator_kwargs"]["clips"]
+    assert len(clips) == 5
+    assert {(c.start_frame, c.end_frame) for c in clips} == {
+        (0, 10),
+        (20, 30),
+        (40, 50),
+        (5, 15),
+        (25, 35),
+    }
+
+
+def test_review_mode_says_so_when_nothing_is_labelled_yet(qtbot, tmp_path, monkeypatch):
+    """An empty review window looks identical to a broken one. Say which it is."""
+    _pose_batch_output(tmp_path, "session01")
+
+    captured, warnings_shown = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
+    )
+
+    assert "annotator_kwargs" not in captured
+    assert len(warnings_shown) == 1
+    assert "no annotations" in warnings_shown[0].lower()
+
+
+def test_skipping_labelled_regions_passes_the_saved_zones(qtbot, tmp_path, monkeypatch):
+    """Continuing a cohort must not re-propose frames already labelled."""
+    _pose_batch_output(tmp_path, "session01")
+    _saved_zones(tmp_path, "session01", [(0, 10), (20, 30)])
+
+    captured, _ = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._skip_labelled_check.setChecked(True)
+    )
+
+    assert captured["exclude_zones_by_session"] == [[(0, 10), (20, 30)]]
+
+
+def test_not_skipping_labelled_regions_excludes_nothing(qtbot, tmp_path, monkeypatch):
+    _pose_batch_output(tmp_path, "session01")
+    _saved_zones(tmp_path, "session01", [(0, 10)])
+
+    captured, _ = _launch_annotate(qtbot, tmp_path, monkeypatch)
+
+    assert captured["exclude_zones_by_session"] is None
+
+
+def test_annotate_wires_up_the_render_more_button(qtbot, tmp_path, monkeypatch):
+    """Without a sampler the window's 'render more' button never appears."""
+    _pose_batch_output(tmp_path, "session01")
+
+    captured, _ = _launch_annotate(qtbot, tmp_path, monkeypatch)
+
+    assert callable(captured["annotator_kwargs"]["clip_sampler"])
+
+
+def test_review_mode_also_wires_up_the_render_more_button(qtbot, tmp_path, monkeypatch):
+    """Reviewing and then wanting fresh material is the normal workflow."""
+    _pose_batch_output(tmp_path, "session01")
+    _saved_zones(tmp_path, "session01", [(0, 10)])
+
+    captured, _ = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
+    )
+
+    assert callable(captured["annotator_kwargs"]["clip_sampler"])
+
+
 def test_cohort_mode_sends_only_the_cohort_file(qtbot, tmp_path):
     """One pooled cut-off, not per-video percentiles."""
     from glider.gui.behavior.window import ApplyTab
