@@ -453,7 +453,6 @@ def classify(
     # loudly if the producer/tracker recorded an error; otherwise treat it as
     # an empty run so callers still get a valid (empty) EthogramResult instead
     # of an opaque FileNotFoundError.
-    speed_labels: list[str] = []
     if ethogram_csv.exists():
         with ethogram_csv.open(newline="") as f:
             rows_in = list(csv.DictReader(f))
@@ -465,7 +464,6 @@ def classify(
             rows_in = _rows_in_range(rows_in, frame_range)
             _rewrite_ethogram(ethogram_csv, rows_in)
         labels = [row["behavior"] for row in rows_in]
-        speed_labels = [row.get("speed", "") for row in rows_in]
     else:
         err = getattr(getattr(pipeline, "producer", None), "error", None) or getattr(
             getattr(pipeline, "tracker", None), "error", None
@@ -529,14 +527,10 @@ def classify(
 
     result.transitions.to_csv(output_dir / "transitions.csv", index=False)
 
-    # The freeze/dart axis scores the same frames independently of posture, so
-    # it gets its own files rather than extra rows in stats.csv. stats.csv
-    # already counts freezing and darting, because the resolved behaviour
-    # folds them in; these answer the narrower question of what the speed axis
-    # alone claimed, so the two must not be added together. Until now the axis
-    # reached neither, and lived only in ethogram_raw.csv.
-    if any(speed_labels):
-        _write_axis_summary(output_dir, speed_labels, effective_fps, floor_ms, prefix="speed")
+    # No separate speed summary: freezing and darting are states of `behavior`
+    # now, so bouts.csv and stats.csv already carry their bouts, totals and
+    # fractions alongside every other behaviour. A second pair of files saying
+    # the same thing is a second answer to a question that has one.
 
     # run.json: what produced these files. Written last, so it only appears
     # beside a complete set of outputs.
@@ -615,48 +609,6 @@ def _rewrite_ethogram(path: Path, rows: list[dict]) -> None:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
-
-
-def _write_axis_summary(
-    output_dir: Path, labels: list[str], fps: float, floor_ms: float, *, prefix: str
-) -> None:
-    """``<prefix>_bouts.csv`` and ``<prefix>_stats.csv`` for a second axis."""
-    result = ethogram_from_labels(labels, fps=fps)
-    total_s = len(labels) / fps if fps else 0.0
-
-    bout_rows = [
-        {"state": state, "duration_s": duration_ms / 1000.0}
-        for state, series in result.bouts.items()
-        if state != UNSCORED
-        for duration_ms in series
-        if duration_ms >= floor_ms
-    ]
-    pd.DataFrame(bout_rows, columns=["state", "duration_s"]).to_csv(
-        output_dir / f"{prefix}_bouts.csv", index=False
-    )
-
-    stats_rows = []
-    for state, series in result.bouts.items():
-        if state == UNSCORED:
-            continue  # "not freezing and not darting" is not a state
-        if floor_ms:
-            series = series[series >= floor_ms]
-        if series.empty:
-            continue
-        seconds = series.sum() / 1000.0
-        stats_rows.append(
-            {
-                "state": state,
-                "n_bouts": len(series),
-                "total_s": seconds,
-                "fraction": seconds / total_s if total_s else 0.0,
-                "mean_s": series.mean() / 1000.0,
-                "median_s": series.median() / 1000.0,
-            }
-        )
-    pd.DataFrame(
-        stats_rows, columns=["state", "n_bouts", "total_s", "fraction", "mean_s", "median_s"]
-    ).to_csv(output_dir / f"{prefix}_stats.csv", index=False)
 
 
 def _write_run_manifest(output_dir: Path, **fields) -> Path | None:

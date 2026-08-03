@@ -94,23 +94,16 @@ def test_behavior_classifier_two_axis_ethogram_and_arbitration(tmp_path):
     clf.join(timeout=5)
 
     rows = list(csv.reader(eth.open(newline="")))
-    assert rows[0] == [
-        "frame",
-        "behavior",
-        "behavior_postural",
-        "speed",
-        "speed_px_frame",
-        "speed_cm_s",
-    ]
+    assert rows[0] == ["frame", "behavior", "speed_px_frame", "speed_cm_s"]
     # No pixel scale was supplied, so cm/s stays blank rather than guessed --
     # but the raw px/frame is always recorded.
     #
     # `behavior` is resolved: an animal cannot be darting and digging at once,
     # so where the speed axis fired it wins, and the classifier's own label is
     # kept beside it rather than thrown away.
-    assert rows[1] == ["0", "groom", "groom", "", "0.5000", ""]
-    assert rows[2] == ["1", "freezing", "groom", "freezing", "0.1000", ""]
-    assert rows[3] == ["2", "darting", "groom", "darting", "9.0000", ""]
+    assert rows[1] == ["0", "groom", "0.5000", ""]
+    assert rows[2] == ["1", "freezing", "0.1000", ""]
+    assert rows[3] == ["2", "darting", "9.0000", ""]
     # Display label arbitrates: speed wins on the last frame.
     assert latest.get()[1] == "darting"
 
@@ -175,7 +168,7 @@ def test_a_dropout_frame_reads_as_missing_not_zero(tmp_path):
     clf.join(timeout=5)
 
     rows = list(csv.reader(eth.open(newline="")))
-    assert rows[1] == ["0", "groom", "groom", "", "", ""]
+    assert rows[1] == ["0", "groom", "", ""]
 
 
 def test_behavior_classifier_stays_single_axis_without_speed(tmp_path):

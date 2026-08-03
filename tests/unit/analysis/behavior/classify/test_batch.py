@@ -235,14 +235,7 @@ class TestEthogramFile:
         out = tmp_path / "ethogram_raw.csv"
         write_ethogram_csv(out, rows, speed_axis=True, cm_s_per_px_frame=2.0)
         df = pd.read_csv(out, keep_default_na=False)
-        assert list(df.columns) == [
-            "frame",
-            "behavior",
-            "behavior_postural",
-            "speed",
-            "speed_px_frame",
-            "speed_cm_s",
-        ]
+        assert list(df.columns) == ["frame", "behavior", "speed_px_frame", "speed_cm_s"]
         scored = df[df["speed_px_frame"] != ""]
         assert len(scored) > 0
         assert scored["speed_cm_s"].astype(float).tolist() == pytest.approx(
@@ -350,18 +343,18 @@ class TestTheSpeedAxisOverridesPosture:
         rows = self._rows(freeze_threshold=-1.0, dart_threshold=1e18)  # never fires
         assert "freezing" not in rows.labels
         assert "darting" not in rows.labels
-        assert rows.labels == rows.postural_labels
 
-    def test_the_classifier_label_is_kept_beside_it(self):
-        """The override is a reading of the data; a reading must be reversible."""
-        rows = self._rows(freeze_threshold=1e9, dart_threshold=1e9 + 1)
-        assert set(rows.labels) == {"freezing"}
-        assert "freezing" not in rows.postural_labels
+    def test_there_is_only_one_behaviour_per_frame(self):
+        """One column, one answer. A parallel `behavior_postural` would be a
+        second answer to a question that has one."""
+        pose = _pose(n=200, seed=7)
+        rows = classify_pose_data(pose, _model(pose, seed=7), predict_every=1)
+        assert not hasattr(rows, "postural_labels")
 
-    def test_without_a_speed_axis_nothing_is_overridden(self):
+    def test_without_a_speed_axis_the_labels_are_the_classifier(self):
         rows = self._rows()
         assert rows.speed_labels == []
-        assert rows.labels == rows.postural_labels
+        assert set(rows.labels) <= {"groom", "locomote", "rear", ""}
 
     def test_resolve_is_positionwise(self):
         from glider.analysis.behavior.classify.batch import resolve_labels
