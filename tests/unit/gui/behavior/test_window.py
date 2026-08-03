@@ -830,3 +830,94 @@ def test_cohort_mode_without_a_file_is_refused_not_run_silently(qtbot, tmp_path)
     tab._speed_group.setChecked(True)
     tab._speed_mode.setCurrentIndex(tab._speed_mode.findData("cohort"))
     assert "cut-offs from a file" in (tab._run_blocker() or "")
+
+
+# --------------------------------------------------------------------------
+# Apply tab: the cohort file has to say what is in it
+# --------------------------------------------------------------------------
+
+
+def _cohort_file(path, **kw):
+    from glider.analysis.behavior.cohort_speed import CM_PER_S, CohortSpeedThresholds
+
+    base = {
+        "freeze": 0.55,
+        "dart": 27.68,
+        "unit": CM_PER_S,
+        "freeze_pct": 10.0,
+        "dart_pct": 99.5,
+        "n_sessions": 30,
+        "n_samples": 269_964,
+        "start_s": 120.0,
+        "end_s": 420.0,
+    }
+    CohortSpeedThresholds(**{**base, **kw}).save(path)
+    return path
+
+
+def test_choosing_a_cohort_file_shows_its_cut_offs(qtbot, tmp_path):
+    """A path does not answer which thresholds the run will use."""
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._cohort_path = _cohort_file(tmp_path / "cohort_speed.json")
+    tab._show_cohort_file()
+    text = tab._cohort_label.text()
+    assert "27.7 cm/s" in text
+    assert "0.55 cm/s" in text
+    assert "2–7 min" in text
+
+
+def test_a_cohort_pooled_in_pixels_is_flagged_with_the_reason(qtbot, tmp_path):
+    from glider.analysis.behavior.cohort_speed import PX_PER_FRAME
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._cohort_path = _cohort_file(
+        tmp_path / "cohort_speed.json", unit=PX_PER_FRAME, n_uncalibrated=4
+    )
+    tab._show_cohort_file()
+    text = tab._cohort_label.text()
+    assert "px/frame" in text
+    assert "4 session(s) had no pixel scale" in text
+
+
+def test_an_unreadable_cohort_file_says_so_rather_than_looking_chosen(qtbot, tmp_path):
+    from glider.gui.behavior.window import ApplyTab
+
+    tab = ApplyTab()
+    qtbot.addWidget(tab)
+    tab._cohort_path = tmp_path / "not_a_cohort.json"
+    tab._cohort_path.write_text("{}")
+    tab._show_cohort_file()
+    assert "unreadable" in tab._cohort_label.text()
+
+
+def test_the_cohort_scan_takes_each_session_once(tmp_path):
+    """An apply run leaves a copy of the poses in its output folder.
+
+    Pooling both weights that animal twice, and the copy usually sits where
+    its video cannot be found — which costs the whole pool its pixel scale.
+    """
+    from glider.gui.behavior.window import _unique_pose_csvs
+
+    (tmp_path / "out" / "t1_d2").mkdir(parents=True)
+    beside = tmp_path / "t1_d2DLC_exp-7.csv"
+    beside.write_text("scorer\n")
+    (tmp_path / "out" / "t1_d2" / "t1_d2DLC_exp-7.csv").write_text("scorer\n")
+    (tmp_path / "t2_d2DLC_exp-7.csv").write_text("scorer\n")
+
+    found = _unique_pose_csvs(tmp_path)
+    assert len(found) == 2
+    # The shallowest copy wins, because it is the one beside its video.
+    assert beside in found
+
+
+def test_the_cohort_scan_ignores_csvs_that_are_not_poses(tmp_path):
+    from glider.gui.behavior.window import _unique_pose_csvs
+
+    (tmp_path / "aDLC_exp-7.csv").write_text("scorer\n")
+    (tmp_path / "ethogram_raw.csv").write_text("frame,behavior\n")
+    assert [p.name for p in _unique_pose_csvs(tmp_path)] == ["aDLC_exp-7.csv"]
