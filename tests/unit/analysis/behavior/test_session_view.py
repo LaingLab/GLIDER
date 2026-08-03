@@ -433,3 +433,117 @@ class TestFreezingIsAnOrdinaryLabel:
         view = SessionView.load(self._session(tmp_path, with_speed=False))
         assert view.speed_cm_s is None
         assert view.segment_stats(0, 119).mean_speed_cm_s is None
+
+
+class TestSteppingBetweenBouts:
+    """Frame-by-frame is not how anyone finds a behaviour.
+
+    A five-minute session holds nine thousand scored rows; the frames worth
+    stopping on are the handful where a bout begins, and both the keyboard and
+    the timeline are hopeless at reaching them any other way.
+    """
+
+    def _view(self, tmp_path, labels, first=0):
+        folder = tmp_path / "s"
+        folder.mkdir(parents=True, exist_ok=True)
+        frames = list(range(first, first + len(labels)))
+        pd.DataFrame({"frame": frames, "behavior": labels}).to_csv(
+            folder / "ethogram_raw.csv", index=False
+        )
+        return SessionView.load(folder / "ethogram_raw.csv")
+
+    def test_every_change_of_label_starts_a_bout(self, tmp_path):
+        view = self._view(tmp_path, ["a", "a", "b", "b", "b", "a"])
+        assert view.bout_starts().tolist() == [0, 2, 5]
+
+    def test_the_first_row_opens_a_bout(self, tmp_path):
+        """For a windowed session it is the only record of what was happening."""
+        view = self._view(tmp_path, ["a", "a", "b"], first=3600)
+        assert view.bout_starts().tolist() == [3600, 3602]
+
+    def test_one_behaviour_gives_only_its_own_starts(self, tmp_path):
+        view = self._view(tmp_path, ["a", "b", "b", "a", "a", "b"])
+        assert view.bout_starts("b").tolist() == [1, 5]
+
+    def test_a_behaviour_that_opens_the_session_counts(self, tmp_path):
+        view = self._view(tmp_path, ["b", "b", "a", "b"])
+        assert view.bout_starts("b").tolist() == [0, 3]
+
+    def test_a_behaviour_never_scored_has_no_starts(self, tmp_path):
+        view = self._view(tmp_path, ["a", "a"])
+        assert view.bout_starts("z").size == 0
+
+    def test_unscored_stretches_are_bouts_too(self, tmp_path):
+        """Where the scoring stopped is exactly what a reviewer looks for."""
+        view = self._view(tmp_path, ["a", "", "", "a"])
+        assert view.bout_starts().tolist() == [0, 1, 3]
+
+    def test_the_bout_under_a_frame_is_its_whole_run(self, tmp_path):
+        view = self._view(tmp_path, ["a", "b", "b", "b", "a"])
+        assert view.bout_at(2) == (1, 3, "b")
+
+    def test_a_frame_outside_the_ethogram_is_in_no_bout(self, tmp_path):
+        view = self._view(tmp_path, ["a", "b"], first=100)
+        assert view.bout_at(50) is None
+
+    def test_an_empty_session_steps_nowhere(self, tmp_path):
+        folder = tmp_path / "e"
+        folder.mkdir()
+        pd.DataFrame({"frame": [], "behavior": []}).to_csv(folder / "ethogram_raw.csv", index=False)
+        view = SessionView.load(folder / "ethogram_raw.csv")
+        assert view.bout_starts().size == 0
+        assert view.bout_at(0) is None
+
+
+class TestTheThresholdsThatProducedTheLabels:
+    """Recovered from run.json, because nothing else records them.
+
+    The ethogram carries the labels and the speed but not the line drawn
+    between them, so "what counted as freezing here" otherwise means opening a
+    JSON file by hand — and the answer is in px/frame, which is not a unit
+    anyone can quote.
+    """
+
+    def _session(self, tmp_path, manifest):
+        import json
+
+        folder = tmp_path / "s"
+        path = _write_session(folder)
+        (folder / "run.json").write_text(json.dumps({"schema_version": 1, **manifest}))
+        return SessionView.load(path)
+
+    def test_the_applied_cut_offs_come_back_in_both_units(self, tmp_path):
+        view = self._session(
+            tmp_path,
+            {"freeze_threshold": 0.25, "dart_threshold": 12.0, "cm_s_per_px_frame": 2.0},
+        )
+        assert view.applied_freeze_px == pytest.approx(0.25)
+        assert view.applied_freeze_cm_s == pytest.approx(0.5)
+        assert view.applied_dart_cm_s == pytest.approx(24.0)
+
+    def test_without_a_scale_the_pixels_survive_and_the_cm_do_not(self, tmp_path):
+        """An uncalibrated run has real thresholds; it has no cm/s."""
+        view = self._session(tmp_path, {"freeze_threshold": 0.25, "dart_threshold": 12.0})
+        assert view.applied_freeze_px == pytest.approx(0.25)
+        assert view.applied_freeze_cm_s is None
+
+    def test_a_disabled_side_reads_as_absent_not_as_a_number(self, tmp_path):
+        """A run that scored freezing only has no darting cut-off to show."""
+        view = self._session(
+            tmp_path,
+            {"freeze_threshold": 0.25, "dart_threshold": None, "cm_s_per_px_frame": 2.0},
+        )
+        assert view.applied_dart_px is None
+        assert view.applied_dart_cm_s is None
+
+    def test_an_infinity_from_an_older_run_reads_the_same_way(self, tmp_path):
+        view = self._session(
+            tmp_path,
+            {"freeze_threshold": 0.25, "dart_threshold": float("inf")},
+        )
+        assert view.applied_dart_px is None
+
+    def test_a_session_with_no_manifest_simply_has_none(self, tmp_path):
+        view = SessionView.load(_write_session(tmp_path / "s"))
+        assert view.applied_freeze_px is None
+        assert view.applied_dart_cm_s is None

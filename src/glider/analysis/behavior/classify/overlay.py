@@ -30,22 +30,27 @@ from collections.abc import Iterable
 
 import numpy as np
 
-# Categorical palette (BGR). Matches the annotator's colours but
-# converted from #RRGGBB hex to BGR ints for OpenCV.
-_PALETTE_BGR: tuple[tuple[int, int, int], ...] = (
-    (216, 78, 29),  # #1d4ed8 blue
-    (87, 120, 4),  # #047857 emerald
-    (9, 83, 180),  # #b45309 amber
-    (237, 60, 124),  # #7c3aed violet
-    (93, 24, 190),  # #be185d rose
-    (110, 118, 15),  # #0f766e teal
-    (7, 98, 161),  # #a16207 yellow
-    (12, 65, 194),  # #c2410c orange
-    (202, 56, 67),  # #4338ca indigo
-    (61, 128, 21),  # #15803d green
-    (77, 23, 157),  # #9d174d pink
-    (28, 28, 185),  # #b91c1c red
-)
+
+def _to_bgr(hex_colour: str) -> tuple[int, int, int]:
+    """``#rrggbb`` to the BGR triple OpenCV draws in."""
+    value = hex_colour.lstrip("#")
+    r, g, b = (int(value[i : i + 2], 16) for i in (0, 2, 4))
+    return (b, g, r)
+
+
+def _palette_bgr() -> tuple[tuple[int, int, int], ...]:
+    """The vocabulary's palette, in OpenCV's channel order.
+
+    Derived rather than transcribed: the overlay and the annotator must agree
+    about what colour a behaviour is, and a second hand-maintained copy of
+    twelve hex values is a guarantee that one day they will not.
+    """
+    from glider.analysis.behavior.vocabulary import DEFAULT_PALETTE
+
+    return tuple(_to_bgr(c) for c in DEFAULT_PALETTE)
+
+
+_PALETTE_BGR: tuple[tuple[int, int, int], ...] = _palette_bgr()
 
 
 def color_for_behavior(name: str, vocab_order: list[str] | None = None) -> tuple[int, int, int]:

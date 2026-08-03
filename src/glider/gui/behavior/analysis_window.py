@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPen
+from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -51,18 +51,36 @@ _BAR_HEIGHT = 46
 _TRAIL_DEFAULT_S = 5.0
 
 
-def behavior_qcolor(name: str) -> QColor:
+def behavior_qcolor(name: str, order: list[str] | None = None) -> QColor:
     """The colour the annotated video would have drawn this behaviour in.
 
     Shared with the overlay so a bout looks the same wherever it is shown;
     blank (unscored) frames read as background rather than a colour.
+
+    ``order`` is the behaviours present, which is what makes the colours
+    reliably *different*. Without it the palette slot comes from a hash of the
+    name, and a hash has no reason to avoid collisions: two behaviours in one
+    session could land on the same colour, and neighbouring ones routinely
+    landed on adjacent hues. Given the session's own label set, the first N
+    palette entries are handed out in order, and N distinct behaviours get N
+    distinct colours.
     """
     if not name:
         return QColor(colors.BORDER)
     from glider.analysis.behavior.classify.overlay import color_for_behavior
 
-    b, g, r = color_for_behavior(name)
+    b, g, r = color_for_behavior(name, order)
     return QColor(r, g, b)
+
+
+def behavior_order(labels) -> list[str]:
+    """The behaviours present, in a stable order.
+
+    Sorted rather than first-appearance: the same cohort scored twice must
+    colour the same behaviour the same way, and first-appearance makes that
+    depend on which animal happened to groom first.
+    """
+    return sorted({label for label in labels if label})
 
 
 class EthogramBar(QWidget):
@@ -82,12 +100,25 @@ class EthogramBar(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._view: SessionView | None = None
+        self._order: list[str] = []
+        self._codes: np.ndarray | None = None
+        self._lane: QPixmap | None = None
         self._frame = 0
         self._selection: tuple[int, int] | None = None
         self._drag_anchor: int | None = None
 
     def set_view(self, view: SessionView | None) -> None:
         self._view = view
+        # Computed once per session rather than per band: the colour a
+        # behaviour gets depends on which behaviours this session contains,
+        # and the per-column majority below needs the labels as integers.
+        self._order = behavior_order(view.labels) if view is not None else []
+        if view is None:
+            self._codes = None
+        else:
+            slot = {name: i + 1 for i, name in enumerate(self._order)}  # 0 = unscored
+            self._codes = np.array([slot.get(label, 0) for label in view.labels], dtype=np.int64)
+        self._lane = None
         self._frame = 0
         self._selection = None
         self.update()
@@ -95,6 +126,24 @@ class EthogramBar(QWidget):
     def set_frame(self, frame: int) -> None:
         self._frame = int(frame)
         self.update()
+
+    def resizeEvent(self, event):
+        # The bands are resolved per pixel column, so a different width is a
+        # different image.
+        self._lane = None
+        super().resizeEvent(event)
+
+    def _lane_pixmap(self) -> QPixmap:
+        """The behaviour bands, drawn once per session and size."""
+        if self._lane is None:
+            self._lane = QPixmap(self.size())
+            self._lane.fill(QColor(colors.BASE))
+            lane_painter = QPainter(self._lane)
+            try:
+                self._paint_lane(lane_painter, self._view.labels, 0.0, float(self.height()))
+            finally:
+                lane_painter.end()
+        return self._lane
 
     def selection(self) -> tuple[int, int] | None:
         return self._selection
@@ -148,15 +197,25 @@ class EthogramBar(QWidget):
         # One lane, because there is one behaviour per frame. Freezing and
         # darting are values of it, not a parallel track: a second lane would
         # be drawing the same frames twice.
-        self._paint_lane(painter, self._view.labels, 0.0, float(self.height()))
+        #
+        # Cached: the bands only change when the session or the width does,
+        # while the playhead moves thirty times a second during playback, and
+        # resolving nine thousand rows into columns on every one of those
+        # frames is a fifth of the frame budget spent redrawing the same image.
+        painter.drawPixmap(0, 0, self._lane_pixmap())
 
         if self._selection is not None:
             start, end = self._selection
             x0, x1 = self._x_of(start), self._x_of(end + 1)
-            painter.fillRect(
-                QRectF(x0, 0, max(1.0, x1 - x0), self.height()),
-                QBrush(colors.qcolor_with_alpha(QColor(colors.ACCENT), 0.28)),
-            )
+            # Shade what is EXCLUDED, not what is chosen. Tinting the selection
+            # blue meant every behaviour inside it was drawn 28% toward the
+            # accent — and since the usual selection is the whole session, that
+            # was every colour on the bar, all of them dragged toward the same
+            # hue. Shading the outside leaves the data at full strength and
+            # says the same thing.
+            scrim = QBrush(colors.qcolor_with_alpha(QColor(colors.BASE), 0.72))
+            painter.fillRect(QRectF(0, 0, max(0.0, x0), self.height()), scrim)
+            painter.fillRect(QRectF(x1, 0, max(0.0, self.width() - x1), self.height()), scrim)
             painter.setPen(QPen(QColor(colors.ACCENT), 2))
             painter.drawLine(QPointF(x0, 0), QPointF(x0, self.height()))
             painter.drawLine(QPointF(x1, 0), QPointF(x1, self.height()))
@@ -166,19 +225,51 @@ class EthogramBar(QWidget):
         painter.drawLine(QPointF(x, 0), QPointF(x, self.height()))
 
     def _paint_lane(self, painter, labels, top: float, height: float) -> None:
-        """One run-length band per label run, across the full width."""
-        if height <= 0 or not labels:
+        """One band per *pixel column*, coloured by what dominates it.
+
+        Not one rect per run, which is the obvious thing and was wrong. A
+        five-minute session holds around nine thousand scored rows and the
+        timeline is at most a couple of thousand pixels wide, so a typical run
+        is a fraction of a pixel: Qt drew each as a sub-pixel rectangle and
+        blended it with its neighbours by coverage. Every colour on the bar was
+        therefore an average of several behaviours — a bright yellow, a green
+        and a blue arriving on screen as one flat olive. No palette can survive
+        that, and it is why the bar looked washed out however distinct the
+        colours themselves were.
+
+        Resolving to whole columns first makes every pixel one behaviour's
+        actual colour. It also means a run shorter than a column is not drawn,
+        which is honest — the bar shows proportions, and a pixel cannot show a
+        three-frame dart without overstating it. The bout stepper is how those
+        are reached.
+        """
+        if height <= 0 or not labels or self._codes is None:
             return
+        width = self.width()
+        span = self._span()
+        if width <= 0 or span == 0:
+            return
+
+        first, _last = self.frame_bounds()
         frames = self._view.frames
-        run_start, run_label = 0, labels[0]
-        for i in range(1, len(labels) + 1):
-            if i < len(labels) and labels[i] == run_label:
-                continue
-            x0 = self._x_of(int(frames[run_start]))
-            x1 = self._x_of(int(frames[i - 1]) + 1)
-            painter.fillRect(QRectF(x0, top, max(1.0, x1 - x0), height), behavior_qcolor(run_label))
-            if i < len(labels):
-                run_start, run_label = i, labels[i]
+        # Which row each column starts at: the columns are equal slices of the
+        # frame axis, and the rows are already sorted by frame.
+        edges = first + np.arange(width + 1, dtype=np.int64) * span // width
+        starts = np.searchsorted(frames, edges, side="left")
+
+        n_codes = len(self._order) + 1  # + the unscored bucket
+        for x in range(width):
+            lo, hi = int(starts[x]), int(starts[x + 1])
+            if hi <= lo:
+                # More pixels than rows: this column falls between two rows, so
+                # it takes the row to its left rather than a gap in the bar.
+                lo, hi = max(0, min(lo, len(frames) - 1)), max(0, min(lo, len(frames) - 1)) + 1
+            counts = np.bincount(self._codes[lo:hi], minlength=n_codes)
+            code = int(counts.argmax())
+            painter.fillRect(
+                QRectF(x, top, 1.0, height),
+                behavior_qcolor(self._order[code - 1] if code else "", self._order),
+            )
 
     # ------------------------------------------------------------------
 
@@ -404,7 +495,12 @@ class KeypointCanvas(QWidget):
             for i, point in enumerate(points):
                 if not np.isfinite(point).all():
                     continue
-                painter.setBrush(QBrush(behavior_qcolor(names[i] if i < len(names) else str(i))))
+                # Keyed on the keypoint list, so seven body parts get seven
+                # different colours rather than whatever a hash of each name
+                # happened to pick.
+                painter.setBrush(
+                    QBrush(behavior_qcolor(names[i] if i < len(names) else str(i), names))
+                )
                 painter.setPen(QPen(QColor(colors.CANVAS), 1))
                 painter.drawEllipse(to_widget(point), 5, 5)
 
@@ -565,7 +661,7 @@ class AnalysisWindow(QMainWindow):
         # Per-session rows for the same window. The cohort is the unit of
         # analysis, and a per-animal breakdown is what gets exported — so it
         # sits beside the shown session rather than replacing it.
-        self._cohort_table = QTableWidget(0, 7)
+        self._cohort_table = QTableWidget(0, 9)
         self._cohort_table.setHorizontalHeaderLabels(
             [
                 "Session",
@@ -574,8 +670,19 @@ class AnalysisWindow(QMainWindow):
                 "Mean (cm/s)",
                 "Freezing (s)",
                 "Darting (s)",
+                # The cut-offs that produced those two columns, per session,
+                # in the unit they were chosen in. A cohort file is pooled in
+                # px/frame and only becomes cm/s through each video's own
+                # scale, so this is the only place the number a methods
+                # section has to quote actually exists.
+                "Freeze < (cm/s)",
+                "Dart > (cm/s)",
                 "Top behavior",
             ]
+        )
+        self._cohort_table.setToolTip(
+            "Freeze/Dart are the thresholds this session was scored with, read "
+            "from its run.json — not thresholds recomputed from the selection."
         )
         self._cohort_table.verticalHeader().setVisible(False)
 
@@ -646,11 +753,89 @@ class AnalysisWindow(QMainWindow):
         select_all = QPushButton("Select whole session")
         select_all.clicked.connect(self._select_all)
         row.addWidget(select_all)
+
+        # Jumping between bouts, which is what reviewing an ethogram actually
+        # consists of. Stepping frames finds a boundary only if you already
+        # know roughly where it is, and on a 45,000-frame session one pixel of
+        # timeline is tens of frames — so the boundaries themselves are the
+        # only sensible thing to move between.
+        row.addWidget(QLabel("Bouts:"))
+        self._bout_filter = QComboBox()
+        self._bout_filter.setToolTip(
+            "Which bouts the [ and ] keys step between. 'Any change' stops at "
+            "every boundary; a behaviour stops only at the starts of that one."
+        )
+        self._bout_filter.setMinimumWidth(140)
+        row.addWidget(self._bout_filter)
+
+        self._prev_bout = QPushButton("◀")
+        self._prev_bout.setToolTip("Previous bout  ( [ )")
+        self._prev_bout.setMaximumWidth(36)
+        self._prev_bout.clicked.connect(lambda: self._step_bout(-1))
+        row.addWidget(self._prev_bout)
+
+        self._next_bout = QPushButton("▶")
+        self._next_bout.setToolTip("Next bout  ( ] )")
+        self._next_bout.setMaximumWidth(36)
+        self._next_bout.clicked.connect(lambda: self._step_bout(+1))
+        row.addWidget(self._next_bout)
+
         row.addStretch(1)
+
+        # What is under the playhead, and how far into it. A frame number on
+        # its own cannot answer either.
+        self._bout_label = QLabel("—")
+        self._bout_label.setMinimumWidth(230)
+        row.addWidget(self._bout_label)
 
         self._clock = QLabel("—")
         row.addWidget(self._clock)
         return row
+
+    def _refresh_bout_filter(self) -> None:
+        """Repopulate the picker for the shown session, keeping the choice."""
+        previous = self._bout_filter.currentData()
+        self._bout_filter.blockSignals(True)
+        self._bout_filter.clear()
+        self._bout_filter.addItem("Any change", None)
+        for name in behavior_order(self._view.labels if self._view else []):
+            self._bout_filter.addItem(name, name)
+        index = self._bout_filter.findData(previous)
+        # A behaviour the new session does not contain falls back to "any"
+        # rather than silently stepping over nothing.
+        self._bout_filter.setCurrentIndex(max(0, index))
+        self._bout_filter.blockSignals(False)
+
+    def _step_bout(self, direction: int) -> None:
+        """Move the playhead to the next/previous bout start."""
+        if self._view is None:
+            return
+        starts = self._view.bout_starts(self._bout_filter.currentData())
+        if starts.size == 0:
+            return
+        first, last = self._bar.frame_bounds()
+        starts = starts[(starts >= first) & (starts <= last)]
+        if starts.size == 0:
+            return
+        if direction > 0:
+            later = starts[starts > self._frame]
+            target = int(later[0]) if later.size else int(starts[-1])
+        else:
+            earlier = starts[starts < self._frame]
+            target = int(earlier[-1]) if earlier.size else int(starts[0])
+        self._set_frame(target)
+
+    def _describe_bout(self) -> str:
+        """The bout under the playhead, as text."""
+        bout = self._view.bout_at(self._frame) if self._view else None
+        if bout is None:
+            return "—"
+        start, end, label = bout
+        fps = self._view.fps or 1.0
+        return (
+            f"{label or 'unscored'} · {(end - start + 1) / fps:.2f} s · "
+            f"{(self._frame - start) / fps:.2f} s in"
+        )
 
     # ------------------------------------------------------------------
 
@@ -683,6 +868,7 @@ class AnalysisWindow(QMainWindow):
         self._path_label.setText(str(ethogram_csv))
         self._bar.set_view(view)
         self._canvas.set_view(view)
+        self._refresh_bout_filter()
         self._apply_trail()
         self._set_frame(self._bar.frame_bounds()[0])
         self._pick_poses.setVisible(view.xy is None)
@@ -717,6 +903,10 @@ class AnalysisWindow(QMainWindow):
         one pixel is tens of frames, so a bout boundary cannot be found with
         the mouse at all. Left/Right step exactly one frame; shift steps ten
         and ctrl a second, for covering ground without losing precision.
+
+        ``[`` and ``]`` jump straight to the previous/next bout, which is the
+        movement review actually consists of: the frames worth stopping on are
+        the boundaries, and stepping to them beats hunting for them.
         """
         if self._view is None:
             super().keyPressEvent(event)
@@ -729,12 +919,19 @@ class AnalysisWindow(QMainWindow):
             Qt.Key.Key_Home,
             Qt.Key.Key_End,
             Qt.Key.Key_Space,
+            Qt.Key.Key_BracketLeft,
+            Qt.Key.Key_BracketRight,
         ):
             super().keyPressEvent(event)
             return
 
         if key == Qt.Key.Key_Space:
             self._toggle_play()
+            event.accept()
+            return
+
+        if key in (Qt.Key.Key_BracketLeft, Qt.Key.Key_BracketRight):
+            self._step_bout(1 if key == Qt.Key.Key_BracketRight else -1)
             event.accept()
             return
 
@@ -869,6 +1066,7 @@ class AnalysisWindow(QMainWindow):
         self._frame = int(frame)
         self._bar.set_frame(self._frame)
         self._canvas.set_frame(self._frame)
+        self._bout_label.setText(self._describe_bout())
         if self._view and self._view.fps:
             seconds = self._frame / self._view.fps
             self._clock.setText(f"{int(seconds) // 60:d}:{seconds % 60:05.2f}")
@@ -1070,6 +1268,13 @@ class AnalysisWindow(QMainWindow):
                     "peak_cm_s": stats.peak_speed_cm_s,
                     "freezing_s": total("freezing"),
                     "darting_s": total("darting"),
+                    # Exported alongside the durations they explain: a table of
+                    # freezing seconds is not interpretable without the line
+                    # that was drawn to produce it.
+                    "freeze_threshold_cm_s": view.applied_freeze_cm_s,
+                    "dart_threshold_cm_s": view.applied_dart_cm_s,
+                    "freeze_threshold_px_frame": view.applied_freeze_px,
+                    "dart_threshold_px_frame": view.applied_dart_px,
                     "top_behavior": top,
                     **{
                         f"{state}_s": float(total)
@@ -1102,6 +1307,20 @@ class AnalysisWindow(QMainWindow):
             out[f"zone_{zone}_latency_s"] = float(row["latency_s"])
         return out
 
+    @staticmethod
+    def _threshold_text(row: dict, side: str) -> str:
+        """A cut-off in cm/s, falling back to px/frame, or an em dash.
+
+        An uncalibrated run has real thresholds in pixels; showing nothing
+        would claim it had none, and showing a converted number would invent
+        the scale it never had.
+        """
+        real = row.get(f"{side}_threshold_cm_s")
+        if real is not None:
+            return f"{real:.2f}"
+        pixels = row.get(f"{side}_threshold_px_frame")
+        return "—" if pixels is None else f"{pixels:.3f} px/f"
+
     def _fill_cohort(self, start: int, end: int) -> None:
         rows = self.cohort_rows(start, end)
         self._cohort_table.setRowCount(len(rows))
@@ -1113,6 +1332,8 @@ class AnalysisWindow(QMainWindow):
                 "—" if row["mean_cm_s"] is None else f"{row['mean_cm_s']:.2f}",
                 f"{row['freezing_s']:.2f}",
                 f"{row['darting_s']:.2f}",
+                self._threshold_text(row, "freeze"),
+                self._threshold_text(row, "dart"),
                 row["top_behavior"] or "—",
             ]
             for c, value in enumerate(values):
@@ -1192,4 +1413,10 @@ class AnalysisWindow(QMainWindow):
         super().closeEvent(event)
 
 
-__all__ = ["AnalysisWindow", "EthogramBar", "KeypointCanvas", "behavior_qcolor"]
+__all__ = [
+    "AnalysisWindow",
+    "EthogramBar",
+    "KeypointCanvas",
+    "behavior_order",
+    "behavior_qcolor",
+]
