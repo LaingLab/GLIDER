@@ -51,6 +51,21 @@ _SEARCH_LEVELS = 3
 #: shift everything after them.
 _ALIGNMENT_SLACK = 5
 
+_MM_PER_CM = 10.0
+
+
+def _finite(value) -> float | None:
+    """A real number, or None for a missing/disabled/unusable one.
+
+    A threshold for a behaviour a run did not score is recorded as an infinity
+    (older runs) or as null (newer ones); both mean the same thing here.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
+
 
 def _numeric_column(frame: pd.DataFrame, name: str, length: int) -> np.ndarray | None:
     """A float column from an ethogram, or None if it isn't there.
@@ -223,6 +238,18 @@ class SessionView:
     # and velocity are computed from.
     speed_px: np.ndarray | None = None
     speed_cm_s: np.ndarray | None = None
+    # The freeze/dart cut-offs the apply run actually used, recovered from the
+    # run.json it wrote. Deliberately not the same thing as
+    # ``SegmentStats.freeze_threshold``, which is recomputed from whatever
+    # window is on screen and is only ever shown for comparison: these are the
+    # numbers that produced the labels, and they are the ones a methods section
+    # has to quote. In px/frame as applied, plus cm/s where the run knew its
+    # own scale — a cohort file is written in whichever unit it was pooled in,
+    # so the conversion only exists per video.
+    applied_freeze_px: float | None = None
+    applied_dart_px: float | None = None
+    applied_freeze_cm_s: float | None = None
+    applied_dart_cm_s: float | None = None
 
     # ------------------------------------------------------------------
     # loading
@@ -271,8 +298,33 @@ class SessionView:
         )
         view._load_poses(ethogram_csv, pose_csv)
         view._load_scale(calibration_master, video, ethogram_csv)
+        view._load_applied_thresholds(ethogram_csv)
         view._load_video(ethogram_csv, video)
         return view
+
+    def _load_applied_thresholds(self, ethogram_csv: Path) -> None:
+        """Recover the cut-offs this run scored with, from its manifest.
+
+        Nothing else records them. The ethogram carries the labels and the
+        speed, but not the line that was drawn between them — so without this
+        the only honest answer to "what counted as freezing here" is to go and
+        read a JSON file by hand.
+        """
+        from glider.analysis.behavior.classify import read_run_manifest
+
+        manifest = read_run_manifest(ethogram_csv.parent) or {}
+        self.applied_freeze_px = _finite(manifest.get("freeze_threshold"))
+        self.applied_dart_px = _finite(manifest.get("dart_threshold"))
+        # Recorded by the run that applied them; falls back to this session's
+        # own scale, which is the same arithmetic the run did.
+        factor = _finite(manifest.get("cm_s_per_px_frame"))
+        if factor is None and self.px_per_mm and self.fps:
+            factor = self.fps / self.px_per_mm / _MM_PER_CM
+        if factor:
+            if self.applied_freeze_px is not None:
+                self.applied_freeze_cm_s = self.applied_freeze_px * factor
+            if self.applied_dart_px is not None:
+                self.applied_dart_cm_s = self.applied_dart_px * factor
 
     def _load_video(self, ethogram_csv: Path, video: Path | str | None) -> None:
         """Find a video to scrub alongside the ethogram, and measure it."""
@@ -401,6 +453,52 @@ class SessionView:
             return ""
         idx = int(np.searchsorted(self.frames, frame, side="right")) - 1
         return self.labels[idx] if 0 <= idx < self.n_rows else ""
+
+    def bout_starts(self, behavior: str | None = None) -> np.ndarray:
+        """Frames at which a bout begins.
+
+        Scrubbing a 45,000-frame session a frame at a time to find where a
+        behaviour started is not review, it is searching — and dragging the
+        timeline cannot help, because one pixel there is tens of frames. These
+        are the only frames worth landing on: the first frame of every run.
+
+        With ``behavior``, only that behaviour's runs; without, every change of
+        label, including into and out of unscored stretches.
+        """
+        if self.n_rows == 0:
+            return np.empty(0, dtype=int)
+        labels = np.asarray(self.labels, dtype=object)
+        if behavior is None:
+            changed = labels[1:] != labels[:-1]
+        else:
+            is_it = labels == behavior
+            changed = is_it[1:] & ~is_it[:-1]
+        starts = np.flatnonzero(changed) + 1
+        # Row zero opens a run too, and for a windowed session it is the only
+        # evidence of what the animal was doing when the window opened.
+        if behavior is None or labels[0] == behavior:
+            starts = np.concatenate([[0], starts])
+        return self.frames[starts].astype(int)
+
+    def bout_at(self, frame: int) -> tuple[int, int, str] | None:
+        """``(first_frame, last_frame, behavior)`` of the run covering *frame*.
+
+        None past either end of the ethogram. What it is for: saying how far
+        through a bout the playhead is, which a frame number alone cannot.
+        """
+        if self.n_rows == 0:
+            return None
+        idx = int(np.searchsorted(self.frames, frame, side="right")) - 1
+        if not 0 <= idx < self.n_rows:
+            return None
+        label = self.labels[idx]
+        start = idx
+        while start > 0 and self.labels[start - 1] == label:
+            start -= 1
+        end = idx
+        while end + 1 < self.n_rows and self.labels[end + 1] == label:
+            end += 1
+        return int(self.frames[start]), int(self.frames[end]), label
 
     def trail(self, frame: int, seconds: float = 5.0) -> np.ndarray | None:
         """Centroid positions over the *seconds* leading up to *frame*."""

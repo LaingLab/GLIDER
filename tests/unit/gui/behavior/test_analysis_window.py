@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("PyQt6")
 
 from PyQt6.QtCore import QPointF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QMouseEvent  # noqa: E402
+from PyQt6.QtGui import QColor, QKeyEvent, QMouseEvent  # noqa: E402
 
 from glider.analysis.behavior.session_view import SessionView  # noqa: E402
 from glider.gui.behavior.analysis_window import (  # noqa: E402
@@ -105,14 +105,35 @@ class TestEthogramBar:
         assert bar.selection() == (50, 200)
         assert seen == [(50, 200)]
 
-    def test_the_selection_tints_the_bands_rather_than_hiding_them(self, qtbot, tmp_path):
-        """`colors.with_alpha` is a QSS string; QPainter reads it as opaque black."""
+    def test_the_selection_shades_what_it_excludes_and_nothing_else(self, qtbot, tmp_path):
+        """Two failures at once, and the scrim has to avoid both.
+
+        The old form tinted the *inside* of the selection, so the usual
+        whole-session selection dragged every behaviour on the bar toward one
+        hue — no palette could look distinct through it. And the scrim must
+        still be drawn with ``qcolor_with_alpha``: ``colors.with_alpha``
+        returns a QSS string, which QPainter reads as opaque black and which
+        blanked the bar outright.
+        """
         bar = self._bar(qtbot, tmp_path)
-        before = bar.grab().toImage().pixelColor(150, 23)
-        bar.set_selection(100, 199)  # 1 px per frame, so x=150 is inside
-        after = bar.grab().toImage().pixelColor(150, 23)
-        assert after != QColor(0, 0, 0)
-        assert after != before  # the tint is actually visible
+        inside_before = bar.grab().toImage().pixelColor(150, 23)
+        outside_before = bar.grab().toImage().pixelColor(250, 23)
+        bar.set_selection(100, 199)  # 1 px per frame, so x=150 is in, x=250 out
+        image = bar.grab().toImage()
+        assert image.pixelColor(150, 23) == inside_before  # data at full strength
+        assert image.pixelColor(250, 23) != outside_before  # excluded, and visibly so
+        assert image.pixelColor(250, 23) != QColor(0, 0, 0)
+
+    def test_selecting_everything_changes_nothing_about_the_colours(self, qtbot, tmp_path):
+        bar = self._bar(qtbot, tmp_path)
+        before = bar.grab().toImage()
+        bar.set_selection(0, 299)
+        after = bar.grab().toImage()
+        assert [after.pixelColor(x, 23) == before.pixelColor(x, 23) for x in (20, 150, 280)] == [
+            True,
+            True,
+            True,
+        ]
 
     def test_scrubbing_does_not_clear_the_selection(self, qtbot, tmp_path):
         """A window survives looking around inside it."""
@@ -850,3 +871,176 @@ class TestSwitchingSessionsIsCheap:
         win.cohort_rows(0, 299)
         win.load_many(self._cohort(tmp_path / "second", n=2))
         assert len(win.cohort_rows(0, 299)) == 2
+
+
+class TestColoursAreActuallyDistinct:
+    """Two behaviours in one session must never be drawn the same.
+
+    The palette slot used to come from a hash of the name, which has no reason
+    to avoid collisions and routinely put neighbouring behaviours on adjacent
+    hues. Given the session's own label set, the first N palette entries are
+    handed out in order instead.
+    """
+
+    def test_every_behaviour_in_a_session_gets_its_own_colour(self):
+        from glider.gui.behavior.analysis_window import behavior_order, behavior_qcolor
+
+        names = ["darting", "dig", "freezing", "grooming", "rearing", "sniffing"]
+        order = behavior_order(names)
+        colours = [behavior_qcolor(n, order).name() for n in order]
+        assert len(set(colours)) == len(names)
+
+    def test_the_hash_fallback_could_collide_and_the_order_fixes_it(self):
+        """Not hypothetical: anagrams hash identically."""
+        from glider.gui.behavior.analysis_window import behavior_qcolor
+
+        assert behavior_qcolor("stop").name() == behavior_qcolor("post").name()
+        order = ["post", "stop"]
+        assert behavior_qcolor("stop", order).name() != behavior_qcolor("post", order).name()
+
+    def test_the_order_does_not_depend_on_which_animal_came_first(self):
+        from glider.gui.behavior.analysis_window import behavior_order
+
+        assert behavior_order(["b", "a", "b"]) == behavior_order(["a", "b", "a"])
+
+    def test_unscored_frames_are_not_given_a_behaviour_colour(self):
+        from glider.gui.behavior.analysis_window import behavior_qcolor
+        from glider.gui.styles import colors
+
+        assert behavior_qcolor("", ["a"]).name() == QColor(colors.BORDER).name()
+
+    def test_the_palette_has_no_duplicates(self):
+        from glider.analysis.behavior.vocabulary import DEFAULT_PALETTE
+
+        assert len(set(DEFAULT_PALETTE)) == len(DEFAULT_PALETTE)
+
+    def test_the_overlay_and_the_vocabulary_cannot_drift(self):
+        """One palette, converted — not two lists kept in step by hand."""
+        from glider.analysis.behavior.classify.overlay import _PALETTE_BGR
+        from glider.analysis.behavior.vocabulary import DEFAULT_PALETTE
+
+        assert len(_PALETTE_BGR) == len(DEFAULT_PALETTE)
+        b, g, r = _PALETTE_BGR[0]
+        assert f"#{r:02x}{g:02x}{b:02x}" == DEFAULT_PALETTE[0]
+
+
+class TestSteppingBetweenBoutsInTheWindow:
+    """`[` and `]` move to bout boundaries, which is what review consists of."""
+
+    def _window(self, qtbot, tmp_path):
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load(_session(tmp_path / "t1"))
+        return window
+
+    def test_the_picker_lists_the_session_s_behaviours(self, qtbot, tmp_path):
+        window = self._window(qtbot, tmp_path)
+        items = [window._bout_filter.itemText(i) for i in range(window._bout_filter.count())]
+        assert items == ["Any change", "groom", "locomote"]
+
+    def test_stepping_forward_lands_on_the_next_boundary(self, qtbot, tmp_path):
+        window = self._window(qtbot, tmp_path)
+        window._set_frame(40)
+        window._step_bout(+1)
+        assert window._frame == 100  # groom -> locomote
+
+    def test_stepping_back_lands_on_the_boundary_behind(self, qtbot, tmp_path):
+        window = self._window(qtbot, tmp_path)
+        window._set_frame(250)
+        window._step_bout(-1)
+        assert window._frame == 200
+
+    def test_a_chosen_behaviour_skips_the_others(self, qtbot, tmp_path):
+        window = self._window(qtbot, tmp_path)
+        window._bout_filter.setCurrentIndex(window._bout_filter.findData("groom"))
+        window._set_frame(50)
+        window._step_bout(+1)
+        assert window._frame == 200  # the second groom bout, not the locomote start
+
+    def test_the_last_bout_holds_rather_than_wrapping(self, qtbot, tmp_path):
+        """Wrapping to the top of the session while reviewing the end is a trap."""
+        window = self._window(qtbot, tmp_path)
+        window._set_frame(280)
+        window._step_bout(+1)
+        assert window._frame == 200
+
+    def test_the_readout_names_the_bout_and_how_far_into_it(self, qtbot, tmp_path):
+        window = self._window(qtbot, tmp_path)
+        window._set_frame(115)
+        text = window._bout_label.text()
+        assert "locomote" in text
+        assert "3.33 s" in text  # 100 frames at 30 fps
+        assert "0.50 s in" in text  # 15 frames past the start
+
+    def test_the_brackets_are_wired_to_the_stepper(self, qtbot, tmp_path):
+        window = self._window(qtbot, tmp_path)
+        window._set_frame(40)
+        window.keyPressEvent(
+            QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_BracketRight, Qt.KeyboardModifier(0))
+        )
+        assert window._frame == 100
+
+
+class TestTheCohortTabShowsTheAppliedThresholds:
+    """The cut-offs that produced the freezing and darting columns beside them.
+
+    A cohort file is pooled in px/frame and only becomes cm/s through each
+    video's own scale, so this is per session — and it is the only place the
+    number a methods section has to quote actually appears.
+    """
+
+    def _session_with_run(self, tmp_path, name, manifest):
+        import json
+
+        path = _session(tmp_path / name)
+        (path.parent / "run.json").write_text(json.dumps({"schema_version": 1, **manifest}))
+        return path
+
+    def test_the_cut_offs_appear_in_the_rows(self, qtbot, tmp_path):
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load(
+            self._session_with_run(
+                tmp_path,
+                "t1",
+                {"freeze_threshold": 0.25, "dart_threshold": 12.0, "cm_s_per_px_frame": 2.0},
+            )
+        )
+        row = window.cohort_rows(0, 299)[0]
+        assert row["freeze_threshold_cm_s"] == pytest.approx(0.5)
+        assert row["dart_threshold_cm_s"] == pytest.approx(24.0)
+
+    def test_the_table_shows_them_in_cm_per_second(self, qtbot, tmp_path):
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load(
+            self._session_with_run(
+                tmp_path,
+                "t1",
+                {"freeze_threshold": 0.25, "dart_threshold": 12.0, "cm_s_per_px_frame": 2.0},
+            )
+        )
+        window._select_all()
+        headers = [
+            window._cohort_table.horizontalHeaderItem(c).text()
+            for c in range(window._cohort_table.columnCount())
+        ]
+        assert "Freeze < (cm/s)" in headers
+        assert window._cohort_table.item(0, headers.index("Freeze < (cm/s)")).text() == "0.50"
+
+    def test_an_uncalibrated_run_shows_pixels_rather_than_nothing(self, qtbot, tmp_path):
+        """It had real thresholds; it just never had a scale."""
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load(
+            self._session_with_run(
+                tmp_path, "t1", {"freeze_threshold": 0.25, "dart_threshold": 12.0}
+            )
+        )
+        assert window._threshold_text(window.cohort_rows(0, 299)[0], "freeze") == "0.250 px/f"
+
+    def test_a_run_with_no_manifest_shows_a_dash(self, qtbot, tmp_path):
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load(_session(tmp_path / "t1"))
+        assert window._threshold_text(window.cohort_rows(0, 299)[0], "dart") == "—"

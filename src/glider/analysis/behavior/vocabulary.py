@@ -44,21 +44,40 @@ class VocabularyError(ValueError):
     """Raised when a vocabulary violates an invariant (duplicate hotkey, etc.)."""
 
 
-# Twelve-hue categorical palette. Same set used elsewhere in the project
-# (the comparison docs + the deleted PyQt6 UI). Light-mode friendly.
+# Twelve-hue categorical palette, ordered so that the first colours taken are
+# the furthest apart.
+#
+# The previous set was twelve Tailwind hues, which had three near-duplicate
+# families in it: amber/yellow/orange, emerald/teal/green, violet/rose/pink.
+# On a timeline band a few pixels wide those read as one colour — a session
+# scored `grooming` (#b45309) and `freezing` (#a16207) drew two behaviours in
+# what was visibly the same brown.
+#
+# Hues are spread around the wheel rather than picked for their names, and the
+# order matters as much as the membership because a session is dealt the first
+# N: the first six sit 60 degrees apart, and the first four 90, so the common
+# case of four to six behaviours is the best-separated one. Values are mid-toned
+# on purpose, since these are drawn both on the dark review timeline and over
+# video.
+#
+# Okabe-Ito was the obvious alternative and is better under colour blindness,
+# but it puts two blues and two oranges inside its first six, which is the
+# failure being fixed. Where hues here do come close, value carries the
+# distinction instead: the dark orange against the light yellow, and the brown
+# against both.
 DEFAULT_PALETTE: tuple[str, ...] = (
-    "#1d4ed8",  # blue
-    "#047857",  # emerald
-    "#b45309",  # amber
-    "#7c3aed",  # violet
-    "#be185d",  # rose
-    "#0f766e",  # teal
-    "#a16207",  # yellow
-    "#c2410c",  # orange
-    "#4338ca",  # indigo
-    "#15803d",  # green
-    "#9d174d",  # pink
-    "#b91c1c",  # red
+    "#4a8fe0",  # blue        hue 212
+    "#d9701f",  # orange      hue  32, dark
+    "#3fbf6a",  # green       hue 122
+    "#cc55c0",  # magenta     hue 302
+    "#ecd23c",  # yellow      hue  62, light — close to the orange in hue, far in value
+    "#33bcd4",  # cyan        hue 182
+    "#9b5fd6",  # violet      hue 272
+    "#e05490",  # pink        hue 332
+    "#8fc73e",  # leaf green  hue  92
+    "#e8493c",  # red         hue   2
+    "#7a5c3e",  # brown       hue  32, darker still
+    "#a8b0ba",  # slate       neutral
 )
 
 

@@ -100,9 +100,21 @@ def tracking_frame(view, zones=None, *, point: str = CENTROID) -> pd.DataFrame:
     repair in the session review window exists for exactly that.
     """
     track = position_track(view, point)
-    frames = np.asarray(view.frames)
-    n = min(len(frames), len(track))
-    frames, track = frames[:n], track[:n]
+    frames = np.asarray(view.frames, dtype=int)
+    labels = view.labels
+
+    # Look the position up BY frame number. The track has one row per video
+    # frame; the ethogram has one row per scored frame, which is neither the
+    # same count nor the same origin — a run over minutes 2–7 starts at frame
+    # 3600, and a cadence of 3 emits every third frame. Zipping the two by
+    # position pairs each label with the wrong place entirely: the whole
+    # session slides by its own start frame, so a heatmap of "minutes 2–7"
+    # was really minutes 0–5, and every zone number was drawn from it.
+    row = np.arange(len(frames))
+    keep = (frames >= 0) & (frames < len(track))
+    frames, row = frames[keep], row[keep]
+    track = track[frames]
+    n = len(frames)
 
     data = {
         "object_id": 0,
@@ -110,7 +122,7 @@ def tracking_frame(view, zones=None, *, point: str = CENTROID) -> pd.DataFrame:
         "flow_elapsed_ms": frames / view.fps * 1000.0 if view.fps else np.zeros(n),
         "center_x": track[:, 0],
         "center_y": track[:, 1],
-        "behavioral_state": [view.labels[i] if i < len(view.labels) else "" for i in range(n)],
+        "behavioral_state": [labels[i] if i < len(labels) else "" for i in row],
     }
     data["zone_ids"] = _zone_ids(track, zones, view.resolution)
     return pd.DataFrame(data)

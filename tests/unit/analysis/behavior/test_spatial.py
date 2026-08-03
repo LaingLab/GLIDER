@@ -253,3 +253,82 @@ class TestVectorisedMembershipMatchesTheScalarForm:
 
         zone = Zone(id="d", name="d", shape=ZoneShape.RECTANGLE, vertices=[])
         assert not _zone_mask(zone, np.array([0.5]), np.array([0.5])).any()
+
+
+class TestTheEthogramNamesTheFrameNotTheRow:
+    """Positions are looked up by frame number, never by row position.
+
+    The pose track has one row per video frame; the ethogram has one row per
+    *scored* frame, which is neither the same count nor the same origin. A run
+    over minutes 2–7 starts at frame 3600, and a cadence of 3 emits every third
+    frame. Zipping the two by position paired every label with the wrong place:
+    a heatmap of minutes 2–7 was really minutes 0–5, and every zone number came
+    out of it.
+    """
+
+    def _view(self, tmp_path, *, first, count, stride=1, n_pose=None, x_origin=0.0):
+        """A session whose ethogram covers part of a longer pose track.
+
+        ``x_origin`` shifts the track so the scored window lands inside the
+        arena; without it a frame number doubles as an x far outside 640 and
+        the occupancy histogram discards every point.
+        """
+        from glider.vision.pose.core import PoseData
+        from glider.vision.pose.dlc import to_dlc_csv
+
+        folder = tmp_path / "v"
+        folder.mkdir(parents=True, exist_ok=True)
+        frames = list(range(first, first + count * stride, stride))
+        n_pose = n_pose if n_pose is not None else frames[-1] + 1
+        pd.DataFrame({"frame": frames, "behavior": [f"b{f}" for f in frames]}).to_csv(
+            folder / "ethogram_raw.csv", index=False
+        )
+        # x == the frame number, so a misread position is unmistakable.
+        xy = np.zeros((n_pose, len(NAMES), 2))
+        xy[:, :, 0] = (np.arange(n_pose, dtype=float) + x_origin)[:, None]
+        xy[:, :, 1] = 100.0
+        to_dlc_csv(
+            PoseData(
+                xy=xy,
+                confidence=np.ones((n_pose, len(NAMES))),
+                keypoint_names=NAMES,
+                fps=30.0,
+                metadata={"resolution": (640, 480)},
+            ),
+            folder / "vDLC_exp-7.csv",
+        )
+        return SessionView.load(folder / "ethogram_raw.csv")
+
+    def test_a_windowed_run_reads_its_own_window(self, tmp_path):
+        view = self._view(tmp_path, first=3600, count=100)
+        frame = tracking_frame(view, None)
+        assert frame["frame"].iloc[0] == 3600
+        assert frame["center_x"].iloc[0] == pytest.approx(3600.0)
+        assert frame["center_x"].iloc[-1] == pytest.approx(3699.0)
+
+    def test_the_label_still_belongs_to_the_position(self, tmp_path):
+        view = self._view(tmp_path, first=3600, count=10)
+        frame = tracking_frame(view, None)
+        assert frame["behavioral_state"].iloc[0] == "b3600"
+        assert frame["behavioral_state"].iloc[-1] == "b3609"
+
+    def test_a_sparse_cadence_lands_on_the_frames_it_scored(self, tmp_path):
+        """predict_every=3 emits every third frame, not the first third."""
+        view = self._view(tmp_path, first=0, count=50, stride=3)
+        frame = tracking_frame(view, None)
+        assert frame["center_x"].tolist() == pytest.approx([float(f) for f in range(0, 150, 3)])
+
+    def test_a_frame_past_the_end_of_the_track_is_dropped(self, tmp_path):
+        """Poses shorter than the ethogram must not wrap or raise."""
+        view = self._view(tmp_path, first=0, count=100, n_pose=60)
+        frame = tracking_frame(view, None)
+        assert len(frame) == 60
+        assert frame["frame"].iloc[-1] == 59
+
+    def test_the_heatmap_bins_the_window_that_was_asked_for(self, tmp_path):
+        # x runs 100..199 over the scored frames, so reading the track from
+        # row zero instead puts every point at a negative x and the histogram
+        # comes back empty.
+        view = self._view(tmp_path, first=3600, count=100, x_origin=100.0 - 3600)
+        grid, _x, _y = occupancy_grid(view, bins=8, start_frame=3600, end_frame=3649)
+        assert grid.sum() == 50
