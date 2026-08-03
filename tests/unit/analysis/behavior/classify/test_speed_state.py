@@ -163,3 +163,102 @@ class TestDropoutAtTheStart:
         causal = CausalSpeed()
         speeds = [causal.push(f) for f in frames]
         assert not np.isnan(speeds[-1])
+
+
+class TestOfflineLabellingKeepsRunsWhole:
+    """The online detector reports a run of n frames as n - min + 1.
+
+    Unavoidable live — you cannot know a freeze began until it has lasted a
+    second — and wrong for a recording, where every frame is known before
+    anything is written. On a real 30-animal cohort it lost 119% of the
+    freezing time: 470 s reported against 1031 s actually below threshold.
+    """
+
+    FT, DT = 1.0, 10.0
+
+    def _trace(self, kind, n, pad=5):
+        value = {"freeze": 0.1, "dart": 20.0}[kind]
+        return [5.0] * pad + [value] * n + [5.0] * pad
+
+    def _online(self, speeds, fmin=30, dmin=3):
+        from glider.analysis.behavior.classify.speed_state import FreezeDartDetector
+
+        detector = FreezeDartDetector(
+            self.FT, self.DT, freeze_min_frames=fmin, dart_min_frames=dmin
+        )
+        return [detector.push(s) for s in speeds]
+
+    def _offline(self, speeds, **kw):
+        from glider.analysis.behavior.classify.speed_state import speed_axis_offline
+
+        return speed_axis_offline(speeds, self.FT, self.DT, **kw)
+
+    def test_a_qualifying_freeze_is_reported_in_full(self):
+        labels = self._offline(self._trace("freeze", 45))
+        assert labels.count("freezing") == 45
+
+    def test_the_online_detector_reports_the_same_run_short(self):
+        """Pins the discrepancy this function exists to remove."""
+        speeds = self._trace("freeze", 45)
+        assert self._online(speeds).count("freezing") == 45 - 30 + 1
+
+    def test_a_run_below_the_minimum_is_still_excluded(self):
+        """The minimum is a filter on which runs count, not a haircut."""
+        assert self._offline(self._trace("freeze", 29)).count("freezing") == 0
+
+    def test_exactly_the_minimum_qualifies_whole(self):
+        assert self._offline(self._trace("freeze", 30)).count("freezing") == 30
+
+    def test_darts_behave_the_same_way(self):
+        assert self._offline(self._trace("dart", 3)).count("darting") == 3
+        assert self._offline(self._trace("dart", 2)).count("darting") == 0
+
+    def test_labels_land_on_the_frames_that_qualified(self):
+        labels = self._offline(self._trace("freeze", 40))
+        assert labels[4] == ""
+        assert labels[5] == "freezing"  # the run's first frame, not its 30th
+        assert labels[44] == "freezing"
+        assert labels[45] == ""
+
+    def test_a_dropout_breaks_a_run(self):
+        speeds = [0.1] * 20 + [float("nan")] + [0.1] * 20
+        # Neither half reaches 30 frames on its own.
+        assert self._offline(speeds).count("freezing") == 0
+
+    def test_a_dropout_does_not_end_the_session(self):
+        speeds = [0.1] * 20 + [float("nan")] + [0.1] * 40
+        assert self._offline(speeds).count("freezing") == 40
+
+    def test_freezing_and_darting_cannot_both_hold(self):
+        labels = self._offline(self._trace("freeze", 40) + self._trace("dart", 5))
+        assert set(labels) <= {"", "freezing", "darting"}
+
+    def test_dart_bursts_are_not_merged_by_default(self):
+        """Merging changes what counts as one dart — a scoring decision."""
+        speeds = [20.0] * 4 + [5.0] * 6 + [20.0] * 4
+        labels = self._offline(speeds)
+        assert labels[4:10] == [""] * 6
+
+    def test_merging_joins_bursts_within_the_gap(self):
+        speeds = [20.0] * 4 + [5.0] * 6 + [20.0] * 4
+        labels = self._offline(speeds, dart_merge_gap=24)
+        assert labels.count("darting") == 14  # one dart, gap included
+
+    def test_merging_leaves_distant_bursts_apart(self):
+        speeds = [20.0] * 4 + [5.0] * 30 + [20.0] * 4
+        labels = self._offline(speeds, dart_merge_gap=24)
+        assert labels.count("darting") == 8
+
+    def test_an_empty_trace_is_empty(self):
+        assert self._offline([]) == []
+
+    def test_both_paths_agree_on_which_runs_qualify(self):
+        """Only the durations differ; a bout either happened or it did not."""
+        import numpy as np
+
+        rng = np.random.default_rng(0)
+        speeds = rng.choice([0.1, 5.0, 20.0], size=2000, p=[0.3, 0.5, 0.2]).tolist()
+        online = self._online(speeds)
+        offline = self._offline(speeds)
+        for state in ("freezing", "darting"):
+            assert (state in online) == (state in offline)

@@ -1,4 +1,5 @@
 import csv
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -140,3 +141,64 @@ def test_classify_missing_ethogram_with_producer_error_raises(tmp_path, monkeypa
             keypoint_names=["nose", "tail"],
             output_dir=tmp_path / "out",
         )
+
+
+class TestTheSpeedAxisIsExported:
+    """Freezing and darting lived only in ethogram_raw.csv, so anyone wanting
+    time-spent-freezing had to parse the per-frame file themselves."""
+
+    def _run(self, tmp_path, monkeypatch, speed_rows):
+        import glider.analysis.behavior.classify as mod
+
+        class _Pipeline(_FakePipeline):
+            def run(self):
+                path = Path(self.config.ethogram_csv)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("w", newline="") as f:
+                    w = csv.writer(f)
+                    w.writerow(["frame", "behavior", "speed", "speed_px_frame", "speed_cm_s"])
+                    for i, speed in enumerate(speed_rows):
+                        w.writerow([i, "groom", speed, "1.0", ""])
+
+        monkeypatch.setattr(mod, "LiveInferencePipeline", _Pipeline)
+        monkeypatch.setattr(mod, "_video_fps", lambda _v: 30.0)
+        out = tmp_path / "out"
+        mod.classify(
+            video="clip.mp4",
+            model_path="m.pkl",
+            yolo_path="y.pt",
+            keypoint_names=["nose", "tail"],
+            output_dir=out,
+            predict_every=1,
+        )
+        return out
+
+    def test_speed_files_are_written(self, tmp_path, monkeypatch):
+        out = self._run(tmp_path, monkeypatch, [""] * 10 + ["freezing"] * 30 + [""] * 10)
+        assert (out / "speed_bouts.csv").exists()
+        assert (out / "speed_stats.csv").exists()
+
+    def test_a_freezing_bout_is_reported_in_seconds(self, tmp_path, monkeypatch):
+        out = self._run(tmp_path, monkeypatch, [""] * 10 + ["freezing"] * 30 + [""] * 10)
+        stats = pd.read_csv(out / "speed_stats.csv").set_index("state")
+        assert stats.loc["freezing", "n_bouts"] == 1
+        assert stats.loc["freezing", "total_s"] == pytest.approx(1.0)  # 30 frames @ 30 fps
+
+    def test_not_freezing_is_not_a_state(self, tmp_path, monkeypatch):
+        out = self._run(tmp_path, monkeypatch, [""] * 10 + ["darting"] * 5 + [""] * 10)
+        stats = pd.read_csv(out / "speed_stats.csv", keep_default_na=False)
+        assert set(stats["state"]) == {"darting"}
+
+    def test_the_posture_tables_are_untouched_by_it(self, tmp_path, monkeypatch):
+        """The two axes describe the same frames; mixing them would push the
+        postural fractions past the session."""
+        out = self._run(tmp_path, monkeypatch, [""] * 10 + ["freezing"] * 30 + [""] * 10)
+        stats = pd.read_csv(out / "speed_stats.csv", keep_default_na=False)
+        posture = pd.read_csv(out / "stats.csv", keep_default_na=False)
+        assert set(posture["state"]) == {"groom"}
+        assert posture["fraction"].sum() == pytest.approx(1.0)
+        assert stats["fraction"].sum() < 1.0
+
+    def test_a_run_without_a_speed_axis_writes_no_speed_files(self, tmp_path, monkeypatch):
+        out = self._run(tmp_path, monkeypatch, [""] * 20)
+        assert not (out / "speed_stats.csv").exists()
