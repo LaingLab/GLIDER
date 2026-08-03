@@ -181,6 +181,23 @@ def describe_speed_threshold(
     }
 
 
+def _folder_name(path: Path | str) -> str:
+    """Lowercased name of the folder containing ``path``, separator-agnostic.
+
+    ``Path(...).parent.name`` is not enough. A calibration master written on
+    Windows stores keys like ``\\\\host\\share\\Sessions\\a.avi``; parsed on
+    Linux that is a single component, because pathlib does not treat a
+    backslash as a separator there. ``parent.name`` then returns ``""`` and
+    every folder comparison below fails, so a scale that should have been
+    borrowed silently never is — on CI and on any Linux analysis box, while
+    passing on the Windows machine the file came from.
+
+    Returns ``""`` for a bare filename, which matches nothing.
+    """
+    parts = [p for p in str(path).replace("\\", "/").split("/") if p]
+    return parts[-2].lower() if len(parts) >= 2 else ""
+
+
 def _borrow_from_folder_mate(cal_set, video: Path) -> float | None:
     """Scale from another calibrated video sitting in the same folder.
 
@@ -204,10 +221,10 @@ def _borrow_from_folder_mate(cal_set, video: Path) -> float | None:
         logger.info("cannot borrow a calibration for %s: its resolution is unreadable", video)
         return None
 
-    folder = video.parent.name.lower()
+    folder = _folder_name(video)
     candidates = []
     for stored, calibration in cal_set.entries.items():
-        if stored.parent.name.lower() != folder:
+        if not folder or _folder_name(stored) != folder:
             continue
         if (calibration.calibration_width, calibration.calibration_height) != resolution:
             continue
