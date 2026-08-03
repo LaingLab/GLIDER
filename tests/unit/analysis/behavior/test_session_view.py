@@ -6,7 +6,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from glider.analysis.behavior.session_view import SessionView, SessionViewError
+from glider.analysis.behavior.session_view import (
+    SessionView,
+    SessionViewError,
+    find_session_poses,
+)
 
 NAMES = ["nose", "l_ear", "r_ear", "tail_base"]
 
@@ -224,3 +228,83 @@ class TestBoutTableUnits:
             "mean_s",
             "median_s",
         ]
+
+
+class TestFindingThePoses:
+    """Reusing already-tracked poses copies nothing into the output folder,
+    so looking only beside the ethogram finds nothing at all."""
+
+    def _layout(self, tmp_path, *, poses_where="videos", manifest=None):
+        """videos/<stem>DLC_exp-7.csv + videos/outputs/<stem>/ethogram_raw.csv"""
+        import json
+
+        videos = tmp_path / "videos"
+        out = videos / "outputs" / "t4_d2"
+        out.mkdir(parents=True)
+        pd.DataFrame({"frame": range(30), "behavior": ["groom"] * 30}).to_csv(
+            out / "ethogram_raw.csv", index=False
+        )
+        target = {"videos": videos, "output": out, "elsewhere": tmp_path / "far"}[poses_where]
+        target.mkdir(parents=True, exist_ok=True)
+        name = "t4_d2DLC_exp-7.csv" if poses_where != "output" else "t4_d2DLC_exp-7.csv"
+        pose_csv = _write_pose_csv(target / name)
+        if manifest is not None:
+            (out / "run.json").write_text(json.dumps(manifest(pose_csv)))
+        return out / "ethogram_raw.csv", pose_csv
+
+    def test_poses_beside_the_ethogram_are_still_found(self, tmp_path):
+        etho, pose_csv = self._layout(tmp_path, poses_where="output")
+        assert find_session_poses(etho) == pose_csv
+
+    def test_poses_left_with_the_videos_are_found_by_searching_up(self, tmp_path):
+        etho, pose_csv = self._layout(tmp_path, poses_where="videos")
+        assert find_session_poses(etho) == pose_csv
+
+    def test_the_manifest_path_wins(self, tmp_path):
+        etho, pose_csv = self._layout(
+            tmp_path, poses_where="elsewhere", manifest=lambda p: {"pose_csv": str(p)}
+        )
+        assert find_session_poses(etho) == pose_csv
+
+    def test_a_stale_manifest_path_falls_back_to_searching(self, tmp_path):
+        etho, pose_csv = self._layout(
+            tmp_path,
+            poses_where="videos",
+            manifest=lambda _p: {"pose_csv": str(tmp_path / "gone" / "x.csv")},
+        )
+        assert find_session_poses(etho) == pose_csv
+
+    def test_another_animals_poses_are_never_picked_up(self, tmp_path):
+        """The search is anchored on the output folder's name."""
+        etho, _ = self._layout(tmp_path, poses_where="elsewhere")
+        _write_pose_csv(tmp_path / "videos" / "t9_d2DLC_exp-7.csv")
+        assert find_session_poses(etho) is None
+
+    def test_the_view_loads_poses_found_upward(self, tmp_path):
+        etho, pose_csv = self._layout(tmp_path, poses_where="videos")
+        view = SessionView.load(etho)
+        assert view.xy is not None
+        assert view.pose_path == pose_csv
+
+    def test_an_explicit_pose_csv_overrides_discovery(self, tmp_path):
+        etho, _ = self._layout(tmp_path, poses_where="videos")
+        chosen = _write_pose_csv(tmp_path / "hand_picked.csv")
+        view = SessionView.load(etho, pose_csv=chosen)
+        assert view.pose_path == chosen
+
+
+def _write_pose_csv(path, n=30):
+    from glider.vision.pose.core import PoseData
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    to_dlc_csv(
+        PoseData(
+            xy=np.zeros((n, len(NAMES), 2)),
+            confidence=np.ones((n, len(NAMES))),
+            keypoint_names=NAMES,
+            fps=30.0,
+        ),
+        path,
+    )
+    return path

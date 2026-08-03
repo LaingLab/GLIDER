@@ -16,6 +16,7 @@ and free of any Qt dependency.
 """
 
 import csv
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +32,8 @@ from glider.analysis.ethogram import (
     compute_intervals,
     compute_state_transitions,
 )
+
+logger = logging.getLogger(__name__)
 
 #: How unscored time is named in stats.csv. A blank cell reads as a bug and
 #: sorts like a behavior; this says what it is.
@@ -508,7 +511,64 @@ def classify(
 
     result.transitions.to_csv(output_dir / "transitions.csv", index=False)
 
+    # run.json: what produced these files. Written last, so it only appears
+    # beside a complete set of outputs.
+    #
+    # The pose CSV is the load-bearing entry. Reusing existing poses means
+    # nothing is copied into the output folder — right, since the CSV is tens
+    # of megabytes — but it also left the session review window with nothing
+    # to find, because it only ever looked beside the ethogram. Recording the
+    # path is cheaper than a copy and says more.
+    _write_run_manifest(
+        output_dir,
+        video=video,
+        pose_csv=pose_csv_in,
+        model_path=model_path,
+        yolo_path=yolo_path,
+        keypoint_names=keypoint_names,
+        fps=video_fps,
+        predict_every=predict_every,
+        smooth_window=config.smooth_window,
+        min_bout_s=min_bout_s,
+        freeze_threshold=config.freeze_threshold,
+        dart_threshold=config.dart_threshold,
+        cm_s_per_px_frame=config.cm_s_per_px_frame,
+        px_per_mm=scale,
+        used_batch=used_batch,
+    )
+
     return result
+
+
+def _write_run_manifest(output_dir: Path, **fields) -> Path | None:
+    """Record how these outputs were produced, beside them.
+
+    Best-effort: an unwritable manifest must not fail a finished run, and
+    every reader treats it as optional.
+    """
+    import json
+
+    payload = {"schema_version": 1}
+    for key, value in fields.items():
+        payload[key] = str(value) if isinstance(value, Path) else value
+    path = output_dir / "run.json"
+    try:
+        path.write_text(json.dumps(payload, indent=2, default=str) + "\n")
+    except OSError as e:  # pragma: no cover - depends on filesystem state
+        logger.info("could not write %s: %s", path, e)
+        return None
+    return path
+
+
+def read_run_manifest(output_dir: Path | str) -> dict | None:
+    """The ``run.json`` beside a set of outputs, or None if absent/unusable."""
+    import json
+
+    try:
+        data = json.loads((Path(output_dir) / "run.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 __all__ = [
