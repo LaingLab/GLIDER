@@ -179,6 +179,11 @@ class CohortSpeedThresholds:
     # window against cut-offs derived from a different one.
     start_s: float | None = None
     end_s: float | None = None
+    # How many sessions had no pixel scale. Non-zero is why a pool that should
+    # have been in cm/s came back in pixels, and it is recorded rather than
+    # only logged because a log line is invisible from a GUI — the operator
+    # sees a file in the wrong unit and no reason for it.
+    n_uncalibrated: int = 0
 
     @property
     def window(self) -> tuple[float | None, float | None] | None:
@@ -186,6 +191,15 @@ class CohortSpeedThresholds:
         if self.start_s is None and self.end_s is None:
             return None
         return self.start_s, self.end_s
+
+    def describe(self) -> str:
+        """One line: the cut-offs, their units, and what they came from."""
+        return (
+            f"freezing < {self.freeze:.3g} {self.unit}, "
+            f"darting > {self.dart:.3g} {self.unit} "
+            f"(p{self.freeze_pct:g}/p{self.dart_pct:g} of {self.n_sessions} session(s) "
+            f"over {self.describe_window()})"
+        )
 
     def describe_window(self) -> str:
         """The pooled stretch, in the words an operator would use."""
@@ -211,6 +225,7 @@ class CohortSpeedThresholds:
             "dart_pct": float(self.dart_pct),
             "n_sessions": int(self.n_sessions),
             "n_samples": int(self.n_samples),
+            "n_uncalibrated": int(self.n_uncalibrated),
             "sources": list(self.sources),
             "start_s": self.start_s,
             "end_s": self.end_s,
@@ -254,6 +269,7 @@ class CohortSpeedThresholds:
                 # means exactly what it says: the whole recording.
                 start_s=_optional_float(data.get("start_s")),
                 end_s=_optional_float(data.get("end_s")),
+                n_uncalibrated=int(data.get("n_uncalibrated", 0)),
             )
         except (KeyError, TypeError, ValueError) as e:
             raise CohortSpeedError(f"malformed cohort threshold file: {e}") from e
@@ -381,6 +397,7 @@ def compute_cohort_thresholds(
         end_s=None if end_s is None else float(end_s),
         n_sessions=len(per_session),
         n_samples=int(pooled.size),
+        n_uncalibrated=len(uncalibrated),
         sources=[p.name for p in paths],
         created=datetime.now().isoformat(timespec="seconds"),
     )

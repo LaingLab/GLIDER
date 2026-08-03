@@ -353,3 +353,97 @@ class TestPoolingOnlyAWindow:
     def test_a_backwards_window_is_refused(self, tmp_path):
         with pytest.raises(CohortSpeedError, match="ends before it starts"):
             compute_cohort_thresholds([self._session(tmp_path)], start_s=8.0, end_s=2.0)
+
+
+class TestSayingWhatTheFileContains:
+    """The numbers live in a JSON nobody opens; the file has to describe itself.
+
+    "Which cut-offs is this run using" is not answered by a path, and the unit
+    matters most of all: a cohort pooled without a calibration is in px/frame
+    and looks nothing like the cm/s the operator typed everywhere else.
+    """
+
+    def _thresholds(self, **kw):
+        base = {
+            "freeze": 0.55,
+            "dart": 27.68,
+            "unit": CM_PER_S,
+            "freeze_pct": 10.0,
+            "dart_pct": 99.5,
+            "n_sessions": 30,
+            "n_samples": 269_964,
+            "start_s": 120.0,
+            "end_s": 420.0,
+        }
+        return CohortSpeedThresholds(**{**base, **kw})
+
+    def test_it_states_the_cut_offs_their_unit_and_their_window(self):
+        text = self._thresholds().describe()
+        assert "0.55 cm/s" in text
+        assert "27.7 cm/s" in text
+        assert "p10/p99.5" in text
+        assert "30 session(s)" in text
+        assert "2–7 min" in text
+
+    def test_a_pixel_pool_says_so_in_the_same_place(self):
+        assert "px/frame" in self._thresholds(unit=PX_PER_FRAME).describe()
+
+    def test_a_whole_recording_pool_says_that(self):
+        text = self._thresholds(start_s=None, end_s=None).describe()
+        assert "the whole recording" in text
+
+
+class TestWhyAPoolFellBackToPixels:
+    """One session without a scale costs the whole pool its units.
+
+    That is correct — a pool of mixed units is meaningless — but it used to be
+    reported only to the log, which is invisible from the GUI. The operator saw
+    a file in the wrong unit and no reason for it.
+    """
+
+    def test_the_count_of_uncalibrated_sessions_is_recorded(self, tmp_path):
+        for name in ("a", "b"):
+            _pose_csv(tmp_path / f"{name}DLC_x.csv")
+            (tmp_path / f"{name}.mp4").write_bytes(b"")
+        result = compute_cohort_thresholds(sorted(tmp_path.glob("*DLC_x.csv")))
+        assert result.unit == PX_PER_FRAME
+        assert result.n_uncalibrated == 2
+
+    def test_a_calibrated_pool_records_none(self, tmp_path):
+        for name in ("a", "b"):
+            _pose_csv(tmp_path / f"{name}DLC_x.csv")
+            (tmp_path / f"{name}.mp4").write_bytes(b"")
+        result = compute_cohort_thresholds(
+            sorted(tmp_path.glob("*DLC_x.csv")), px_per_mm=4.0, fps=30.0
+        )
+        assert result.unit == CM_PER_S
+        assert result.n_uncalibrated == 0
+
+    def test_it_survives_a_round_trip_through_the_file(self, tmp_path):
+        path = tmp_path / "cohort.json"
+        CohortSpeedThresholds(
+            freeze=1.0,
+            dart=9.0,
+            unit=PX_PER_FRAME,
+            freeze_pct=10.0,
+            dart_pct=99.5,
+            n_sessions=30,
+            n_samples=100,
+            n_uncalibrated=7,
+        ).save(path)
+        assert CohortSpeedThresholds.load(path).n_uncalibrated == 7
+
+    def test_a_file_written_before_this_existed_still_loads(self, tmp_path):
+        path = tmp_path / "cohort.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "freeze": 1.0,
+                    "dart": 9.0,
+                    "unit": PX_PER_FRAME,
+                    "n_sessions": 30,
+                }
+            )
+        )
+        assert CohortSpeedThresholds.load(path).n_uncalibrated == 0

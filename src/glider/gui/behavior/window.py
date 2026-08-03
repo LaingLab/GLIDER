@@ -1454,7 +1454,7 @@ class ApplyTab(QWidget):
         self._calibration_row = row
         form.addRow("Calibration file:", row)
         self._calibration_hint = QLabel(
-            "Used for cm/s thresholds, and for the ethogram's speed_cm_s " "column in either mode."
+            "Used for cm/s thresholds, and for the ethogram's speed_cm_s column in either mode."
         )
         self._calibration_hint.setWordWrap(True)
         form.addRow("", self._calibration_hint)
@@ -1522,7 +1522,32 @@ class ApplyTab(QWidget):
         )
         if path:
             self._cohort_path = Path(path)
-            self._cohort_label.setText(str(self._cohort_path))
+            self._show_cohort_file()
+
+    def _show_cohort_file(self) -> None:
+        """Put what the chosen file actually says on the label.
+
+        A path is not an answer to "which cut-offs is this run using". The
+        numbers exist only inside the JSON, so choosing a file used to mean
+        opening it in a text editor to find out — and the unit matters most of
+        all, because a cohort pooled without a calibration is in px/frame and
+        looks nothing like the cm/s the operator typed elsewhere.
+        """
+        from glider.analysis.behavior.cohort_speed import CohortSpeedError, CohortSpeedThresholds
+
+        self._cohort_label.setToolTip(str(self._cohort_path))
+        try:
+            thresholds = CohortSpeedThresholds.load(self._cohort_path)
+        except CohortSpeedError as e:
+            self._cohort_label.setText(f"{self._cohort_path.name} — unreadable: {e}")
+            return
+        note = ""
+        if not thresholds.is_calibrated:
+            missing = thresholds.n_uncalibrated
+            note = "  ⚠ pooled in pixels" + (
+                f" — {missing} session(s) had no pixel scale" if missing else ""
+            )
+        self._cohort_label.setText(f"{self._cohort_path.name} — {thresholds.describe()}{note}")
 
     def _on_build_cohort(self) -> None:
         """Pool every pose CSV in a folder into one set of cut-offs.
@@ -1535,7 +1560,7 @@ class ApplyTab(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Folder of pose CSVs")
         if not folder:
             return
-        csvs = sorted(p for p in Path(folder).rglob("*.csv") if "DLC_" in p.stem)
+        csvs = _unique_pose_csvs(Path(folder))
         if not csvs:
             QMessageBox.warning(
                 self,
@@ -1566,8 +1591,7 @@ class ApplyTab(QWidget):
                 else f"minute {self._range_start.value():g} to the end"
             )
         self._results.append(
-            f"Pooling speed from {len(csvs)} session(s) over {window}… "
-            "this takes a minute or two."
+            f"Pooling speed from {len(csvs)} session(s) over {window}… this takes a minute or two."
         )
         self._progress.setVisible(True)
         self._progress.setRange(0, len(csvs))
@@ -1614,12 +1638,15 @@ class ApplyTab(QWidget):
     def _on_cohort_done(self, thresholds, path) -> None:
         self._end_cohort_run()
         self._cohort_path = Path(path)
-        self._cohort_label.setText(str(self._cohort_path))
+        self._show_cohort_file()
+        missing = getattr(thresholds, "n_uncalibrated", 0)
         note = (
             ""
             if thresholds.is_calibrated
-            else "\n\nNo calibration covered these sessions, so the thresholds are "
-            "in px/frame. That is only valid if every video shares one rig geometry."
+            else f"\n\n{missing or 'Some'} of the sessions had no pixel scale, so the "
+            "WHOLE pool fell back to px/frame — mixing units would be meaningless. "
+            "That is only valid if every video shares one rig geometry. To get "
+            "cm/s, choose a calibration file that covers every session."
         )
         summary = (
             f"Pooled {thresholds.n_samples:,} samples from "
@@ -1802,6 +1829,27 @@ def _short_path(path: Path, keep: int = 3) -> str:
     """
     parts = Path(path).parts
     return str(path) if len(parts) <= keep else "…" + "\\".join(parts[-keep:])
+
+
+def _unique_pose_csvs(folder: Path) -> list[Path]:
+    """Pose CSVs under *folder*, one per session, shallowest first.
+
+    A recursive scan of a working folder finds the same session more than
+    once: an apply run copies or writes poses into its own output subfolder,
+    so ``videos/t1_d2DLC_exp-7.csv`` and ``videos/output/t1_d2/...`` are the
+    same animal. Pooling both weights that session twice in the cohort
+    percentiles, and the copies usually sit where their video cannot be found,
+    which costs the whole pool its pixel scale — cm/s cut-offs silently become
+    px/frame ones because of a duplicate.
+
+    Keyed on the file name, and the shallowest copy wins, because that is the
+    one that lives beside its video.
+    """
+    seen: dict[str, Path] = {}
+    for path in sorted(folder.rglob("*.csv"), key=lambda p: (len(p.relative_to(folder).parts), p)):
+        if "DLC_" in path.stem and path.name not in seen:
+            seen[path.name] = path
+    return sorted(seen.values())
 
 
 def _row(*widgets: QWidget) -> QHBoxLayout:
