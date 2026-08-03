@@ -256,3 +256,73 @@ class TestEthogramFile:
         write_ethogram_csv(out, rows, speed_axis=True, cm_s_per_px_frame=None)
         df = pd.read_csv(out, keep_default_na=False)
         assert (df["speed_cm_s"] == "").all()
+
+
+class TestAnalysingOnlyAWindow:
+    """Scoring minutes 2-7 rather than the whole recording.
+
+    The point of care: everything upstream of the prediction still runs over
+    the whole session. Trimming the poses first would give the window's
+    opening frames partial rolling windows and a cold causal-speed filter, so
+    the very frames the operator chose to look at would be the least
+    comparable ones in the cohort.
+    """
+
+    def test_only_the_window_is_returned(self):
+        pose = _pose(n=300)
+        model = _model(pose)
+        rows = classify_pose_data(pose, model, predict_every=1, frame_range=(100, 199))
+        assert rows.frames[0] == 100
+        assert rows.frames[-1] == 199
+        assert len(rows.frames) == 100
+
+    def test_the_labels_match_a_whole_session_run(self):
+        """A windowed run must be a subset of the full run, not a rescoring."""
+        pose = _pose(n=300, seed=4)
+        model = _model(pose, seed=4)
+        full = classify_pose_data(pose, model, predict_every=1)
+        window = classify_pose_data(pose, model, predict_every=1, frame_range=(100, 199))
+
+        wanted = dict(zip(full.frames, full.labels, strict=True))
+        for frame, label in zip(window.frames, window.labels, strict=True):
+            assert label == wanted[frame]
+
+    def test_frames_keep_their_absolute_numbering(self):
+        """So the ethogram still lines up with the video and the poses."""
+        pose = _pose(n=300)
+        rows = classify_pose_data(pose, _model(pose), predict_every=1, frame_range=(100, 199))
+        assert rows.frames == list(range(100, 200))
+
+    def test_the_cadence_is_preserved_inside_the_window(self):
+        pose = _pose(n=300)
+        rows = classify_pose_data(pose, _model(pose), predict_every=4, frame_range=(100, 199))
+        assert set(np.diff(rows.frames).tolist()) == {4}
+
+    def test_the_speed_axis_is_warmed_up_not_restarted(self):
+        """CausalSpeed smooths over the preceding frames; a window that
+        restarted it would report a different speed for the same frame."""
+        from glider.analysis.behavior.classify.speed_state import CausalSpeed
+
+        pose = _pose(n=300)
+        rows = classify_pose_data(
+            pose,
+            _model(pose),
+            predict_every=1,
+            freeze_threshold=0.5,
+            dart_threshold=8.0,
+            frame_range=(100, 199),
+        )
+        causal = CausalSpeed()
+        expected = [float(causal.push(f)) for f in pose.xy]  # from frame 0
+        for frame, value in zip(rows.frames, rows.speed_px, strict=True):
+            assert value == pytest.approx(expected[frame], nan_ok=True)
+
+    def test_a_window_past_the_end_yields_nothing(self):
+        pose = _pose(n=300)
+        rows = classify_pose_data(pose, _model(pose), predict_every=1, frame_range=(9000, 9999))
+        assert rows.frames == []
+
+    def test_no_range_scores_everything(self):
+        pose = _pose(n=300)
+        rows = classify_pose_data(pose, _model(pose), predict_every=1)
+        assert len(rows.frames) > 250

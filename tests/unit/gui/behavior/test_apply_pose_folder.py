@@ -325,3 +325,62 @@ class TestScaleAdvisories:
         tab._model_path = tmp_path / "not-a-bundle.pkl"
         tab._model_path.write_text("garbage")
         assert tab._scale_advisories() == []
+
+
+class TestTheTimeRange:
+    """Scoring minutes 2-7 of each video instead of all of it."""
+
+    def test_it_is_off_by_default(self, tab):
+        assert tab._range_on.isChecked() is False
+        assert tab._time_range() == (None, None)
+
+    def test_minutes_become_seconds(self, tab):
+        tab._range_on.setChecked(True)
+        tab._range_start.setValue(2.0)
+        tab._range_end.setValue(7.0)
+        assert tab._time_range() == (120.0, 420.0)
+
+    def test_an_open_end_means_to_the_end_of_the_video(self, tab):
+        tab._range_on.setChecked(True)
+        tab._range_start.setValue(2.0)
+        tab._range_end.setValue(0.0)  # the spin's special "to the end" value
+        start, end = tab._time_range()
+        assert start == 120.0
+        assert end is None
+
+    def test_the_spins_follow_the_checkbox(self, tab):
+        assert tab._range_start.isEnabled() is False
+        tab._range_on.setChecked(True)
+        assert tab._range_start.isEnabled() is True
+        assert tab._range_end.isEnabled() is True
+
+    def test_the_hint_reports_the_span(self, tab):
+        tab._range_on.setChecked(True)
+        tab._range_start.setValue(2.0)
+        tab._range_end.setValue(7.0)
+        assert "300 s" in tab._range_hint.text()
+
+    def test_a_backwards_window_is_called_out(self, tab):
+        tab._range_on.setChecked(True)
+        tab._range_start.setValue(7.0)
+        tab._range_end.setValue(2.0)
+        assert "before it starts" in tab._range_hint.text()
+
+    def test_the_window_reaches_the_worker(self, tab, tmp_path, monkeypatch):
+        tab._videos = [_video(tmp_path / "videos", "t0")]
+        tab._range_on.setChecked(True)
+        tab._range_start.setValue(2.0)
+        tab._range_end.setValue(7.0)
+        seen = TestTheRunActuallyUsesTheseSettings()._capture_worker_kwargs(
+            tab, tmp_path, monkeypatch
+        )
+        assert seen["start_s"] == pytest.approx(120.0)
+        assert seen["end_s"] == pytest.approx(420.0)
+
+    def test_no_window_passes_nothing(self, tab, tmp_path, monkeypatch):
+        tab._videos = [_video(tmp_path / "videos", "t0")]
+        seen = TestTheRunActuallyUsesTheseSettings()._capture_worker_kwargs(
+            tab, tmp_path, monkeypatch
+        )
+        assert seen["start_s"] is None
+        assert seen["end_s"] is None

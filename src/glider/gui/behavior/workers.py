@@ -97,6 +97,8 @@ class ApplyWorker(_BaseWorker):
         pose_dir=None,
         smooth_window=None,
         min_bout_s=None,
+        start_s=None,
+        end_s=None,
     ):
         super().__init__()
         self._args = (video, model_path, yolo_path, keypoint_names, output_dir, device)
@@ -111,6 +113,9 @@ class ApplyWorker(_BaseWorker):
         # truth, exactly as predict_every does below.
         self._smooth_window = smooth_window
         self._min_bout_s = min_bout_s
+        # Inclusive analysis window in seconds; None either side = open.
+        self._start_s = start_s
+        self._end_s = end_s
         # None = don't pass it at all, so the pipeline default stays the single
         # source of truth for the cadence.
         self._predict_every = predict_every
@@ -134,6 +139,8 @@ class ApplyWorker(_BaseWorker):
                 reuse_existing_poses=self._reuse_existing_poses,
                 pose_dir=self._pose_dir,
                 min_bout_s=self._min_bout_s,
+                start_s=self._start_s,
+                end_s=self._end_s,
                 **opts,
             )
             self.finished.emit(result)

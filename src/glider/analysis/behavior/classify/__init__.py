@@ -308,6 +308,8 @@ def classify(
     reuse_existing_poses=False,
     pose_dir=None,
     min_bout_s=None,
+    start_s=None,
+    end_s=None,
     model=None,
     **opts,
 ) -> EthogramResult:
@@ -423,6 +425,12 @@ def classify(
     # the realtime threads, and it computes `body_angular_velocity` over the
     # whole session the way training does -- the five-frame streaming window
     # cannot, because angle unwrapping is cumulative, not a local stencil.
+    # Analysing a stretch of each recording — a drug window, the minutes after
+    # a stimulus — rather than the whole thing. Resolved against this video's
+    # own rate, so one setting means the same clock time on a 30 fps and a
+    # 60 fps recording.
+    frame_range = _frame_range(start_s, end_s, rate, Path(video).name)
+
     pipeline = None
     used_batch = False
     if pose_csv_in is not None and output_video is None:
@@ -431,7 +439,7 @@ def classify(
 
         if model is None:
             model = _load_behavior_model(model_path)
-        used_batch = _batch.batch_apply(config, ethogram_csv, model)
+        used_batch = _batch.batch_apply(config, ethogram_csv, model, frame_range=frame_range)
     if not used_batch:
         # Hand over the bundle only if we already loaded it: unpickling some
         # bundles twice in one process corrupts native memory.
@@ -449,6 +457,13 @@ def classify(
     if ethogram_csv.exists():
         with ethogram_csv.open(newline="") as f:
             rows_in = list(csv.DictReader(f))
+        if frame_range is not None and not used_batch:
+            # The streaming path scored the whole video — it has to, since the
+            # annotated frames come off the same queue — so the window is
+            # applied to what it wrote. Same rows either way; only the batch
+            # path also saves the work.
+            rows_in = _rows_in_range(rows_in, frame_range)
+            _rewrite_ethogram(ethogram_csv, rows_in)
         labels = [row["behavior"] for row in rows_in]
         speed_labels = [row.get("speed", "") for row in rows_in]
     else:
@@ -549,6 +564,56 @@ def classify(
     )
 
     return result
+
+
+def _frame_range(
+    start_s: float | None, end_s: float | None, fps: float | None, name: str
+) -> tuple[int, int] | None:
+    """``(first_frame, last_frame)`` inclusive for a time window, or None.
+
+    Seconds rather than frames because a window is a fact about the
+    experiment, not about the recording: "minutes two to seven" means the
+    same stretch of an animal's session whether it was filmed at 30 or 60 fps.
+    """
+    if start_s is None and end_s is None:
+        return None
+    if not fps or fps <= 0:
+        raise ValueError(
+            f"a time range is in seconds and needs the frame rate, which could "
+            f"not be read from {name}; pass fps_override"
+        )
+    first = int(round(float(start_s or 0.0) * fps))
+    last = int(round(float(end_s) * fps)) - 1 if end_s is not None else 2**31
+    if last < first:
+        raise ValueError(
+            f"the analysis window ends before it starts: "
+            f"{float(start_s or 0.0):g} s to {float(end_s):g} s"
+        )
+    return max(0, first), last
+
+
+def _rows_in_range(rows: list[dict], frame_range: tuple[int, int]) -> list[dict]:
+    """Ethogram rows whose frame falls inside an inclusive window."""
+    first, last = frame_range
+    kept = []
+    for row in rows:
+        try:
+            frame = int(row.get("frame", -1))
+        except (TypeError, ValueError):
+            continue
+        if first <= frame <= last:
+            kept.append(row)
+    return kept
+
+
+def _rewrite_ethogram(path: Path, rows: list[dict]) -> None:
+    """Replace an ethogram with a subset of its own rows, header intact."""
+    if not rows:
+        return
+    with path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def _write_axis_summary(

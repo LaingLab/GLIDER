@@ -123,11 +123,18 @@ def classify_pose_data(
     dart_threshold: float | None = None,
     freeze_min_frames: int = 30,
     dart_min_frames: int = 3,
+    frame_range: tuple[int, int] | None = None,
 ) -> EthogramRows:
     """Score every frame of *pose* with *model*, as the streaming path would.
 
     Parameters mirror the corresponding :class:`LiveInferenceConfig` fields so
     a caller can hand the same settings to either path and get the same rows.
+
+    ``frame_range`` limits the rows returned to an inclusive window of source
+    frames. Everything upstream of the prediction still runs over the whole
+    session, so a windowed run's labels are exactly the rows a whole-session
+    run would have produced for those frames — only the classifier's work is
+    skipped, which is where the time goes anyway.
     """
     from glider.analysis.behavior.classify.features_stream import derive_stream_columns
     from glider.analysis.behavior.classify.smoothing import MajorityVoteSmoother
@@ -175,7 +182,19 @@ def classify_pose_data(
     # The cadence is counted on the frame the engine *ticked* on, which leads
     # the tagged frame by `lag` — not on the tagged frame itself.
     emit_frames = np.arange(lag, max(lag, n_frames - lag))
-    emit_rows = np.nonzero((emit_frames + lag + 1) % predict_every == 0)[0]
+    keep = (emit_frames + lag + 1) % predict_every == 0
+    if frame_range is not None:
+        # Analysing a window restricts which rows are *emitted*, nothing else.
+        # Features, rolling statistics and the causal speed are still computed
+        # over the whole session, so the window's opening frames get the same
+        # full-width rolling windows and the same warmed-up speed filter they
+        # would have had in a whole-session run. Trimming the poses first would
+        # instead give them partial windows and a cold filter, and the very
+        # frames the operator chose to look at would be the least comparable
+        # ones in the cohort.
+        first, last = frame_range
+        keep &= (emit_frames >= first) & (emit_frames <= last)
+    emit_rows = np.nonzero(keep)[0]
 
     speed_labels_all: list[str] = []
     speed_values_all: list[float] = []
@@ -245,7 +264,7 @@ def write_ethogram_csv(path, rows: EthogramRows, *, speed_axis: bool, cm_s_per_p
                 w.writerow([frame, rows.labels[i]])
 
 
-def batch_apply(config, ethogram_csv, model) -> bool:
+def batch_apply(config, ethogram_csv, model, frame_range=None) -> bool:
     """Score ``config``'s pose CSV in one pass and write the ethogram.
 
     Returns False when this run needs the streaming pipeline after all — an
@@ -279,6 +298,7 @@ def batch_apply(config, ethogram_csv, model) -> bool:
             dart_threshold=config.dart_threshold,
             freeze_min_frames=config.freeze_min_frames,
             dart_min_frames=config.dart_min_frames,
+            frame_range=frame_range,
         )
     except NotImplementedError as e:
         logger.info("batch apply not usable (%s); falling back to the streaming path", e)
