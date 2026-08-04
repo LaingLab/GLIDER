@@ -93,8 +93,9 @@ def test_invalid_settings_raise(settings):
 
 async def test_initialize_opens_and_configures(fake_spidev):
     module, spi = fake_spidev
-    await _initialized(settings={"spi_bus": 1, "spi_device": 0, "max_speed_hz": 2_000_000,
-                                 "spi_mode": 2})
+    await _initialized(
+        settings={"spi_bus": 1, "spi_device": 0, "max_speed_hz": 2_000_000, "spi_mode": 2}
+    )
     spi.open.assert_called_once_with(1, 0)
     assert spi.max_speed_hz == 2_000_000
     assert spi.mode == 2

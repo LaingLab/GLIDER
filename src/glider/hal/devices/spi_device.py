@@ -45,12 +45,29 @@ class GenericSPIDevice(BaseDevice):
 
     SETTINGS_SCHEMA = [
         {"key": "spi_bus", "label": "SPI Bus", "type": "int", "default": 0, "min": 0, "max": 8},
-        {"key": "spi_device", "label": "Chip Select (CE)", "type": "int", "default": 0,
-         "min": 0, "max": 8},
-        {"key": "max_speed_hz", "label": "Clock (Hz)", "type": "int", "default": 500000,
-         "min": 1, "max": 100_000_000},
-        {"key": "spi_mode", "label": "SPI Mode", "type": "enum", "default": 0,
-         "choices": [[0, "Mode 0"], [1, "Mode 1"], [2, "Mode 2"], [3, "Mode 3"]]},
+        {
+            "key": "spi_device",
+            "label": "Chip Select (CE)",
+            "type": "int",
+            "default": 0,
+            "min": 0,
+            "max": 8,
+        },
+        {
+            "key": "max_speed_hz",
+            "label": "Clock (Hz)",
+            "type": "int",
+            "default": 500000,
+            "min": 1,
+            "max": 100_000_000,
+        },
+        {
+            "key": "spi_mode",
+            "label": "SPI Mode",
+            "type": "enum",
+            "default": 0,
+            "choices": [[0, "Mode 0"], [1, "Mode 1"], [2, "Mode 2"], [3, "Mode 3"]],
+        },
     ]
 
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
@@ -285,7 +302,7 @@ class GenericSPIDevice(BaseDevice):
         n = self._validate_length(length)
         frame = list(reg) + [0x00] * n
         result = await self._call("xfer2", frame)
-        return list(result[len(reg):])
+        return list(result[len(reg) :])
 
     # --- serialization ---
 

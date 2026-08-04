@@ -355,6 +355,40 @@ async def _wait_for_sample(device, timeout=2.0):
     raise AssertionError("sampler produced no sample within timeout")
 
 
+async def _wait_for_frames(fake_chip, n, timeout=2.0):
+    """Poll until the fake has clocked ``n`` frames; fail on timeout.
+
+    These tests feed a finite number of frames, so "the sampler has worked
+    through them" is something to *observe*, not to sleep for. The fixed
+    ``asyncio.sleep(0.1)`` this replaces was a guess about how fast the
+    machine is, and it was wrong on CI: a loaded runner clocked one frame
+    where the test wanted two, and the suite failed on the runner while
+    passing on every developer machine.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if len(fake_chip.pulse_counts) >= n:
+            return fake_chip.pulse_counts
+        await asyncio.sleep(0.005)
+    raise AssertionError(
+        f"expected {n} clocked frame(s) within {timeout}s; got {fake_chip.pulse_counts}"
+    )
+
+
+async def _assert_never_caches(device, seconds=0.05):
+    """Fail if the sampler caches anything over ``seconds``.
+
+    Stronger than a single check after a settle: a driver that wrongly caches
+    is caught whenever it does so within the window, rather than only if it
+    happens to have done it by the instant we looked.
+    """
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        state = await device.get_state()
+        assert state is None, f"sampler cached {state!r} when it should have cached nothing"
+        await asyncio.sleep(0.005)
+
+
 async def test_initialize_starts_sampler_and_caches_sample(fake_chip):
     # Surplus identical frames: a spurious glitch consuming one must not
     # starve the finite fake (see FakeHX711's docstring).
@@ -422,8 +456,10 @@ async def test_timing_glitch_consumes_next_frame_as_reprime_dummy(fake_chip):
     device = _make_device()
     await device.initialize()
     try:
-        await asyncio.sleep(0.1)  # ample time to clock both frames
-        assert await device.get_state() is None
+        # Wait for the frames to actually be clocked rather than guessing how
+        # long that takes; the fake holds exactly two, so this cannot over-wait.
+        await _wait_for_frames(fake_chip, 2)
+        await _assert_never_caches(device)
         # Both frames were clocked with their full 25 pulses (24 data + 1 gain
         # for the default gain of 128) - the dummy read is a real frame.
         assert fake_chip.pulse_counts == [25, 25]
@@ -460,8 +496,8 @@ async def test_reprime_dummy_that_also_glitches_does_not_trust_the_next_frame(fa
     device = _make_device(settings={"gain": 32})
     await device.initialize()
     try:
-        await asyncio.sleep(0.1)  # ample time to clock all three frames
-        assert await device.get_state() is None
+        await _wait_for_frames(fake_chip, 3)
+        await _assert_never_caches(device)
         assert fake_chip.pulse_counts == [26, 26, 26]  # gain 32 -> 24 + 2
     finally:
         await device.shutdown()
@@ -604,8 +640,10 @@ async def test_disconnected_dout_caches_no_sample(fake_chip):
     device = _make_device()
     await device.initialize()
     try:
-        await asyncio.sleep(0.1)
-        assert await device.get_state() is None  # never a fabricated 0.0
+        # Polled rather than checked once after a sleep: a driver that
+        # fabricates a 0.0 is caught whenever it does so in the window, not
+        # only if it happens to have done it by the instant we looked.
+        await _assert_never_caches(device, seconds=0.1)  # never a fabricated 0.0
     finally:
         await device.shutdown()
 
