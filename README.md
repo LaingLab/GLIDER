@@ -6,7 +6,7 @@
 
 **General Laboratory Interface for Design, Experimentation, and Recording**
 
-Build, run, and record laboratory experiments — without writing code.
+Build, run, and record reproducible experiments without writing code.
 
 [![Documentation](https://img.shields.io/badge/docs-online-2f81f7?style=flat-square)](https://lainglab.github.io/GLIDER/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
@@ -25,9 +25,8 @@ Build, run, and record laboratory experiments — without writing code.
 GLIDER is a desktop application for building, running, and recording laboratory
 experiments. You wire together a **visual node graph** that controls hardware
 (Arduino, Raspberry Pi, Bluetooth), reads sensors, records synchronized video and
-data, and drives an experiment from start to finish. The same experiment file can
-run on a full desktop or on a touchscreen **Runner** — a self-contained kiosk you
-can leave at the bench or bolt to a behavior rig.
+data, and drives an experiment from start to finish. Experiments files are portable, and can 
+run on Windows, macOS, and Linux.
 
 <div align="center">
   <img src="docs-site/assets/screenshots/builder.png" alt="The GLIDER Builder, a visual node-graph editor" width="900">
@@ -36,7 +35,7 @@ can leave at the bench or bolt to a behavior rig.
 
 ## Prerequisites
 
-1. [uv](https://docs.astral.sh/uv/getting-started/installation/) — manages the virtual environment and Python for you
+1. [uv](https://docs.astral.sh/uv/getting-started/installation/): manages the virtual environment and Python for you
    - Windows: `winget install astral-sh.uv`
    - macOS/Linux: `curl -LsSf https://astral.sh/uv/install.sh | sh`
 2. FFmpeg (for video recording)
@@ -44,8 +43,7 @@ can leave at the bench or bolt to a behavior rig.
    - macOS: `brew install ffmpeg`
    - Linux/Raspberry Pi: `sudo apt install ffmpeg`
 
-> GLIDER requires Python 3.11–3.13 (3.14+ is not supported). uv installs a
-> compatible Python automatically — no separate Python install needed.
+> GLIDER requires Python 3.11–3.13 (3.14+ is not supported).
 
 ## Quick start
 
@@ -127,9 +125,9 @@ If you use GLIDER in your research, please cite it:
 
 ## Contributing
 
-Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
 for development setup, coding standards, and the review process.
 
 ## License
 
-Released under the [MIT License](LICENSE). Copyright © 2026 Laing Lab.
+Released under the [MIT License](LICENSE).
