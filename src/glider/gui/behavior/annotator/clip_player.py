@@ -32,6 +32,8 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QLabel, QSizePolicy
 
+from glider.gui.styles import colors
+
 if TYPE_CHECKING:
     from glider.gui.behavior.annotator.capture_cache import VideoCaptureCache
 
@@ -54,7 +56,9 @@ class ClipPlayer(QLabel):
     ):
         super().__init__(parent)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet("background: #111; color: #888; border-radius: 8px;")
+        self.setStyleSheet(
+            f"background: {colors.CANVAS}; color: {colors.TEXT_MUTED}; border-radius: 8px;"
+        )
         self.setMinimumSize(640, 360)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setText("(no clip loaded)")

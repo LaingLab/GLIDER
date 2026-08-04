@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QAction, QKeySequence, QShortcut
+from PyQt6.QtGui import QAction, QFont, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -63,6 +63,8 @@ from glider.gui.behavior.annotator.sampler import ProposedClip
 from glider.gui.behavior.annotator.speed_source import SpeedCache, load_session_speed
 from glider.gui.behavior.annotator.speed_trace import SpeedTrace
 from glider.gui.behavior.annotator.trim_bar import TrimBar, compute_window
+from glider.gui.styles import colors
+from glider.gui.widgets.tool_ui import apply_tool_theme, readable_text_on
 
 if TYPE_CHECKING:
     from glider.analysis.behavior.cohort_speed import CohortSpeedThresholds
@@ -226,9 +228,11 @@ class AnnotatorWindow(QMainWindow):
         # Title row at the top of the main pane.
         title_row = QHBoxLayout()
         self.title_label = QLabel(self._current_video_path().name)
-        self.title_label.setStyleSheet("font-size: 14px; font-weight: 500;")
+        self.title_label.setStyleSheet(
+            f"font-size: 14px; font-weight: 600; color: {colors.TEXT_PRIMARY};"
+        )
         self.save_indicator = QLabel("")
-        self.save_indicator.setStyleSheet("color: #6b6b6b; font-size: 12px;")
+        self.save_indicator.setStyleSheet(f"color: {colors.TEXT_TERTIARY}; font-size: 12px;")
         # Big, color-coded readout of the current clip's label (top-right).
         self.big_label = QLabel("—")
         self.big_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -262,25 +266,30 @@ class AnnotatorWindow(QMainWindow):
         self.clip.frame_changed.connect(self._on_player_frame)
 
         self.trim_hint = QLabel("trim: drag handles · [ ] in · { } out")
-        self.trim_hint.setStyleSheet("color: #9ca3af; font-size: 11px;")
+        self.trim_hint.setStyleSheet(f"color: {colors.TEXT_MUTED}; font-size: 11px;")
         self.trim_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main.addWidget(self.trim_hint)
 
         self.caption_label = QLabel("(no clip)")
-        self.caption_label.setStyleSheet("color: #6b6b6b; font-size: 12px;")
+        self.caption_label.setStyleSheet(f"color: {colors.TEXT_TERTIARY}; font-size: 12px;")
         self.caption_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main.addWidget(self.caption_label)
 
         # Label buttons card.
         label_card = QFrame()
+        # Qualified by object name. Unqualified, a stylesheet set on a
+        # container also matches every descendant, so the card's border was
+        # drawn around each of its child labels too -- which is why every
+        # heading in this window used to sit in its own little box.
+        label_card.setObjectName("LabelCard")
         label_card.setStyleSheet(
-            "background: white; border: 1px solid #e5e5e5; border-radius: 6px;"
+            f"QFrame#LabelCard {{ background: {colors.SURFACE_1}; "
+            f"border: 1px solid {colors.BORDER}; border-radius: 10px; }}"
         )
         lcv = QVBoxLayout(label_card)
         lcv.setContentsMargins(16, 14, 16, 14)
         lcv.setSpacing(8)
-        h3 = QLabel("LABEL THIS CLIP")
-        h3.setStyleSheet("font-size: 12px; font-weight: 600; color: #6b6b6b;")
+        h3 = _section_header("Label this clip")
         lcv.addWidget(h3)
         # Behavior chips row (rebuilt on vocab change).
         self.chips_row = QHBoxLayout()
@@ -291,14 +300,17 @@ class AnnotatorWindow(QMainWindow):
         # Markers row.
         markers = QHBoxLayout()
         self.btn_multi = QPushButton("⚠ multi-behavior   M")
+        self.btn_multi.setObjectName(CHIP_ID)
         self.btn_multi.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_multi.setStyleSheet(_chip_warn_css())
         self.btn_multi.clicked.connect(lambda: self._apply_label(MULTI_BEHAVIOR))
         self.btn_unclear = QPushButton("? unclear   U")
+        self.btn_unclear.setObjectName(CHIP_ID)
         self.btn_unclear.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_unclear.setStyleSheet(_chip_unknown_css())
         self.btn_unclear.clicked.connect(lambda: self._apply_label(UNCLEAR))
         self.btn_skip = QPushButton("skip   Space")
+        self.btn_skip.setObjectName(CHIP_ID)
         self.btn_skip.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_skip.setStyleSheet(_chip_subtle_css())
         self.btn_skip.clicked.connect(self._skip)
@@ -314,11 +326,9 @@ class AnnotatorWindow(QMainWindow):
         nav = QHBoxLayout()
         self.btn_prev = QPushButton("← prev")
         self.btn_prev.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_prev.setStyleSheet(_nav_css())
         self.btn_prev.clicked.connect(lambda: self._go(-1))
         self.btn_next = QPushButton("next →")
         self.btn_next.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_next.setStyleSheet(_nav_css())
         self.btn_next.clicked.connect(lambda: self._go(+1))
         nav.addWidget(self.btn_prev)
         nav.addWidget(self.btn_next)
@@ -326,6 +336,11 @@ class AnnotatorWindow(QMainWindow):
         main.addLayout(nav)
 
         self.setStatusBar(QStatusBar())
+        # Opened from the Annotate tab with no parent, so Qt hands it no
+        # stylesheet -- the same gap the three tool windows had. This one was
+        # additionally built light throughout, so the hardcoded surfaces below
+        # move to the shared tokens rather than just inheriting the theme.
+        apply_tool_theme(self)
         # ---------- Wiring ----------
         self._build_transport_shortcuts()
         self._rebuild_behavior_shortcuts()
@@ -374,7 +389,11 @@ class AnnotatorWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
         sidebar.setFixedWidth(300)
-        sidebar.setStyleSheet("background: white; border: 1px solid #e5e5e5; border-radius: 6px;")
+        sidebar.setObjectName("Sidebar")  # qualified -- see LabelCard above
+        sidebar.setStyleSheet(
+            f"QFrame#Sidebar {{ background: {colors.SURFACE_1}; "
+            f"border: 1px solid {colors.BORDER}; border-radius: 10px; }}"
+        )
         v = QVBoxLayout(sidebar)
         v.setContentsMargins(14, 12, 14, 12)
         v.setSpacing(8)
@@ -382,10 +401,12 @@ class AnnotatorWindow(QMainWindow):
         # Progress card.
         v.addWidget(_section_header("Progress"))
         self.progress_label = QLabel("clip 0 / 0")
-        self.progress_label.setStyleSheet("font-size: 18px; font-weight: 600;")
+        self.progress_label.setStyleSheet(
+            f"font-size: 20px; font-weight: 700; color: {colors.TEXT_PRIMARY};"
+        )
         v.addWidget(self.progress_label)
         self.labeled_label = QLabel("0 labeled · 0 marked")
-        self.labeled_label.setStyleSheet("color: #6b6b6b; font-size: 12px;")
+        self.labeled_label.setStyleSheet(f"color: {colors.TEXT_TERTIARY}; font-size: 12px;")
         v.addWidget(self.labeled_label)
 
         # Vocabulary.
@@ -398,7 +419,7 @@ class AnnotatorWindow(QMainWindow):
             "No behaviors yet. Add some below — they save next to the video."
         )
         self.vocab_empty_hint.setWordWrap(True)
-        self.vocab_empty_hint.setStyleSheet("color: #9ca3af; font-size: 12px;")
+        self.vocab_empty_hint.setStyleSheet(f"color: {colors.TEXT_MUTED}; font-size: 12px;")
         v.addWidget(self.vocab_empty_hint)
 
         # Add-behavior form.
@@ -1084,6 +1105,7 @@ class AnnotatorWindow(QMainWindow):
                 w.deleteLater()
         for b in self.vocab:
             btn = QPushButton(f"●  {b.name}    {b.hotkey}")
+            btn.setObjectName(CHIP_ID)
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             btn.setStyleSheet(_chip_css(b.color))
             btn.clicked.connect(lambda _ch=False, name=b.name: self._apply_label(name))
@@ -1158,7 +1180,9 @@ class AnnotatorWindow(QMainWindow):
             self.big_label.setStyleSheet(f"color: {color}; font-size: 26px; font-weight: 700;")
         else:
             self.big_label.setText("—")
-            self.big_label.setStyleSheet("color: #cbd5e1; font-size: 26px; font-weight: 700;")
+            self.big_label.setStyleSheet(
+                f"color: {colors.TEXT_DISABLED}; font-size: 26px; font-weight: 700;"
+            )
 
     # ------------------------------------------------------------------
     # Cleanup
@@ -1188,10 +1212,14 @@ class AnnotatorWindow(QMainWindow):
 
 
 def _section_header(text: str) -> QLabel:
-    # Upper-case in Python — Qt Style Sheets don't support text-transform /
-    # letter-spacing (they log "Unknown property" warnings).
+    # Upper-case in Python — Qt Style Sheets have no text-transform, and no
+    # letter-spacing either (both log "Unknown property"), so the tracking
+    # that makes a run of capitals read as a label is set on the QFont.
     h = QLabel(text.upper())
-    h.setStyleSheet("font-size: 12px; font-weight: 600; color: #6b6b6b;")
+    h.setStyleSheet(f"font-size: 11px; font-weight: 700; color: {colors.TEXT_TERTIARY};")
+    font = h.font()
+    font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.9)
+    h.setFont(font)
     return h
 
 
@@ -1208,7 +1236,11 @@ class _VocabRow(QFrame):
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
-        self.setStyleSheet("background: #f6f6f6; border-radius: 4px; padding: 2px;")
+        self.setObjectName("VocabRow")  # qualified -- see LabelCard
+        self.setStyleSheet(
+            f"QFrame#VocabRow {{ background: {colors.BASE}; "
+            f"border: 1px solid {colors.BORDER}; border-radius: 6px; }}"
+        )
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 4, 4)
         layout.setSpacing(8)
@@ -1217,14 +1249,14 @@ class _VocabRow(QFrame):
         dot.setStyleSheet(f"background: {color}; border-radius: 5px;")
         layout.addWidget(dot)
         name_label = QLabel(name)
-        name_label.setStyleSheet("font-weight: 500;")
+        name_label.setStyleSheet(f"font-weight: 500; color: {colors.TEXT_SECONDARY};")
         layout.addWidget(name_label)
         layout.addStretch(1)
         kbd = QLabel(hotkey)
         kbd.setStyleSheet(
-            "color: #6b6b6b; font-family: SF Mono, monospace; font-size: 11px;"
-            "background: white; border: 1px solid #e5e5e5; "
-            "border-radius: 3px; padding: 0 5px;"
+            f"color: {colors.TEXT_TERTIARY}; font-family: SF Mono, monospace; "
+            f"font-size: 11px; background: {colors.CHROME}; "
+            f"border: 1px solid {colors.BORDER}; border-radius: 4px; padding: 0 5px;"
         )
         layout.addWidget(kbd)
         count_label = QLabel(str(count))
@@ -1233,59 +1265,88 @@ class _VocabRow(QFrame):
         # NOTE: Qt Style Sheets don't support `font-variant-numeric`
         # (it spams "Unknown property" warnings); the right-alignment +
         # min-width already keep the counts tidy.
-        count_label.setStyleSheet("color: #6b6b6b;")
+        count_label.setStyleSheet(f"color: {colors.TEXT_TERTIARY};")
         layout.addWidget(count_label)
         remove_btn = QPushButton("×")
         remove_btn.setFixedSize(20, 20)
         remove_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         remove_btn.setToolTip(f"Remove {name!r} from vocabulary")
+        remove_btn.setObjectName("VocabRemove")
+        # padding: 0 is load-bearing. The theme's QPushButton carries
+        # "padding: 6px 12px", which a widget sheet does not reset -- 24px of
+        # horizontal padding inside a 20px fixed width left no room to draw
+        # the glyph, so the button was present, enabled and invisible.
         remove_btn.setStyleSheet(
-            "QPushButton { background: transparent; border: none; "
-            "color: #9ca3af; font-size: 16px; }"
-            "QPushButton:hover { color: #b91c1c; }"
+            "QPushButton#VocabRemove { background: transparent; border: none; "
+            f"padding: 0; margin: 0; color: {colors.TEXT_TERTIARY}; font-size: 15px; }}"
+            f"QPushButton#VocabRemove:hover {{ color: {colors.ERROR}; }}"
         )
         remove_btn.clicked.connect(lambda _checked=False: on_remove(name))
         layout.addWidget(remove_btn)
 
 
+# Object name shared by every chip. An unqualified `QPushButton` rule in a
+# widget stylesheet only ties with the app theme's own `QPushButton` rule, and
+# the theme wins the tie -- which is what flattened these pills back to 6px
+# rectangles. An ID selector outranks a type selector, so it does not.
+CHIP_ID = "Chip"
+
+# A real radius, not a 999px sentinel. Qt does not clamp an oversized
+# border-radius, it ignores the declaration outright -- so with the theme
+# applied the pills came back as square-cornered rectangles. 14px is past half
+# a chip's ~29px height, which is a full pill, and degrades to a rounded
+# rectangle rather than to nothing if the chip ever gets taller.
+CHIP_RADIUS = 14
+
+
 def _chip_css(color: str) -> str:
+    """A behaviour chip in that behaviour's own colour.
+
+    The colour is vocabulary data, not theme, so it is used as given -- these
+    are the same hues the ethogram and the annotated video draw the behaviour
+    in, and re-mapping them here would break that correspondence.
+
+    The *text* colour is picked per chip: the vocabulary colours are chosen by
+    whoever set the project up, and one fixed text colour cannot be legible on
+    both amber and crimson.
+    """
     return (
-        "QPushButton { "
-        f"background: {color}; color: white; border: none; "
-        "padding: 7px 14px; border-radius: 999px; "
-        "font-weight: 500; font-size: 13px; "
+        f"QPushButton#{CHIP_ID} {{ "
+        f"background: {color}; color: {readable_text_on(color)}; border: none; "
+        f"padding: 7px 16px; border-radius: {CHIP_RADIUS}px; "
+        "font-weight: 600; font-size: 13px; "
         "}"
     )
 
 
 def _chip_warn_css() -> str:
     return (
-        "QPushButton { background: #fef3c7; color: #92400e; "
-        "border: none; padding: 7px 14px; border-radius: 999px; "
-        "font-weight: 500; }"
+        f"QPushButton#{CHIP_ID} {{ background: {colors.with_alpha(colors.WARNING, 0.15)}; "
+        f"color: {colors.WARNING}; "
+        f"border: 1px solid {colors.with_alpha(colors.WARNING, 0.45)}; "
+        f"padding: 6px 14px; border-radius: {CHIP_RADIUS}px; font-weight: 500; }}"
+        f"QPushButton#{CHIP_ID}:hover {{ background: {colors.with_alpha(colors.WARNING, 0.24)}; }}"
     )
 
 
 def _chip_unknown_css() -> str:
     return (
-        "QPushButton { background: #f1f5f9; color: #475569; "
-        "border: none; padding: 7px 14px; border-radius: 999px; "
-        "font-weight: 500; }"
+        f"QPushButton#{CHIP_ID} {{ background: {colors.SURFACE_2}; color: {colors.TEXT_TERTIARY}; "
+        f"border: 1px solid {colors.BORDER}; "
+        f"padding: 6px 14px; border-radius: {CHIP_RADIUS}px; font-weight: 500; }}"
+        f"QPushButton#{CHIP_ID}:hover {{ background: {colors.BORDER}; color: {colors.TEXT_PRIMARY}; }}"
     )
 
 
 def _chip_subtle_css() -> str:
     return (
-        "QPushButton { background: transparent; color: #6b6b6b; "
-        "border: none; padding: 7px 12px; border-radius: 999px; "
+        f"QPushButton#{CHIP_ID} {{ background: transparent; color: {colors.TEXT_TERTIARY}; "
+        f"border: 1px solid transparent; padding: 6px 12px; border-radius: {CHIP_RADIUS}px; "
         "font-weight: 500; } "
-        "QPushButton:hover { background: #f6f6f6; }"
+        f"QPushButton#{CHIP_ID}:hover {{ background: {colors.SURFACE_2}; "
+        f"color: {colors.TEXT_PRIMARY}; }}"
     )
 
 
-def _nav_css() -> str:
-    return (
-        "QPushButton { background: transparent; color: #6b6b6b; "
-        "border: 1px solid #e5e5e5; padding: 6px 12px; border-radius: 4px; } "
-        "QPushButton:hover { color: #1a1a1a; border-color: #cbd5e1; }"
-    )
+# _nav_css is gone: prev/next now take the shared theme's default button,
+# which is exactly the quiet surface control they were hand-rolling.

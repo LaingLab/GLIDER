@@ -89,6 +89,10 @@ try:
     from PyQt6.QtGui import QColor, QPainter
     from PyQt6.QtWidgets import QWidget
 
+    # Inside the guard with the Qt imports: colors builds QColor objects at
+    # module scope, so it is no more importable without PyQt6 than they are.
+    from glider.gui.styles import colors
+
     _HAVE_QT = True
 except ImportError:  # pragma: no cover - exercised only in no-UI installs
     _HAVE_QT = False
@@ -191,14 +195,14 @@ if _HAVE_QT:
             h = self.height()
             mid = h // 2
             # Track baseline.
-            p.fillRect(_MARGIN, mid - 3, self._track_width(), 6, QColor("#e5e5e5"))
+            p.fillRect(_MARGIN, mid - 3, self._track_width(), 6, QColor(colors.BORDER))
             # Proposed-clip shaded region.
             cs, ce = self._frame_to_x(self._clip_start), self._frame_to_x(self._clip_end)
-            p.fillRect(cs, mid - 3, max(1, ce - cs), 6, QColor("#cbd5e1"))
+            p.fillRect(cs, mid - 3, max(1, ce - cs), 6, QColor(colors.SURFACE_2))
             # Selected span.
             ix, ox = self._frame_to_x(self._in), self._frame_to_x(self._out)
-            p.fillRect(ix, mid - 5, max(1, ox - ix), 10, QColor("#2563eb"))
+            p.fillRect(ix, mid - 5, max(1, ox - ix), 10, QColor(colors.ACCENT))
             # Handles.
             for hx in (ix, ox):
-                p.fillRect(hx - 3, mid - 11, 6, 22, QColor("#1d4ed8"))
+                p.fillRect(hx - 3, mid - 11, 6, 22, QColor(colors.ACCENT_PRESSED))
             p.end()

@@ -29,17 +29,22 @@ from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from glider.gui.behavior.annotator.speed_source import SessionSpeed
 from glider.gui.behavior.annotator.trim_bar import TRACK_MARGIN, frame_to_x, track_width
+from glider.gui.styles import colors
 
 # Vertical padding inside the widget, leaving room for the axis labels.
 _PAD_TOP = 14
 _PAD_BOTTOM = 6
 
-_COLOR_TRACE = QColor("#2563eb")
-_COLOR_DART = QColor("#dc2626")
-_COLOR_FREEZE = QColor("#0891b2")
-_COLOR_PLAYHEAD = QColor("#111827")
-_COLOR_TEXT = QColor("#6b7280")
-_COLOR_BG = QColor("#f8fafc")
+# Theme tokens rather than literals: this widget sits inside the annotator,
+# which is now dark, and a light slate background under a dark chrome was the
+# most visible half of that mismatch. Freeze/dart keep semantic hues so the
+# two reference lines stay tellable apart from the trace itself.
+_COLOR_TRACE = QColor(colors.ACCENT)
+_COLOR_DART = QColor(colors.ERROR)
+_COLOR_FREEZE = QColor(colors.SUCCESS)
+_COLOR_PLAYHEAD = QColor(colors.TEXT_PRIMARY)
+_COLOR_TEXT = QColor(colors.TEXT_MUTED)
+_COLOR_BG = QColor(colors.CHROME)
 
 
 class SpeedTrace(QWidget):

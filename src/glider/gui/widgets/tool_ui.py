@@ -53,6 +53,7 @@ __all__ = [
     "hint",
     "labelled_row",
     "path_label",
+    "readable_text_on",
     "scroll_column",
     "set_button_role",
     "set_path_text",
@@ -98,6 +99,36 @@ def _tracked(font: QFont, spacing: float) -> QFont:
     """Letter-spacing, which Qt style sheets have no property for."""
     font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
     return font
+
+
+TEXT_ON_LIGHT = "#0a0e13"  # colors.CANVAS
+TEXT_ON_DARK = "#ffffff"
+
+
+def readable_text_on(background: str) -> str:
+    """Black or white for *background*, whichever is easier to read on it.
+
+    Needed wherever a colour comes from data rather than the theme -- a
+    behaviour's vocabulary colour is chosen by whoever set up the project, so
+    no single text colour works: dark text is right on amber and green and
+    close to illegible on crimson or violet.
+
+    Relative luminance per WCAG 2.x, then whichever of the two extremes has
+    the better contrast ratio against it.
+    """
+    hex_colour = background.lstrip("#")
+    if len(hex_colour) == 3:
+        hex_colour = "".join(c * 2 for c in hex_colour)
+    try:
+        channels = [int(hex_colour[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    except (ValueError, IndexError):
+        return TEXT_ON_DARK  # unparseable: assume a dark ground and stay legible
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    luminance = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+    # Contrast against white vs against black, per the WCAG formula.
+    return (
+        TEXT_ON_LIGHT if (1.05 / (luminance + 0.05)) < ((luminance + 0.05) / 0.05) else TEXT_ON_DARK
+    )
 
 
 def _tool_stylesheet() -> str:
