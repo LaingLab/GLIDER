@@ -2,9 +2,9 @@ site_name: GLIDER
 site_description: >-
   General Laboratory Interface for Design, Experimentation, and Recording —
   tutorials and guides for building, running, and recording experiments.
-site_url: https://lainglab.github.io/glider/
-repo_url: https://github.com/LaingLab/glider
-repo_name: LaingLab/glider
+site_url: https://lainglab.github.io/GLIDER/
+repo_url: https://github.com/LaingLab/GLIDER
+repo_name: LaingLab/GLIDER
 edit_uri: edit/main/docs-site/
 copyright: Copyright &copy; LaingLab — MIT License
 
