@@ -318,9 +318,7 @@ async def test_write_retries_once_after_reconnect(fake_bleak):
 async def test_write_mode_autodetected_from_characteristic(fake_bleak):
     # #B6: a write-only characteristic forces response=True even if the setting says False.
     _module, created = fake_bleak
-    device = await _initialized(
-        {"address": "x", "write_char_uuid": "w", "write_response": False}
-    )
+    device = await _initialized({"address": "x", "write_char_uuid": "w", "write_response": False})
     client = created["client"]
     char = type("Char", (), {"properties": ["write"]})()  # supports only with-response
     client.services = type("Svc", (), {"get_characteristic": lambda self, u: char})()

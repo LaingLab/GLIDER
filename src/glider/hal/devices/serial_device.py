@@ -71,24 +71,72 @@ class GenericSerialDevice(BaseDevice):
 
     # Rendered by the hardware panel's schema form when adding/editing a device.
     SETTINGS_SCHEMA = [
-        {"key": "port", "label": "Port", "type": "str", "default": "",
-         "help": "Serial port, e.g. /dev/ttyUSB0 or COM3. Use Scan on the board to list ports."},
-        {"key": "baudrate", "label": "Baud rate", "type": "enum", "default": 9600,
-         "choices": [[9600, "9600"], [19200, "19200"], [38400, "38400"],
-                     [57600, "57600"], [115200, "115200"], [230400, "230400"]]},
-        {"key": "bytesize", "label": "Data bits", "type": "enum", "default": 8,
-         "choices": [[8, "8"], [7, "7"], [6, "6"], [5, "5"]]},
-        {"key": "parity", "label": "Parity", "type": "enum", "default": "N",
-         "choices": [["N", "None"], ["E", "Even"], ["O", "Odd"]]},
-        {"key": "stopbits", "label": "Stop bits", "type": "enum", "default": 1,
-         "choices": [[1, "1"], [2, "2"]]},
-        {"key": "timeout", "label": "Read timeout (s)", "type": "float", "default": 1.0,
-         "min": 0.0, "max": 60.0, "decimals": 2},
-        {"key": "terminator", "label": "Line terminator", "type": "enum", "default": "\n",
-         "choices": [["\n", "LF (\\n)"], ["\r", "CR (\\r)"], ["\r\n", "CRLF (\\r\\n)"]]},
+        {
+            "key": "port",
+            "label": "Port",
+            "type": "str",
+            "default": "",
+            "help": "Serial port, e.g. /dev/ttyUSB0 or COM3. Use Scan on the board to list ports.",
+        },
+        {
+            "key": "baudrate",
+            "label": "Baud rate",
+            "type": "enum",
+            "default": 9600,
+            "choices": [
+                [9600, "9600"],
+                [19200, "19200"],
+                [38400, "38400"],
+                [57600, "57600"],
+                [115200, "115200"],
+                [230400, "230400"],
+            ],
+        },
+        {
+            "key": "bytesize",
+            "label": "Data bits",
+            "type": "enum",
+            "default": 8,
+            "choices": [[8, "8"], [7, "7"], [6, "6"], [5, "5"]],
+        },
+        {
+            "key": "parity",
+            "label": "Parity",
+            "type": "enum",
+            "default": "N",
+            "choices": [["N", "None"], ["E", "Even"], ["O", "Odd"]],
+        },
+        {
+            "key": "stopbits",
+            "label": "Stop bits",
+            "type": "enum",
+            "default": 1,
+            "choices": [[1, "1"], [2, "2"]],
+        },
+        {
+            "key": "timeout",
+            "label": "Read timeout (s)",
+            "type": "float",
+            "default": 1.0,
+            "min": 0.0,
+            "max": 60.0,
+            "decimals": 2,
+        },
+        {
+            "key": "terminator",
+            "label": "Line terminator",
+            "type": "enum",
+            "default": "\n",
+            "choices": [["\n", "LF (\\n)"], ["\r", "CR (\\r)"], ["\r\n", "CRLF (\\r\\n)"]],
+        },
         {"key": "encoding", "label": "Encoding", "type": "str", "default": "utf-8"},
-        {"key": "stream", "label": "Stream (background read)", "type": "bool", "default": False,
-         "help": "Continuously read framed lines in the background so the recorder can log them."},
+        {
+            "key": "stream",
+            "label": "Stream (background read)",
+            "type": "bool",
+            "default": False,
+            "help": "Continuously read framed lines in the background so the recorder can log them.",
+        },
     ]
 
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
@@ -230,8 +278,7 @@ class GenericSerialDevice(BaseDevice):
                 import serial
             except ImportError as e:
                 raise RuntimeError(
-                    "pyserial not installed. Run: pip install pyserial "
-                    "(or reinstall GLIDER)."
+                    "pyserial not installed. Run: pip install pyserial " "(or reinstall GLIDER)."
                 ) from e
             return serial.Serial(
                 port=self._port,
@@ -293,9 +340,7 @@ class GenericSerialDevice(BaseDevice):
                     try:
                         await asyncio.to_thread(ser.close)
                     except Exception as e:  # close is best-effort
-                        logger.warning(
-                            "GenericSerial %s: error during close: %s", self._name, e
-                        )
+                        logger.warning("GenericSerial %s: error during close: %s", self._name, e)
         finally:
             self._initialized = False
             with self._sample_lock:

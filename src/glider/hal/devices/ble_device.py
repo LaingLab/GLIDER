@@ -68,18 +68,47 @@ class BLEDevice(BaseDevice):
     """
 
     SETTINGS_SCHEMA = [
-        {"key": "address", "label": "Address / UUID", "type": "str", "default": "",
-         "help": "MAC (Windows/Linux) or UUID (macOS). Leave blank and set Name for portability."},
-        {"key": "name", "label": "Advertised name", "type": "str", "default": "",
-         "help": "Resolve the address by scanning for this name when Address is blank."},
-        {"key": "read_char_uuid", "label": "Read/Notify characteristic", "type": "str", "default": ""},
+        {
+            "key": "address",
+            "label": "Address / UUID",
+            "type": "str",
+            "default": "",
+            "help": "MAC (Windows/Linux) or UUID (macOS). Leave blank and set Name for portability.",
+        },
+        {
+            "key": "name",
+            "label": "Advertised name",
+            "type": "str",
+            "default": "",
+            "help": "Resolve the address by scanning for this name when Address is blank.",
+        },
+        {
+            "key": "read_char_uuid",
+            "label": "Read/Notify characteristic",
+            "type": "str",
+            "default": "",
+        },
         {"key": "write_char_uuid", "label": "Write characteristic", "type": "str", "default": ""},
-        {"key": "notify", "label": "Subscribe (stream notifications)", "type": "bool",
-         "default": False,
-         "help": "Push-based sensors: subscribe on connect and record each notification."},
-        {"key": "value_format", "label": "Value format", "type": "enum", "default": "text",
-         "choices": [["text", "Text"], ["int", "Integer (LE)"], ["int_be", "Integer (BE)"],
-                     ["hex", "Hex string"], ["bytes", "Raw bytes"]]},
+        {
+            "key": "notify",
+            "label": "Subscribe (stream notifications)",
+            "type": "bool",
+            "default": False,
+            "help": "Push-based sensors: subscribe on connect and record each notification.",
+        },
+        {
+            "key": "value_format",
+            "label": "Value format",
+            "type": "enum",
+            "default": "text",
+            "choices": [
+                ["text", "Text"],
+                ["int", "Integer (LE)"],
+                ["int_be", "Integer (BE)"],
+                ["hex", "Hex string"],
+                ["bytes", "Raw bytes"],
+            ],
+        },
         {"key": "service_uuid", "label": "Service UUID (optional)", "type": "str", "default": ""},
         {"key": "encoding", "label": "Encoding", "type": "str", "default": "utf-8"},
         {"key": "write_response", "label": "Acknowledged write", "type": "bool", "default": False},
@@ -102,9 +131,7 @@ class BLEDevice(BaseDevice):
         before mutating anything, so a rejected edit leaves the caches untouched)."""
         value_format = str(s.get("value_format", "text"))
         if value_format not in _VALUE_FORMATS:
-            raise ValueError(
-                f"value_format must be one of {_VALUE_FORMATS}, got {value_format!r}"
-            )
+            raise ValueError(f"value_format must be one of {_VALUE_FORMATS}, got {value_format!r}")
         self._address = str(s.get("address", "")).strip()
         self._adv_name = str(s.get("name", "")).strip()
         self._service_uuid = str(s.get("service_uuid", "")).strip() or None

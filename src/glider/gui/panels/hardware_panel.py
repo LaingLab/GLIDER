@@ -156,7 +156,9 @@ class HardwarePanel(QWidget):
                     elif device_type == "GenericSPI":
                         cfg = getattr(device, "_config", None)
                         settings = getattr(cfg, "settings", {}) if cfg else {}
-                        pin_str = f"bus {settings.get('spi_bus', 0)}.{settings.get('spi_device', 0)}"
+                        pin_str = (
+                            f"bus {settings.get('spi_bus', 0)}.{settings.get('spi_device', 0)}"
+                        )
                     elif pin_values:
                         pin_str = f"Pin {pin_values[0]}"
                     else:

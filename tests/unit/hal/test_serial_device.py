@@ -315,6 +315,7 @@ async def test_streaming_reader_discards_partial_frame(fake_serial):
 
     def _read_until(*_a, **_k):
         import time as _t
+
         _t.sleep(0.005)
         return b"12.3"  # always partial
 
