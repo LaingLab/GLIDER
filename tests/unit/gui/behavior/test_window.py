@@ -1316,9 +1316,10 @@ def _cv_options(qtbot, tmp_path, monkeypatch, configure=None):
     class FakeWorker:
         progress = failed = finished = None
 
-        def __init__(self, sessions, options):
+        def __init__(self, sessions, options, output=None):
             captured["sessions"] = sessions
             captured["options"] = options
+            captured["output"] = output
 
         def moveToThread(self, _t):
             pass
@@ -1395,6 +1396,63 @@ def test_cross_validate_needs_sessions(qtbot, tmp_path, monkeypatch):
     )
     assert "options" not in captured
     assert warned and "session" in warned[0].lower()
+
+
+def test_measure_only_by_default_passes_no_output(qtbot, tmp_path, monkeypatch):
+    """Cross-validate alone must not write a model."""
+    _tab, captured, _ = _cv_options(qtbot, tmp_path, monkeypatch)
+    assert captured["output"] is None
+
+
+def test_ticking_also_fit_passes_the_output_path(qtbot, tmp_path, monkeypatch):
+    def configure(tab):
+        tab._cv_fit_check.setChecked(True)
+        tab._output_path = tmp_path / "model.pkl"
+
+    _tab, captured, _ = _cv_options(qtbot, tmp_path, monkeypatch, configure=configure)
+    assert captured["output"] == tmp_path / "model.pkl"
+
+
+def test_also_fit_without_an_output_file_is_refused(qtbot, tmp_path, monkeypatch):
+    """Fitting with nowhere to save it would throw the model away."""
+    _tab, captured, warned = _cv_options(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._cv_fit_check.setChecked(True)
+    )
+    assert "options" not in captured
+    assert warned and "output file" in warned[0].lower()
+
+
+def test_the_combined_worker_reaches_the_combined_pipeline_call(tmp_path, monkeypatch):
+    """The worker must use cross_validate_and_train, not two separate calls."""
+    from glider.analysis.behavior import pipeline
+    from glider.gui.behavior.workers import CrossValidateWorker
+
+    seen: dict = {}
+
+    class FakeModel:
+        def save(self, path):
+            seen["saved"] = path
+
+    def fake_combined(sessions, **kwargs):
+        seen["combined"] = True
+        return {"mean_macro_f1": 0.5}, type("R", (), {"model": FakeModel()})()
+
+    def fake_cv_only(sessions, **kwargs):
+        seen["cv_only"] = True
+        return {"mean_macro_f1": 0.5}
+
+    monkeypatch.setattr(pipeline, "cross_validate_and_train", fake_combined)
+    monkeypatch.setattr(pipeline, "cross_validate_sessions", fake_cv_only)
+    import glider.analysis.behavior as behavior_pkg
+
+    monkeypatch.setattr(behavior_pkg, "cross_validate_and_train", fake_combined, raising=False)
+    monkeypatch.setattr(behavior_pkg, "cross_validate_sessions", fake_cv_only, raising=False)
+
+    out = tmp_path / "m.pkl"
+    CrossValidateWorker([("a.csv", "b.csv")], {}, out).run()
+    assert seen.get("combined") is True
+    assert seen.get("cv_only") is None
+    assert seen.get("saved") == out
 
 
 def test_a_failed_run_re_enables_both_buttons(qtbot, tmp_path, monkeypatch):
