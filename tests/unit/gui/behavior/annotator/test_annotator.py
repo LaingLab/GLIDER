@@ -609,6 +609,39 @@ def test_save_writes_to_correct_per_video_csv(tmp_path):
     assert list(loaded_b) == []
 
 
+def test_load_any_returns_the_record_whatever_the_inputs(tmp_path):
+    """Resuming must not depend on today's settings matching yesterday's.
+
+    ResumeCache.load() is hash-gated, which is right for "reuse this
+    automatically". Deliberately clicking Resume is a different question: the
+    operator is asking for whatever queue is saved, not for a queue matching
+    the checkboxes currently on screen.
+    """
+    from glider.gui.behavior.annotator.resume_cache import ResumeCache
+
+    cache = ResumeCache(tmp_path)
+    cache.save(inputs={"n_clips": 100, "exclude_labeled": False}, clip_payload=[{"a": 1}])
+
+    assert cache.load(inputs={"n_clips": 250}) is None  # hash-gated, as designed
+    record = cache.load_any()
+    assert record is not None
+    assert record["clips"] == [{"a": 1}]
+    assert record["inputs"]["n_clips"] == 100
+
+
+def test_load_any_is_none_when_there_is_no_queue(tmp_path):
+    from glider.gui.behavior.annotator.resume_cache import ResumeCache
+
+    assert ResumeCache(tmp_path).load_any() is None
+
+
+def test_load_any_survives_a_corrupt_file(tmp_path):
+    from glider.gui.behavior.annotator.resume_cache import CACHE_FILENAME, ResumeCache
+
+    (tmp_path / CACHE_FILENAME).write_text("{not json", encoding="utf-8")
+    assert ResumeCache(tmp_path).load_any() is None
+
+
 def test_build_review_clips_loads_zones(tmp_path):
     from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
     from glider.gui.behavior.annotator.app import build_review_clips

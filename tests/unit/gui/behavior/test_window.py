@@ -1688,6 +1688,147 @@ def test_review_mode_reports_the_zones_it_loaded(qtbot, tmp_path, monkeypatch):
     assert "review" in captured["tab"]._queue_status.lower()
 
 
+# --------------------------------------------------------------------------
+# Resume labelling: the saved queue AND everything already labelled
+# --------------------------------------------------------------------------
+
+
+def _resume(qtbot, tmp_path, monkeypatch, configure=None):
+    """Drive _on_resume and return (captured, warnings)."""
+    from glider.gui.behavior import window as win_mod
+    from glider.gui.behavior.annotator import main_window as annot_mod
+    from glider.gui.behavior.annotator import sampler as sampler_mod
+
+    captured: dict = {}
+    warnings_shown: list[str] = []
+
+    def fake_propose(sessions, n_clips_total, fps=30.0, **kw):
+        from glider.gui.behavior.annotator.sampler import ProposedClip
+
+        video = str(sessions[0][1]) if sessions else "v.mp4"
+        return [
+            ProposedClip(i, 100 + 10 * i, 95 + 10 * i, 105 + 10 * i, 0.6, video)
+            for i in range(int(n_clips_total))
+        ]
+
+    class FakeAnnotator:
+        def __init__(self, **kw):
+            captured["annotator_kwargs"] = kw
+
+        def show(self):
+            pass
+
+        def warn_about_load_errors(self):
+            return False
+
+    monkeypatch.setattr(sampler_mod, "propose_clips_multi", fake_propose)
+    monkeypatch.setattr(annot_mod, "AnnotatorWindow", FakeAnnotator)
+    for kind in ("warning", "critical", "information"):
+        monkeypatch.setattr(
+            win_mod.QMessageBox,
+            kind,
+            lambda *a, **k: warnings_shown.append(a[2] if len(a) > 2 else ""),
+        )
+
+    tab = win_mod.AnnotateTab(tmp_path)
+    qtbot.addWidget(tab)
+    tab._videos_dir = tmp_path
+    if configure is not None:
+        configure(tab)
+    tab._on_resume()
+    captured["tab"] = tab
+    return captured, warnings_shown
+
+
+def test_resume_loads_the_saved_queue(qtbot, tmp_path, monkeypatch):
+    _pose_batch_output(tmp_path, "session01")
+    _launch_annotate(qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(6))
+
+    captured, _ = _resume(qtbot, tmp_path, monkeypatch)
+
+    assert len(captured["annotator_kwargs"]["clips"]) == 6
+
+
+def test_resume_ignores_the_sampling_settings(qtbot, tmp_path, monkeypatch):
+    """A queue is a queue. Toggling a sampling-only option must not lose it."""
+    _pose_batch_output(tmp_path, "session01")
+    _launch_annotate(qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(6))
+
+    def different_settings(tab):
+        tab._clip_count.setValue(250)
+        tab._skip_labelled_check.setChecked(True)
+
+    captured, _ = _resume(qtbot, tmp_path, monkeypatch, configure=different_settings)
+
+    assert len(captured["annotator_kwargs"]["clips"]) == 6
+
+
+def test_resume_includes_labelled_clips_outside_the_queue(qtbot, tmp_path, monkeypatch):
+    """Zones from 'render more' or an earlier queue must not vanish."""
+    _pose_batch_output(tmp_path, "session01")
+    _launch_annotate(qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(3))
+    # Queue clips span 95-105, 105-115, 115-125. This zone is well clear.
+    _saved_zones(tmp_path, "session01", [(900, 930)])
+
+    captured, _ = _resume(qtbot, tmp_path, monkeypatch)
+
+    clips = captured["annotator_kwargs"]["clips"]
+    assert len(clips) == 4
+    assert any(c.start_frame == 900 for c in clips)
+
+
+def test_resume_does_not_show_a_labelled_clip_twice(qtbot, tmp_path, monkeypatch):
+    """A zone overlapping a queued clip is already covered by it."""
+    _pose_batch_output(tmp_path, "session01")
+    _launch_annotate(qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(3))
+    _saved_zones(tmp_path, "session01", [(96, 104)])  # inside queue clip 95-105
+
+    captured, _ = _resume(qtbot, tmp_path, monkeypatch)
+
+    assert len(captured["annotator_kwargs"]["clips"]) == 3
+
+
+def test_resume_works_from_annotations_alone(qtbot, tmp_path, monkeypatch):
+    """No queue saved, but labelled work exists — resume should still open it."""
+    _pose_batch_output(tmp_path, "session01")
+    _saved_zones(tmp_path, "session01", [(0, 10), (20, 30)])
+
+    captured, _ = _resume(qtbot, tmp_path, monkeypatch)
+
+    assert len(captured["annotator_kwargs"]["clips"]) == 2
+
+
+def test_resume_with_nothing_to_resume_says_so(qtbot, tmp_path, monkeypatch):
+    _pose_batch_output(tmp_path, "session01")
+
+    captured, warnings_shown = _resume(qtbot, tmp_path, monkeypatch)
+
+    assert "annotator_kwargs" not in captured
+    assert warnings_shown and "nothing to resume" in warnings_shown[0].lower()
+
+
+def test_resume_can_still_add_more(qtbot, tmp_path, monkeypatch):
+    """The annotator's 'render more' button needs a sampler to exist."""
+    _pose_batch_output(tmp_path, "session01")
+    _launch_annotate(qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(3))
+
+    captured, _ = _resume(qtbot, tmp_path, monkeypatch)
+
+    assert callable(captured["annotator_kwargs"]["clip_sampler"])
+
+
+def test_resume_reports_what_it_opened(qtbot, tmp_path, monkeypatch):
+    _pose_batch_output(tmp_path, "session01")
+    _launch_annotate(qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(4))
+    _saved_zones(tmp_path, "session01", [(96, 104)])
+
+    captured, _ = _resume(qtbot, tmp_path, monkeypatch)
+
+    status = captured["tab"]._queue_status.lower()
+    assert "resumed" in status
+    assert "1 already labelled" in status
+
+
 def test_cohort_mode_sends_only_the_cohort_file(qtbot, tmp_path):
     """One pooled cut-off, not per-video percentiles."""
     from glider.gui.behavior.window import ApplyTab
