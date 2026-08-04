@@ -1,99 +1,99 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
-         <loc>https://lainglab.github.io/glider/</loc>
+         <loc>https://lainglab.github.io/GLIDER/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/building/</loc>
+         <loc>https://lainglab.github.io/GLIDER/building/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/building/devices/</loc>
+         <loc>https://lainglab.github.io/GLIDER/building/devices/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/building/functions/</loc>
+         <loc>https://lainglab.github.io/GLIDER/building/functions/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/building/node-graph/</loc>
+         <loc>https://lainglab.github.io/GLIDER/building/node-graph/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/building/plugins/</loc>
+         <loc>https://lainglab.github.io/GLIDER/building/plugins/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/camera-behavior/</loc>
+         <loc>https://lainglab.github.io/GLIDER/camera-behavior/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/camera-behavior/behavior/</loc>
+         <loc>https://lainglab.github.io/GLIDER/camera-behavior/behavior/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/camera-behavior/camera/</loc>
+         <loc>https://lainglab.github.io/GLIDER/camera-behavior/camera/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/camera-behavior/tracking/</loc>
+         <loc>https://lainglab.github.io/GLIDER/camera-behavior/tracking/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/getting-started/</loc>
+         <loc>https://lainglab.github.io/GLIDER/getting-started/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/getting-started/concepts/</loc>
+         <loc>https://lainglab.github.io/GLIDER/getting-started/concepts/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/getting-started/first-experiment/</loc>
+         <loc>https://lainglab.github.io/GLIDER/getting-started/first-experiment/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/getting-started/installation/</loc>
+         <loc>https://lainglab.github.io/GLIDER/getting-started/installation/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/reference/</loc>
+         <loc>https://lainglab.github.io/GLIDER/reference/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/reference/behavior-model/</loc>
+         <loc>https://lainglab.github.io/GLIDER/reference/behavior-model/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/reference/devices/</loc>
+         <loc>https://lainglab.github.io/GLIDER/reference/devices/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/reference/ecosystem-reference/</loc>
+         <loc>https://lainglab.github.io/GLIDER/reference/ecosystem-reference/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/reference/nodes/</loc>
+         <loc>https://lainglab.github.io/GLIDER/reference/nodes/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/reference/shortcuts/</loc>
+         <loc>https://lainglab.github.io/GLIDER/reference/shortcuts/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/reference/troubleshooting/</loc>
+         <loc>https://lainglab.github.io/GLIDER/reference/troubleshooting/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/runner/</loc>
+         <loc>https://lainglab.github.io/GLIDER/runner/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/runner/pi-kiosk/</loc>
+         <loc>https://lainglab.github.io/GLIDER/runner/pi-kiosk/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
     <url>
-         <loc>https://lainglab.github.io/glider/runner/runner/</loc>
+         <loc>https://lainglab.github.io/GLIDER/runner/runner/</loc>
          <lastmod>2026-08-04</lastmod>
     </url>
 </urlset>
