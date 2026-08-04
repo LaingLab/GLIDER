@@ -85,12 +85,27 @@ class ResumeCache:
 
     def load(self, *, inputs: dict[str, Any]) -> dict[str, Any] | None:
         """Return the cached record only if its input-hash matches."""
+        record = self.load_any()
+        if record is None or record.get("hash") != _hash_inputs(inputs):
+            return None
+        return record
+
+    def load_any(self) -> dict[str, Any] | None:
+        """Return the cached record whatever inputs produced it.
+
+        :meth:`load` is hash-gated, which is right for "reuse this
+        automatically if nothing changed". Deliberately choosing to resume is
+        a different question: the operator is asking for whichever queue is
+        saved, not for one that happens to match the checkboxes currently on
+        screen. Gating that on an exact settings match is how a good queue
+        gets discarded because a sampling-only option was toggled.
+
+        Missing or unreadable yields None — a resume that cannot find its
+        queue is not an error, it just has nothing to offer.
+        """
         if not self.path.exists():
             return None
         try:
-            record = json.loads(self.path.read_text(encoding="utf-8"))
+            return json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
-        if record.get("hash") != _hash_inputs(inputs):
-            return None
-        return record

@@ -446,6 +446,27 @@ class AnnotateTab(QWidget):
         self._queue_status = ""
         self._annotate_status = hint("")
         clips.add(self._annotate_status)
+
+        # Picking up where you left off is the common case, and it was only
+        # reachable by reproducing the exact settings that first drew the
+        # queue — including a sampling-only checkbox that has no bearing on
+        # an existing one. Its own button, with no settings involved.
+        self._resume_btn = QPushButton("Resume labelling")
+        self._resume_btn.setToolTip(
+            "Open the saved clip queue together with everything you have\n"
+            "already labelled, whatever the settings above say.\n\n"
+            "To add further clips on top, use 'Render more' in the\n"
+            "annotator's sidebar — it avoids the stretches already done."
+        )
+        self._resume_btn.clicked.connect(self._on_resume)
+        clips.add(self._resume_btn)
+        clips.add(
+            hint(
+                "Resume ignores the clip count and the skip setting — those "
+                "only affect drawing a new queue. Add more from inside the "
+                "annotator with 'Render more'."
+            )
+        )
         column.addWidget(clips)
 
         # --- speed trace ------------------------------------------------
@@ -565,6 +586,159 @@ class AnnotateTab(QWidget):
         set_path_text(self._poses_label, _short_path(self._poses_dir), filled=True)
         self._poses_label.setToolTip(path)
 
+    def _open_annotator(self, sessions, videos_meta, fps, clips, *, origin: str) -> None:
+        """Open the annotator on ``clips``. Shared by Launch and Resume.
+
+        Extracted so the two entry points cannot drift on the speed
+        trace, the vocabulary, or whether 'render more' is available —
+        a resumed session needs all three exactly as a fresh one does.
+        """
+        # Deferred here rather than at module scope: AnnotatorWindow pulls in
+        # cv2 via the clip player, and building menus must stay cheap.
+        from glider.analysis.behavior.cohort_speed import (
+            CohortSpeedError,
+            CohortSpeedThresholds,
+        )
+        from glider.analysis.behavior.units import load_px_per_mm
+        from glider.analysis.behavior.vocabulary import Vocabulary
+        from glider.gui.behavior.annotator.app import make_more_sampler
+        from glider.gui.behavior.annotator.capture_cache import VideoCaptureCache
+        from glider.gui.behavior.annotator.main_window import AnnotatorWindow
+
+        self._set_queue_status(origin, clips, videos_meta)
+
+        # The window's "render more" button only exists when it is given a
+        # sampler; without one, a review session is a dead end and a sampled
+        # session can never be extended.
+        clip_sampler = make_more_sampler(sessions, fps=fps)
+
+        # Speed trace inputs. All three are optional and independent: no pose
+        # CSVs means no trace, no cohort file means no reference lines, no
+        # calibration means the trace is in px/frame.
+        pose_csvs: dict[Path, Path] = {}
+        scales: dict[Path, float] = {}
+        cohort = None
+        if self._speed_check.isChecked():
+            pose_csvs = dict(sessions)
+            if self._calibration_master is not None:
+                for video, _pose in sessions:
+                    scale = load_px_per_mm(self._calibration_master, video)
+                    if scale and scale > 0:
+                        scales[video] = float(scale)
+            if self._cohort_path is not None:
+                try:
+                    cohort = CohortSpeedThresholds.load(self._cohort_path)
+                except CohortSpeedError as e:
+                    # Costs the reference lines, not the labelling session.
+                    QMessageBox.warning(
+                        self,
+                        "Annotate",
+                        f"Could not read the cohort threshold file:\n{e}\n\n"
+                        "Opening without speed reference lines.",
+                    )
+
+        # Vocabulary fallback: a sibling of the first video, same rule as
+        # annotator/app.py's run().
+        vocab = Vocabulary()
+        first_video = sessions[0][0]
+        vocab_path: Path | None = first_video.parent / f"{first_video.stem}_behaviors.yaml"
+        if vocab_path.exists():
+            try:
+                vocab = Vocabulary.load(vocab_path)
+            except Exception:  # noqa: BLE001
+                vocab_path = None
+        else:
+            vocab_path = None
+
+        capture_cache = VideoCaptureCache(max_open=3)
+        self._annotator_window = AnnotatorWindow(
+            clips=clips,
+            videos_meta=videos_meta,
+            fps=fps,
+            vocab=vocab,
+            vocab_path=vocab_path,
+            capture_cache=capture_cache,
+            clip_sampler=clip_sampler,
+            pose_csvs=pose_csvs,
+            cohort=cohort,
+            px_per_mm=scales,
+        )
+        self._annotator_window.show()
+        self._annotator_window.warn_about_load_errors()
+
+    def _resolve_sessions(self):
+        """``(sessions, poses_dir)`` for the chosen folders, or ``None``.
+
+        Shared by Launch and Resume so the two cannot disagree about which
+        videos are in play or how their pose CSVs are found. Reports its own
+        problems and returns None when there is nothing to work with.
+        """
+        if self._videos_dir is None:
+            QMessageBox.warning(self, "Annotate", "Choose a videos folder first.")
+            return None
+        poses_dir = self._poses_dir or self._videos_dir
+
+        videos = sorted(p for p in self._videos_dir.iterdir() if p.suffix.lower() in _VIDEO_EXTS)
+        if not videos:
+            QMessageBox.warning(self, "Annotate", f"No videos found in {self._videos_dir}")
+            return None
+        located = [(v, find_pose_csv(v, poses_dir)) for v in videos]
+        missing = [v.name for v, csv in located if csv is None]
+        if missing:
+            QMessageBox.warning(
+                self,
+                "Annotate",
+                "No pose CSV found for:\n"
+                + "\n".join(missing)
+                + f"\n\nLooked in {poses_dir} for <name>.csv and "
+                "<name>DLC_<model>.csv.\n\nPose data comes from "
+                "Tools ▸ Batch Pose Tracking — run that over these videos "
+                "first, then come back here.",
+            )
+            return None
+        return [(v, csv) for v, csv in located if csv is not None], poses_dir
+
+    def _on_resume(self) -> None:
+        """Reopen the saved queue together with everything already labelled.
+
+        Deliberately settings-free. The clip count and the skip-labelled
+        option describe how to *draw* a queue; asking to resume one already
+        drawn should not depend on them still matching, which is how a good
+        queue gets thrown away by a checkbox.
+        """
+        resolved = self._resolve_sessions()
+        if resolved is None:
+            return
+        sessions, _poses_dir = resolved
+
+        from glider.gui.behavior.annotator.app import (
+            annotation_path_for,
+            merge_queue_with_labelled,
+        )
+        from glider.gui.behavior.annotator.resume_cache import ResumeCache
+        from glider.gui.behavior.annotator.sampler import ProposedClip
+        from glider.vision.pose.dlc import DEFAULT_FPS, fps_for_csv
+
+        rates = {fps_for_csv(csv) for _v, csv in sessions}
+        rates.discard(None)
+        fps = float(next(iter(rates))) if len(rates) == 1 else DEFAULT_FPS
+        videos_meta = {v: annotation_path_for(p) for v, p in sessions}
+
+        record = ResumeCache(self._videos_dir).load_any()
+        queue = [ProposedClip(**c) for c in (record or {}).get("clips", [])]
+        clips = merge_queue_with_labelled(queue, videos_meta, fps)
+        if not clips:
+            QMessageBox.warning(
+                self,
+                "Annotate",
+                "Nothing to resume: no saved clip queue and no annotations "
+                f"for the videos in {self._videos_dir}.\n\n"
+                "Use 'Launch annotator' to draw a queue first.",
+            )
+            return
+
+        self._open_annotator(sessions, videos_meta, fps, clips, origin="resumed")
+
     def _on_launch(self) -> None:
         if self._videos_dir is None:
             QMessageBox.warning(self, "Annotate", "Choose a videos folder first.")
@@ -596,19 +770,10 @@ class AnnotateTab(QWidget):
         # Deferred: propose_clips_multi pulls in sklearn; AnnotatorWindow
         # pulls in cv2 via the clip player.
         from glider.analysis.behavior.annotations import AnnotationStore
-        from glider.analysis.behavior.cohort_speed import (
-            CohortSpeedError,
-            CohortSpeedThresholds,
-        )
-        from glider.analysis.behavior.units import load_px_per_mm
-        from glider.analysis.behavior.vocabulary import Vocabulary
         from glider.gui.behavior.annotator.app import (
             annotation_path_for,
             build_review_clips,
-            make_more_sampler,
         )
-        from glider.gui.behavior.annotator.capture_cache import VideoCaptureCache
-        from glider.gui.behavior.annotator.main_window import AnnotatorWindow
         from glider.gui.behavior.annotator.resume_cache import ResumeCache
         from glider.gui.behavior.annotator.sampler import ProposedClip, propose_clips_multi
         from glider.vision.pose.dlc import DEFAULT_FPS, fps_for_csv
@@ -702,65 +867,7 @@ class AnnotateTab(QWidget):
         # saved queue or thrown it away and sampled a new one — and on a
         # 250-clip job spread over several sittings that is the one thing
         # worth knowing at launch.
-        self._set_queue_status(origin, clips, videos_meta)
-
-        # The window's "render more" button only exists when it is given a
-        # sampler; without one, a review session is a dead end and a sampled
-        # session can never be extended.
-        clip_sampler = make_more_sampler(sessions, fps=fps)
-
-        # Speed trace inputs. All three are optional and independent: no pose
-        # CSVs means no trace, no cohort file means no reference lines, no
-        # calibration means the trace is in px/frame.
-        pose_csvs: dict[Path, Path] = {}
-        scales: dict[Path, float] = {}
-        cohort = None
-        if self._speed_check.isChecked():
-            pose_csvs = dict(sessions)
-            if self._calibration_master is not None:
-                for video, _pose in sessions:
-                    scale = load_px_per_mm(self._calibration_master, video)
-                    if scale and scale > 0:
-                        scales[video] = float(scale)
-            if self._cohort_path is not None:
-                try:
-                    cohort = CohortSpeedThresholds.load(self._cohort_path)
-                except CohortSpeedError as e:
-                    # Costs the reference lines, not the labelling session.
-                    QMessageBox.warning(
-                        self,
-                        "Annotate",
-                        f"Could not read the cohort threshold file:\n{e}\n\n"
-                        "Opening without speed reference lines.",
-                    )
-
-        # Vocabulary fallback: a sibling of the first video, same rule as
-        # annotator/app.py's run().
-        vocab = Vocabulary()
-        vocab_path: Path | None = videos[0].parent / f"{videos[0].stem}_behaviors.yaml"
-        if vocab_path.exists():
-            try:
-                vocab = Vocabulary.load(vocab_path)
-            except Exception:  # noqa: BLE001
-                vocab_path = None
-        else:
-            vocab_path = None
-
-        capture_cache = VideoCaptureCache(max_open=3)
-        self._annotator_window = AnnotatorWindow(
-            clips=clips,
-            videos_meta=videos_meta,
-            fps=fps,
-            vocab=vocab,
-            vocab_path=vocab_path,
-            capture_cache=capture_cache,
-            clip_sampler=clip_sampler,
-            pose_csvs=pose_csvs,
-            cohort=cohort,
-            px_per_mm=scales,
-        )
-        self._annotator_window.show()
-        self._annotator_window.warn_about_load_errors()
+        self._open_annotator(sessions, videos_meta, fps, clips, origin=origin)
 
 
 class TrainTab(QWidget):

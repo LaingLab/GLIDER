@@ -58,6 +58,44 @@ def build_review_clips(videos_meta: dict[Path, Path], fps: float) -> list[Propos
     return clips
 
 
+def merge_queue_with_labelled(
+    queue_clips: list[ProposedClip],
+    videos_meta: dict[Path, Path],
+    fps: float,
+) -> list[ProposedClip]:
+    """The saved queue plus everything already labelled, in one list.
+
+    Resuming should show the whole job: the clips still to do *and* the ones
+    already done, marked done. The saved queue alone misses zones labelled
+    outside it — anything added by "render more", or carried over from an
+    earlier queue — and those would silently vanish from the session.
+
+    A saved zone that overlaps a queued clip is dropped: the queued clip
+    already covers that stretch and the annotator marks it done by the same
+    overlap rule, so keeping both would show the labeller the same moment
+    twice.
+    """
+    merged = list(queue_clips)
+    seen = {(str(c.video_path), c.start_frame, c.end_frame) for c in merged}
+    by_video: dict[str, list[ProposedClip]] = {}
+    for clip in merged:
+        by_video.setdefault(str(clip.video_path), []).append(clip)
+
+    for clip in build_review_clips(videos_meta, fps):
+        key = (str(clip.video_path), clip.start_frame, clip.end_frame)
+        if key in seen:
+            continue
+        overlaps = any(
+            min(q.end_frame, clip.end_frame) > max(q.start_frame, clip.start_frame)
+            for q in by_video.get(str(clip.video_path), ())
+        )
+        if overlaps:
+            continue
+        seen.add(key)
+        merged.append(clip)
+    return merged
+
+
 def make_more_sampler(
     pose_sessions: list[tuple[Path, Path]],  # (video, pose_csv) pairs
     *,
