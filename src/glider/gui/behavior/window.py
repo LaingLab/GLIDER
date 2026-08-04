@@ -22,7 +22,7 @@ import pprint
 from pathlib import Path
 from typing import NamedTuple
 
-from PyQt6.QtCore import QThread
+from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -47,6 +47,21 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.widgets.tool_ui import (
+    GUTTER,
+    Card,
+    RunRail,
+    ToolHeader,
+    apply_tool_theme,
+    attach_empty_state,
+    hint,
+    labelled_row,
+    path_label,
+    scroll_column,
+    set_button_role,
+    set_path_text,
+    set_text_role,
+)
 from glider.vision.pose.batch import VIDEO_EXTS, VIDEO_FILTER, find_pose_csv
 
 logger = logging.getLogger(__name__)
@@ -274,10 +289,18 @@ class LgbmAdvancedDialog(QDialog):
 class BehaviorAnalysisWindow(QMainWindow):
     """Top-level window for the Behavior Analysis tool."""
 
+    # What each tab is for, shown in the header so the three stages read as one
+    # pipeline rather than three unrelated screens.
+    _TAB_BLURBS = (
+        "Label behavior on sampled clips to build a training set",
+        "Fit a classifier from labeled sessions",
+        "Score recorded video and write the ethogram",
+    )
+
     def __init__(self, project_dir: Path | None = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Behavior Analysis")
-        self.resize(1000, 700)
+        self.resize(1240, 840)
 
         if project_dir is None:
             from glider.core.config import get_config
@@ -287,10 +310,49 @@ class BehaviorAnalysisWindow(QMainWindow):
         self.project_dir.mkdir(parents=True, exist_ok=True)
 
         self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
         self.tabs.addTab(AnnotateTab(self.project_dir), "Annotate")
         self.tabs.addTab(TrainTab(), "Train")
         self.tabs.addTab(ApplyTab(), "Apply")
-        self.setCentralWidget(self.tabs)
+
+        self._header = ToolHeader("Behavior Analysis", self._TAB_BLURBS[0])
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
+        central = QWidget()
+        central.setObjectName("ToolPage")
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._header)
+        layout.addWidget(self.tabs, 1)
+        self.setCentralWidget(central)
+
+        # These windows open with parent=None, so nothing hands them the app
+        # theme -- see tool_ui.apply_tool_theme.
+        apply_tool_theme(self)
+
+    def _on_tab_changed(self, index: int) -> None:
+        if 0 <= index < len(self._TAB_BLURBS):
+            self._header.set_subtitle(self._TAB_BLURBS[index])
+
+
+def _workspace(parent: QWidget, rail: RunRail, *, rail_width: int = 380) -> QVBoxLayout:
+    """Lay a tab out as ``[ scrolling config column | pinned run rail ]``.
+
+    Returns the layout to add cards to. The rail keeps the primary action and
+    its output on screen no matter how far the configuration scrolls, which is
+    the whole point of the two-column shape.
+    """
+    outer = QHBoxLayout(parent)
+    outer.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
+    outer.setSpacing(GUTTER)
+
+    area, column = scroll_column()
+    outer.addWidget(area, 1)
+
+    rail.setFixedWidth(rail_width)
+    outer.addWidget(rail)
+    return column
 
 
 class AnnotateTab(QWidget):
@@ -308,18 +370,40 @@ class AnnotateTab(QWidget):
         # Keep a reference so the launched AnnotatorWindow survives GC.
         self._annotator_window = None
 
-        layout = QVBoxLayout(self)
+        rail = RunRail("Launch annotator")
+        self._launch_btn = rail.button
+        self._launch_btn.clicked.connect(self._on_launch)
+        rail.status.setVisible(False)  # nothing runs here; the annotator opens
+        rail.card.add(
+            hint(
+                "Opens the clip annotator in its own window. Labels are saved "
+                "beside each pose CSV as <name>_annotations.csv — the same "
+                "files the Train tab reads."
+            )
+        )
+        column = _workspace(self, rail, rail_width=340)
 
-        self._videos_label = QLabel("Videos folder: (none)")
-        videos_btn = QPushButton("Choose videos folder...")
+        # --- sources ----------------------------------------------------
+        sources = Card("Sources", "where the clips come from")
+        self._videos_label = path_label("(none)")
+        videos_btn = QPushButton("Choose…")
         videos_btn.clicked.connect(self._on_choose_videos)
-        layout.addLayout(_row(self._videos_label, videos_btn))
+        sources.add_row("Videos folder", self._videos_label, videos_btn)
 
-        self._poses_label = QLabel("Pose CSV folder: (defaults to videos folder)")
-        poses_btn = QPushButton("Choose pose CSV folder...")
+        self._poses_label = path_label("(defaults to videos folder)")
+        poses_btn = QPushButton("Choose…")
         poses_btn.clicked.connect(self._on_choose_poses)
-        layout.addLayout(_row(self._poses_label, poses_btn))
+        sources.add_row("Pose CSV folder", self._poses_label, poses_btn)
+        sources.add(
+            hint(
+                "Pose data comes from Tools ▸ Batch Pose Tracking. Both "
+                "<name>.csv and <name>DLC_<model>.csv naming are accepted."
+            )
+        )
+        column.addWidget(sources)
 
+        # --- clips ------------------------------------------------------
+        clips = Card("Clips", "what the annotator will show you")
         # Reviewing existing work and sampling new material are the two
         # reasons to open the annotator, and the tab could only do the second.
         self._review_check = QCheckBox("Review annotations already saved for these videos")
@@ -329,7 +413,8 @@ class AnnotateTab(QWidget):
             "same files training reads."
         )
         self._review_check.toggled.connect(self._on_review_toggled)
-        layout.addWidget(self._review_check)
+        clips.add(self._review_check)
+        clips.add_separator()
 
         self._clip_count = QSpinBox()
         # A 30-video cohort wants four figures of clips, so the ceiling has to
@@ -341,42 +426,57 @@ class AnnotateTab(QWidget):
             "Raised to the number of videos if you ask for fewer."
         )
         self._clip_count_label = QLabel("Clips to sample (across all videos):")
-        layout.addLayout(_row(self._clip_count_label, self._clip_count))
+        self._clip_count_label.setVisible(False)  # the row caption says it now
+        clips.add_row("Clips to sample", self._clip_count)
+        clips.add(hint("Across all videos, not per video."))
 
         self._skip_labelled_check = QCheckBox("Skip regions already labelled")
         self._skip_labelled_check.setToolTip(
             "Keep the sampler off frames you have already annotated, so a\n"
             "second pass over a cohort proposes new material."
         )
-        layout.addWidget(self._skip_labelled_check)
+        clips.add(self._skip_labelled_check)
+        column.addWidget(clips)
 
-        # Speed trace. On by default: the labeller is judging speed either
-        # way, and doing it against the numbers the scoring run uses is the
-        # whole point. Opting out skips reading pose data altogether.
+        # --- speed trace ------------------------------------------------
+        speed = Card("Speed trace", "optional reference while labelling")
+        # On by default: the labeller is judging speed either way, and doing it
+        # against the numbers the scoring run uses is the whole point. Opting
+        # out skips reading pose data altogether.
         self._speed_check = QCheckBox("Show speed trace under the clip")
         self._speed_check.setChecked(True)
         self._speed_check.setToolTip(
             "Draw each clip's speed beside the video. Reads the pose CSVs,\n"
             "which is why it can be turned off."
         )
-        layout.addWidget(self._speed_check)
+        self._speed_check.toggled.connect(self._on_speed_toggled)
+        speed.add(self._speed_check)
 
         self._cohort_path: Path | None = None
-        self._cohort_label = QLabel("Speed thresholds: (none — trace has no reference lines)")
-        cohort_btn = QPushButton("Choose cohort thresholds...")
+        self._cohort_label = path_label("(none — trace has no reference lines)")
+        cohort_btn = QPushButton("Choose…")
         cohort_btn.clicked.connect(self._on_choose_cohort)
-        layout.addLayout(_row(self._cohort_label, cohort_btn))
+        self._cohort_row = speed.add_row("Speed thresholds", self._cohort_label, cohort_btn)
 
         self._calibration_master: Path | None = None
-        self._calibration_label = QLabel("Calibration: (none — trace in px/frame)")
-        calib_btn = QPushButton("Choose calibration...")
+        self._calibration_label = path_label("(none — trace in px/frame)")
+        calib_btn = QPushButton("Choose…")
         calib_btn.clicked.connect(self._on_choose_calibration)
-        layout.addLayout(_row(self._calibration_label, calib_btn))
+        self._calibration_row = speed.add_row("Calibration", self._calibration_label, calib_btn)
+        self._speed_children = (cohort_btn, calib_btn)
+        column.addWidget(speed)
 
-        self._launch_btn = QPushButton("Launch annotator")
-        self._launch_btn.clicked.connect(self._on_launch)
-        layout.addWidget(self._launch_btn)
-        layout.addStretch(1)
+        column.addStretch(1)
+        self._on_speed_toggled(self._speed_check.isChecked())
+
+    def _on_speed_toggled(self, enabled: bool) -> None:
+        """The trace's inputs mean nothing when the trace itself is off."""
+        for widget in (
+            self._cohort_label,
+            self._calibration_label,
+            *self._speed_children,
+        ):
+            widget.setEnabled(enabled)
 
     def _on_review_toggled(self, reviewing: bool) -> None:
         """Review mode replays saved zones, so the sampling controls don't apply."""
@@ -390,7 +490,8 @@ class AnnotateTab(QWidget):
         if not path:
             return
         self._cohort_path = Path(path)
-        self._cohort_label.setText(f"Speed thresholds: {Path(path).name}")
+        set_path_text(self._cohort_label, Path(path).name, filled=True)
+        self._cohort_label.setToolTip(path)
 
     def _on_choose_calibration(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -399,21 +500,24 @@ class AnnotateTab(QWidget):
         if not path:
             return
         self._calibration_master = Path(path)
-        self._calibration_label.setText(f"Calibration: {Path(path).name}")
+        set_path_text(self._calibration_label, Path(path).name, filled=True)
+        self._calibration_label.setToolTip(path)
 
     def _on_choose_videos(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose videos folder")
         if not path:
             return
         self._videos_dir = Path(path)
-        self._videos_label.setText(f"Videos folder: {path}")
+        set_path_text(self._videos_label, _short_path(self._videos_dir), filled=True)
+        self._videos_label.setToolTip(path)
 
     def _on_choose_poses(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose pose CSV folder")
         if not path:
             return
         self._poses_dir = Path(path)
-        self._poses_label.setText(f"Pose CSV folder: {path}")
+        set_path_text(self._poses_label, _short_path(self._poses_dir), filled=True)
+        self._poses_label.setToolTip(path)
 
     def _on_launch(self) -> None:
         if self._videos_dir is None:
@@ -587,34 +691,71 @@ class TrainTab(QWidget):
         # truth instead of freezing today's values into every trained model.
         self._lgbm_advanced: dict | None = None
 
-        layout = QVBoxLayout(self)
+        # --- run rail ---------------------------------------------------
+        rail = RunRail("Fit model")
+        self._fit_btn = rail.button
+        self._fit_btn.clicked.connect(self._on_fit)
+        self._rail = rail
 
-        sessions_group = QGroupBox("Training sessions (pose CSV + annotations CSV)")
-        sessions_layout = QVBoxLayout(sessions_group)
+        self._progress = QProgressBar()
+        self._progress.setVisible(False)
+        rail.card.add(self._progress)
+
+        results_card = Card("Results")
+        self._results = QTextEdit()
+        self._results.setObjectName("LogPane")
+        self._results.setReadOnly(True)
+        self._results.setPlaceholderText("Training results will appear here.")
+        results_card.add(self._results, 1)
+        rail.add(results_card, 1)
+
+        column = _workspace(self, rail)
+
+        # --- training sessions ------------------------------------------
+        sessions_group = Card("Training sessions", "pose CSV + annotations CSV")
+        self._sessions_card = sessions_group
         self._sessions_list = QListWidget()
-        sessions_layout.addWidget(self._sessions_list)
-        add_btn = QPushButton("Add session...")
+        self._sessions_list.setMinimumHeight(96)
+        self._sessions_list.setMaximumHeight(150)
+        attach_empty_state(
+            self._sessions_list, "No sessions yet.\nAdd a pose CSV and its annotations CSV."
+        )
+        sessions_group.add(self._sessions_list)
+        add_btn = QPushButton("Add session…")
         add_btn.clicked.connect(self._on_add_session)
         remove_btn = QPushButton("Remove selected")
-        remove_btn.clicked.connect(lambda: _remove_selected(self._sessions_list, self._sessions))
-        sessions_layout.addLayout(_row(add_btn, remove_btn))
-        layout.addWidget(sessions_group)
+        set_button_role(remove_btn, "ghost")
+        remove_btn.clicked.connect(self._on_remove_session)
+        sessions_group.add(_button_row(add_btn, remove_btn))
+        column.addWidget(sessions_group)
 
-        holdout_group = QGroupBox("Holdout sessions (optional cross-session test set)")
-        holdout_layout = QVBoxLayout(holdout_group)
+        # --- holdout ----------------------------------------------------
+        holdout_group = Card("Holdout sessions", "optional cross-session test set")
+        self._holdout_card = holdout_group
         self._holdout_list = QListWidget()
-        holdout_layout.addWidget(self._holdout_list)
-        add_holdout_btn = QPushButton("Add holdout session...")
+        self._holdout_list.setMinimumHeight(80)
+        self._holdout_list.setMaximumHeight(130)
+        attach_empty_state(
+            self._holdout_list,
+            "No holdout sessions.\nAccuracy will be reported on training data only.",
+        )
+        holdout_group.add(self._holdout_list)
+        add_holdout_btn = QPushButton("Add holdout session…")
         add_holdout_btn.clicked.connect(self._on_add_holdout)
         remove_holdout_btn = QPushButton("Remove selected")
-        remove_holdout_btn.clicked.connect(
-            lambda: _remove_selected(self._holdout_list, self._holdout)
+        set_button_role(remove_holdout_btn, "ghost")
+        remove_holdout_btn.clicked.connect(self._on_remove_holdout)
+        holdout_group.add(_button_row(add_holdout_btn, remove_holdout_btn))
+        holdout_group.add(
+            hint(
+                "Sessions held back from fitting, so the reported accuracy is "
+                "measured on animals the model has never seen."
+            )
         )
-        holdout_layout.addLayout(_row(add_holdout_btn, remove_holdout_btn))
-        layout.addWidget(holdout_group)
+        column.addWidget(holdout_group)
 
-        options_row = QHBoxLayout()
-        options_row.addWidget(QLabel("Classifier:"))
+        # --- classifier -------------------------------------------------
+        options = Card("Classifier")
         self._classifier_combo = QComboBox()
         # train_model(classifier_type=...) accepts exactly "rf"
         # (RandomForestClassifier) or "lightgbm" (LGBMClassifier, and the
@@ -622,35 +763,52 @@ class TrainTab(QWidget):
         # glider.analysis.behavior.pipeline.train_model docstring.
         self._classifier_combo.addItems(["rf", "lightgbm"])
         self._classifier_combo.currentTextChanged.connect(self._on_classifier_changed)
-        options_row.addWidget(self._classifier_combo)
-        self._advanced_btn = QPushButton("Advanced...")
+        self._advanced_btn = QPushButton("Advanced…")
         self._advanced_btn.clicked.connect(self._on_advanced)
-        options_row.addWidget(self._advanced_btn)
+        options.add_row("Backend", self._classifier_combo, self._advanced_btn)
+
         self._background_check = QCheckBox("Include background class")
+        self._background_check.setToolTip(
+            "Score unlabelled frames as an explicit 'background' behavior "
+            "rather than leaving them out of the fit."
+        )
         self._mirror_check = QCheckBox("Mirror augment")
-        options_row.addWidget(self._background_check)
-        options_row.addWidget(self._mirror_check)
-        options_row.addStretch(1)
-        layout.addLayout(options_row)
+        self._mirror_check.setToolTip(
+            "Double the training set by left-right mirroring every pose, so a "
+            "behavior is learned independently of which way the animal faced."
+        )
+        options.add(self._background_check)
+        options.add(self._mirror_check)
+        column.addWidget(options)
         self._on_classifier_changed()
 
-        self._output_label = QLabel("Model output: (none)")
-        output_btn = QPushButton("Choose output file...")
+        # --- output -----------------------------------------------------
+        output = Card("Output")
+        self._output_label = path_label("(none)")
+        output_btn = QPushButton("Choose…")
         output_btn.clicked.connect(self._on_choose_output)
-        layout.addLayout(_row(self._output_label, output_btn))
+        output.add_row("Model bundle", self._output_label, output_btn)
+        output.add(hint("A .pkl the Apply tab loads to score new video."))
+        column.addWidget(output)
 
-        self._fit_btn = QPushButton("Fit")
-        self._fit_btn.clicked.connect(self._on_fit)
-        layout.addWidget(self._fit_btn)
+        column.addStretch(1)
+        self._refresh_counts()
 
-        self._progress = QProgressBar()
-        self._progress.setVisible(False)
-        layout.addWidget(self._progress)
+    def _refresh_counts(self) -> None:
+        """Keep the card badges showing how much material is loaded."""
+        n = len(self._sessions)
+        self._sessions_card.set_badge(f"{n} session{'' if n == 1 else 's'}" if n else "none yet")
+        n = len(self._holdout)
+        self._holdout_card.set_badge(f"{n} session{'' if n == 1 else 's'}" if n else "none yet")
+        self._rail.set_blocker("" if self._sessions else "Add at least one training session.")
 
-        self._results = QTextEdit()
-        self._results.setReadOnly(True)
-        self._results.setPlaceholderText("Training results will appear here.")
-        layout.addWidget(self._results, 1)
+    def _on_remove_session(self) -> None:
+        _remove_selected(self._sessions_list, self._sessions)
+        self._refresh_counts()
+
+    def _on_remove_holdout(self) -> None:
+        _remove_selected(self._holdout_list, self._holdout)
+        self._refresh_counts()
 
     def _on_classifier_changed(self, *_args) -> None:
         """The advanced knobs are LightGBM-only; RandomForest silently ignores them."""
@@ -689,13 +847,27 @@ class TrainTab(QWidget):
         pair = _pick_session_pair(self, "training")
         if pair is not None:
             self._sessions.append(pair)
-            self._sessions_list.addItem(f"{pair[0]}  |  {pair[1]}")
+            self._add_session_item(self._sessions_list, pair)
+            self._refresh_counts()
 
     def _on_add_holdout(self) -> None:
         pair = _pick_session_pair(self, "holdout")
         if pair is not None:
             self._holdout.append(pair)
-            self._holdout_list.addItem(f"{pair[0]}  |  {pair[1]}")
+            self._add_session_item(self._holdout_list, pair)
+            self._refresh_counts()
+
+    @staticmethod
+    def _add_session_item(list_widget: QListWidget, pair: tuple[Path, Path]) -> None:
+        """One row per session, named rather than spelled out in full.
+
+        Two absolute paths joined by a pipe overflowed the row every time, so
+        the list showed a scrollbar and no filenames. The names identify the
+        session; the tooltip still carries both paths in full.
+        """
+        list_widget.addItem(f"{pair[0].name}  ·  {pair[1].name}")
+        item = list_widget.item(list_widget.count() - 1)
+        item.setToolTip(f"{pair[0]}\n{pair[1]}")
 
     def _on_choose_output(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -704,7 +876,8 @@ class TrainTab(QWidget):
         if not path:
             return
         self._output_path = Path(path)
-        self._output_label.setText(f"Model output: {path}")
+        set_path_text(self._output_label, _short_path(self._output_path), filled=True)
+        self._output_label.setToolTip(path)
 
     def _on_fit(self) -> None:
         if not self._sessions:
@@ -737,6 +910,7 @@ class TrainTab(QWidget):
         self._progress.setVisible(True)
         self._progress.setRange(0, 0)  # indeterminate until fit finishes
         self._fit_btn.setEnabled(False)
+        self._rail.status.set_state("running", "Fitting")
         self._train_thread.start()
 
     def _on_train_progress(self, done: int, total: int) -> None:
@@ -748,12 +922,14 @@ class TrainTab(QWidget):
         self._teardown_train_thread()
         self._progress.setVisible(False)
         self._fit_btn.setEnabled(True)
+        self._rail.status.set_state("ok", "Done")
         self._results.setPlainText(pprint.pformat(summary))
 
     def _on_train_failed(self, message: str) -> None:
         self._teardown_train_thread()
         self._progress.setVisible(False)
         self._fit_btn.setEnabled(True)
+        self._rail.status.set_state("error", "Failed")
         QMessageBox.critical(self, "Training failed", message)
 
     def _teardown_train_thread(self) -> None:
@@ -787,75 +963,98 @@ class ApplyTab(QWidget):
         # its own <output_dir>/<video stem>/ subfolder.
         self._queue: list[Path] = []
 
-        layout = QVBoxLayout(self)
+        # --- run rail ---------------------------------------------------
+        rail = RunRail("Score videos")
+        self._run_btn = rail.button
+        self._run_btn.clicked.connect(self._on_run)
+        self._rail = rail
 
+        self._progress = QProgressBar()
+        self._progress.setVisible(False)
+        rail.card.add(self._progress)
+
+        results_card = Card("Output")
+        self._results = QTextEdit()
+        self._results.setObjectName("LogPane")
+        self._results.setReadOnly(True)
+        self._results.setPlaceholderText("Output paths will appear here.")
+        results_card.add(self._results, 1)
+        rail.add(results_card, 1)
+
+        column = _workspace(self, rail)
+
+        # --- models -----------------------------------------------------
         # Both models are optional, and the labels say so where the operator
         # is deciding: no bundle scores freezing/darting alone, and no weights
         # is fine as long as the poses already exist. Clearing is offered
         # because choosing one is otherwise irreversible, and switching to a
         # speed-only run after picking a bundle is a normal thing to want.
+        # No "both optional" subtitle: each field's own placeholder already says
+        # what happens without it, and more precisely than the card could.
+        models = Card("Models")
         self._model_label = QLabel("Model bundle: (none — scores freezing/darting only)")
-        model_btn = QPushButton("Choose model bundle...")
+        self._model_label.setVisible(False)  # kept as the text of record
+        self._model_path_label = path_label("(none — scores freezing/darting only)")
+        model_btn = QPushButton("Choose…")
         model_btn.clicked.connect(self._on_choose_model)
         model_clear = QPushButton("Clear")
+        set_button_role(model_clear, "ghost")
         model_clear.setToolTip(
             "Run without a behaviour model: freezing and darting are read from "
             "the speed trace, which needs no classifier."
         )
         model_clear.clicked.connect(self._on_clear_model)
-        model_row = _row(self._model_label, model_btn)
-        model_row.addWidget(model_clear)
-        layout.addLayout(model_row)
+        models.add_row("Model bundle", self._model_path_label, model_btn, model_clear)
 
         self._yolo_label = QLabel("YOLO weights: (none — needed only to track poses)")
-        yolo_btn = QPushButton("Choose YOLO weights...")
+        self._yolo_label.setVisible(False)
+        self._yolo_path_label = path_label("(none — needed only to track poses)")
+        yolo_btn = QPushButton("Choose…")
         yolo_btn.clicked.connect(self._on_choose_yolo)
         yolo_clear = QPushButton("Clear")
+        set_button_role(yolo_clear, "ghost")
         yolo_clear.setToolTip(
             "Only tracking uses the pose weights. A run whose videos all have "
             "a pose CSV never needs them."
         )
         yolo_clear.clicked.connect(self._on_clear_yolo)
-        yolo_row = _row(self._yolo_label, yolo_btn)
-        yolo_row.addWidget(yolo_clear)
-        layout.addLayout(yolo_row)
+        models.add_row("YOLO weights", self._yolo_path_label, yolo_btn, yolo_clear)
+        column.addWidget(models)
 
-        videos_group = QGroupBox("Video(s) to classify")
-        videos_layout = QVBoxLayout(videos_group)
+        # --- videos -----------------------------------------------------
+        videos_group = Card("Videos to classify")
+        self._videos_card = videos_group
         self._videos_list = QListWidget()
-        videos_layout.addWidget(self._videos_list)
-        add_videos_btn = QPushButton("Add video(s)...")
+        self._videos_list.setMinimumHeight(96)
+        self._videos_list.setMaximumHeight(160)
+        attach_empty_state(self._videos_list, "No videos yet.\nAdd the recordings you want scored.")
+        videos_group.add(self._videos_list)
+        add_videos_btn = QPushButton("Add video(s)…")
         add_videos_btn.clicked.connect(self._on_add_videos)
         remove_video_btn = QPushButton("Remove selected")
+        set_button_role(remove_video_btn, "ghost")
         remove_video_btn.clicked.connect(self._on_remove_video)
-        videos_layout.addLayout(_row(add_videos_btn, remove_video_btn))
-        layout.addWidget(videos_group)
+        videos_group.add(_button_row(add_videos_btn, remove_video_btn))
+        column.addWidget(videos_group)
 
+        # --- keypoints --------------------------------------------------
+        keypoints = Card("Keypoints", "must match the model's own order")
         self._keypoints_edit = QLineEdit()
         self._keypoints_edit.setPlaceholderText("nose, left_ear, right_ear, ... (comma-separated)")
-        keypoints_row = QHBoxLayout()
-        keypoints_row.addWidget(QLabel("Keypoint names:"))
-        keypoints_row.addWidget(self._keypoints_edit, 1)
         edit_kp = QPushButton("Edit…")
         edit_kp.setToolTip(
             "Arrange the keypoints on a figure instead of typing the order, "
             "and save the layout for reuse."
         )
         edit_kp.clicked.connect(self._edit_keypoint_schema)
-        keypoints_row.addWidget(edit_kp)
-        layout.addLayout(keypoints_row)
+        keypoints.add_row("Names", self._keypoints_edit, edit_kp)
+        keypoints.add(hint("Filled in automatically when a model bundle is chosen."))
+        column.addWidget(keypoints)
 
-        layout.addLayout(self._build_cadence_row())
-        layout.addLayout(self._build_time_range_row())
-        layout.addWidget(self._build_stability_group())
-
-        layout.addWidget(self._build_speed_group())
-
-        # Encoding an annotated MP4 costs more wall-clock than the inference
-        # itself on a long recording, and it is a spot-checking aid rather than
-        # an analysis artifact -- so it is off unless asked for.
+        # --- pose reuse -------------------------------------------------
         # Checked by default: Batch Pose Tracking has usually already produced
         # these, and re-deriving them is the biggest avoidable cost in a run.
+        poses = Card("Pose data")
         self._reuse_poses = QCheckBox("Reuse already-tracked pose CSVs (skips tracking)")
         self._reuse_poses.setChecked(True)
         self._reuse_poses.setToolTip(
@@ -864,53 +1063,83 @@ class ApplyTab(QWidget):
             "Falls back to tracking for any video without one."
         )
         self._reuse_poses.toggled.connect(self._on_reuse_toggled)
-        layout.addWidget(self._reuse_poses)
+        poses.add(self._reuse_poses)
 
         # Batch Pose Tracking writes its CSVs wherever it was pointed, which
         # is routinely a poses folder rather than beside the videos. Matching
         # by name from one folder beats copying a CSV per video by hand.
         self._pose_dir: Path | None = None
         self._pose_dir_label = QLabel("Pose CSV folder: beside each video")
-        # Not wrapped: a UNC share path is long enough to wrap to four lines
-        # and shove the buttons around. The tail identifies the folder; the
-        # tooltip carries the whole thing.
+        self._pose_dir_label.setVisible(False)  # kept as the text of record
         self._pose_dir_label.setWordWrap(False)
-        self._pose_dir_btn = QPushButton("Choose pose CSV folder…")
+        self._pose_dir_value = path_label("beside each video")
+        self._pose_dir_btn = QPushButton("Choose…")
         self._pose_dir_btn.clicked.connect(self._on_choose_pose_dir)
         self._pose_dir_clear = QPushButton("Use video folder")
+        set_button_role(self._pose_dir_clear, "ghost")
         self._pose_dir_clear.clicked.connect(self._on_clear_pose_dir)
-        pose_row = _row(self._pose_dir_label, self._pose_dir_btn)
-        pose_row.addWidget(self._pose_dir_clear)
-        layout.addLayout(pose_row)
-        self._pose_match_label = QLabel("")
-        self._pose_match_label.setWordWrap(True)
-        layout.addWidget(self._pose_match_label)
+        poses.add_row("CSV folder", self._pose_dir_value, self._pose_dir_btn, self._pose_dir_clear)
 
+        self._pose_match_label = hint("")
+        poses.add(self._pose_match_label)
+        column.addWidget(poses)
+
+        # --- scoring ----------------------------------------------------
+        scoring = Card("Scoring")
+        scoring.add(self._build_cadence_row())
+        scoring.add(self._build_time_range_row())
+        scoring.add_separator()
+        scoring.add(self._build_stability_group())
+        column.addWidget(scoring)
+
+        # --- speed axis -------------------------------------------------
+        speed_card = Card("Freeze / dart speed axis", "optional")
+        self._speed_card = speed_card
+        speed_card.add(self._build_speed_group())
+        column.addWidget(speed_card)
+
+        # --- output -----------------------------------------------------
+        output = Card("Output")
+        self._output_label = QLabel("Output folder: (none)")
+        self._output_label.setVisible(False)  # kept as the text of record
+        self._output_value = path_label("(none)")
+        output_btn = QPushButton("Choose…")
+        output_btn.clicked.connect(self._on_choose_output_dir)
+        output.add_row("Folder", self._output_value, output_btn)
+        output.add(hint("Each video gets its own subfolder here."))
+
+        # Encoding an annotated MP4 costs more wall-clock than the inference
+        # itself on a long recording, and it is a spot-checking aid rather than
+        # an analysis artifact -- so it is off unless asked for.
         self._render_video = QCheckBox("Also render an annotated video (slow)")
         self._render_video.setChecked(False)
         self._render_video.setToolTip(
             "Writes annotated.mp4 beside the ethogram. Useful for checking a "
             "single video; a large cost per video across a batch."
         )
-        layout.addWidget(self._render_video)
+        output.add(self._render_video)
+        column.addWidget(output)
 
-        self._output_label = QLabel("Output folder: (none)")
-        output_btn = QPushButton("Choose output folder...")
-        output_btn.clicked.connect(self._on_choose_output_dir)
-        layout.addLayout(_row(self._output_label, output_btn))
+        column.addStretch(1)
+        self._refresh_blocker()
 
-        self._run_btn = QPushButton("Run")
-        self._run_btn.clicked.connect(self._on_run)
-        layout.addWidget(self._run_btn)
+    def _refresh_blocker(self) -> None:
+        """Say why Run is unavailable, in the rail, before it is ever clicked.
 
-        self._progress = QProgressBar()
-        self._progress.setVisible(False)
-        layout.addWidget(self._progress)
-
-        self._results = QTextEdit()
-        self._results.setReadOnly(True)
-        self._results.setPlaceholderText("Output paths will appear here.")
-        layout.addWidget(self._results, 1)
+        ``_run_blocker`` already knew all of this; it was only ever consulted
+        after the click, so the operator configured the whole screen and then
+        found out. Shown continuously it becomes a checklist instead.
+        """
+        n = len(self._videos)
+        self._videos_card.set_badge(f"{n} video{'' if n == 1 else 's'}" if n else "none yet")
+        self._speed_card.set_badge("on" if self._speed_group.isChecked() else "off")
+        if not self._videos:
+            message = "Add at least one video."
+        elif self._output_dir is None:
+            message = "Choose an output folder."
+        else:
+            message = self._run_blocker() or ""
+        self._rail.set_blocker(message)
 
     def _on_choose_model(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -920,15 +1149,24 @@ class ApplyTab(QWidget):
             return
         self._model_path = Path(path)
         self._model_label.setText(f"Model bundle: {path}")
+        set_path_text(self._model_path_label, _short_path(self._model_path), filled=True)
+        self._model_path_label.setToolTip(path)
         self._autofill_keypoints()
+        self._refresh_blocker()
 
     def _on_clear_model(self) -> None:
         self._model_path = None
         self._model_label.setText("Model bundle: (none — scores freezing/darting only)")
+        set_path_text(self._model_path_label, "(none — scores freezing/darting only)", filled=False)
+        self._model_path_label.setToolTip("")
+        self._refresh_blocker()
 
     def _on_clear_yolo(self) -> None:
         self._yolo_path = None
         self._yolo_label.setText("YOLO weights: (none — needed only to track poses)")
+        set_path_text(self._yolo_path_label, "(none — needed only to track poses)", filled=False)
+        self._yolo_path_label.setToolTip("")
+        self._refresh_blocker()
 
     def _autofill_keypoints(self) -> None:
         """Write the bundle's own keypoint order into the field.
@@ -963,12 +1201,16 @@ class ApplyTab(QWidget):
             return
         self._yolo_path = Path(path)
         self._yolo_label.setText(f"YOLO weights: {path}")
+        set_path_text(self._yolo_path_label, _short_path(self._yolo_path), filled=True)
+        self._yolo_path_label.setToolTip(path)
+        self._refresh_blocker()
 
     def _on_add_videos(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "Choose video(s)", "", _VIDEO_FILTER)
         for path in paths:
             self._videos.append(Path(path))
-            self._videos_list.addItem(path)
+            self._videos_list.addItem(Path(path).name)
+            self._videos_list.item(self._videos_list.count() - 1).setToolTip(path)
         self._refresh_pose_match()
 
     def _confirm_unmatched_poses(self) -> bool:
@@ -1091,6 +1333,7 @@ class ApplyTab(QWidget):
     def _on_remove_video(self) -> None:
         _remove_selected(self._videos_list, self._videos)
         self._refresh_pose_match()
+        self._refresh_blocker()
 
     # ------------------------------------------------------------------
     # Pose CSV folder
@@ -1103,16 +1346,25 @@ class ApplyTab(QWidget):
         self._pose_dir = Path(path)
         self._pose_dir_label.setText(f"Pose CSV folder: {_short_path(self._pose_dir)}")
         self._pose_dir_label.setToolTip(path)
+        set_path_text(self._pose_dir_value, _short_path(self._pose_dir), filled=True)
+        self._pose_dir_value.setToolTip(path)
         self._refresh_pose_match()
 
     def _on_clear_pose_dir(self) -> None:
         self._pose_dir = None
         self._pose_dir_label.setText("Pose CSV folder: beside each video")
         self._pose_dir_label.setToolTip("")
+        set_path_text(self._pose_dir_value, "beside each video", filled=False)
+        self._pose_dir_value.setToolTip("")
         self._refresh_pose_match()
 
     def _on_reuse_toggled(self, checked: bool) -> None:
-        for w in (self._pose_dir_label, self._pose_dir_btn, self._pose_dir_clear):
+        for w in (
+            self._pose_dir_label,
+            self._pose_dir_value,
+            self._pose_dir_btn,
+            self._pose_dir_clear,
+        ):
             w.setEnabled(checked)
         self._refresh_pose_match()
 
@@ -1135,25 +1387,33 @@ class ApplyTab(QWidget):
         expensive thing an apply run can do.
         """
         if not self._reuse_poses.isChecked():
+            set_text_role(self._pose_match_label, "warning")
             self._pose_match_label.setText("Tracking will run for every video.")
+            self._refresh_blocker()
             return
         if not self._videos:
+            set_text_role(self._pose_match_label, "hint")
             self._pose_match_label.setText("")
+            self._refresh_blocker()
             return
         matched, unmatched = self._match_poses()
         where = _short_path(self._pose_dir) if self._pose_dir else "each video's own folder"
         self._pose_match_label.setToolTip(str(self._pose_dir) if self._pose_dir else "")
         if not unmatched:
+            set_text_role(self._pose_match_label, "success")
             self._pose_match_label.setText(
-                f"Matched a pose CSV for all {len(matched)} video(s) in {where}."
+                f"✓ Matched a pose CSV for all {len(matched)} video(s) in {where}."
             )
+            self._refresh_blocker()
             return
         names = ", ".join(v.name for v in unmatched[:4])
         more = f" (+{len(unmatched) - 4} more)" if len(unmatched) > 4 else ""
+        set_text_role(self._pose_match_label, "warning")
         self._pose_match_label.setText(
-            f"Matched {len(matched)} of {len(self._videos)} in {where}. "
+            f"⚠ Matched {len(matched)} of {len(self._videos)} in {where}. "
             f"No pose CSV for: {names}{more} — those would be tracked from scratch."
         )
+        self._refresh_blocker()
 
     def _on_choose_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose output folder")
@@ -1161,6 +1421,9 @@ class ApplyTab(QWidget):
             return
         self._output_dir = Path(path)
         self._output_label.setText(f"Output folder: {path}")
+        set_path_text(self._output_value, _short_path(self._output_dir), filled=True)
+        self._output_value.setToolTip(path)
+        self._refresh_blocker()
 
     def _needs_tracking(self) -> list[Path]:
         """Videos this run would have to track, because no pose CSV covers them."""
@@ -1251,6 +1514,7 @@ class ApplyTab(QWidget):
         self._queue = list(self._videos)
         self._run_btn.setEnabled(False)
         self._progress.setVisible(True)
+        self._rail.status.set_state("running", "Scoring")
         self._keypoint_names = keypoint_names
         self._run_next()
 
@@ -1401,13 +1665,15 @@ class ApplyTab(QWidget):
             "proportionally more classifier calls.\n"
             "Pose tracking and feature extraction run on every frame regardless."
         )
-        self._cadence_hint = QLabel()
+        self._cadence_hint = hint()
+        self._predict_every.setFixedWidth(120)
         self._predict_every.valueChanged.connect(self._on_cadence_changed)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Classify every:"))
-        row.addWidget(self._predict_every)
-        row.addWidget(self._cadence_hint, 1)
+        inner = QHBoxLayout()
+        inner.setSpacing(8)
+        inner.addWidget(self._predict_every)
+        inner.addWidget(self._cadence_hint, 1)
+        row = labelled_row("Classify every", inner)
         self._on_cadence_changed()
         return row
 
@@ -1422,7 +1688,7 @@ class ApplyTab(QWidget):
         frames are scored exactly as a whole-session run would have scored
         them rather than from a cold start.
         """
-        self._range_on = QCheckBox("Analyse only")
+        self._range_on = QCheckBox("Limit to")
         self._range_on.setToolTip(
             "Score a stretch of each video instead of all of it.\n"
             "Applies to every selected video, measured from its own start."
@@ -1445,15 +1711,18 @@ class ApplyTab(QWidget):
             spin.setEnabled(False)
             spin.valueChanged.connect(self._on_range_changed)
 
-        self._range_hint = QLabel("")
-        self._range_hint.setWordWrap(True)
+        self._range_hint = hint("")
+        for spin in (self._range_start, self._range_end):
+            spin.setFixedWidth(110)
 
-        row = QHBoxLayout()
-        row.addWidget(self._range_on)
-        row.addWidget(self._range_start)
-        row.addWidget(QLabel("to"))
-        row.addWidget(self._range_end)
-        row.addWidget(self._range_hint, 1)
+        inner = QHBoxLayout()
+        inner.setSpacing(8)
+        inner.addWidget(self._range_on)
+        inner.addWidget(self._range_start)
+        inner.addWidget(set_text_role(QLabel("to"), "muted"))
+        inner.addWidget(self._range_end)
+        inner.addWidget(self._range_hint, 1)
+        row = labelled_row("Time window", inner)
         return row
 
     def _on_range_toggled(self, checked: bool) -> None:
@@ -1463,12 +1732,15 @@ class ApplyTab(QWidget):
 
     def _on_range_changed(self, *_args) -> None:
         if not self._range_on.isChecked():
+            set_text_role(self._range_hint, "hint")
             self._range_hint.setText("whole recording")
             return
         start, end = self._range_start.value(), self._range_end.value()
         if end and end <= start:
+            set_text_role(self._range_hint, "error")
             self._range_hint.setText("⚠ the window ends before it starts")
             return
+        set_text_role(self._range_hint, "hint")
         span = f"{(end - start) * 60:.0f} s of each video" if end else "to the end of each video"
         self._range_hint.setText(span)
 
@@ -1481,7 +1753,7 @@ class ApplyTab(QWidget):
         # The end spin's minimum doubles as "to the end", so 0 means open.
         return (start or None) if start else 0.0, (end or None)
 
-    def _build_stability_group(self) -> QGroupBox:
+    def _build_stability_group(self) -> QWidget:
         """How much frame-to-frame flicker to absorb before reporting bouts.
 
         A per-frame classifier switches label far more often than an animal
@@ -1492,8 +1764,12 @@ class ApplyTab(QWidget):
         matrix — is dominated by it. Both knobs exist in the pipeline; until
         now neither was reachable from here.
         """
-        group = QGroupBox("Label stability")
-        form = QFormLayout(group)
+        group = QWidget()
+        group.setObjectName("CardSection")
+        box = QVBoxLayout(group)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(8)
+        box.addWidget(set_text_role(QLabel("Label stability"), "caption"))
 
         self._smooth_window = QSpinBox()
         self._smooth_window.setRange(1, 61)
@@ -1507,7 +1783,7 @@ class ApplyTab(QWidget):
             "each behavior's share of the session by well under a percentage point.\n"
             "Applies to the ethogram, bouts, stats and the annotated video alike."
         )
-        form.addRow("Majority-vote smoothing:", self._smooth_window)
+        box.addLayout(labelled_row("Majority vote", self._smooth_window))
 
         self._min_bout_s = QDoubleSpinBox()
         self._min_bout_s.setRange(0.0, 10.0)
@@ -1523,7 +1799,7 @@ class ApplyTab(QWidget):
             "The per-frame ethogram_raw.csv is never altered — this only "
             "filters the summaries, so the raw record stays auditable."
         )
-        form.addRow("Minimum bout duration:", self._min_bout_s)
+        box.addLayout(labelled_row("Minimum bout", self._min_bout_s))
         return group
 
     def _on_cadence_changed(self, *_args) -> None:
@@ -1541,14 +1817,23 @@ class ApplyTab(QWidget):
         through the batch calibration keeps the numbers comparable across rigs
         and sessions. Off by default — the pre-existing behaviour.
         """
-        group = QGroupBox("Freeze / dart speed axis (optional)")
+        # Stays a checkable QGroupBox: its per-row show/hide (_on_speed_mode_
+        # changed) is driven through QFormLayout.setRowVisible with the row
+        # indices captured below, and the tests address those rows by index.
+        group = QGroupBox("Score freezing and darting from speed")
         group.setCheckable(True)
         group.setChecked(False)
         group.setToolTip(
             "Adds a speed column to the ethogram and shows freezing/darting "
             "over the postural label. Needs a pixel-to-distance calibration."
         )
+        group.toggled.connect(self._on_speed_group_toggled)
         form = QFormLayout(group)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._speed_form = form
 
         self._speed_mode = QComboBox()
@@ -1602,18 +1887,21 @@ class ApplyTab(QWidget):
         self._dart_abs_row = form.rowCount() - 1
 
         row = QHBoxLayout()
-        self._calibration_label = QLabel("(none)")
-        self._calibration_label.setWordWrap(True)
-        cal_btn = QPushButton("Choose...")
+        row.setSpacing(8)
+        self._calibration_label = path_label("(none)")
+        cal_btn = QPushButton("Choose…")
         cal_btn.clicked.connect(self._on_choose_calibration)
         row.addWidget(self._calibration_label, 1)
         row.addWidget(cal_btn)
         self._calibration_row = row
         form.addRow("Calibration file:", row)
-        self._calibration_hint = QLabel(
+        self._calibration_hint = hint(
             "Used for cm/s thresholds, and for the ethogram's speed_cm_s column in either mode."
         )
-        self._calibration_hint.setWordWrap(True)
+        # A wrapping QLabel in a QFormLayout field column reports a narrow
+        # sizeHint and gets taken at its word, so this wrapped to three short
+        # lines with the rest of the row empty beside it.
+        self._calibration_hint.setMinimumWidth(380)
         form.addRow("", self._calibration_hint)
 
         # Percentiles of the video's own causal-speed distribution. Defaults
@@ -1635,11 +1923,11 @@ class ApplyTab(QWidget):
         self._dart_pct_row = form.rowCount() - 1
 
         cohort_row = QHBoxLayout()
-        self._cohort_label = QLabel("(none)")
-        self._cohort_label.setWordWrap(True)
-        pick = QPushButton("Choose...")
+        cohort_row.setSpacing(8)
+        self._cohort_label = path_label("(none)")
+        pick = QPushButton("Choose…")
         pick.clicked.connect(self._on_choose_cohort)
-        build = QPushButton("Compute...")
+        build = QPushButton("Compute…")
         build.setToolTip(
             "Pool the speed of every pose CSV in a folder and take the cohort "
             "percentiles. Existing CSVs are used as-is, so tracking is not re-run."
@@ -1673,6 +1961,10 @@ class ApplyTab(QWidget):
         self._on_speed_mode_changed()
         return group
 
+    def _on_speed_group_toggled(self, _checked: bool) -> None:
+        """Keep the card badge and the Run blocker in step with the axis."""
+        self._refresh_blocker()
+
     def _on_choose_cohort(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Choose cohort thresholds", "", "JSON Files (*.json);;All Files (*)"
@@ -1696,7 +1988,9 @@ class ApplyTab(QWidget):
         try:
             thresholds = CohortSpeedThresholds.load(self._cohort_path)
         except CohortSpeedError as e:
-            self._cohort_label.setText(f"{self._cohort_path.name} — unreadable: {e}")
+            set_path_text(
+                self._cohort_label, f"{self._cohort_path.name} — unreadable: {e}", filled=True
+            )
             return
         note = ""
         if not thresholds.is_calibrated:
@@ -1704,7 +1998,12 @@ class ApplyTab(QWidget):
             note = "  ⚠ pooled in pixels" + (
                 f" — {missing} session(s) had no pixel scale" if missing else ""
             )
-        self._cohort_label.setText(f"{self._cohort_path.name} — {thresholds.describe()}{note}")
+        set_path_text(
+            self._cohort_label,
+            f"{self._cohort_path.name} — {thresholds.describe()}{note}",
+            filled=True,
+        )
+        self._refresh_blocker()
 
     def _on_build_cohort(self) -> None:
         """Pool every pose CSV in a folder into one set of cut-offs.
@@ -1855,7 +2154,10 @@ class ApplyTab(QWidget):
         )
         if path:
             self._calibration_master = Path(path)
-            self._calibration_label.setText(str(self._calibration_master))
+            set_path_text(
+                self._calibration_label, _short_path(self._calibration_master), filled=True
+            )
+            self._calibration_label.setToolTip(path)
 
     def _speed_opts(self) -> dict:
         """Speed-axis kwargs for ApplyWorker, or {} when the axis is off."""
@@ -1896,11 +2198,15 @@ class ApplyTab(QWidget):
         if not self._queue:
             self._progress.setVisible(False)
             self._run_btn.setEnabled(True)
+            if self._rail.status.property("state") == "running":
+                self._rail.status.set_state("ok", "Done")
             return
 
         from glider.gui.behavior.workers import ApplyWorker
 
         video = self._queue.pop(0)
+        remaining = len(self._videos) - len(self._queue)
+        self._rail.status.set_state("running", f"{remaining} / {len(self._videos)}")
         video_output_dir = self._output_dir / video.stem
         start_s, end_s = self._time_range()
 
@@ -1958,6 +2264,7 @@ class ApplyTab(QWidget):
 
     def _on_apply_failed(self, message: str, video: Path) -> None:
         self._teardown_apply_thread()
+        self._rail.status.set_state("error", "Failed")
         self._results.append(f"{video.name}: FAILED - {message}")
         QMessageBox.critical(self, "Apply failed", f"{video.name}:\n{message}")
         self._run_next()
@@ -2014,6 +2321,16 @@ def _row(*widgets: QWidget) -> QHBoxLayout:
     row = QHBoxLayout()
     for i, w in enumerate(widgets):
         row.addWidget(w, 1 if i == 0 else 0)
+    return row
+
+
+def _button_row(*buttons: QWidget) -> QHBoxLayout:
+    """Buttons packed left, so a two-button pair does not stretch to the width."""
+    row = QHBoxLayout()
+    row.setSpacing(8)
+    for button in buttons:
+        row.addWidget(button)
+    row.addStretch(1)
     return row
 
 

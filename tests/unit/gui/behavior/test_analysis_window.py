@@ -243,7 +243,7 @@ class TestAnalysisWindow:
         win._advance()  # 299
         win._advance()  # would pass the end
         assert win._timer.isActive() is False
-        assert win._play.text() == "Play"
+        assert "Play" in win._play.text()
 
     def test_the_repair_button_is_hidden_when_nothing_needs_repairing(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
@@ -456,7 +456,7 @@ class TestKeyboardScrubbing:
         win._toggle_play()
         _key(win, Qt.Key.Key_Right)
         assert win._timer.isActive() is False
-        assert win._play.text() == "Play"
+        assert "Play" in win._play.text()
 
     def test_keys_are_inert_before_a_session_is_loaded(self, qtbot):
         win = AnalysisWindow()
