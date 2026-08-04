@@ -440,6 +440,12 @@ class AnnotateTab(QWidget):
             "second pass over a cohort proposes new material."
         )
         clips.add(self._skip_labelled_check)
+
+        # Resuming used to be silent: a relaunch looked identical whether it
+        # had reused the saved queue or discarded it and sampled a new one.
+        self._queue_status = ""
+        self._annotate_status = hint("")
+        clips.add(self._annotate_status)
         column.addWidget(clips)
 
         # --- speed trace ------------------------------------------------
@@ -486,6 +492,42 @@ class AnnotateTab(QWidget):
         """Review mode replays saved zones, so the sampling controls don't apply."""
         for widget in (self._clip_count, self._clip_count_label, self._skip_labelled_check):
             widget.setEnabled(not reviewing)
+
+    def _set_queue_status(self, origin: str, clips, videos_meta: dict[Path, Path]) -> None:
+        """Report which queue was opened and how much of it is already done.
+
+        ``origin`` is ``sampled`` (a fresh queue), ``resumed`` (the cached one
+        matched) or ``review`` (replaying saved zones, where every clip is
+        labelled by definition and counting them again would be noise).
+        """
+        # Deferred like the rest of the analysis imports in this tab — the
+        # module pulls in pandas, and building menus must stay cheap.
+        from glider.analysis.behavior.annotations import AnnotationStore
+
+        n = len(clips)
+        if origin == "review":
+            self._queue_status = f"review · {n} labelled clip(s) loaded"
+            self._annotate_status.setText(self._queue_status)
+            return
+
+        # A clip counts as done when a saved zone overlaps it — the same rule
+        # the annotator uses to grey out finished clips, rather than a second
+        # definition that could disagree with what the labeller sees.
+        zones_by_video: dict[Path, list] = {}
+        labelled = 0
+        for clip in clips:
+            video = Path(clip.video_path)
+            if video not in zones_by_video:
+                ann = videos_meta.get(video)
+                zones_by_video[video] = list(AnnotationStore.load_csv(ann)) if ann else []
+            for z in zones_by_video[video]:
+                if min(z.end_frame, clip.end_frame) > max(z.start_frame, clip.start_frame):
+                    labelled += 1
+                    break
+
+        word = "resumed" if origin == "resumed" else "sampled"
+        self._queue_status = f"{word} · {n} clip(s) · {labelled} already labelled"
+        self._annotate_status.setText(self._queue_status)
 
     def _on_choose_cohort(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -588,14 +630,18 @@ class AnnotateTab(QWidget):
                 # Every saved zone becomes a replayable clip. Nothing is
                 # sampled: the point is to see the work already on disk.
                 clips = build_review_clips(videos_meta, fps)
+                origin = "review"
                 if not clips:
                     QMessageBox.warning(
                         self,
                         "Annotate",
                         "Review mode found no annotations for these videos.\n\n"
                         f"Looked for <name>_annotations.csv in {poses_dir}.\n\n"
-                        "Uncheck 'Review annotations already saved' to sample "
-                        "fresh clips and start labelling.",
+                        "Review replays clips you have already labelled — it is "
+                        "not how you get back to a sampled queue.\n\n"
+                        "Untick 'Review annotations already saved' to start "
+                        "labelling. Your clip queue is resumed automatically "
+                        "when the settings match the last run.",
                     )
                     return
             else:
@@ -632,7 +678,9 @@ class AnnotateTab(QWidget):
                 cached = resume.load(inputs=cache_inputs)
                 if cached is not None:
                     clips = [ProposedClip(**c) for c in cached["clips"]]
+                    origin = "resumed"
                 else:
+                    origin = "sampled"
                     clips = propose_clips_multi(
                         sessions=pairs,
                         n_clips_total=n_total,
@@ -648,6 +696,13 @@ class AnnotateTab(QWidget):
         except Exception as e:  # noqa: BLE001 - surfaced to the user, not fatal
             QMessageBox.critical(self, "Annotate", f"Could not build the clip list:\n{e}")
             return
+
+        # Say which queue this is and how much of it is done. Resuming was
+        # silent, so a relaunch looked identical whether it had reused the
+        # saved queue or thrown it away and sampled a new one — and on a
+        # 250-clip job spread over several sittings that is the one thing
+        # worth knowing at launch.
+        self._set_queue_status(origin, clips, videos_meta)
 
         # The window's "render more" button only exists when it is given a
         # sampler; without one, a review session is a dead end and a sampled
