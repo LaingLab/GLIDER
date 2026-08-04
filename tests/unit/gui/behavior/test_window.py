@@ -1295,6 +1295,133 @@ def test_the_two_can_never_both_reach_train_model(qtbot, tmp_path, monkeypatch):
     assert not (options.get("motion_features") and options.get("mirror_augment"))
 
 
+# --------------------------------------------------------------------------
+# Train tab: cross-validation
+#
+# cross_validate_sessions has been in the pipeline all along and was
+# unreachable from the GUI, so the only evaluation available was a single
+# hand-picked holdout. On this data a 3-animal holdout has sd 0.09 and a range
+# of 0.518-0.804, which makes one split close to meaningless.
+# --------------------------------------------------------------------------
+
+
+def _cv_options(qtbot, tmp_path, monkeypatch, configure=None):
+    """Drive _on_cross_validate and return the options handed to the worker."""
+    from glider.gui.behavior import window as win_mod
+    from glider.gui.behavior import workers as workers_mod
+
+    captured: dict = {}
+    warned: list[str] = []
+
+    class FakeWorker:
+        progress = failed = finished = None
+
+        def __init__(self, sessions, options):
+            captured["sessions"] = sessions
+            captured["options"] = options
+
+        def moveToThread(self, _t):
+            pass
+
+    monkeypatch.setattr(workers_mod, "CrossValidateWorker", FakeWorker, raising=False)
+    monkeypatch.setattr(
+        win_mod.QMessageBox, "warning", lambda *a, **k: warned.append(a[2] if len(a) > 2 else "")
+    )
+
+    tab = win_mod.TrainTab()
+    qtbot.addWidget(tab)
+    tab._sessions = [(tmp_path / "a.csv", tmp_path / "a_annotations.csv")]
+    if configure is not None:
+        configure(tab)
+    try:
+        tab._on_cross_validate()
+    except Exception:  # noqa: BLE001 - thread wiring past the capture point
+        pass
+    return tab, captured, warned
+
+
+def test_cross_validate_sends_the_training_sessions(qtbot, tmp_path, monkeypatch):
+    _tab, captured, _ = _cv_options(qtbot, tmp_path, monkeypatch)
+    assert len(captured["sessions"]) == 1
+
+
+def test_cross_validate_defaults_to_five_folds(qtbot, tmp_path, monkeypatch):
+    tab, captured, _ = _cv_options(qtbot, tmp_path, monkeypatch)
+    assert tab._folds_spin.value() == 5
+    assert captured["options"]["n_folds"] == 5
+
+
+def test_fold_count_is_configurable(qtbot, tmp_path, monkeypatch):
+    _tab, captured, _ = _cv_options(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._folds_spin.setValue(10)
+    )
+    assert captured["options"]["n_folds"] == 10
+
+
+def test_cross_validate_uses_the_same_settings_as_fit(qtbot, tmp_path, monkeypatch):
+    """What you validate has to be what you would fit, or the number is a lie."""
+
+    def configure(tab):
+        tab._window_spin.setValue(8)
+        tab._class_weight_combo.setCurrentIndex(tab._class_weight_combo.findData("balanced"))
+        tab._mirror_check.setChecked(True)
+        tab._traj_check.setChecked(True)
+        tab._freq_check.setChecked(True)
+
+    _tab, captured, _ = _cv_options(qtbot, tmp_path, monkeypatch, configure=configure)
+    options = captured["options"]
+    assert options["window"] == 8
+    assert options["class_weight"] == "balanced"
+    assert options["mirror_augment"] is True
+    assert options["traj_features"] is True
+    assert options["freq_features"] is True
+
+
+def test_cross_validate_does_not_send_options_it_does_not_accept(qtbot, tmp_path, monkeypatch):
+    """cross_validate_sessions takes no holdout_sessions and no test_split."""
+    import inspect
+
+    from glider.analysis.behavior.pipeline import cross_validate_sessions
+
+    _tab, captured, _ = _cv_options(qtbot, tmp_path, monkeypatch)
+    accepted = set(inspect.signature(cross_validate_sessions).parameters)
+    unknown = set(captured["options"]) - accepted
+    assert not unknown, f"cross_validate_sessions does not accept: {sorted(unknown)}"
+
+
+def test_cross_validate_needs_sessions(qtbot, tmp_path, monkeypatch):
+    _tab, captured, warned = _cv_options(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._sessions.clear()
+    )
+    assert "options" not in captured
+    assert warned and "session" in warned[0].lower()
+
+
+def test_a_failed_run_re_enables_both_buttons(qtbot, tmp_path, monkeypatch):
+    """_on_train_failed is shared, so it must revive the cross-validate button
+    too — otherwise one failure kills the action for the rest of the session."""
+    from glider.gui.behavior import window as win_mod
+
+    monkeypatch.setattr(win_mod.QMessageBox, "critical", lambda *a, **k: None)
+    tab = win_mod.TrainTab()
+    qtbot.addWidget(tab)
+    tab._fit_btn.setEnabled(False)
+    tab._cv_btn.setEnabled(False)
+
+    tab._on_train_failed("boom")
+
+    assert tab._fit_btn.isEnabled()
+    assert tab._cv_btn.isEnabled()
+
+
+def test_cross_validate_needs_no_output_file(qtbot, tmp_path, monkeypatch):
+    """It produces no model, so demanding an output path would be nonsense."""
+    tab, captured, warned = _cv_options(qtbot, tmp_path, monkeypatch)
+    assert tab._output_path is None
+    assert "options" in captured
+    assert warned == []
+
+
 def test_window_hint_reports_the_duration(qtbot, tmp_path, monkeypatch):
     """30 frames means nothing; 1.0 s at 30 fps does."""
     tab, _ = _fit_options(
