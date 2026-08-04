@@ -34,6 +34,26 @@ opt-in flags.
   acceleration. ``K`` columns.
 * **Body-axis angular velocity** — radians per frame of the body-axis
   vector. 1 column.
+* **Trajectory** — ``step_length`` (body-centroid displacement per frame,
+  in body lengths), ``turn_angle`` (change of heading, radians in
+  ``[0, π]``) and ``turn_cos``. 3 columns, opt-out via
+  ``FeatureSpec.include_trajectory``.
+
+  Everything above this line is *relative geometry*, so without these the
+  model has no notion of the path the animal took — whether it was
+  travelling somewhere or milling about in one spot. They are built from
+  displacements rather than positions, so they never encode WHERE in the
+  arena anything happened and cannot become the which-recording-is-this
+  leak that raw coordinates can.
+
+  A rolling **mean** of ``turn_cos`` is the circular mean resultant
+  length, i.e. a straightness index: ~1 for an animal travelling in a
+  line, lower for one that keeps changing direction. Tortuosity proper
+  (net displacement ÷ path length) is not recoverable from any rolling
+  statistic of a per-frame column, whereas this is — which keeps the
+  whole feature inside the existing windowing machinery and therefore
+  automatically identical on the live inference path, which calls this
+  same function.
 
 NaN handling
 ------------
@@ -46,6 +66,7 @@ respects ``min_periods`` so partial coverage doesn't silently fill in.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -110,6 +131,30 @@ class FeatureSpec:
     # at low-confidence positions, in which case this knob is moot.)
     min_confidence: float = 0.0
 
+    # If True (default), emit the per-frame trajectory primitives —
+    # ``step_length``, ``turn_angle``, ``turn_cos``. Every other feature here
+    # is relative geometry, so without these the model has no notion of the
+    # PATH the animal took: whether it was travelling somewhere or milling
+    # about in one spot. They are deliberately built from displacements
+    # rather than positions, so they say nothing about WHERE in the arena
+    # anything happened and cannot become the which-recording-is-this leak
+    # that raw coordinates (or ``body_length``) can.
+    include_trajectory: bool = True
+
+    # Minimum per-frame centroid displacement, in body lengths, for a step to
+    # count as having a direction. Below it the heading is carried forward
+    # rather than recomputed.
+    #
+    # A stationary animal's centroid still wanders a pixel or two per frame in
+    # a random direction. Taking that at face value makes ``turn_angle``
+    # uniform noise and ``turn_cos`` a zero-mean noise column, injected into
+    # exactly the classes that do not translate. Measured on a real cohort,
+    # that cost grooming F1 in ten cross-session folds out of ten.
+    #
+    # 0.02 body lengths is ~2 px for a mouse ~100 px long: above camera
+    # jitter, an order of magnitude below a locomotion step.
+    trajectory_min_step: float = 0.02
+
     def with_resolved_body_axis(self, n_keypoints: int) -> FeatureSpec:
         """Replace negative body_axis indices with absolute ones."""
         head, tail = self.body_axis
@@ -124,6 +169,11 @@ class FeatureSpec:
             angle_triplets=self.angle_triplets,
             auto_angles=self.auto_angles,
             min_confidence=self.min_confidence,
+            # getattr, not attribute access: a spec unpickled from a model
+            # bundle written before this field existed has no such attribute,
+            # and resolving the body axis must not be where that model dies.
+            include_trajectory=getattr(self, "include_trajectory", True),
+            trajectory_min_step=getattr(self, "trajectory_min_step", 0.02),
         )
 
     def resolve_angle_triplets(
@@ -297,9 +347,106 @@ def compute_features(
         angvel = np.full(n_frames, np.nan)
     columns["body_angular_velocity"] = angvel
 
+    # ----- Trajectory -----
+    if getattr(spec, "include_trajectory", True):
+        columns.update(
+            _trajectory_columns(xy, safe_body_length, getattr(spec, "trajectory_min_step", 0.02))
+        )
+
     df = pd.DataFrame(columns)
     df.index.name = "frame"
     return df
+
+
+def _trajectory_columns(
+    xy: np.ndarray, safe_body_length: np.ndarray, min_step: float = 0.02
+) -> dict[str, np.ndarray]:
+    """Per-frame description of the path, from displacements only.
+
+    Three columns, all translation-invariant because every one of them is
+    built from *differences* between consecutive centroids rather than from
+    the centroids themselves:
+
+    ``step_length``
+        Distance the body centroid moved this frame, in body lengths. The
+        centroid rather than a named keypoint, so it is robust to one
+        keypoint dropping out and averages away limb motion — this is
+        whole-body translation, which the per-keypoint ``speed_*`` columns
+        do not isolate.
+    ``turn_angle``
+        Absolute change in heading, radians in ``[0, π]``. Wrapped to the
+        shorter way round, so a reversal is π rather than 3π/2.
+    ``turn_cos``
+        ``cos(turn_angle)``. Looks redundant, and is the point of the whole
+        exercise: a rolling MEAN of this is the circular mean resultant
+        length, i.e. a straightness index — ~1 for an animal travelling in a
+        line, ~0 for one milling about in a spot. Tortuosity proper
+        (net displacement ÷ path length) cannot be recovered from any
+        rolling statistic of a per-frame column, whereas this can, which
+        keeps the whole feature inside the existing windowing machinery and
+        therefore automatically identical on the live path.
+
+    A frame with no measurable step has no direction, so its turn is left as
+    "no turn" rather than being assigned an angle derived from numerical
+    noise in a stationary animal.
+    """
+    n_frames = xy.shape[0]
+    nan = np.full(n_frames, np.nan)
+    if n_frames < 2:
+        return {"step_length": nan, "turn_angle": nan.copy(), "turn_cos": nan.copy()}
+    min_step = float(min_step)
+
+    with warnings.catch_warnings():
+        # A fully-dropped frame is an all-NaN slice. The NaN result is the
+        # intended signal — the path is genuinely unknown there — so the
+        # warning is noise. Same suppression as CausalSpeed, for the same
+        # reason.
+        warnings.filterwarnings("ignore", r"Mean of empty slice", RuntimeWarning)
+        centroid = np.nanmean(xy, axis=1)  # (F, 2) — NaN only on a full dropout
+    delta = np.diff(centroid, axis=0)  # (F-1, 2), delta[i] = frame i+1 - i
+    step = np.linalg.norm(delta, axis=1)
+
+    step_length = np.concatenate([[np.nan], step]) / safe_body_length
+
+    heading = np.arctan2(delta[:, 1], delta[:, 0])  # (F-1,)
+    # Only a step long enough to be movement rather than tracking jitter
+    # defines a heading. Everything else CARRIES THE LAST ONE FORWARD rather
+    # than going NaN: apply_rolling runs with min_periods=window, so a single
+    # NaN blanks the whole window, and the pipeline's keep-mask then drops
+    # that row outright — gating to NaN would have deleted the stationary
+    # classes from the training set entirely.
+    moved = (step / safe_body_length[1:]) > float(min_step)
+    heading = _carry_forward(np.where(moved, heading, np.nan))
+
+    raw_turn = np.diff(heading)  # (F-2,)
+    # Wrap to (-π, π] so going the short way round is what gets reported.
+    wrapped = np.abs(np.arctan2(np.sin(raw_turn), np.cos(raw_turn)))
+    turn_angle = np.concatenate([[np.nan, np.nan], wrapped])
+    # Before the animal has ever moved there is no heading to carry, and no
+    # turn to report. Zero, not unknown — see the NaN note above.
+    turn_angle = np.where(np.isnan(turn_angle), 0.0, turn_angle)
+
+    return {
+        "step_length": step_length,
+        "turn_angle": turn_angle,
+        "turn_cos": np.cos(turn_angle),
+    }
+
+
+def _carry_forward(values: np.ndarray) -> np.ndarray:
+    """Replace each NaN with the last finite value before it.
+
+    Leading NaNs — before any finite value exists — are left as they are;
+    the caller decides what an unestablished heading means.
+    """
+    out = np.asarray(values, dtype=np.float64).copy()
+    finite = ~np.isnan(out)
+    if not finite.any():
+        return out
+    # Index of the most recent finite sample at or before each position.
+    idx = np.maximum.accumulate(np.where(finite, np.arange(out.size), 0))
+    seen = np.maximum.accumulate(finite)
+    return np.where(seen, out[idx], np.nan)
 
 
 def _safe_unwrap(angle: np.ndarray) -> np.ndarray:
