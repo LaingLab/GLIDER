@@ -1,4 +1,4 @@
-"""Scrub an analysed session, select a window, and ask what is in it.
+"""Scrub an analyzed session, select a window, and ask what is in it.
 
 Built around two things the outputs already contain but nothing yet showed.
 
@@ -22,14 +22,16 @@ from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap
+from PyQt6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -44,11 +46,112 @@ from PyQt6.QtWidgets import (
 
 from glider.analysis.behavior.session_view import SessionView, SessionViewError
 from glider.gui.styles import colors
+from glider.gui.widgets.tool_ui import (
+    CARD_GAP,
+    GUTTER,
+    Card,
+    StatusPill,
+    ToolHeader,
+    apply_tool_theme,
+    caption,
+    data_font,
+    set_button_role,
+    set_text_role,
+)
 
 logger = logging.getLogger(__name__)
 
 _BAR_HEIGHT = 46
 _TRAIL_DEFAULT_S = 5.0
+
+
+def _short_path(path: Path, keep: int = 3) -> str:
+    """The tail of a path, enough to recognise a session without filling the row.
+
+    Apply-run outputs are nested several folders deep under a share, and the
+    last few components (cohort / session / file) are what tells one animal
+    from another. The full path stays on the tooltip.
+    """
+    parts = Path(path).parts
+    return str(path) if len(parts) <= keep else "…/" + "/".join(parts[-keep:])
+
+
+def _measure_item(text: str) -> QTableWidgetItem:
+    """A measured value: monospace, right-aligned.
+
+    These columns are read downward to compare animals, and centred
+    proportional digits put every decimal point in a different place, so the
+    column could not be scanned at all. See the type-roles note in
+    :mod:`glider.gui.widgets.tool_ui`.
+    """
+    item = QTableWidgetItem(text)
+    item.setFont(data_font())
+    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    return item
+
+
+def _behavior_item(name: str, order: list[str]) -> QTableWidgetItem:
+    """A behaviour name carrying the colour of its own band on the timeline.
+
+    The colour comes from the same :func:`behavior_qcolor` the ethogram bar
+    and the annotated video overlay use, so one behaviour is one colour in the
+    timeline, in this table, and in the exported MP4. Without the chip the
+    table and the bar directly above it share no visual link at all, and
+    finding which stripe a row refers to means reading the labels one by one.
+    """
+    item = QTableWidgetItem(name)
+    chip = QPixmap(10, 10)
+    chip.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(chip)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QBrush(behavior_qcolor(name, order)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(0, 0, 10, 10, 3, 3)
+    finally:
+        painter.end()
+    item.setIcon(QIcon(chip))
+    return item
+
+
+def _dress_table(table: QTableWidget) -> None:
+    """Make a results table read as a table rather than a grid in a box.
+
+    The columns used to keep their default 100px width whatever the window
+    size, leaving a wide empty strip to the right of the last one and making
+    the numbers look like debug output. The first column carries the name and
+    takes the slack; the numeric columns size to their content.
+    """
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+    header.setHighlightSections(False)
+    # The stretched name column is left-aligned content, so its heading is too.
+    heading = table.horizontalHeaderItem(0)
+    if heading is not None:
+        heading.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    table.setAlternatingRowColors(True)
+    table.setShowGrid(False)
+    table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+    table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+    table.verticalHeader().setDefaultSectionSize(28)
+
+
+def _vrule() -> QFrame:
+    """A short vertical hairline grouping the transport strip into clusters.
+
+    The strip holds playback, overlay toggles, selection and bout stepping --
+    four unrelated jobs that previously ran together as one undifferentiated
+    row of controls.
+    """
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.VLine)
+    line.setFixedWidth(1)
+    line.setFixedHeight(22)
+    # A touch lighter than BORDER: at 1px against the card surface the border
+    # tone is invisible, and an invisible divider does no grouping at all.
+    line.setStyleSheet("background-color: #2a3441; border: none;")
+    return line
 
 
 def behavior_qcolor(name: str, order: list[str] | None = None) -> QColor:
@@ -577,12 +680,27 @@ class AnalysisWindow(QMainWindow):
         self._cohort_cache: tuple[tuple, list[dict]] | None = None
 
         central = QWidget()
-        layout = QVBoxLayout(central)
+        central.setObjectName("ToolPage")
+        page = QVBoxLayout(central)
+        page.setContentsMargins(0, 0, 0, 0)
+        page.setSpacing(0)
 
-        top = QHBoxLayout()
+        self._header = ToolHeader(
+            "Session Review",
+            "Scrub an analyzed session, select a window, and read what is in it",
+        )
+        page.addWidget(self._header)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
+        layout.setSpacing(CARD_GAP)
+        page.addLayout(layout, 1)
+
         self._path_label = QLabel("No session loaded")
-        self._path_label.setWordWrap(True)
+        self._path_label.setWordWrap(False)
+        set_text_role(self._path_label, "muted")
         open_btn = QPushButton("Open ethogram…")
+        set_button_role(open_btn, "primary")
         open_btn.clicked.connect(self._open)
         # A cohort is the unit of analysis, not a session: the question is
         # almost always "what did these thirty animals do between minutes two
@@ -624,33 +742,50 @@ class AnalysisWindow(QMainWindow):
         self._pick_poses = QPushButton("Choose pose CSV…")
         self._pick_poses.clicked.connect(self._choose_pose_csv)
         self._pick_poses.setVisible(False)
-        top.addWidget(self._pick_poses)
 
         self._fix_resolution = QPushButton("Set arena size from video…")
         self._fix_resolution.clicked.connect(self._resolution_from_video)
         self._fix_resolution.setVisible(False)
-        top.addWidget(self._path_label, 1)
-        top.addWidget(self._sessions)
-        top.addWidget(self._fix_resolution)
-        top.addWidget(open_btn)
-        top.addWidget(open_folder_btn)
-        top.addWidget(draw_zones_btn)
-        top.addWidget(zones_btn)
-        layout.addLayout(top)
+
+        # Loading and zone actions live in the window header: they apply to the
+        # whole window, unlike the playback controls under the timeline, and
+        # mixing the two in one strip was most of why the old top row read as
+        # an undifferentiated bank of seven buttons.
+        self._header.add_action(self._sessions)
+        self._header.add_action(self._pick_poses)
+        self._header.add_action(self._fix_resolution)
+        self._header.add_action(open_btn)
+        self._header.add_action(open_folder_btn)
+        self._header.add_action(draw_zones_btn)
+        self._header.add_action(zones_btn)
+
+        # --- viewer -----------------------------------------------------
+        viewer = Card()
+        viewer_body = viewer.body
+        viewer_body.setSpacing(CARD_GAP)
+
+        session_row = QHBoxLayout()
+        session_row.setSpacing(8)
+        session_row.addWidget(caption("Session"))
+        session_row.addWidget(self._path_label, 1)
+        self._session_state = StatusPill("None loaded")
+        session_row.addWidget(self._session_state)
+        viewer_body.addLayout(session_row)
 
         self._canvas = KeypointCanvas()
-        layout.addWidget(self._canvas, 1)
+        viewer_body.addWidget(self._canvas, 1)
 
         self._bar = EthogramBar()
         self._bar.scrubbed.connect(self._set_frame)
         self._bar.selection_changed.connect(self._on_selection)
-        layout.addWidget(self._bar)
+        viewer_body.addWidget(self._bar)
 
-        layout.addLayout(self._build_controls())
+        viewer_body.addLayout(self._build_controls())
+        layout.addWidget(viewer, 3)
 
         self._summary = QLabel("Shift-drag (or right-drag) the ethogram to select a window.")
         self._summary.setWordWrap(True)
-        layout.addWidget(self._summary)
+        set_text_role(self._summary, "hint")
 
         self._bouts = QTableWidget(0, 6)
         self._bouts.setHorizontalHeaderLabels(
@@ -692,14 +827,20 @@ class AnalysisWindow(QMainWindow):
         )
         self._zone_table.verticalHeader().setVisible(False)
 
+        for table in (self._bouts, self._cohort_table, self._zone_table):
+            _dress_table(table)
+
         self._tables = QTabWidget()
+        self._tables.setDocumentMode(True)
         self._tables.addTab(self._bouts, "This session")
         self._tables.addTab(self._cohort_table, "Cohort")
         self._tables.addTab(self._zone_table, "Zones")
-        layout.addWidget(self._tables, 1)
 
-        export_row = QHBoxLayout()
-        export_row.addStretch(1)
+        # Numbers card: what the selected window contains, plus the one action
+        # that acts on it. Export sat alone at the very bottom of the window
+        # before, a full panel away from the table it exports.
+        numbers = Card("Selected window")
+        self._numbers_card = numbers
         self._export_btn = QPushButton("Export window…")
         self._export_btn.setToolTip(
             "Write the selected window's per-session numbers to a CSV, so the "
@@ -707,19 +848,29 @@ class AnalysisWindow(QMainWindow):
         )
         self._export_btn.clicked.connect(self._export_window)
         self._export_btn.setEnabled(False)
-        export_row.addWidget(self._export_btn)
-        layout.addLayout(export_row)
+        numbers.add_header_widget(self._export_btn)
+        numbers.add(self._summary)
+        numbers.add(self._tables, 1)
+        layout.addWidget(numbers, 2)
 
         self.setCentralWidget(central)
+        # Opened with parent=None, so nothing hands it the app theme -- and
+        # this window suffered worst for it: a near-black canvas and ethogram
+        # inside a light-grey chrome with a white table under them.
+        apply_tool_theme(self)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance)
 
     def _build_controls(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        self._play = QPushButton("Play")
+        row.setSpacing(10)
+        self._play = QPushButton("▶  Play")
+        self._play.setMinimumWidth(88)
+        set_button_role(self._play, "primary")
         self._play.clicked.connect(self._toggle_play)
         row.addWidget(self._play)
+        row.addWidget(_vrule())
 
         self._video_on = QCheckBox("Video")
         self._video_on.setChecked(True)
@@ -747,10 +898,13 @@ class AnalysisWindow(QMainWindow):
         self._trail_s.setRange(0.5, 60.0)
         self._trail_s.setValue(_TRAIL_DEFAULT_S)
         self._trail_s.setSuffix(" s")
+        self._trail_s.setFixedWidth(84)
         self._trail_s.valueChanged.connect(self._apply_trail)
         row.addWidget(self._trail_s)
+        row.addWidget(_vrule())
 
-        select_all = QPushButton("Select whole session")
+        select_all = QPushButton("Select all")
+        select_all.setToolTip("Select the whole session as the analysis window")
         select_all.clicked.connect(self._select_all)
         row.addWidget(select_all)
 
@@ -759,7 +913,8 @@ class AnalysisWindow(QMainWindow):
         # know roughly where it is, and on a 45,000-frame session one pixel of
         # timeline is tens of frames — so the boundaries themselves are the
         # only sensible thing to move between.
-        row.addWidget(QLabel("Bouts:"))
+        row.addWidget(_vrule())
+        row.addWidget(caption("Bouts"))
         self._bout_filter = QComboBox()
         self._bout_filter.setToolTip(
             "Which bouts the [ and ] keys step between. 'Any change' stops at "
@@ -770,25 +925,37 @@ class AnalysisWindow(QMainWindow):
 
         self._prev_bout = QPushButton("◀")
         self._prev_bout.setToolTip("Previous bout  ( [ )")
-        self._prev_bout.setMaximumWidth(36)
+        self._prev_bout.setMaximumWidth(34)
+        set_button_role(self._prev_bout, "icon")
         self._prev_bout.clicked.connect(lambda: self._step_bout(-1))
         row.addWidget(self._prev_bout)
 
         self._next_bout = QPushButton("▶")
         self._next_bout.setToolTip("Next bout  ( ] )")
-        self._next_bout.setMaximumWidth(36)
+        self._next_bout.setMaximumWidth(34)
+        set_button_role(self._next_bout, "icon")
         self._next_bout.clicked.connect(lambda: self._step_bout(+1))
         row.addWidget(self._next_bout)
 
         row.addStretch(1)
 
         # What is under the playhead, and how far into it. A frame number on
-        # its own cannot answer either.
+        # its own cannot answer either. Right-aligned as a readout, away from
+        # the controls, so the strip separates what you press from what you read.
         self._bout_label = QLabel("—")
         self._bout_label.setMinimumWidth(230)
+        self._bout_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        # Monospace: these numbers change thirty times a second during
+        # playback, and proportional digits make the readout jitter sideways.
+        self._bout_label.setFont(data_font())
+        set_text_role(self._bout_label, "value")
         row.addWidget(self._bout_label)
 
         self._clock = QLabel("—")
+        self._clock.setMinimumWidth(96)
+        self._clock.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._clock.setFont(data_font())
+        set_text_role(self._clock, "caption")
         row.addWidget(self._clock)
         return row
 
@@ -865,7 +1032,8 @@ class AnalysisWindow(QMainWindow):
         """Show an already-loaded session."""
         self._view = view
         self._ethogram_csv = Path(ethogram_csv)
-        self._path_label.setText(str(ethogram_csv))
+        self._path_label.setText(_short_path(Path(ethogram_csv)))
+        self._path_label.setToolTip(str(ethogram_csv))
         self._bar.set_view(view)
         self._canvas.set_view(view)
         self._refresh_bout_filter()
@@ -877,6 +1045,18 @@ class AnalysisWindow(QMainWindow):
         has_video = view.video_path is not None
         self._video_on.setEnabled(has_video)
         self._canvas.set_show_video(has_video and self._video_on.isChecked())
+
+        # One pill saying how complete this session's evidence is, so the
+        # degraded cases (no poses, no video) are visible before you wonder why
+        # the canvas is empty.
+        if view.xy is None:
+            self._session_state.set_state("warn", "No poses")
+        elif not has_video:
+            self._session_state.set_state("ok", "Poses only")
+        elif not view.video_is_aligned:
+            self._session_state.set_state("warn", "Video may not align")
+        else:
+            self._session_state.set_state("ok", "Video + poses")
 
         found = f"  Poses: {view.pose_path.name}." if view.pose_path else "  No poses found."
         if has_video:
@@ -955,7 +1135,7 @@ class AnalysisWindow(QMainWindow):
         # Stepping past either end holds there rather than wrapping: a scrub
         # that jumps from the last frame to the first reads as a glitch.
         self._timer.stop()
-        self._play.setText("Play")
+        self._play.setText("▶  Play")
         self._set_frame(max(first, min(last, target)))
         event.accept()
 
@@ -1095,13 +1275,13 @@ class AnalysisWindow(QMainWindow):
     def _toggle_play(self) -> None:
         if self._timer.isActive():
             self._timer.stop()
-            self._play.setText("Play")
+            self._play.setText("▶  Play")
         elif self._view is not None:
             # Playback is deliberately wall-clock, not frame-locked: this is a
             # review tool, and a smooth approximate rate reads better than a
             # stuttering exact one.
             self._timer.start(int(1000 / max(1.0, self._view.fps)))
-            self._play.setText("Pause")
+            self._play.setText("❚❚  Pause")
 
     def _advance(self) -> None:
         if self._view is None:
@@ -1109,7 +1289,7 @@ class AnalysisWindow(QMainWindow):
         _first, last = self._bar.frame_bounds()
         if self._frame + 1 > last:
             self._timer.stop()
-            self._play.setText("Play")
+            self._play.setText("▶  Play")
             return
         self._set_frame(self._frame + 1)
 
@@ -1216,9 +1396,7 @@ class AnalysisWindow(QMainWindow):
                 "never" if latency != latency else f"{latency:.2f}",
             ]
             for c, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                if c:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item = QTableWidgetItem(value) if c == 0 else _measure_item(value)
                 self._zone_table.setItem(r, c, item)
         self._tables.setTabText(2, f"Zones ({len(rows)})" if len(rows) else "Zones")
 
@@ -1337,9 +1515,14 @@ class AnalysisWindow(QMainWindow):
                 row["top_behavior"] or "—",
             ]
             for c, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                if c:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                # Column 0 is the session name and the last is a behaviour
+                # name; everything between them is a measured quantity. No
+                # colour chip here: a cohort row's colours come from ITS own
+                # session's label set, so a chip would only sometimes match
+                # the bar -- decoration wearing the costume of information.
+                item = (
+                    QTableWidgetItem(value) if c in (0, len(values) - 1) else _measure_item(value)
+                )
                 self._cohort_table.setItem(r, c, item)
         self._tables.setTabText(1, f"Cohort ({len(rows)})")
 
@@ -1392,6 +1575,9 @@ class AnalysisWindow(QMainWindow):
     def _fill_bouts(self, stats) -> None:
         rows = stats.bouts
         self._bouts.setRowCount(len(rows))
+        # The shown session's own order, which is what the bar above was
+        # coloured from -- so a row's chip is that row's stripe.
+        order = behavior_order(self._view.labels if self._view else [])
         for r, (_, row) in enumerate(rows.iterrows()):
             values = [
                 str(row["state"] or "(unscored)"),
@@ -1402,9 +1588,7 @@ class AnalysisWindow(QMainWindow):
                 f"{row['median_s']:.2f}",
             ]
             for c, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                if c:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item = _behavior_item(value, order) if c == 0 else _measure_item(value)
                 self._bouts.setItem(r, c, item)
 
     def closeEvent(self, event):

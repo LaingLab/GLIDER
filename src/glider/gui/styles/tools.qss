@@ -1,0 +1,691 @@
+/*
+ * GLIDER Tool Window Stylesheet
+ *
+ * Layered ON TOP of desktop.qss for the standalone analysis tools (Behavior
+ * Analysis, Batch Pose Tracking, Session Review). Those windows are opened
+ * with parent=None, so they never inherited MainWindow's stylesheet at all --
+ * see glider.gui.widgets.tool_ui.apply_tool_theme, which concatenates the two.
+ *
+ * Everything here is additive: same Deep Navy palette as desktop.qss, plus the
+ * surface/hierarchy layer the tools need because they are dense configuration
+ * screens rather than a canvas with docks.
+ *
+ * The one deliberate override is QPushButton. desktop.qss fills EVERY button
+ * with the accent, which reads fine on a toolbar of four actions but not on a
+ * screen where "Clear", "Browse..." and "Run" all shout equally loudly. Here
+ * the default button is a quiet surface control and only [role="primary"]
+ * carries the accent, so each screen has exactly one obvious next action.
+ */
+
+/* === Page === */
+QFrame#ToolPage,
+QWidget#ToolPage {
+    background-color: #0a0e13;
+}
+
+/* === Window header =================================================== */
+
+QFrame#ToolHeader {
+    background-color: #0b0f14;
+    border: none;
+    border-bottom: 1px solid #1e2530;
+}
+
+QLabel#ToolHeaderTitle {
+    color: #e2e8f0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+QLabel#ToolHeaderSubtitle {
+    color: #718096;
+    font-size: 12px;
+}
+
+/* === Card ============================================================ */
+
+QFrame#Card {
+    background-color: #111820;
+    border: 1px solid #1e2530;
+    border-radius: 10px;
+}
+
+/* Children sit on the card, not on the page. Qt does not inherit
+   background-color, so without this the plain widgets inside a card keep
+   desktop.qss's #0f1419 and show as rectangles against the card's #111820.
+ *
+ * Listed by type rather than as `QFrame#Card > QWidget`, which also matched
+ * every button and input and flattened their backgrounds to transparent --
+ * that is what made a primary Run button render as an accent outline around
+ * nothing. Only the types that have no fill of their own belong here. */
+QLabel,
+QCheckBox,
+QRadioButton,
+QGroupBox,
+QSplitter {
+    background-color: transparent;
+}
+
+/* Plain container widgets: our own QWidget subclasses (Qt matches these by
+   metaobject class name) and any bare QWidget used purely to group a few rows. */
+RunRail,
+CardGrid,
+QWidget#CardSection {
+    background-color: transparent;
+}
+
+QLabel#CardTitle {
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QLabel#CardSubtitle {
+    color: #718096;
+    font-size: 11px;
+}
+
+/* Right-hand summary of a collapsed/secondary card ("2 videos", "off") */
+QLabel#CardBadge {
+    color: #718096;
+    font-size: 11px;
+    background-color: #0b0f14;
+    border: 1px solid #1e2530;
+    border-radius: 8px;
+    padding: 2px 8px;
+}
+
+QFrame#CardSeparator {
+    background-color: #1e2530;
+    border: none;
+    max-height: 1px;
+    min-height: 1px;
+}
+
+/* === Buttons ========================================================= */
+
+/* Quiet by default -- see the header note. */
+QPushButton {
+    background-color: #151c25;
+    color: #c0c8d4;
+    border: 1px solid #1e2530;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-weight: 500;
+}
+
+QPushButton:hover {
+    background-color: #1e2530;
+    border-color: #38bdf8;
+    color: #e2e8f0;
+}
+
+QPushButton:pressed {
+    background-color: #0b0f14;
+}
+
+QPushButton:disabled {
+    background-color: #0f1419;
+    border-color: #1e2530;
+    color: #475569;
+}
+
+/* The one action the screen exists to perform. */
+QPushButton[role="primary"] {
+    background-color: #38bdf8;
+    color: #0a0e13;
+    border: 1px solid #38bdf8;
+    font-weight: 600;
+    padding: 9px 20px;
+}
+
+QPushButton[role="primary"]:hover {
+    background-color: #0ea5e9;
+    border-color: #0ea5e9;
+}
+
+QPushButton[role="primary"]:pressed {
+    background-color: #0284c7;
+    border-color: #0284c7;
+}
+
+/* Full border shorthand, not just border-color: Qt resolves a longhand
+   override against the shorthand above inconsistently, and a disabled Run
+   otherwise kept the accent outline while losing its fill -- reading as an
+   enabled button with unreadable text. */
+QPushButton[role="primary"]:disabled {
+    background-color: #151c25;
+    border: 1px solid #232c38;
+    color: #5b6779;
+}
+
+/* Stop / cancel a run in flight. */
+QPushButton[role="danger"] {
+    background-color: #151c25;
+    color: #f87171;
+    border: 1px solid #1e2530;
+}
+
+QPushButton[role="danger"]:hover {
+    background-color: #1e2530;
+    border-color: #f87171;
+}
+
+QPushButton[role="danger"]:disabled {
+    color: #475569;
+    border-color: #1e2530;
+}
+
+/* Borderless text button, for tertiary actions inside a row. */
+QPushButton[role="ghost"] {
+    background-color: transparent;
+    border: 1px solid transparent;
+    color: #94a3b8;
+    padding: 5px 10px;
+}
+
+QPushButton[role="ghost"]:hover {
+    background-color: #1e2530;
+    color: #e2e8f0;
+}
+
+QPushButton[role="ghost"]:disabled {
+    background-color: transparent;
+    color: #475569;
+}
+
+/* Square icon-sized control (bout steppers, ± buttons). */
+QPushButton[role="icon"] {
+    background-color: #151c25;
+    border: 1px solid #1e2530;
+    border-radius: 6px;
+    padding: 4px 6px;
+    color: #c0c8d4;
+    font-size: 13px;
+}
+
+QPushButton[role="icon"]:hover {
+    background-color: #1e2530;
+    border-color: #38bdf8;
+    color: #e2e8f0;
+}
+
+/* === Text roles ====================================================== */
+
+QLabel[textRole="caption"] {
+    color: #94a3b8;
+}
+
+QLabel[textRole="muted"] {
+    color: #718096;
+}
+
+QLabel[textRole="hint"] {
+    color: #718096;
+    font-size: 11px;
+}
+
+QLabel[textRole="value"] {
+    color: #e2e8f0;
+}
+
+QLabel[textRole="success"] {
+    color: #34d399;
+}
+
+QLabel[textRole="warning"] {
+    color: #fbbf24;
+}
+
+QLabel[textRole="error"] {
+    color: #f87171;
+}
+
+/* A chosen file/folder, or "(none)". Reads as a filled slot rather than
+   loose text floating beside a button. */
+QLabel[textRole="path"] {
+    background-color: #0b0f14;
+    border: 1px solid #1e2530;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #c0c8d4;
+}
+
+QLabel[textRole="path"][filled="false"] {
+    color: #718096;
+    font-style: italic;
+}
+
+/* === Status pill ===================================================== */
+
+QLabel#StatusPill {
+    border-radius: 9px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    background-color: #151c25;
+    color: #94a3b8;
+    border: 1px solid #1e2530;
+}
+
+QLabel#StatusPill[state="running"] {
+    background-color: rgba(56, 189, 248, 0.14);
+    color: #38bdf8;
+    border-color: rgba(56, 189, 248, 0.45);
+}
+
+QLabel#StatusPill[state="ok"] {
+    background-color: rgba(52, 211, 153, 0.14);
+    color: #34d399;
+    border-color: rgba(52, 211, 153, 0.45);
+}
+
+QLabel#StatusPill[state="warn"] {
+    background-color: rgba(251, 191, 36, 0.14);
+    color: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.45);
+}
+
+QLabel#StatusPill[state="error"] {
+    background-color: rgba(248, 113, 113, 0.14);
+    color: #f87171;
+    border-color: rgba(248, 113, 113, 0.45);
+}
+
+/* === Inputs ========================================================== */
+
+QLineEdit,
+QSpinBox,
+QDoubleSpinBox,
+QComboBox {
+    background-color: #0b0f14;
+    border: 1px solid #1e2530;
+    border-radius: 6px;
+    padding: 6px 8px;
+    color: #e2e8f0;
+    selection-background-color: #38bdf8;
+    selection-color: #0a0e13;
+}
+
+QLineEdit:hover,
+QSpinBox:hover,
+QDoubleSpinBox:hover,
+QComboBox:hover {
+    border-color: #2a3441;
+}
+
+QLineEdit:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
+QComboBox:focus {
+    border-color: #38bdf8;
+}
+
+QLineEdit:disabled,
+QSpinBox:disabled,
+QDoubleSpinBox:disabled,
+QComboBox:disabled {
+    background-color: #0f1419;
+    color: #475569;
+}
+
+QLineEdit[readOnly="true"] {
+    color: #c0c8d4;
+}
+
+/* Spin/combo sub-controls. desktop.qss styles the button bodies but leaves the
+   arrows to Qt, which draws them from the default (light) palette -- against
+   these surfaces that reads as a pale block glued to the field. Drawn here as
+   CSS triangles so they need no image assets. */
+
+QSpinBox::up-button,
+QDoubleSpinBox::up-button,
+QSpinBox::down-button,
+QDoubleSpinBox::down-button {
+    background-color: #151c25;
+    border: none;
+    border-left: 1px solid #1e2530;
+    width: 18px;
+    /* An explicit height is required: without one Qt collapses a styled
+       spin button to a few pixels and only the arrow shows. */
+    height: 13px;
+}
+
+QSpinBox::up-button,
+QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    border-top-right-radius: 5px;
+    border-bottom: 1px solid #1e2530;
+}
+
+QSpinBox::down-button,
+QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    border-bottom-right-radius: 5px;
+}
+
+QSpinBox::up-button:hover,
+QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover,
+QDoubleSpinBox::down-button:hover {
+    background-color: #1e2530;
+}
+
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+    image: url(@ICONS@/chevron-up.svg);
+    width: 9px;
+    height: 9px;
+}
+
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+    image: url(@ICONS@/chevron-down.svg);
+    width: 9px;
+    height: 9px;
+}
+
+QSpinBox::up-arrow:disabled,
+QDoubleSpinBox::up-arrow:disabled,
+QSpinBox::up-arrow:off,
+QDoubleSpinBox::up-arrow:off {
+    image: url(@ICONS@/chevron-up-disabled.svg);
+}
+
+QSpinBox::down-arrow:disabled,
+QDoubleSpinBox::down-arrow:disabled,
+QSpinBox::down-arrow:off,
+QDoubleSpinBox::down-arrow:off {
+    image: url(@ICONS@/chevron-down-disabled.svg);
+}
+
+QComboBox::drop-down {
+    subcontrol-origin: border;
+    subcontrol-position: center right;
+    border: none;
+    border-left: 1px solid #1e2530;
+    width: 22px;
+}
+
+QComboBox::down-arrow {
+    image: url(@ICONS@/chevron-down.svg);
+    width: 10px;
+    height: 10px;
+}
+
+QComboBox::down-arrow:disabled {
+    image: url(@ICONS@/chevron-down-disabled.svg);
+}
+
+QComboBox QAbstractItemView {
+    background-color: #111820;
+    border: 1px solid #1e2530;
+    border-radius: 6px;
+    padding: 4px;
+    outline: none;
+    selection-background-color: #38bdf8;
+    selection-color: #0a0e13;
+}
+
+QCheckBox {
+    spacing: 8px;
+    padding: 2px 0;
+    color: #c0c8d4;
+}
+
+QCheckBox:disabled {
+    color: #475569;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #2a3441;
+    border-radius: 4px;
+    background-color: #0b0f14;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #38bdf8;
+}
+
+/* A ticked box is state, not an action. Filling it solid accent put a dozen
+   bright blocks on the Apply tab competing with the one control that actually
+   starts work -- so the accent here is the tick and the border, and the solid
+   accent fill belongs to the primary button alone. */
+QCheckBox::indicator:checked {
+    background-color: rgba(56, 189, 248, 0.14);
+    border-color: #38bdf8;
+    image: url(@ICONS@/check-accent.svg);
+}
+
+QCheckBox::indicator:disabled {
+    border-color: #1e2530;
+    background-color: #0f1419;
+}
+
+/* === Group box (checkable sections kept from the old layout) ========== */
+
+/* padding-top reserves the title row. Qt does not lay a group box's contents
+   out below its title automatically -- desktop.qss bought the space with
+   margin-top + padding-top, and zeroing both drew the first form row straight
+   through the title text. */
+QGroupBox {
+    background-color: transparent;
+    border: none;
+    border-top: none;
+    margin-top: 0;
+    padding-top: 26px;
+    font-weight: 600;
+    color: #c0c8d4;
+}
+
+QGroupBox::title {
+    subcontrol-origin: padding;
+    subcontrol-position: top left;
+    padding: 0;
+    color: #c0c8d4;
+}
+
+QGroupBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #2a3441;
+    border-radius: 4px;
+    background-color: #0b0f14;
+}
+
+QGroupBox::indicator:checked {
+    background-color: rgba(56, 189, 248, 0.14);
+    border-color: #38bdf8;
+    image: url(@ICONS@/check-accent.svg);
+}
+
+/* === Lists / tables ================================================== */
+
+QListWidget,
+QListView,
+QTableWidget,
+QTableView {
+    background-color: #0b0f14;
+    border: 1px solid #1e2530;
+    border-radius: 8px;
+    alternate-background-color: #0f1419;
+    gridline-color: #1e2530;
+}
+
+QListWidget::item,
+QTableView::item {
+    padding: 5px 8px;
+    border: none;
+}
+
+QListWidget::item:selected,
+QTableView::item:selected {
+    background-color: rgba(56, 189, 248, 0.22);
+    color: #e2e8f0;
+}
+
+QListWidget::item:hover,
+QTableView::item:hover {
+    background-color: #151c25;
+}
+
+QHeaderView::section {
+    background-color: #0f1419;
+    color: #94a3b8;
+    padding: 7px 8px;
+    border: none;
+    border-bottom: 1px solid #1e2530;
+    border-right: 1px solid #1e2530;
+    font-weight: 600;
+}
+
+QTableCornerButton::section {
+    background-color: #0f1419;
+    border: none;
+}
+
+/* === Log / results panes ============================================= */
+
+QTextEdit,
+QPlainTextEdit {
+    background-color: #0b0f14;
+    border: 1px solid #1e2530;
+    border-radius: 8px;
+    padding: 8px;
+    color: #c0c8d4;
+    selection-background-color: #38bdf8;
+    selection-color: #0a0e13;
+}
+
+QTextEdit#LogPane,
+QPlainTextEdit#LogPane {
+    font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+}
+
+/* === Progress ======================================================== */
+
+QProgressBar {
+    background-color: #0b0f14;
+    border: 1px solid #1e2530;
+    border-radius: 6px;
+    height: 18px;
+    text-align: center;
+    color: #94a3b8;
+    font-size: 11px;
+}
+
+QProgressBar::chunk {
+    background-color: #38bdf8;
+    border-radius: 5px;
+    margin: 1px;
+}
+
+/* === Tabs ============================================================ */
+
+QTabWidget::pane {
+    border: none;
+    border-top: 1px solid #1e2530;
+    background-color: #0a0e13;
+    top: -1px;
+}
+
+QTabBar {
+    background-color: #0b0f14;
+}
+
+QTabBar::tab {
+    background-color: transparent;
+    color: #718096;
+    padding: 9px 18px;
+    margin: 0;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-weight: 500;
+}
+
+QTabBar::tab:selected {
+    color: #e2e8f0;
+    border-bottom: 2px solid #38bdf8;
+}
+
+QTabBar::tab:hover:!selected {
+    color: #c0c8d4;
+    border-bottom: 2px solid #1e2530;
+}
+
+/* === Scrollbars ====================================================== */
+
+QScrollArea {
+    background-color: transparent;
+    border: none;
+}
+
+QScrollBar:vertical {
+    background-color: transparent;
+    width: 10px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #1e2530;
+    border-radius: 5px;
+    min-height: 28px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #2a3441;
+}
+
+QScrollBar:horizontal {
+    background-color: transparent;
+    height: 10px;
+    margin: 0;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #1e2530;
+    border-radius: 5px;
+    min-width: 28px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: #2a3441;
+}
+
+QScrollBar::add-line,
+QScrollBar::sub-line {
+    height: 0;
+    width: 0;
+}
+
+QScrollBar::add-page,
+QScrollBar::sub-page {
+    background: transparent;
+}
+
+/* === Splitter ======================================================== */
+
+/* Transparent: cards already carry their own gap, so a painted handle reads
+   as a stray bar between two panels rather than a grip. */
+QSplitter::handle {
+    background-color: transparent;
+}
+
+QSplitter::handle:hover {
+    background-color: rgba(56, 189, 248, 0.35);
+}
+
+/* === Tooltip ========================================================= */
+
+QToolTip {
+    background-color: #151c25;
+    color: #e2e8f0;
+    border: 1px solid #2a3441;
+    border-radius: 6px;
+    padding: 6px 8px;
+}

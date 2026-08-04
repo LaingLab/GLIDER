@@ -22,7 +22,6 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -41,6 +40,19 @@ from PyQt6.QtWidgets import (
 
 from glider.gui.pose_batch.calibration_table import CalibrationTable
 from glider.gui.styles import colors
+from glider.gui.widgets.tool_ui import (
+    GUTTER,
+    Card,
+    RunRail,
+    ToolHeader,
+    apply_tool_theme,
+    attach_empty_state,
+    hint,
+    labelled_row,
+    scroll_column,
+    set_button_role,
+    set_text_role,
+)
 from glider.vision.calibration import CameraCalibration
 from glider.vision.calibration_set import CalibrationSet, CalibrationSetError
 from glider.vision.pose import batch as batch_core
@@ -174,53 +186,91 @@ class PoseBatchWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         central = QWidget()
-        layout = QVBoxLayout(central)
+        central.setObjectName("ToolPage")
+        page = QVBoxLayout(central)
+        page.setContentsMargins(0, 0, 0, 0)
+        page.setSpacing(0)
 
-        layout.addWidget(self._build_model_group())
+        header = ToolHeader(
+            "Batch Pose Tracking",
+            "Run a YOLO-pose model over folders of video and write a DLC CSV beside each one",
+        )
+        page.addWidget(header)
 
-        self._log = QPlainTextEdit()
-        self._log.setReadOnly(True)
-        self._log.setPlaceholderText("Progress will appear here.")
+        body = QHBoxLayout()
+        body.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
+        body.setSpacing(GUTTER)
+        page.addLayout(body, 1)
 
-        # Videos, calibration, and the log all want more room than a fixed
-        # 900px-tall window can give all three at once. A splitter lets the
-        # operator trade space between them instead of Qt imposing a
-        # one-size-fits-all compromise that starves the calibration table.
+        # --- left: configuration ----------------------------------------
+        area, column = scroll_column()
+        column.addWidget(self._build_model_group())
+        # Videos and calibration still share a splitter -- the calibration
+        # table is the one thing here whose useful height genuinely depends on
+        # the cohort size, and trading rows against it is worth a handle. The
+        # log moved to the run rail, where output belongs.
         splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.setHandleWidth(1)  # every pixel matters against a 1080p ceiling
+        splitter.setHandleWidth(GUTTER)
+        splitter.setChildrenCollapsible(False)
         splitter.addWidget(self._build_sources_group())
         splitter.addWidget(self._build_calibration_group())
-        splitter.addWidget(self._log)
-        # Calibration is the workflow's focus, so it gets the largest share;
-        # sources a moderate share; the log (least-consulted day to day) the rest.
-        splitter.setSizes([160, 260, 100])
-        layout.addWidget(splitter, stretch=1)
+        splitter.setSizes([220, 340])
+        column.addWidget(splitter, 1)
+        column.addWidget(self._build_filter_group())
+        column.addWidget(self._build_options_group())
+        column.addStretch(0)
+        body.addWidget(area, 1)
 
-        layout.addWidget(self._build_filter_group())
-        layout.addWidget(self._build_options_group())
-        layout.addLayout(self._build_run_bar())
+        # --- right: run rail --------------------------------------------
+        rail = RunRail("Track poses")
+        self._rail = rail
+        self._run_button = rail.button
+        self._run_button.clicked.connect(self._start)
+        self._cancel_button = rail.secondary
+        self._cancel_button.setVisible(True)
+        self._cancel_button.setEnabled(False)
+        self._cancel_button.clicked.connect(self._cancel)
+
+        # Hidden until a batch starts: two empty bars sitting at zero read as
+        # a run that has stalled rather than one that has not begun.
+        self._overall_bar = QProgressBar()
+        self._overall_bar.setFormat("%v / %m videos")
+        self._overall_bar.setVisible(False)
+        rail.card.add(self._overall_bar)
+
+        self._video_bar = QProgressBar()
+        self._video_bar.setFormat("%v / %m frames")
+        self._video_bar.setVisible(False)
+        rail.card.add(self._video_bar)
+
+        log_card = Card("Progress log")
+        self._log = QPlainTextEdit()
+        self._log.setObjectName("LogPane")
+        self._log.setReadOnly(True)
+        self._log.setPlaceholderText("Progress will appear here.")
+        log_card.add(self._log, 1)
+        rail.add(log_card, 1)
+
+        rail.setFixedWidth(400)
+        body.addWidget(rail)
 
         self.setCentralWidget(central)
+        # Opened with parent=None, so nothing hands it the app theme.
+        apply_tool_theme(self)
 
-    def _build_model_group(self) -> QGroupBox:
-        group = QGroupBox("Model")
-        form = QFormLayout(group)
+    def _build_model_group(self) -> Card:
+        card = Card("Model")
 
-        row = QHBoxLayout()
         self._model_field = QLineEdit()
         self._model_field.setReadOnly(True)
         self._model_field.setPlaceholderText("Select a trained YOLO-pose .pt")
         browse = QPushButton("Browse…")
         browse.clicked.connect(self._choose_model)
-        row.addWidget(self._model_field, stretch=1)
-        row.addWidget(browse)
-        form.addRow("Weights:", row)
+        card.add_row("Weights", self._model_field, browse)
 
         self._names_field = QLineEdit()
         self._names_field.setPlaceholderText("nose, l_ear, r_ear, …")
         self._names_field.textChanged.connect(self._validate)
-        names_row = QHBoxLayout()
-        names_row.addWidget(self._names_field, stretch=1)
         edit_schema = QPushButton("Edit…")
         edit_schema.setToolTip(
             "Arrange the bodyparts on a figure instead of typing the order, and "
@@ -228,68 +278,86 @@ class PoseBatchWindow(QMainWindow):
             "this batch writes, so a wrong order propagates downstream."
         )
         edit_schema.clicked.connect(self._edit_keypoint_schema)
-        names_row.addWidget(edit_schema)
-        form.addRow("Bodyparts:", names_row)
+        card.add_row("Bodyparts", self._names_field, edit_schema)
 
-        self._names_status = QLabel("Select a model to load its keypoints.")
-        self._names_status.setWordWrap(True)
-        form.addRow("", self._names_status)
+        self._names_status = hint("Select a model to load its keypoints.")
+        card.add(self._names_status)
+        card.add_separator()
 
         self._device_combo = QComboBox()
         self._device_combo.addItems(["auto", "cpu", "cuda", "mps"])
-        form.addRow("Device:", self._device_combo)
+        self._device_combo.setMaximumWidth(150)
 
         self._conf_spin = QDoubleSpinBox()
         self._conf_spin.setRange(0.01, 1.0)
         self._conf_spin.setSingleStep(0.05)
         self._conf_spin.setValue(0.25)  # matches infer_video's default
-        form.addRow("Confidence:", self._conf_spin)
+
+        # Two short numeric settings on one line: each is narrow, and stacking
+        # them cost a full row apiece for a value four characters wide.
+        inference = QHBoxLayout()
+        inference.setSpacing(8)
+        inference.addWidget(self._device_combo)
+        inference.addSpacing(8)
+        inference.addWidget(set_text_role(QLabel("Confidence"), "caption"))
+        inference.addWidget(self._conf_spin)
+        inference.addStretch(1)
+        card.add(labelled_row("Device", inference))
 
         self._require_gpu = QCheckBox("Fail if no GPU is available")
         self._require_gpu.setToolTip(
             "Prevents a silent CPU fallback turning an overnight batch into a multi-day one."
         )
-        form.addRow("", self._require_gpu)
-        return group
+        card.add(self._require_gpu)
+        return card
 
-    def _build_sources_group(self) -> QGroupBox:
-        group = QGroupBox("Videos")
-        layout = QVBoxLayout(group)
+    def _build_sources_group(self) -> Card:
+        card = Card("Videos", "drop folders or files here")
+        self._sources_card = card
 
         self._sources = _DropList()
         self._sources.changed.connect(self._refresh_videos)
-        layout.addWidget(self._sources, stretch=1)
+        attach_empty_state(
+            self._sources, "Drop video folders or files here,\nor use the buttons below."
+        )
+        card.add(self._sources, 1)
 
-        buttons = QHBoxLayout()
         add_dir = QPushButton("Add Directory…")
         add_dir.clicked.connect(self._choose_directory)
         add_files = QPushButton("Add Files…")
         add_files.clicked.connect(self._choose_files)
         remove = QPushButton("Remove")
+        set_button_role(remove, "ghost")
         remove.clicked.connect(self._sources.remove_selected)
         clear = QPushButton("Clear")
+        set_button_role(clear, "ghost")
         clear.clicked.connect(self._sources.clear_all)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
         for button in (add_dir, add_files, remove, clear):
             buttons.addWidget(button)
         buttons.addStretch(1)
-        layout.addLayout(buttons)
+        card.add(buttons)
 
         self._recursive = QCheckBox("Include subdirectories")
         self._recursive.setChecked(True)
         self._recursive.toggled.connect(self._refresh_videos)
-        layout.addWidget(self._recursive)
+        card.add(self._recursive)
 
+        # Kept as the count of record; the card badge is where it is read now.
         self._count_label = QLabel("No videos found")
-        layout.addWidget(self._count_label)
-        return group
+        self._count_label.setVisible(False)
+        card.add(self._count_label)
+        return card
 
-    def _build_calibration_group(self) -> QGroupBox:
-        group = QGroupBox("Pixel-to-distance calibration")
-        group.setToolTip(
+    def _build_calibration_group(self) -> Card:
+        card = Card("Pixel-to-distance calibration", "required for every video")
+        self._calibration_card = card
+        card.setToolTip(
             "Every video needs a scale before the batch can run. The DLC CSVs "
             "stay in pixels; the scale is written to the master calibration file."
         )
-        layout = QVBoxLayout(group)
 
         self._cal_table = CalibrationTable()
         self._cal_table.set_calibration_set(self._calibrations)
@@ -297,9 +365,8 @@ class PoseBatchWindow(QMainWindow):
         # ~4-5 rows: enough to see calibration status at a glance even if the
         # splitter above gets dragged down to its floor.
         self._cal_table.setMinimumHeight(140)
-        layout.addWidget(self._cal_table, stretch=1)
+        card.add(self._cal_table, 1)
 
-        buttons = QHBoxLayout()
         calibrate = QPushButton("Calibrate…")
         calibrate.setToolTip("Calibrate the selected video (or double-click its row)")
         calibrate.clicked.connect(self._calibrate_selected)
@@ -310,13 +377,17 @@ class PoseBatchWindow(QMainWindow):
         )
         copy_btn.clicked.connect(self._copy_calibration_to_selected)
         clear_btn = QPushButton("Clear")
+        set_button_role(clear_btn, "ghost")
         clear_btn.clicked.connect(self._clear_selected_calibrations)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
         for button in (calibrate, copy_btn, clear_btn):
             buttons.addWidget(button)
         buttons.addStretch(1)
-        layout.addLayout(buttons)
+        card.add(buttons)
+        card.add_separator()
 
-        master_row = QHBoxLayout()
         self._master_field = QLineEdit()
         self._master_field.setPlaceholderText("Master calibration file")
         # A typed or pasted path must get the same load-if-exists treatment as
@@ -326,36 +397,43 @@ class PoseBatchWindow(QMainWindow):
         master_browse = QPushButton("Browse…")
         master_browse.clicked.connect(self._choose_master_path)
         load_master = QPushButton("Load")
+        set_button_role(load_master, "ghost")
         load_master.clicked.connect(self._load_master_clicked)
         save_master = QPushButton("Save")
+        set_button_role(save_master, "ghost")
         save_master.clicked.connect(self._save_master_clicked)
-        master_row.addWidget(QLabel("Master file:"))
-        master_row.addWidget(self._master_field, stretch=1)
-        for button in (master_browse, load_master, save_master):
-            master_row.addWidget(button)
-        layout.addLayout(master_row)
-        return group
+        card.add_row("Master file", self._master_field, master_browse, load_master, save_master)
+        return card
 
-    def _build_filter_group(self) -> QGroupBox:
-        group = QGroupBox("Post-process filtering")
+    def _build_filter_group(self) -> Card:
+        card = Card("Post-process filtering", "optional")
+        self._filter_card = card
+
+        # Still a checkable QGroupBox: it is the enable switch the rest of the
+        # section hangs off, and _filter_settings reads isChecked().
+        group = QGroupBox("Smooth and gap-fill the tracked keypoints")
         group.setCheckable(True)
         group.setChecked(False)
         group.setToolTip(
             "Writes the smoothed result as the main CSV and keeps the raw "
             "inference alongside it as *_raw.csv."
         )
-        form = QFormLayout(group)
+        group.toggled.connect(lambda on: card.set_badge("on" if on else "off"))
+        box = QVBoxLayout(group)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(8)
 
         self._filter_conf = QDoubleSpinBox()
         self._filter_conf.setRange(0.0, 1.0)
         self._filter_conf.setSingleStep(0.05)
         self._filter_conf.setValue(0.5)
-        form.addRow("Min confidence:", self._filter_conf)
+        box.addLayout(labelled_row("Min confidence", self._filter_conf))
 
         self._filter_gap = QSpinBox()
         self._filter_gap.setRange(0, 500)
         self._filter_gap.setValue(5)
-        form.addRow("Max gap (frames):", self._filter_gap)
+        self._filter_gap.setSuffix(" frames")
+        box.addLayout(labelled_row("Max gap", self._filter_gap))
 
         self._filter_window = QSpinBox()
         self._filter_window.setRange(3, 99)
@@ -363,44 +441,23 @@ class PoseBatchWindow(QMainWindow):
         self._filter_window.setValue(5)
         # median_filter rejects even windows, so keep the widget odd-only.
         self._filter_window.valueChanged.connect(self._force_odd_window)
-        form.addRow("Median window:", self._filter_window)
+        box.addLayout(labelled_row("Median window", self._filter_window))
 
+        card.add(group)
+        card.set_badge("off")
         self._filter_group = group
-        return group
+        return card
 
-    def _build_options_group(self) -> QGroupBox:
-        group = QGroupBox("Options")
-        layout = QVBoxLayout(group)
+    def _build_options_group(self) -> Card:
+        card = Card("Options")
         self._overwrite = QCheckBox("Overwrite existing outputs")
         self._overwrite.setToolTip(
             "Off by default, so an interrupted batch resumes without redoing finished videos."
         )
         self._overwrite.toggled.connect(self._validate)
-        layout.addWidget(self._overwrite)
-        return group
-
-    def _build_run_bar(self) -> QVBoxLayout:
-        layout = QVBoxLayout()
-
-        buttons = QHBoxLayout()
-        self._run_button = QPushButton("Run")
-        self._run_button.clicked.connect(self._start)
-        self._cancel_button = QPushButton("Cancel")
-        self._cancel_button.setEnabled(False)
-        self._cancel_button.clicked.connect(self._cancel)
-        buttons.addWidget(self._run_button)
-        buttons.addWidget(self._cancel_button)
-        buttons.addStretch(1)
-        layout.addLayout(buttons)
-
-        self._overall_bar = QProgressBar()
-        self._overall_bar.setFormat("%v / %m videos")
-        layout.addWidget(self._overall_bar)
-
-        self._video_bar = QProgressBar()
-        self._video_bar.setFormat("%v / %m frames")
-        layout.addWidget(self._video_bar)
-        return layout
+        card.add(self._overwrite)
+        card.add(hint("Leave off to resume an interrupted batch without redoing finished videos."))
+        return card
 
     # ------------------------------------------------------------------
     # inputs
@@ -446,6 +503,9 @@ class PoseBatchWindow(QMainWindow):
         count = len(self._videos)
         self._count_label.setText(
             "No videos found" if count == 0 else f"{count} video{'s' if count != 1 else ''} found"
+        )
+        self._sources_card.set_badge(
+            "none yet" if count == 0 else f"{count} video{'s' if count != 1 else ''}"
         )
         self._cal_table.set_videos(self._videos)
         self._sync_master_field()
@@ -882,6 +942,16 @@ class PoseBatchWindow(QMainWindow):
         self._names_field.setStyleSheet(_INVALID_STYLE if names_bad else "")
         self._run_button.setEnabled(problem is None)
         self._run_button.setToolTip(problem or "")
+        # Shown next to the button as well as on hover: a disabled Run with the
+        # reason only in a tooltip is a dead end you have to go hunting in.
+        self._rail.set_blocker(problem or "")
+
+        if self._videos:
+            missing = len(self._calibrations.missing(self._videos))
+            done = len(self._videos) - missing
+            self._calibration_card.set_badge(f"{done} / {len(self._videos)} calibrated")
+        else:
+            self._calibration_card.set_badge("")
 
     # ------------------------------------------------------------------
     # running
@@ -944,12 +1014,16 @@ class PoseBatchWindow(QMainWindow):
 
         self._run_button.setEnabled(False)
         self._cancel_button.setEnabled(True)
+        self._overall_bar.setVisible(True)
+        self._video_bar.setVisible(True)
+        self._rail.status.set_state("running", "Tracking")
         self._thread.start()
 
     def _cancel(self) -> None:
         if self._worker is not None:
             self._worker.cancel()
             self._cancel_button.setEnabled(False)
+            self._rail.status.set_state("warn", "Cancelling")
             self._log.appendPlainText("Cancelling after the current frame…")
 
     def _on_progress(self, index: int, total: int) -> None:
@@ -967,11 +1041,18 @@ class PoseBatchWindow(QMainWindow):
         self._video_bar.setValue(1)
         if result.completed:
             self._remember_names(self._current_names())
+        if result.failed:
+            self._rail.status.set_state("warn", f"{len(result.failed)} failed")
+        elif result.completed:
+            self._rail.status.set_state("ok", "Done")
+        else:
+            self._rail.status.set_state("idle", "Cancelled")
         for video, message in result.failed:
             self._log.appendPlainText(f"FAILED {video.name}: {message}")
         self._teardown_thread()
 
     def _on_failed(self, message: str) -> None:
+        self._rail.status.set_state("error", "Failed")
         self._log.appendPlainText(f"Batch could not start: {message}")
         QMessageBox.critical(self, "Batch Pose Tracking", message)
         self._teardown_thread()

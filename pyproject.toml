@@ -132,7 +132,15 @@ version = {attr = "glider._version.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-glider = ["schema/*.json", "gui/styles/*.qss", "assets/*.png"]
+glider = [
+    "schema/*.json",
+    "gui/styles/*.qss",
+    # Arrow/check glyphs the tool-window stylesheet references through url();
+    # without these an installed (non-editable) build renders spin boxes,
+    # combos and checkboxes with no indicator at all.
+    "gui/styles/icons/*.svg",
+    "assets/*.png",
+]
 
 [tool.black]
 line-length = 100
