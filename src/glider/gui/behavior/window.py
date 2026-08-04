@@ -18,7 +18,6 @@ module scope, so ``import glider.gui.behavior.window`` succeeds under a bare
 from __future__ import annotations
 
 import logging
-import pprint
 from pathlib import Path
 from typing import NamedTuple
 
@@ -961,7 +960,11 @@ class TrainTab(QWidget):
         self._progress.setVisible(False)
         self._fit_btn.setEnabled(True)
         self._rail.status.set_state("ok", "Done")
-        self._results.setPlainText(pprint.pformat(summary))
+        # Deferred like the rest of the analysis imports, though this one is
+        # cheap by design — it exists so the results pane never needs pandas.
+        from glider.analysis.behavior.summary_text import format_training_summary
+
+        self._results.setPlainText(format_training_summary(summary))
 
     def _on_train_failed(self, message: str) -> None:
         self._teardown_train_thread()
