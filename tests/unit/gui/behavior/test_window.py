@@ -1085,6 +1085,171 @@ def test_removing_nothing_selected_is_a_no_op(qtbot, tmp_path, monkeypatch):
     assert len(tab._sessions) == 2
 
 
+# --------------------------------------------------------------------------
+# Train tab: the knobs that actually move the score
+#
+# train_model takes window, class_weight, test_split, random_state and three
+# feature-family flags. None of them were reachable from the GUI, so every
+# model trained here used stock defaults. Measured over 5 cross-session folds,
+# the settings an earlier hand-tuned model used were worth +0.063 macro F1,
+# winning 5 folds out of 5 — roughly fifteen times the effect of anything else
+# tried on this cohort.
+# --------------------------------------------------------------------------
+
+
+def _fit_options(qtbot, tmp_path, monkeypatch, configure=None):
+    """Drive _on_fit and return the options dict handed to TrainWorker."""
+    from glider.gui.behavior import window as win_mod
+    from glider.gui.behavior import workers as workers_mod
+
+    captured: dict = {}
+
+    class FakeWorker:
+        progress = failed = finished = None
+
+        def __init__(self, sessions, output, options):
+            captured["sessions"] = sessions
+            captured["options"] = options
+
+        def moveToThread(self, _t):
+            pass
+
+    monkeypatch.setattr(workers_mod, "TrainWorker", FakeWorker, raising=False)
+
+    tab = win_mod.TrainTab()
+    qtbot.addWidget(tab)
+    tab._sessions = [(tmp_path / "a.csv", tmp_path / "a_annotations.csv")]
+    tab._output_path = tmp_path / "model.pkl"
+    if configure is not None:
+        configure(tab)
+    try:
+        tab._on_fit()
+    except Exception:  # noqa: BLE001 - thread wiring past the capture point
+        pass
+    return tab, captured.get("options", {})
+
+
+def test_window_defaults_to_thirty_and_is_sent(qtbot, tmp_path, monkeypatch):
+    tab, options = _fit_options(qtbot, tmp_path, monkeypatch)
+    assert tab._window_spin.value() == 30
+    assert options.get("window") == 30
+
+
+def test_window_is_configurable(qtbot, tmp_path, monkeypatch):
+    """The 0.78 model used window 8; stock is 30, and it is worth ~0.06 F1."""
+    _tab, options = _fit_options(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._window_spin.setValue(8)
+    )
+    assert options["window"] == 8
+
+
+def test_class_weight_defaults_to_none_and_is_sent_as_none(qtbot, tmp_path, monkeypatch):
+    """train_model wants None, not the string 'none'."""
+    _tab, options = _fit_options(qtbot, tmp_path, monkeypatch)
+    assert options.get("class_weight") is None
+
+
+def test_class_weight_balanced_is_sent(qtbot, tmp_path, monkeypatch):
+    def pick(tab):
+        tab._class_weight_combo.setCurrentIndex(tab._class_weight_combo.findData("balanced"))
+
+    _tab, options = _fit_options(qtbot, tmp_path, monkeypatch, configure=pick)
+    assert options["class_weight"] == "balanced"
+
+
+def test_random_seed_is_sent(qtbot, tmp_path, monkeypatch):
+    _tab, options = _fit_options(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._seed_spin.setValue(7)
+    )
+    assert options["random_state"] == 7
+
+
+def test_test_split_is_sent_only_when_set(qtbot, tmp_path, monkeypatch):
+    _tab, options = _fit_options(qtbot, tmp_path, monkeypatch)
+    assert options.get("test_split", 0.0) == 0.0
+
+    _tab, options = _fit_options(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._test_split_spin.setValue(0.25)
+    )
+    assert options["test_split"] == pytest.approx(0.25)
+
+
+def test_feature_family_flags_default_off_and_are_sent(qtbot, tmp_path, monkeypatch):
+    """traj/motion/freq exist in train_model and defaulted off with no way to
+    turn them on. Defaults stay off so nothing changes unasked."""
+    _tab, options = _fit_options(qtbot, tmp_path, monkeypatch)
+    for flag in ("traj_features", "motion_features", "freq_features"):
+        assert options.get(flag) is False
+
+
+def test_feature_family_flags_can_be_enabled(qtbot, tmp_path, monkeypatch):
+    def enable(tab):
+        tab._traj_check.setChecked(True)
+        tab._motion_check.setChecked(True)
+        tab._freq_check.setChecked(True)
+
+    _tab, options = _fit_options(qtbot, tmp_path, monkeypatch, configure=enable)
+    assert options["traj_features"] is True
+    assert options["motion_features"] is True
+    assert options["freq_features"] is True
+
+
+def test_the_new_knobs_stay_available_for_randomforest(qtbot, tmp_path, monkeypatch):
+    """These are pipeline knobs, not LightGBM ones — unlike the Advanced
+    dialog, which is disabled for rf. Putting them there would have made them
+    unreachable with the RandomForest backend."""
+
+    def pick_rf(tab):
+        tab._classifier_combo.setCurrentText("rf")
+
+    tab, options = _fit_options(qtbot, tmp_path, monkeypatch, configure=pick_rf)
+    assert tab._window_spin.isEnabled()
+    assert tab._class_weight_combo.isEnabled()
+    assert options["window"] == 30
+    assert options["classifier_type"] == "rf"
+
+
+def test_train_model_accepts_every_option_the_train_tab_can_send(qtbot, tmp_path, monkeypatch):
+    """The GUI/core contract, mirroring the Apply tab's equivalent.
+
+    A mistyped kwarg here would only surface as a TypeError *after* a fit
+    that can take ten minutes, with the model lost.
+    """
+    import inspect
+
+    from glider.analysis.behavior.pipeline import train_model
+
+    def enable_everything(tab):
+        tab._traj_check.setChecked(True)
+        tab._motion_check.setChecked(True)
+        tab._freq_check.setChecked(True)
+        tab._background_check.setChecked(True)
+        tab._mirror_check.setChecked(True)
+        tab._test_split_spin.setValue(0.2)
+        tab._class_weight_combo.setCurrentIndex(tab._class_weight_combo.findData("balanced"))
+        tab._lgbm_advanced = {k.name: k.default for k in win_lgbm_knobs()}
+
+    def win_lgbm_knobs():
+        from glider.gui.behavior.window import _LGBM_KNOBS
+
+        return _LGBM_KNOBS
+
+    _tab, options = _fit_options(qtbot, tmp_path, monkeypatch, configure=enable_everything)
+    assert options, "no options captured"
+
+    accepted = set(inspect.signature(train_model).parameters)
+    unknown = set(options) - accepted
+    assert not unknown, f"train_model does not accept: {sorted(unknown)}"
+
+
+def test_window_hint_reports_the_duration(qtbot, tmp_path, monkeypatch):
+    """30 frames means nothing; 1.0 s at 30 fps does."""
+    tab, _ = _fit_options(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._window_spin.setValue(15)
+    )
+    assert "0.5" in tab._window_hint.text()
+
+
 def test_cohort_mode_sends_only_the_cohort_file(qtbot, tmp_path):
     """One pooled cut-off, not per-video percentiles."""
     from glider.gui.behavior.window import ApplyTab
