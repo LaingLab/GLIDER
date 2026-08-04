@@ -154,6 +154,11 @@ then summarized over a short rolling window (about one second) using their mean,
 standard deviation, and maximum. The classifier is trained on those windowed
 features paired with your labels.
 
+For the full mechanical account — what each feature column is, which rows get
+dropped before training, what LightGBM actually does with the table, and how the
+same numbers are reproduced at apply time — see
+[Behavior Classifier Internals](../reference/behavior-model.md).
+
 ## Stage 3 — Apply
 
 On the **Apply** tab you score new videos with a trained model:

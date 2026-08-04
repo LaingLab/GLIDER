@@ -8,6 +8,11 @@ Quick lookups for when you know roughly what you want and just need the details.
 
     A system-wide guide to GLIDER's workflows, architecture, evidence boundaries, and source map.
 
+-   :material-graph-outline: **[Behavior Classifier Internals](behavior-model.md)**
+
+    Exactly how pose becomes features, features become a LightGBM model, and the
+    model becomes an ethogram.
+
 -   :material-shape-outline: **[Node Catalog](nodes.md)**
 
     Every node, grouped by category, with a one-line description.

@@ -107,6 +107,7 @@ nav:
   - Reference:
       - reference/index.md
       - Ecosystem Reference: reference/ecosystem-reference.md
+      - Behavior Classifier Internals: reference/behavior-model.md
       - Node Catalog: reference/nodes.md
       - Device Catalog: reference/devices.md
       - Keyboard Shortcuts: reference/shortcuts.md
