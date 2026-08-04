@@ -2,94 +2,98 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://lainglab.github.io/glider/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/building/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/building/devices/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/building/functions/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/building/node-graph/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/building/plugins/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/camera-behavior/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/camera-behavior/behavior/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/camera-behavior/camera/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/camera-behavior/tracking/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/getting-started/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/getting-started/concepts/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/getting-started/first-experiment/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/getting-started/installation/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/reference/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
+    </url>
+    <url>
+         <loc>https://lainglab.github.io/glider/reference/behavior-model/</loc>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/reference/devices/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/reference/ecosystem-reference/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/reference/nodes/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/reference/shortcuts/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/reference/troubleshooting/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/runner/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/runner/pi-kiosk/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
     <url>
          <loc>https://lainglab.github.io/glider/runner/runner/</loc>
-         <lastmod>2026-07-18</lastmod>
+         <lastmod>2026-08-04</lastmod>
     </url>
 </urlset>

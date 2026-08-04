@@ -883,6 +883,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#advanced-lightgbm-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced LightGBM settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#what-the-model-learns-from" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -909,6 +920,17 @@
   
     <nav class="md-nav" aria-label="Stage 3 — Apply">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#classifier-cadence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Classifier cadence
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#apply-outputs" class="md-nav__link">
@@ -1121,6 +1143,8 @@
       
         
       
+        
+      
     
     
     
@@ -1190,6 +1214,34 @@
     
   
     Ecosystem Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/behavior-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Behavior Classifier Internals
   
 
     
@@ -1394,6 +1446,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#advanced-lightgbm-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced LightGBM settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#what-the-model-learns-from" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1420,6 +1483,17 @@
   
     <nav class="md-nav" aria-label="Stage 3 — Apply">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#classifier-cadence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Classifier cadence
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#apply-outputs" class="md-nav__link">
@@ -1563,6 +1637,8 @@ ambiguous clips — those are dropped from training instead of adding noise.</p>
   available, GLIDER falls back to Random Forest automatically.)</li>
 </ul>
 </li>
+<li>With <code>lightgbm</code> selected, <strong>Advanced…</strong> opens the per-knob hyperparameters —
+   see <a href="#advanced-lightgbm-settings">Advanced LightGBM settings</a>.</li>
 <li>Optionally enable <strong>Include background class</strong> (treat unlabeled frames as a
    catch-all "background" behavior) and <strong>Mirror augment</strong> (add left/right-mirrored
    copies of your data to make the model robust to direction).</li>
@@ -1580,6 +1656,82 @@ precision/recall/F1, and a confusion matrix.</p>
 optimistic. Holding out one or more whole sessions gives you a realistic
 estimate of how the model will do on new recordings.</p>
 </div>
+<h3 id="advanced-lightgbm-settings">Advanced LightGBM settings<a class="headerlink" href="#advanced-lightgbm-settings" title="Permanent link">&para;</a></h3>
+<p>Most users never need this. The defaults are already tuned to be <em>more</em>
+regularized than stock LightGBM, which deliberately gives up some training
+accuracy to generalize better to sessions the model has never seen.</p>
+<p>Reach for <strong>Advanced…</strong> when the training summary and your holdout scores
+disagree — near-perfect training accuracy alongside mediocre holdout accuracy
+means the model has memorized your training sessions rather than learned the
+behaviors. Every field has a tooltip explaining what it trades off, and
+<strong>Restore Defaults</strong> puts all of them back.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What it does</th>
+<th>To reduce overfitting</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Boosting rounds</strong></td>
+<td>How many trees are boosted in sequence</td>
+<td>Lower it, or raise it alongside a lower learning rate</td>
+</tr>
+<tr>
+<td><strong>Learning rate</strong></td>
+<td>How much each tree contributes</td>
+<td>Lower it, and add boosting rounds to compensate</td>
+</tr>
+<tr>
+<td><strong>Leaves per tree</strong></td>
+<td>LightGBM's main capacity dial</td>
+<td>Lower it</td>
+</tr>
+<tr>
+<td><strong>Max tree depth</strong></td>
+<td>Hard cap on tree depth (<code>No limit</code> by default)</td>
+<td>Cap it</td>
+</tr>
+<tr>
+<td><strong>Min samples per leaf</strong></td>
+<td>Fewest training frames a leaf may cover</td>
+<td>Raise it — especially with few labeled bouts</td>
+</tr>
+<tr>
+<td><strong>Min split gain</strong></td>
+<td>Improvement a split must buy to be kept</td>
+<td>Raise it above 0</td>
+</tr>
+<tr>
+<td><strong>Feature fraction</strong></td>
+<td>Fraction of features each tree samples</td>
+<td>Lower it</td>
+</tr>
+<tr>
+<td><strong>Row fraction</strong></td>
+<td>Fraction of training rows each tree samples</td>
+<td>Lower it</td>
+</tr>
+<tr>
+<td><strong>L2 regularization</strong></td>
+<td>Penalty on confident leaf weights</td>
+<td>Raise it</td>
+</tr>
+</tbody>
+</table>
+<p>These settings apply to LightGBM only — the Random Forest backend ignores them,
+which is why <strong>Advanced…</strong> is greyed out when <code>rf</code> is selected. Values you set
+are used for the runs you fit afterward; they aren't saved between sessions, and
+leaving the dialog untouched means the built-in defaults are used.</p>
+<div class="admonition tip">
+<p class="admonition-title">Change one knob at a time</p>
+<p>Hyperparameter changes are only meaningful if you can measure them. Add a
+holdout set first, note the holdout accuracy, then change a single setting
+and re-fit. Without a holdout set you'll only see training accuracy, which
+gets <em>better</em> as the model overfits.</p>
+</div>
 <h3 id="what-the-model-learns-from">What the model learns from<a class="headerlink" href="#what-the-model-learns-from" title="Permanent link">&para;</a></h3>
 <p>Under the hood, GLIDER turns each frame of pose data into a compact set of
 <strong>geometric and kinematic features</strong> — things like the distances between
@@ -1588,6 +1740,10 @@ each keypoint's speed, acceleration, and turning rate. These per-frame features 
 then summarized over a short rolling window (about one second) using their mean,
 standard deviation, and maximum. The classifier is trained on those windowed
 features paired with your labels.</p>
+<p>For the full mechanical account — what each feature column is, which rows get
+dropped before training, what LightGBM actually does with the table, and how the
+same numbers are reproduced at apply time — see
+<a href="../../reference/behavior-model/">Behavior Classifier Internals</a>.</p>
 <h2 id="stage-3-apply">Stage 3 — Apply<a class="headerlink" href="#stage-3-apply" title="Permanent link">&para;</a></h2>
 <p>On the <strong>Apply</strong> tab you score new videos with a trained model:</p>
 <ol>
@@ -1598,11 +1754,30 @@ features paired with your labels.</p>
    recordings.</li>
 <li>In <strong>Keypoint names</strong>, enter the keypoint names in the model's training order,
    comma-separated (for example <code>nose, left_ear, right_ear, ...</code>).</li>
+<li>Optionally set <strong>Classify every</strong> — see <a href="#classifier-cadence">Classifier cadence</a>.</li>
 <li>Click <strong>Choose output folder…</strong>, then <strong>Run</strong>.</li>
 </ol>
-<p>GLIDER runs pose inference over each video and classifies every frame. Videos are
-processed one at a time, each writing into its own subfolder (named after the
-video) inside your output folder.</p>
+<p>GLIDER runs pose inference over each video and classifies it at the chosen
+cadence. Videos are processed one at a time, each writing into its own subfolder
+(named after the video) inside your output folder.</p>
+<h3 id="classifier-cadence">Classifier cadence<a class="headerlink" href="#classifier-cadence" title="Permanent link">&para;</a></h3>
+<p><strong>Classify every</strong> sets how many frames pass between behavior predictions. The
+default of 3 asks the model for a label about 10 times per second on 30 fps
+video — fine resolution for scoring bouts, at a third of the inference work of
+labelling every frame.</p>
+<p>Set it to <strong>1</strong> when you want a label on every single frame: frame-accurate
+onset and offset times, an <code>ethogram_raw.csv</code> you can join row-for-row against
+another per-frame signal, or short behaviors whose bouts are only a few frames
+long. The cost is proportionally more classifier calls, so an Apply run takes
+longer.</p>
+<p>Two things stay true whichever value you pick:</p>
+<ul>
+<li>Pose tracking and feature extraction always run on <strong>every</strong> frame. Only the
+  behavior prediction is sampled, so the model still sees a fully populated
+  rolling feature window.</li>
+<li>Bout durations, totals, and transition counts are corrected for the cadence,
+  so <code>bouts.csv</code> and <code>stats.csv</code> report real seconds either way.</li>
+</ul>
 <h3 id="apply-outputs">Apply outputs<a class="headerlink" href="#apply-outputs" title="Permanent link">&para;</a></h3>
 <p>For each video, GLIDER writes:</p>
 <table>
@@ -1619,7 +1794,7 @@ video) inside your output folder.</p>
 </tr>
 <tr>
 <td><code>ethogram_raw.csv</code></td>
-<td>The per-frame behavior label (the raw ethogram)</td>
+<td>The raw ethogram: one row per <em>prediction</em> (<code>frame</code>, <code>behavior</code>), so one row per video frame only when <strong>Classify every</strong> is 1</td>
 </tr>
 <tr>
 <td><code>bouts.csv</code></td>
