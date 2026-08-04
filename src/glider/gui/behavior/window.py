@@ -567,7 +567,8 @@ class AnnotateTab(QWidget):
         )
         from glider.gui.behavior.annotator.capture_cache import VideoCaptureCache
         from glider.gui.behavior.annotator.main_window import AnnotatorWindow
-        from glider.gui.behavior.annotator.sampler import propose_clips_multi
+        from glider.gui.behavior.annotator.resume_cache import ResumeCache
+        from glider.gui.behavior.annotator.sampler import ProposedClip, propose_clips_multi
         from glider.vision.pose.dlc import DEFAULT_FPS, fps_for_csv
 
         # Clip lengths and the trim window are specified in seconds, so the
@@ -602,8 +603,9 @@ class AnnotateTab(QWidget):
                 # and a labeller asking for "10 clips" across 30 videos means
                 # "a few", not "crash".
                 n_total = max(int(self._clip_count.value()), len(pairs))
+                exclude_labeled = self._skip_labelled_check.isChecked()
                 exclude_zones = None
-                if self._skip_labelled_check.isChecked():
+                if exclude_labeled:
                     exclude_zones = [
                         [
                             (z.start_frame, z.end_frame)
@@ -611,12 +613,38 @@ class AnnotateTab(QWidget):
                         ]
                         for _pose_csv, video in pairs
                     ]
-                clips = propose_clips_multi(
-                    sessions=pairs,
-                    n_clips_total=n_total,
-                    fps=fps,
-                    exclude_zones_by_session=exclude_zones,
-                )
+
+                # Record the sampled queue, exactly as the CLI path does. The
+                # annotations CSV only ever holds the clips that got LABELLED,
+                # so without this the other two hundred are gone the moment the
+                # window closes and the next launch starts somewhere else.
+                cache_inputs = {
+                    "videos": sorted(str(v) for _p, v in pairs),
+                    "n_clips": int(n_total),
+                    "window": 30,
+                    "fps": float(fps),
+                    "random_state": 42,
+                    "spatial_weight": 1.0,
+                    "min_frame_gap": None,
+                    "exclude_labeled": bool(exclude_labeled),
+                }
+                resume = ResumeCache(self._videos_dir)
+                cached = resume.load(inputs=cache_inputs)
+                if cached is not None:
+                    clips = [ProposedClip(**c) for c in cached["clips"]]
+                else:
+                    clips = propose_clips_multi(
+                        sessions=pairs,
+                        n_clips_total=n_total,
+                        fps=fps,
+                        exclude_zones_by_session=exclude_zones,
+                    )
+                    try:
+                        resume.save(inputs=cache_inputs, clip_payload=[c.__dict__ for c in clips])
+                    except OSError as e:
+                        # A read-only or full drive costs the resume, not the
+                        # session — the clips are already in hand.
+                        logger.warning("could not write the clip queue: %s", e)
         except Exception as e:  # noqa: BLE001 - surfaced to the user, not fatal
             QMessageBox.critical(self, "Annotate", f"Could not build the clip list:\n{e}")
             return
