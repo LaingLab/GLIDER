@@ -67,6 +67,27 @@ class TrainWorker(_BaseWorker):
             self.failed.emit(str(e))
 
 
+class CrossValidateWorker(_BaseWorker):
+    """Session-grouped K-fold cross-validation over the training sessions.
+
+    Measures only — :func:`cross_validate_sessions` deliberately returns no
+    model. Kept separate from :class:`TrainWorker` for that reason: a caller
+    cannot accidentally treat the result as something to save.
+    """
+
+    def __init__(self, sessions, options):
+        super().__init__()
+        self._sessions, self._options = sessions, options
+
+    def run(self) -> None:
+        try:
+            from glider.analysis.behavior import cross_validate_sessions
+
+            self.finished.emit(cross_validate_sessions(self._sessions, **self._options))
+        except Exception as e:  # surface as a UI message, never crash the thread
+            self.failed.emit(str(e))
+
+
 class ApplyWorker(_BaseWorker):
     """Classify a recorded video with a trained model and write the ethogram.
 

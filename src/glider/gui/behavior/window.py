@@ -701,6 +701,36 @@ class TrainTab(QWidget):
         self._fit_btn.clicked.connect(self._on_fit)
         self._rail = rail
 
+        # Cross-validation is its own action, not a mode of Fit: it
+        # deliberately produces NO model, only a measurement, and folding it
+        # into the same button would invite saving something that does not
+        # exist. It is the only way to get a number with a spread on it — a
+        # single cross-session holdout on this kind of data varies by ~0.09
+        # macro F1 depending purely on which animals land in it.
+        self._folds_spin = QSpinBox()
+        self._folds_spin.setRange(2, 100)
+        self._folds_spin.setValue(5)
+        self._folds_spin.setToolTip(
+            "Whole sessions are split across folds, never frames within a\n"
+            "session, so every fold is scored on animals the model never saw.\n"
+            "At or above the number of sessions this is leave-one-out."
+        )
+        self._cv_btn = QPushButton("Cross-validate")
+        set_button_role(self._cv_btn, "ghost")
+        self._cv_btn.setToolTip(
+            "Measure generalization across all training sessions.\n"
+            "Produces no model — use Fit for that."
+        )
+        self._cv_btn.clicked.connect(self._on_cross_validate)
+        rail.card.add(_button_row(QLabel("Folds"), self._folds_spin, self._cv_btn))
+        rail.card.add(
+            hint(
+                "Cross-validation splits the TRAINING sessions itself and "
+                "ignores the holdout list. It reports a mean and a spread "
+                "instead of one split's number, and saves nothing."
+            )
+        )
+
         self._progress = QProgressBar()
         self._progress.setVisible(False)
         rail.card.add(self._progress)
@@ -1040,6 +1070,67 @@ class TrainTab(QWidget):
         set_path_text(self._output_label, _short_path(self._output_path), filled=True)
         self._output_label.setToolTip(path)
 
+    def _shared_options(self) -> dict:
+        """Settings both Fit and Cross-validate accept.
+
+        Shared deliberately: a cross-validation run configured differently
+        from the fit it is meant to estimate is not an estimate of anything.
+        ``test_split`` and ``holdout_sessions`` are NOT here — cross-validation
+        takes neither, and it makes its own splits.
+        """
+        options: dict = {
+            "classifier_type": self._classifier_combo.currentText(),
+            "include_background": self._background_check.isChecked(),
+            "mirror_augment": self._mirror_check.isChecked(),
+            "window": int(self._window_spin.value()),
+            # currentData, not currentText: the pipeline wants None, and the
+            # string "none" would be passed through to sklearn as a weighting
+            # scheme it does not recognise.
+            "class_weight": self._class_weight_combo.currentData(),
+            "random_state": int(self._seed_spin.value()),
+            "traj_features": self._traj_check.isChecked(),
+            "motion_features": self._motion_check.isChecked(),
+            "freq_features": self._freq_check.isChecked(),
+        }
+        options.update(self._lgbm_options())
+        return options
+
+    def _on_cross_validate(self) -> None:
+        """Measure generalization over the training sessions. Saves nothing."""
+        if not self._sessions:
+            QMessageBox.warning(self, "Train", "Add at least one training session first.")
+            return
+
+        from glider.gui.behavior import workers as workers_mod
+
+        options = self._shared_options()
+        options["n_folds"] = int(self._folds_spin.value())
+
+        self._train_thread = QThread()
+        self._train_worker = workers_mod.CrossValidateWorker(list(self._sessions), options)
+        self._train_worker.moveToThread(self._train_thread)
+        self._train_thread.started.connect(self._train_worker.run)
+        self._train_worker.finished.connect(self._on_cv_finished)
+        self._train_worker.failed.connect(self._on_train_failed)
+
+        self._results.clear()
+        self._progress.setVisible(True)
+        self._progress.setRange(0, 0)
+        self._fit_btn.setEnabled(False)
+        self._cv_btn.setEnabled(False)
+        self._rail.status.set_state("running", f"Cross-validating ({options['n_folds']} folds)")
+        self._train_thread.start()
+
+    def _on_cv_finished(self, result: object) -> None:
+        from glider.analysis.behavior.summary_text import format_cv_summary
+
+        self._teardown_train_thread()
+        self._progress.setVisible(False)
+        self._fit_btn.setEnabled(True)
+        self._cv_btn.setEnabled(True)
+        self._rail.status.set_state("ok", "Done")
+        self._results.setPlainText(format_cv_summary(result))
+
     def _on_fit(self) -> None:
         if not self._sessions:
             QMessageBox.warning(self, "Train", "Add at least one training session first.")
@@ -1050,22 +1141,8 @@ class TrainTab(QWidget):
 
         from glider.gui.behavior.workers import TrainWorker
 
-        options: dict = {
-            "classifier_type": self._classifier_combo.currentText(),
-            "include_background": self._background_check.isChecked(),
-            "mirror_augment": self._mirror_check.isChecked(),
-            "window": int(self._window_spin.value()),
-            # currentData, not currentText: train_model wants None, and the
-            # string "none" would be passed through to sklearn as a weighting
-            # scheme it does not recognise.
-            "class_weight": self._class_weight_combo.currentData(),
-            "test_split": float(self._test_split_spin.value()),
-            "random_state": int(self._seed_spin.value()),
-            "traj_features": self._traj_check.isChecked(),
-            "motion_features": self._motion_check.isChecked(),
-            "freq_features": self._freq_check.isChecked(),
-        }
-        options.update(self._lgbm_options())
+        options = self._shared_options()
+        options["test_split"] = float(self._test_split_spin.value())
         if self._holdout:
             options["holdout_sessions"] = list(self._holdout)
 
@@ -1101,6 +1178,9 @@ class TrainTab(QWidget):
         self._results.setPlainText(format_training_summary(summary))
 
     def _on_train_failed(self, message: str) -> None:
+        # Shared by Fit and Cross-validate, so both buttons come back —
+        # otherwise a failed cross-validation leaves its own button dead.
+        self._cv_btn.setEnabled(True)
         self._teardown_train_thread()
         self._progress.setVisible(False)
         self._fit_btn.setEnabled(True)

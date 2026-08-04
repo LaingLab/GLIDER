@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["format_training_summary"]
+__all__ = ["format_cv_summary", "format_training_summary"]
 
 #: Hard cap on line length. The pane is a fixed-width card; a table that wraps
 #: is less readable than one that truncates, because a wrapped row silently
@@ -93,6 +93,116 @@ def format_training_summary(summary: Any) -> str:
     lines += _settings(summary)
     lines += ["", "The complete summary is stored inside the saved model bundle."]
     return "\n".join(lines)
+
+
+def format_cv_summary(result: Any) -> str:
+    """A readable report for one ``cross_validate_sessions`` result.
+
+    Separate from :func:`format_training_summary` because the shape is
+    different: per-fold arrays and pooled metrics rather than one split's
+    numbers, and no model at the end of it.
+
+    The spread across folds is given as much prominence as the mean. A single
+    cross-session holdout on this kind of data has a standard deviation near
+    0.09 — quoting one number without it is how a fold-to-fold difference gets
+    read as a real improvement.
+    """
+    if not isinstance(result, dict) or not result:
+        return "No cross-validation result available."
+
+    lines: list[str] = []
+    lines += _cv_headline(result)
+    lines += _cv_folds(result)
+    lines += _per_class(result)
+    lines += _confusion(result)
+    lines += _cv_bouts(result)
+    lines += [
+        "",
+        "No model is produced by cross-validation — it measures only.",
+        "Use Fit to train the model you will actually apply.",
+    ]
+    return "\n".join(lines)
+
+
+def _stdev(values: list[float]) -> float | None:
+    """Population sd, or None when there is nothing to spread."""
+    finite = [float(v) for v in values if isinstance(v, (int, float))]
+    if len(finite) < 2:
+        return None
+    mean = sum(finite) / len(finite)
+    return (sum((v - mean) ** 2 for v in finite) / len(finite)) ** 0.5
+
+
+def _cv_headline(s: dict) -> list[str]:
+    n_folds = s.get("n_folds") or len(s.get("fold_macro_f1") or [])
+    right = f"{_count(n_folds)} folds · {_count(s.get('n_sessions'))} sessions"
+    left = " CROSS-VALIDATION"
+    gap = max(1, WIDTH - len(left) - len(right) - 1)
+    out = [_rule("═"), f"{left}{' ' * gap}{right} ", _rule("═"), ""]
+
+    # sd of macro F1 is not in the dict; only std_accuracy is. Computing it
+    # here is the difference between a number and a number you can act on.
+    f1_sd = _stdev(s.get("fold_macro_f1") or [])
+    macro = _num(s.get("mean_macro_f1"))
+    out.append(
+        f"  Macro F1     {macro}"
+        + (f" ± {_num(f1_sd)}" if f1_sd is not None else "")
+        + "   ← mean over folds"
+    )
+    acc_sd = s.get("std_accuracy")
+    out.append(
+        f"  Accuracy     {_num(s.get('mean_accuracy'))}"
+        + (f" ± {_num(acc_sd)}" if isinstance(acc_sd, (int, float)) else "")
+    )
+    rows = s.get("n_rows_kept")
+    if rows:
+        out.append(f"  Rows         {_count(rows)} scored across all folds")
+
+    rate = s.get("false_alarm_rate")
+    if isinstance(rate, (int, float)):
+        out.append(
+            f"  False alarm  {_num(rate)}  (a named behavior fired on a "
+            f"{s.get('background_class_name') or 'background'} frame)"
+        )
+    return out
+
+
+def _cv_folds(s: dict) -> list[str]:
+    accs = s.get("fold_accuracies") or []
+    f1s = s.get("fold_macro_f1") or []
+    if not f1s:
+        return []
+    header = f"  {'fold':<8}{'accuracy':>11}{'macro F1':>11}"
+    out = ["", "PER FOLD", header, "  " + _rule("─", len(header) - 2)]
+    for i, f1 in enumerate(f1s):
+        acc = accs[i] if i < len(accs) else None
+        out.append(f"  {i + 1:<8}{_num(acc):>11}{_num(f1):>11}")
+    if _stdev(f1s) is not None:
+        worst, best = min(f1s), max(f1s)
+        out.append("  " + _rule("─", len(header) - 2))
+        out.append(f"  {'range':<8}{'':>11}{_num(best - worst):>11}  (worst to best)")
+    return out
+
+
+def _cv_bouts(s: dict) -> list[str]:
+    """Bout-level recall: was the episode caught at all, not how many frames."""
+    bouts = s.get("bout_metrics")
+    if not isinstance(bouts, dict) or not bouts:
+        return []
+    out = ["", "BOUT RECALL  (episodes detected, not frames)"]
+    # recall_any = the bout was touched at all; recall_50 = at least half of
+    # it was covered. The gap between them is how much of a detected bout the
+    # model actually got, which frame accuracy cannot show.
+    out.append(f"  {'class':<18}{'bouts':>8}{'any':>9}{'≥50%':>9}{'F1 ≥50%':>10}")
+    for name, m in sorted(bouts.items()):
+        if not isinstance(m, dict):
+            continue
+        out.append(
+            f"  {_clip(name, 17):<18}{_count(m.get('n_bouts')):>8}"
+            f"{_num(m.get('recall_any')):>9}{_num(m.get('recall_50')):>9}"
+            f"{_num(m.get('f1_50')):>10}"
+        )
+    return out
 
 
 def _headline(s: dict) -> list[str]:
