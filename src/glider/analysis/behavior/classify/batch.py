@@ -266,7 +266,7 @@ def classify_pose_data(
     emit_frames = np.arange(lag, max(lag, n_frames - lag))
     keep = (emit_frames + lag + 1) % predict_every == 0
     if frame_range is not None:
-        # Analysing a window restricts which rows are *emitted*, nothing else.
+        # Analyzing a window restricts which rows are *emitted*, nothing else.
         # Features, rolling statistics and the causal speed are still computed
         # over the whole session, so the window's opening frames get the same
         # full-width rolling windows and the same warmed-up speed filter they

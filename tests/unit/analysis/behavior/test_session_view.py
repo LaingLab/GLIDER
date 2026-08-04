@@ -1,4 +1,4 @@
-"""Loading an analysed session and asking questions about a window of it."""
+"""Loading an analyzed session and asking questions about a window of it."""
 
 from __future__ import annotations
 

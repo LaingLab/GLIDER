@@ -1021,7 +1021,7 @@ class MainWindow(QMainWindow):
 
         review_action = QAction("&Session Review…", self)
         review_action.setStatusTip(
-            "Scrub an analysed session, select a window, and read what is in it"
+            "Scrub an analyzed session, select a window, and read what is in it"
         )
         review_action.triggered.connect(self._open_session_review)
         # Shares the behavior extra's probe: it reads the same outputs.

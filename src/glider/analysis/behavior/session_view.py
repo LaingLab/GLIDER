@@ -1,4 +1,4 @@
-"""One analysed session, and statistics over any window of it.
+"""One analyzed session, and statistics over any window of it.
 
 An apply run leaves several files beside each other — the ethogram, the poses,
 the pose sidecar, the rig's calibration. Separately each is a fragment; taken
@@ -219,7 +219,7 @@ class SegmentStats:
 
 @dataclass
 class SessionView:
-    """Everything loadable about one analysed session."""
+    """Everything loadable about one analyzed session."""
 
     labels: list[str]  # behavior per ethogram row
     frames: np.ndarray  # the frame index each row describes

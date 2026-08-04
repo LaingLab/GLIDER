@@ -318,7 +318,7 @@ def test_exact_stem_wins_over_a_batch_output(tmp_path):
 
 
 def test_skips_the_raw_companion(tmp_path):
-    """_raw is the unsmoothed inference — never the one to analyse."""
+    """_raw is the unsmoothed inference — never the one to analyze."""
     video = tmp_path / "session01.mp4"
     video.touch()
     (tmp_path / "session01DLC_exp-6_raw.csv").touch()

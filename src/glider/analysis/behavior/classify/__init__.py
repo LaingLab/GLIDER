@@ -555,7 +555,7 @@ def classify(
     # the realtime threads, and it computes `body_angular_velocity` over the
     # whole session the way training does -- the five-frame streaming window
     # cannot, because angle unwrapping is cumulative, not a local stencil.
-    # Analysing a stretch of each recording — a drug window, the minutes after
+    # Analyzing a stretch of each recording — a drug window, the minutes after
     # a stimulus — rather than the whole thing. Resolved against this video's
     # own rate, so one setting means the same clock time on a 30 fps and a
     # 60 fps recording.

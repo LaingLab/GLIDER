@@ -108,7 +108,7 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     ``<stem>DLC_<model>.csv``
         What :func:`run_batch` writes. Companions that share this prefix but
         are not pose data are skipped (see :data:`_NOT_POSE_SUFFIXES`):
-        ``_raw`` is the unsmoothed inference, never the one to analyse, and
+        ``_raw`` is the unsmoothed inference, never the one to analyze, and
         ``_annotations`` is the annotator's behavior zones. The latter is
         written *after* the pose CSV, so before it was excluded it won the
         most-recent tie-break and every reader downstream — annotate, train,
