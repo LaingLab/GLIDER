@@ -24,6 +24,7 @@ from typing import NamedTuple
 
 from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -86,6 +87,10 @@ _DEFAULT_PREDICT_EVERY = 3
 # changes behavior, and at 5 the time budget shifts by <0.5 percentage points
 # while the switch rate roughly halves.
 _DEFAULT_SMOOTH_WINDOW = 5
+
+# Session lists hold one row per animal, so a cohort is dozens of rows and
+# both adding and removing have to work on a selection rather than a row.
+_MULTI_SELECT = QAbstractItemView.SelectionMode.ExtendedSelection
 
 
 class _Knob(NamedTuple):
@@ -717,11 +722,18 @@ class TrainTab(QWidget):
         self._sessions_list = QListWidget()
         self._sessions_list.setMinimumHeight(96)
         self._sessions_list.setMaximumHeight(150)
+        self._sessions_list.setSelectionMode(_MULTI_SELECT)
         attach_empty_state(
-            self._sessions_list, "No sessions yet.\nAdd a pose CSV and its annotations CSV."
+            self._sessions_list,
+            "No sessions yet.\nAdd pose CSVs; annotations are found beside them.",
         )
         sessions_group.add(self._sessions_list)
-        add_btn = QPushButton("Add session…")
+        add_btn = QPushButton("Add sessions…")
+        add_btn.setToolTip(
+            "Pick any number of pose CSVs. Each session's annotations are\n"
+            "taken from <name>_annotations.csv beside it — the same file\n"
+            "training reads."
+        )
         add_btn.clicked.connect(self._on_add_session)
         remove_btn = QPushButton("Remove selected")
         set_button_role(remove_btn, "ghost")
@@ -735,12 +747,13 @@ class TrainTab(QWidget):
         self._holdout_list = QListWidget()
         self._holdout_list.setMinimumHeight(80)
         self._holdout_list.setMaximumHeight(130)
+        self._holdout_list.setSelectionMode(_MULTI_SELECT)
         attach_empty_state(
             self._holdout_list,
             "No holdout sessions.\nAccuracy will be reported on training data only.",
         )
         holdout_group.add(self._holdout_list)
-        add_holdout_btn = QPushButton("Add holdout session…")
+        add_holdout_btn = QPushButton("Add holdout sessions…")
         add_holdout_btn.clicked.connect(self._on_add_holdout)
         remove_holdout_btn = QPushButton("Remove selected")
         set_button_role(remove_holdout_btn, "ghost")
@@ -844,18 +857,43 @@ class TrainTab(QWidget):
         return {"n_estimators": n_estimators, "lgbm_reg": LgbmReg(**values)}
 
     def _on_add_session(self) -> None:
-        pair = _pick_session_pair(self, "training")
-        if pair is not None:
-            self._sessions.append(pair)
-            self._add_session_item(self._sessions_list, pair)
-            self._refresh_counts()
+        self._add_sessions("training", self._sessions, self._sessions_list)
 
     def _on_add_holdout(self) -> None:
-        pair = _pick_session_pair(self, "holdout")
-        if pair is not None:
-            self._holdout.append(pair)
-            self._add_session_item(self._holdout_list, pair)
-            self._refresh_counts()
+        self._add_sessions("holdout", self._holdout, self._holdout_list)
+
+    def _add_sessions(
+        self, kind: str, backing: list[tuple[Path, Path]], list_widget: QListWidget
+    ) -> None:
+        """Add every selected session, reporting whatever could not be added.
+
+        Silence would be the wrong default here: selecting thirty files and
+        getting twenty-eight rows is invisible unless the two missing ones are
+        named.
+        """
+        pairs, skipped = _pick_session_pairs(self, kind)
+        if not pairs and not skipped:
+            return  # cancelled
+
+        already = {pose for pose, _ann in backing}
+        added = 0
+        for pose, ann_path in pairs:
+            if pose in already:
+                skipped.append(f"{pose.name} (already added)")
+                continue
+            already.add(pose)
+            backing.append((pose, ann_path))
+            self._add_session_item(list_widget, (pose, ann_path))
+            added += 1
+        self._refresh_counts()
+
+        if skipped:
+            QMessageBox.warning(
+                self,
+                "Train",
+                f"Added {added} {kind} session(s).\n\n"
+                f"Skipped {len(skipped)}:\n" + "\n".join(f"  • {s}" for s in skipped),
+            )
 
     @staticmethod
     def _add_session_item(list_widget: QListWidget, pair: tuple[Path, Path]) -> None:
@@ -2335,24 +2373,72 @@ def _button_row(*buttons: QWidget) -> QHBoxLayout:
 
 
 def _remove_selected(list_widget: QListWidget, backing: list) -> None:
-    """Remove the current row from a QListWidget and its backing list in step."""
-    row = list_widget.currentRow()
-    if row < 0:
-        return
-    list_widget.takeItem(row)
-    del backing[row]
+    """Remove every selected row from a QListWidget and its backing list in step.
+
+    Rows are taken bottom-up: deleting from the front would shift the indices
+    of everything still to be removed, so a top-down pass silently deletes the
+    wrong entries as soon as more than one row is selected.
+    """
+    rows = sorted((index.row() for index in list_widget.selectedIndexes()), reverse=True)
+    for row in rows:
+        if 0 <= row < len(backing):
+            list_widget.takeItem(row)
+            del backing[row]
 
 
-def _pick_session_pair(parent: QWidget, kind: str) -> tuple[Path, Path] | None:
-    """Prompt for a (pose CSV, annotations CSV) pair, or None if cancelled."""
-    pose_path, _ = QFileDialog.getOpenFileName(
-        parent, f"Choose {kind} pose CSV", "", "CSV files (*.csv);;All files (*)"
+def _annotations_beside(pose_csv: Path) -> Path:
+    """Where training expects this pose CSV's annotations to live.
+
+    Same rule as the annotator's ``annotation_path_for`` and the training
+    pipeline, so a session added here is one training can actually read.
+    """
+    return pose_csv.parent / f"{pose_csv.stem}_annotations.csv"
+
+
+def _pick_session_pairs(parent: QWidget, kind: str) -> tuple[list[tuple[Path, Path]], list[str]]:
+    """Prompt for pose CSVs and pair each with its annotations.
+
+    Returns ``(pairs, skipped)``. One multi-select dialog: pairing a whole
+    cohort by hand cost two dialogs per session, which is sixty for thirty
+    animals.
+
+    Selecting exactly one pose CSV with no annotations beside it falls back to
+    asking for the annotations explicitly, so a layout that keeps them
+    somewhere unrelated is still reachable. That fallback is deliberately not
+    offered for a multi-selection: answering it once would say nothing about
+    the other files, and asking N times is the tax this replaces.
+    """
+    chosen, _ = QFileDialog.getOpenFileNames(
+        parent, f"Choose {kind} pose CSVs", "", "CSV files (*.csv);;All files (*)"
     )
-    if not pose_path:
-        return None
-    ann_path, _ = QFileDialog.getOpenFileName(
-        parent, f"Choose {kind} annotations CSV", "", "CSV files (*.csv);;All files (*)"
-    )
-    if not ann_path:
-        return None
-    return (Path(pose_path), Path(ann_path))
+    if not chosen:
+        return [], []
+
+    poses = [Path(p) for p in chosen]
+    pairs: list[tuple[Path, Path]] = []
+    skipped: list[str] = []
+    for pose in poses:
+        # These folders hold pose and annotation CSVs side by side, and the
+        # dialog cannot tell them apart. Taking one as a pose CSV would look
+        # for "<stem>_annotations_annotations.csv" and report it missing,
+        # which is a confusing way to say "you picked the wrong file".
+        if pose.stem.endswith("_annotations"):
+            skipped.append(f"{pose.name} (that is an annotations file, not pose data)")
+            continue
+        ann_path = _annotations_beside(pose)
+        if ann_path.exists():
+            pairs.append((pose, ann_path))
+            continue
+        if len(poses) == 1:
+            picked, _ = QFileDialog.getOpenFileName(
+                parent,
+                f"Choose {kind} annotations CSV for {pose.name}",
+                "",
+                "CSV files (*.csv);;All files (*)",
+            )
+            if picked:
+                pairs.append((pose, Path(picked)))
+                continue
+            return [], []
+        skipped.append(f"{pose.name} (no {ann_path.name} beside it)")
+    return pairs, skipped
