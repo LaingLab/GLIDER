@@ -909,6 +909,182 @@ def test_turning_the_trace_off_sends_no_pose_csvs(qtbot, tmp_path, monkeypatch):
     assert captured["annotator_kwargs"]["pose_csvs"] == {}
 
 
+# --------------------------------------------------------------------------
+# Train tab: adding sessions in bulk
+#
+# "Add session..." opened TWO single-file dialogs per session. A 30-video
+# cohort cost 60 dialogs, and "Remove selected" then removed one row at a time.
+# --------------------------------------------------------------------------
+
+
+def _session_files(tmp_path, stem, with_annotations=True):
+    """A pose CSV, and by default the annotations file training looks for."""
+    pose = tmp_path / f"{stem}.csv"
+    pose.write_text("pose\n", encoding="utf-8")
+    if with_annotations:
+        (tmp_path / f"{stem}_annotations.csv").write_text(
+            "behavior,start_frame,end_frame,created_at,note\n", encoding="utf-8"
+        )
+    return pose
+
+
+def _train_tab(qtbot, monkeypatch, chosen, asked=None):
+    """A TrainTab whose file dialogs return ``chosen`` (and ``asked`` as fallback)."""
+    from glider.gui.behavior import window as win_mod
+
+    notes: list[str] = []
+    monkeypatch.setattr(
+        win_mod.QFileDialog,
+        "getOpenFileNames",
+        staticmethod(lambda *a, **k: ([str(p) for p in chosen], "")),
+    )
+    monkeypatch.setattr(
+        win_mod.QFileDialog,
+        "getOpenFileName",
+        staticmethod(lambda *a, **k: (str(asked) if asked else "", "")),
+    )
+    for kind in ("information", "warning"):
+        monkeypatch.setattr(
+            win_mod.QMessageBox,
+            kind,
+            lambda *a, **k: notes.append(a[2] if len(a) > 2 else ""),
+        )
+    tab = win_mod.TrainTab()
+    qtbot.addWidget(tab)
+    return tab, notes
+
+
+def test_add_sessions_pairs_every_selected_pose_csv(qtbot, tmp_path, monkeypatch):
+    poses = [_session_files(tmp_path, f"s{i}") for i in range(3)]
+
+    tab, _ = _train_tab(qtbot, monkeypatch, poses)
+    tab._on_add_session()
+
+    assert len(tab._sessions) == 3
+    assert tab._sessions_list.count() == 3
+    for pose, (got_pose, got_ann) in zip(poses, tab._sessions, strict=True):
+        assert got_pose == pose
+        assert got_ann.name == f"{pose.stem}_annotations.csv"
+
+
+def test_add_sessions_skips_pose_csvs_with_no_annotations(qtbot, tmp_path, monkeypatch):
+    """Never guess at a missing annotations file; say which ones were skipped."""
+    good = [_session_files(tmp_path, "good1"), _session_files(tmp_path, "good2")]
+    orphan = _session_files(tmp_path, "orphan", with_annotations=False)
+
+    tab, notes = _train_tab(qtbot, monkeypatch, [*good, orphan])
+    tab._on_add_session()
+
+    assert len(tab._sessions) == 2
+    assert len(notes) == 1
+    assert "orphan.csv" in notes[0]
+
+
+def test_add_sessions_ignores_annotation_files_chosen_by_mistake(qtbot, tmp_path, monkeypatch):
+    """The folder holds both kinds; <stem>_annotations_annotations.csv is nobody's intent."""
+    pose = _session_files(tmp_path, "s1")
+    annotations = tmp_path / "s1_annotations.csv"
+
+    tab, notes = _train_tab(qtbot, monkeypatch, [pose, annotations])
+    tab._on_add_session()
+
+    assert len(tab._sessions) == 1
+    assert tab._sessions[0][0] == pose
+    assert "s1_annotations.csv" in notes[0]
+
+
+def test_add_sessions_does_not_add_the_same_session_twice(qtbot, tmp_path, monkeypatch):
+    pose = _session_files(tmp_path, "s1")
+
+    tab, notes = _train_tab(qtbot, monkeypatch, [pose])
+    tab._on_add_session()
+    tab._on_add_session()
+
+    assert len(tab._sessions) == 1
+    assert tab._sessions_list.count() == 1
+    assert "already" in notes[-1].lower()
+
+
+def test_one_pose_csv_without_annotations_falls_back_to_asking(qtbot, tmp_path, monkeypatch):
+    """Annotations kept somewhere unrelated must still be reachable."""
+    pose = _session_files(tmp_path, "s1", with_annotations=False)
+    elsewhere = tmp_path / "somewhere_else.csv"
+    elsewhere.write_text("behavior,start_frame,end_frame,created_at,note\n", encoding="utf-8")
+
+    tab, _ = _train_tab(qtbot, monkeypatch, [pose], asked=elsewhere)
+    tab._on_add_session()
+
+    assert tab._sessions == [(pose, elsewhere)]
+
+
+def test_declining_the_fallback_adds_nothing(qtbot, tmp_path, monkeypatch):
+    pose = _session_files(tmp_path, "s1", with_annotations=False)
+
+    tab, _ = _train_tab(qtbot, monkeypatch, [pose], asked=None)
+    tab._on_add_session()
+
+    assert tab._sessions == []
+
+
+def test_cancelling_the_dialog_adds_nothing(qtbot, tmp_path, monkeypatch):
+    tab, notes = _train_tab(qtbot, monkeypatch, [])
+    tab._on_add_session()
+
+    assert tab._sessions == []
+    assert notes == []
+
+
+def test_holdout_sessions_are_added_in_bulk_too(qtbot, tmp_path, monkeypatch):
+    poses = [_session_files(tmp_path, f"h{i}") for i in range(3)]
+
+    tab, _ = _train_tab(qtbot, monkeypatch, poses)
+    tab._on_add_holdout()
+
+    assert len(tab._holdout) == 3
+    assert tab._holdout_list.count() == 3
+    assert tab._sessions == []
+
+
+def test_both_lists_allow_multi_selection(qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QAbstractItemView
+
+    tab, _ = _train_tab(qtbot, monkeypatch, [])
+    mode = QAbstractItemView.SelectionMode.ExtendedSelection
+    assert tab._sessions_list.selectionMode() == mode
+    assert tab._holdout_list.selectionMode() == mode
+
+
+def test_remove_selected_removes_every_selected_row(qtbot, tmp_path, monkeypatch):
+    """It removed only currentRow, so clearing 30 sessions meant 30 clicks."""
+    poses = [_session_files(tmp_path, f"s{i}") for i in range(5)]
+
+    tab, _ = _train_tab(qtbot, monkeypatch, poses)
+    tab._on_add_session()
+    for row in (0, 2, 4):
+        tab._sessions_list.item(row).setSelected(True)
+    tab._on_remove_session()
+
+    assert [p.stem for p, _a in tab._sessions] == ["s1", "s3"]
+    assert tab._sessions_list.count() == 2
+    # The list and its backing store must not drift apart. Rows show names;
+    # the tooltip carries the full paths.
+    for i, (pose, ann) in enumerate(tab._sessions):
+        item = tab._sessions_list.item(i)
+        assert pose.name in item.text()
+        assert item.toolTip() == f"{pose}\n{ann}"
+
+
+def test_removing_nothing_selected_is_a_no_op(qtbot, tmp_path, monkeypatch):
+    poses = [_session_files(tmp_path, f"s{i}") for i in range(2)]
+
+    tab, _ = _train_tab(qtbot, monkeypatch, poses)
+    tab._on_add_session()
+    tab._sessions_list.clearSelection()
+    tab._on_remove_session()
+
+    assert len(tab._sessions) == 2
+
+
 def test_cohort_mode_sends_only_the_cohort_file(qtbot, tmp_path):
     """One pooled cut-off, not per-video percentiles."""
     from glider.gui.behavior.window import ApplyTab
