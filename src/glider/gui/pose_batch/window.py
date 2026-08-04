@@ -159,9 +159,12 @@ class PoseBatchWindow(QMainWindow):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Batch Pose Tracking")
-        # Fits a 1080p screen (~1040px usable); the splitter below distributes
-        # whatever height that leaves the videos/calibration/log widgets.
-        self.resize(820, 900)
+        # Wide enough for both columns. The old 820 was sized for a single
+        # stacked column; against the config/run split it left the config side
+        # ~370px and clipped the weights field, the confidence spin box and
+        # half the calibration table. The minimum stops a drag doing the same.
+        self.resize(1180, 900)
+        self.setMinimumWidth(940)
 
         self._model_path: Path | None = None
         self._meta = None
