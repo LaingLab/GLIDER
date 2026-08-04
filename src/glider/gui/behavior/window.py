@@ -723,6 +723,21 @@ class TrainTab(QWidget):
         )
         self._cv_btn.clicked.connect(self._on_cross_validate)
         rail.card.add(_button_row(QLabel("Folds"), self._folds_spin, self._cv_btn))
+
+        # Refitting on everything after measuring is the standard way to turn a
+        # CV estimate into a deployable model. Done as two separate actions it
+        # assembles the features twice — and with motion features that means
+        # decoding every source video twice — so it is offered here instead.
+        self._cv_fit_check = QCheckBox("…and fit a model on all sessions")
+        self._cv_fit_check.setToolTip(
+            "Refit on every session after measuring, and save the bundle.\n"
+            "One feature pass for both, and the saved model carries the\n"
+            "cross-validated score instead of a meaningless 1.000 train\n"
+            "accuracy.\n\n"
+            "The CV number understates this model slightly: it saw every\n"
+            "session, while each fold model saw only a fraction."
+        )
+        rail.card.add(self._cv_fit_check)
         rail.card.add(
             hint(
                 "Cross-validation splits the TRAINING sessions itself and "
@@ -1100,6 +1115,15 @@ class TrainTab(QWidget):
         if not self._sessions:
             QMessageBox.warning(self, "Train", "Add at least one training session first.")
             return
+        also_fit = self._cv_fit_check.isChecked()
+        if also_fit and self._output_path is None:
+            QMessageBox.warning(
+                self,
+                "Train",
+                "Choose a model output file first, or untick "
+                "'…and fit a model on all sessions' to measure only.",
+            )
+            return
 
         from glider.gui.behavior import workers as workers_mod
 
@@ -1107,7 +1131,9 @@ class TrainTab(QWidget):
         options["n_folds"] = int(self._folds_spin.value())
 
         self._train_thread = QThread()
-        self._train_worker = workers_mod.CrossValidateWorker(list(self._sessions), options)
+        self._train_worker = workers_mod.CrossValidateWorker(
+            list(self._sessions), options, self._output_path if also_fit else None
+        )
         self._train_worker.moveToThread(self._train_thread)
         self._train_thread.started.connect(self._train_worker.run)
         self._train_worker.finished.connect(self._on_cv_finished)

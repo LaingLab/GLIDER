@@ -980,17 +980,229 @@ def cross_validate_sessions(
     :func:`train_model`) so CV measures the same backend that gets
     deployed; pass ``"rf"`` to evaluate the RandomForest backend instead.
     """
+    spec = spec or FeatureSpec()
+    fps = resolve_sessions_fps(sessions, fps)
+    data = _assemble_for_cv(
+        sessions,
+        spec=spec,
+        window=window,
+        stats=stats,
+        fps=fps,
+        mirror_augment=mirror_augment,
+        merge_map=merge_map,
+        exclude=exclude,
+        freq_features=freq_features,
+        traj_features=traj_features,
+        motion_features=motion_features,
+        include_background=include_background,
+        background_class_name=background_class_name,
+        background_ratio=background_ratio,
+        random_state=random_state,
+    )
+    return _run_cv_folds(
+        data,
+        n_folds=n_folds,
+        n_estimators=n_estimators,
+        random_state=random_state,
+        class_weight=class_weight,
+        classifier_type=classifier_type,
+        lgbm_reg=lgbm_reg,
+        include_background=include_background,
+        background_class_name=background_class_name,
+        threshold_curve=threshold_curve,
+    )
+
+
+def cross_validate_and_train(
+    sessions: list[SessionPair],
+    *,
+    spec: FeatureSpec | None = None,
+    window: int = 30,
+    stats: tuple[str, ...] = DEFAULT_STATS,
+    fps: float | None = None,
+    n_estimators: int = 200,
+    random_state: int = 42,
+    class_weight: str | None = None,
+    classifier_type: str = "lightgbm",
+    mirror_augment: bool = False,
+    merge_map: dict[str, str] | None = None,
+    exclude: set[str] | None = None,
+    lgbm_reg: LgbmReg | None = None,
+    n_folds: int = 5,
+    include_background: bool = False,
+    background_class_name: str = "background",
+    background_ratio: float = 5.0,
+    threshold_curve: bool = False,
+    freq_features: bool = False,
+    traj_features: bool = False,
+    motion_features: bool = False,
+) -> tuple[dict[str, Any], TrainResult]:
+    """Cross-validate, then refit on everything — one feature pass for both.
+
+    Returns ``(cv_result, train_result)``.
+
+    Cross-validation cannot itself hand back a model: it fits ``n_folds`` of
+    them, each on a fraction of the sessions, and none is the one you would
+    deploy. The usual answer is to measure with CV and then refit on all the
+    data, which is what this does — and the CV estimate is *conservative* for
+    the returned model, since that model saw every session while each fold
+    model saw only ``(n_folds - 1) / n_folds`` of them.
+
+    Doing it as two separate calls means assembling the feature matrix twice.
+    That is the dominant cost of both, and with ``motion_features`` it means
+    decoding every source video twice. Here it is paid once.
+
+    The CV metrics are written into the model's ``training_summary``, so the
+    saved bundle carries a real cross-session estimate instead of the
+    ``no_holdout`` / 1.000-train-accuracy that a plain fit records.
+    """
+    spec = spec or FeatureSpec()
+    fps = resolve_sessions_fps(sessions, fps)
+    data = _assemble_for_cv(
+        sessions,
+        spec=spec,
+        window=window,
+        stats=stats,
+        fps=fps,
+        mirror_augment=mirror_augment,
+        merge_map=merge_map,
+        exclude=exclude,
+        freq_features=freq_features,
+        traj_features=traj_features,
+        motion_features=motion_features,
+        include_background=include_background,
+        background_class_name=background_class_name,
+        background_ratio=background_ratio,
+        random_state=random_state,
+    )
+    cv_result = _run_cv_folds(
+        data,
+        n_folds=n_folds,
+        n_estimators=n_estimators,
+        random_state=random_state,
+        class_weight=class_weight,
+        classifier_type=classifier_type,
+        lgbm_reg=lgbm_reg,
+        include_background=include_background,
+        background_class_name=background_class_name,
+        threshold_curve=threshold_curve,
+    )
+
+    # Refit on every row, mirrored copies included — augmentation is training
+    # data, and it is only held out of *scoring* so the folds measure real
+    # frames.
+    clf = _build_classifier(
+        classifier_type=classifier_type,
+        n_estimators=n_estimators,
+        random_state=random_state,
+        class_weight=class_weight,
+        lgbm_reg=lgbm_reg,
+    )
+    clf.fit(data.x, data.y)
+
+    summary = {
+        "split_strategy": "cross_validated",
+        "n_sessions": len(sessions),
+        "n_folds": cv_result.get("n_folds"),
+        "n_rows_kept": int(len(data.y)),
+        "train_size": int(len(data.y)),
+        "test_size": int(cv_result.get("n_rows_kept") or 0),
+        "train_accuracy": float(clf.score(data.x, data.y)),
+        # The honest headline: measured across folds, not on the fit itself.
+        "test_accuracy": cv_result.get("mean_accuracy"),
+        "cv_mean_macro_f1": cv_result.get("mean_macro_f1"),
+        "cv_fold_macro_f1": cv_result.get("fold_macro_f1"),
+        "per_class_metrics": cv_result.get("per_class_metrics") or {},
+        "confusion_matrix": cv_result.get("confusion_matrix") or {},
+        "bout_metrics": cv_result.get("bout_metrics") or {},
+        "false_alarm_rate": cv_result.get("false_alarm_rate"),
+        "classes": [str(c) for c in clf.classes_],
+        "n_features": int(data.x.shape[1]),
+        "kept_label_counts": split_label_counts(data.y),
+        "window": int(window),
+        "stats": list(stats),
+        "fps": float(fps),
+        "class_weight": class_weight,
+        "classifier_type": _classifier_label_for(clf),
+        "mirror_augment": bool(mirror_augment),
+        "lgbm_reg": (
+            dataclasses.asdict(lgbm_reg or LgbmReg())
+            if _classifier_label_for(clf) == "lightgbm"
+            else None
+        ),
+    }
+    if hasattr(clf, "feature_importances_"):
+        importances = np.asarray(clf.feature_importances_, dtype=float)
+        order = np.argsort(-importances)
+        summary["top_features"] = [
+            {"feature": data.x.columns[int(i)], "importance": float(importances[int(i)])}
+            for i in order[:20]
+        ]
+
+    model = BehaviorModel(
+        classifier=clf,
+        feature_names=list(data.x.columns),
+        spec=spec,
+        window=window,
+        stats=tuple(stats),
+        fps=fps,
+        classes=[str(c) for c in clf.classes_],
+        training_summary=summary,
+        library_versions=capture_library_versions(),
+    )
+    return cv_result, TrainResult(model=model, summary=summary)
+
+
+@dataclasses.dataclass
+class _CvData:
+    """One assembled feature matrix plus the row metadata folding needs.
+
+    ``sess`` groups rows by recording so folds split whole sessions;
+    ``mirror`` marks augmented copies so they train but never score;
+    ``frame`` is the within-session frame index, needed to stitch rows back
+    into bouts for bout-level metrics.
+    """
+
+    x: pd.DataFrame
+    y: pd.Series
+    sess: np.ndarray
+    mirror: np.ndarray
+    frame: np.ndarray
+
+
+def _assemble_for_cv(
+    sessions: list[SessionPair],
+    *,
+    spec: FeatureSpec,
+    window: int,
+    stats: tuple[str, ...],
+    fps: float,
+    mirror_augment: bool,
+    merge_map: dict[str, str] | None,
+    exclude: set[str] | None,
+    freq_features: bool,
+    traj_features: bool,
+    motion_features: bool,
+    include_background: bool,
+    background_class_name: str,
+    background_ratio: float,
+    random_state: int,
+) -> _CvData:
+    """Feature matrix + per-row session / mirror / frame metadata.
+
+    Split out of :func:`cross_validate_sessions` so the assembly can be paid
+    for once and used twice — see :func:`cross_validate_and_train`. Reading
+    thirty sessions is the dominant cost of both, and with
+    ``motion_features`` it decodes every source video, so doing it twice for
+    "measure, then fit" turned a ten-minute wait into twenty.
+    """
     if not sessions:
-        raise ValueError("cross_validate_sessions requires at least one session")
+        raise ValueError("cross-validation requires at least one session")
     if motion_features and mirror_augment:
         raise ValueError(
             "motion features are not supported with mirror augmentation yet "
             "(the source video isn't mirrored)"
         )
-    spec = spec or FeatureSpec()
-    fps = resolve_sessions_fps(sessions, fps)
-    from sklearn.metrics import f1_score
-    from sklearn.model_selection import GroupKFold
 
     xs: list[pd.DataFrame] = []
     ys: list[pd.Series] = []
@@ -1068,6 +1280,33 @@ def cross_validate_sessions(
                 sess = sess[sel]
                 mirror = mirror[sel]
                 frame = frame[sel]
+
+    return _CvData(x=x, y=y, sess=sess, mirror=mirror, frame=frame)
+
+
+def _run_cv_folds(
+    data: _CvData,
+    *,
+    n_folds: int,
+    n_estimators: int,
+    random_state: int,
+    class_weight: str | None,
+    classifier_type: str,
+    lgbm_reg: LgbmReg | None,
+    include_background: bool,
+    background_class_name: str,
+    threshold_curve: bool,
+) -> dict[str, Any]:
+    """Fold, fit, and score an already-assembled matrix.
+
+    The half of cross-validation that is cheap. Separated from
+    :func:`_assemble_for_cv` so the expensive half can be shared.
+    """
+    from sklearn.metrics import f1_score
+    from sklearn.model_selection import GroupKFold
+
+    x, y = data.x, data.y
+    sess, mirror, frame = data.sess, data.mirror, data.frame
 
     n_unique = int(len(np.unique(sess)))
     if n_unique < 2:

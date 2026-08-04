@@ -75,15 +75,26 @@ class CrossValidateWorker(_BaseWorker):
     cannot accidentally treat the result as something to save.
     """
 
-    def __init__(self, sessions, options):
+    def __init__(self, sessions, options, output=None):
         super().__init__()
-        self._sessions, self._options = sessions, options
+        self._sessions, self._options, self._output = sessions, options, output
 
     def run(self) -> None:
         try:
-            from glider.analysis.behavior import cross_validate_sessions
+            if self._output is None:
+                from glider.analysis.behavior import cross_validate_sessions
 
-            self.finished.emit(cross_validate_sessions(self._sessions, **self._options))
+                self.finished.emit(cross_validate_sessions(self._sessions, **self._options))
+                return
+
+            # Measure and produce in one pass. Two separate calls would
+            # assemble the feature matrix twice, which with motion features
+            # means decoding every source video twice.
+            from glider.analysis.behavior import cross_validate_and_train
+
+            cv_result, trained = cross_validate_and_train(self._sessions, **self._options)
+            trained.model.save(self._output)
+            self.finished.emit(cv_result)
         except Exception as e:  # surface as a UI message, never crash the thread
             self.failed.emit(str(e))
 
