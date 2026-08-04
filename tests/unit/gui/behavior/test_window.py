@@ -696,6 +696,7 @@ def _launch_annotate(qtbot, tmp_path, monkeypatch, configure=None):
     if configure is not None:
         configure(tab)
     tab._on_launch()
+    captured["tab"] = tab
     return captured, warnings_shown
 
 
@@ -1593,6 +1594,98 @@ def test_an_unwritable_folder_does_not_stop_labelling(qtbot, tmp_path, monkeypat
 
     assert "annotator_kwargs" in captured, "a failed cache write blocked the annotator"
     assert warnings_shown == []
+
+
+# --------------------------------------------------------------------------
+# Resuming has to be visible
+#
+# The queue is cached now, but nothing said so: a launch gave no sign whether
+# it had sampled fresh clips or resumed a saved queue, nor how much of it was
+# already done. And the empty-review dialog still told the operator that
+# unticking Review would "sample fresh clips", which stopped being true the
+# moment the queue started persisting.
+# --------------------------------------------------------------------------
+
+
+def test_the_empty_review_message_does_not_promise_fresh_clips(qtbot, tmp_path, monkeypatch):
+    """Unticking Review resumes the cached queue; it does not resample."""
+    _pose_batch_output(tmp_path, "session01")
+
+    _captured, warnings_shown = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
+    )
+
+    assert len(warnings_shown) == 1
+    assert "sample fresh clips" not in warnings_shown[0]
+
+
+def test_the_empty_review_message_explains_what_unticking_does(qtbot, tmp_path, monkeypatch):
+    _pose_batch_output(tmp_path, "session01")
+
+    _captured, warnings_shown = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
+    )
+
+    lowered = warnings_shown[0].lower()
+    assert "resume" in lowered or "resumed" in lowered
+
+
+def test_a_fresh_sample_says_it_sampled(qtbot, tmp_path, monkeypatch):
+    _pose_batch_output(tmp_path, "session01")
+
+    captured, _ = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(6)
+    )
+
+    status = captured["tab"]._queue_status
+    assert "sampled" in status.lower()
+    assert "6" in status
+
+
+def test_a_second_launch_says_it_resumed(qtbot, tmp_path, monkeypatch):
+    """The whole point of caching the queue — and it was invisible."""
+    _pose_batch_output(tmp_path, "session01")
+
+    _launch_annotate(qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(6))
+    captured, _ = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(6)
+    )
+
+    assert "resumed" in captured["tab"]._queue_status.lower()
+
+
+def test_the_status_counts_how_many_clips_are_already_labelled(qtbot, tmp_path, monkeypatch):
+    """On a 250-clip job across sessions this is the number that matters."""
+    _pose_batch_output(tmp_path, "session01")
+    # The fake sampler lays clips at 95+10i .. 105+10i; cover the first two.
+    _saved_zones(tmp_path, "session01", [(95, 105), (105, 115)])
+
+    captured, _ = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(6)
+    )
+
+    assert "2" in captured["tab"]._queue_status
+    assert "labelled" in captured["tab"]._queue_status.lower()
+
+
+def test_the_status_reaches_the_status_bar_not_just_an_attribute(qtbot, tmp_path, monkeypatch):
+    _pose_batch_output(tmp_path, "session01")
+
+    captured, _ = _launch_annotate(qtbot, tmp_path, monkeypatch)
+
+    assert captured["tab"]._annotate_status.text() == captured["tab"]._queue_status
+
+
+def test_review_mode_reports_the_zones_it_loaded(qtbot, tmp_path, monkeypatch):
+    _pose_batch_output(tmp_path, "session01")
+    _saved_zones(tmp_path, "session01", [(0, 10), (20, 30), (40, 50)])
+
+    captured, _ = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
+    )
+
+    assert "3" in captured["tab"]._queue_status
+    assert "review" in captured["tab"]._queue_status.lower()
 
 
 def test_cohort_mode_sends_only_the_cohort_file(qtbot, tmp_path):
