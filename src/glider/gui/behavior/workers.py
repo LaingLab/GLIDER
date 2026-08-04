@@ -9,6 +9,7 @@ crash its thread, so ``run()`` catches broadly and forwards the message.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -16,6 +17,8 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from glider.analysis.behavior import train_model
 from glider.analysis.behavior.classify import classify
 from glider.vision.pose import infer_video, smooth
+
+logger = logging.getLogger(__name__)
 
 
 class _BaseWorker(QObject):
@@ -50,8 +53,41 @@ class ConvertWorker(_BaseWorker):
             self.failed.emit(str(e))
 
 
+def report_dir_for(model_path) -> Path:
+    """Where a run's report folder goes for a given model bundle.
+
+    A sibling of the bundle named after it, so the numbers a model was
+    accepted on stay next to the model itself. Two bundles in one folder keep
+    separate reports, and copying the pair keeps them together.
+    """
+    model_path = Path(model_path)
+    return model_path.with_name(f"{model_path.stem}_report")
+
+
+def _write_report(result, model_path) -> Path | None:
+    """Write the run's report folder, or return None if it could not be written.
+
+    Never raises. The model is already on disk by the time this runs, and a
+    report is a convenience: losing a ten-minute fit because a chart could not
+    be rendered, or because the output folder is a read-only share, would be a
+    far worse outcome than having no report.
+    """
+    from glider.analysis.behavior import write_training_report
+
+    try:
+        return write_training_report(result, report_dir_for(model_path))
+    except Exception:  # noqa: BLE001 - the model is saved; the report is a bonus
+        logger.warning("could not write the training report", exc_info=True)
+        return None
+
+
 class TrainWorker(_BaseWorker):
     """Fit a behavior classifier from labeled sessions and save the bundle."""
+
+    #: Emitted with the report folder once it is on disk, before ``finished``.
+    #: A separate signal rather than a richer ``finished`` payload: that one is
+    #: the summary dict and several callers already read it positionally.
+    report_ready = pyqtSignal(object)  # Path | None
 
     # sessions: list[(pose_csv, annotations_csv)] pairs (train_model's SessionPair).
     def __init__(self, sessions, output, options):
@@ -62,6 +98,10 @@ class TrainWorker(_BaseWorker):
         try:
             result = train_model(self._sessions, **self._options)  # -> TrainResult
             result.model.save(self._output)  # train_model does NOT write
+            # On this thread deliberately: the report renders charts through
+            # matplotlib, and doing that on the GUI thread would freeze the
+            # window at the moment the run looks finished.
+            self.report_ready.emit(_write_report(result, self._output))
             self.finished.emit(result.summary)
         except Exception as e:
             self.failed.emit(str(e))
@@ -75,6 +115,11 @@ class CrossValidateWorker(_BaseWorker):
     cannot accidentally treat the result as something to save.
     """
 
+    #: See :attr:`TrainWorker.report_ready`. Emitted with None on the
+    #: measure-only path, which produces no model and so has nowhere to put a
+    #: report — the Review tab needs to hear that as much as it needs a path.
+    report_ready = pyqtSignal(object)  # Path | None
+
     def __init__(self, sessions, options, output=None):
         super().__init__()
         self._sessions, self._options, self._output = sessions, options, output
@@ -84,6 +129,7 @@ class CrossValidateWorker(_BaseWorker):
             if self._output is None:
                 from glider.analysis.behavior import cross_validate_sessions
 
+                self.report_ready.emit(None)
                 self.finished.emit(cross_validate_sessions(self._sessions, **self._options))
                 return
 
@@ -94,6 +140,9 @@ class CrossValidateWorker(_BaseWorker):
 
             cv_result, trained = cross_validate_and_train(self._sessions, **self._options)
             trained.model.save(self._output)
+            # The bundle's own summary carries the cross-validated score, so
+            # the report describes the model that was actually saved.
+            self.report_ready.emit(_write_report(trained, self._output))
             self.finished.emit(cv_result)
         except Exception as e:  # surface as a UI message, never crash the thread
             self.failed.emit(str(e))

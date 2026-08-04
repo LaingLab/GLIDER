@@ -21,7 +21,7 @@ import logging
 from pathlib import Path
 from typing import NamedTuple
 
-from PyQt6.QtCore import Qt, QThread
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -293,11 +293,12 @@ class LgbmAdvancedDialog(QDialog):
 class BehaviorAnalysisWindow(QMainWindow):
     """Top-level window for the Behavior Analysis tool."""
 
-    # What each tab is for, shown in the header so the three stages read as one
-    # pipeline rather than three unrelated screens.
+    # What each tab is for, shown in the header so the four stages read as one
+    # pipeline rather than four unrelated screens.
     _TAB_BLURBS = (
         "Label behavior on sampled clips to build a training set",
         "Fit a classifier from labeled sessions",
+        "Read how the trained model actually performed",
         "Score recorded video and write the ethogram",
     )
 
@@ -313,11 +314,23 @@ class BehaviorAnalysisWindow(QMainWindow):
         self.project_dir = Path(project_dir)
         self.project_dir.mkdir(parents=True, exist_ok=True)
 
+        from glider.gui.behavior.review_tab import ReviewTab
+
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.tabs.addTab(AnnotateTab(self.project_dir), "Annotate")
-        self.tabs.addTab(TrainTab(), "Train")
+        self.train_tab = TrainTab()
+        self.tabs.addTab(self.train_tab, "Train")
+        # Between Train and Apply, in pipeline order: a run is reviewed before
+        # it is trusted to score a cohort.
+        self.review_tab = ReviewTab()
+        self.tabs.addTab(self.review_tab, "Review")
         self.tabs.addTab(ApplyTab(), "Apply")
+
+        # A finished run opens its own report. The Train tab does not know
+        # about the Review tab -- it announces that a run produced one, and
+        # the window decides what to do with that.
+        self.train_tab.run_reported.connect(self._on_run_reported)
 
         self._header = ToolHeader("Behavior Analysis", self._TAB_BLURBS[0])
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -338,6 +351,24 @@ class BehaviorAnalysisWindow(QMainWindow):
     def _on_tab_changed(self, index: int) -> None:
         if 0 <= index < len(self._TAB_BLURBS):
             self._header.set_subtitle(self._TAB_BLURBS[index])
+
+    def _on_run_reported(self, report_dir: object, summary: object) -> None:
+        """Show a just-finished run and bring its tab forward.
+
+        Falls back to the in-memory summary when no report could be written --
+        a read-only output folder should cost the charts, not the review. The
+        tab is only raised when there is something in it to read.
+        """
+        from glider.analysis.behavior.run_report import TrainingRun
+
+        shown = False
+        if report_dir is not None:
+            shown = self.review_tab.load(Path(report_dir))
+        if not shown and isinstance(summary, dict) and summary:
+            self.review_tab.show_run(TrainingRun.from_summary(summary))
+            shown = True
+        if shown:
+            self.tabs.setCurrentWidget(self.review_tab)
 
 
 def _workspace(parent: QWidget, rail: RunRail, *, rail_width: int = 380) -> QVBoxLayout:
@@ -873,8 +904,17 @@ class AnnotateTab(QWidget):
 class TrainTab(QWidget):
     """Fit a behavior classifier from labeled sessions."""
 
+    #: ``(report_dir | None, summary)`` once a run has finished and its report
+    #: is on disk. The tab announces the run rather than reaching for the
+    #: Review tab itself: which tab shows it is the window's business, and a
+    #: TrainTab built on its own in a test must not need one to exist.
+    run_reported = pyqtSignal(object, object)
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        #: Report folder from the run in flight, delivered by report_ready
+        #: before finished. Held because the two arrive separately.
+        self._pending_report: Path | None = None
         self._sessions: list[tuple[Path, Path]] = []
         self._holdout: list[tuple[Path, Path]] = []
         self._output_path: Path | None = None
@@ -1326,6 +1366,7 @@ class TrainTab(QWidget):
         )
         self._train_worker.moveToThread(self._train_thread)
         self._train_thread.started.connect(self._train_worker.run)
+        self._train_worker.report_ready.connect(self._on_report_ready)
         self._train_worker.finished.connect(self._on_cv_finished)
         self._train_worker.failed.connect(self._on_train_failed)
 
@@ -1346,6 +1387,7 @@ class TrainTab(QWidget):
         self._cv_btn.setEnabled(True)
         self._rail.status.set_state("ok", "Done")
         self._results.setPlainText(format_cv_summary(result))
+        self._announce_run(result)
 
     def _on_fit(self) -> None:
         if not self._sessions:
@@ -1367,6 +1409,7 @@ class TrainTab(QWidget):
         self._train_worker.moveToThread(self._train_thread)
         self._train_thread.started.connect(self._train_worker.run)
         self._train_worker.progress.connect(self._on_train_progress)
+        self._train_worker.report_ready.connect(self._on_report_ready)
         self._train_worker.finished.connect(self._on_train_finished)
         self._train_worker.failed.connect(self._on_train_failed)
 
@@ -1376,6 +1419,10 @@ class TrainTab(QWidget):
         self._fit_btn.setEnabled(False)
         self._rail.status.set_state("running", "Fitting")
         self._train_thread.start()
+
+    def _on_report_ready(self, report_dir: object) -> None:
+        """Remember where this run's report landed, if it landed anywhere."""
+        self._pending_report = Path(report_dir) if report_dir is not None else None
 
     def _on_train_progress(self, done: int, total: int) -> None:
         if total > 0:
@@ -1392,11 +1439,18 @@ class TrainTab(QWidget):
         from glider.analysis.behavior.summary_text import format_training_summary
 
         self._results.setPlainText(format_training_summary(summary))
+        self._announce_run(summary)
+
+    def _announce_run(self, summary: object) -> None:
+        """Hand the finished run to whoever is listening, and reset for the next."""
+        report, self._pending_report = self._pending_report, None
+        self.run_reported.emit(report, summary)
 
     def _on_train_failed(self, message: str) -> None:
         # Shared by Fit and Cross-validate, so both buttons come back —
         # otherwise a failed cross-validation leaves its own button dead.
         self._cv_btn.setEnabled(True)
+        self._pending_report = None
         self._teardown_train_thread()
         self._progress.setVisible(False)
         self._fit_btn.setEnabled(True)

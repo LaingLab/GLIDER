@@ -12,13 +12,14 @@ import pytest
 pytest.importorskip("PyQt6")
 
 
-def test_window_has_three_tabs(qtbot, tmp_path):
+def test_window_tabs_are_in_pipeline_order(qtbot, tmp_path):
+    """Review sits between Train and Apply: a run is read before it is trusted."""
     from glider.gui.behavior.window import BehaviorAnalysisWindow
 
     win = BehaviorAnalysisWindow(project_dir=tmp_path)
     qtbot.addWidget(win)
     titles = [win.tabs.tabText(i) for i in range(win.tabs.count())]
-    assert titles == ["Annotate", "Train", "Apply"]
+    assert titles == ["Annotate", "Train", "Review", "Apply"]
 
 
 def test_window_defaults_project_dir_from_config(qtbot):
