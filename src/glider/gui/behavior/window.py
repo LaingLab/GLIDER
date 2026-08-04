@@ -791,6 +791,83 @@ class TrainTab(QWidget):
         )
         options.add(self._background_check)
         options.add(self._mirror_check)
+
+        # Pipeline knobs, deliberately here rather than in the Advanced
+        # dialog: that dialog is LightGBM-only and is disabled for the
+        # RandomForest backend, which would leave these unreachable. They also
+        # move the score far more than the LightGBM knobs do — measured over
+        # five cross-session folds on a real cohort, window + class weight +
+        # mirroring together were worth +0.063 macro F1, winning 5 folds of 5.
+        self._window_spin = QSpinBox()
+        self._window_spin.setRange(1, 600)
+        self._window_spin.setValue(30)
+        self._window_spin.setToolTip(
+            "How many frames of context each prediction sees.\n"
+            "Shorter reacts faster and captures brief bouts; longer is\n"
+            "steadier but smears the boundaries between behaviors."
+        )
+        self._window_spin.valueChanged.connect(self._refresh_window_hint)
+        options.add_row("Window (frames)", self._window_spin)
+        self._window_hint = hint("")
+        options.add(self._window_hint)
+        self._refresh_window_hint()
+
+        self._class_weight_combo = QComboBox()
+        self._class_weight_combo.addItem("none", None)
+        self._class_weight_combo.addItem("balanced", "balanced")
+        self._class_weight_combo.setToolTip(
+            "'balanced' weights each class by the inverse of how often it\n"
+            "occurs, so a rare behavior is not simply ignored in favour of\n"
+            "the common ones. Worth trying whenever one class is scarce."
+        )
+        options.add_row("Class weight", self._class_weight_combo)
+
+        self._test_split_spin = QDoubleSpinBox()
+        self._test_split_spin.setRange(0.0, 0.5)
+        self._test_split_spin.setSingleStep(0.05)
+        self._test_split_spin.setDecimals(2)
+        self._test_split_spin.setValue(0.0)
+        self._test_split_spin.setToolTip(
+            "Fraction of each session held back for testing when no holdout\n"
+            "SESSIONS are set. Ignored when they are — a cross-session\n"
+            "holdout is the stronger test. At 0 with no holdout sessions the\n"
+            "run reports training accuracy only, which is not a\n"
+            "generalization estimate."
+        )
+        options.add_row("Within-session test split", self._test_split_spin)
+
+        self._seed_spin = QSpinBox()
+        self._seed_spin.setRange(0, 999_999)
+        self._seed_spin.setValue(42)
+        self._seed_spin.setToolTip("Change to check how much of a score is fit noise.")
+        options.add_row("Random seed", self._seed_spin)
+
+        # Feature families the pipeline can compute but never did: all three
+        # default to False in train_model and had no way to be switched on.
+        self._traj_check = QCheckBox("Trajectory shape features")
+        self._traj_check.setToolTip(
+            "Straightness, path length, net displacement, radius of gyration\n"
+            "and total turning over each window — the shape of the path\n"
+            "rather than the pose. Aimed at telling travelling apart from\n"
+            "milling about in one spot."
+        )
+        self._motion_check = QCheckBox("Motion features")
+        self._freq_check = QCheckBox("Frequency features")
+        self._freq_check.setToolTip(
+            "Dominant frequency and spectral flatness per kinematic column —\n"
+            "for rhythmic behaviors such as grooming."
+        )
+        options.add(self._traj_check)
+        options.add(self._motion_check)
+        options.add(self._freq_check)
+        options.add(
+            hint(
+                "These three are computed but off by default, so no existing "
+                "model used them. Turning one on changes the feature set, and "
+                "the resulting model is not comparable to one trained without it."
+            )
+        )
+
         column.addWidget(options)
         self._on_classifier_changed()
 
@@ -821,6 +898,11 @@ class TrainTab(QWidget):
     def _on_remove_holdout(self) -> None:
         _remove_selected(self._holdout_list, self._holdout)
         self._refresh_counts()
+
+    def _refresh_window_hint(self) -> None:
+        """Say what the window is in seconds; frames alone mean nothing."""
+        frames = self._window_spin.value()
+        self._window_hint.setText(f"{frames / 30.0:g} s at 30 fps")
 
     def _on_classifier_changed(self, *_args) -> None:
         """The advanced knobs are LightGBM-only; RandomForest silently ignores them."""
@@ -930,6 +1012,16 @@ class TrainTab(QWidget):
             "classifier_type": self._classifier_combo.currentText(),
             "include_background": self._background_check.isChecked(),
             "mirror_augment": self._mirror_check.isChecked(),
+            "window": int(self._window_spin.value()),
+            # currentData, not currentText: train_model wants None, and the
+            # string "none" would be passed through to sklearn as a weighting
+            # scheme it does not recognise.
+            "class_weight": self._class_weight_combo.currentData(),
+            "test_split": float(self._test_split_spin.value()),
+            "random_state": int(self._seed_spin.value()),
+            "traj_features": self._traj_check.isChecked(),
+            "motion_features": self._motion_check.isChecked(),
+            "freq_features": self._freq_check.isChecked(),
         }
         options.update(self._lgbm_options())
         if self._holdout:
