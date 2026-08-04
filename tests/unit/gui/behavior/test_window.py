@@ -653,7 +653,22 @@ def _launch_annotate(qtbot, tmp_path, monkeypatch, configure=None):
         captured["sessions"] = list(sessions)
         captured["n_clips_total"] = n_clips_total
         captured["exclude_zones_by_session"] = kw.get("exclude_zones_by_session")
-        return []
+        # Real ProposedClips, not an empty list: the queue cache serialises
+        # them, so a stub returning nothing would let an empty queue pass.
+        from glider.gui.behavior.annotator.sampler import ProposedClip
+
+        video = str(sessions[0][1]) if sessions else "v.mp4"
+        return [
+            ProposedClip(
+                window_index=i,
+                center_frame=100 + 10 * i,
+                start_frame=95 + 10 * i,
+                end_frame=105 + 10 * i,
+                clip_seconds=0.6,
+                video_path=video,
+            )
+            for i in range(int(n_clips_total))
+        ]
 
     class FakeAnnotator:
         def __init__(self, **kw):
@@ -1486,6 +1501,98 @@ def test_window_hint_reports_the_duration(qtbot, tmp_path, monkeypatch):
         qtbot, tmp_path, monkeypatch, configure=lambda t: t._window_spin.setValue(15)
     )
     assert "0.5" in tab._window_hint.text()
+
+
+# --------------------------------------------------------------------------
+# The sampled clip queue must survive closing the window
+#
+# app.run() (the CLI path) writes .annotate_queue.json and reuses it on the
+# next launch. The GUI Annotate tab never touched ResumeCache, so sampling 250
+# clips and labelling 40 of them threw the other 210 away: only the labelled
+# ones reached the annotations CSV, and the queue itself was never recorded.
+# --------------------------------------------------------------------------
+
+
+def _queue_file(tmp_path):
+    from glider.gui.behavior.annotator.resume_cache import CACHE_FILENAME
+
+    return tmp_path / CACHE_FILENAME
+
+
+def test_sampling_writes_the_queue_to_the_videos_folder(qtbot, tmp_path, monkeypatch):
+    _pose_batch_output(tmp_path, "session01")
+
+    _launch_annotate(qtbot, tmp_path, monkeypatch)
+
+    assert _queue_file(tmp_path).exists(), "the sampled queue was not recorded"
+
+
+def test_the_saved_queue_holds_every_clip_not_just_labelled_ones(qtbot, tmp_path, monkeypatch):
+    import json
+
+    _pose_batch_output(tmp_path, "session01")
+
+    captured, _ = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(7)
+    )
+
+    record = json.loads(_queue_file(tmp_path).read_text(encoding="utf-8"))
+    assert len(record["clips"]) == len(captured["annotator_kwargs"]["clips"])
+    assert record["clips"], "queue saved but empty"
+
+
+def test_relaunching_with_the_same_settings_reuses_the_queue(qtbot, tmp_path, monkeypatch):
+    """Otherwise the second session labels a different set of clips."""
+    _pose_batch_output(tmp_path, "session01")
+
+    first, _ = _launch_annotate(qtbot, tmp_path, monkeypatch)
+    stamp = _queue_file(tmp_path).stat().st_mtime_ns
+    second, _ = _launch_annotate(qtbot, tmp_path, monkeypatch)
+
+    a = [(c.video_path, c.start_frame, c.end_frame) for c in first["annotator_kwargs"]["clips"]]
+    b = [(c.video_path, c.start_frame, c.end_frame) for c in second["annotator_kwargs"]["clips"]]
+    assert a == b
+    assert _queue_file(tmp_path).stat().st_mtime_ns == stamp, "queue was rewritten, not reused"
+
+
+def test_changing_the_clip_count_resamples_rather_than_reusing(qtbot, tmp_path, monkeypatch):
+    """The cached queue is keyed on the inputs; a different ask is a different
+    queue, and silently returning the old one would ignore the request."""
+    _pose_batch_output(tmp_path, "session01")
+
+    _launch_annotate(qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(5))
+    second, _ = _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._clip_count.setValue(9)
+    )
+
+    assert len(second["annotator_kwargs"]["clips"]) == 9
+
+
+def test_review_mode_writes_no_queue(qtbot, tmp_path, monkeypatch):
+    """Review replays saved zones; there is no sampled queue to cache."""
+    _pose_batch_output(tmp_path, "session01")
+    _saved_zones(tmp_path, "session01", [(0, 10)])
+
+    _launch_annotate(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
+    )
+
+    assert not _queue_file(tmp_path).exists()
+
+
+def test_an_unwritable_folder_does_not_stop_labelling(qtbot, tmp_path, monkeypatch):
+    """The cache is a convenience. Losing it must not cost the session."""
+    from glider.gui.behavior.annotator import resume_cache as rc_mod
+
+    _pose_batch_output(tmp_path, "session01")
+    monkeypatch.setattr(
+        rc_mod.ResumeCache, "save", lambda *a, **k: (_ for _ in ()).throw(OSError("read-only"))
+    )
+
+    captured, warnings_shown = _launch_annotate(qtbot, tmp_path, monkeypatch)
+
+    assert "annotator_kwargs" in captured, "a failed cache write blocked the annotator"
+    assert warnings_shown == []
 
 
 def test_cohort_mode_sends_only_the_cohort_file(qtbot, tmp_path):
