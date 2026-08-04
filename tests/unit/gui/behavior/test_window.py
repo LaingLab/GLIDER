@@ -1242,6 +1242,59 @@ def test_train_model_accepts_every_option_the_train_tab_can_send(qtbot, tmp_path
     assert not unknown, f"train_model does not accept: {sorted(unknown)}"
 
 
+# --------------------------------------------------------------------------
+# Motion features and mirror augmentation are mutually exclusive
+#
+# train_model raises outright: "motion features are not supported with mirror
+# augmentation yet (the source video isn't mirrored)". Both were offered as
+# free-standing checkboxes, so ticking both killed the run with a ValueError
+# AFTER the fit had started -- minutes in, with the model lost.
+# --------------------------------------------------------------------------
+
+
+def test_the_pipeline_really_does_refuse_the_combination():
+    """Pins the constraint this UI rule exists to respect."""
+    import inspect
+
+    from glider.analysis.behavior import pipeline
+
+    source = inspect.getsource(pipeline._assemble_sessions)
+    assert "motion_features and mirror_augment" in source
+
+
+def test_checking_mirror_disables_motion(qtbot, tmp_path, monkeypatch):
+    tab, _ = _fit_options(qtbot, tmp_path, monkeypatch)
+    tab._mirror_check.setChecked(True)
+    assert tab._motion_check.isEnabled() is False
+    assert tab._motion_check.isChecked() is False
+
+
+def test_checking_motion_disables_mirror(qtbot, tmp_path, monkeypatch):
+    tab, _ = _fit_options(qtbot, tmp_path, monkeypatch)
+    tab._motion_check.setChecked(True)
+    assert tab._mirror_check.isEnabled() is False
+    assert tab._mirror_check.isChecked() is False
+
+
+def test_unchecking_one_frees_the_other_again(qtbot, tmp_path, monkeypatch):
+    tab, _ = _fit_options(qtbot, tmp_path, monkeypatch)
+    tab._mirror_check.setChecked(True)
+    tab._mirror_check.setChecked(False)
+    assert tab._motion_check.isEnabled() is True
+    assert tab._mirror_check.isEnabled() is True
+
+
+def test_the_two_can_never_both_reach_train_model(qtbot, tmp_path, monkeypatch):
+    """Whatever the user clicks, the options dict must not carry both."""
+
+    def click_both(tab):
+        tab._mirror_check.setChecked(True)
+        tab._motion_check.setChecked(True)  # blocked by the rule above
+
+    _tab, options = _fit_options(qtbot, tmp_path, monkeypatch, configure=click_both)
+    assert not (options.get("motion_features") and options.get("mirror_augment"))
+
+
 def test_window_hint_reports_the_duration(qtbot, tmp_path, monkeypatch):
     """30 frames means nothing; 1.0 s at 30 fps does."""
     tab, _ = _fit_options(

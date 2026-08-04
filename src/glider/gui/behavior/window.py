@@ -852,6 +852,12 @@ class TrainTab(QWidget):
             "milling about in one spot."
         )
         self._motion_check = QCheckBox("Motion features")
+        self._motion_check.setToolTip(
+            "Frame-differencing features read from the source video.\n\n"
+            "Cannot be combined with mirror augmentation: the pipeline\n"
+            "mirrors the pose but not the video, so the two would disagree.\n"
+            "train_model refuses the combination outright."
+        )
         self._freq_check = QCheckBox("Frequency features")
         self._freq_check.setToolTip(
             "Dominant frequency and spectral flatness per kinematic column —\n"
@@ -860,6 +866,14 @@ class TrainTab(QWidget):
         options.add(self._traj_check)
         options.add(self._motion_check)
         options.add(self._freq_check)
+        # train_model raises on motion + mirror together, and the raise lands
+        # minutes into a fit with the model lost. Enforce it here, where the
+        # click happens, rather than letting the run start and fail.
+        self._mirror_check.toggled.connect(self._on_motion_mirror_toggled)
+        self._motion_check.toggled.connect(self._on_motion_mirror_toggled)
+        self._motion_mirror_hint = hint("")
+        options.add(self._motion_mirror_hint)
+        self._on_motion_mirror_toggled()
         options.add(
             hint(
                 "These three are computed but off by default, so no existing "
@@ -898,6 +912,34 @@ class TrainTab(QWidget):
     def _on_remove_holdout(self) -> None:
         _remove_selected(self._holdout_list, self._holdout)
         self._refresh_counts()
+
+    def _on_motion_mirror_toggled(self, *_args) -> None:
+        """Keep motion features and mirror augmentation mutually exclusive.
+
+        The pipeline mirrors the pose but not the source video, so motion
+        features read from the video would disagree with the mirrored pose;
+        ``train_model`` refuses the pair. Whichever the operator picked most
+        recently wins, and the other is cleared and greyed out with the reason
+        on screen — a disabled box with no explanation reads as a bug.
+        """
+        mirror, motion = self._mirror_check, self._motion_check
+        # Signals are blocked while clearing so the two handlers do not
+        # bounce the state between them.
+        if mirror.isChecked() and motion.isChecked():
+            loser = motion if self.sender() is mirror else mirror
+            loser.blockSignals(True)
+            loser.setChecked(False)
+            loser.blockSignals(False)
+
+        motion.setEnabled(not mirror.isChecked())
+        mirror.setEnabled(not motion.isChecked())
+        if mirror.isChecked():
+            note = "Motion features are unavailable while mirror augment is on."
+        elif motion.isChecked():
+            note = "Mirror augment is unavailable while motion features are on."
+        else:
+            note = "Motion features and mirror augment cannot be used together."
+        self._motion_mirror_hint.setText(note)
 
     def _refresh_window_hint(self) -> None:
         """Say what the window is in seconds; frames alone mean nothing."""

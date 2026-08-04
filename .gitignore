@@ -197,3 +197,8 @@ docs/*
 manuscript_figures/*
 # Git worktrees (isolated feature workspaces)
 .worktrees/
+
+# Frame-differencing cache written beside the working directory whenever
+# motion features are computed. Megabytes per video, regenerable, and it
+# lands in whatever directory training was launched from.
+motion_cache/
