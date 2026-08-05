@@ -234,11 +234,41 @@ class TrainingRun:
 
     @property
     def macro_f1(self) -> float | None:
-        """Unweighted mean F1. A support-weighted mean hides the rare class."""
+        """Unweighted mean of the per-class F1s. Pooled over folds when there
+        were folds.
+
+        Deliberately not ``mean_macro_f1`` on the cross-validated path. That
+        is the mean of each fold's own macro F1, which the headline already
+        reports and labels as such; returning it here made both figures the
+        same number. Worse, the two disagree exactly when a class is absent
+        from some fold's test set -- it scores 0 there and drags the
+        mean-of-folds down, while the per-class F1s, computed once over every
+        fold's pooled predictions, are unaffected. The pooled mean is the
+        figure that matches this property's name and the "rare classes count
+        equally" caption it is displayed under.
+
+        Falls back to ``mean_macro_f1`` only when there is no per-class table
+        to pool, so a run that measured something never shows nothing.
+        """
+        scores = [c.f1 for c in self.per_class if c.f1 is not None]
+        if scores:
+            return sum(scores) / len(scores)
         if self.is_cross_validated:
             return _float(self.summary.get("mean_macro_f1"))
-        scores = [c.f1 for c in self.per_class if c.f1 is not None]
-        return sum(scores) / len(scores) if scores else None
+        return None
+
+    @property
+    def scored_rows(self) -> int | None:
+        """How many rows the reported metrics were actually measured on.
+
+        Deliberately not ``n_rows_kept``. That counts every row assembled for
+        training, and with mirror augmentation on it includes the mirrored
+        copies -- which exist only to train and are excluded from scoring, so
+        quoting it beside the metrics overstates the evidence roughly twofold.
+        The per-class supports sum to the rows that were genuinely scored.
+        """
+        supports = [c.support for c in self.per_class if c.support is not None]
+        return sum(supports) if supports else None
 
     @property
     def weakest(self) -> ClassMetric | None:
