@@ -97,10 +97,23 @@ def test_the_headline_carries_the_fold_spread(sessions):
     assert headline.spread is not None
 
 
-def test_the_macro_f1_matches_the_cross_validation_result(sessions):
+def test_the_macro_f1_pools_the_classes_and_the_headline_keeps_the_folds(sessions):
+    """Both cross-validated figures survive, each in its own place.
+
+    This used to assert ``macro_f1 == mean_macro_f1``, which made the Review
+    tab print one number twice. They are different statistics: the headline's
+    mean-of-folds, and the unweighted mean of the pooled per-class F1s shown
+    beside it. They diverge whenever a class is missing from a fold's test
+    set, so pinning them together hid the more useful of the two.
+    """
     cv, trained = cross_validate_and_train(sessions, spec=SPEC, **COMMON)
     run = TrainingRun.from_summary(trained.summary)
-    assert run.macro_f1 == pytest.approx(cv["mean_macro_f1"])
+
+    per_class = [m["f1"] for m in cv["per_class_metrics"].values()]
+    assert run.macro_f1 == pytest.approx(sum(per_class) / len(per_class))
+
+    # The fold statistic is not lost -- it still leads the page, with spread.
+    assert run.headline.value == pytest.approx(cv["mean_macro_f1"])
 
 
 def test_the_confusion_matrix_reaches_the_review_tab(sessions):

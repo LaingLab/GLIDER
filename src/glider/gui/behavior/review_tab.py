@@ -137,7 +137,14 @@ def _supporting_stats(run) -> list[tuple[str, str, str, str]]:
     note = f"{sessions} session{'' if sessions == 1 else 's'}"
     if holdout:
         note += f" + {holdout} held out"
-    out.append(("Rows", f"{summary.get('n_rows_kept') or 0:,}", colors.TEXT_PRIMARY, note))
+    # Rows the metrics were measured on, not rows assembled for training: this
+    # sits in the row of scores, so it reads as the evidence behind them. The
+    # mirrored training copies are counted in the Training rows panel below,
+    # which is where they belong.
+    rows = run.scored_rows
+    if rows is None:
+        rows = summary.get("n_rows_kept") or 0
+    out.append(("Rows", f"{rows:,}", colors.TEXT_PRIMARY, note))
     return out
 
 

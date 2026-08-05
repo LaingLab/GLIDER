@@ -161,6 +161,44 @@ class TestPerClass:
         assert run.weakest is None
         assert run.macro_f1 is None
 
+    def test_cross_validated_macro_f1_pools_the_classes(self):
+        """Cross-validation must not swap this for the mean-of-folds figure.
+
+        They answer different questions, and they diverge precisely when a
+        class is missing from some fold's test set: that class scores 0 in
+        those folds, so the mean-of-folds drops while the pooled per-class
+        F1 -- computed once over every fold's predictions -- does not. The
+        headline already reports mean-of-folds and labels it as such; this
+        property is the other number, and reporting mean-of-folds here made
+        the two tiles duplicate each other and understate a good model.
+        """
+        run = TrainingRun.from_summary(
+            _summary(split_strategy="cross_validated", mean_macro_f1=0.684)
+        )
+        assert run.is_cross_validated
+        assert run.macro_f1 == pytest.approx((0.89 + 0.95 + 0.44) / 3)
+
+    def test_scored_rows_counts_what_was_measured_not_what_was_trained(self):
+        """``n_rows_kept`` includes mirror-augmented copies, which never score."""
+        run = TrainingRun.from_summary(
+            _summary(split_strategy="cross_validated", n_rows_kept=10_000)
+        )
+        assert run.scored_rows == 900 + 800 + 300
+
+    def test_scored_rows_is_none_without_a_per_class_table(self):
+        assert TrainingRun.from_summary(_summary(per_class_metrics={})).scored_rows is None
+
+    def test_cross_validated_macro_f1_falls_back_when_unmeasured(self):
+        """No per-class table, no pooled mean -- keep the only number there is."""
+        run = TrainingRun.from_summary(
+            _summary(
+                split_strategy="cross_validated",
+                mean_macro_f1=0.684,
+                per_class_metrics={},
+            )
+        )
+        assert run.macro_f1 == pytest.approx(0.684)
+
 
 class TestConfusion:
     def test_rows_are_normalized_to_fractions(self):
