@@ -1395,15 +1395,71 @@ def test_cross_validate_uses_the_same_settings_as_fit(qtbot, tmp_path, monkeypat
     assert options["freq_features"] is True
 
 
+def test_measure_only_cv_drops_model_only_options(tmp_path, monkeypatch):
+    """cross_validate_sessions fits no model, so it takes no embedding.
+
+    Passing one through would be a TypeError minutes into a run, after the
+    feature assembly has already been paid for.
+    """
+    import inspect
+
+    from glider.analysis.behavior import pipeline
+    from glider.gui.behavior.workers import CrossValidateWorker
+
+    seen: dict = {}
+
+    def fake_cv(sessions, **kwargs):
+        seen.update(kwargs)
+        return {"mean_macro_f1": 0.5}
+
+    import glider.analysis.behavior as behavior_pkg
+
+    monkeypatch.setattr(behavior_pkg, "cross_validate_sessions", fake_cv, raising=False)
+    CrossValidateWorker([("a.csv", "b.csv")], {"n_folds": 5, "embedding": "umap"}).run()
+
+    assert "embedding" not in seen
+    assert seen["n_folds"] == 5
+    accepted = set(inspect.signature(pipeline.cross_validate_sessions).parameters)
+    assert not set(seen) - accepted
+
+
+def test_the_fitting_path_keeps_the_embedding_option(tmp_path, monkeypatch):
+    from glider.gui.behavior.workers import CrossValidateWorker
+
+    seen: dict = {}
+
+    class FakeModel:
+        def save(self, path):
+            pass
+
+    def fake_combined(sessions, **kwargs):
+        seen.update(kwargs)
+        return {"mean_macro_f1": 0.5}, type("R", (), {"model": FakeModel()})()
+
+    import glider.analysis.behavior as behavior_pkg
+
+    monkeypatch.setattr(behavior_pkg, "cross_validate_and_train", fake_combined, raising=False)
+    monkeypatch.setattr(
+        "glider.gui.behavior.workers._write_report", lambda *a, **k: None, raising=False
+    )
+    CrossValidateWorker(
+        [("a.csv", "b.csv")], {"n_folds": 5, "embedding": "umap"}, tmp_path / "m.pkl"
+    ).run()
+
+    assert seen["embedding"] == "umap"
+
+
 def test_cross_validate_does_not_send_options_it_does_not_accept(qtbot, tmp_path, monkeypatch):
     """cross_validate_sessions takes no holdout_sessions and no test_split."""
     import inspect
 
     from glider.analysis.behavior.pipeline import cross_validate_sessions
+    from glider.gui.behavior.workers import _MODEL_ONLY_OPTIONS
 
     _tab, captured, _ = _cv_options(qtbot, tmp_path, monkeypatch)
     accepted = set(inspect.signature(cross_validate_sessions).parameters)
-    unknown = set(captured["options"]) - accepted
+    # Model-only options are stripped by the worker on the measure-only path.
+    unknown = set(captured["options"]) - accepted - _MODEL_ONLY_OPTIONS
     assert not unknown, f"cross_validate_sessions does not accept: {sorted(unknown)}"
 
 

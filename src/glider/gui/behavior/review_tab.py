@@ -45,6 +45,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.analysis.behavior.run_report import RunReportError, TrainingRun
+from glider.gui.behavior.embedding_view import EmbeddingView
 from glider.gui.styles import colors
 from glider.gui.widgets.tool_ui import (
     CARD_GAP,
@@ -325,6 +326,9 @@ class ReviewTab(QWidget):
         confusion = self._confusion_card(run)
         if confusion is not None:
             cards.append(confusion)
+        embedding = self._embedding_card(run)
+        if embedding is not None:
+            cards.append(embedding)
         balance = self._balance_card(run)
         if balance is not None:
             cards.append(balance)
@@ -465,6 +469,28 @@ class ReviewTab(QWidget):
             set_text_role(cell, "caption")
             row.addWidget(cell)
         return row
+
+    def _embedding_card(self, run: TrainingRun) -> Card | None:
+        """The learned feature space as a rotatable 3D scatter.
+
+        Omitted entirely when the run has no embedding: most do not, and an
+        empty panel inviting a drag that does nothing is worse than no panel.
+        """
+        points = run.embedding
+        if points is None or len(getattr(points, "coords", ())) == 0:
+            return None
+        card = Card("Feature space", "what the classifier learned")
+        view = EmbeddingView()
+        view.set_artifact(points)
+        card.add(view)
+        card.add(
+            hint(
+                "Each point is a labelled window, reduced to three dimensions. "
+                "Classes in their own regions are separable; classes sitting on "
+                "top of each other are the confusion matrix, seen directly."
+            )
+        )
+        return card
 
     def _confusion_card(self, run: TrainingRun) -> Card | None:
         labels, normalized = run.confusion_rows_normalized()

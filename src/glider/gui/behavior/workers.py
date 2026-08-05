@@ -107,6 +107,11 @@ class TrainWorker(_BaseWorker):
             self.failed.emit(str(e))
 
 
+#: Options that describe the model a run produces, not the measurement.
+#: cross_validate_sessions fits no final model and does not accept them.
+_MODEL_ONLY_OPTIONS = frozenset({"embedding"})
+
+
 class CrossValidateWorker(_BaseWorker):
     """Session-grouped K-fold cross-validation over the training sessions.
 
@@ -129,8 +134,15 @@ class CrossValidateWorker(_BaseWorker):
             if self._output is None:
                 from glider.analysis.behavior import cross_validate_sessions
 
+                # Measuring produces no model, so options that only describe
+                # one are not just unused here — cross_validate_sessions does
+                # not accept them, and passing one through is a TypeError
+                # minutes into a run.
+                measure_only = {
+                    k: v for k, v in self._options.items() if k not in _MODEL_ONLY_OPTIONS
+                }
                 self.report_ready.emit(None)
-                self.finished.emit(cross_validate_sessions(self._sessions, **self._options))
+                self.finished.emit(cross_validate_sessions(self._sessions, **measure_only))
                 return
 
             # Measure and produce in one pass. Two separate calls would
