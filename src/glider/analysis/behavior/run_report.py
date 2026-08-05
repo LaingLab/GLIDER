@@ -79,6 +79,21 @@ class ClassMetric:
     support: int | None
 
 
+@dataclass(frozen=True)
+class _EmbeddingPoints:
+    """Just enough of an embedding to draw one.
+
+    Deliberately not an ``EmbeddingArtifact``: that carries a fitted scaler
+    and reducer for projecting *new* rows, which only the live path needs.
+    Reviewing a run needs the points and their labels, and nothing that
+    would require the model bundle to reconstruct.
+    """
+
+    coords: Any
+    labels: Any
+    method: str = ""
+
+
 @dataclass
 class TrainingRun:
     """One training run, loaded from its report folder."""
@@ -184,6 +199,38 @@ class TrainingRun:
             if isinstance(m, dict)
         ]
         return sorted(out, key=lambda c: (c.f1 is None, c.f1 if c.f1 is not None else 0.0))
+
+    @property
+    def embedding(self):
+        """The run's 3D embedding points, or None.
+
+        Read from the report folder rather than the model bundle: the bundle
+        carries the fitted reducer and the classifier with it, and opening
+        hundreds of megabytes to draw a scatter would make browsing runs cost
+        as much as loading a model.
+
+        Returns a light stand-in with ``coords`` / ``labels`` / ``method`` —
+        enough to draw, without reconstructing a fitted artifact that nothing
+        here would use.
+        """
+        if self.path is None:
+            return None
+        import numpy as np
+
+        from glider.analysis.behavior.report import EMBEDDING_FILE
+
+        path = self.path / EMBEDDING_FILE
+        if not path.exists():
+            return None
+        try:
+            with np.load(path, allow_pickle=False) as data:
+                return _EmbeddingPoints(
+                    coords=np.asarray(data["coords"], dtype=float),
+                    labels=np.asarray(data["labels"]).astype(str),
+                    method=str(data["method"]) if "method" in data else "",
+                )
+        except Exception:  # noqa: BLE001 - a truncated file must not break browsing
+            return None
 
     @property
     def macro_f1(self) -> float | None:

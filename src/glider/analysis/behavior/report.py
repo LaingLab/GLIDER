@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv as _csv
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -248,6 +249,39 @@ def _plot_lambda_sweep(result, out_dir: Path) -> None:
     _save(fig, out_dir / "lambda_sweep.png")
 
 
+logger = logging.getLogger(__name__)
+
+#: Embedding coordinates written beside the summary. Just the points and
+#: their labels — not the fitted reducer, which stays in the model bundle.
+EMBEDDING_FILE = "embedding.npz"
+
+
+def _write_embedding(result, out_dir: Path) -> None:
+    """Save the run's 3D embedding points, if it has any.
+
+    The fitted artifact lives in the model bundle, which is hundreds of
+    megabytes with the classifier inside. Opening that just to draw a scatter
+    would make browsing runs cost as much as loading a model, so the
+    coordinates are copied into the report folder — already the
+    self-contained record of a run.
+
+    Never raises: the summary is the record and a chart is a bonus.
+    """
+    model = getattr(result, "model", None)
+    artifact = getattr(model, "embedding", None)
+    if artifact is None:
+        return
+    try:
+        np.savez_compressed(
+            out_dir / EMBEDDING_FILE,
+            coords=np.asarray(artifact.coords, dtype=np.float64),
+            labels=np.asarray(artifact.labels).astype(str),
+            method=np.asarray(str(getattr(artifact, "method", "") or "")),
+        )
+    except Exception:  # noqa: BLE001 - a report must not fail over a bonus
+        logger.warning("could not write the embedding to the report", exc_info=True)
+
+
 def write_training_report(result, out_dir: str | Path, *, px_per_mm: float | None = None) -> Path:
     """Write summary.json, tidy CSVs, and charts for a training result.
 
@@ -264,6 +298,7 @@ def write_training_report(result, out_dir: str | Path, *, px_per_mm: float | Non
         encoding="utf-8",
     )
     _write_csvs(result, out_dir)
+    _write_embedding(result, out_dir)
     if _is_hybrid(result):
         _plot_importances(result, out_dir)
         _plot_lambda_sweep(result, out_dir)

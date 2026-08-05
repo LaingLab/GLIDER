@@ -1138,6 +1138,22 @@ class TrainTab(QWidget):
             "Dominant frequency and spectral flatness per kinematic column —\n"
             "for rhythmic behaviors such as grooming."
         )
+        # A 3D view of the feature space the classifier learned, stored in the
+        # bundle and drawn by the Review tab. Off by default: fitting one costs
+        # real time on a large cohort, and it changes nothing about the model.
+        self._embedding_combo = QComboBox()
+        self._embedding_combo.addItem("none", "none")
+        self._embedding_combo.addItem("UMAP", "umap")
+        self._embedding_combo.addItem("PCA", "pca")
+        self._embedding_combo.setToolTip(
+            "Fit a 3D embedding of the training features and store it in the\n"
+            "model bundle, so the Review tab can show whether the behaviors\n"
+            "occupy distinct regions.\n\n"
+            "UMAP separates clusters better; PCA is faster and always\n"
+            "available. UMAP falls back to PCA when it is not installed."
+        )
+        options.add_row("3D embedding", self._embedding_combo)
+
         options.add(self._traj_check)
         options.add(self._motion_check)
         options.add(self._freq_check)
@@ -1336,6 +1352,7 @@ class TrainTab(QWidget):
             "traj_features": self._traj_check.isChecked(),
             "motion_features": self._motion_check.isChecked(),
             "freq_features": self._freq_check.isChecked(),
+            "embedding": self._embedding_combo.currentData(),
         }
         options.update(self._lgbm_options())
         return options
