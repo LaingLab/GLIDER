@@ -56,6 +56,49 @@ def test_mixed_rates_can_be_forced(tmp_path):
     assert resolve_sessions_fps(sessions, 30.0) == pytest.approx(30.0)
 
 
+def test_encoder_jitter_is_one_rate(tmp_path):
+    """Container timestamps wobble; a cohort filmed on one rig is one rate.
+
+    Real sidecars off the same camera read 29.979620 / 30.000000 / 30.000727 --
+    a 0.07% spread, which over an 8-frame window is 0.19 ms. Refusing that
+    blocks training on a perfectly uniform cohort, and the difference is far
+    below anything a rolling window can express.
+    """
+    sessions = [
+        _session(tmp_path, "a", 29.979620),
+        _session(tmp_path, "b", 30.000000),
+        _session(tmp_path, "c", 30.000727),
+    ]
+
+    assert resolve_sessions_fps(sessions, None) == pytest.approx(30.0, abs=0.05)
+
+
+def test_ntsc_and_round_thirty_are_one_rate(tmp_path):
+    """29.97 vs 30.0 is a 0.1% difference -- a naming convention, not a rate."""
+    sessions = [_session(tmp_path, "ntsc", 29.97), _session(tmp_path, "round", 30.0)]
+
+    assert resolve_sessions_fps(sessions, None) == pytest.approx(30.0, abs=0.05)
+
+
+def test_a_real_rate_difference_is_still_refused(tmp_path):
+    """The guard must keep catching what it exists for."""
+    sessions = [_session(tmp_path, "pal", 25.0), _session(tmp_path, "ntsc", 30.0)]
+
+    with pytest.raises(ValueError, match="different frame rates"):
+        resolve_sessions_fps(sessions, None)
+
+
+def test_the_refusal_names_the_rates_and_their_sessions(tmp_path):
+    """The message has to say which files to split out, not just that it failed."""
+    sessions = [_session(tmp_path, "fast", 60.0), _session(tmp_path, "slow", 30.0)]
+
+    with pytest.raises(ValueError) as excinfo:
+        resolve_sessions_fps(sessions, None)
+    message = str(excinfo.value)
+    assert "fast.csv" in message and "slow.csv" in message
+    assert "fps=" in message
+
+
 def test_holdout_sessions_are_checked_too(tmp_path):
     """A holdout at another rate would be scored against mismatched windows."""
     sessions = [_session(tmp_path, "train", 30.0)]
