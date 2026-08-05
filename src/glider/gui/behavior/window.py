@@ -1165,6 +1165,22 @@ class TrainTab(QWidget):
         self._seed_spin.setToolTip("Change to check how much of a score is fit noise.")
         options.add_row("Random seed", self._seed_spin)
 
+        # The escape hatch the "different frame rates" error tells you to use.
+        # Without it that message asks for something the window cannot do.
+        self._fps_spin = QDoubleSpinBox()
+        self._fps_spin.setRange(0.0, 1000.0)
+        self._fps_spin.setDecimals(3)
+        self._fps_spin.setValue(0.0)
+        self._fps_spin.setSpecialValueText("auto (from pose CSVs)")
+        self._fps_spin.setToolTip(
+            "Frame rate to read every session at. Auto takes it from the\n"
+            "sidecars written beside the pose CSVs.\n\n"
+            "Set a value to force one rate when sessions disagree — every\n"
+            "windowed feature is specified in seconds, so this rescales them\n"
+            "all. Only force a rate the recordings actually share."
+        )
+        options.add_row("Frame rate", self._fps_spin)
+
         # Feature families the pipeline can compute but never did: all three
         # default to False in train_model and had no way to be switched on.
         self._traj_check = QCheckBox("Trajectory shape features")
@@ -1401,6 +1417,9 @@ class TrainTab(QWidget):
             "motion_features": self._motion_check.isChecked(),
             "freq_features": self._freq_check.isChecked(),
             "embedding": self._embedding_combo.currentData(),
+            # 0 is the spin box's "auto": leave fps unset and let the pipeline
+            # read it from the sidecars, rather than forcing everything to 0.
+            "fps": float(self._fps_spin.value()) or None,
         }
         options.update(self._lgbm_options())
         return options

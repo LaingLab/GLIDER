@@ -64,6 +64,19 @@ from glider.vision.pose.dlc import DEFAULT_FPS, fps_for_csv, from_dlc_csv
 
 SessionPair = tuple[Path, Path]
 
+#: Frame rates within this relative distance are treated as one recording rate.
+#:
+#: Container timestamps wobble: sidecars written off a single camera in one
+#: session read 29.979620, 30.000000 and 30.000727 -- a 0.07% spread, which
+#: over an 8-frame window is 0.19 ms. 29.97 against 30.0 is a naming
+#: convention rather than a rate. Neither is expressible by a rolling window
+#: measured in whole frames, and refusing them blocks training on a cohort
+#: that is in fact uniform.
+#:
+#: The differences worth refusing are far away: 25 vs 30 is 20% and 30 vs 60
+#: is 100%, so 2% leaves a wide gap on both sides.
+FPS_REL_TOLERANCE = 0.02
+
 
 def resolve_sessions_fps(
     sessions: list[SessionPair],
@@ -86,13 +99,13 @@ def resolve_sessions_fps(
     if fps is not None:
         return float(fps)
 
-    by_rate: dict[float, list[str]] = {}
+    rates: list[tuple[float, str]] = []
     for pose_csv, _ann_csv in list(sessions) + list(holdout_sessions or []):
         rate = fps_for_csv(Path(pose_csv))
         if rate is not None:
-            by_rate.setdefault(round(rate, 3), []).append(Path(pose_csv).name)
+            rates.append((float(rate), Path(pose_csv).name))
 
-    if not by_rate:
+    if not rates:
         warnings.warn(
             f"no frame rate recorded beside these pose CSVs; assuming "
             f"{DEFAULT_FPS} fps. Re-run Batch Pose Tracking to record the "
@@ -102,9 +115,23 @@ def resolve_sessions_fps(
         )
         return DEFAULT_FPS
 
-    if len(by_rate) > 1:
+    # Group rates that are the same recording rate wearing different decimals,
+    # then refuse only if genuinely distinct rates remain. Sorted ascending, so
+    # each group is measured from its own smallest member and cannot drift.
+    rates.sort()
+    groups: list[list[tuple[float, str]]] = [[rates[0]]]
+    for rate, name in rates[1:]:
+        floor = groups[-1][0][0]
+        if rate - floor <= floor * FPS_REL_TOLERANCE:
+            groups[-1].append((rate, name))
+        else:
+            groups.append([(rate, name)])
+
+    if len(groups) > 1:
         detail = "; ".join(
-            f"{rate} fps: {', '.join(sorted(names))}" for rate, names in sorted(by_rate.items())
+            f"{sum(r for r, _n in group) / len(group):.4g} fps: "
+            f"{', '.join(sorted(n for _r, n in group))}"
+            for group in groups
         )
         raise ValueError(
             f"these sessions were recorded at different frame rates ({detail}). "
@@ -112,7 +139,10 @@ def resolve_sessions_fps(
             f"Train them as separate models, or pass fps= to force one rate."
         )
 
-    return next(iter(by_rate))
+    # One rate, possibly spelled several ways. The mean is within the tolerance
+    # of every member by construction, so no session is read at a rate it was
+    # not recorded at to any degree a window could notice.
+    return sum(r for r, _n in groups[0]) / len(groups[0])
 
 
 @dataclass
