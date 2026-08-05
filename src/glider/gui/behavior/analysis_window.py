@@ -702,6 +702,7 @@ class AnalysisWindow(QMainWindow):
         open_btn = QPushButton("Open ethogram…")
         set_button_role(open_btn, "primary")
         open_btn.clicked.connect(self._open)
+        self._open_btn = open_btn
         # A cohort is the unit of analysis, not a session: the question is
         # almost always "what did these thirty animals do between minutes two
         # and seven", and answering it one file at a time invites the window
@@ -721,6 +722,7 @@ class AnalysisWindow(QMainWindow):
             "loaded session."
         )
         zones_btn.clicked.connect(self._load_zones)
+        self._zones_btn = zones_btn
 
         open_folder_btn = QPushButton("Open cohort folder…")
         open_folder_btn.setToolTip(
@@ -728,6 +730,7 @@ class AnalysisWindow(QMainWindow):
             "applies to all of them at once."
         )
         open_folder_btn.clicked.connect(self._open_folder)
+        self._open_folder_btn = open_folder_btn
 
         self._sessions = QComboBox()
         self._sessions.setMinimumWidth(180)
@@ -758,6 +761,13 @@ class AnalysisWindow(QMainWindow):
         self._header.add_action(open_folder_btn)
         self._header.add_action(draw_zones_btn)
         self._header.add_action(zones_btn)
+
+        self._tour = None
+        self._tour_btn = QPushButton("Tutorial")
+        self._tour_btn.setToolTip("Walk through reading a scored session.")
+        set_button_role(self._tour_btn, "ghost")
+        self._tour_btn.clicked.connect(self.start_tour)
+        self._header.add_action(self._tour_btn)
 
         # --- viewer -----------------------------------------------------
         viewer = Card()
@@ -861,6 +871,55 @@ class AnalysisWindow(QMainWindow):
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance)
+
+    # ------------------------------------------------------------------
+    # walkthrough
+    # ------------------------------------------------------------------
+
+    def tour_targets(self) -> dict[str, QWidget | None]:
+        """Widgets the Session Review walkthrough spotlights, by step key.
+
+        ``cohort_table`` is the table itself rather than the tab strip holding
+        it: the tour walks up from the target and brings its tab forward, so
+        naming the table is what actually puts Cohort on screen.
+        """
+        return {
+            "open": self._open_btn,
+            "open_folder": self._open_folder_btn,
+            "canvas": self._canvas,
+            "ethogram": self._bar,
+            "cohort_table": self._cohort_table,
+            "zones": self._zones_btn,
+            "export": self._export_btn,
+        }
+
+    def start_tour(self) -> None:
+        """Run the Session Review walkthrough (also the Tutorial button)."""
+        from glider.gui.onboarding.tour import (
+            SESSION_REVIEW_TOUR_COMPLETE_KEY,
+            Tour,
+            session_review_steps,
+        )
+
+        # Held on the instance: the overlay is parented to this window, and a
+        # Tour that goes out of scope takes its overlay with it mid-step.
+        self._tour = Tour(
+            self,
+            steps=session_review_steps(),
+            complete_key=SESSION_REVIEW_TOUR_COMPLETE_KEY,
+        )
+        self._tour.start()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        """Offer the walkthrough the first time this window is opened."""
+        super().showEvent(event)
+        from glider.gui.onboarding.tour import (
+            SESSION_REVIEW_TOUR_COMPLETE_KEY,
+            offer_tour_once,
+            session_review_steps,
+        )
+
+        offer_tour_once(self, session_review_steps(), SESSION_REVIEW_TOUR_COMPLETE_KEY)
 
     def _build_controls(self) -> QHBoxLayout:
         row = QHBoxLayout()
