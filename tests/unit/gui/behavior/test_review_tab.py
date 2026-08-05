@@ -8,6 +8,8 @@ import pytest
 
 pytest.importorskip("PyQt6")
 
+from PyQt6.QtWidgets import QLabel  # noqa: E402
+
 from glider.analysis.behavior.run_report import TrainingRun  # noqa: E402
 from glider.gui.behavior.review_tab import ReviewTab  # noqa: E402
 
@@ -190,3 +192,76 @@ class TestWindowWiring:
         tab.run_reported.connect(lambda report, summary: seen.append(report))
         tab._on_train_finished({})  # noqa: SLF001
         assert seen == [None]
+
+
+class TestLayout:
+    """The report is a page, not a list. These pin the shape of it."""
+
+    def test_the_verdict_leads_and_carries_its_warnings(self, qtbot, tmp_path):
+        """Score, evidence and caveats are one block -- they must not separate."""
+        from glider.gui.behavior.review_tab import Verdict
+
+        tab = ReviewTab()
+        qtbot.addWidget(tab)
+        tab.load(
+            _report(
+                tmp_path,
+                _summary(
+                    split_strategy="no_holdout",
+                    test_size=0,
+                    test_accuracy=None,
+                    kept_label_counts={"common": 50_000, "rare": 500},
+                ),
+            )
+        )
+        assert isinstance(tab._cards[0], Verdict)  # noqa: SLF001
+        shown = tab._cards[0].findChildren(QLabel)  # noqa: SLF001
+        text = " ".join(lab.text() for lab in shown)
+        assert "No held-out data" in text
+        # The eyebrow is uppercased for display; the label is what matters.
+        assert "TRAIN ACCURACY" in text.upper()
+
+    def test_the_panels_are_paired_into_a_grid(self, qtbot, tmp_path):
+        """One full-width column per panel is what made this read as a list."""
+        from glider.gui.widgets.tool_ui import CardGrid
+
+        tab = ReviewTab()
+        qtbot.addWidget(tab)
+        tab.load(_report(tmp_path))
+        assert any(isinstance(c, CardGrid) for c in tab._cards)  # noqa: SLF001
+
+    def test_bars_share_one_width_so_rows_are_comparable(self, qtbot):
+        """A bar that stretches to fill its panel encodes the panel, not the value."""
+        from glider.gui.behavior.review_tab import ScoreBar
+
+        wide = ScoreBar(0.9, "#38bdf8")
+        narrow = ScoreBar(0.9, "#38bdf8")
+        qtbot.addWidget(wide)
+        qtbot.addWidget(narrow)
+        wide.resize(900, 16)
+        assert wide.width() == narrow.width() == ScoreBar.WIDTH
+
+    def test_a_card_badge_never_grows_into_a_column(self, qtbot, tmp_path):
+        """A stretched card handed its slack to the header and inflated the pill."""
+        tab = ReviewTab()
+        qtbot.addWidget(tab)
+        tab.load(_report(tmp_path))
+        tab.resize(1100, 1400)
+        tab.show()
+        badges = [
+            lab
+            for lab in tab.findChildren(QLabel)
+            if lab.objectName() == "CardBadge" and lab.isVisible()
+        ]
+        assert badges, "expected at least one badge"
+        for badge in badges:
+            assert badge.height() <= 30, f"{badge.text()!r} grew to {badge.height()}px"
+
+    def test_the_split_strategy_is_said_in_words(self, qtbot, tmp_path):
+        """'no_holdout' is a field name, not an answer."""
+        tab = ReviewTab()
+        qtbot.addWidget(tab)
+        tab.load(_report(tmp_path, _summary(split_strategy="no_holdout", test_size=0)))
+        text = " ".join(lab.text() for lab in tab.findChildren(QLabel))
+        assert "no_holdout" not in text
+        assert "fitted on everything" in text
