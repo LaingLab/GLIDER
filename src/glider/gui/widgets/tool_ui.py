@@ -464,6 +464,10 @@ class Card(QFrame):
         self._badge = QLabel("")
         self._badge.setObjectName("CardBadge")
         self._badge.setVisible(False)
+        # A pill, never a column: a QLabel defaults to expanding vertically,
+        # so any slack in the header row stretched it into a tall empty box.
+        self._badge.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._header.addWidget(self._badge)
 
         self._has_header = bool(title)
@@ -508,7 +512,10 @@ class CardGrid(QWidget):
     """Two side-by-side columns of cards that collapse to one when narrow.
 
     Used for rows of small cards that would each waste half a screen on their
-    own.
+    own. A one-column page of full-width cards is the default that makes a
+    report read as a list: most panels hold a narrow list of names and numbers,
+    and stretching one to twelve hundred pixels adds no information while
+    pushing the next panel below the fold.
     """
 
     def __init__(self, parent=None):
@@ -520,9 +527,39 @@ class CardGrid(QWidget):
         self._n = 0
 
     def add_card(self, card: Card) -> Card:
+        """Append in reading order, filling left then right."""
         self._grid.addWidget(card, self._n // 2, self._n % 2)
         self._n += 1
         return card
+
+    def add_pair(self, left: QWidget, right: QWidget, *, weights=(1, 1)) -> None:
+        """Put two panels on one row, with an explicit width ratio.
+
+        Pairing is what carries the meaning here -- two panels side by side
+        read as two halves of one question, which is the whole reason for
+        putting a metric table next to the matrix that explains it.
+
+        Both are pinned to the top of the row. Without that, a grid row is as
+        tall as its taller card and the shorter one is stretched to match --
+        and a stretched Card hands the slack to its own layout, which spreads
+        its rows apart and inflates the badge in its header into a tall empty
+        box. A ragged bottom edge is the correct look for cards of different
+        lengths.
+        """
+        row = self._grid.rowCount()
+        top = Qt.AlignmentFlag.AlignTop
+        self._grid.addWidget(left, row, 0, top)
+        self._grid.addWidget(right, row, 1, top)
+        self._grid.setColumnStretch(0, weights[0])
+        self._grid.setColumnStretch(1, weights[1])
+        self._n = (row + 1) * 2
+
+    def add_full_width(self, widget: QWidget) -> QWidget:
+        """A panel that spans both columns -- a chart, or a wide table."""
+        row = self._grid.rowCount()
+        self._grid.addWidget(widget, row, 0, 1, 2)
+        self._n = (row + 1) * 2
+        return widget
 
 
 class RunRail(QWidget):
