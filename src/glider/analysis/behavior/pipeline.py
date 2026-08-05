@@ -1036,6 +1036,7 @@ def cross_validate_and_train(
     freq_features: bool = False,
     traj_features: bool = False,
     motion_features: bool = False,
+    embedding: str = "none",
 ) -> tuple[dict[str, Any], TrainResult]:
     """Cross-validate, then refit on everything — one feature pass for both.
 
@@ -1110,8 +1111,14 @@ def cross_validate_and_train(
         "train_accuracy": float(clf.score(data.x, data.y)),
         # The honest headline: measured across folds, not on the fit itself.
         "test_accuracy": cv_result.get("mean_accuracy"),
-        "cv_mean_macro_f1": cv_result.get("mean_macro_f1"),
-        "cv_fold_macro_f1": cv_result.get("fold_macro_f1"),
+        # The names every reader looks for -- run_report.TrainingRun,
+        # summary_text, the Review tab. Prefixing these "cv_" left the run
+        # knowing it was cross-validated with no score to show for it, and the
+        # tab rendered a dash where the headline number belongs.
+        "mean_macro_f1": cv_result.get("mean_macro_f1"),
+        "fold_macro_f1": cv_result.get("fold_macro_f1"),
+        "mean_accuracy": cv_result.get("mean_accuracy"),
+        "std_accuracy": cv_result.get("std_accuracy"),
         "per_class_metrics": cv_result.get("per_class_metrics") or {},
         "confusion_matrix": cv_result.get("confusion_matrix") or {},
         "bout_metrics": cv_result.get("bout_metrics") or {},
@@ -1139,6 +1146,24 @@ def cross_validate_and_train(
             for i in order[:20]
         ]
 
+    # Optional 3D embedding of the feature space, same contract as
+    # train_model: a visualisation add-on that must never cost the model. A
+    # cross-validated bundle could not carry one at all before, so the Review
+    # tab had nothing to render for exactly the runs worth reviewing.
+    embedding_artifact = None
+    if embedding and embedding.lower() != "none":
+        from glider.analysis.behavior import embedding as _embedding_mod
+
+        try:
+            embedding_artifact = _embedding_mod.fit_embedding(
+                data.x, data.y, method=embedding, random_state=random_state
+            )
+        except Exception as e:  # noqa: BLE001 - never lose a fit over a chart
+            warnings.warn(
+                f"embedding fit failed ({e}); model saved without a 3D embedding view",
+                stacklevel=2,
+            )
+
     model = BehaviorModel(
         classifier=clf,
         feature_names=list(data.x.columns),
@@ -1149,6 +1174,7 @@ def cross_validate_and_train(
         classes=[str(c) for c in clf.classes_],
         training_summary=summary,
         library_versions=capture_library_versions(),
+        embedding=embedding_artifact,
     )
     return cv_result, TrainResult(model=model, summary=summary)
 
