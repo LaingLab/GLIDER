@@ -14,6 +14,8 @@
 
 # ruff: noqa  -- PyInstaller spec files are not normal Python modules
 
+import os
+
 from PyInstaller.utils.hooks import (
     collect_all,
     collect_dynamic_libs,
@@ -27,6 +29,26 @@ block_cipher = None
 # Our own package. collect_all includes data files (schemas, stylesheets, icons)
 # declared in pyproject.toml's package-data.
 glider_datas, glider_binaries, glider_hiddenimports = collect_all("glider")
+
+# Optional stacks the app imports lazily, inside the functions that need them.
+# PyInstaller's static analysis walks imports from __main__ outward, so a
+# module that is only ever imported inside a function body is invisible to it
+# and silently absent from the bundle -- which is how hdbscan went missing
+# while its own dependencies (numba, llvmlite, pynndescent) rode along via
+# other packages. The failure is quiet: behavior_available() finds one module
+# short and the Behavior Analysis menu disables itself with no error anywhere.
+#
+# collect_all rather than a bare hiddenimport because these ship more than
+# Python: hdbscan is Cython (.pyd), and ultralytics loads its model and
+# tracker configs from .yaml files at runtime.
+_LAZY_STACKS = ["hdbscan", "umap", "ultralytics", "lap"]
+
+lazy_datas, lazy_binaries, lazy_hiddenimports = [], [], []
+for _pkg in _LAZY_STACKS:
+    _d, _b, _h = collect_all(_pkg)
+    lazy_datas += _d
+    lazy_binaries += _b
+    lazy_hiddenimports += _h
 
 # ryvencore is the node-graph engine; its plugins are discovered by name so
 # PyInstaller's static analysis doesn't find them.
@@ -45,6 +67,7 @@ hiddenimports = (
     glider_hiddenimports
     + ryvencore_hiddenimports
     + qasync_hiddenimports
+    + lazy_hiddenimports
     + [
         # Driver entry points are registered in pyproject.toml via the
         # "glider.driver" group. At runtime they're looked up by string, so
@@ -64,12 +87,24 @@ excludes = [
     "glider.hal.boards.pi_gpio_board",
     "gpiozero",
     "lgpio",
-    # ultralytics is AGPL-3.0. We ship it as a lazy first-run download so the
-    # base installer stays permissively-licensed. If a user opts in, the app
-    # will pip-install it into the bundled venv at runtime.
-    "ultralytics",
-    "torch",
-    "torchvision",
+    # ultralytics and torch are now BUNDLED, deliberately.
+    #
+    # They used to be excluded to keep the installer permissively licensed,
+    # on the assumption that yolo_install.py would fetch ultralytics on first
+    # use. It cannot: can_auto_install() returns `not sys.frozen`, so in a
+    # packaged build that path is always off. The exclusion did not defer the
+    # download, it removed pose tracking from the installer entirely.
+    #
+    # The cost is real and was accepted knowingly: ultralytics is AGPL-3.0, so
+    # the distributed application is a combined AGPL work and recipients are
+    # entitled to source. Ultralytics sells a commercial license if that
+    # becomes a problem. torch is the CUDA build (~2.9 GB unpacked) because
+    # CPU-only inference is too slow for hour-long recordings.
+    #
+    # To go back to a permissive, small installer, re-add "ultralytics",
+    # "torch" and "torchvision" here AND give frozen builds a real way to
+    # obtain them -- an add-on pack, or a bundled pip -- or tracking silently
+    # disappears again.
     # Test + dev tooling should never ride along.
     "pytest",
     "pytest_asyncio",
@@ -83,12 +118,19 @@ excludes = [
 a = Analysis(
     ["../../src/glider/__main__.py"],
     pathex=["../../src"],
-    binaries=glider_binaries + cv2_binaries,
-    datas=glider_datas,
+    binaries=glider_binaries + cv2_binaries + lazy_binaries,
+    datas=glider_datas + lazy_datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    # Runs before the entry script -- see rthook_torch.py. __main__.py's own
+    # torch-before-Qt guard is too late in a frozen build.
+    #
+    # Absolute via SPECPATH: runtime_hooks are resolved against the current
+    # working directory, not this file's directory (unlike the entry script
+    # above), so a relative path here builds only when pyinstaller happens to
+    # be invoked from packaging/windows.
+    runtime_hooks=[os.path.join(SPECPATH, "rthook_torch.py")],
     excludes=excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

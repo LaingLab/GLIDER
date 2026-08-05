@@ -39,9 +39,19 @@ if ($LASTEXITCODE -ne 0) { throw "frozen GLIDER.exe --version failed ($LASTEXITC
 # Locate ISCC (Inno Setup compiler).
 $Iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
 if (-not $Iscc) {
-    $Default = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-    if (Test-Path $Default) { $Iscc = $Default }
-    else { throw "ISCC.exe not found. Install Inno Setup 6: https://jrsoftware.org/isdl.php" }
+    # Per-user first: `winget install JRSoftware.InnoSetup` -- the quickest way
+    # to satisfy the prerequisite -- installs under %LOCALAPPDATA% and adds
+    # nothing to PATH, so checking only Program Files made the documented setup
+    # path end in "ISCC.exe not found".
+    $Candidates = @(
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+    )
+    $Iscc = $Candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $Iscc) {
+        throw "ISCC.exe not found. Install Inno Setup 6: https://jrsoftware.org/isdl.php (or: winget install JRSoftware.InnoSetup)"
+    }
 }
 
 Write-Host ">> Building installer with Inno Setup"
