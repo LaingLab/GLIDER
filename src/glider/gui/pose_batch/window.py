@@ -194,11 +194,18 @@ class PoseBatchWindow(QMainWindow):
         page.setContentsMargins(0, 0, 0, 0)
         page.setSpacing(0)
 
-        header = ToolHeader(
+        self._header = ToolHeader(
             "Batch Pose Tracking",
             "Run a YOLO-pose model over folders of video and write a DLC CSV beside each one",
         )
-        page.addWidget(header)
+        page.addWidget(self._header)
+
+        self._tour = None
+        self._tour_btn = QPushButton("Tutorial")
+        self._tour_btn.setToolTip("Walk through setting up and running a batch.")
+        set_button_role(self._tour_btn, "ghost")
+        self._tour_btn.clicked.connect(self.start_tour)
+        self._header.add_action(self._tour_btn)
 
         body = QHBoxLayout()
         body.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
@@ -263,6 +270,7 @@ class PoseBatchWindow(QMainWindow):
 
     def _build_model_group(self) -> Card:
         card = Card("Model")
+        self._model_card = card
 
         self._model_field = QLineEdit()
         self._model_field.setReadOnly(True)
@@ -461,6 +469,50 @@ class PoseBatchWindow(QMainWindow):
         card.add(self._overwrite)
         card.add(hint("Leave off to resume an interrupted batch without redoing finished videos."))
         return card
+
+    # ------------------------------------------------------------------
+    # walkthrough
+    # ------------------------------------------------------------------
+
+    def tour_targets(self) -> dict[str, QWidget | None]:
+        """Widgets the Batch Pose walkthrough spotlights, by step key.
+
+        Mostly whole cards rather than single fields: the lesson is which
+        section of the form to fill in next, and outlining one line edit inside
+        a card says less than outlining the card.
+        """
+        return {
+            "model": self._model_card,
+            "bodyparts": self._names_field,
+            "videos": self._sources_card,
+            "calibration": self._calibration_card,
+            "filter": self._filter_card,
+            "run": self._run_button,
+        }
+
+    def start_tour(self) -> None:
+        """Run the Batch Pose walkthrough (also the Tutorial button)."""
+        from glider.gui.onboarding.tour import (
+            POSE_BATCH_TOUR_COMPLETE_KEY,
+            Tour,
+            pose_batch_steps,
+        )
+
+        # Held on the instance: the overlay is parented to this window, and a
+        # Tour that goes out of scope takes its overlay with it mid-step.
+        self._tour = Tour(self, steps=pose_batch_steps(), complete_key=POSE_BATCH_TOUR_COMPLETE_KEY)
+        self._tour.start()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        """Offer the walkthrough the first time this window is opened."""
+        super().showEvent(event)
+        from glider.gui.onboarding.tour import (
+            POSE_BATCH_TOUR_COMPLETE_KEY,
+            offer_tour_once,
+            pose_batch_steps,
+        )
+
+        offer_tour_once(self, pose_batch_steps(), POSE_BATCH_TOUR_COMPLETE_KEY)
 
     # ------------------------------------------------------------------
     # inputs

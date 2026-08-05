@@ -348,6 +348,54 @@ class BehaviorAnalysisWindow(QMainWindow):
         # theme -- see tool_ui.apply_tool_theme.
         apply_tool_theme(self)
 
+        self._tour = None
+        self._tour_btn = QPushButton("Tutorial")
+        self._tour_btn.setToolTip("Walk through the four stages of scoring behavior.")
+        set_button_role(self._tour_btn, "ghost")
+        self._tour_btn.clicked.connect(self.start_tour)
+        self._header.add_action(self._tour_btn)
+
+    # ------------------------------------------------------------------
+    # Walkthrough
+    # ------------------------------------------------------------------
+    def tour_targets(self) -> dict[str, QWidget | None]:
+        """Widgets the Behavior walkthrough spotlights, by step key.
+
+        The tab keys resolve to the tab *pages*, which is what lets the tour
+        bring each one forward: it walks up from the target to find the tab
+        widget holding it. Pointing at the tab bar instead would highlight the
+        label while leaving the wrong page on screen.
+        """
+        annotate = self.tabs.widget(0)
+        return {
+            "tab_annotate": annotate,
+            "annotate_resume": getattr(annotate, "_resume_btn", None) or annotate,
+            "tab_train": self.train_tab,
+            "train_cv": getattr(self.train_tab, "_cv_btn", None) or self.train_tab,
+            "tab_review": self.review_tab,
+            "tab_apply": self.tabs.widget(3),
+        }
+
+    def start_tour(self) -> None:
+        """Run the Behavior walkthrough (also the Tutorial button)."""
+        from glider.gui.onboarding.tour import BEHAVIOR_TOUR_COMPLETE_KEY, Tour, behavior_steps
+
+        # Held on the instance: the overlay is parented to this window, and a
+        # Tour that goes out of scope takes its overlay with it mid-step.
+        self._tour = Tour(self, steps=behavior_steps(), complete_key=BEHAVIOR_TOUR_COMPLETE_KEY)
+        self._tour.start()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        """Offer the walkthrough the first time this window is opened."""
+        super().showEvent(event)
+        from glider.gui.onboarding.tour import (
+            BEHAVIOR_TOUR_COMPLETE_KEY,
+            behavior_steps,
+            offer_tour_once,
+        )
+
+        offer_tour_once(self, behavior_steps(), BEHAVIOR_TOUR_COMPLETE_KEY)
+
     def _on_tab_changed(self, index: int) -> None:
         if 0 <= index < len(self._TAB_BLURBS):
             self._header.set_subtitle(self._TAB_BLURBS[index])
