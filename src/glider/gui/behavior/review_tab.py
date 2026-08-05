@@ -538,9 +538,11 @@ class ReviewTab(QWidget):
             ("Split", summary.get("split_strategy")),
             (
                 "Window",
-                f"{window} frames ({window / fps:g} s)"
-                if window and fps
-                else (f"{window} frames" if window else None),
+                (
+                    f"{window} frames ({window / fps:g} s)"
+                    if window and fps
+                    else (f"{window} frames" if window else None)
+                ),
             ),
             ("Features", summary.get("n_features")),
             ("Class weight", summary.get("class_weight") or "none"),
