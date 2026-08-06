@@ -404,20 +404,36 @@ def batch_apply(config, ethogram_csv, model, frame_range=None, pose=None) -> boo
     annotated video, a CNN sequence model, or spectral features. Never
     silently degrades: the caller falls back to the streaming path, which
     produces the same artifacts more slowly.
+
+    One thing the streaming path genuinely cannot reproduce is
+    ``offline_smooth_window``: a centred vote needs frames the stream has not
+    reached. Falling back therefore costs accuracy rather than just time, so
+    it is logged rather than left for someone to discover in the numbers.
     """
     from pathlib import Path
 
     from glider.vision.pose.dlc import from_dlc_csv
 
-    if (config.pose_csv_in is None and pose is None) or config.output_video is not None:
+    def _decline(why: str) -> bool:
+        if getattr(config, "offline_smooth_window", 0) > 1:
+            logger.warning(
+                "centred offline smoothing (window %d) was requested but this run "
+                "needs the streaming path (%s), which can only smooth causally — "
+                "the ethogram will be less accurate than a batch run",
+                config.offline_smooth_window,
+                why,
+            )
         return False
+
+    if (config.pose_csv_in is None and pose is None) or config.output_video is not None:
+        return _decline("an annotated output video was requested")
     # A CNN sequence model classifies raw keypoint windows, not tabular
     # rolling features, so none of this applies to it. `model is None` is not
     # that case — it is a speed-only run, which needs no model at all.
     if model is not None and not all(
         hasattr(model, a) for a in ("spec", "window", "stats", "feature_names")
     ):
-        return False
+        return _decline("the model is a CNN sequence model")
 
     if pose is None:
         pose = from_dlc_csv(Path(config.pose_csv_in))
@@ -451,6 +467,7 @@ def batch_apply(config, ethogram_csv, model, frame_range=None, pose=None) -> boo
             confidence_threshold=config.behavior_confidence_threshold,
             class_thresholds=config.behavior_class_thresholds,
             smooth_window=config.smooth_window,
+            offline_smooth_window=config.offline_smooth_window,
             freeze_threshold=config.freeze_threshold,
             dart_threshold=config.dart_threshold,
             freeze_min_frames=config.freeze_min_frames,
@@ -459,7 +476,7 @@ def batch_apply(config, ethogram_csv, model, frame_range=None, pose=None) -> boo
         )
     except NotImplementedError as e:
         logger.info("batch apply not usable (%s); falling back to the streaming path", e)
-        return False
+        return _decline(str(e))
 
     speed_axis = config.freeze_threshold is not None and config.dart_threshold is not None
     write_ethogram_csv(

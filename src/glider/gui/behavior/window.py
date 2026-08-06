@@ -47,6 +47,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.analysis.behavior.classify.smoothing import DEFAULT_OFFLINE_WINDOW
 from glider.gui.widgets.tool_ui import (
     GUTTER,
     Card,
@@ -86,6 +87,13 @@ _DEFAULT_PREDICT_EVERY = 3
 # changes behavior, and at 5 the time budget shifts by <0.5 percentage points
 # while the switch rate roughly halves.
 _DEFAULT_SMOOTH_WINDOW = 5
+
+# Its offline counterpart -- DEFAULT_OFFLINE_WINDOW, imported above -- is what
+# the Apply tab actually defaults to. A recorded video is exactly the case
+# where reading the frames after each one is free, and declining costs real
+# accuracy: on eight held-out sessions a centred vote took macro F1 from 0.780
+# to 0.823, where the causal vote above reached 0.797 and was worse than no
+# smoothing at all on transition frames.
 
 # Session lists hold one row per animal, so a cohort is dozens of rows and
 # both adding and removing have to work on a selection rather than a row.
@@ -2394,6 +2402,24 @@ class ApplyTab(QWidget):
         )
         box.addLayout(labelled_row("Majority vote", self._smooth_window))
 
+        self._offline_smooth = QSpinBox()
+        self._offline_smooth.setRange(0, 61)
+        self._offline_smooth.setValue(DEFAULT_OFFLINE_WINDOW)
+        self._offline_smooth.setSingleStep(2)
+        self._offline_smooth.setSuffix(" frame(s)")
+        self._offline_smooth.setSpecialValueText("off")
+        self._offline_smooth.setToolTip(
+            "Majority vote centred on each frame — half the window before it, half "
+            "after — instead of only the predictions already made.\n"
+            "Only possible when scoring a recording, where the later frames are "
+            "already on disk. A live overlay cannot do this.\n"
+            f"{DEFAULT_OFFLINE_WINDOW} (default) is about one bout at 30 fps. On held-out "
+            "sessions it took macro F1 from 0.78 to 0.82 and roughly halved "
+            "spurious bouts.\n"
+            "Set to off to score exactly as the live path would."
+        )
+        box.addLayout(labelled_row("Centred vote (offline)", self._offline_smooth))
+
         self._min_bout_s = QDoubleSpinBox()
         self._min_bout_s.setRange(0.0, 10.0)
         self._min_bout_s.setValue(0.0)
@@ -2832,6 +2858,7 @@ class ApplyTab(QWidget):
             pose_dir=self._pose_dir if self._reuse_poses.isChecked() else None,
             write_annotated=self._render_video.isChecked(),
             smooth_window=self._smooth_window.value(),
+            offline_smooth_window=self._offline_smooth.value(),
             min_bout_s=self._min_bout_s.value() or None,
             start_s=start_s,
             end_s=end_s,
