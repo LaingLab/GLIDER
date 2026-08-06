@@ -80,6 +80,17 @@ def test_the_summary_uses_the_canonical_fold_score_names(sessions):
     assert trained.summary["fold_macro_f1"]
 
 
+def test_the_saved_summary_says_how_many_rows_were_scored(sessions):
+    """n_rows_kept counts rows assembled for training, which is a larger
+    number: mirrored copies and window-contaminated frames train but never
+    score. A report carrying only the first invites dividing by it."""
+    cv, trained = cross_validate_and_train(sessions, spec=SPEC, **COMMON)
+    scored = trained.summary["n_rows_scored"]
+    assert scored == cv["n_rows_scored"]
+    assert 0 < scored <= trained.summary["n_rows_kept"]
+    assert scored == sum(m["support"] for m in trained.summary["per_class_metrics"].values())
+
+
 def test_the_review_tab_can_read_the_macro_f1(sessions):
     """The exact path the Review tab takes: summary -> TrainingRun.macro_f1."""
     _cv, trained = cross_validate_and_train(sessions, spec=SPEC, **COMMON)

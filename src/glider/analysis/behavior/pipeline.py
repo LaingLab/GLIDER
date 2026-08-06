@@ -1138,6 +1138,10 @@ def cross_validate_and_train(
         "n_rows_kept": int(len(data.y)),
         "train_size": int(len(data.y)),
         "test_size": int(cv_result.get("n_rows_kept") or 0),
+        # Rows the metrics were actually computed on. Without it a report can
+        # only say how many rows were assembled, leaving the reader to infer
+        # the real denominator from the per-class supports.
+        "n_rows_scored": cv_result.get("n_rows_scored"),
         "train_accuracy": float(clf.score(data.x, data.y)),
         # The honest headline: measured across folds, not on the fit itself.
         "test_accuracy": cv_result.get("mean_accuracy"),
