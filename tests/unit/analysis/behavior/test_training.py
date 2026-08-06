@@ -222,8 +222,12 @@ def test_cross_validate_sessions_folds_by_session(tmp_path, three_regime_pose):
     assert pc and all(set(m) == {"precision", "recall", "f1", "support"} for m in pc.values())
     cm = res["confusion_matrix"]
     assert cm["labels"] and len(cm["matrix"]) == len(cm["labels"])
-    # Pooled support == every kept (un-mirrored) row tested exactly once.
-    assert sum(m["support"] for m in pc.values()) == res["n_rows_kept"]
+    # Pooled support == every SCORED row tested exactly once. Scored is fewer
+    # than kept: frames whose trailing window straddles a bout boundary are
+    # trained on but not scored, because their features describe the previous
+    # behavior rather than the labelled one.
+    assert sum(m["support"] for m in pc.values()) == res["n_rows_scored"]
+    assert res["n_rows_scored"] <= res["n_rows_kept"]
 
 
 def test_cross_validate_sessions_with_background_reports_false_alarm(tmp_path, three_regime_pose):

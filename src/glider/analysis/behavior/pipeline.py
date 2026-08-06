@@ -1224,6 +1224,10 @@ class _CvData:
     sess: np.ndarray
     mirror: np.ndarray
     frame: np.ndarray
+    #: Rolling-window length these features were built with. Carried here so
+    #: scoring can tell which rows have a window free of bout boundaries
+    #: without the caller having to pass it twice.
+    window: int = 1
 
 
 def _assemble_for_cv(
@@ -1337,7 +1341,7 @@ def _assemble_for_cv(
                 mirror = mirror[sel]
                 frame = frame[sel]
 
-    return _CvData(x=x, y=y, sess=sess, mirror=mirror, frame=frame)
+    return _CvData(x=x, y=y, sess=sess, mirror=mirror, frame=frame, window=window)
 
 
 def _run_cv_folds(
@@ -1363,6 +1367,7 @@ def _run_cv_folds(
 
     x, y = data.x, data.y
     sess, mirror, frame = data.sess, data.mirror, data.frame
+    scorable = _clean_window_rows(y.to_numpy(), sess, frame, data.window)
 
     n_unique = int(len(np.unique(sess)))
     if n_unique < 2:
@@ -1380,8 +1385,10 @@ def _run_cv_folds(
     all_frame: list[np.ndarray] = []
     all_proba: list[tuple[np.ndarray, list]] = []  # (proba, fold class order)
     for train_idx, test_idx in gkf.split(x, y, groups=sess):
-        # Score only on un-mirrored rows of the held-out session(s).
-        eval_idx = test_idx[~mirror[test_idx]]
+        # Score only on un-mirrored rows of the held-out session(s), and only
+        # where the trailing feature window lies inside one bout -- see
+        # _clean_window_rows. Training still sees every row.
+        eval_idx = test_idx[~mirror[test_idx] & scorable[test_idx]]
         if len(eval_idx) == 0:
             continue
         clf = _build_classifier(
@@ -1514,6 +1521,11 @@ def _run_cv_folds(
         "tuned_thresholds": tuned,
         "bout_metrics": bouts,
         "n_rows_kept": int(len(y)),
+        # Rows the metrics were actually computed on. Lower than n_rows_kept by
+        # the frames whose trailing window crossed a bout boundary (and by the
+        # mirrored copies, which train but never score), so a reader is not
+        # invited to divide by the wrong denominator.
+        "n_rows_scored": int(sum(len(t) for t in all_true)),
     }
 
 

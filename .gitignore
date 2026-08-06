@@ -16,6 +16,10 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+# Inno Setup's output. Release installers are built locally by policy (see
+# packaging/windows/build.ps1), so without this every release leaves a
+# multi-hundred-MB .exe sitting untracked in the working tree.
+Output/
 downloads/
 eggs/
 .eggs/
