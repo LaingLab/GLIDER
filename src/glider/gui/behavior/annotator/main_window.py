@@ -246,6 +246,11 @@ class AnnotatorWindow(QMainWindow):
         self.title_label.setStyleSheet(
             f"font-size: 14px; font-weight: 600; color: {colors.TEXT_PRIMARY};"
         )
+        # Which video the last successful save was for, and the last save
+        # error. The indicator is derived from these plus the current clip,
+        # rather than being written at save time and left to go stale.
+        self._saved_video: Path | None = None
+        self._save_failure: str | None = None
         self.save_indicator = QLabel("")
         self.save_indicator.setStyleSheet(f"color: {colors.TEXT_TERTIARY}; font-size: 12px;")
         # Big, color-coded readout of the current clip's label (top-right).
@@ -1043,15 +1048,46 @@ class AnnotatorWindow(QMainWindow):
         if video in self.load_errors:
             # Writing here would truncate a file we could not read, throwing
             # away whatever labelling it holds.
-            self.save_indicator.setText(f"not saved · {ann_path.name} is unreadable")
+            self._saved_video = None
+            self._save_failure = None
+            self._refresh_save_indicator()
             return
         store = self.stores[video]
         try:
             ann_path.parent.mkdir(parents=True, exist_ok=True)
             store.save_csv(ann_path)
-            self.save_indicator.setText(f"saved · {ann_path.name}")
         except OSError as e:
-            self.save_indicator.setText(f"save failed: {e}")
+            self._saved_video = None
+            self._save_failure = str(e)
+        else:
+            self._saved_video = video
+            self._save_failure = None
+        self._refresh_save_indicator()
+
+    def _refresh_save_indicator(self) -> None:
+        """Describe the session on screen, never the one last written to.
+
+        The indicator sits beside the video title, so a filename carried over
+        from another session reads as though the clip belongs to it. Navigating
+        persists the clip being left, which stamped this with that session's
+        file a moment before the title switched to the next one -- and a review
+        pass over saved zones changes video every few clips.
+        """
+        video = self._current_video_path()
+        ann_path = self.videos_meta.get(video)
+        if ann_path is None:
+            self.save_indicator.setText("")
+            return
+        if self._save_failure and self._saved_video is None:
+            self.save_indicator.setText(f"save failed: {self._save_failure}")
+        elif video in self.load_errors:
+            self.save_indicator.setText(f"not saved · {ann_path.name} is unreadable")
+        elif self._saved_video == video:
+            # Keep the confirmation while we are still in the session it
+            # applies to; context is not worth losing "it saved" for.
+            self.save_indicator.setText(f"saved · {ann_path.name}")
+        else:
+            self.save_indicator.setText(f"· {ann_path.name}")
 
     def _save_annotations_for(self, clip: ProposedClip) -> None:
         self._save_annotations_for_video(Path(clip.video_path))
@@ -1198,6 +1234,7 @@ class AnnotatorWindow(QMainWindow):
         # Keep the window-title chrome (filename in the header) in sync
         # with whichever video the active clip belongs to.
         self.title_label.setText(self._current_video_path().name)
+        self._refresh_save_indicator()
         if not self.clips:
             self.caption_label.setText("(no clips proposed — nothing to label)")
             self._set_big_label(None)
