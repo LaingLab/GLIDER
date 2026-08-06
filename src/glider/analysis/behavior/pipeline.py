@@ -1487,9 +1487,9 @@ def _run_cv_folds(
     # BOUTS the model catches, because a partially-detected bout is still a
     # detected bout once predictions are smoothed at inference. Stitch the
     # held-out predictions back into bouts and report what fraction are hit.
-    bout_metrics: dict[str, dict[str, float]] = {}
+    bouts: dict[str, dict[str, float]] = {}
     if all_true:
-        bout_metrics = _bout_recall(
+        bouts = bout_metrics(
             np.concatenate(all_sess),
             np.concatenate(all_frame),
             y_true_all,
@@ -1512,18 +1512,58 @@ def _run_cv_folds(
         "background_class_name": background_class_name if include_background else None,
         "threshold_curves": threshold_curves,
         "tuned_thresholds": tuned,
-        "bout_metrics": bout_metrics,
+        "bout_metrics": bouts,
         "n_rows_kept": int(len(y)),
     }
 
 
-def _bout_recall(
+def _clean_window_rows(
+    y: np.ndarray, sess: np.ndarray, frame: np.ndarray, window: int
+) -> np.ndarray:
+    """Rows whose whole trailing feature window sits inside one bout.
+
+    The rolling window is causal: row *i*'s features summarise frames
+    ``i-window+1 .. i``. For the first ``window-1`` frames of a bout that span
+    still covers the *previous* behavior, so the model is asked to name a
+    behavior from features that mostly describe a different one. Scoring those
+    measures where the annotator drew the boundary, not the classifier.
+
+    Only the leading edge is affected -- the end of a bout is fine, its window
+    lies wholly inside it. Roughly ``(window-1)/mean_bout_length`` of frames go:
+    on 25-frame bouts at window 8 that is about a quarter, and they are frames
+    no model can get right by construction.
+
+    Training is deliberately left alone. A partly-filled window is still a real
+    input the deployed model will meet, and dropping those rows would shrink
+    the training set for no gain.
+    """
+    order = np.lexsort((frame, sess))
+    ys, ss, fs = y[order], sess[order], frame[order]
+    # A row continues the previous one when it is the next frame of the same
+    # session carrying the same label; anything else restarts the run.
+    same = np.zeros(len(ys), dtype=bool)
+    if len(ys) > 1:
+        same[1:] = (ss[1:] == ss[:-1]) & (fs[1:] == fs[:-1] + 1) & (ys[1:] == ys[:-1])
+    run = np.zeros(len(ys), dtype=int)
+    for i in range(1, len(ys)):
+        run[i] = run[i - 1] + 1 if same[i] else 0
+    out = np.zeros(len(ys), dtype=bool)
+    out[order] = run >= window - 1
+    return out
+
+
+def bout_metrics(
     sess: np.ndarray,
     frame: np.ndarray,
     y_true: np.ndarray,
     y_pred: np.ndarray,
 ) -> dict[str, dict[str, float]]:
     """Bout-level detection recall, precision, and F1 per behavior.
+
+    Public because :mod:`glider.analysis.behavior.evaluation` scores saved
+    models with it. Evaluation and cross-validation must agree on what counts
+    as a detected bout, so they share one definition rather than keeping two
+    that can drift apart.
 
     A *bout* is a maximal run of consecutive frames (within one session)
     sharing the same label. Two views:
