@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from glider.analysis.behavior.annotations import AnnotationStore
+from glider.analysis.behavior.classify.smoothing import centered_majority_vote
 from glider.analysis.behavior.features import compute_features
 from glider.analysis.behavior.labels import AMBIGUOUS, build_label_and_group_series
 from glider.analysis.behavior.model import BehaviorModel
@@ -138,6 +139,7 @@ def evaluate_model(
     *,
     support_floor: int = DEFAULT_SUPPORT_FLOOR,
     fps: float | None = None,
+    smooth_window: int = 1,
 ) -> dict[str, Any]:
     """Score the saved bundle at *model_path* against annotated *sessions*.
 
@@ -151,6 +153,12 @@ def evaluate_model(
     has not filled come back from :meth:`BehaviorModel.predict` as ``""``; they
     are counted in ``n_unscored`` rather than dropped silently or charged as
     errors, because "declined to answer" is not the same as "wrong".
+
+    ``smooth_window`` applies the offline centred vote the apply path uses, so
+    a score can describe the pipeline someone will actually run rather than
+    raw per-frame output. It defaults to off: an unsmoothed number is the one
+    comparable to cross-validation, and silently changing what an existing
+    call measures would be worse than making callers ask.
     """
     if not sessions:
         raise ValueError("evaluation needs at least one session")
@@ -202,12 +210,28 @@ def evaluate_model(
             "(every frame is unlabelled or marked unclear)"
         )
 
-    x = x_all.loc[annotated]
+    if smooth_window > 1:
+        # Smoothing needs the frames either side of each scored one, and the
+        # annotated frames are scattered islands in the recording -- voting
+        # over just those would pool labels seconds apart. So predict the whole
+        # session, smooth along it, and only then keep the annotated rows.
+        # This is also what scoring a recording actually does, which is the
+        # point: the evaluation should measure the pipeline, not a fragment.
+        raw = model.predict(x_all)
+        predictions = np.empty(len(raw), dtype=object)
+        for sid in np.unique(sess_all):
+            in_session = sess_all == sid
+            order = np.argsort(frame_all[in_session], kind="stable")
+            idx = np.nonzero(in_session)[0][order]
+            predictions[idx] = centered_majority_vote(list(raw[idx]), smooth_window)
+        predictions = predictions[annotated].astype(object)
+    else:
+        predictions = model.predict(x_all.loc[annotated])
+
     y = y_all.loc[annotated].to_numpy()
     sess = sess_all[annotated]
     frame = frame_all[annotated]
 
-    predictions = model.predict(x)
     # "" is the model declining on a window it could not fill.
     answered = predictions != ""
     result = summarise_predictions(
@@ -227,6 +251,10 @@ def evaluate_model(
             "n_window_contaminated": n_annotated - int(annotated.sum()),
             "n_unscored": int((~answered).sum()),
             "window": int(model.window),
+            # Recorded because a smoothed score and a raw one are not
+            # comparable, and a bare macro_f1 in a report gives no way to tell
+            # which one you are looking at.
+            "smooth_window": int(smooth_window),
             "stats": list(model.stats),
             "fps": rate,
             "n_features": len(model.feature_names),
