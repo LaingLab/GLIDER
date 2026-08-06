@@ -176,9 +176,7 @@ class TestEvaluateModel:
         assert result["accuracy"] > 0.8, "a model should recognise its own training data"
         assert result["n_scored"] > 0
 
-    def test_frames_the_window_has_not_filled_are_counted_not_scored(
-        self, trained_model
-    ):
+    def test_frames_the_window_has_not_filled_are_counted_not_scored(self, trained_model):
         """Warm-up rows predict "" and must be declared, not hidden."""
         path, sessions = trained_model
         result = evaluate_model(path, sessions, support_floor=1)
@@ -192,8 +190,7 @@ class TestEvaluateModel:
         assert len(result["sessions"]) == len(sessions)
         assert result["window"] == 10
 
-    def test_sessions_without_annotations_are_refused_clearly(self, tmp_path,
-                                                              trained_model):
+    def test_sessions_without_annotations_are_refused_clearly(self, tmp_path, trained_model):
         from glider.analysis.behavior.annotations import AnnotationStore
 
         path, _sessions = trained_model

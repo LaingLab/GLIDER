@@ -87,9 +87,7 @@ def summarise_predictions(
 
     scored = [n for n in labels if not per_class[n]["thin"]]
     thin = [n for n in labels if per_class[n]["thin"]]
-    macro = (
-        float(np.mean([per_class[n]["f1"] for n in scored])) if scored else None
-    )
+    macro = float(np.mean([per_class[n]["f1"] for n in scored])) if scored else None
 
     cm = confusion_matrix(y_true.astype(str), y_pred.astype(str), labels=labels)
     return {
@@ -125,14 +123,10 @@ def _windowed_for(model: BehaviorModel, pose_csv: Path, fps: float) -> pd.DataFr
     feats = compute_features(pose, spec=model.spec)
     windowed = apply_rolling(feats, window=model.window, stats=model.stats)
     if freq:
-        windowed = pd.concat(
-            [windowed, apply_spectral_rolling(feats, window=model.window)], axis=1
-        )
+        windowed = pd.concat([windowed, apply_spectral_rolling(feats, window=model.window)], axis=1)
     if traj:
         axis = model.spec.with_resolved_body_axis(pose.n_keypoints).body_axis
-        traj_frame = apply_trajectory_rolling(
-            pose.xy, body_axis=axis, window=model.window
-        )
+        traj_frame = apply_trajectory_rolling(pose.xy, body_axis=axis, window=model.window)
         traj_frame.index = windowed.index
         windowed = pd.concat([windowed, traj_frame], axis=1)
     return windowed
@@ -230,7 +224,7 @@ def evaluate_model(
             "sessions": [str(p) for p, _a in sessions],
             "n_sessions": len(sessions),
             "n_annotated": n_annotated,
-        "n_window_contaminated": n_annotated - int(annotated.sum()),
+            "n_window_contaminated": n_annotated - int(annotated.sum()),
             "n_unscored": int((~answered).sum()),
             "window": int(model.window),
             "stats": list(model.stats),
