@@ -166,6 +166,12 @@ class LiveInferenceConfig:
     # Majority-vote smoothing over the last N classifier predictions to
     # stabilise the label stream (overlay, video, ethogram). 1 = off.
     smooth_window: int = 1
+    # Offline-only: a CENTRED vote of this many frames, replacing the causal
+    # one above. Ignored by the live path, which cannot read frames it has not
+    # reached. Scoring a recording can, and it is worth 0.780 -> 0.823 macro F1
+    # on held-out data; a causal vote of the same width instead lags every bout
+    # boundary by half its window. 0 = keep the causal behaviour.
+    offline_smooth_window: int = 0
     # Realtime 3D behavior-embedding window: removed (Phase-2, Qt-dependent).
     # Kept as a config field for compatibility with persisted configs; always
     # treated as off.
