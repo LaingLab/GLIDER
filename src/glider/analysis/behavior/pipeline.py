@@ -1367,7 +1367,7 @@ def _run_cv_folds(
 
     x, y = data.x, data.y
     sess, mirror, frame = data.sess, data.mirror, data.frame
-    scorable = _clean_window_rows(y.to_numpy(), sess, frame, data.window)
+    scorable = _clean_window_rows(y.to_numpy(), sess, frame, data.window, mirror=mirror)
 
     n_unique = int(len(np.unique(sess)))
     if n_unique < 2:
@@ -1530,7 +1530,11 @@ def _run_cv_folds(
 
 
 def _clean_window_rows(
-    y: np.ndarray, sess: np.ndarray, frame: np.ndarray, window: int
+    y: np.ndarray,
+    sess: np.ndarray,
+    frame: np.ndarray,
+    window: int,
+    mirror: np.ndarray | None = None,
 ) -> np.ndarray:
     """Rows whose whole trailing feature window sits inside one bout.
 
@@ -1549,13 +1553,25 @@ def _clean_window_rows(
     input the deployed model will meet, and dropping those rows would shrink
     the training set for no gain.
     """
-    order = np.lexsort((frame, sess))
-    ys, ss, fs = y[order], sess[order], frame[order]
+    # Mirror augmentation appends a second copy of a session under the SAME
+    # session id and the SAME frame numbers. Without splitting on it, sorting
+    # by (session, frame) interleaves the copies -- frame 0 real, frame 0
+    # mirror, frame 1 real -- so no row ever follows its own predecessor, no
+    # run reaches window-1, and every fold scores nothing.
+    mir = np.zeros(len(y), dtype=bool) if mirror is None else np.asarray(mirror, dtype=bool)
+    order = np.lexsort((frame, mir, sess))
+    ys, ss, fs, ms = y[order], sess[order], frame[order], mir[order]
     # A row continues the previous one when it is the next frame of the same
-    # session carrying the same label; anything else restarts the run.
+    # session and the same copy, carrying the same label; anything else
+    # restarts the run.
     same = np.zeros(len(ys), dtype=bool)
     if len(ys) > 1:
-        same[1:] = (ss[1:] == ss[:-1]) & (fs[1:] == fs[:-1] + 1) & (ys[1:] == ys[:-1])
+        same[1:] = (
+            (ss[1:] == ss[:-1])
+            & (ms[1:] == ms[:-1])
+            & (fs[1:] == fs[:-1] + 1)
+            & (ys[1:] == ys[:-1])
+        )
     run = np.zeros(len(ys), dtype=int)
     for i in range(1, len(ys)):
         run[i] = run[i - 1] + 1 if same[i] else 0
