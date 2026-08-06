@@ -38,7 +38,7 @@ def _cv(**overrides):
         },
         "false_alarm_rate": None,
         "background_class_name": None,
-        # Key names copied from pipeline._bout_recall, not invented — an
+        # Key names copied from pipeline.bout_metrics, not invented — an
         # earlier fixture guessed "recall" and every assertion passed against
         # a formatter that rendered a dash for every real result.
         "bout_metrics": {
@@ -127,9 +127,9 @@ def test_bout_metric_keys_match_what_the_pipeline_emits():
 
     from glider.analysis.behavior import pipeline
 
-    source = inspect.getsource(pipeline._bout_recall)
+    source = inspect.getsource(pipeline.bout_metrics)
     for key in _cv()["bout_metrics"]["dig"]:
-        assert f'"{key}"' in source, f"{key!r} is not a key _bout_recall emits"
+        assert f'"{key}"' in source, f"{key!r} is not a key bout_metrics emits"
 
 
 def test_bout_recall_is_shown_when_present():

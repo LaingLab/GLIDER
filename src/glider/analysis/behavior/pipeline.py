@@ -1494,9 +1494,9 @@ def _run_cv_folds(
     # BOUTS the model catches, because a partially-detected bout is still a
     # detected bout once predictions are smoothed at inference. Stitch the
     # held-out predictions back into bouts and report what fraction are hit.
-    bout_metrics: dict[str, dict[str, float]] = {}
+    bouts: dict[str, dict[str, float]] = {}
     if all_true:
-        bout_metrics = _bout_recall(
+        bouts = bout_metrics(
             np.concatenate(all_sess),
             np.concatenate(all_frame),
             y_true_all,
@@ -1519,7 +1519,7 @@ def _run_cv_folds(
         "background_class_name": background_class_name if include_background else None,
         "threshold_curves": threshold_curves,
         "tuned_thresholds": tuned,
-        "bout_metrics": bout_metrics,
+        "bout_metrics": bouts,
         "n_rows_kept": int(len(y)),
         # Rows the metrics were actually computed on. Lower than n_rows_kept by
         # the frames whose trailing window crossed a bout boundary (and by the
@@ -1564,13 +1564,18 @@ def _clean_window_rows(
     return out
 
 
-def _bout_recall(
+def bout_metrics(
     sess: np.ndarray,
     frame: np.ndarray,
     y_true: np.ndarray,
     y_pred: np.ndarray,
 ) -> dict[str, dict[str, float]]:
     """Bout-level detection recall, precision, and F1 per behavior.
+
+    Public because :mod:`glider.analysis.behavior.evaluation` scores saved
+    models with it. Evaluation and cross-validation must agree on what counts
+    as a detected bout, so they share one definition rather than keeping two
+    that can drift apart.
 
     A *bout* is a maximal run of consecutive frames (within one session)
     sharing the same label. Two views:

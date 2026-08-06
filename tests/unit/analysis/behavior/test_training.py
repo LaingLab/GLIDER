@@ -307,7 +307,7 @@ def test_bout_recall_stitches_consecutive_frames_into_bouts():
     any / 25% / 50% criteria. Non-consecutive frames start a new bout."""
     import numpy as np
 
-    from glider.analysis.behavior.pipeline import _bout_recall
+    from glider.analysis.behavior.pipeline import bout_metrics
 
     # One session. Frames 0-3 are a 'dig' bout, 2 of 4 predicted dig (50%).
     # Frames 10-13 are a second 'dig' bout (gap → separate), 0 predicted.
@@ -315,7 +315,7 @@ def test_bout_recall_stitches_consecutive_frames_into_bouts():
     frame = np.array([0, 1, 2, 3, 10, 11, 12, 13])
     y_true = np.array(["dig"] * 8)
     y_pred = np.array(["dig", "dig", "x", "x", "x", "x", "x", "x"])
-    out = _bout_recall(sess, frame, y_true, y_pred)
+    out = bout_metrics(sess, frame, y_true, y_pred)
     assert out["dig"]["n_bouts"] == 2  # gap split it into two bouts
     assert out["dig"]["recall_any"] == 0.5  # only the first bout had a hit
     assert out["dig"]["recall_50"] == 0.5  # first bout exactly 50% → counts
