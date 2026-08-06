@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -126,6 +127,20 @@ class _SpeedWorker(QObject):
             # Always emitted: a worker that dies silently would leave the
             # trace saying "loading…" for the rest of the session.
             self.finished.emit()
+
+
+def clamp_clip_index(clip_number: int, n_clips: int) -> int | None:
+    """A 1-based clip number as a 0-based index, clamped to what exists.
+
+    Split out of the window so the arithmetic is testable without a display,
+    which is how the rest of the annotator's logic is covered.
+
+    Returns ``None`` when there are no clips -- the caller has nowhere to go,
+    and that is different from "go to the first one".
+    """
+    if n_clips <= 0:
+        return None
+    return max(0, min(int(clip_number) - 1, n_clips - 1))
 
 
 class AnnotatorWindow(QMainWindow):
@@ -332,6 +347,23 @@ class AnnotatorWindow(QMainWindow):
         self.btn_next.clicked.connect(lambda: self._go(+1))
         nav.addWidget(self.btn_prev)
         nav.addWidget(self.btn_next)
+        nav.addSpacing(16)
+
+        # Go-to box. Reviewing a flagged subset means arriving with a list of
+        # clip numbers; stepping there with prev/next is impractical once the
+        # queue runs to four figures. Editing-finished rather than
+        # value-changed, so typing "47" does not stop off at clip 4.
+        nav.addWidget(QLabel("clip"))
+        self.goto_spin = QSpinBox()
+        self.goto_spin.setKeyboardTracking(False)
+        self.goto_spin.setFixedWidth(84)
+        self.goto_spin.setToolTip(
+            "Jump to a clip by number (Ctrl+G).\n" "Counts from 1, matching the sidebar."
+        )
+        self.goto_spin.editingFinished.connect(lambda: self._go_to(self.goto_spin.value()))
+        nav.addWidget(self.goto_spin)
+        self.goto_total = QLabel("/ 0")
+        nav.addWidget(self.goto_total)
         nav.addStretch(1)
         main.addLayout(nav)
 
@@ -489,6 +521,7 @@ class AnnotatorWindow(QMainWindow):
             ("Left", lambda: self._go(-1)),
             ("Right", lambda: self._go(+1)),
             ("N", self._focus_add_name),
+            ("Ctrl+G", self._focus_goto),
             ("[", lambda: self.trim_bar.nudge_in(-1)),
             ("]", lambda: self.trim_bar.nudge_in(+1)),
             ("{", lambda: self.trim_bar.nudge_out(-1)),
@@ -732,6 +765,32 @@ class AnnotatorWindow(QMainWindow):
             return
         self._persist_current_trim()
         self.current = max(0, min(self.current + delta, len(self.clips) - 1))
+        self._refresh_all()
+        self.clip.setFocus()
+
+    def _focus_goto(self) -> None:
+        """Put the cursor in the go-to box with the number selected.
+
+        Selected, not appended to: arriving with a clip number in hand means
+        replacing what is there, and having to clear it first would make the
+        shortcut slower than the mouse.
+        """
+        self.goto_spin.setFocus()
+        self.goto_spin.selectAll()
+
+    def _go_to(self, clip_number: int) -> None:
+        """Jump to *clip_number*, counting from 1 as the sidebar does.
+
+        Out-of-range clamps rather than refusing: a number carried over from a
+        stale queue should still land somewhere useful. Persists the trim first
+        for the same reason prev/next do -- a jump must not silently drop an
+        adjustment to the clip being left.
+        """
+        index = clamp_clip_index(clip_number, len(self.clips))
+        if index is None:
+            return
+        self._persist_current_trim()
+        self.current = index
         self._refresh_all()
         self.clip.setFocus()
 
@@ -1048,6 +1107,15 @@ class AnnotatorWindow(QMainWindow):
         n = len(self.clips)
         idx = self.current + 1 if self.clips else 0
         self.progress_label.setText(f"clip {idx} / {n}")
+        # The go-to box doubles as a position readout, so it follows every way
+        # of moving -- prev/next, skip, and labelling -- not just typing in it.
+        self.goto_spin.setRange(1, max(1, n))
+        self.goto_spin.setEnabled(bool(n))
+        self.goto_total.setText(f"/ {n}")
+        if self.clips:
+            was = self.goto_spin.blockSignals(True)
+            self.goto_spin.setValue(idx)
+            self.goto_spin.blockSignals(was)
         labeled = len(self._clip_zone)
         # Aggregate reserved-label counts across every per-video store so
         # the sidebar shows a session-wide tally, not just the active video.
