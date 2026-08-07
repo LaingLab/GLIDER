@@ -5,26 +5,32 @@ All notable changes to GLIDER are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] — 2026-07-11
+## [1.0.0] — 2026-08-07
 
-### Added
+Initial public release. This is the version described in Bradham et al.
+(2026) and the release that manuscript's results were produced from.
 
+### Major features
+
+- Visual flow programming for experimental protocols.
+- Direct GPIO / serial / I²C / camera control across Arduino, Raspberry Pi, and PC.
+- Multi-camera capture with YOLO + ByteTrack object tracking and zone enter/exit events.
+- UCLA Miniscope V4 integration (LED + electrowetting-lens focus control).
+- Touchscreen-optimised "runner mode" for Pi kiosk deployment.
+- One-file `.glider` JSON experiment storage with embedded metadata.
+- Live behavior-state classification (resting / walking / darting / freezing).
+- Synchronous CSV logging of every trial event and per-frame tracking position.
+- Audio playback and recording nodes.
+- Plugin system for user-supplied node and driver extensions.
+- In-app updater (GitHub Releases).
+- Atomic `.glider` save via `tempfile.mkstemp` + `os.replace`.
+- Pi-gen image build pipeline (`packaging/pi/`) for turnkey kiosk SD-card images.
+- Inno Setup installer pipeline (`packaging/windows/`) for Windows distribution.
 - **Live behavior classifier** wired into the camera panel: `LiveBehaviorClassifier` + `BehaviorInferenceWorker`, with a live == offline feature-parity test guard.
 - **Interactive onboarding tour** (`gui/onboarding/`): spotlight overlay + callout card walking new users through the Node Library, panel tabs, Hardware, canvas, Properties, Camera, and Run. Offered on first launch (Take the Tour / Skip) in Builder mode; replayable anytime from Help → Replay Tutorial.
 - **GPU/accelerator diagnostics**: `glider --gpu-check` CLI flag and Tools → GPU / Device Check menu action, reporting CUDA/MPS/CPU availability and the device inference will use.
 - **macOS packaging** (`packaging/macos/`): PyInstaller spec producing `GLIDER.app` (with camera/microphone usage descriptions) and a one-command local `build.sh` that packages `GLIDER-<version>-<arch>.dmg`. Unsigned for now; per-arch (arm64/x86_64).
 - Local Windows installer build script (`packaging/windows/build.ps1`) and local Pi image build script (`packaging/pi/build.sh`) — one-command equivalents of the CI workflows for building on your own machines.
-
-### Changed
-
-- **Apple Silicon (MPS) acceleration**: behavior-classifier inference and live YOLO detection now resolve CUDA → MPS → CPU instead of silently falling back to CPU on Macs. Training keeps its deterministic CUDA-or-CPU path.
-- HiDPI scale-factor rounding changed from `PassThrough` to `RoundPreferFloor` so 1px borders stay crisp at scaled macOS resolutions and on external displays.
-- Desktop theme: dock separators blend into the panel background, the node-editor canvas no longer draws a contrasting border, and tabbed-dock tabs stretch the full width of the tab bar.
-- `diagnose()`/`format_gpu_info()` no longer advise reinstalling a CUDA wheel on macOS (where CUDA is not applicable); they report MPS as the platform accelerator instead.
-
-## [Unreleased] — release-prep-1.0 branch
-
-Release-readiness work for the 1.0.0 cut. See [`code-review-laing.md`](code-review-laing.md) for the engineering audit driving these changes.
 
 ### Added
 
@@ -38,6 +44,23 @@ Release-readiness work for the 1.0.0 cut. See [`code-review-laing.md`](code-revi
 - Parametric test asserting every registered node class round-trips its `get_state()` through `set_state()` without loss (catches `property_names`-style silent state drops in CI).
 - Parametric test asserting every exported node class registers with the `FlowEngine` (catches the "node in the library but engine can't instantiate it" class of bug).
 - Round-trip test `tests/unit/serialization/test_serializer.py` covering save → load → save with at least one board, one device, one node, and one connection (catches the API-mismatch class of bug in the apply path).
+
+### Changed
+
+- **Apple Silicon (MPS) acceleration**: behavior-classifier inference and live YOLO detection now resolve CUDA → MPS → CPU instead of silently falling back to CPU on Macs. Training keeps its deterministic CUDA-or-CPU path.
+- HiDPI scale-factor rounding changed from `PassThrough` to `RoundPreferFloor` so 1px borders stay crisp at scaled macOS resolutions and on external displays.
+- Desktop theme: dock separators blend into the panel background, the node-editor canvas no longer draws a contrasting border, and tabbed-dock tabs stretch the full width of the tab bar.
+- `diagnose()`/`format_gpu_info()` no longer advise reinstalling a CUDA wheel on macOS (where CUDA is not applicable); they report MPS as the platform accelerator instead.
+- Python version policy unified across `pyproject.toml`, classifiers, `black` target, `ruff` target, `mypy` config, CI matrix, and README — all now **3.11 / 3.12 / 3.13**.
+- `requires-python` tightened from `>=3.10,<3.14` to `>=3.11,<3.14` (the codebase uses `match` statements and `X | None` unions, which require 3.10+; we standardise on 3.11 as the floor since 3.10 is not CI-tested).
+- `[tool.ruff] target-version = "py311"` added.
+- `pyproject.toml` `[dev]` extras group consolidated: now uses `GLIDER[pc,vision,i2c]` self-reference rather than duplicating individual dependencies (no more drift when bumping a `[vision]` pin).
+- `uv.lock` is now tracked (was gitignored). Reproducible installs for the application.
+- `__main__.spec` (the auto-generated PyInstaller stub at repo root) deleted. `packaging/windows/glider.spec` is the canonical spec; new contributors building locally are no longer routed to the broken stub.
+- Removed install one-liner curl-pipe-bash references from the README; the `install.sh` / `install.ps1` scripts they pointed at do not exist and the pattern is a supply-chain risk.
+- **Runner UI replaced by a customizable Dashboard.** The four-tab Runner view was replaced by a customizable 2×2 quadrant Dashboard (`gui/dashboard/`) shared by both the desktop and Pi surfaces, with bidirectional Builder↔Dashboard switching. Each quadrant hosts a user-pickable panel (camera, hardware, run control, experiment info, etc.).
+- ~2,500 LOC of dead `gui/` code purged (`runner/dashboard.py`, `runner/widget_factory.py`, `widgets/touch_widgets.py`, `widgets/device_card.py`, `controllers/hardware_controller.py`, `controllers/device_control_controller.py`, `panels/experiment_panel.py`). Active runner UI is the quadrant Dashboard in `gui/dashboard/`; active hardware UI is `panels/hardware_panel.py`; etc.
+- CI now runs unit + integration tests with coverage, type-check (mypy), lint (ruff), format check (black), and a PyInstaller smoke build that asserts `dist/glider/glider --version` succeeds.
 
 ### Fixed
 
@@ -56,24 +79,11 @@ Release-readiness work for the 1.0.0 cut. See [`code-review-laing.md`](code-revi
 - **`_initialized` was never cleared on shutdown for 6 of 7 device classes.** After `shutdown → initialize(fails) → shutdown`, the second shutdown thought it was still initialized and could write to a board that had been disconnected and reconnected. Every concrete `shutdown()` now clears the flag in a `try/finally`.
 - **`TelemetrixBoard.set_pin_mode` and `disconnect` still blocked the qasync loop up to 10 seconds.** Other writers had been wrapped in `asyncio.to_thread`; these two were missed. Now all `_call_telemetrix` invocations are async, so a wedged USB cable cannot freeze the GUI during pin configuration or graceful shutdown.
 
-### Changed
-
-- Python version policy unified across `pyproject.toml`, classifiers, `black` target, `ruff` target, `mypy` config, CI matrix, and README — all now **3.11 / 3.12 / 3.13**.
-- `requires-python` tightened from `>=3.10,<3.14` to `>=3.11,<3.14` (the codebase uses `match` statements and `X | None` unions, which require 3.10+; we standardise on 3.11 as the floor since 3.10 is not CI-tested).
-- `[tool.ruff] target-version = "py311"` added.
-- `pyproject.toml` `[dev]` extras group consolidated: now uses `GLIDER[pc,vision,i2c]` self-reference rather than duplicating individual dependencies (no more drift when bumping a `[vision]` pin).
-- `uv.lock` is now tracked (was gitignored). Reproducible installs for the application.
-- `__main__.spec` (the auto-generated PyInstaller stub at repo root) deleted. `packaging/windows/glider.spec` is the canonical spec; new contributors building locally are no longer routed to the broken stub.
-- Removed install one-liner curl-pipe-bash references from the README; the `install.sh` / `install.ps1` scripts they pointed at do not exist and the pattern is a supply-chain risk.
-- **Runner UI replaced by a customizable Dashboard.** The four-tab Runner view was replaced by a customizable 2×2 quadrant Dashboard (`gui/dashboard/`) shared by both the desktop and Pi surfaces, with bidirectional Builder↔Dashboard switching. Each quadrant hosts a user-pickable panel (camera, hardware, run control, experiment info, etc.).
-- ~2,500 LOC of dead `gui/` code purged (`runner/dashboard.py`, `runner/widget_factory.py`, `widgets/touch_widgets.py`, `widgets/device_card.py`, `controllers/hardware_controller.py`, `controllers/device_control_controller.py`, `panels/experiment_panel.py`). Active runner UI is the quadrant Dashboard in `gui/dashboard/`; active hardware UI is `panels/hardware_panel.py`; etc.
-- CI now runs unit + integration tests with coverage, type-check (mypy), lint (ruff), format check (black), and a PyInstaller smoke build that asserts `dist/glider/glider --version` succeeds.
-
 ### Removed
 
 - `_exec_callbacks` channel on `ExecNode` and `ZoneInputNode`. The registrar `on_exec()` was never called from anywhere, so every node firing `exec_output(index)` via the inherited dispatch produced nothing. Node `exec_output` now routes through `_update_callbacks` (the channel the FlowEngine subscribes to) with output-name resolution.
 
-### Known limitations carried into 1.0.0
+### Known limitations
 
 - **Engine data-flow propagation** between data nodes is not yet wired — math/comparison/display nodes show real values for hardware reads they're directly subscribed to, but chained `Add(A,B) → Threshold → LED` reactive flows are limited. Tracked as a 1.1 architectural item.
 - **`ZoneInputNode` live wiring** from the CV processor's frame loop to per-node `update_zone_state` calls is staged but uses an interim direct-call pathway pending a `ZoneOrchestrator` event-bus refactor.
@@ -81,23 +91,3 @@ Release-readiness work for the 1.0.0 cut. See [`code-review-laing.md`](code-revi
 - **macOS first-class platform support is community-supported** for 1.0.0. Mac CI matrix and `.dmg` build with notarization are planned for 1.1.
 - **Windows installer is unsigned.** Azure Trusted Signing planned for 1.1.
 
-## [1.0.0] — 2026-XX-XX (planned)
-
-Initial public release.
-
-### Major features
-
-- Visual flow programming for experimental protocols.
-- Direct GPIO / serial / I²C / camera control across Arduino, Raspberry Pi, and PC.
-- Multi-camera capture with YOLO + ByteTrack object tracking and zone enter/exit events.
-- UCLA Miniscope V4 integration (LED + electrowetting-lens focus control).
-- Touchscreen-optimised "runner mode" for Pi kiosk deployment.
-- One-file `.glider` JSON experiment storage with embedded metadata.
-- Live behavior-state classification (resting / walking / darting / freezing).
-- Synchronous CSV logging of every trial event and per-frame tracking position.
-- Audio playback and recording nodes.
-- Plugin system for user-supplied node and driver extensions.
-- In-app updater (GitHub Releases).
-- Atomic `.glider` save via `tempfile.mkstemp` + `os.replace`.
-- Pi-gen image build pipeline (`packaging/pi/`) for turnkey kiosk SD-card images.
-- Inno Setup installer pipeline (`packaging/windows/`) for Windows distribution.

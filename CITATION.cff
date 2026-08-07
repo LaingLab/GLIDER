@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+title: >-
+  GLIDER: General Laboratory Interface for Design, Experimentation,
+  and Recording
+message: >-
+  If you use this software, please cite both the software itself and
+  the accompanying paper.
+type: software
+authors:
+  - family-names: Bradham
+    given-names: Garrett
+    email: gbradham@go.olemiss.edu
+    affiliation: University of Mississippi
+  - name: Laing Lab
+    address: University of Mississippi
+version: 1.0.0
+date-released: '2026-08-07'
+license: MIT
+repository-code: 'https://github.com/LaingLab/glider'
+url: 'https://github.com/LaingLab/glider'
+abstract: >-
+  GLIDER is a cross-platform desktop application for laboratory
+  automation. It combines visual flow programming for experimental
+  protocols, direct hardware control over Arduino, Raspberry Pi and PC
+  interfaces, multi-camera capture with pose tracking, frame-wise
+  behavior classification, and timestamped synchronization with
+  external acquisition systems such as fiber photometry.
+keywords:
+  - laboratory automation
+  - behavioral neuroscience
+  - pose estimation
+  - behavior classification
+  - fiber photometry
+  - open-source scientific software
