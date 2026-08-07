@@ -15,6 +15,7 @@ authors:
     address: University of Mississippi
 version: 1.0.0
 date-released: '2026-08-07'
+doi: 10.5281/zenodo.21840294
 license: MIT
 repository-code: 'https://github.com/LaingLab/glider'
 url: 'https://github.com/LaingLab/glider'
@@ -32,3 +33,10 @@ keywords:
   - behavior classification
   - fiber photometry
   - open-source scientific software
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.21840294
+    description: Analysis code and results for this release
+  - type: doi
+    value: 10.5281/zenodo.21840428
+    description: Source video recordings
