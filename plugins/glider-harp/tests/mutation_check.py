@@ -125,8 +125,22 @@ MUTANTS: list[tuple[str, str, str]] = [
     ),
     (
         "never counts corruption",
-        "                self.checksum_errors += 1",
+        "                if self._synced:\n                    self.checksum_errors += 1",
         "                pass",
+    ),
+    (
+        # Escaped the first counter round: every counter test delivered its
+        # whole stream in a single feed(), so nothing exercised a corrupt frame
+        # sitting at the head across reads, which is the normal serial case.
+        "counts corruption regardless of _synced",
+        "                if self._synced:\n                    self.checksum_errors += 1",
+        "                self.checksum_errors += 1",
+    ),
+    (
+        # The degenerate fix for the mutant above.
+        "counts corruption once per session instead of once per frame",
+        "                if self._synced:\n                    self.checksum_errors += 1",
+        "                self.checksum_errors = 1",
     ),
     ("never counts resyncs", "            self.resyncs += 1\n", ""),
     (
@@ -221,10 +235,16 @@ def main() -> int:
 
     restored = run_tests()
     print(f"\nrestored baseline: {'PASS' if restored.returncode == 0 else 'FAIL'}")
-    killable = len(MUTANTS) - len(EXPECTED_SURVIVORS)
-    print(f"{killable - len(unexpected)}/{killable} killable mutants killed")
+    # Tallied over the killable names only. Subtracting every problem from the
+    # killable total misattributes a killed expected-survivor, which is not a
+    # killable mutant at all, to the killable set.
+    killable = [name for name, _, _ in MUTANTS if name not in EXPECTED_SURVIVORS]
+    killed_count = sum(name not in unexpected for name in killable)
+    print(f"{killed_count}/{len(killable)} killable mutants killed")
     if unexpected:
         print("PROBLEMS: " + ", ".join(unexpected))
+    # A score is only ever evidence about the mutants someone thought to write.
+    print(f"({len(MUTANTS)} mutants total; a clean sweep is not proof of coverage)")
     return 1 if unexpected or restored.returncode != 0 else 0
 
 

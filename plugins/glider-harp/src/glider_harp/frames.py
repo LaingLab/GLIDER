@@ -154,9 +154,30 @@ class FrameSplitter:
 
     * ``checksum_errors`` -- frames that arrived complete at a known boundary
       but were corrupt. This is the count that means "bad cable", as distinct
-      from the framing noise below.
+      from the framing noise below. Counted once per corrupt frame, not once
+      per read, and only while framing is held: a burst of garbage that never
+      resynchronises registers one error, because the splitter cannot know how
+      many frames were in it.
     * ``resyncs`` -- times framing was lost and had to be recovered.
     * ``bytes_discarded`` -- bytes thrown away without ever forming a frame.
+
+    Known limitation -- a stall the splitter cannot fix alone. Noise is only
+    rejected here by its message-type byte, so garbage that happens to begin
+    with 1, 2 or 3 and claims a long frame still parks the splitter in "waiting
+    for the rest". Measured at ~1.1% of resyncs (3/256 for the message type,
+    times 251/256 for a length byte claiming more than the minimum).
+
+    That wait is bounded in bytes but not in time. At most 255 further bytes
+    settle it, so a live stream always recovers -- across all 768 head
+    combinations, none stalls once ample data follows. But if the device falls
+    silent first, the frames behind it are held indefinitely: a head of
+    ``(3, 255)`` ahead of 36 events emits none of them and holds 254 bytes
+    until something more arrives, whereupon all 37 flush at once.
+
+    Closing this properly would mean validating payload-type bits here, which
+    duplicates the parser knowledge this module exists to isolate. The real
+    mitigation belongs to the reader: flush on an idle timeout, since only the
+    reader knows the device has gone quiet.
 
     Not thread-safe: one splitter belongs to one reader.
     """
@@ -200,11 +221,19 @@ class FrameSplitter:
             try:
                 decode(candidate)
             except ChecksumError:
-                # Only counted here, at a boundary we had positive reason to
-                # trust. The same error raised while hunting through noise in
-                # ``_resync`` means "not a frame start", not "corrupt frame",
-                # and counting those would bury the real corruption signal.
-                self.checksum_errors += 1
+                # Counted only at a boundary we had positive reason to trust,
+                # which means offset 0 *and* still synced. The same error
+                # raised while hunting through noise in ``_resync`` means "not
+                # a frame start", not "corrupt frame", and counting those would
+                # bury the real corruption signal.
+                #
+                # The ``_synced`` half is what makes this count once per
+                # corrupt frame rather than once per read. A corrupt frame that
+                # resync cannot yet see past stays at the head, so every later
+                # feed re-decodes it -- and an idle poller calling ``feed(b"")``
+                # would otherwise inflate the count without limit.
+                if self._synced:
+                    self.checksum_errors += 1
             except FrameError:
                 pass
             else:

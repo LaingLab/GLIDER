@@ -358,6 +358,56 @@ def test_corruption_is_counted_apart_from_framing_noise():
     assert splitter.bytes_discarded == len(corrupt)
 
 
+def _corrupt(seed=1):
+    raw = bytearray(_frame(3, 32, 0x01, bytes([seed])))
+    raw[-1] ^= 0xFF
+    return bytes(raw)
+
+
+def test_corruption_is_counted_once_per_frame_not_once_per_read():
+    """A corrupt frame must cost one error however the reads are chopped up.
+
+    Until resync can see past it, the corrupt frame stays at the head of the
+    buffer and every later read re-decodes it. Counting each of those makes the
+    error count a function of read sizes rather than of corruption -- and an
+    idle poller calling ``feed(b"")`` inflates it without limit. The whole-
+    stream-in-one-feed tests below cannot see any of this.
+    """
+    corrupt = _corrupt()
+    good = _other()
+
+    splitter = FrameSplitter()
+    assert splitter.feed(corrupt) == []
+    assert splitter.feed(good) == [good]
+    assert splitter.checksum_errors == 1
+
+    splitter = FrameSplitter()
+    splitter.feed(corrupt)
+    for _ in range(50):
+        splitter.feed(b"")
+    assert splitter.checksum_errors == 1
+
+    splitter = FrameSplitter()
+    for byte in corrupt + good:
+        splitter.feed(bytes([byte]))
+    assert splitter.checksum_errors == 1
+
+
+def test_every_recovered_corrupt_frame_is_counted():
+    """Counting once per frame must not degenerate into once per session.
+
+    The guard against over-counting is a flag, and pinning it to one would
+    satisfy the test above while making the count useless on a failing cable.
+    """
+    splitter = FrameSplitter()
+    good = _other()
+    for i in range(5):
+        for byte in _corrupt(i) + good:
+            splitter.feed(bytes([byte]))
+    assert splitter.feed(b"") == []
+    assert splitter.checksum_errors == 5
+
+
 def test_a_clean_stream_reports_nothing_swallowed():
     """A healthy stream must leave every counter at zero, or they are useless."""
     splitter = FrameSplitter()
