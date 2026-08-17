@@ -5,6 +5,7 @@ after a fixed sleep passes or fails on how busy the machine was, which is the
 one thing these tests must not measure.
 """
 
+import struct
 import threading
 import time
 
@@ -244,6 +245,67 @@ def test_no_decode_failure_ends_the_thread(cache, reader_for, monkeypatch, raise
     assert reader.error_count == 0
 
 
+@pytest.mark.parametrize(
+    "raised",
+    [ValueError("bad payload"), struct.error("unpack requires 4 bytes"), TypeError("not bytes")],
+    ids=["value-error", "struct-error", "type-error"],
+)
+def test_an_error_processing_a_read_does_not_end_the_thread(cache, reader_for, monkeypatch, raised):
+    """The other door into a silently empty recording.
+
+    Only the read was guarded once. Anything raised on the way from bytes to
+    the cache -- out of the splitter, the decoder, or ``ingest`` -- ended the
+    thread with ``failure`` still None and the traceback going to
+    ``threading.excepthook`` on stderr, where a packaged GUI shows nobody and
+    ``logger`` never sees it. The device then polls a cache that will never
+    change again.
+
+    Not reachable while payloads are read as plain little-endian integers. It
+    becomes reachable the moment payload decoding grows types of its own,
+    which is why these are the exceptions that decoding raises.
+    """
+    real_ingest = cache.ingest
+    seen = []
+
+    def flaky(frame):
+        seen.append(frame)
+        if len(seen) == 1:
+            raise raised
+        return real_ingest(frame)
+
+    monkeypatch.setattr(cache, "ingest", flaky)
+    reader = reader_for(_FakeSerial([_event(32, 1), _event(33, 1)]))
+
+    assert _wait_until(lambda: cache.peek()["poke_count"] == 1)
+    assert reader.is_alive()
+    assert reader.failure is None
+    assert reader.processing_errors == 1
+    # A bug in this package is not corruption on the wire.
+    assert (reader.error_count, reader.decode_failures) == (0, 0)
+
+
+def test_an_error_processing_the_idle_flush_does_not_end_the_thread(cache, reader_for, monkeypatch):
+    """The flush reaches the cache by its own path, so it needs its own guard.
+
+    A guard wrapped around the read path alone leaves this one bare, and it is
+    the path that runs at the end of every trial.
+    """
+    events = [_event(32, i % 2) for i in range(36)]
+    stalled = bytes([3, 255]) + b"".join(events)
+    assert FrameSplitter().feed(stalled) == []
+
+    def always_raises(frame):
+        raise ValueError("bad payload")
+
+    monkeypatch.setattr(cache, "ingest", always_raises)
+    reader = reader_for(_FakeSerial([stalled]), idle_flush_s=0.05)
+
+    assert _wait_until(lambda: reader.processing_errors >= 1)
+    assert reader.idle_flushes >= 1
+    assert reader.is_alive()
+    assert reader.failure is None
+
+
 def test_a_read_failure_stops_the_reader(cache, reader_for):
     """A dead port must stop the thread visibly, not propagate and not spin."""
     fake = _FakeSerial([_event(32, 1)], idle_sleep=0.05)
@@ -468,11 +530,83 @@ def test_stop_joins_the_thread(cache):
     reader.start()
     assert _wait_until(reader.is_alive)
 
-    reader.stop()
+    assert reader.stop() is True
 
     assert reader.is_alive() is False
     assert _live_reader_threads() == []
-    reader.stop()  # idempotent
+    assert reader.stop() is True  # idempotent
+
+
+def test_stop_reports_a_thread_it_could_not_join(cache):
+    """False means the thread still owns the port, and the caller must not use it.
+
+    Otherwise the only signal is a log line: the caller carries on, writes a
+    register, reads the reply back on a short timeout while the live reader
+    consumes it, and sees nothing but a timeout it cannot explain. Reachable on
+    a loaded Pi at the end of a trial, where the thread may not be scheduled
+    through a read plus overhead inside the join.
+
+    The handle here parks in ``read`` far longer than the join allows, which is
+    that situation without the load.
+    """
+    fake = _FakeSerial(idle_sleep=1.0)
+    fake.timeout = 3.0
+    reader = HarpReader(fake, cache)
+    reader.start()
+    assert _wait_until(reader.is_alive)
+
+    assert reader.stop(timeout=0.05) is False
+
+    assert reader.is_alive() is True  # and says so, rather than reporting gone
+    # The timeout stays borrowed on purpose: a thread still running needs the
+    # short one to keep noticing the stop event.
+    assert fake.timeout != 3.0
+    assert reader.stop(timeout=2.0) is True  # retryable, and it finishes the job
+    assert fake.timeout == 3.0
+
+
+def test_a_failed_thread_start_leaves_the_reader_startable(cache, monkeypatch):
+    """Thread exhaustion on a Pi must not strand the port or mask the error.
+
+    Recording the thread before it has started makes the caller's ``stop``
+    raise "cannot join thread before it is started" -- the original error lost,
+    the borrowed timeout never returned.
+    """
+    fake = _FakeSerial()
+    fake.timeout = 3.0
+    reader = HarpReader(fake, cache)
+    monkeypatch.setattr(
+        threading.Thread, "start", lambda self: (_ for _ in ()).throw(RuntimeError("can't start"))
+    )
+
+    with pytest.raises(RuntimeError, match="can't start"):
+        reader.start()
+
+    assert reader.is_alive() is False
+    assert fake.timeout == 3.0  # handed back, not stranded
+    assert reader.stop() is True  # and does not raise about an unstarted thread
+
+    monkeypatch.undo()
+    with pytest.raises(RuntimeError, match="one-shot"):
+        reader.start()  # retired by the stop above, not by the failed start
+
+
+def test_a_reader_whose_start_failed_can_be_started_again(cache, monkeypatch):
+    """A failed start leaves nothing behind, so the caller's retry is the fix."""
+    fake = _FakeSerial()
+    reader = HarpReader(fake, cache)
+    monkeypatch.setattr(
+        threading.Thread, "start", lambda self: (_ for _ in ()).throw(RuntimeError("can't start"))
+    )
+    with pytest.raises(RuntimeError, match="can't start"):
+        reader.start()
+
+    monkeypatch.undo()
+    reader.start()
+    try:
+        assert reader.is_alive()
+    finally:
+        reader.stop()
 
 
 def test_a_stopped_reader_cannot_be_restarted(cache):
@@ -485,7 +619,7 @@ def test_a_stopped_reader_cannot_be_restarted(cache):
     fake = _FakeSerial()
     fake.timeout = 3.0
     reader = HarpReader(fake, cache)
-    reader.stop()
+    assert reader.stop() is True
 
     with pytest.raises(RuntimeError):
         reader.start()

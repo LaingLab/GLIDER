@@ -205,6 +205,22 @@ FRAME_MUTANTS: list[tuple[str, str, str]] = [
         "        return frames",
         "        return (f for f in frames)",
     ),
+    # --- the public hand-off to the reader, which is the half with a clock ---
+    (
+        "force_resync leaves the head believed, so nothing is released",
+        '        self._synced = False\n        return self.feed(b"")',
+        '        return self.feed(b"")',
+    ),
+    (
+        "force_resync releases the frames and drops them",
+        '        self._synced = False\n        return self.feed(b"")',
+        '        self._synced = False\n        self.feed(b"")\n        return []',
+    ),
+    (
+        "pending_bytes never reports anything held",
+        "        return len(self._buffer)",
+        "        return 0",
+    ),
 ]
 
 # ``ingest``'s guarded write, and the shared read loop behind ``peek`` and
@@ -520,17 +536,47 @@ READER_MUTANTS: list[tuple[str, str, str]] = [
 DECODE_CALL = (
     "            try:\n                frame = decode(raw)\n            except FrameError:"
 )
-FLUSH = (
-    "        self._splitter._synced = False\n"
-    '        self._ingest_frames(self._splitter.feed(b""))'
-)
+FLUSH = "        self._ingest_frames(self._splitter.force_resync())"
 READ_TIMEOUT = (
     "        wanted = max(_MIN_READ_TIMEOUT_S, min(self._idle_flush_s / 2, _MAX_READ_TIMEOUT_S))"
 )
 STALL_CHECK = (
-    "        if not self._splitter._buffer:\n"
+    "        if not self._splitter.pending_bytes:\n"
     "            return False\n"
     "        return time.monotonic() - self._last_data_at >= self._idle_flush_s"
+)
+LOOP_BODY = (
+    "            try:\n"
+    "                if chunk:\n"
+    "                    self._last_data_at = time.monotonic()\n"
+    "                    self._ingest_frames(self._splitter.feed(chunk))\n"
+    "                elif self._is_stalled():\n"
+    "                    self._flush_stalled_buffer()\n"
+    "            except Exception:\n"
+    "                self._processing_errors += 1\n"
+    '                logger.exception("HarpReader: could not process %d bytes read", len(chunk))'
+)
+START_THREAD = (
+    "        try:\n"
+    "            thread.start()\n"
+    "        except Exception:\n"
+    "            # A Pi already running the GUI, vision and the recorder can refuse\n"
+    "            # a new thread. Nothing is running, so hand the port back and leave\n"
+    "            # the reader startable: recording _thread first would make the\n"
+    '            # caller\'s stop() raise "cannot join thread before it is started",\n'
+    "            # masking this error and stranding the borrowed timeout.\n"
+    "            self._restore_timeout()\n"
+    "            raise\n"
+    "        self._thread = thread"
+)
+JOIN_RESULT = (
+    "        if thread.is_alive():\n"
+    "            logger.error(\n"
+    '                "HarpReader: thread did not exit within %.1fs; the port is still in use",'
+    " timeout\n"
+    "            )\n"
+    "            return False\n"
+    "        self._restore_timeout()"
 )
 
 # ``HarpReader``. Written against the rules the thread inherited from the three
@@ -609,8 +655,8 @@ HARP_READER_MUTANTS: list[tuple[str, str, str]] = [
     # --- the idle flush: the stall only a clock can resolve ---
     (
         "never flushes, so frames behind a stalled head are lost at the end of a trial",
-        "            elif self._is_stalled():",
-        "            elif False:",
+        "                elif self._is_stalled():",
+        "                elif False:",
     ),
     (
         "flushes on every read that came back empty",
@@ -626,8 +672,8 @@ HARP_READER_MUTANTS: list[tuple[str, str, str]] = [
         # The window is silence on the line. Timed from anywhere else it expires
         # mid-stream and tears a frame that was merely arriving slowly.
         "the idle window is not restarted by the bytes that arrive",
-        "            if chunk:\n                self._last_data_at = time.monotonic()\n",
-        "            if chunk:\n",
+        "                if chunk:\n                    self._last_data_at = time.monotonic()\n",
+        "                if chunk:\n",
     ),
     (
         "a buffer with nothing framable in it is rescanned on every read",
@@ -640,9 +686,10 @@ HARP_READER_MUTANTS: list[tuple[str, str, str]] = [
         "        self._splitter._buffer.clear()",
     ),
     (
-        "the flush confirms the head as a boundary instead of doubting it",
+        # The idle flush that isn't one: feed(b"") without giving up on the head
+        # re-runs the same wait that is already stuck.
+        "the flush re-feeds without giving up on the head",
         FLUSH,
-        "        self._splitter._synced = True\n"
         '        self._ingest_frames(self._splitter.feed(b""))',
     ),
     (
@@ -650,25 +697,67 @@ HARP_READER_MUTANTS: list[tuple[str, str, str]] = [
         # ignores the return value silently drops them.
         "the flush reframes but throws away what came back",
         FLUSH,
-        "        self._splitter._synced = False\n" '        self._splitter.feed(b"")',
+        "        self._splitter.force_resync()",
     ),
     (
         "the read path throws away what feed returned",
-        "                self._ingest_frames(self._splitter.feed(chunk))",
-        "                self._splitter.feed(chunk)",
+        "                    self._ingest_frames(self._splitter.feed(chunk))",
+        "                    self._splitter.feed(chunk)",
     ),
     # --- exactly one caller may poll snapshot(), and it is not this thread ---
     (
         "the thread polls snapshot() each time round the loop",
-        "            elif self._is_stalled():",
-        "            self._cache.snapshot()\n            if self._is_stalled():",
+        "                elif self._is_stalled():",
+        "                self._cache.snapshot()\n                if self._is_stalled():",
     ),
     (
         "the flush consumes the cache it just filled",
         FLUSH,
-        "        self._splitter._synced = False\n"
-        '        self._ingest_frames(self._splitter.feed(b""))\n'
+        "        self._ingest_frames(self._splitter.force_resync())\n"
         "        self._cache.snapshot()",
+    ),
+    # --- nothing may escape the loop; see _run ---
+    (
+        # The other door into a silent empty recording: the traceback goes to
+        # threading.excepthook on stderr, logger never sees it, and the device
+        # polls a cache that will never change again.
+        "an unexpected error while processing a read ends the thread",
+        "            except Exception:\n"
+        "                self._processing_errors += 1\n"
+        '                logger.exception("HarpReader: could not process %d bytes read", len(chunk))',
+        "            except Exception:\n                raise",
+    ),
+    (
+        "the guard covers the read path but leaves the flush bare",
+        LOOP_BODY,
+        "            try:\n"
+        "                if chunk:\n"
+        "                    self._last_data_at = time.monotonic()\n"
+        "                    self._ingest_frames(self._splitter.feed(chunk))\n"
+        "            except Exception:\n"
+        "                self._processing_errors += 1\n"
+        "                logger.exception"
+        '("HarpReader: could not process %d bytes read", len(chunk))\n'
+        "            if not chunk and self._is_stalled():\n"
+        "                self._flush_stalled_buffer()",
+    ),
+    (
+        # A bug in this package is not a dead port: one malformed payload would
+        # end the recording instead of costing the read it arrived in.
+        "a processing error is treated as a dead port and stops the reader",
+        "                self._processing_errors += 1\n"
+        '                logger.exception("HarpReader: could not process %d bytes read", len(chunk))',
+        "                self._stop_event.set()\n                return",
+    ),
+    (
+        "an unexpected processing error leaves no trace",
+        "                self._processing_errors += 1\n",
+        "",
+    ),
+    (
+        "processing errors are folded into error_count",
+        "        return self._splitter.checksum_errors",
+        "        return self._splitter.checksum_errors + self._processing_errors",
     ),
     # --- what the frames do on the way to the cache ---
     (
@@ -726,8 +815,46 @@ HARP_READER_MUTANTS: list[tuple[str, str, str]] = [
     ),
     (
         "a failing port leaves no record of what happened",
-        "                self.failure = exc\n",
+        "                self._failure = exc\n",
         "",
+    ),
+    # --- start/stop, which Task 11 drives from an event loop ---
+    (
+        # Thread exhaustion on a Pi: recording the thread before it started
+        # makes the caller's stop() raise "cannot join thread before it is
+        # started", masking the real error and stranding the borrowed timeout.
+        "the thread is recorded before it has actually started",
+        START_THREAD,
+        "        self._thread = thread\n        thread.start()",
+    ),
+    (
+        "a failed start keeps the port's read timeout",
+        START_THREAD,
+        "        thread.start()\n        self._thread = thread",
+    ),
+    (
+        # False is the only way a caller learns the thread still owns the port.
+        # Reported as stopped, it writes a register and reads the reply back
+        # while the reader consumes it, and sees an unexplainable timeout.
+        "stop() reports success whatever the join did",
+        JOIN_RESULT,
+        "        self._restore_timeout()",
+    ),
+    (
+        "stop() reports failure when there was nothing to stop",
+        "        if thread is None:\n            return True",
+        "        if thread is None:\n            return False",
+    ),
+    (
+        "stop() hands the port back to a thread that is still reading it",
+        JOIN_RESULT,
+        "        self._restore_timeout()\n"
+        "        if thread.is_alive():\n"
+        "            logger.error(\n"
+        '                "HarpReader: thread did not exit within %.1fs; the port is still in use",'
+        " timeout\n"
+        "            )\n"
+        "            return False",
     ),
     (
         "start() leaves the port's read timeout as it found it",

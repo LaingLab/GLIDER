@@ -416,6 +416,48 @@ def test_a_clean_stream_reports_nothing_swallowed():
     assert (splitter.checksum_errors, splitter.resyncs, splitter.bytes_discarded) == (0, 0, 0)
 
 
+def test_pending_bytes_reports_what_is_held_back():
+    """The caller with the clock cannot notice a stall it cannot see."""
+    splitter = FrameSplitter()
+    raw = _valid()
+    assert splitter.pending_bytes == 0
+    assert splitter.feed(raw[:3]) == []
+    assert splitter.pending_bytes == 3
+    assert splitter.feed(raw[3:]) == [raw]
+    assert splitter.pending_bytes == 0
+
+
+def test_force_resync_releases_frames_parked_behind_a_stalled_head():
+    """The documented hand-off: the splitter has no clock, so the caller says when.
+
+    This head is the one stall the splitter cannot resolve alone -- a valid
+    message type followed by a length byte claiming a frame longer than what
+    follows. Ample trailing data would settle it; a device that has gone quiet
+    never will, and 36 events sit behind it until someone says so.
+    """
+    splitter = FrameSplitter()
+    events = [_frame(3, 32, 0x01, bytes([i % 2])) for i in range(36)]
+    stalled = bytes([3, 255]) + b"".join(events)
+    assert splitter.feed(stalled) == []
+    assert splitter.pending_bytes == 254
+
+    assert splitter.force_resync() == events
+    assert splitter.pending_bytes == 0
+    # Only the two head bytes were the price; nothing real was thrown away.
+    assert splitter.bytes_discarded == 2
+    assert splitter.checksum_errors == 0
+
+
+def test_force_resync_on_an_empty_buffer_does_nothing():
+    """It runs on every idle poll of a healthy link, so it must be free of side effects."""
+    splitter = FrameSplitter()
+    assert splitter.force_resync() == []
+    assert (splitter.resyncs, splitter.bytes_discarded, splitter.checksum_errors) == (0, 0, 0)
+
+    raw = _valid()
+    assert splitter.feed(raw) == [raw]
+
+
 def test_splitter_does_not_hoard_bytes_it_can_never_frame():
     """A corrupt length byte must not grow the buffer without bound.
 

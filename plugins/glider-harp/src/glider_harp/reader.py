@@ -28,9 +28,11 @@ _MS_PER_SECOND = 1000.0
 # How long the reader may sit inside one blocking read. The floor keeps a port
 # opened with timeout=0 from spinning a core; the ceiling bounds how long
 # ``stop`` waits for the loop to notice the stop event, well inside its 2 s
-# join. Between them the reader wakes twice per idle window (see ``start``),
-# because everything it must do on a silent line happens only when a read
-# returns.
+# join. Everything the reader must do on a silent line happens only when a read
+# returns, so ``start`` aims for half the idle window -- but the floor wins
+# below a 0.1 s window, and the flush then lands within one read of the window
+# rather than at it. That only matters to a test choosing a small window; the
+# 0.5 s default sits well above the floor.
 _MIN_READ_TIMEOUT_S = 0.05
 _MAX_READ_TIMEOUT_S = 0.5
 
@@ -242,12 +244,20 @@ class HarpReader:
 
     Ownership, because two of these bite quietly:
 
-    * The **port** belongs to the caller. The reader never opens or closes it.
-      It borrows the handle's read timeout between ``start`` and ``stop``,
-      since the read cadence is the reader's own heartbeat, and puts the
-      caller's value back afterwards. ``stop`` before ``close``, in that
-      order: a read in flight when the handle closes is indistinguishable from
-      an unplugged cable and is recorded as a failure.
+    * The **port** belongs to the caller, but not while the reader is running.
+      The reader never opens or closes it, and it borrows the handle's read
+      timeout between ``start`` and ``stop`` -- the read cadence is the
+      reader's own heartbeat -- putting the caller's value back afterwards.
+      Two orderings follow, and both are the caller's to keep:
+
+      - ``stop`` before ``close``. A read in flight when the handle closes is
+        indistinguishable from an unplugged cable and is recorded as a failure.
+      - Every write and register round-trip goes **before ``start`` or after
+        ``stop``, never during**. This thread reads every byte the port
+        produces and hands only events to the cache; a Read reply arriving
+        while it runs is decoded, counted in ``frame_count``, and dropped. A
+        concurrent round-trip therefore cannot see its own reply -- it does not
+        race, it simply never returns one.
     * ``snapshot`` belongs to whoever writes the CSV. This thread calls
       ``cache.ingest`` and nothing else -- ``snapshot`` clears the counters, so
       a second caller silently eats events out of the record.
@@ -271,6 +281,9 @@ class HarpReader:
       decode. Structurally impossible today, since the splitter validates by
       decoding, and counted anyway because the alternative to a visible zero is
       a silent swallow if the two ever disagree.
+    * ``processing_errors`` -- reads the splitter or the cache could not be
+      made to swallow at all. This one means a bug in this package rather than
+      anything on the wire, so it is kept out of ``error_count``; see ``_run``.
     * ``idle_flushes`` -- times the reader forced framing open because the
       device went quiet (see ``_flush_stalled_buffer``).
 
@@ -285,10 +298,11 @@ class HarpReader:
     """
 
     def __init__(self, serial: Any, cache: RegisterCache, idle_flush_s: float = 0.5) -> None:
-        """``serial`` is any object with pyserial's ``read``; ``cache`` receives events.
+        """``serial`` needs pyserial's ``read`` and a settable ``timeout``.
 
-        ``idle_flush_s`` is how long the line must be silent before framing is
-        forced open. See ``_flush_stalled_buffer`` for what it trades.
+        ``cache`` receives every event decoded. ``idle_flush_s`` is how long
+        the line must be silent before framing is forced open; see
+        ``_flush_stalled_buffer`` for what that trades.
         """
         if idle_flush_s <= 0:
             # Zero would flush on every read that returned nothing, which on a
@@ -303,12 +317,12 @@ class HarpReader:
         self._thread: threading.Thread | None = None
         self._frame_count = 0
         self._decode_failures = 0
+        self._processing_errors = 0
         self._idle_flushes = 0
         self._last_data_at = 0.0
         # (borrowed?, the caller's read timeout) -- see ``start`` and ``stop``.
         self._borrowed_timeout: tuple[bool, Any] = (False, None)
-        self.failure: Exception | None = None
-        """The read that ended the thread, or None. See ``_run``."""
+        self._failure: Exception | None = None
 
     # --- lifecycle ---
 
@@ -345,30 +359,56 @@ class HarpReader:
         self._serial.timeout = wanted
         self._borrowed_timeout = (True, previous)
         self._last_data_at = time.monotonic()
-        self._thread = threading.Thread(target=self._run, name="harp-reader", daemon=True)
-        self._thread.start()
 
-    def stop(self, timeout: float = 2.0) -> None:
+        thread = threading.Thread(target=self._run, name="harp-reader", daemon=True)
+        try:
+            thread.start()
+        except Exception:
+            # A Pi already running the GUI, vision and the recorder can refuse
+            # a new thread. Nothing is running, so hand the port back and leave
+            # the reader startable: recording _thread first would make the
+            # caller's stop() raise "cannot join thread before it is started",
+            # masking this error and stranding the borrowed timeout.
+            self._restore_timeout()
+            raise
+        self._thread = thread
+
+    def stop(self, timeout: float = 2.0) -> bool:
         """Ask the reader to finish, wait for it, and give the port back.
 
-        Idempotent, and safe before ``start`` -- which retires the reader, see
-        ``start``. The thread reference is kept rather than cleared, so a
-        thread that refused to join stays visible through ``is_alive`` instead
-        of being reported as stopped.
+        Returns whether the reader is now stopped: **False means the thread is
+        still reading the port**, and the caller must not use the handle. The
+        return value exists because that outcome is otherwise invisible -- a
+        caller that carried on would write a register and read the reply back
+        with a live reader thread consuming it, and see only a timeout. It is
+        reachable: a loaded Pi at the end of a trial may not schedule the
+        thread through a read plus overhead inside ``timeout``.
 
-        The read timeout is restored only once the thread has actually gone. A
-        thread still running needs the short timeout it was given to keep
-        noticing the stop event; handing it back a long one would strand it
-        further, and the failed join is already logged as an error.
+        Idempotent, safe before ``start`` -- which retires the reader, see
+        ``start`` -- and worth retrying, since it keeps asking. The thread
+        reference is kept rather than cleared, so a thread that refused to join
+        stays visible through ``is_alive`` instead of being reported as gone.
+
+        The read timeout is handed back only once the thread has actually
+        exited. A thread still running needs the short timeout it was given to
+        keep noticing the stop event; handing it back a long one would strand
+        it further.
         """
         self._stop_event.set()
         thread = self._thread
         if thread is None:
-            return
+            return True
         thread.join(timeout)
         if thread.is_alive():
-            logger.error("HarpReader: thread did not exit within %.1fs", timeout)
-            return
+            logger.error(
+                "HarpReader: thread did not exit within %.1fs; the port is still in use", timeout
+            )
+            return False
+        self._restore_timeout()
+        return True
+
+    def _restore_timeout(self) -> None:
+        """Give the caller's read timeout back, if we took one."""
         borrowed, previous = self._borrowed_timeout
         if borrowed:
             self._serial.timeout = previous
@@ -406,43 +446,76 @@ class HarpReader:
         return self._decode_failures
 
     @property
+    def processing_errors(self) -> int:
+        """Reads that could not be processed at all. A bug here, not on the wire."""
+        return self._processing_errors
+
+    @property
     def idle_flushes(self) -> int:
         """Times a silent line forced framing open."""
         return self._idle_flushes
+
+    @property
+    def failure(self) -> Exception | None:
+        """The read that ended the thread, or None. See ``_run``."""
+        return self._failure
 
     # --- the reader thread ---
 
     def _run(self) -> None:
         """Read, split, decode, ingest, until stopped or the port fails.
 
-        A read that raises ends the thread: the port is gone (unplugged, or
-        closed under us), and a loop that swallowed it would spin on the same
-        error for the rest of the trial. It is recorded in ``failure`` and
-        logged rather than raised, because there is nobody on this stack to
-        catch it -- an escaping exception would end the thread with the
-        recording simply stopping and nothing anywhere saying why.
+        Nothing may escape this method. There is nobody on this stack to catch
+        it: an exception here ends the thread, the traceback goes to
+        ``threading.excepthook`` on stderr -- invisible under a packaged GUI,
+        and never seen by ``logger`` -- and the device then polls a cache that
+        will never change again, reporting zeros with nothing anywhere saying
+        why. That is the same silent-empty-recording failure the ``FrameError``
+        handler exists to prevent, through a different door.
+
+        So both halves are guarded, and they are guarded differently because
+        they fail differently:
+
+        * A **read** that raises is the port itself: unplugged, or closed under
+          us. Nothing later will read from it either, and a loop that swallowed
+          it would spin on the same error for the rest of the trial, so the
+          thread stops and records ``failure``.
+        * Anything raised while **processing** what was read is a bug in this
+          package -- the splitter, the decoder, or the cache -- not a fault on
+          the wire. It is data-dependent, so the next read may well be fine:
+          the rest of that one read is skipped, ``processing_errors`` counts
+          it, and the thread carries on. (Not reachable today. It becomes
+          reachable the moment payload decoding grows types of its own, where
+          a ``struct.error`` on one malformed register would otherwise take
+          the whole recording with it.)
         """
         while not self._stop_event.is_set():
             try:
                 chunk = self._read_chunk()
             except Exception as exc:
                 logger.exception("HarpReader: serial read failed; reader stopping")
-                self.failure = exc
+                self._failure = exc
                 self._stop_event.set()
                 return
-            if chunk:
-                self._last_data_at = time.monotonic()
-                self._ingest_frames(self._splitter.feed(chunk))
-            elif self._is_stalled():
-                self._flush_stalled_buffer()
+            try:
+                if chunk:
+                    self._last_data_at = time.monotonic()
+                    self._ingest_frames(self._splitter.feed(chunk))
+                elif self._is_stalled():
+                    self._flush_stalled_buffer()
+            except Exception:
+                self._processing_errors += 1
+                logger.exception("HarpReader: could not process %d bytes read", len(chunk))
 
     def _read_chunk(self) -> bytes:
         """One read, taking whatever the port has already buffered.
 
         ``in_waiting`` collapses a burst into a single read instead of one call
         per byte, which is worth having on a Pi at 115200 baud. It is reached
-        through ``getattr`` so the only thing the reader truly requires of a
-        handle is ``read``; without it the loop still works, one byte per call.
+        through ``getattr`` so the read loop needs nothing of a handle but
+        ``read``; without it the loop still works, one byte per call. (The
+        handle does need a settable ``timeout`` -- but that is ``start``'s
+        requirement, and it fails there, before any thread exists.)
         """
         waiting = getattr(self._serial, "in_waiting", 0) or 0
         return self._serial.read(max(1, waiting))
@@ -478,7 +551,7 @@ class HarpReader:
 
     def _is_stalled(self) -> bool:
         """Whether a silent line has left the splitter holding bytes."""
-        if not self._splitter._buffer:
+        if not self._splitter.pending_bytes:
             return False
         return time.monotonic() - self._last_data_at >= self._idle_flush_s
 
@@ -495,9 +568,10 @@ class HarpReader:
         idle polls. The splitter has no clock, so only the reader can tell the
         difference between "still arriving" and "never coming".
 
-        Clearing ``_synced`` is that message: the head is no longer believed to
-        be a frame boundary, so the next ``feed`` hunts forward with the
-        splitter's own resync and releases everything parked behind it.
+        ``force_resync`` is that message: the head stops being believed as a
+        frame boundary, so the splitter's own resync hunts forward and releases
+        everything parked behind it. The policy is here, where the clock is;
+        the mechanism stays in ``frames``, next to the invariant it breaks.
 
         What it costs when it fires on a frame that really was still arriving
         depends entirely on what that frame's payload happens to contain, and
@@ -540,10 +614,9 @@ class HarpReader:
         logger.debug(
             "HarpReader: %.2fs idle with %d bytes held; forcing a resync",
             self._idle_flush_s,
-            len(self._splitter._buffer),
+            self._splitter.pending_bytes,
         )
-        self._splitter._synced = False
-        self._ingest_frames(self._splitter.feed(b""))
+        self._ingest_frames(self._splitter.force_resync())
         # Restart the window rather than flushing on every read from here on:
         # a buffer with nothing framable in it stays put, and re-hunting it
         # each time would burn a full rescan per read for the rest of the trial.

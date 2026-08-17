@@ -214,6 +214,35 @@ class FrameSplitter:
         # take len() of and test for emptiness.
         return frames
 
+    @property
+    def pending_bytes(self) -> int:
+        """How many bytes are held back, not yet formed into a frame.
+
+        Zero on a healthy stream between frames. A number that stays put while
+        nothing arrives is the stall described above, which is why this is
+        public: the caller with the clock needs it to notice.
+        """
+        return len(self._buffer)
+
+    def force_resync(self) -> list[bytes]:
+        """Stop believing the head is a frame boundary, and rescan from there.
+
+        The other half of the stall above, and the reason it is a method rather
+        than a caller reaching in: the *policy* -- how long silence must last
+        before framing is given up on -- belongs to whoever owns the clock,
+        while the mechanism belongs here, next to the invariant it breaks. A
+        reader poking at ``_synced`` gets the same effect and finds out at
+        runtime, mid-trial, when this file is refactored.
+
+        Returns whatever the rescan released, in stream order, like ``feed``.
+        Nothing is discarded that could still start a frame, so calling this on
+        a partial frame that was merely arriving slowly costs a forward hunt
+        rather than the frame -- but see ``HarpReader._flush_stalled_buffer``
+        for the case where that hunt finds a frame embedded in a payload.
+        """
+        self._synced = False
+        return self.feed(b"")
+
     def _take_frame(self) -> bytes | None:
         """Consume and return the next frame, or None if none is available."""
         candidate = self._candidate_at(0)
