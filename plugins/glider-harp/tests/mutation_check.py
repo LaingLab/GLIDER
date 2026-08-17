@@ -27,6 +27,20 @@ it rewrites source files on disk and shells out to pytest. Run it directly:
 
     python plugins/glider-harp/tests/mutation_check.py
 
+**Check that the tree is clean before you start and after you finish.** This
+tool edits the files it is measuring, and restores each one from a ``finally``
+-- which does not run if the process is killed. A run interrupted by a timeout
+or a Ctrl-C therefore leaves a mutant on disk, in a source file, looking like
+an ordinary edit. That has already happened once: an interrupted run left
+``start()``'s thread-start guard removed, and the only thing that caught it was
+an unrelated test failing afterwards. It is the one failure mode of this
+technique that damages the artifact rather than merely wasting a run, and it is
+invisible in the tool's own output, because the tool is no longer running.
+
+A full sweep takes tens of minutes. Run it somewhere it will not be killed --
+and if you interrupt it, ``git status`` and ``git diff`` the source directory
+before doing anything else.
+
 Every mutant below must be killed by the suite, except those marked EQUIVALENT,
 which provably cannot be killed and are asserted to survive so that a future
 change making one observable shows up as a failure rather than as a silently
@@ -597,6 +611,20 @@ START_THREAD = (
     "            raise\n"
     "        self._thread = thread"
 )
+RESTORE_BODY = (
+    "        borrowed, previous = self._borrowed_timeout\n"
+    "        if not borrowed:\n"
+    "            return\n"
+    "        self._borrowed_timeout = (False, None)\n"
+    "        try:\n"
+    "            self._serial.timeout = previous\n"
+    "        except Exception:\n"
+    "            logger.warning(\n"
+    '                "HarpReader: could not restore the port read timeout (the device may be "\n'
+    '                "gone); continuing so the handle can still be released",\n'
+    "                exc_info=True,\n"
+    "            )"
+)
 JOIN_RESULT = (
     "        if thread.is_alive():\n"
     "            logger.error(\n"
@@ -904,11 +932,22 @@ HARP_READER_MUTANTS: list[tuple[str, str, str]] = [
         # a borrowed timeout that is never handed back surfaces later as a read
         # that returned early on a port nobody remembers editing.
         "stop() keeps the read timeout it borrowed",
-        "        borrowed, previous = self._borrowed_timeout\n"
-        "        if borrowed:\n"
-        "            self._serial.timeout = previous\n"
-        "            self._borrowed_timeout = (False, None)",
+        RESTORE_BODY,
         "        return",
+    ),
+    (
+        # pyserial's timeout setter reconfigures the open port, so it raises
+        # once the device is gone -- which is the likeliest reason a reader is
+        # being stopped at all. Unguarded, it leaves stop() before the caller
+        # can release the handle, and a pulled cable strands the port until
+        # the process exits. Re-plugging does not help.
+        "restoring the read timeout is unguarded, so a vanished device strands the port",
+        RESTORE_BODY,
+        "        borrowed, previous = self._borrowed_timeout\n"
+        "        if not borrowed:\n"
+        "            return\n"
+        "        self._borrowed_timeout = (False, None)\n"
+        "        self._serial.timeout = previous",
     ),
     (
         "start() does not remember what the caller's read timeout was",
@@ -1376,6 +1415,38 @@ DERIVATION_MUTANTS: list[tuple[str, str, str]] = [
         '        if "Event" not in _access_of(by_name[register]):',
         '        if "Event" in _access_of(by_name[register]):',
     ),
+    # --- what the record can actually decode ---
+    (
+        # RegisterCache reads every payload as one unsigned little-endian
+        # integer: an S16 of -1 records as 65535, a Float of 1.5 as
+        # 1069547520. The CSV opens cleanly and is wrong, and nothing
+        # downstream can tell the difference from a real reading.
+        "a register the cache cannot decode may be recorded",
+        "        _check_recordable(register, by_name[register])\n",
+        "",
+    ),
+    (
+        "only the type is gated, so an array register records as one number",
+        '    length = meta.get("length", 1)',
+        "        length = 1",
+    ),
+    (
+        # The other half: narrowing the gate past what the cache can decode
+        # would refuse registers that record perfectly well.
+        "the gate is narrower than what the cache can decode",
+        '_RECORDABLE_TYPES = frozenset({"U8", "U16", "U32", "U64"})',
+        '_RECORDABLE_TYPES = frozenset({"U8"})',
+    ),
+    (
+        # Only the recorded side is gated: writes already go out with the
+        # correct width and signedness, so a signed register stays usable as
+        # an action.
+        "the gate is applied to actions as well, taking away a working write",
+        "        modes = _access_of(meta)\n        result.access[str(name)] = modes",
+        "        _check_recordable(str(name), meta)\n"
+        "        modes = _access_of(meta)\n"
+        "        result.access[str(name)] = modes",
+    ),
     # --- load_profile: a name from a device setting, resolved inside the package ---
     (
         "a profile name is used as a path",
@@ -1402,6 +1473,11 @@ HARP_CHECK_FAILURE = (
     '                f"The Harp protocol stack is not usable: {e}. "'
 )
 SCAN_APPEND = "                results.append((label or p.device, p.device))"
+# connect()'s two failure paths set ERROR too, so the line alone is not unique
+# to report_transport_failure; the pair that follows it is.
+TRANSPORT_FAILURE = (
+    "        self._set_state(BoardConnectionState.ERROR)\n        self._notify_error(error)"
+)
 
 # ``board``. A transport shim, so the set is short and derived from the four
 # things the contract actually states: no GPIO, both halves of the stack
@@ -1540,6 +1616,29 @@ BOARD_MUTANTS: list[tuple[str, str, str]] = [
         "        from glider.hal.base_board import PinCapability\n\n"
         '        return BoardCapabilities(name="Harp", pins={0: PinCapability(0)})',
     ),
+    # --- a device's broken link, which the board never sees for itself ---
+    (
+        # The board's state is what the hardware panel shows. Left healthy, an
+        # operator walking past a rig whose cable came out sees nothing wrong.
+        "a reported transport failure leaves the board looking healthy",
+        TRANSPORT_FAILURE,
+        "        self._notify_error(error)",
+    ),
+    (
+        # DISCONNECTED is an orderly shutdown; a broken link is not, and the
+        # two want different responses from whoever is watching.
+        "a broken link is reported as an orderly disconnect",
+        TRANSPORT_FAILURE,
+        "        self._set_state(BoardConnectionState.DISCONNECTED)\n"
+        "        self._notify_error(error)",
+    ),
+    (
+        # HardwareManager wires its own error listeners to these, so this is
+        # the only path from a dead reader thread to anything watching.
+        "a reported transport failure notifies nobody",
+        "        self._notify_error(error)",
+        "        pass",
+    ),
 ]
 
 REFUSE_SECOND_INIT = (
@@ -1556,9 +1655,14 @@ READ_ACTION_GUARD = (
     "            raise RuntimeError("
 )
 CONFIRM_READBACK = (
-    "        confirmed = await self._read_operation_control()\n"
+    "        confirmed = await self._read_operation_control(timeout)\n"
     "        if confirmed & _OPERATION_MODE_MASK != mode:"
 )
+STANDBY_CALL = (
+    "await self._set_operation_mode(_MODE_STANDBY, timeout=SHUTDOWN_ROUND_TRIP_TIMEOUT_S)"
+)
+STANDBY_BUDGET = "_MODE_STANDBY, timeout=SHUTDOWN_ROUND_TRIP_TIMEOUT_S"
+REARM = "                self._link_failed = False\n                self._runtime_warnings = []"
 READ_ACCESS_GUARD = '        if "Read" not in self._derived.access.get(register, frozenset()):'
 WRITE_ACCESS_GUARD = '        if "Write" not in self._derived.access.get(register, frozenset()):'
 CACHE_READ = (
@@ -1629,8 +1733,8 @@ DEVICE_MUTANTS: list[tuple[str, str, str]] = [
     ),
     (
         "shutdown leaves the device Active, streaming into a closed port",
-        "                await self._set_operation_mode(_MODE_STANDBY)",
-        "                pass",
+        STANDBY_CALL,
+        "pass",
     ),
     (
         # OperationControl also carries the heartbeat and LED flags. Clobbering
@@ -1793,14 +1897,92 @@ DEVICE_MUTANTS: list[tuple[str, str, str]] = [
         "        if declared is None or self._who_am_i is None:\n            return",
         "        if False:\n            return",
     ),
+    # --- a link that breaks mid-recording, which nothing above can see ---
+    (
+        # HarpReader records why it stopped and exits. Until this, nothing
+        # anywhere read that: the cache simply stopped changing, and every row
+        # for the rest of a four-hour run carried the last state, a count of
+        # zero and a frozen device time -- byte for byte what an animal that
+        # stopped licking looks like.
+        "a reader thread that died is never noticed",
+        "        if reader is None or self._link_failed or reader.is_alive():",
+        "        if True:",
+    ),
+    (
+        # The recorder calls get_state() once per row; a four-hour run at 30
+        # fps is 430,000 of them.
+        "the link failure is reported once per row instead of once",
+        "        self._link_failed = True",
+        "        self._link_failed = False",
+    ),
+    (
+        # The log is the half nobody reads during an unattended run, so this
+        # is the half that has to survive: without it the CSV says nothing.
+        "the link failure never reaches the recording",
+        "        self._runtime_warnings.append(message)",
+        "        pass",
+    ),
+    (
+        # And the half the operator sees while the rig is still running. The
+        # board's state is what the hardware panel shows and what
+        # HardwareManager's error listeners are wired to.
+        "the link failure never reaches the board",
+        "            report(failure if failure is not None else RuntimeError(message))",
+        "            pass",
+    ),
+    (
+        # The half-fix, and the reason its test asserts on the *second*
+        # detection rather than on an empty warning list. ``_check_link``
+        # returns early while the latch is set, so a device reconnected after
+        # a cable is replaced gets a fresh reader that nothing is watching:
+        # the second pull is never noticed, and C2 regresses on every run
+        # after the first.
+        "the link detector is not re-armed on reconnect, so only the first pull is seen",
+        REARM,
+        "                self._runtime_warnings = []",
+    ),
+    (
+        # And the other half: a new link must not inherit the dead one's
+        # warning, or every recording after a reconnect is annotated with a
+        # failure that is already over.
+        "a reconnected device carries the dead link's warning into the new one",
+        REARM,
+        "                self._link_failed = False",
+    ),
+    (
+        "a healthy reader is reported as a broken link",
+        "        if reader is None or self._link_failed or reader.is_alive():",
+        "        if reader is None or self._link_failed:",
+    ),
+    (
+        "runtime warnings are collected and never reported",
+        "        return [*self._derived.warnings, *self._runtime_warnings]",
+        "        return list(self._derived.warnings)",
+    ),
+    # --- shutdown inside the caller's budget, cancellation included ---
+    (
+        # HardwareManager bounds shutdown() at 2 s. Two full-length round-trips
+        # on top of the reader's join overrun it, wait_for cancels part-way,
+        # and the port leaks.
+        "the Standby courtesy is given the full round-trip budget",
+        STANDBY_BUDGET,
+        "_MODE_STANDBY, timeout=ROUND_TRIP_TIMEOUT_S",
+    ),
+    (
+        # CancelledError is a BaseException, so a bare except with no finally
+        # skips the close entirely and leaves a handle nothing can reopen.
+        "a cancelled shutdown never releases the port",
+        "        finally:",
+        "        else:",
+    ),
     # --- the warning that has to outlive the log ---
     (
         # The predicate and the wording live in ``derive`` (see the
         # derivation section, which mutates both); this device only has to
         # pass them on rather than drop them on the floor.
         "the device swallows the warnings derive reported",
-        "        return list(self._derived.warnings)",
-        "        return []",
+        "        return [*self._derived.warnings, *self._runtime_warnings]",
+        "        return list(self._runtime_warnings)",
     ),
     # --- which half of an action a caller gets: read or write ---
     (
@@ -1939,6 +2121,34 @@ RACE_WINDOW = {
 }
 
 
+def check_anchors() -> list[str]:
+    """Every mutant's anchor must match its target exactly once, and change it.
+
+    Run before the baseline, and fatal, because a stale anchor is the one
+    failure of this technique that produces *false confidence* rather than a
+    wasted run. ``run_suite`` does report an unapplied mutant as
+    ``[NOT APPLIED]`` and tallies it -- but a mutant that never reached disk
+    looks exactly like one that was killed to anyone reading the score, and
+    the score is what gets quoted. Seven went stale in a single refactor of
+    the sources, across four sections, and the run still printed a number for
+    all four.
+
+    The checks are the same two ``run_suite`` makes per mutant; the point is
+    the timing. Finding a stale anchor after twenty-five minutes of mutating
+    is finding it too late to do anything but run again.
+    """
+    problems: list[str] = []
+    for target, mutants in SUITES:
+        source = target.read_text(encoding="utf-8")
+        for name, old, new in mutants:
+            count = source.count(old)
+            if count != 1:
+                problems.append(f"{target.name}: {name!r} matched {count} times, expected 1")
+            elif source.replace(old, new) == source:
+                problems.append(f"{target.name}: {name!r} replacement is identical to the source")
+    return problems
+
+
 def run_tests() -> subprocess.CompletedProcess[str]:
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONPATH="src;plugins/glider-harp/src")
     return subprocess.run(
@@ -1996,6 +2206,16 @@ def run_suite(target: Path, mutants: list[tuple[str, str, str]], unexpected: lis
 
 
 def main() -> int:
+    stale = check_anchors()
+    if stale:
+        # Before the baseline, and fatal. See check_anchors: an anchor that no
+        # longer matches is a mutant that silently never runs, and the score
+        # printed at the end counts it as though it had.
+        print("STALE ANCHORS -- these mutants would never reach disk:")
+        for problem in stale:
+            print(f"  {problem}")
+        return 1
+
     baseline = run_tests()
     if baseline.returncode != 0:
         print("BASELINE FAILS -- fix the suite before mutating")

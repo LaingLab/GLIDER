@@ -237,3 +237,28 @@ async def test_the_generic_pin_dispatchers_raise_too():
         await board.write_pin(1, PinType.DIGITAL, True)
     with pytest.raises(NotImplementedError):
         await board.read_pin(1, PinType.ANALOG)
+
+
+# --- reporting a device's broken link -----------------------------------
+
+
+def test_a_transport_failure_shows_as_an_error_state_and_reaches_listeners():
+    """Harp devices own their own ports, so the board never touches the thing
+    that fails and cannot notice a pulled cable itself.
+
+    It is nonetheless where one has to surface: the board's state is what the
+    hardware panel shows, and its error callbacks are what ``HardwareManager``
+    wires its own listeners to. Without this a device whose reader thread died
+    has nowhere at all to say so.
+    """
+    board = HarpBoard()
+    seen: list[Exception] = []
+    board.register_error_callback(seen.append)
+
+    failure = OSError("the device has been disconnected")
+    board.report_transport_failure(failure)
+
+    # ERROR, not DISCONNECTED: the transport did not shut down, it broke, and
+    # those want different responses from whoever is watching.
+    assert board.state is BoardConnectionState.ERROR
+    assert seen == [failure]

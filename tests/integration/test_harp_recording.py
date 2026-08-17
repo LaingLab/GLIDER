@@ -38,8 +38,15 @@ from glider.core.data_recorder import DataRecorder
 from glider.core.hardware_manager import HardwareManager
 from glider.hal.base_device import DeviceConfig, DigitalOutputDevice
 from glider.hal.mock_board import MockBoard
-from glider_harp.board import HarpBoard
-from glider_harp.mock import MockHarpDevice
+
+# The plugin lives outside ``src`` and is not on the path for the setup CLAUDE.md
+# documents (``PYTHONPATH=src``). A hard import here aborts *collection* of the
+# whole run, so someone who has not installed the plugin gets zero tests instead
+# of one skip. Same convention as the sklearn/torch/lightgbm suites.
+pytest.importorskip("glider_harp", reason="the glider-harp plugin is not installed")
+
+from glider_harp.board import HarpBoard  # noqa: E402
+from glider_harp.mock import MockHarpDevice  # noqa: E402
 
 # The shipped ``licketysplit`` profile records LickState as "lick" and is
 # written for WhoAmI 1400, so any schema used with it has to agree on both.

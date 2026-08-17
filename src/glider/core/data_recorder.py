@@ -75,6 +75,9 @@ class DataRecorder:
         # yields None — so the device records nothing but empty cells for
         # the whole session. _write_metadata says so in the CSV itself.
         self._degraded_devices: list[str] = []
+        # (device_id, message) pairs already written as `# WARNING` rows, so a
+        # warning reported both before the run and after it appears once.
+        self._reported_warnings: set[tuple[str, str]] = set()
         self._zone_columns: list[str] = []
         self._zone_config: ZoneConfiguration | None = None
         self._cv_processor: CVProcessor | None = None
@@ -400,9 +403,11 @@ class DataRecorder:
         # device rather than discovered here, and for the same reason the
         # rows above exist: the log line each one also emits is not something
         # anyone watches during an unattended run.
+        self._reported_warnings = set()
         for device_id, device in self._hardware_manager.devices.items():
             for message in self._device_warnings(device_id, device):
                 self._writer.writerow(["# WARNING", device_id, message])
+                self._reported_warnings.add((device_id, message))
         self._writer.writerow([])
 
         # Write column headers. `frame` is the canonical camera frame index
@@ -657,6 +662,22 @@ class DataRecorder:
 
         # Write footer
         if self._writer:
+            # Warnings a device only learned during the run — a serial link
+            # that died mid-session is the motivating case. The header block
+            # was written before the first row, so it cannot carry these, and
+            # the failure they describe is precisely the kind that leaves a
+            # CSV looking like a plausible result (a sensor that reports the
+            # same value for three hours reads exactly like an animal that
+            # stopped responding). Only what wasn't already reported at the
+            # top, so a static warning isn't repeated.
+            for device_id, device in self._hardware_manager.devices.items():
+                for message in self._device_warnings(device_id, device):
+                    if (device_id, message) in self._reported_warnings:
+                        continue
+                    self._reported_warnings.add((device_id, message))
+                    self._writer.writerow([])
+                    self._writer.writerow(["# WARNING", device_id, message])
+
             end_time = datetime.now()
             duration = (end_time - self._start_time).total_seconds() if self._start_time else 0
             self._writer.writerow([])

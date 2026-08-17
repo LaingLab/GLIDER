@@ -103,6 +103,27 @@ class HarpBoard(BaseBoard):
         logger.info("HarpBoard: transport ready")
         return True
 
+    def report_transport_failure(self, error: Exception) -> None:
+        """Record that a device's link to its hardware has broken.
+
+        Harp devices own their own ports, so this board never touches the
+        thing that fails and cannot notice a pulled cable itself. But the
+        board's state is what the hardware panel shows, and its error
+        callbacks are what ``HardwareManager`` wires its own listeners to, so
+        the board is nonetheless where a broken link has to surface -- and
+        without this a device whose reader thread died has nowhere at all to
+        say so.
+
+        ``ERROR`` rather than ``DISCONNECTED``: the transport was not shut
+        down, it broke, and those want different responses from whoever is
+        watching. Deliberately does *not* stop the recording -- a session that
+        loses one device should come back with everything the others recorded,
+        annotated, rather than not at all.
+        """
+        self._set_state(BoardConnectionState.ERROR)
+        self._notify_error(error)
+        logger.error("HarpBoard: transport failure reported: %s", error)
+
     async def disconnect(self) -> None:
         # Port connections live on the individual devices; nothing to do at the
         # transport level beyond updating state.

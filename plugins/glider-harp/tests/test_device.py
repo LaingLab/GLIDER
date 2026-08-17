@@ -16,16 +16,22 @@ reply. None of these raise; all of them come back as an empty or wrong CSV.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 
 import pytest
 import yaml
 
+from glider.hal.base_board import BoardConnectionState
 from glider.hal.base_device import DeviceConfig
 from glider.hal.value_spec import KIND_WHOLE
 from glider_harp.board import HarpBoard
-from glider_harp.device import OPERATION_CONTROL, ROUND_TRIP_TIMEOUT_S
+from glider_harp.device import (
+    OPERATION_CONTROL,
+    ROUND_TRIP_TIMEOUT_S,
+    SHUTDOWN_ROUND_TRIP_TIMEOUT_S,
+)
 from glider_harp.frames import MESSAGE_EVENT, MESSAGE_WRITE, decode, encode
 from glider_harp.mock import DEFAULT_OPERATION_CONTROL, MockHarpDevice
 
@@ -56,6 +62,26 @@ def event(address: int, value: int, timestamp: float | None = None) -> bytes:
     return HarpMessage(
         MessageType.Event, address, PayloadType.U8, bytes([value]), timestamp=timestamp
     ).bytes
+
+
+def _dead_read(_size=1):
+    """A port whose device has gone: every read raises, as an unplugged one does."""
+    raise OSError("the device has been disconnected")
+
+
+def _wait_until_dead(reader, timeout: float = 2.0) -> bool:
+    """Block until the reader thread has actually exited.
+
+    A thread boundary, so a ``threading`` wait rather than a sleep-and-hope:
+    the reader notices the dead port inside its own read, records the failure,
+    and exits, and none of that is visible to the event loop until it has.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not reader.is_alive():
+            return True
+        time.sleep(0.005)
+    return False
 
 
 @pytest.fixture
@@ -464,6 +490,208 @@ async def test_settings_cannot_be_edited_while_a_refusing_reader_holds_the_port(
 
     reader.stop = real_stop
     await device.shutdown()
+
+
+async def test_a_vanished_device_does_not_strand_its_port(board, schema_path):
+    """The whole chain a pulled cable used to take.
+
+    pyserial's ``timeout`` setter reconfigures the open port, so it raises once
+    the device is gone -- and ``HarpReader.stop()`` runs it on every shutdown to
+    hand the borrowed timeout back. Unguarded, that exception left ``stop()``
+    before ``shutdown()`` could close the handle, so ``_serial`` stayed set,
+    ``initialize()`` refused forever, and re-plugging the cable did not help:
+    only restarting the application recovered the port.
+    """
+    dev = make_device(board, schema_path)
+    await dev.initialize()
+    dev.port_handle.raise_on_timeout_set = True  # the cable is pulled here
+
+    await dev.shutdown()
+
+    assert dev.port_handle.closed, "the port was never released"
+    assert dev.reader is None
+    # And the device can be brought back up once the cable is replaced.
+    dev.port_handle.raise_on_timeout_set = False
+    dev.port_handle._replayed = threading.Event()
+    await dev.initialize()
+    assert dev.is_initialized
+    await dev.shutdown()
+
+
+async def test_shutdown_gives_the_standby_courtesy_a_small_budget(device):
+    """``HardwareManager`` bounds shutdown() at 2 s, of which the reader's join
+    may already have taken most. Two full-length round-trips on top overrun it,
+    the caller's ``wait_for`` cancels part-way, and the port leaks.
+
+    Returning the device to Standby is a courtesy; releasing the port is not.
+    """
+    seen: list[float] = []
+    real = device._round_trip
+
+    async def watched(address, payload_type, timeout=None, *args, **kwargs):
+        seen.append(timeout)
+        return await real(address, payload_type, timeout)
+
+    device._round_trip = watched
+    await device.shutdown()
+
+    assert seen, "shutdown did not round-trip at all"
+    assert all(t == SHUTDOWN_ROUND_TRIP_TIMEOUT_S for t in seen), seen
+    assert sum(seen) < 2.0, "the Standby courtesy alone could exceed the caller's budget"
+
+
+async def test_a_cancelled_shutdown_still_releases_the_port(board, schema_path):
+    """The caller cancels at its own deadline. A shutdown that gives up
+    without closing leaves a handle nothing in the process can reopen --
+    the same dead end as the stranded port above, by a different route.
+
+    ``CancelledError`` is a ``BaseException``, so this is exactly what a bare
+    ``except Exception`` with no ``finally`` would have missed.
+    """
+    dev = make_device(board, schema_path)
+    await dev.initialize()
+
+    entered = threading.Event()
+    release = threading.Event()
+    answer = dev.port_handle._handle_request
+
+    def slow(raw):
+        frame = decode(raw)
+        if frame.address == OPERATION_CONTROL:
+            entered.set()
+            release.wait(2.0)
+        answer(raw)
+
+    dev.port_handle._handle_request = slow
+    task = asyncio.create_task(dev.shutdown())
+    try:
+        assert await asyncio.to_thread(entered.wait, 2.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        release.set()
+
+    # The shielded close outlives the cancellation; give it the loop.
+    for _ in range(200):
+        if dev.port_handle.closed:
+            break
+        await asyncio.sleep(0.01)
+    assert dev.port_handle.closed, "a cancelled shutdown leaked the port"
+
+
+# --- a link that breaks mid-recording ------------------------------------
+
+
+async def test_a_dead_reader_is_noticed_and_reported(board, schema_path, caplog):
+    """The worst-shaped failure this device has.
+
+    A cable pulled twenty minutes into a four-hour unattended run kills the
+    reader thread. Without this the cache simply stops changing, so every row
+    for the next three hours carries the last state, a count of zero and a
+    frozen device time -- byte for byte what an animal that stopped licking
+    looks like. A plausible result is worse than a broken one; nobody
+    investigates it.
+    """
+    errors: list[Exception] = []
+    board.register_error_callback(errors.append)
+    dev = make_device(board, schema_path)
+    await dev.initialize()
+    try:
+        assert dev.recording_warnings() == []
+        # The port dies under the reader thread, which records why and exits.
+        dev.port_handle.read = _dead_read
+        assert await asyncio.to_thread(_wait_until_dead, dev.reader), "the reader never noticed"
+
+        with caplog.at_level(logging.ERROR):
+            await dev.get_state()
+
+        warnings = dev.recording_warnings()
+        assert len(warnings) == 1
+        assert "reader thread stopped" in warnings[0]
+        assert "is not a reading" in warnings[0]
+        assert "reader thread stopped" in caplog.text
+        assert board.state is BoardConnectionState.ERROR
+        assert errors, "the board's error listeners were never told"
+    finally:
+        await dev.shutdown()
+
+
+async def test_the_link_failure_is_reported_once_not_once_per_row(board, schema_path, caplog):
+    """The recorder calls get_state() every row. A four-hour run at 30 fps is
+    430,000 rows; one line each buries the log and 430,000 warning rows buries
+    the CSV."""
+    dev = make_device(board, schema_path)
+    await dev.initialize()
+    try:
+        dev.port_handle.read = _dead_read
+        assert await asyncio.to_thread(_wait_until_dead, dev.reader)
+        with caplog.at_level(logging.ERROR):
+            for _ in range(5):
+                await dev.get_state()
+            await dev.read()
+        assert len(dev.recording_warnings()) == 1
+        assert caplog.text.count("reader thread stopped") == 1
+    finally:
+        await dev.shutdown()
+
+
+async def test_a_second_cable_pull_is_caught_after_a_reconnect(board, schema_path):
+    """The detector has to be re-armed by initialize(), not merely emptied.
+
+    ``_check_link`` returns early while the latch is set, so a device that is
+    reconnected after a cable is fixed gets a fresh reader that nothing is
+    watching. The second pull then goes unnoticed and the CSV goes back to
+    looking exactly like a subject that stopped responding -- C2 regressing on
+    every run after the first.
+
+    Asserted on the *second* detection rather than on the warning list being
+    empty after re-init: an implementation that clears the list and leaves the
+    latch set passes the emptiness check and fails here, which is the whole
+    point of the test.
+    """
+    dev = make_device(board, schema_path)
+    await dev.initialize()
+    real_read = dev.port_handle.read
+
+    # First failure, detected.
+    dev.port_handle.read = _dead_read
+    assert await asyncio.to_thread(_wait_until_dead, dev.reader)
+    await dev.get_state()
+    first = dev.recording_warnings()
+    assert len(first) == 1
+    await dev.shutdown()
+
+    # The cable is replaced and the device brought back up.
+    dev.port_handle.read = real_read
+    dev.port_handle.closed = False
+    dev.port_handle._replayed = threading.Event()
+    board._set_state(BoardConnectionState.CONNECTED)
+    await dev.initialize()
+    try:
+        assert dev.recording_warnings() == [], "carried the dead link's warning into a new one"
+        await dev.get_state()
+
+        # Second failure, on the new reader.
+        dev.port_handle.read = _dead_read
+        assert await asyncio.to_thread(_wait_until_dead, dev.reader)
+        await dev.get_state()
+
+        second = dev.recording_warnings()
+        assert len(second) == 1, "the second cable pull was never noticed"
+        assert board.state is BoardConnectionState.ERROR
+    finally:
+        dev.port_handle.read = real_read
+        await dev.shutdown()
+
+
+async def test_a_healthy_reader_reports_nothing(device):
+    """The check must not cry wolf on the ordinary case, or the warning stops
+    meaning anything."""
+    for _ in range(5):
+        await device.get_state()
+    assert device.recording_warnings() == []
+    assert device.board.state is not BoardConnectionState.ERROR
 
 
 async def test_shutdown_closes_the_port_even_if_standby_fails(board, schema_path):

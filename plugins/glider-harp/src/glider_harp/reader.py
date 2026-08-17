@@ -408,11 +408,32 @@ class HarpReader:
         return True
 
     def _restore_timeout(self) -> None:
-        """Give the caller's read timeout back, if we took one."""
+        """Give the caller's read timeout back, if we took one.
+
+        Guarded, because on pyserial this is not an assignment: the setter
+        reconfigures the open port, and that raises on a device that has been
+        unplugged -- which is the single likeliest reason a reader is being
+        stopped at all. Unguarded, the exception leaves ``stop`` by a path no
+        caller expects, *before* the caller can release the handle, so a pulled
+        cable strands the port until the process exits and re-plugging does
+        not help.
+
+        The courtesy is not worth that. The handle is about to be closed, and
+        a device that is gone has no configuration left to restore. Cleared
+        before the attempt so a failed restore is not retried on the next stop.
+        """
         borrowed, previous = self._borrowed_timeout
-        if borrowed:
+        if not borrowed:
+            return
+        self._borrowed_timeout = (False, None)
+        try:
             self._serial.timeout = previous
-            self._borrowed_timeout = (False, None)
+        except Exception:
+            logger.warning(
+                "HarpReader: could not restore the port read timeout (the device may be "
+                "gone); continuing so the handle can still be released",
+                exc_info=True,
+            )
 
     def is_alive(self) -> bool:
         """Whether the reader thread is running."""

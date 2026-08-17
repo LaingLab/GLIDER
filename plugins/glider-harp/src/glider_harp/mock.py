@@ -96,7 +96,15 @@ class FakeHarpPort:
         # MockHarpDevice fills it in when the port is opened.
         self.who_am_i = who_am_i
         self.operation_control = operation_control
-        self.timeout: Any = None
+        self._timeout: Any = None
+        # Arm to make the ``timeout`` setter raise, which is what pyserial
+        # does once the device behind an open handle has gone: the setter
+        # reconfigures the port rather than storing a number. It is the one
+        # attribute assignment in the read path that can fail, and the failure
+        # arrives at the worst moment -- during the shutdown a pulled cable
+        # provoked. Not a hypothetical the fake invents; see
+        # ``HarpReader._restore_timeout``.
+        self.raise_on_timeout_set = False
         self.closed = False
         # Every frame the device was sent, in order, for tests that care what
         # was written rather than what came back.
@@ -112,6 +120,16 @@ class FakeHarpPort:
         self._replayed = threading.Event()
 
     # --- the handle surface HarpReader and HarpDevice actually use ---
+
+    @property
+    def timeout(self) -> Any:
+        return self._timeout
+
+    @timeout.setter
+    def timeout(self, value: Any) -> None:
+        if self.raise_on_timeout_set:
+            raise OSError("FakeHarpPort: cannot reconfigure a port whose device is gone")
+        self._timeout = value
 
     @property
     def in_waiting(self) -> int:

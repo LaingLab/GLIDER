@@ -421,3 +421,47 @@ def test_a_schema_with_no_registers_derives_nothing():
     result = derive({}, None)
 
     assert result.recorded == {} and result.actions == {}
+
+
+# --- what the record can actually decode ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "entry, fragment",
+    [
+        ({"address": 32, "type": "S16", "access": "Event"}, "'S16'"),
+        ({"address": 32, "type": "Float", "access": "Event"}, "'Float'"),
+        ({"address": 32, "type": "U8", "access": "Event", "length": 4}, "4 elements"),
+    ],
+    ids=["signed", "float", "array"],
+)
+def test_recording_a_register_the_cache_cannot_decode_is_refused(entry, fragment):
+    """``RegisterCache`` reads every payload as one unsigned little-endian
+    integer, so an S16 of -1 is recorded as 65535, a Float of 1.5 as
+    1069547520, and a four-element array as one implausible number.
+
+    Refused rather than warned because every one of those files opens cleanly,
+    plots, and is wrong: nothing downstream can tell 65535 from a reading. And
+    ``HarpDevice`` packs *writes* by the declared type, so a signed register
+    written as -1 and read back through the record returns a different number
+    than it was given, inside one program.
+    """
+    schema = {"registers": {"Reg": entry}}
+    with pytest.raises(ValueError, match="Reg") as excinfo:
+        derive(schema, {"record": [{"register": "Reg", "as": "r"}]})
+    assert fragment in str(excinfo.value)
+
+
+@pytest.mark.parametrize("declared", ["U8", "U16", "U32", "U64"])
+def test_every_unsigned_width_may_be_recorded(declared):
+    """The gate is exactly what the cache can decode, not a narrower guess."""
+    schema = {"registers": {"Reg": {"address": 32, "type": declared, "access": "Event"}}}
+    assert derive(schema, {"record": [{"register": "Reg", "as": "r"}]}).recorded == {32: "r"}
+
+
+def test_a_signed_register_is_still_usable_as_an_action():
+    """Only the recorded side is gated. Writes go out with the correct width
+    and signedness already, so refusing the action too would take away
+    something that works."""
+    schema = {"registers": {"Offset": {"address": 32, "type": "S16", "access": "Write"}}}
+    assert derive(schema, None).actions == {"Offset": 32}

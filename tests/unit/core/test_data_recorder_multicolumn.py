@@ -9,6 +9,7 @@ producing exactly the column they always did.
 from __future__ import annotations
 
 import csv
+import time
 
 import pytest
 
@@ -389,3 +390,84 @@ def test_a_device_without_the_hook_is_left_alone(tmp_path):
     """Every device that predates the hook."""
     recorder = _recorder_for({"lever": _LegacyDevice("button")})
     assert [line for line in _metadata_lines(recorder, tmp_path) if "WARNING" in line] == []
+
+
+# --- Warnings a device only learns during the run -----------------------
+
+
+class _LateWarningDevice(_FakeDevice):
+    """A device that learns something is wrong after recording has started.
+
+    The motivating case is a serial link that dies mid-session: the header
+    block was written before the first row, so it cannot carry this, and the
+    resulting CSV is the plausible kind of wrong — a column that repeats one
+    value for three hours reads exactly like a subject that stopped
+    responding.
+    """
+
+    def __init__(self, warnings_before, warnings_after):
+        super().__init__("harp", columns=["lick_state"], state={"lick_state": 1})
+        self._warnings = list(warnings_before)
+        self._after = list(warnings_after)
+
+    def fail(self):
+        self._warnings = self._after
+
+    def recording_warnings(self) -> list[str]:
+        return list(self._warnings)
+
+
+async def test_a_warning_raised_during_the_run_reaches_the_csv(tmp_path):
+    device = _LateWarningDevice([], ["the reader thread stopped; rows after this are not readings"])
+    recorder = _recorder_for({"harp1": device})
+    recorder.set_camera_driven(True)
+    recorder.set_output_directory(tmp_path)
+
+    path = await recorder.start("late")
+    await recorder.record_at_frame(0, time.time())
+    device.fail()  # the cable is pulled here
+    await recorder.record_at_frame(1, time.time())
+    await recorder.stop()
+
+    warnings = [
+        line for line in path.read_text(encoding="utf-8").splitlines() if line.startswith("# WARN")
+    ]
+    assert warnings == [
+        "# WARNING,harp1,the reader thread stopped; rows after this are not readings"
+    ], path.read_text(encoding="utf-8")
+
+
+async def test_a_warning_already_in_the_header_is_not_repeated_in_the_footer(tmp_path):
+    """A static warning is reported once, not once at each end of the file."""
+    device = _LateWarningDevice(["a column that cannot change"], ["a column that cannot change"])
+    recorder = _recorder_for({"harp1": device})
+    recorder.set_camera_driven(True)
+    recorder.set_output_directory(tmp_path)
+
+    path = await recorder.start("static")
+    await recorder.record_at_frame(0, time.time())
+    await recorder.stop()
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert [ln for ln in lines if ln.startswith("# WARN")] == [
+        "# WARNING,harp1,a column that cannot change"
+    ], lines
+
+
+async def test_the_footer_warning_does_not_disturb_the_analysis_reader(tmp_path):
+    """It lands after the data rows, so the reader must skip it as a comment
+    rather than parse it as one."""
+    device = _LateWarningDevice([], ["the reader thread stopped mid-run"])
+    recorder = _recorder_for({"harp1": device})
+    recorder.set_camera_driven(True)
+    recorder.set_output_directory(tmp_path)
+
+    path = await recorder.start("late")
+    await recorder.record_at_frame(0, time.time())
+    device.fail()
+    await recorder.stop()
+
+    _, df = parse_csv(path)
+    assert list(df.columns)[-1] == "harp1:lick_state"
+    assert len(df) >= 1
+    assert "the reader thread stopped mid-run" in path.read_text(encoding="utf-8")

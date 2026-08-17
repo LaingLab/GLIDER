@@ -75,6 +75,11 @@ _PROFILE_MAJOR_VERSION = 1
 # path: anything else lets a device setting read a file we never shipped.
 _PROFILE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
+# Payload types a recorded register may have. Not a policy: it is exactly what
+# ``RegisterCache`` can decode, which reads a payload as one unsigned
+# little-endian integer. See ``_check_recordable``.
+_RECORDABLE_TYPES = frozenset({"U8", "U16", "U32", "U64"})
+
 
 @dataclass
 class Derived:
@@ -230,6 +235,8 @@ def derive(schema: Mapping[str, Any], profile: Mapping[str, Any] | None) -> Deri
         if address in result.recorded:
             raise ValueError(f"Profile records register {register!r} more than once")
 
+        _check_recordable(register, by_name[register])
+
         if not isinstance(column, str) or not column:
             raise ValueError(f"Profile entry {register!r} has no 'as' column name")
         if ":" in column:
@@ -263,6 +270,46 @@ def derive(schema: Mapping[str, Any], profile: Mapping[str, Any] | None) -> Deri
         result.recorded[address] = column
 
     return result
+
+
+def _check_recordable(name: str, meta: Any) -> None:
+    """Refuse a register whose payload the record would decode wrongly.
+
+    ``RegisterCache`` reads every payload as one unsigned little-endian
+    integer -- which is what the digital-input and counter registers this is
+    built for send, and is wrong for everything else in a way the CSV cannot
+    show. An ``S16`` of -1 is recorded as 65535. A ``Float`` of 1.5 is
+    recorded as 1069547520. An array register's whole payload collapses into
+    one implausible number. And because ``HarpDevice`` *packs* writes by the
+    declared type, a signed register written as -1 and read back through the
+    record returns a different number than it was given, inside one program.
+
+    This is the gate rather than a warning because every one of those files
+    opens cleanly, plots, and is wrong: there is nothing downstream that can
+    tell 65535 from a real reading. Widening the record to another type means
+    teaching the cache to decode it, and the two have to happen together --
+    so the refusal names the type, and stays until they do.
+
+    Only the *recorded* side is gated. Writes already go out with the correct
+    width and signedness, so a signed or float register remains perfectly
+    usable as an action; it just cannot become a column yet.
+    """
+    if not isinstance(meta, Mapping):
+        return
+    declared = meta.get("type")
+    if declared not in _RECORDABLE_TYPES:
+        raise ValueError(
+            f"Profile records register {name!r}, whose type is {declared!r}; only "
+            f"{', '.join(sorted(_RECORDABLE_TYPES))} can be recorded today, because the "
+            "register cache reads every payload as one unsigned little-endian integer"
+        )
+    length = meta.get("length", 1)
+    if isinstance(length, int) and not isinstance(length, bool) and length > 1:
+        raise ValueError(
+            f"Profile records register {name!r}, which has {length} elements; the register "
+            "cache reads the whole payload as one integer, so an array register would be "
+            "recorded as a single meaningless number"
+        )
 
 
 def _address_of(name: str, meta: Any) -> int:

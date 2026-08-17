@@ -51,6 +51,12 @@ What the recorder sees:
   whoever writes the CSV.
 * ``read()`` -- ``cache.peek()``. Non-consuming, because ``WaitForInput`` and
   the Input node both prefer ``read()`` and one of them polls at 50 ms.
+
+Both of those reads are also where a link that broke mid-session is noticed.
+The reader thread records why it stopped and exits, and nothing above it would
+otherwise look: the cache simply stops changing, so the CSV carries the last
+value with a count of zero for the rest of the run and is indistinguishable
+from a subject that went quiet. See ``_check_link``.
 """
 
 from __future__ import annotations
@@ -107,6 +113,15 @@ _MODE_NAMES = {_MODE_STANDBY: "Standby", _MODE_ACTIVE: "Active"}
 # second is only there so the loop can notice its own deadline.
 ROUND_TRIP_TIMEOUT_S = 1.0
 ROUND_TRIP_READ_TIMEOUT_S = 0.05
+
+# The same wait, on the way out, and much shorter. ``HardwareManager`` bounds
+# ``device.shutdown()`` at 2 s, of which the reader's join may already have
+# taken most; two full-length round-trips on top of it overrun the budget, and
+# the caller's ``wait_for`` then cancels shutdown part-way -- historically
+# before the port was closed. A board that is powered off but still enumerated
+# burns exactly this path. Returning the device to Standby is a courtesy;
+# releasing the port is not, so the courtesy gets the small budget.
+SHUTDOWN_ROUND_TRIP_TIMEOUT_S = 0.25
 
 _DEFAULT_BAUDRATE = 115200
 
@@ -201,6 +216,10 @@ class HarpDevice(BaseDevice):
         self._derived = Derived()
         self._actions: dict[str, Callable] = {}
         self._who_am_i: int | None = None
+        # Warnings about *this run* rather than about the configuration, and
+        # latched: a link that broke must be reported once, not once per row.
+        self._runtime_warnings: list[str] = []
+        self._link_failed = False
         # Whether the schema/profile have been resolved at least once. The node
         # editor asks for ``actions`` long before any hardware exists, so the
         # derivation is loaded lazily there and strictly in initialize().
@@ -347,9 +366,14 @@ class HarpDevice(BaseDevice):
         ``derive``, which owns the predicate and the wording; this only passes
         them on. A second copy of the predicate here was the previous shape,
         and it got the list-of-access-modes case wrong.
+
+        Two kinds, and the second is why the recorder reads this again at
+        stop() as well as at start(): what the *configuration* cannot report
+        is known before a row is written, while a link that broke mid-run is
+        only known afterwards. See ``_check_link``.
         """
         self._ensure_derivation()
-        return list(self._derived.warnings)
+        return [*self._derived.warnings, *self._runtime_warnings]
 
     def _ensure_derivation(self) -> None:
         """Resolve the schema and profile once, tolerating failure.
@@ -403,7 +427,11 @@ class HarpDevice(BaseDevice):
 
         ``snapshot`` clears the event counters, so this must have exactly one
         caller. Everything else wants ``read``.
+
+        Also where a broken link is noticed, because this is the call the
+        recorder makes once per row -- see ``_check_link``.
         """
+        self._check_link()
         cache = self._cache
         return cache.snapshot() if cache is not None else None
 
@@ -415,8 +443,54 @@ class HarpDevice(BaseDevice):
         node onto this device costs nothing; wired to ``snapshot`` it would eat
         counts out of the CSV twenty times a second, with no symptom anywhere.
         """
+        self._check_link()
         cache = self._cache
         return cache.peek() if cache is not None else None
+
+    def _check_link(self) -> None:
+        """Notice a reader thread that has stopped, once.
+
+        ``HarpReader._run`` records why it stopped and exits; until this,
+        nothing anywhere read that. The failure it leaves behind is the worst
+        shape a failure can have. A cable pulled twenty minutes into a
+        four-hour unattended run kills the thread, and every row from then on
+        carries the last state it saw, a count of zero, and a device time that
+        never moves again -- byte for byte what an animal that stopped licking
+        looks like. A plausible result is worse than a broken one, because
+        nobody investigates it.
+
+        So it is reported three ways, none of which stops the recording: the
+        board goes to ERROR (which is what the hardware panel shows and what
+        ``HardwareManager``'s error listeners are wired to), the log gets one
+        line, and -- the one that survives the session -- a warning is added
+        for the CSV. Losing one device should still leave a recording of
+        everything the others saw, annotated, rather than nothing at all.
+
+        Latched, so a four-hour run does not write the same line every 33 ms.
+        """
+        reader = self._reader
+        if reader is None or self._link_failed or reader.is_alive():
+            return
+        self._link_failed = True
+
+        failure = reader.failure
+        cause = f"{type(failure).__name__}: {failure}" if failure is not None else "no error"
+        message = (
+            f"the reader thread stopped during recording ({cause}); every row after this "
+            "point repeats the last value with a count of zero and is not a reading"
+        )
+        self._runtime_warnings.append(message)
+        logger.error("Harp %s: %s", self._name, message)
+
+        report = getattr(self._board, "report_transport_failure", None)
+        if report is None:
+            return
+        try:
+            report(failure if failure is not None else RuntimeError(message))
+        except Exception:
+            # A board that cannot record the failure must not also swallow the
+            # sample the recorder came here for.
+            logger.exception("Harp %s: could not report the transport failure", self._name)
 
     # --- lifecycle ---
 
@@ -468,6 +542,22 @@ class HarpDevice(BaseDevice):
                 # here can never find a thread it has to stop.
                 self._cache = cache
                 self._reader = reader
+                # Re-arm the broken-link detector for the new reader, and drop
+                # what the old one reported. Both halves matter, and the latch
+                # is the one that bites: ``_check_link`` returns early while it
+                # is set, so a detector left latched never looks at this reader
+                # at all. A second cable pull would then go unnoticed, and the
+                # recording would go back to being indistinguishable from a
+                # subject that went quiet -- the whole failure this detector
+                # exists to close, regressing on every run after the first.
+                #
+                # The warnings go with it because they describe a link that no
+                # longer exists. They are *not* cleared per recording: the
+                # recorder re-reads them at the start of each one, so a reader
+                # that is still dead correctly annotates every recording made
+                # while it stays that way. Only a new link clears them.
+                self._link_failed = False
+                self._runtime_warnings = []
             else:
                 logger.info(
                     "Harp %s: no profile, so nothing is recorded and the device is left "
@@ -503,6 +593,13 @@ class HarpDevice(BaseDevice):
         also keeps ``initialize()`` refused, since the port really is still in
         use), and the error is logged. ``stop()`` keeps asking, so a later
         shutdown() can still succeed.
+
+        Everything after the join is bounded and best-effort, because the
+        caller bounds this whole method: ``HardwareManager`` gives it 2 s and
+        cancels at the deadline. Standby gets a short round-trip budget and
+        the close runs from a ``finally``, shielded -- releasing the port is
+        the part that must happen, and a cancellation must not be what stops
+        it.
         """
         self._initialized = False
 
@@ -520,15 +617,26 @@ class HarpDevice(BaseDevice):
                 return
             self._reader = None
 
-        if self._serial is not None:
-            try:
-                await self._set_operation_mode(_MODE_STANDBY)
-            except Exception as e:
-                # Best-effort: a device that will not answer is still a device
-                # whose port has to be released.
-                logger.warning("Harp %s: could not return the device to Standby: %s", self._name, e)
-            await self._close_port()
-        self._cache = None
+        try:
+            if self._serial is not None:
+                await self._set_operation_mode(_MODE_STANDBY, timeout=SHUTDOWN_ROUND_TRIP_TIMEOUT_S)
+        except Exception as e:
+            # Best-effort: a device that will not answer is still a device
+            # whose port has to be released.
+            logger.warning("Harp %s: could not return the device to Standby: %s", self._name, e)
+        finally:
+            # In a ``finally`` and shielded, because the caller bounds this
+            # whole method with ``wait_for``: a shutdown cancelled part-way
+            # must still release the handle, or a device that merely took too
+            # long leaves a port nothing in the process can reopen. Shielding
+            # lets the close finish even though the ``await`` here is about to
+            # raise ``CancelledError`` -- which is a ``BaseException``, so a
+            # bare ``except Exception`` would have skipped this entirely.
+            # ``initialize()`` catches ``BaseException`` for the same reason;
+            # two halves of one lifecycle should not disagree about it.
+            if self._serial is not None:
+                await asyncio.shield(self._close_port())
+            self._cache = None
 
     async def _close_port(self) -> None:
         """Release the handle, whatever close() thinks of it.
@@ -617,15 +725,15 @@ class HarpDevice(BaseDevice):
         frame = await self._round_trip(WHO_AM_I, _WHO_AM_I_TYPE)
         return int.from_bytes(frame.payload, "little") if frame.payload else None
 
-    async def _read_operation_control(self) -> int:
-        frame = await self._round_trip(OPERATION_CONTROL, _OPERATION_CONTROL_TYPE)
+    async def _read_operation_control(self, timeout: float = ROUND_TRIP_TIMEOUT_S) -> int:
+        frame = await self._round_trip(OPERATION_CONTROL, _OPERATION_CONTROL_TYPE, timeout)
         if not frame.payload:
             raise RuntimeError(
                 f"Harp {self._name}: the device answered OperationControl with an empty payload"
             )
         return frame.payload[0]
 
-    async def _set_operation_mode(self, mode: int) -> int:
+    async def _set_operation_mode(self, mode: int, timeout: float = ROUND_TRIP_TIMEOUT_S) -> int:
         """Move the device between Standby and Active, and confirm it moved.
 
         Read-modify-write, so the flags that share the register -- heartbeat,
@@ -638,12 +746,12 @@ class HarpDevice(BaseDevice):
         through the echo, and the symptom of that is a recording with no rows
         in it and nothing in any log.
         """
-        current = await self._read_operation_control()
+        current = await self._read_operation_control(timeout)
         wanted = (current & ~_OPERATION_MODE_MASK) | mode
         await self._send(
             encode(MESSAGE_WRITE, OPERATION_CONTROL, _OPERATION_CONTROL_TYPE, bytes([wanted]))
         )
-        confirmed = await self._read_operation_control()
+        confirmed = await self._read_operation_control(timeout)
         if confirmed & _OPERATION_MODE_MASK != mode:
             raise RuntimeError(
                 f"Harp {self._name}: asked for OperationControl 0x{wanted:02X} "
@@ -659,7 +767,9 @@ class HarpDevice(BaseDevice):
         )
         return confirmed
 
-    async def _round_trip(self, address: int, payload_type: str) -> HarpFrame:
+    async def _round_trip(
+        self, address: int, payload_type: str, timeout: float = ROUND_TRIP_TIMEOUT_S
+    ) -> HarpFrame:
         """Read one register and wait for the reply.
 
         Only legal before ``reader.start()`` or after ``reader.stop()``. While
@@ -676,9 +786,7 @@ class HarpDevice(BaseDevice):
             handle = self._serial
             if handle is None:
                 raise RuntimeError(f"Harp {self._name} is not connected")
-            return await asyncio.to_thread(
-                _exchange, handle, request, address, ROUND_TRIP_TIMEOUT_S, self._name
-            )
+            return await asyncio.to_thread(_exchange, handle, request, address, timeout, self._name)
 
     async def _send(self, request: bytes) -> None:
         """Write one frame and do not wait for anything.
