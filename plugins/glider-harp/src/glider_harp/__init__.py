@@ -39,7 +39,23 @@ no ``glider`` modules at all, while importing any of those three pulls in 36,
 including all of ``glider.vision``. Import them by module --
 ``from glider_harp.board import HarpBoard``,
 ``from glider_harp.device import HarpDevice``.
+
+``BOARD_DRIVERS`` and ``DEVICE_TYPES`` are the exception, and they are lazy for
+exactly that reason. ``PluginManager._register_plugin_components`` reads them
+off a plugin module with ``hasattr``/``getattr``, so they must *resolve* from
+this package -- but writing them as top-level assignments would mean
+``import glider_harp`` imports ``board`` and ``device``, and the property above
+would be gone. PEP 562's module ``__getattr__`` satisfies ``hasattr`` and
+``getattr`` identically while deferring the import to first access, so the cost
+is paid only by a caller who actually wants the drivers. The resolved value is
+written back into ``globals()``, so the second access is a plain dict lookup
+and never re-enters this function.
+
+There is no ``NODE_TYPES``: this package ships no node classes, and an empty
+dict would only make ``PluginManager`` walk a loop over nothing.
 """
+
+from typing import Any
 
 from glider_harp.derivation import CORE_REGISTERS, Derived, derive, load_profile
 from glider_harp.frames import (
@@ -72,3 +88,39 @@ __all__ = [
     "load_profile",
     "load_schema",
 ]
+
+# Deliberately NOT in ``__all__``: ``from glider_harp import *`` would evaluate
+# every name in it, which would pull ``glider`` in through the back door and
+# undo the whole point of the laziness below. They are part of the plugin-host
+# contract, not of the star-import surface. ``__dir__`` still advertises them.
+_LAZY_PLUGIN_ATTRS = frozenset({"BOARD_DRIVERS", "DEVICE_TYPES"})
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve the plugin-host tables on first access (PEP 562).
+
+    ``PluginManager`` reaches for these with ``hasattr``/``getattr``, both of
+    which route through here, so the deferral is invisible to it.
+    """
+    if name == "BOARD_DRIVERS":
+        from glider_harp.board import HarpBoard
+
+        # Key is the driver name: what ``HardwareManager._driver_registry`` is
+        # keyed by, matching ``HarpBoard.board_type`` and the entry point name.
+        value: Any = {"harp": HarpBoard}
+    elif name == "DEVICE_TYPES":
+        from glider_harp.device import HarpDevice
+
+        # Key is ``HarpDevice.device_type``, which is what
+        # ``create_device_from_dict`` looks up in ``DEVICE_REGISTRY``.
+        value = {"Harp": HarpDevice}
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    # Cache into the module namespace: a second access never re-enters here.
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(__all__) | _LAZY_PLUGIN_ATTRS)

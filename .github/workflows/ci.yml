@@ -35,11 +35,16 @@ jobs:
       - name: Install dev extras
         run: uv sync --extra dev
 
+      # `plugins` covers the in-repo plugin distributions (plugins/glider-harp
+      # and any future sibling). Before it was listed here, the plugin's source
+      # and the `src = [".", "src", "plugins/glider-harp/src"]` import-root
+      # config in the root pyproject were only ever exercised on a developer's
+      # machine.
       - name: Ruff
-        run: uv run ruff check src tests
+        run: uv run ruff check src tests plugins
 
       - name: Black --check
-        run: uv run black --check src tests
+        run: uv run black --check src tests plugins
 
       - name: Mypy
         # Start permissive (ignore-missing-imports), tighten over time. Failing
@@ -89,6 +94,20 @@ jobs:
       - name: Install project + dev extras
         run: uv sync --extra dev
 
+      # The in-repo plugin distributions. Editable, and after `uv sync`
+      # (which prunes anything not in the lockfile), so this must stay last of
+      # the install steps. This is also how `harp-protocol` reaches CI: it is
+      # the plugin's declared dependency, not the core project's.
+      #
+      # Installing rather than extending PYTHONPATH is deliberate: PYTHONPATH's
+      # separator is `;` on Windows and `:` elsewhere, and the workflow's `env:`
+      # block is one literal string for all three runners -- a wrong separator
+      # does not error, it just quietly imports nothing. An install has no such
+      # edge, and it registers the entry points that
+      # tests/test_packaging.py's PluginManager test exercises.
+      - name: Install in-repo plugins (brings in harp-protocol)
+        run: uv pip install -e ./plugins/glider-harp
+
       - name: Run tests with coverage
         # Force bash on all platforms: the default Windows shell is PowerShell,
         # which doesn't understand `\` line-continuation. GitHub-hosted Windows
@@ -103,9 +122,15 @@ jobs:
         # --cov-fail-under starts at today's coverage; ratchet upward on every
         # release. Producing a coverage report at all is the win — the floor
         # can move once the test sprint lands.
+        # `--no-sync`: a bare `uv run` re-syncs the environment from uv.lock
+        # first, which would uninstall the editable plugin installed above and
+        # take harp-protocol with it. The paths are given explicitly rather
+        # than relying on `testpaths` so the invocation stays readable, and
+        # they match what `testpaths` in pyproject.toml lists.
         run: |
-          uv run pytest tests/ -v -m "not slow" \
+          uv run --no-sync pytest tests/ plugins/glider-harp/tests/ -v -m "not slow" \
             --cov=glider \
+            --cov=glider_harp \
             --cov-report=xml \
             --cov-report=term
 
