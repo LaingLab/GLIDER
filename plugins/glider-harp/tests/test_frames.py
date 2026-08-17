@@ -6,6 +6,7 @@ from harp.protocol import HarpParseError
 from glider_harp.frames import (
     ChecksumError,
     FrameError,
+    FrameSplitter,
     HarpFrame,
     TruncatedFrameError,
     decode,
@@ -155,3 +156,129 @@ def test_upstream_parse_errors_are_translated(raw):
     # Chained from upstream, proving the frame really did reach the parser
     # rather than being rejected by a local check that happens to agree.
     assert isinstance(excinfo.value.__cause__, HarpParseError)
+
+
+def _other():
+    """A frame distinguishable from ``_valid()`` in both length and contents."""
+    return _frame(msg_type=1, address=44, payload_type=0x02, payload=bytes([7, 9]), port=2)
+
+
+def test_splitter_yields_complete_frames():
+    splitter = FrameSplitter()
+    a = _frame(3, 32, 0x01, bytes([1]))
+    b = _frame(3, 32, 0x01, bytes([0]))
+    assert list(splitter.feed(a + b)) == [a, b]
+
+
+def test_splitter_buffers_partial_frame():
+    splitter = FrameSplitter()
+    raw = _frame(3, 32, 0x01, bytes([1]))
+    assert list(splitter.feed(raw[:3])) == []
+    assert list(splitter.feed(raw[3:])) == [raw]
+
+
+def test_splitter_recovers_after_garbage():
+    """A desynchronised byte must not wedge the stream permanently."""
+    splitter = FrameSplitter()
+    raw = _frame(3, 32, 0x01, bytes([1]))
+    list(splitter.feed(b"\x00"))
+    frames = list(splitter.feed(raw))
+    assert raw in frames
+
+
+def test_resync_consumes_the_frame_it_recovers():
+    """Recovery must leave the reader positioned after the frame, holding nothing.
+
+    Resync self-heals, so a splitter that consumed the wrong number of bytes
+    here still limps along and still yields the right frames -- it just carries
+    a stale byte in front of every later frame, which is one coincidence away
+    from framing a bogus message. The buffer catches that; the output does not.
+    """
+    splitter = FrameSplitter()
+    raw = _valid()
+    assert list(splitter.feed(b"\x00" + raw)) == [raw]
+    assert splitter._buffer == b""
+
+
+def test_splitter_accepts_one_byte_at_a_time():
+    """The pathological read size a loaded serial port really produces.
+
+    Order is asserted, not just membership: a splitter that emitted the second
+    frame first would still satisfy a set comparison.
+    """
+    splitter = FrameSplitter()
+    a = _valid()
+    b = _other()
+    assert a != b
+    yielded = []
+    for byte in a + b:
+        yielded.extend(splitter.feed(bytes([byte])))
+    assert yielded == [a, b]
+
+
+def test_corrupt_frame_does_not_consume_its_successor():
+    """Resync must land on the next real frame, not swallow it as padding.
+
+    The bytes after a corrupt frame are re-examined from every offset, so the
+    good frame behind it survives. A splitter that trusted the corrupt frame's
+    length byte and skipped that many bytes would lose the good one.
+    """
+    splitter = FrameSplitter()
+    corrupt = bytearray(_valid())
+    corrupt[-1] ^= 0xFF
+    good = _other()
+    assert list(splitter.feed(bytes(corrupt) + good)) == [good]
+
+
+def test_splitter_survives_a_chunk_boundary_at_every_offset():
+    """Sweep every split of a two-frame buffer, as a serial reader would see them.
+
+    Frames of unequal length are used so the boundary lands at a different
+    place within each frame, and so reversed output is detectable.
+    """
+    a = _valid()
+    b = _other()
+    stream = a + b
+    assert len(a) != len(b)
+
+    for split in range(len(stream) + 1):
+        splitter = FrameSplitter()
+        yielded = list(splitter.feed(stream[:split]))
+        yielded += list(splitter.feed(stream[split:]))
+        assert yielded == [a, b], f"split at {split}"
+
+
+def test_partial_read_does_not_reframe_a_payload_that_looks_like_a_frame():
+    """While synchronised, a short read must wait rather than hunt forward.
+
+    This outer frame's payload happens to contain the bytes of a complete,
+    correctly checksummed inner frame -- payloads are arbitrary bytes, so this
+    is a matter of time on a real device. A splitter that scanned forward
+    whenever the head was incomplete would emit the inner frame, then treat
+    the rest of the outer frame as garbage: one message invented, one lost.
+    """
+    inner = _valid()
+    outer = _frame(msg_type=3, address=33, payload_type=0x01, payload=bytes([0]) + inner + bytes(4))
+    cut = outer.find(inner) + len(inner)
+    assert 0 < cut < len(outer)
+
+    splitter = FrameSplitter()
+    assert list(splitter.feed(outer[:cut])) == []
+    assert list(splitter.feed(outer[cut:])) == [outer]
+
+
+def test_splitter_does_not_hoard_bytes_it_can_never_frame():
+    """A corrupt length byte must not grow the buffer without bound.
+
+    Every byte of this noise claims a 257-byte frame, so a splitter that simply
+    waits for each claimed length accumulates the whole stream forever. Once
+    more than one maximum frame is held with nothing decodable in it, the
+    leading bytes cannot start a frame and must be dropped.
+    """
+    splitter = FrameSplitter()
+    assert list(splitter.feed(b"\xff" * 3000)) == []
+    assert len(splitter._buffer) <= 257
+
+    # ...and the buffer is still a working splitter, not merely a small one.
+    raw = _valid()
+    assert raw in list(splitter.feed(raw))
