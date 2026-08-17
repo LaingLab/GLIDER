@@ -239,6 +239,41 @@ def test_a_masked_array_register_raises_rather_than_masking_one_element():
         )
 
 
+def test_payload_spec_and_mask_type_together_raise():
+    """The payloadSpec branch returns before maskType is read, so declaring
+    both dropped the mask in silence -- including a mask name that exists in
+    neither section, which is how the defect was found."""
+    with pytest.raises(SchemaError, match="maskType"):
+        build_registers(
+            _schema(
+                Reg={
+                    "address": 32,
+                    "type": "U8",
+                    "maskType": "NoSuchMask",
+                    "payloadSpec": {"x": {"offset": 0}},
+                }
+            )
+        )
+
+
+@pytest.mark.parametrize("section", ["bitMasks", "groupMasks"])
+def test_a_mask_section_that_is_not_a_mapping_raises(section):
+    """A bare string passes the ``in`` test -- ``"Bits" in "Bits"`` is
+    substring membership -- and then dies on the subscript with TypeError."""
+    with pytest.raises(SchemaError, match=section):
+        build_registers(
+            {
+                "registers": {"Reg": {"address": 32, "type": "U8", "maskType": "Bits"}},
+                section: "Bits",
+            }
+        )
+
+
+def test_a_register_with_an_empty_name_raises():
+    with pytest.raises(SchemaError, match="empty name"):
+        build_registers(_schema(**{"": {"address": 32, "type": "U8"}}))
+
+
 @pytest.mark.parametrize("length", [0, -2, 1.5, "3"])
 def test_an_impossible_length_raises(length):
     with pytest.raises(SchemaError, match="length"):

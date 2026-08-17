@@ -1009,6 +1009,26 @@ SCHEMA_MUTANTS: list[tuple[str, str, str]] = [
         "        if False:",
     ),
     (
+        # The payloadSpec branch returns before maskType is read, so declaring
+        # both dropped the mask in silence -- including a mask name present in
+        # neither section, which is how it was found.
+        "payloadSpec and maskType on one register silently drops the mask",
+        "    if payload_spec is not None and mask_type is not None:",
+        "    if False:",
+    ),
+    (
+        # "Bits" in "Bits" is substring membership, so a section written as a
+        # bare string passes the maskType lookup and dies on the subscript.
+        "a mask section that is not a mapping is indexed anyway",
+        "    if not isinstance(section, Mapping):",
+        "    if False:",
+    ),
+    (
+        "a register with an empty name builds a class called ''",
+        "        if not str(name):",
+        "        if False:",
+    ),
+    (
         "a mask member written with a description is read as the description",
         MASK_MEMBER_VALUE,
         "        raw = value",
@@ -1244,11 +1264,45 @@ DERIVATION_MUTANTS: list[tuple[str, str, str]] = [
         "        if False:",
     ),
     (
+        # "record": {"LickState": "lick"} iterates its keys, so every register
+        # name comes back as a malformed entry -- naming a register that does
+        # exist, and pointing at the wrong half of the file.
+        "a record block that is not a list is iterated anyway",
+        "    if not isinstance(records, (list, tuple)):",
+        "    if False:",
+    ),
+    (
         # ``mode`` is reserved, carried by the shipped profile, and read by
         # nothing. Rejecting it would make the shipped profile unloadable.
         "the reserved mode key is rejected",
         '_RECORD_KEYS = frozenset({"register", "as", "mode"})',
         '_RECORD_KEYS = frozenset({"register", "as"})',
+    ),
+    # --- the version gate that makes strict record keys survivable ---
+    (
+        # Without it, a 1.1 profile adding a key fails with "unknown keys:
+        # scale" -- naming the key rather than the version, and reading like a
+        # typo in a file that is perfectly correct for a newer GLIDER.
+        "no version gate, so a future profile fails as a typo",
+        '    declared = profile.get("schema_version")\n    if declared is None:\n        return',
+        '    declared = profile.get("schema_version")\n    if True:\n        return',
+    ),
+    (
+        "the gate rejects a minor bump as well as a major one",
+        '    major = str(declared).split(".")[0].strip()',
+        '    major = str(declared).replace(".", "")',
+    ),
+    (
+        # load_profile is only the shipped path; Task 11 reads user files of
+        # its own, so gating in one place leaves the other open.
+        "derive does not gate the version, only load_profile",
+        "    _check_schema_version(profile)\n    _check_who_am_i(schema, profile)",
+        "    _check_who_am_i(schema, profile)",
+    ),
+    (
+        "load_profile does not gate the version, only derive",
+        "    _check_schema_version(loaded)\n    return loaded",
+        "    return loaded",
     ),
     # --- WhoAmI, which is the only thing that does not overlap across boards ---
     (

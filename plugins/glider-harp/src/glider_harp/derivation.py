@@ -58,8 +58,18 @@ _ACTION_ACCESS = frozenset({"Read", "Write"})
 # ignored**: it is carried in the shipped profile as a decoding hint for a
 # later task, and nothing reads it today. Unknown keys are rejected rather
 # than ignored, because a profile is hand-edited JSON and a key typed as
-# ``"az"`` would otherwise be a change that silently does nothing.
+# ``"az"`` would otherwise be a change that silently does nothing. (A
+# ``device.yml`` is treated the opposite way, and rightly: it is vendor-
+# authored and full of keys we legitimately do not consume.)
 _RECORD_KEYS = frozenset({"register", "as", "mode"})
+
+# The profile format this module understands. Rejecting unknown keys is only
+# safe with a version gate in front of it: without one, a 1.1 profile adding a
+# key fails with "unknown keys: scale", which points at the key rather than at
+# the version, and reads like a typo in a file that is perfectly correct for a
+# newer GLIDER. Major only -- a minor bump is by definition additive, and a
+# profile that omits the field is assumed to be of this major version.
+_PROFILE_MAJOR_VERSION = 1
 
 # A profile name selects a file inside the package, so it is a name and not a
 # path: anything else lets a device setting read a file we never shipped.
@@ -102,7 +112,34 @@ def load_profile(name: str) -> dict[str, Any]:
     loaded = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(loaded, dict):
         raise ValueError(f"Profile {name!r} is not a JSON object")
+    _check_schema_version(loaded)
     return loaded
+
+
+def _check_schema_version(profile: Mapping[str, Any]) -> None:
+    """Refuse a profile written to a format this GLIDER does not know.
+
+    Checked here *and* from ``derive``, so the gate holds however the profile
+    arrived -- ``load_profile`` is only the shipped-profile path, and Task 11
+    will read user-supplied files of its own.
+    """
+    declared = profile.get("schema_version")
+    if declared is None:
+        return
+    major = str(declared).split(".")[0].strip()
+    try:
+        version = int(major)
+    except ValueError:
+        raise ValueError(
+            f"Profile {profile.get('name', '?')!r} has an unreadable "
+            f"schema_version {declared!r}"
+        ) from None
+    if version != _PROFILE_MAJOR_VERSION:
+        raise ValueError(
+            f"Profile {profile.get('name', '?')!r} declares schema_version "
+            f"{declared!r}; this GLIDER reads profile format "
+            f"{_PROFILE_MAJOR_VERSION}.x"
+        )
 
 
 def derive(schema: Mapping[str, Any], profile: Mapping[str, Any] | None) -> Derived:
@@ -132,11 +169,22 @@ def derive(schema: Mapping[str, Any], profile: Mapping[str, Any] | None) -> Deri
     if not profile:
         return result
 
+    _check_schema_version(profile)
     _check_who_am_i(schema, profile)
 
     by_name = {str(name): meta for name, meta in registers.items()}
     claimed: dict[str, str] = {}
-    for entry in profile.get("record") or []:
+    records = profile.get("record") or []
+    if not isinstance(records, (list, tuple)):
+        # A mapping is the plausible mistake -- writing the block as
+        # {"LickState": "lick"} -- and it is the worst shape to let through:
+        # iterating it yields the register *names*, each of which then fails
+        # as "not a mapping" while naming a register that does exist, which
+        # points the reader at the wrong half of the file entirely.
+        raise ValueError(
+            f"Profile 'record' must be a list of entries, got {type(records).__name__}"
+        )
+    for entry in records:
         if not isinstance(entry, Mapping):
             raise ValueError(f"Profile record entry is not a mapping: {entry!r}")
         if unknown := sorted(str(key) for key in entry if key not in _RECORD_KEYS):
@@ -193,7 +241,16 @@ def derive(schema: Mapping[str, Any], profile: Mapping[str, Any] | None) -> Deri
 
 
 def _address_of(name: str, meta: Any) -> int:
-    """The address of one register entry."""
+    """The address of one register entry.
+
+    Deliberately not range-checked. ``schema.build_registers`` is the single
+    authority on what a frame header can carry (0..255) and rejects anything
+    else; repeating the bound here would put the wire's limit in two files that
+    could disagree. So ``derive`` will happily route address 999 into
+    ``actions`` -- a caller that only ever derives, and never builds registers
+    from the same schema, gets no protection from that and should not expect
+    any. In GLIDER both run against the same schema.
+    """
     if not isinstance(meta, Mapping) or "address" not in meta:
         raise ValueError(f"Register {name!r} has no address")
     address = meta["address"]

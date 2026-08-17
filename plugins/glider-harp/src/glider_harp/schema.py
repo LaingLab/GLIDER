@@ -134,12 +134,16 @@ def build_registers(schema: Mapping[str, Any]) -> dict[str, type[RegisterBase[An
     if not isinstance(registers, Mapping):
         raise SchemaError("Schema 'registers' must be a mapping of name to register entry")
 
-    bit_masks = schema.get("bitMasks") or {}
-    group_masks = schema.get("groupMasks") or {}
+    bit_masks = _mask_section(schema, "bitMasks")
+    group_masks = _mask_section(schema, "groupMasks")
 
     built: dict[str, type[RegisterBase[Any]]] = {}
     seen: dict[int, str] = {}
     for name, entry in registers.items():
+        if not str(name):
+            # A class named '' and a key of '' -- unreachable by name from
+            # anything, and it looks like a register that simply isn't there.
+            raise SchemaError("Schema has a register with an empty name")
         register = _build_register(str(name), entry, bit_masks, group_masks)
         # Two registers at one address is a broken schema, and one that hides
         # well: the loser simply never appears in an address-keyed map, so its
@@ -178,6 +182,20 @@ def _build_register(
     payload_spec = entry.get("payloadSpec")
     mask_type = entry.get("maskType")
 
+    if payload_spec is not None and mask_type is not None:
+        # The register-level mask has nowhere to go once the payload is a
+        # struct -- a payloadSpec member carries its own maskType -- so taking
+        # the payloadSpec branch and returning would drop it in silence, and
+        # the built class would then decode every event of the session through
+        # the wrong lens. The same argument as the masked-array refusal below:
+        # a schema declaring both is one its author misunderstood, and guessing
+        # which half they meant is worse than saying so.
+        raise SchemaError(
+            f"Register {name!r} declares both payloadSpec and maskType {mask_type!r}; "
+            "a payloadSpec member carries its own maskType, so the register-level "
+            "one would be silently dropped"
+        )
+
     if payload_spec is not None:
         payload = _struct_payload(name, payload_spec, element, length, bit_masks, group_masks)
         return _register_class(name, address, payload_type, payload)
@@ -200,6 +218,23 @@ def _build_register(
     register.__name__ = name
     register.__qualname__ = name
     return register
+
+
+def _mask_section(schema: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    """The ``bitMasks`` or ``groupMasks`` block, checked before it is indexed.
+
+    Without this, a section written as a bare string passes the ``in`` test a
+    ``maskType`` lookup does -- ``"Bits" in "Bits"`` is substring membership --
+    and then dies on the subscript with ``TypeError: string indices must be
+    integers``, which is neither a ``SchemaError`` nor a hint about the file.
+    """
+    section = schema.get(key) or {}
+    if not isinstance(section, Mapping):
+        raise SchemaError(
+            f"Schema {key!r} must be a mapping of mask name to definition, "
+            f"got {type(section).__name__}"
+        )
+    return section
 
 
 def _address_of(name: str, entry: Mapping[str, Any]) -> int:
@@ -261,9 +296,13 @@ def _register_class(
 def _root_payload(name: str, descriptor: Any, element: Any) -> type[Any]:
     """A payload that *is* one decoded value, held in the reserved ``__value__``.
 
-    Upstream unwraps this single field on ``parse``, so the register returns
-    the ``IntFlag`` or ``IntEnum`` directly rather than a wrapper the caller
-    would have to reach through.
+    ``__value__`` is upstream's name, not ours, and it is load-bearing: an
+    ``AnonymousPayload`` subclass declaring exactly one descriptor field with
+    that exact name is how the package spells "this payload is a single value"
+    (their docstring compares it to pydantic's ``__root__``). Any other field
+    name is a definition-time ``TypeError``. The effect is that ``parse``
+    unwraps the field and hands back the ``IntFlag`` or ``IntEnum`` itself,
+    rather than a wrapper object the caller would have to reach through.
     """
     try:
         return types.new_class(

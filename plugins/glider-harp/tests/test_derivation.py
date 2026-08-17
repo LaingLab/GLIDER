@@ -10,6 +10,7 @@ import logging
 
 import pytest
 
+from glider_harp import derivation
 from glider_harp.derivation import CORE_REGISTERS, Derived, derive, load_profile
 
 SCHEMA = {
@@ -283,6 +284,15 @@ def test_an_unknown_key_in_a_record_entry_raises(key):
         derive(SCHEMA, {"record": [entry]})
 
 
+@pytest.mark.parametrize("records", [5, "LickState", {"LickState": "lick"}])
+def test_a_record_block_that_is_not_a_list_raises(records):
+    """An object keyed by register name is the plausible mistake, and the
+    worst shape to let through: iterating it yields the register names, which
+    then fail as malformed entries naming registers that do exist."""
+    with pytest.raises(ValueError, match="list of entries"):
+        derive(SCHEMA, {"record": records})
+
+
 def test_the_reserved_mode_key_is_accepted_and_ignored():
     with_mode = derive(SCHEMA, {"record": [{"register": "LickState", "as": "lick", "mode": "x"}]})
     without = derive(SCHEMA, {"record": [{"register": "LickState", "as": "lick"}]})
@@ -341,6 +351,45 @@ def test_the_shipped_profile_is_valid_json_with_the_expected_shape():
     assert profile["schema_version"] == "1.0"
     assert profile["name"] == "LicketySplit"
     assert profile["record"] == [{"register": "LickState", "as": "lick", "mode": "boolean"}]
+
+
+@pytest.mark.parametrize("version", ["2.0", "0.9", 2, "11.0"])
+def test_a_profile_from_another_format_version_raises(version):
+    """The gate that makes strict record keys safe: without it a 1.1 profile
+    carrying a new key fails with "unknown keys: scale", which names the key
+    rather than the version and reads like a typo in a correct file."""
+    profile = {"schema_version": version, "record": LICK}
+
+    with pytest.raises(ValueError, match="schema_version"):
+        derive(SCHEMA, profile)
+
+
+@pytest.mark.parametrize("version", ["1.0", "1.4", 1, "1"])
+def test_any_minor_version_of_this_format_is_accepted(version):
+    """A minor bump is additive by definition, so only the major is gated."""
+    assert derive(SCHEMA, {"schema_version": version, "record": LICK}).recorded == {32: "lick"}
+
+
+def test_a_profile_with_no_declared_version_is_assumed_current():
+    assert derive(SCHEMA, {"record": LICK}).recorded == {32: "lick"}
+
+
+def test_an_unreadable_schema_version_raises():
+    with pytest.raises(ValueError, match="schema_version"):
+        derive(SCHEMA, {"schema_version": "one point oh", "record": LICK})
+
+
+def test_load_profile_gates_the_version_too(tmp_path, monkeypatch):
+    """``load_profile`` is only the shipped-profile path, and Task 11 will read
+    user files of its own -- so the gate has to hold at both entry points, and
+    checking it only in ``derive`` would leave this one open."""
+    monkeypatch.setattr(derivation, "PROFILE_DIR", tmp_path)
+    (tmp_path / "future.json").write_text(
+        json.dumps({"schema_version": "2.0", "name": "Future", "record": []}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="schema_version"):
+        derivation.load_profile("future")
 
 
 def test_an_unknown_profile_raises():
