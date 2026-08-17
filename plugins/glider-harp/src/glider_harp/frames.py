@@ -15,7 +15,7 @@ The wire format itself is stable:
 
 from dataclasses import dataclass
 
-from harp.protocol import HarpMessage, HarpParseError
+from harp.protocol import HarpMessage, HarpParseError, MessageType, PayloadType
 
 # Payload-type byte bit signalling that a timestamp precedes the payload.
 _TIMESTAMP_FLAG = 0x10
@@ -33,10 +33,18 @@ _MIN_FRAME_LEN = 6
 # itself, so no frame can exceed 255 + 2 bytes however corrupt it looks.
 _MAX_FRAME_LEN = 257
 
+# The three message types the wire format defines. Read and Write are
+# host-initiated -- a request and a command -- and Event is the device
+# reporting something it did on its own. Named here, beside the codec, so a
+# caller building a request never has to import upstream's enum.
+MESSAGE_READ = 1
+MESSAGE_WRITE = 2
+MESSAGE_EVENT = 3
+
 # The only message types the wire format defines. Used to judge whether a byte
 # could begin a frame at all, which is the cheapest way to tell a real short
 # read from noise that merely claims to be a long frame.
-_MESSAGE_TYPES = frozenset((1, 2, 3))  # Read, Write, Event
+_MESSAGE_TYPES = frozenset((MESSAGE_READ, MESSAGE_WRITE, MESSAGE_EVENT))
 
 
 class FrameError(ValueError):
@@ -137,6 +145,39 @@ def decode(raw: bytes) -> HarpFrame:
         payload=bytes(message.payload),
         timestamp=message.timestamp,
     )
+
+
+def encode(message_type: int, address: int, payload_type: str, payload: bytes = b"") -> bytes:
+    """Build one Harp frame, ready for the wire.
+
+    The other direction of ``decode``, and here for the same reason: this
+    module is the single place ``harp.protocol``'s codec is named, so a caller
+    that needs to *send* a register read or write does not have to import
+    ``HarpMessage`` and reimplement the header layout beside it.
+
+    ``payload_type`` is a payload-type **name** -- ``"U8"``, ``"U16"``, the
+    spellings a ``device.yml`` uses -- not the wire byte. Upstream's
+    ``PayloadType`` is keyed by numpy dtype rather than by code, so a numeric
+    argument here would need a second code table that could disagree with the
+    one already inside the codec; ``schema`` resolves register types by the
+    same name for the same reason.
+
+    Frames are built untimestamped: a timestamp is the device saying when
+    something happened, and a host request has nothing to say about that.
+
+    Raises ``FrameError`` for a payload type, address or payload the wire
+    format cannot carry, matching what ``decode`` raises on the way back in.
+    """
+    try:
+        message = HarpMessage(
+            MessageType(message_type), address, PayloadType[payload_type], bytes(payload)
+        )
+    except (KeyError, ValueError, HarpParseError) as exc:
+        raise FrameError(
+            f"Cannot build a Harp frame (type={message_type!r}, address={address!r}, "
+            f"payload_type={payload_type!r}): {exc}"
+        ) from exc
+    return message.bytes
 
 
 class FrameSplitter:

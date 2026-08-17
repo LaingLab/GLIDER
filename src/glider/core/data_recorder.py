@@ -272,6 +272,30 @@ class DataRecorder:
             states[device_id] = state
         return states
 
+    @staticmethod
+    def _device_warnings(device_id: str, device: Any) -> list[str]:
+        """A device's own recording-fidelity warnings, validated.
+
+        Validated rather than trusted for the same reason ``state_columns()``
+        is: devices arrive from third-party packages, and a bare string is
+        iterable, so it would otherwise be written out one character per row.
+        Anything that isn't a list of non-empty strings is dropped with a log
+        line — a malformed warning must not cost the recording its metadata
+        block.
+        """
+        getter = getattr(device, "recording_warnings", None)
+        if getter is None:
+            return []
+        try:
+            warnings = getter()
+        except Exception:
+            logger.exception("recording_warnings() failed for device %s", device_id)
+            return []
+        if not isinstance(warnings, list) or not all(isinstance(w, str) and w for w in warnings):
+            logger.error("recording_warnings() returned %r for device %s", warnings, device_id)
+            return []
+        return warnings
+
     def _write_metadata(
         self, experiment_name: str, session: Optional["ExperimentSession"] = None
     ) -> None:
@@ -370,6 +394,15 @@ class DataRecorder:
             self._writer.writerow(
                 ["# WARNING", device_id, "state_columns() failed; recorded as single column"]
             )
+        # The same row shape for a device that knows its own columns will be
+        # less informative than they look (e.g. a Harp register that emits no
+        # events, so its column can never change). Those are reported by the
+        # device rather than discovered here, and for the same reason the
+        # rows above exist: the log line each one also emits is not something
+        # anyone watches during an unattended run.
+        for device_id, device in self._hardware_manager.devices.items():
+            for message in self._device_warnings(device_id, device):
+                self._writer.writerow(["# WARNING", device_id, message])
         self._writer.writerow([])
 
         # Write column headers. `frame` is the canonical camera frame index

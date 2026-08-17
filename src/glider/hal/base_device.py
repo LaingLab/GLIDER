@@ -156,6 +156,24 @@ class BaseDevice(ABC):
         """
         return None
 
+    def recording_warnings(self) -> list[str]:
+        """
+        Ways this device's columns will say less than they look like they do.
+
+        Each string becomes a ``# WARNING`` row in the CSV metadata block,
+        beside the device id. Return short sentences describing a *known*
+        limitation of what will be recorded — a column that is wired to
+        something that never changes, a sensor configured out of range —
+        not transient errors, which belong in the log.
+
+        The CSV is what outlives the session. A device that only logs its
+        limitation announces it to nobody: an unattended overnight run
+        writes the log to a file nobody opens, and the person reading the
+        recording six months later has no way to learn that a column was
+        never going to move. Default: none.
+        """
+        return []
+
     @property
     def input_behaviors(self) -> list["InputBehavior"]:
         """Wait/input behaviors this device offers to WaitForInput (default none).

@@ -6,7 +6,7 @@ The package's public names are re-exported here so callers depend on
 reader fills it, and importing a cache from a module called ``reader`` reads
 like a mistake every time.
 
-Four layers, and they are separable on purpose:
+Five layers, and they are separable on purpose:
 
 * ``frames`` -- wire format only. ``decode`` and ``FrameSplitter`` turn bytes
   into frames.
@@ -17,6 +17,9 @@ Four layers, and they are separable on purpose:
   ``device.yml``-shaped dict into typed register classes.
 * ``derivation`` -- what this experiment wants of it. ``derive`` decides which
   registers become columns and which become actions.
+* ``device`` -- the four above, composed. ``HarpDevice`` owns the port and the
+  order the others are driven in; ``mock`` is the same device with a fake
+  handle underneath it.
 
 Three modules name ``harp.protocol``, and an upstream change lands in those
 three files and no other:
@@ -30,10 +33,12 @@ three files and no other:
   silently turns that guard into a false alarm, reporting a bad install to
   anyone with a good one. Retarget the canary along with the codec.
 
-``board`` is also the only module here that imports ``glider``, which is why it
-is not re-exported below: ``import glider_harp`` pulls in no ``glider`` modules
-at all, while ``import glider_harp.board`` pulls in 36, including all of
-``glider.vision``. Import it as ``from glider_harp.board import HarpBoard``.
+``board``, ``device`` and ``mock`` are the modules here that import ``glider``,
+which is why none of them is re-exported below: ``import glider_harp`` pulls in
+no ``glider`` modules at all, while importing any of those three pulls in 36,
+including all of ``glider.vision``. Import them by module --
+``from glider_harp.board import HarpBoard``,
+``from glider_harp.device import HarpDevice``.
 """
 
 from glider_harp.derivation import CORE_REGISTERS, Derived, derive, load_profile
@@ -44,6 +49,7 @@ from glider_harp.frames import (
     HarpFrame,
     TruncatedFrameError,
     decode,
+    encode,
 )
 from glider_harp.reader import HarpReader, RegisterCache
 from glider_harp.schema import SchemaError, build_registers, load_schema
@@ -62,6 +68,7 @@ __all__ = [
     "build_registers",
     "decode",
     "derive",
+    "encode",
     "load_profile",
     "load_schema",
 ]

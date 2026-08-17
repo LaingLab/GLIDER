@@ -1,7 +1,7 @@
 """Mutation check for every module in ``glider_harp`` that fails quietly.
 
 ``FrameSplitter``, ``RegisterCache``, ``HarpReader``, ``schema``,
-``derivation`` and ``board``.
+``derivation``, ``board`` and ``device``.
 
 ``board`` is the odd one out and is included with lower expectations. It is a
 transport shim with no state machine of its own, and the eighteen mutants break
@@ -92,6 +92,7 @@ READER_TARGET = SOURCE / "reader.py"
 SCHEMA_TARGET = SOURCE / "schema.py"
 DERIVATION_TARGET = SOURCE / "derivation.py"
 BOARD_TARGET = SOURCE / "board.py"
+DEVICE_TARGET = SOURCE / "device.py"
 TESTS = "plugins/glider-harp/tests/"
 
 CONSUME = "                del self._buffer[: len(candidate)]\n                self._synced = True"
@@ -1520,6 +1521,271 @@ BOARD_MUTANTS: list[tuple[str, str, str]] = [
     ),
 ]
 
+REFUSE_SECOND_INIT = (
+    "        if self._serial is not None or self._reader is not None:\n"
+    "            raise RuntimeError("
+)
+FRESH_READER = (
+    "                reader = HarpReader(self._serial, cache)\n                reader.start()"
+)
+STOP_RESULT = "            if not await asyncio.to_thread(reader.stop):"
+READ_ACTION_GUARD = (
+    "            reader = self._reader\n"
+    "            if reader is not None and reader.is_alive():\n"
+    "                raise RuntimeError("
+)
+CONFIRM_READBACK = (
+    "        confirmed = await self._read_operation_control()\n"
+    "        if confirmed & _OPERATION_MODE_MASK != mode:"
+)
+NON_EVENT_WARNING = (
+    '            if "Event" not in modes:\n'
+    "                warnings.append(\n"
+    '                    f"register {name} (column {column}) is not an Event register; "\n'
+    '                    "its columns will never change"\n'
+    "                )"
+)
+
+# ``HarpDevice``. This module is composition, so the mutants are written
+# against the rules it **inherited** from the four pieces it drives -- the
+# reader's port ownership and one-shot lifecycle, the cache's snapshot/peek
+# split, derivation's silence without a profile, and the Harp specification's
+# own Standby default. Written off the code instead, every one of these would
+# read as already covered: the composition is short, and each of these lines
+# looks optional right up until the recording comes back empty.
+#
+# Not covered here, and deliberately: the ``# WARNING`` row itself lives in
+# ``glider.core.data_recorder``, outside this package and outside ``TESTS``, so
+# a mutant of it would survive a plugin-only run for the wrong reason. It is
+# pinned by ``tests/unit/core/test_data_recorder_multicolumn.py``. What this
+# section covers is the half the device owns: whether the warning exists at all.
+DEVICE_MUTANTS: list[tuple[str, str, str]] = [
+    # --- the Standby default: the failure this whole task exists to avoid ---
+    (
+        # A Harp device boots in Standby, where it answers every command and
+        # emits no events. Skip this and the device connects, identifies,
+        # reports no error, and records nothing for the whole session.
+        "never takes the device out of Standby",
+        "            await self._set_operation_mode(_MODE_ACTIVE)",
+        "            pass",
+    ),
+    (
+        # The write is not the guarantee; the readback is. A device that
+        # acknowledges a mode it did not enter is indistinguishable from one
+        # that entered it, until the CSV comes back empty.
+        "writes Active and trusts the write, never reading it back",
+        CONFIRM_READBACK,
+        "        confirmed = wanted\n        if False:",
+    ),
+    (
+        "confirms the readback against the wrong thing, so any value passes",
+        "        if confirmed & _OPERATION_MODE_MASK != mode:",
+        "        if False:",
+    ),
+    (
+        "shutdown leaves the device Active, streaming into a closed port",
+        "                await self._set_operation_mode(_MODE_STANDBY)",
+        "                pass",
+    ),
+    (
+        # OperationControl also carries the heartbeat and LED flags. Clobbering
+        # them switches off the operation LED an operator watches, and the
+        # reverse direction then never clears the mode bits at all.
+        "the mode change clobbers the flags that share the register",
+        "        wanted = (current & ~_OPERATION_MODE_MASK) | mode",
+        "        wanted = current | mode",
+    ),
+    (
+        "the mode change writes the mode and nothing else",
+        "        wanted = (current & ~_OPERATION_MODE_MASK) | mode",
+        "        wanted = mode",
+    ),
+    # --- round-trips only before start() or after stop(), never during ---
+    (
+        # The reader consumes every byte and hands only Events to the cache, so
+        # a reply arriving while it runs is decoded and dropped. This does not
+        # race -- it simply never returns.
+        "a register read is attempted while the reader owns the port",
+        READ_ACTION_GUARD,
+        "            reader = self._reader\n            if False:\n                raise RuntimeError(",
+    ),
+    (
+        # Same rule, the other end of the lifecycle: the reader is started
+        # before the mode round-trip, so the reply to it can never arrive.
+        "the reader is started before the device is identified and made Active",
+        "            self._who_am_i = await self._read_who_am_i()",
+        "            if self._derived.recorded:\n"
+        "                HarpReader(self._serial, RegisterCache(self._derived.recorded)).start()\n"
+        "            self._who_am_i = await self._read_who_am_i()",
+    ),
+    (
+        # A write needs no reply, which is exactly why it stays legal during a
+        # recording. Waiting for the echo makes every action time out.
+        "a register write waits for its echo",
+        "        await self._send(encode(MESSAGE_WRITE, address, payload_type,"
+        " self._pack(register, value)))",
+        "        await self._round_trip(address, payload_type)",
+    ),
+    # --- stop() returns False, and False means the port is still in use ---
+    (
+        "shutdown ignores a refused join and writes the register anyway",
+        STOP_RESULT,
+        "            await asyncio.to_thread(reader.stop)\n            if False:",
+    ),
+    (
+        # The other half: a thread still inside a read on this handle, and the
+        # handle closes. Indistinguishable from an unplugged cable, and
+        # recorded as a read failure.
+        "shutdown closes the port under a reader that would not stop",
+        "                return\n            self._reader = None",
+        "                pass\n            self._reader = None",
+    ),
+    (
+        # Up to 2 s inside the join. On the loop that is a two-second freeze of
+        # the GUI, the recorder and every other device, mid-recording.
+        "the join runs on the event loop",
+        STOP_RESULT,
+        "            if not reader.stop():",
+    ),
+    # --- one reader per connection, and one connection at a time ---
+    (
+        # A second initialize() opens a second handle and leaves the first
+        # reader -- a daemon thread -- on the old one, eating the frames the
+        # new one is waiting for, for the rest of the process.
+        "initialize() may be called twice, orphaning a reader on the old handle",
+        REFUSE_SECOND_INIT,
+        "        if False:\n            raise RuntimeError(",
+    ),
+    (
+        # The plausible wrong key. ``_initialized`` is already False after a
+        # shutdown whose join was refused, so the reader that refused to stop
+        # would be joined by a second one on the same port.
+        "the refusal is keyed on _initialized rather than on the port still being held",
+        REFUSE_SECOND_INIT,
+        "        if self._initialized:\n            raise RuntimeError(",
+    ),
+    (
+        # HarpReader is one-shot: start() after a stop() raises rather than
+        # resurrecting a thread whose splitter still holds the last session's
+        # bytes. A cached reader makes every reconnect fail.
+        "the reader is reused across initialize() instead of rebuilt",
+        FRESH_READER,
+        '                reader = getattr(self, "_retained_reader", None)\n'
+        "                if reader is None:\n"
+        "                    reader = HarpReader(self._serial, cache)\n"
+        "                    self._retained_reader = reader\n"
+        "                reader.start()",
+    ),
+    (
+        # Nothing outside the device can see a handle it opened, so a failed
+        # initialize that keeps one leaves the port held for the process's life
+        # and every retry refused.
+        "a failed initialize keeps the port it opened",
+        "        except BaseException:\n            await self._close_port()",
+        "        except BaseException:\n            pass",
+    ),
+    # --- get_state() consumes, read() must not ---
+    (
+        # WaitForInput and the Input node both prefer read(), and one polls at
+        # 50 ms. Wired to snapshot, an Input node dropped onto this device eats
+        # counts out of the CSV twenty times a second, with no symptom anywhere.
+        "read() consumes the counters like get_state()",
+        "        return cache.peek() if cache is not None else None",
+        "        return cache.snapshot() if cache is not None else None",
+    ),
+    (
+        # The other direction: every event would then be reported in every row
+        # from the one it arrived in onward.
+        "get_state() does not consume, so counts accumulate across rows",
+        "        return cache.snapshot() if cache is not None else None",
+        "        return cache.peek() if cache is not None else None",
+    ),
+    (
+        # None and [] are not the same answer. DataRecorder reads [] as
+        # single-column behaviour and then looks the device *type* up in a dict
+        # keyed by columns, so every row gets an empty cell.
+        "state_columns() returns [] rather than None when nothing is recorded",
+        "        return cache.columns() if cache is not None else None",
+        "        return cache.columns() if cache is not None else []",
+    ),
+    (
+        # state and last_ms are None while count > 0 for an untimestamped or
+        # empty-payload event -- the normal representation, not an error. The
+        # CSV writes None as a blank cell; dropping the key writes nothing and
+        # silently shortens the row.
+        "columns whose value is unknown are dropped from the row",
+        "        return cache.snapshot() if cache is not None else None",
+        "        return (\n"
+        "            {k: v for k, v in cache.snapshot().items() if v is not None}\n"
+        "            if cache is not None\n"
+        "            else None\n"
+        "        )",
+    ),
+    # --- a schema for the wrong board derives cleanly and records the wrong thing ---
+    (
+        "WhoAmI is read and never compared against the schema",
+        "            self._check_identity()",
+        "            pass",
+    ),
+    (
+        "any WhoAmI matches",
+        "        if declared != self._who_am_i:",
+        "        if False:",
+    ),
+    (
+        # The other half: a hand-written schema that omits whoAmI must not be
+        # rejected, or nothing without a vendor file can be used at all.
+        "a schema that declares no WhoAmI is rejected by every board",
+        "        if declared is None or self._who_am_i is None:\n            return",
+        "        if False:\n            return",
+    ),
+    # --- the warning that has to outlive the log ---
+    (
+        # derive() logs this and nothing else does. A log line during an
+        # unattended overnight run reaches nobody; the CSV is what survives.
+        "a recorded register that emits no events is not reported for the CSV",
+        NON_EVENT_WARNING,
+        '            if "Event" not in modes:\n                pass',
+    ),
+    (
+        "the warning fires for event registers instead",
+        '            if "Event" not in modes:',
+        '            if "Event" in modes:',
+    ),
+    (
+        # ``access: [Write, Event]`` is ordinary. Read as one opaque value it
+        # matches nothing, and every recorded register looks silent.
+        "a list of access modes is read as a single mode",
+        "            modes = {access} if isinstance(access, str) else set(map(str, access or ()))",
+        "            modes = {str(access)}",
+    ),
+    # --- what a device with no profile is ---
+    (
+        # derive()'s third rule, at the device level: without a profile nothing
+        # is recorded, and the whole control surface is still reachable.
+        "a device with no profile loses its actions too",
+        "        self._ensure_derivation()\n        return dict(self._actions)",
+        "        self._ensure_derivation()\n"
+        "        return dict(self._actions) if self._derived.recorded else {}",
+    ),
+    (
+        # The node editor asks for actions while the hardware is still in a
+        # box; a hook that only answers after initialize() offers an empty
+        # dropdown and no way to tell why.
+        "actions are only listed once the device is initialized",
+        "        self._ensure_derivation()\n        return dict(self._actions)",
+        "        if not self._initialized:\n            return {}\n        return dict(self._actions)",
+    ),
+    (
+        # The register's declared width, not a byte. A U16 truncated to its low
+        # byte writes a threshold nobody asked for and raises nothing.
+        "every register is written one byte wide",
+        '            return int(value).to_bytes(dtype.itemsize, "little",'
+        ' signed=name.startswith("S"))',
+        '            return int(value).to_bytes(1, "little", signed=name.startswith("S"))',
+    ),
+]
+
 # (target file, mutants). Each file is restored before the next is touched.
 SUITES: list[tuple[Path, list[tuple[str, str, str]]]] = [
     (FRAMES_TARGET, FRAME_MUTANTS),
@@ -1527,6 +1793,7 @@ SUITES: list[tuple[Path, list[tuple[str, str, str]]]] = [
     (SCHEMA_TARGET, SCHEMA_MUTANTS),
     (DERIVATION_TARGET, DERIVATION_MUTANTS),
     (BOARD_TARGET, BOARD_MUTANTS),
+    (DEVICE_TARGET, DEVICE_MUTANTS),
 ]
 
 EXPECTED_SURVIVORS = {

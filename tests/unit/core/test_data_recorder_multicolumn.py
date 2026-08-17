@@ -293,3 +293,99 @@ def test_warning_row_survives_the_analysis_reader(tmp_path):
         "fl,aky:broken",
         "lever:button",
     ]
+
+
+# --- Device-reported recording warnings --------------------------------
+
+
+class _WarningDevice(_FakeDevice):
+    """A device that knows one of its own columns can never change."""
+
+    def __init__(self, warnings):
+        super().__init__("harp", columns=["lick_state", "lick_count"], state=None)
+        self._warnings = warnings
+
+    def recording_warnings(self) -> list[str]:
+        return self._warnings
+
+
+class _BadWarningDevice(_FakeDevice):
+    """A third-party device whose warnings hook misbehaves.
+
+    A bare string is iterable, so an unvalidated hook would write it out
+    one character per row and bury the metadata block.
+    """
+
+    def __init__(self, warnings):
+        super().__init__("harp", columns=["a"], state=None)
+        self._warnings = warnings
+
+    def recording_warnings(self):
+        if isinstance(self._warnings, Exception):
+            raise self._warnings
+        return self._warnings
+
+
+def test_a_device_reported_warning_reaches_the_csv(tmp_path):
+    """``derive`` logs a recorded register that emits no events, and nobody
+    reads a log during an overnight run. The recording has to carry it."""
+    recorder = _recorder_for({"harp1": _WarningDevice(["register Foo will never change"])})
+    lines = _metadata_lines(recorder, tmp_path)
+
+    assert [line for line in lines if line.startswith("# WARNING")] == [
+        "# WARNING,harp1,register Foo will never change"
+    ], lines
+
+
+def test_several_warnings_from_one_device_each_get_a_row(tmp_path):
+    recorder = _recorder_for({"harp1": _WarningDevice(["first thing", "second thing"])})
+    lines = _metadata_lines(recorder, tmp_path)
+    assert [line for line in lines if line.startswith("# WARNING")] == [
+        "# WARNING,harp1,first thing",
+        "# WARNING,harp1,second thing",
+    ], lines
+
+
+def test_a_device_reported_warning_survives_the_analysis_reader(tmp_path):
+    """Cell 0 is a fixed literal for the same reason the degraded row's is:
+    csv quotes any cell holding a comma, and a quote at the front of the line
+    stops it being a comment row."""
+    recorder = _recorder_for({"ha,rp": _WarningDevice(["Foo, which emits nothing, is recorded"])})
+    path = tmp_path / "metadata.csv"
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        recorder._writer = csv.writer(fh)
+        recorder._write_metadata("warning_test")
+    recorder._writer = None
+
+    warning_line = next(
+        line for line in path.read_text(encoding="utf-8").splitlines() if "WARNING" in line
+    )
+    assert warning_line.startswith("#"), warning_line
+
+    metadata, df = parse_csv(path)
+    assert "ha,rp" in metadata["WARNING"]
+    assert metadata["Experiment Name"] == "warning_test"
+    assert list(df.columns) == ["frame", "timestamp", "elapsed_ms", "flow_elapsed_ms"] + [
+        "ha,rp:lick_state",
+        "ha,rp:lick_count",
+    ]
+
+
+@pytest.mark.parametrize(
+    "warnings",
+    ["a bare string", ["", "ok"], [123], RuntimeError("boom"), None],
+    ids=["string", "empty-entry", "non-string", "raises", "none"],
+)
+def test_a_malformed_warnings_hook_costs_nothing(tmp_path, warnings):
+    """Devices arrive from third-party packages. A hook that misbehaves must
+    not take the metadata block with it."""
+    recorder = _recorder_for({"harp1": _BadWarningDevice(warnings)})
+    lines = _metadata_lines(recorder, tmp_path)
+    assert [line for line in lines if "WARNING" in line] == [], lines
+    assert any(line.startswith("# Experiment Name") for line in lines)
+
+
+def test_a_device_without_the_hook_is_left_alone(tmp_path):
+    """Every device that predates the hook."""
+    recorder = _recorder_for({"lever": _LegacyDevice("button")})
+    assert [line for line in _metadata_lines(recorder, tmp_path) if "WARNING" in line] == []
