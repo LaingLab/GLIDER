@@ -50,10 +50,6 @@ def test_the_core_register_set_is_the_one_the_protocol_specifies():
     assert CORE_REGISTERS == CORE
 
 
-def test_core_registers_are_never_recorded():
-    assert all(address not in derive(SCHEMA, None).recorded for address in CORE)
-
-
 def test_no_core_register_becomes_an_action():
     """Swept over every core address rather than the two this schema happens to
     carry: a rule tested against one address is a rule tested against nothing."""
@@ -62,14 +58,28 @@ def test_no_core_register_becomes_an_action():
     assert result.actions == {}
 
 
-def test_a_profile_may_not_record_a_core_register():
+@pytest.mark.parametrize("address", sorted(CORE))
+def test_a_profile_may_not_record_any_core_register(address):
     """Dropping it silently would leave a profile that asked for a column and
-    produced none."""
-    schema = _schema_of(0, 32)
-    profile = {"record": [{"register": "R0", "as": "who"}]}
+    produced none.
 
-    with pytest.raises(ValueError, match="R0"):
+    Swept for the same reason the action side is, and it needed it: pinned by
+    address 0 alone, narrowing this guard to ``{0}`` survived the whole suite,
+    leaving a profile recording 10 or 14 unconstrained."""
+    schema = _schema_of(address, 32)
+    profile = {"record": [{"register": f"R{address}", "as": "who"}]}
+
+    with pytest.raises(ValueError, match=f"R{address}"):
         derive(schema, profile)
+
+
+def test_a_profile_may_record_a_non_core_register_below_fifteen():
+    """The guard is eight addresses, not everything under 15: 3, 4, 5, 9, 11,
+    12 and 13 are ordinary registers a device may report data on."""
+    schema = _schema_of(*(sorted(set(range(15)) - CORE)))
+    profile = {"record": [{"register": "R9", "as": "nine"}]}
+
+    assert derive(schema, profile).recorded == {9: "nine"}
 
 
 @pytest.mark.parametrize("address", sorted(CORE))
@@ -254,6 +264,32 @@ def test_a_record_entry_that_is_not_a_mapping_raises():
         derive(SCHEMA, {"record": ["LickState"]})
 
 
+@pytest.mark.parametrize("register", [["LickState"], {"name": "LickState"}, 32, None])
+def test_a_non_string_register_raises_a_value_error_like_everything_else(register):
+    """A JSON list or object here is unhashable, so the membership test used to
+    raise TypeError -- the one hand-editing mistake that came back as a
+    different exception type from all the others."""
+    with pytest.raises(ValueError, match="register"):
+        derive(SCHEMA, {"record": [{"register": register, "as": "x"}]})
+
+
+@pytest.mark.parametrize("key", ["az", "Mode", "column", "registers"])
+def test_an_unknown_key_in_a_record_entry_raises(key):
+    """``mode`` is reserved; anything else is a typo that would silently do
+    nothing, which is what a hand-edited profile produces most often."""
+    entry = {"register": "LickState", "as": "lick", key: "boolean"}
+
+    with pytest.raises(ValueError, match=key):
+        derive(SCHEMA, {"record": [entry]})
+
+
+def test_the_reserved_mode_key_is_accepted_and_ignored():
+    with_mode = derive(SCHEMA, {"record": [{"register": "LickState", "as": "lick", "mode": "x"}]})
+    without = derive(SCHEMA, {"record": [{"register": "LickState", "as": "lick"}]})
+
+    assert with_mode.recorded == without.recorded == {32: "lick"}
+
+
 def test_a_profile_for_another_device_raises():
     """Register names overlap across boards; WhoAmI is what does not."""
     schema = dict(SCHEMA, whoAmI=1216)
@@ -266,6 +302,25 @@ def test_a_matching_who_am_i_derives_normally():
     schema = dict(SCHEMA, whoAmI=1400)
 
     assert derive(schema, load_profile("licketysplit")).recorded == {32: "lick"}
+
+
+@pytest.mark.parametrize("declared", ["1400", 0x578, "0x578", 1400])
+def test_a_who_am_i_written_another_way_still_matches(declared):
+    """A schema hand-copied from a datasheet quotes it, or writes it in hex.
+    Compared raw, that reported a mismatch between two identical numbers."""
+    schema = dict(SCHEMA, whoAmI=declared)
+
+    assert derive(schema, load_profile("licketysplit")).recorded == {32: "lick"}
+
+
+def test_a_who_am_i_mismatch_shows_both_values_as_written():
+    """A value that is not a number at all still has to print recognisably."""
+    schema = dict(SCHEMA, whoAmI="not-a-number")
+
+    with pytest.raises(ValueError) as caught:
+        derive(schema, load_profile("licketysplit"))
+
+    assert "'not-a-number'" in str(caught.value)
 
 
 # --- the shipped profile ---

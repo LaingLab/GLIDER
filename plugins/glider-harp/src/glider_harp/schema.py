@@ -231,10 +231,18 @@ def _register_class(
     """Assemble a register class around a payload class we built ourselves.
 
     The scalar and array constructors are metaclasses that take an address and
-    nothing else, so a register whose payload carries masks or named members
-    has to be assembled here instead. ``types.new_class`` rather than a bare
-    ``type()`` call so the generic bases resolve the way a ``class`` statement
-    would.
+    nothing else -- ``RegisterU8(32, payload_class=...)`` is a ``TypeError`` --
+    so a register whose payload carries masks or named members has to be
+    assembled here instead. Upstream's own generated code hand-assembles these
+    the same way.
+
+    ``types.new_class`` here is **consistency, not necessity**: the base is a
+    bare ``RegisterBase``, so a plain ``type()`` call would work. It is
+    necessary in ``_root_payload`` and ``_struct_payload``, whose bases are
+    subscripted generics that need ``__mro_entries__`` resolved and
+    ``__orig_bases__`` recorded -- upstream reads the latter to derive the
+    payload's base element width. Kept the same in all three so that changing
+    one of them is not a decision about which mechanism it was using.
     """
     return types.new_class(
         name,

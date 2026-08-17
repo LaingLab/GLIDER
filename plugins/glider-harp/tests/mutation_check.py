@@ -1159,14 +1159,14 @@ DERIVATION_MUTANTS: list[tuple[str, str, str]] = [
     (
         "the profile's column name is ignored and the register name is used",
         "        result.recorded[address] = column",
-        "        result.recorded[address] = str(register)",
+        "        result.recorded[address] = register",
     ),
     (
         # RegisterCache is built from address -> name; keyed by name it would
         # match no frame, and every column would stay at its initial value.
         "recorded is keyed by register name rather than address",
         "        result.recorded[address] = column",
-        "        result.recorded[str(register)] = column",
+        "        result.recorded[register] = column",
     ),
     (
         "a profile naming a register the device does not have is ignored",
@@ -1218,8 +1218,52 @@ DERIVATION_MUTANTS: list[tuple[str, str, str]] = [
         # it never fires for two different registers -- which is the only case
         # that can collide.
         "the collision check tracks register names instead of column names",
-        "        claimed[column] = str(register)",
-        "        claimed[str(register)] = str(register)",
+        "        claimed[column] = register",
+        "        claimed[register] = register",
+    ),
+    (
+        # The hole the action-side sweep already closed, on the record side:
+        # pinned by address 0 alone, this survived the whole suite, leaving a
+        # profile recording OperationControl or ClockConfig unconstrained.
+        "the profile-side core guard covers WhoAmI only",
+        CORE_PROFILE_GUARD,
+        "        if address in {0}:\n            raise ValueError(",
+    ),
+    # --- malformed JSON a hand-editing user can actually produce ---
+    (
+        # A JSON list or object is unhashable, so the membership test below
+        # raises TypeError: the one malformed entry that did not come back as
+        # the ValueError every other one does.
+        "a non-string register reaches the membership test",
+        "        if not isinstance(register, str):",
+        "        if False:",
+    ),
+    (
+        "an unknown key in a record entry is silently ignored",
+        "        if unknown := sorted(str(key) for key in entry if key not in _RECORD_KEYS):",
+        "        if False:",
+    ),
+    (
+        # ``mode`` is reserved, carried by the shipped profile, and read by
+        # nothing. Rejecting it would make the shipped profile unloadable.
+        "the reserved mode key is rejected",
+        '_RECORD_KEYS = frozenset({"register", "as", "mode"})',
+        '_RECORD_KEYS = frozenset({"register", "as"})',
+    ),
+    # --- WhoAmI, which is the only thing that does not overlap across boards ---
+    (
+        "a WhoAmI written as a string or in hex never matches",
+        "        return int(str(raw), 0)",
+        "        return raw",
+    ),
+    (
+        # Compared raw, a quoted WhoAmI produced "is for WhoAmI 1400, but this
+        # schema declares 1400" -- a mismatch naming two identical numbers.
+        "the mismatch message hides how each value was written",
+        "            f\"Profile {profile.get('name', '?')!r} is for WhoAmI {expected!r}, \"\n"
+        '            f"but this schema declares {declared!r}"',
+        "            f\"Profile {profile.get('name', '?')!r} is for WhoAmI {expected}, \"\n"
+        '            f"but this schema declares {declared}"',
     ),
     # --- a recorded register that cannot report anything ---
     (
@@ -1233,8 +1277,8 @@ DERIVATION_MUTANTS: list[tuple[str, str, str]] = [
     ),
     (
         "the warning fires for event registers instead",
-        '        if "Event" not in _access_of(registers[str(register)]):',
-        '        if "Event" in _access_of(registers[str(register)]):',
+        '        if "Event" not in _access_of(by_name[register]):',
+        '        if "Event" in _access_of(by_name[register]):',
     ),
     # --- load_profile: a name from a device setting, resolved inside the package ---
     (
