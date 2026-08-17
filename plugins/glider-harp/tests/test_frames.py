@@ -176,10 +176,10 @@ def test_splitter_buffers_partial_frame():
     assert list(splitter.feed(raw[:3])) == []
     assert list(splitter.feed(raw[3:])) == [raw]
     # Consuming one byte too few here leaves the frame's checksum byte behind,
-    # which desynchronises everything after it. It has to be asserted on a
-    # single frame: with two, resync coincidentally drains the stale byte and
-    # the yielded frames come out right anyway.
-    assert splitter._buffer == b""
+    # which desynchronises everything after it. Nothing was noise, so a clean
+    # split throws nothing away and never loses framing; an off-by-one shows up
+    # as the resync it forces. Asserting the yielded frames alone misses it.
+    assert (splitter.bytes_discarded, splitter.resyncs) == (0, 0)
 
 
 def test_splitter_recovers_after_garbage():
@@ -225,9 +225,16 @@ def test_resync_consumes_the_frame_it_recovers():
     from framing a bogus message. The buffer catches that; the output does not.
     """
     splitter = FrameSplitter()
-    raw = _valid()
-    assert list(splitter.feed(b"\x00" + raw)) == [raw]
-    assert splitter._buffer == b""
+    a = _valid()
+    b = _other()
+    assert splitter.feed(b"\x00" + a) == [a]
+    assert splitter.bytes_discarded == 1
+
+    # The next frame must come back having cost nothing further. A stale byte
+    # left in front of it forces another resync to clear, which the yielded
+    # frames alone never reveal because resync recovers either way.
+    assert splitter.feed(b) == [b]
+    assert (splitter.bytes_discarded, splitter.resyncs) == (1, 1)
 
 
 def test_splitter_accepts_one_byte_at_a_time():
@@ -295,6 +302,68 @@ def test_partial_read_does_not_reframe_a_payload_that_looks_like_a_frame():
     splitter = FrameSplitter()
     assert list(splitter.feed(outer[:cut])) == []
     assert list(splitter.feed(outer[cut:])) == [outer]
+
+
+@pytest.mark.parametrize("noise", [1, 6, 200, 255, 256, 257, 3000])
+def test_noise_does_not_strand_the_frames_behind_it(noise):
+    """Noise must never park the splitter in "waiting for the rest".
+
+    Every one of these bytes claims a 257-byte frame. Trusting that length at
+    an offset nothing has validated made the splitter withhold each frame
+    behind it until 257 bytes happened to arrive -- and forever if the device
+    went quiet at the end of a trial. Only bursts of a full maximum frame or
+    more recovered, so sweeping the size is what catches it: a single large
+    value passes while a realistic 200-byte burst swallows the recording.
+    """
+    splitter = FrameSplitter()
+    good = _valid()
+    assert splitter.feed(b"\xff" * noise) == []
+    assert splitter.feed(good) == [good]
+
+
+def test_frames_behind_noise_are_not_delayed_into_a_burst():
+    """Measured case from review: ten events behind two noise bytes."""
+    splitter = FrameSplitter()
+    events = [_frame(3, 32, 0x01, bytes([i])) for i in range(10)]
+    assert splitter.feed(b"\x00\xc8" + b"".join(events)) == events
+    assert splitter.bytes_discarded == 2
+
+
+def test_scanning_past_noise_does_not_inflate_the_corruption_count():
+    """Noise must cost at most one corruption report, not one per offset.
+
+    Resync tries every offset in the buffer, and a one-byte wrapping checksum
+    passes by chance at roughly one offset in 256. Counting those would make
+    any stretch of garbage read as a failing cable, which is the opposite of
+    what Task 8 surfaces the count for.
+    """
+    splitter = FrameSplitter()
+    good = _valid()
+    assert splitter.feed(b"\xff" * 3000 + good) == [good]
+    # Only the one complete-looking candidate at the head we had reason to
+    # trust; the thousands scanned past during resync are framing, not corruption.
+    assert splitter.checksum_errors <= 1
+    assert splitter.bytes_discarded >= 3000
+
+
+def test_corruption_is_counted_apart_from_framing_noise():
+    """The counters are Task 8's only view of what the splitter swallowed."""
+    splitter = FrameSplitter()
+    corrupt = bytearray(_valid())
+    corrupt[-1] ^= 0xFF
+    good = _other()
+    assert splitter.feed(bytes(corrupt) + good) == [good]
+    assert splitter.checksum_errors == 1
+    assert splitter.resyncs == 1
+    assert splitter.bytes_discarded == len(corrupt)
+
+
+def test_a_clean_stream_reports_nothing_swallowed():
+    """A healthy stream must leave every counter at zero, or they are useless."""
+    splitter = FrameSplitter()
+    stream = _valid() + _other() + _valid()
+    assert len(splitter.feed(stream)) == 3
+    assert (splitter.checksum_errors, splitter.resyncs, splitter.bytes_discarded) == (0, 0, 0)
 
 
 def test_splitter_does_not_hoard_bytes_it_can_never_frame():
