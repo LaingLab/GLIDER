@@ -195,44 +195,50 @@ FRAME_MUTANTS: list[tuple[str, str, str]] = [
     ),
 ]
 
-# ``ingest``'s guarded write, and ``snapshot``'s read-and-clear. Quoted whole so
-# the race-window mutants below can remove the lock and widen the window in one
-# edit -- a lock only fails where two threads meet, so mutating it in place would
-# just be dropping a statement no single-threaded test can see. Read the
-# RACE_WINDOW note above before quoting their result as coverage.
+# ``ingest``'s guarded write, and the shared read loop behind ``peek`` and
+# ``snapshot``. Quoted whole so the race-window mutants below can remove the
+# lock and widen the window in one edit -- a lock only fails where two threads
+# meet, so mutating it in place would just be dropping a statement no
+# single-threaded test can see. Read the RACE-WINDOW note above before quoting
+# their result as coverage.
 INGEST_WRITE = (
     "        with self._lock:\n"
     "            register.state = value\n"
     "            register.count += 1\n"
     "            register.last_ms = last_ms"
 )
-SNAPSHOT_BODY = (
+READ_BODY = (
     "        with self._lock:\n"
     "            for address, name in self._names.items():\n"
     "                register = self._states[address]\n"
-    '                values[f"{name}:state"] = register.state\n'
-    '                values[f"{name}:count"] = register.count\n'
-    '                values[f"{name}:last_ms"] = register.last_ms\n'
-    "                register.count = 0"
+    "                state_column, count_column, last_ms_column = _columns_for(name)\n"
+    "                values[state_column] = register.state\n"
+    "                values[count_column] = register.count\n"
+    "                values[last_ms_column] = register.last_ms\n"
+    "                if clear:\n"
+    "                    register.count = 0"
 )
 LOOKUP = (
     "        register = self._states.get(frame.address)\n"
     "        if register is None:\n"
     "            return"
 )
-COLUMNS = '            for column in (f"{name}:state", f"{name}:count", f"{name}:last_ms")'
+COLUMN_NAMES = '    return (f"{name}_state", f"{name}_count", f"{name}_last_ms")'
+COLUMNS = (
+    "        return [column for name in self._names.values() for column in _columns_for(name)]"
+)
 
 READER_MUTANTS: list[tuple[str, str, str]] = [
-    # --- "state -- latest value seen, persists across snapshots" ---
+    # --- "state -- latest value seen, persists across reads" ---
     (
         "state keeps the first value instead of the latest",
         "            register.state = value",
         "            register.state = register.state if register.state is not None else value",
     ),
     (
-        "snapshot clears state as well as count",
-        "                register.count = 0",
-        "                register.count = 0\n                register.state = None",
+        "a read clears state as well as count",
+        "                    register.count = 0",
+        "                    register.count = 0\n                    register.state = None",
     ),
     (
         "payload read big-endian",
@@ -277,25 +283,46 @@ READER_MUTANTS: list[tuple[str, str, str]] = [
         "            register.count = 1",
     ),
     (
-        "count is not cleared on read",
-        "                register.count = 0",
-        "                pass",
+        "nothing ever clears the counters",
+        "                if clear:",
+        "                if False:",
     ),
     (
         "count is cleared before it is reported, so every row reads zero",
-        '                values[f"{name}:count"] = register.count\n'
-        '                values[f"{name}:last_ms"] = register.last_ms\n'
-        "                register.count = 0",
-        "                register.count = 0\n"
-        '                values[f"{name}:count"] = register.count\n'
-        '                values[f"{name}:last_ms"] = register.last_ms',
+        "                values[count_column] = register.count\n"
+        "                values[last_ms_column] = register.last_ms\n"
+        "                if clear:\n"
+        "                    register.count = 0",
+        "                if clear:\n"
+        "                    register.count = 0\n"
+        "                values[count_column] = register.count\n"
+        "                values[last_ms_column] = register.last_ms",
     ),
     (
-        # Dedented, so only the last register in the loop is cleared: the CSV
-        # then double-counts every register but one.
-        "only one register's count is cleared per snapshot",
-        "                register.count = 0\n        return values",
-        "            register.count = 0\n        return values",
+        # Dedented out of the loop, so only the last register is cleared: the
+        # CSV then double-counts every register but one.
+        "only one register's count is cleared per read",
+        "                if clear:\n                    register.count = 0",
+        "            if clear:\n                register.count = 0",
+    ),
+    # --- peek: the non-consuming read a second poller needs ---
+    (
+        # WaitForInput and the Input node poll read() every 50 ms. If that path
+        # consumes, an Input node dropped onto the device silently eats counts
+        # out of the CSV twenty times a second.
+        "peek consumes the counters like snapshot",
+        "        return self._read(clear=False)",
+        "        return self._read(clear=True)",
+    ),
+    (
+        "snapshot does not consume the counters",
+        "        return self._read(clear=True)",
+        "        return self._read(clear=False)",
+    ),
+    (
+        "the clear flag is ignored and every read consumes",
+        "                if clear:",
+        "                if True:",
     ),
     # --- "last_ms -- device timestamp of the most recent event, in ms" ---
     (
@@ -309,14 +336,21 @@ READER_MUTANTS: list[tuple[str, str, str]] = [
         "frame.timestamp * _MS_PER_SECOND * 1000.0",
     ),
     (
+        # Device time is Seconds(U32) + Micros(U16) at 32 us per tick, so the
+        # sub-millisecond digits are resolution the device really has.
+        "last_ms is rounded to whole milliseconds",
+        "frame.timestamp * _MS_PER_SECOND",
+        "float(int(frame.timestamp * _MS_PER_SECOND))",
+    ),
+    (
         "last_ms keeps the first event's time instead of the latest",
         "            register.last_ms = last_ms",
         "            if register.last_ms is None:\n                register.last_ms = last_ms",
     ),
     (
-        "snapshot clears last_ms",
-        "                register.count = 0",
-        "                register.count = 0\n                register.last_ms = None",
+        "a read clears last_ms",
+        "                    register.count = 0",
+        "                    register.count = 0\n                    register.last_ms = None",
     ),
     (
         # The other half of the timestamp-is-None decision: an untimestamped
@@ -372,59 +406,93 @@ READER_MUTANTS: list[tuple[str, str, str]] = [
         "        for register in self._states.values():\n"
         "            pass",
     ),
-    # --- columns() is the CSV header; it must be exactly what snapshot fills ---
+    # --- the columns themselves: this list is the CSV header ---
     (
+        # A colon here yields "harp1:lick:state" once the recorder prefixes the
+        # device id, and nothing downstream can tell which colon was the
+        # separator. BaseDevice.state_columns forbids it.
+        "columns are separated by a colon",
+        COLUMN_NAMES,
+        '    return (f"{name}:state", f"{name}:count", f"{name}:last_ms")',
+    ),
+    (
+        # Mutating columns() alone, not the shared speller: the header then
+        # disagrees with the rows it labels.
         "columns omits last_ms",
         COLUMNS,
-        '            for column in (f"{name}:state", f"{name}:count")',
+        "        return [\n"
+        "            column for name in self._names.values() for column in _columns_for(name)[:2]\n"
+        "        ]",
     ),
     (
-        "columns uses a different separator from snapshot",
+        "columns orders the fields differently from the rows",
         COLUMNS,
-        '            for column in (f"{name}_state", f"{name}_count", f"{name}_last_ms")',
+        "        return [\n"
+        "            column\n"
+        "            for name in self._names.values()\n"
+        "            for column in reversed(_columns_for(name))\n"
+        "        ]",
     ),
     (
-        "columns orders the fields differently from snapshot",
+        "columns are ordered by field rather than by register",
         COLUMNS,
-        '            for column in (f"{name}:count", f"{name}:state", f"{name}:last_ms")',
+        "        return [\n"
+        '            f"{name}_{field}"\n'
+        '            for field in ("state", "count", "last_ms")\n'
+        "            for name in self._names.values()\n"
+        "        ]",
+    ),
+    # --- construction-time validation, all of it protecting the CSV ---
+    (
+        "duplicate columns are accepted",
+        "        if repeated := sorted(name for name, n in Counter(columns).items() if n > 1):",
+        "        if False:",
+    ),
+    (
+        "a colon in a register name is accepted",
+        '        if colons := sorted(column for column in columns if ":" in column):',
+        "        if False:",
+    ),
+    (
+        "an unnamed register is accepted",
+        "        if any(not name for name in self._names.values()):",
+        "        if False:",
+    ),
+    (
+        # columns() == [] reads to DataRecorder as single-column behaviour: it
+        # emits "{device_id}:{device_type}" and then looks the device type up
+        # in the state dict, so every row gets an empty cell.
+        "an empty register map is accepted",
+        "        if not self._names:",
+        "        if False:",
     ),
     (
         # Every value in the shared dict is one the cache really did report, so
         # a caller batching rows sees row N rewrite itself when row N+1 is
         # taken, with nothing anywhere looking wrong.
-        "snapshot returns one shared dict reused across calls",
+        "a read returns one shared dict reused across calls",
         "        values: dict[str, int | float | None] = {}",
         '        values: dict[str, int | float | None] = getattr(self, "_shared", {})\n'
         "        self._shared = values",
-    ),
-    (
-        # Device time is Seconds(U32) + Micros(U16) at 32 us per tick, so the
-        # sub-millisecond digits are resolution the device really has.
-        "last_ms is rounded to whole milliseconds",
-        "frame.timestamp * _MS_PER_SECOND",
-        "float(int(frame.timestamp * _MS_PER_SECOND))",
     ),
     (
         "the caller's register map is aliased rather than copied",
         "        self._names = dict(registers)",
         "        self._names = registers",
     ),
+    # --- the lock; see the RACE-WINDOW note, these are not coverage evidence ---
     (
-        "duplicate register names are accepted",
-        "        if duplicates:",
-        "        if False:",
-    ),
-    # --- the lock; see the RACE_WINDOW note, these are not coverage evidence ---
-    (
-        "RACE-WINDOW: snapshot reads and clears without the lock",
-        SNAPSHOT_BODY,
+        "RACE-WINDOW: a read reports and clears without the lock",
+        READ_BODY,
         "        for address, name in self._names.items():\n"
         "            register = self._states[address]\n"
-        '            values[f"{name}:state"] = register.state\n'
-        '            values[f"{name}:count"] = register.count\n'
+        "            state_column, count_column, last_ms_column = _columns_for(name)\n"
+        "            values[state_column] = register.state\n"
+        "            values[count_column] = register.count\n"
         '            __import__("time").sleep(0.0002)\n'
-        '            values[f"{name}:last_ms"] = register.last_ms\n'
-        "            register.count = 0",
+        "            values[last_ms_column] = register.last_ms\n"
+        "            if clear:\n"
+        "                register.count = 0",
     ),
     (
         "RACE-WINDOW: ingest increments without the lock",

@@ -1,12 +1,12 @@
-"""Per-register state, the layer between decoded frames and CSV columns.
+"""The read side of a Harp link: what the device reported, and what a row says.
 
-Pure state: no threads of its own, no I/O, no serial port. The reader thread
-that owns the port calls ``ingest``; the event loop calls ``snapshot`` once per
-recorded row. Keeping the two apart is what lets the ``state``/``count``/
-``last_ms`` semantics below be decided and tested without a device in the way.
+``RegisterCache`` is pure state -- no threads of its own, no I/O, no serial
+port -- so the ``state``/``count``/``last_ms`` semantics can be decided and
+tested with no device in the way. The thread that owns the port joins it here.
 """
 
 import threading
+from collections import Counter
 
 from glider_harp.frames import HarpFrame
 
@@ -17,6 +17,22 @@ from glider_harp.frames import HarpFrame
 _EVENT = 3
 
 _MS_PER_SECOND = 1000.0
+
+
+def _columns_for(name: str) -> tuple[str, str, str]:
+    """The three columns one register contributes, in order.
+
+    The single spelling of the column names, shared by ``columns`` and the
+    reads. Sharing it is what makes a header that disagrees with its rows
+    structurally impossible rather than merely tested for.
+
+    The separator is ``_``, not ``:``, because these are sub-column names: the
+    recorder builds its header as ``{device_id}:{sub_column}``, so a colon here
+    would produce ``harp1:lick:state``, in which nothing downstream can tell
+    which colon was the separator. ``BaseDevice.state_columns`` forbids it for
+    that reason.
+    """
+    return (f"{name}_state", f"{name}_count", f"{name}_last_ms")
 
 
 class _RegisterState:
@@ -37,17 +53,18 @@ class RegisterCache:
     questions on purpose:
 
     * ``state`` -- the value carried by the most recent event. Persists across
-      snapshots, so a row always reports the level the device is at, not just
-      the rows where it changed.
-    * ``count`` -- events since the previous snapshot, **cleared on read**.
+      reads, so a row always reports the level the device is at, not just the
+      rows where it changed.
+    * ``count`` -- events since the previous ``snapshot``, **cleared on read**.
       This is what makes the record honest: a row is written about every 33 ms
       at 30 fps while a lick lasts 20-50 ms, so a column that reported only the
       current level would drop whole events between rows, and two licks inside
       one interval would look like one. A counter cleared on read cannot lose
       one -- every event is reported in exactly one row.
-    * ``last_ms`` -- device time of the most recent event, in milliseconds.
-      Persists. Device time is the only clock that can place an event inside
-      the poll interval it was found in; host arrival time cannot.
+    * ``last_ms`` -- device time of the most recent event, in milliseconds,
+      sub-millisecond digits kept. Persists. Device time is the only clock that
+      can place an event inside the poll interval it was found in; host arrival
+      time cannot.
 
     Where a value is unknown, the column reports ``None`` rather than the
     previous value. An event whose payload is empty leaves no value to report
@@ -57,46 +74,78 @@ class RegisterCache:
     non-zero ``count`` says what actually happened -- the event occurred, this
     part of it is unknown.
 
+    That unknown is sticky. ``state`` stays ``None`` until some later event
+    arrives carrying a payload, so one empty-payload event blanks the column
+    for the rest of the session if no other event follows. This is the intended
+    trade -- a blank column is a visible gap, a stale one is not -- but it is
+    reachable without a broken device: a 6-byte all-header frame that happens
+    to satisfy the checksum while ``FrameSplitter`` hunts through noise decodes
+    as a perfectly valid empty-payload event, roughly once in 256 tried offsets.
+
     Payloads are read as little-endian unsigned integers, which is what the
     digital-input and counter registers this is built for send. Signed and
     floating-point payload types would need decoding per ``payload_type``; add
     that when a device needs it rather than guessing now.
 
-    Thread-safe: the reader thread ingests while the event loop snapshots.
-    The lock is not decoration, and the suite passing without it is not
-    evidence that it can go: under CPython's GIL these few attribute writes are
-    very hard to interleave destructively, so no test here can tell locked from
-    unlocked code. On a free-threaded build they can, and a snapshot that
-    cleared a count it never reported would lose events silently.
+    Reading comes in two forms, and which one a caller wants depends on whether
+    it owns the record. ``snapshot`` consumes the counters and belongs to
+    whatever writes the CSV; ``peek`` reports without consuming and is for
+    everybody else. See ``peek`` for why that distinction is not optional.
 
-    Each snapshot is a fresh dict, so a caller may hold rows and batch them.
+    Thread-safe: the reader thread ingests while the event loop reads. Be
+    precise about what that rests on, because the tests cannot show it. On
+    CPython today the lock is unobservable -- the suite passes with it removed,
+    and not by luck: the interpreter offers a thread switch only at bytecodes
+    like ``RESUME`` and ``JUMP_BACKWARD``, and neither critical section here
+    contains one, so there is no interleaving available to find at any switch
+    interval. That is a property of one interpreter's implementation, not a
+    guarantee of the language, and it does not hold on a free-threaded build
+    (3.13t/3.14t), where a snapshot could clear a count it never reported and
+    lose events in silence. Unobservable here, unspecified by the language,
+    required there -- so do not remove it because the tests still pass without
+    it.
+
+    Every read returns a fresh dict, so a caller may hold rows and batch them.
     """
 
     def __init__(self, registers: dict[int, str]) -> None:
-        """``registers`` maps a register address to the base name of its columns."""
-        names = list(registers.values())
-        duplicates = sorted({name for name in names if names.count(name) > 1})
-        if duplicates:
-            # Two addresses under one name would collide in the CSV header and
-            # silently interleave two registers' events in one set of columns.
-            raise ValueError(f"Register names must be unique; repeated: {', '.join(duplicates)}")
+        """``registers`` maps a register address to the base name of its columns.
 
+        The names are checked here rather than at the first read, because every
+        way they can be wrong produces a CSV that is malformed but not
+        obviously so, and by then a trial is running.
+        """
         self._names = dict(registers)
+
+        if not self._names:
+            # An empty columns() is falsy to DataRecorder, which then treats
+            # the device as single-column: it emits one header,
+            # "{device_id}:{device_type}", and per row partitions that header
+            # on the colon and looks the device *type* up in the dict
+            # get_state() returned. That key is never there, so every row gets
+            # an empty cell. The device records nothing and nothing raises.
+            raise ValueError("RegisterCache needs at least one register")
+
+        if any(not name for name in self._names.values()):
+            # Not caught by the column checks below: an unnamed register
+            # yields "_state", which is unique and non-empty and tells a
+            # reader of the CSV nothing at all.
+            raise ValueError("Register names must be non-empty")
+
+        # Validated on the produced columns rather than on the names, because
+        # the columns are what DataRecorder validates and what a person reads.
+        columns = self.columns()
+        if colons := sorted(column for column in columns if ":" in column):
+            raise ValueError(f"Column names must not contain ':': {', '.join(colons)}")
+        if repeated := sorted(name for name, n in Counter(columns).items() if n > 1):
+            raise ValueError(f"Column names must be unique; repeated: {', '.join(repeated)}")
+
         self._states = {address: _RegisterState() for address in registers}
         self._lock = threading.Lock()
 
     def columns(self) -> list[str]:
-        """Every column name this cache reports, in register order.
-
-        Spelled out here and again in ``snapshot`` rather than shared, because
-        sharing them would need ``getattr`` on the field names to build the
-        snapshot. The suite asserts the two agree instead.
-        """
-        return [
-            column
-            for name in self._names.values()
-            for column in (f"{name}:state", f"{name}:count", f"{name}:last_ms")
-        ]
+        """Every column name this cache reports, in register order."""
+        return [column for name in self._names.values() for column in _columns_for(name)]
 
     def ingest(self, frame: HarpFrame) -> None:
         """Absorb one decoded frame.
@@ -118,19 +167,50 @@ class RegisterCache:
             register.count += 1
             register.last_ms = last_ms
 
+    def peek(self) -> dict[str, int | float | None]:
+        """Read every column without clearing anything.
+
+        Because ``snapshot`` consumes the counters, only one caller may use it
+        -- and in GLIDER a second caller already exists. Both ``WaitForInput``
+        and the Input node try ``device.read()`` first and fall back to
+        ``get_state()``, the latter on a 50 ms loop, so an experimenter who
+        drops an Input node onto a Harp device would otherwise consume counts
+        twenty times a second and write a CSV that is wrong with no symptom
+        anywhere. Wiring ``read()`` here makes that harmless.
+
+        ``peek`` is the fix rather than making the ownership a rule, because it
+        has no clearing behaviour to get wrong: it cannot lose a count, so a
+        second poller becomes safe instead of forbidden. Enforcing ownership
+        instead would trade a miscount for a ``RuntimeError`` in the middle of
+        a trial, which is worse.
+
+        The counts it reports are those accumulated since the last ``snapshot``
+        -- a partial interval, which is what an unsynchronised observer should
+        see. Two peeks with no snapshot between them report the same numbers.
+        """
+        return self._read(clear=False)
+
     def snapshot(self) -> dict[str, int | float | None]:
         """Read every column and clear the event counters.
+
+        For the one caller that owns the record; everybody else wants ``peek``.
 
         Reading and clearing are one operation under the lock. Splitting them
         would let an event that arrived in between be counted into no row at
         all, which is the one failure the counter exists to prevent.
         """
+        return self._read(clear=True)
+
+    def _read(self, clear: bool) -> dict[str, int | float | None]:
+        """Collect every column, optionally consuming the counters."""
         values: dict[str, int | float | None] = {}
         with self._lock:
             for address, name in self._names.items():
                 register = self._states[address]
-                values[f"{name}:state"] = register.state
-                values[f"{name}:count"] = register.count
-                values[f"{name}:last_ms"] = register.last_ms
-                register.count = 0
+                state_column, count_column, last_ms_column = _columns_for(name)
+                values[state_column] = register.state
+                values[count_column] = register.count
+                values[last_ms_column] = register.last_ms
+                if clear:
+                    register.count = 0
         return values
