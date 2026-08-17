@@ -319,6 +319,46 @@ def test_a_stalled_head_is_not_flushed_before_the_window(cache, reader_for):
     assert reader.idle_flushes == 0
 
 
+def test_an_embedded_frame_is_mis_framed_by_a_mid_frame_flush(cache, reader_for):
+    """The idle flush's accepted cost, pinned rather than left to a comment.
+
+    Same adversarial input as the test above -- an outer event for ``poke``
+    whose payload contains a complete, correctly checksummed inner event for
+    ``lick`` -- but with the window short enough that the flush actually fires
+    while the outer frame is half-arrived. That test proves the flush does not
+    fire early; without this one, nothing exercises it firing at all on a
+    payload that can be mis-framed, and the comment describing the damage
+    would be the only thing asserting it.
+
+    The damage is deterministic, not the "one offset in 256" a phantom
+    normally costs: clearing the splitter's sync belief is precisely what
+    disarms its guard against hunting inside an in-flight head, so resync finds
+    the embedded frame every time. The real event is lost and a phantom lands
+    on the wrong register, with no counter moving to say so.
+
+    Pinned because it is accepted, not fixed: preventing it means judging an
+    in-flight head by its payload-type bits, which duplicates the parser
+    knowledge ``frames`` isolates and would hold real stalls open. If a future
+    change does prevent it, this test should fail and be rewritten to the
+    better behaviour -- that is the point of pinning it.
+    """
+    inner = _event(32, 7)
+    outer = _frame(3, 33, 0x01, bytes([0]) + inner + bytes(4))
+    cut = outer.find(inner) + len(inner)
+    fake = _FakeSerial([outer[:cut]])
+    reader = reader_for(fake, idle_flush_s=0.05)
+
+    assert _wait_until(lambda: reader.idle_flushes >= 1)
+    fake.push(outer[cut:])
+
+    assert _wait_until(lambda: cache.peek()["lick_count"] == 1)  # the phantom
+    row = cache.peek()
+    assert row["lick_state"] == 7  # the inner frame's payload, never sent as an event
+    assert row["poke_count"] == 0  # the event that really happened, lost
+    # Nothing in the counters marks the swap: it is corruption-free framing.
+    assert (reader.error_count, reader.decode_failures) == (0, 0)
+
+
 def test_a_slow_device_is_not_flushed_while_bytes_keep_arriving(cache, reader_for):
     """The window is silence on the line, not elapsed time since the reader started.
 
@@ -442,12 +482,38 @@ def test_a_stopped_reader_cannot_be_restarted(cache):
     its first loop test: alive for microseconds, then quietly gone, leaving an
     empty recording and nothing anywhere saying the reader never ran.
     """
-    reader = HarpReader(_FakeSerial(), cache)
+    fake = _FakeSerial()
+    fake.timeout = 3.0
+    reader = HarpReader(fake, cache)
     reader.stop()
 
     with pytest.raises(RuntimeError):
         reader.start()
     assert reader.is_alive() is False
+    # A reader that never ran never borrowed anything, so it has nothing to
+    # hand back -- restoring regardless would clear a timeout it never took.
+    assert fake.timeout == 3.0
+
+
+@pytest.mark.parametrize("caller_timeout", [3.0, None], ids=["chosen", "unset"])
+def test_stop_gives_the_port_its_read_timeout_back(cache, caller_timeout):
+    """The reader borrows the timeout; it does not keep it.
+
+    The caller owns this port for writes and register round-trips too. A
+    timeout it chose and silently lost does not fail here -- it surfaces much
+    later as a read that returned early, on a port nobody remembers editing.
+    """
+    fake = _FakeSerial(idle_sleep=0.01)
+    fake.timeout = caller_timeout
+    reader = HarpReader(fake, cache)
+
+    reader.start()
+    assert fake.timeout != caller_timeout  # borrowed while running
+
+    reader.stop()
+    assert fake.timeout == caller_timeout
+    reader.stop()  # idempotent, and does not re-restore
+    assert fake.timeout == caller_timeout
 
 
 def test_the_reader_thread_is_a_daemon(reader_for):

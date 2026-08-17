@@ -525,9 +525,7 @@ FLUSH = (
     '        self._ingest_frames(self._splitter.feed(b""))'
 )
 READ_TIMEOUT = (
-    "        self._serial.timeout = max(\n"
-    "            _MIN_READ_TIMEOUT_S, min(self._idle_flush_s / 2, _MAX_READ_TIMEOUT_S)\n"
-    "        )"
+    "        wanted = max(_MIN_READ_TIMEOUT_S, min(self._idle_flush_s / 2, _MAX_READ_TIMEOUT_S))"
 )
 STALL_CHECK = (
     "        if not self._splitter._buffer:\n"
@@ -733,18 +731,43 @@ HARP_READER_MUTANTS: list[tuple[str, str, str]] = [
     ),
     (
         "start() leaves the port's read timeout as it found it",
-        READ_TIMEOUT,
+        "        self._serial.timeout = wanted",
         "        pass",
     ),
     (
         "the read timeout ignores the idle window",
         READ_TIMEOUT,
-        "        self._serial.timeout = _MAX_READ_TIMEOUT_S",
+        "        wanted = _MAX_READ_TIMEOUT_S",
     ),
     (
         "the read timeout is unbounded above, so stop() cannot join",
         READ_TIMEOUT,
-        "        self._serial.timeout = max(_MIN_READ_TIMEOUT_S, self._idle_flush_s / 2)",
+        "        wanted = max(_MIN_READ_TIMEOUT_S, self._idle_flush_s / 2)",
+    ),
+    (
+        # The caller owns this port for writes and register round-trips too, so
+        # a borrowed timeout that is never handed back surfaces later as a read
+        # that returned early on a port nobody remembers editing.
+        "stop() keeps the read timeout it borrowed",
+        "        borrowed, previous = self._borrowed_timeout\n"
+        "        if borrowed:\n"
+        "            self._serial.timeout = previous\n"
+        "            self._borrowed_timeout = (False, None)",
+        "        return",
+    ),
+    (
+        "start() does not remember what the caller's read timeout was",
+        "        self._borrowed_timeout = (True, previous)",
+        "        self._borrowed_timeout = (True, None)",
+    ),
+    (
+        # The wrong place to put it back: a reader that never ran borrowed
+        # nothing, and restoring regardless clears a timeout it never took.
+        "stop() restores a timeout it never borrowed",
+        "        self._stop_event.set()\n        thread = self._thread",
+        "        self._stop_event.set()\n"
+        "        self._serial.timeout = self._borrowed_timeout[1]\n"
+        "        thread = self._thread",
     ),
     (
         "start() may be called on a reader that is already running",

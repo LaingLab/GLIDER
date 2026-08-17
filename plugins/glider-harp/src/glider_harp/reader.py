@@ -242,11 +242,12 @@ class HarpReader:
 
     Ownership, because two of these bite quietly:
 
-    * The **port** belongs to the caller. The reader never opens or closes it;
-      it does set the handle's read timeout for the duration (see ``start``),
-      since the read cadence is the reader's own heartbeat. ``stop`` before
-      ``close``, in that order: a read in flight when the handle closes is
-      indistinguishable from an unplugged cable and is recorded as a failure.
+    * The **port** belongs to the caller. The reader never opens or closes it.
+      It borrows the handle's read timeout between ``start`` and ``stop``,
+      since the read cadence is the reader's own heartbeat, and puts the
+      caller's value back afterwards. ``stop`` before ``close``, in that
+      order: a read in flight when the handle closes is indistinguishable from
+      an unplugged cable and is recorded as a failure.
     * ``snapshot`` belongs to whoever writes the CSV. This thread calls
       ``cache.ingest`` and nothing else -- ``snapshot`` clears the counters, so
       a second caller silently eats events out of the record.
@@ -304,6 +305,8 @@ class HarpReader:
         self._decode_failures = 0
         self._idle_flushes = 0
         self._last_data_at = 0.0
+        # (borrowed?, the caller's read timeout) -- see ``start`` and ``stop``.
+        self._borrowed_timeout: tuple[bool, Any] = (False, None)
         self.failure: Exception | None = None
         """The read that ended the thread, or None. See ``_run``."""
 
@@ -318,25 +321,45 @@ class HarpReader:
         if self._thread is not None or self._stop_event.is_set():
             raise RuntimeError("HarpReader.start() is one-shot; build a new reader to reconnect")
 
-        # The reader owns the handle's read timeout while it runs. Both things
-        # it must do on a silent line -- notice the stop event, notice the
-        # device stopped talking -- can only happen when a read returns, so a
-        # port opened with no timeout would leave the thread unstoppable and
+        # The reader borrows the handle's read timeout while it runs. Both
+        # things it must do on a silent line -- notice the stop event, notice
+        # the device stopped talking -- can only happen when a read returns, so
+        # a port opened with no timeout would leave the thread unstoppable and
         # the idle flush unreachable. Half the idle window so a stalled buffer
         # is released near ``idle_flush_s`` rather than a whole read later.
-        self._serial.timeout = max(
-            _MIN_READ_TIMEOUT_S, min(self._idle_flush_s / 2, _MAX_READ_TIMEOUT_S)
-        )
+        #
+        # Borrowed, not taken: ``stop`` puts the caller's value back. The
+        # caller owns this port for writes and register round-trips too, and a
+        # timeout it chose and silently lost is the kind of thing that surfaces
+        # much later as a read that returns too early. Set before the thread
+        # exists so a handle that rejects it fails out of ``start`` cleanly,
+        # with nothing running and the reader still startable.
+        wanted = max(_MIN_READ_TIMEOUT_S, min(self._idle_flush_s / 2, _MAX_READ_TIMEOUT_S))
+        previous = getattr(self._serial, "timeout", None)
+        if previous is not None and previous != wanted:
+            logger.debug(
+                "HarpReader: borrowing the port read timeout (%s -> %.2fs) until stop",
+                previous,
+                wanted,
+            )
+        self._serial.timeout = wanted
+        self._borrowed_timeout = (True, previous)
         self._last_data_at = time.monotonic()
         self._thread = threading.Thread(target=self._run, name="harp-reader", daemon=True)
         self._thread.start()
 
     def stop(self, timeout: float = 2.0) -> None:
-        """Ask the reader to finish and wait for it. Idempotent; safe before ``start``.
+        """Ask the reader to finish, wait for it, and give the port back.
 
-        The thread reference is kept rather than cleared, so a thread that
-        refused to join stays visible through ``is_alive`` instead of being
-        reported as stopped.
+        Idempotent, and safe before ``start`` -- which retires the reader, see
+        ``start``. The thread reference is kept rather than cleared, so a
+        thread that refused to join stays visible through ``is_alive`` instead
+        of being reported as stopped.
+
+        The read timeout is restored only once the thread has actually gone. A
+        thread still running needs the short timeout it was given to keep
+        noticing the stop event; handing it back a long one would strand it
+        further, and the failed join is already logged as an error.
         """
         self._stop_event.set()
         thread = self._thread
@@ -345,6 +368,11 @@ class HarpReader:
         thread.join(timeout)
         if thread.is_alive():
             logger.error("HarpReader: thread did not exit within %.1fs", timeout)
+            return
+        borrowed, previous = self._borrowed_timeout
+        if borrowed:
+            self._serial.timeout = previous
+            self._borrowed_timeout = (False, None)
 
     def is_alive(self) -> bool:
         """Whether the reader thread is running."""
@@ -471,16 +499,42 @@ class HarpReader:
         be a frame boundary, so the next ``feed`` hunts forward with the
         splitter's own resync and releases everything parked behind it.
 
-        Against a genuinely slow device the cost is small and bounded, which is
-        what makes waiting a whole ``idle_flush_s`` the right conservative
-        default rather than a tuning knob. If this fires on a frame that really
-        was still arriving, resync finds nothing decodable in a partial frame
-        and (below one maximum frame) discards nothing, so the frame still
-        completes and is still emitted when its tail lands. The residue is that
-        framing is treated as unknown until the next good frame, which costs a
-        forward hunt and, at roughly one offset in 256, risks framing a phantom
-        message out of a payload. That is why the flush waits for the line to
-        be silent rather than merely for a read to come back empty.
+        What it costs when it fires on a frame that really was still arriving
+        depends entirely on what that frame's payload happens to contain, and
+        one of the two cases is worse than it first looks:
+
+        * An ordinary payload survives. Resync finds nothing decodable inside a
+          partial frame and, below one maximum frame, discards nothing, so the
+          frame completes and is emitted when its tail lands. Swept across
+          arrival gaps from 0.02x to 4x the window with zero and random
+          payloads: 1/1 delivered every time.
+        * A payload that **contains a decodable frame** is mis-framed, and
+          deterministically -- not at "one offset in 256". Clearing ``_synced``
+          is exactly what disarms the splitter's guard against hunting inside
+          an in-flight head, so resync finds the embedded frame, consumes the
+          outer frame's header with it, and emits it. The recording then gets a
+          phantom event on the *inner* frame's register and loses the real
+          event entirely, with no counter moving. Reproduced 3/3, and pinned in
+          ``test_an_embedded_frame_is_mis_framed_by_a_mid_frame_flush``.
+
+        The second case is accepted rather than prevented, on reachability: it
+        needs a mid-frame stall longer than ``idle_flush_s`` (0.5 s is already
+        pathological at 115200 baud, where a whole frame takes ~1.5 ms) *and*
+        an embedded frame, which needs a payload of at least six bytes -- the
+        digital-input and counter registers this is built for send one to four.
+        12,000 realistic timestamped events produced no instance.
+
+        Preventing it means deciding whether an in-flight head is a real frame
+        before disarming the guard, and the only evidence available is the
+        header's payload-type bits -- the parser knowledge ``frames`` exists to
+        keep in one place, reimplemented here, and still only a heuristic: a
+        noise head with plausible bits would then hold the stall open and lose
+        every frame behind it at the end of a trial, which is the failure this
+        flush exists to prevent and the far likelier one. Not worth the trade
+        unless a device appears with long payloads.
+
+        Waiting a whole ``idle_flush_s`` rather than flushing on the first
+        empty read is what keeps the second case as rare as it is.
         """
         self._idle_flushes += 1
         logger.debug(
