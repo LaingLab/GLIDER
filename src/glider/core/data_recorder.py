@@ -179,11 +179,27 @@ class DataRecorder:
         self._cv_processor = cv_processor
 
     def _get_device_columns(self) -> list[str]:
-        """Get list of device column names."""
+        """
+        Get list of device column names.
+
+        A device may contribute several columns by returning names from
+        ``state_columns()``; those become ``{device_id}:{name}``. Devices
+        returning ``None`` keep the historical ``{device_id}:{device_type}``.
+        """
         columns = []
         for device_id, device in self._hardware_manager.devices.items():
-            device_type = getattr(device, "device_type", "unknown")
-            columns.append(f"{device_id}:{device_type}")
+            sub_columns = None
+            if hasattr(device, "state_columns"):
+                try:
+                    sub_columns = device.state_columns()
+                except Exception:
+                    logger.exception("state_columns() failed for device %s", device_id)
+                    sub_columns = None
+            if sub_columns:
+                columns.extend(f"{device_id}:{name}" for name in sub_columns)
+            else:
+                device_type = getattr(device, "device_type", "unknown")
+                columns.append(f"{device_id}:{device_type}")
         return columns
 
     def _get_zone_columns(self) -> list[str]:
