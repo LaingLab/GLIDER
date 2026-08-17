@@ -1,9 +1,11 @@
 """Split and decode Harp binary frames.
 
-A thin adapter over ``harp.protocol``. That package is a pre-1.0 release
-candidate whose API is not frozen -- 0.4.0 and 0.5.0rc1 are entirely different
--- so the rest of ``glider_harp`` depends on the names defined here rather than
-on upstream's. An upstream change should touch this file and no other.
+A thin adapter over ``harp.protocol``'s message codec. That package is a pre-1.0
+release candidate whose API is not frozen -- 0.4.0 and 0.5.0rc1 are entirely
+different -- so the rest of ``glider_harp`` depends on the names defined here
+rather than on upstream's. An upstream change to the codec should touch this
+file and no other. (``schema`` adapts the other half, the register DSL; the two
+import disjoint names.)
 
 The wire format itself is stable:
 

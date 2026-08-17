@@ -1,4 +1,7 @@
-"""Mutation check for ``FrameSplitter``, ``RegisterCache`` and ``HarpReader``.
+"""Mutation check for every module in ``glider_harp`` that fails quietly.
+
+``FrameSplitter``, ``RegisterCache``, ``HarpReader``, ``schema`` and
+``derivation``.
 
 Not collected by pytest -- deliberately named without a ``test_`` prefix, since
 it rewrites source files on disk and shells out to pytest. Run it directly:
@@ -12,12 +15,14 @@ stricter suite. That has already earned its keep once: the lazy-genexp mutant
 was EQUIVALENT until ``feed`` was annotated ``list[bytes]``, and this check is
 what flagged that the justification had gone stale.
 
-This exists because both modules fail quietly. Several splitter bugs found in
-review (a stale byte after each frame, noise stranding the frames behind it)
-left the yielded frames looking correct and were invisible to assertions on
-output alone; a register cache that drops an event writes a CSV that is wrong
-in no visible way at all. A mutant that survives means a test constant is doing
-the work.
+This exists because every one of these modules fails quietly. Several splitter
+bugs found in review (a stale byte after each frame, noise stranding the frames
+behind it) left the yielded frames looking correct and were invisible to
+assertions on output alone; a register cache that drops an event writes a CSV
+that is wrong in no visible way at all; a register built one byte too narrow
+decodes every event of the session and never raises; a column rule obeyed by
+halves writes a file that opens cleanly. A mutant that survives means a test
+constant is doing the work.
 
 Mutants are written against the *contract* each module documents, not against
 the code as written -- including rules the implementation might have obeyed by
@@ -65,6 +70,8 @@ ROOT = Path(__file__).resolve().parents[3]
 SOURCE = ROOT / "plugins" / "glider-harp" / "src" / "glider_harp"
 FRAMES_TARGET = SOURCE / "frames.py"
 READER_TARGET = SOURCE / "reader.py"
+SCHEMA_TARGET = SOURCE / "schema.py"
+DERIVATION_TARGET = SOURCE / "derivation.py"
 TESTS = "plugins/glider-harp/tests/"
 
 CONSUME = "                del self._buffer[: len(candidate)]\n                self._synced = True"
@@ -911,10 +918,343 @@ HARP_READER_MUTANTS: list[tuple[str, str, str]] = [
     ),
 ]
 
+TYPE_GUARD = "    if type_name not in _REGISTER_TYPES:"
+BUILD_SCALAR = "    register = array(address, length=length) if length > 1 else scalar(address)"
+MASK_MEMBER_VALUE = '        raw = value.get("value") if isinstance(value, Mapping) else value'
+
+# ``schema``. Written against what each schema key is *documented to mean* --
+# a type is a width and a signedness, a length is an element count, a maskType
+# is a decoding -- rather than against the branches as written. Every one of
+# these builds a register class successfully; the damage is that it decodes
+# every event of the session wrongly and looks identical from the outside.
+SCHEMA_MUTANTS: list[tuple[str, str, str]] = [
+    # --- the type table: one wrong row is one register decoded wrongly forever ---
+    (
+        "U16 registers are built one byte wide",
+        '    "U16": (RegisterU16, RegisterU16Array),',
+        '    "U16": (RegisterU8, RegisterU8Array),',
+    ),
+    (
+        "S16 registers are built unsigned, so negatives read as large positives",
+        '    "S16": (RegisterS16, RegisterS16Array),',
+        '    "S16": (RegisterU16, RegisterU16Array),',
+    ),
+    (
+        "Float registers are built as integers of the same width",
+        '    "Float": (RegisterFloat, RegisterFloatArray),',
+        '    "Float": (RegisterU32, RegisterU32Array),',
+    ),
+    (
+        # The quiet version of an unknown type: something is built, and it is
+        # the commonest width, so it works for exactly the registers that would
+        # have worked anyway.
+        "an unknown type silently defaults to U8",
+        TYPE_GUARD + "\n        raise SchemaError(",
+        '    if type_name not in _REGISTER_TYPES:\n        type_name = "U8"\n    if False:\n        raise SchemaError(',
+    ),
+    # --- length: an element count, not a flag ---
+    (
+        "length is ignored and every register is a scalar",
+        BUILD_SCALAR,
+        "    register = scalar(address)",
+    ),
+    (
+        "an array register is built one element short",
+        BUILD_SCALAR,
+        "    register = array(address, length=length - 1) if length > 1 else scalar(address)",
+    ),
+    (
+        "a scalar register is built as a one-element array",
+        BUILD_SCALAR,
+        "    register = array(address, length=length) if length >= 1 else scalar(address)",
+    ),
+    (
+        "a length below one is accepted",
+        "    if not isinstance(length, int) or isinstance(length, bool) or length < 1:",
+        "    if False:",
+    ),
+    # --- maskType: a decoding, and the two kinds decode differently ---
+    (
+        "maskType is ignored, so a flag register decodes to a bare number",
+        "    if mask_type is not None:",
+        "    if False:",
+    ),
+    (
+        # Bits combine. An enum of alternatives rejects Channel0|Channel1,
+        # which is the ordinary case of two licks at once.
+        "a bit mask is built as an enum of alternatives",
+        "        return enum.IntFlag(name, dict(members))",
+        "        return enum.IntEnum(name, dict(members))",
+    ),
+    (
+        "a group mask is built as a set of combinable bits",
+        "        return enum.IntEnum(name, dict(members))",
+        "        return enum.IntFlag(name, dict(members))",
+    ),
+    (
+        # BitMask defaults its mask to the whole base element; pinning it to one
+        # byte truncates a 16-bit flag word to its low half.
+        "a bit mask reads only the low byte of a wide register",
+        "        return BitMask(enum=flags, offset=offset)",
+        "        return BitMask(enum=flags, mask=0xFF, offset=offset)",
+    ),
+    (
+        "an unknown maskType is silently ignored",
+        '    raise SchemaError(\n        f"Register {name!r} names mask {mask_type!r}, which is in neither "\n        "bitMasks nor groupMasks"\n    )',
+        '    return BitMask(enum=enum.IntFlag(mask_type, {"Bit0": 1}), offset=offset)',
+    ),
+    (
+        "a masked array register masks its first element and drops the rest",
+        "        if length > 1:",
+        "        if False:",
+    ),
+    (
+        "a mask member written with a description is read as the description",
+        MASK_MEMBER_VALUE,
+        "        raw = value",
+    ),
+    (
+        "a 0x-prefixed mask value is read as decimal",
+        "        return int(str(raw), 0)",
+        "        return int(str(raw))",
+    ),
+    # --- payloadSpec: named members at element offsets ---
+    (
+        "payloadSpec is ignored and the register decodes as a bare scalar",
+        "    if payload_spec is not None:",
+        "    if False:",
+    ),
+    (
+        "payloadSpec offsets are ignored and every member reads the first element",
+        '        offset = member.get("offset", 0)',
+        "        offset = 0",
+    ),
+    # --- addresses: the key every frame is dispatched by ---
+    (
+        "the address is off by one",
+        "    return address",
+        "    return address + 1",
+    ),
+    (
+        "an address no frame header could carry is accepted",
+        "    if not 0 <= address <= _MAX_ADDRESS:",
+        "    if False:",
+    ),
+    (
+        "a non-integer address is accepted",
+        "    if not isinstance(address, int) or isinstance(address, bool):",
+        "    if False:",
+    ),
+    (
+        # An address-keyed map keeps one and loses the other, so every event of
+        # the loser is attributed to the winner for the whole session.
+        "two registers at one address are accepted",
+        "        if register.address in seen:",
+        "        if False:",
+    ),
+    # --- the surrounding shape ---
+    (
+        "registers come back sorted rather than in schema order",
+        "    return built",
+        "    return dict(sorted(built.items()))",
+    ),
+    (
+        "load_schema returns whatever the file happened to contain",
+        "    if not isinstance(loaded, dict):",
+        "    if False:",
+    ),
+]
+
+CORE_SKIP = "        if address in CORE_REGISTERS:\n            continue"
+CORE_PROFILE_GUARD = (
+    "        if address in CORE_REGISTERS:\n"
+    "            # Silently dropping it would leave a profile that looks like it\n"
+    "            # asked for a column and produced none.\n"
+    "            raise ValueError("
+)
+NO_PROFILE = "    if not profile:\n        return result"
+ACCESS_LIST = (
+    "    if isinstance(access, (list, tuple, set, frozenset)):\n"
+    "        return frozenset(str(item) for item in access)"
+)
+
+# ``derivation``. Written against the three rules the module docstring states
+# and the four validation rules it owns, not against the branches -- a rule
+# obeyed for the one register a test happens to name looks fully covered from
+# the code. Every mutant here produces a CSV that opens cleanly and is wrong.
+DERIVATION_MUTANTS: list[tuple[str, str, str]] = [
+    # --- "core registers are never columns" ---
+    (
+        "one core register is missing from the set, so it leaks into the columns",
+        "CORE_REGISTERS = frozenset({0, 1, 2, 6, 7, 8, 10, 14})",
+        "CORE_REGISTERS = frozenset({0, 1, 2, 6, 7, 8, 10})",
+    ),
+    (
+        "no register is core, so identity and lifecycle become actions",
+        "CORE_REGISTERS = frozenset({0, 1, 2, 6, 7, 8, 10, 14})",
+        "CORE_REGISTERS = frozenset()",
+    ),
+    (
+        "core registers become actions",
+        CORE_SKIP,
+        "        if False:\n            continue",
+    ),
+    (
+        # The leak the profile side owns: a profile naming WhoAmI would write
+        # the same number in every row of every trial.
+        "a profile may record a core register",
+        CORE_PROFILE_GUARD,
+        "        if False:\n            raise ValueError(",
+    ),
+    # --- "without a profile, record nothing" ---
+    (
+        # The tempting default, and the reason the rule exists: a Behavior board
+        # would drop ~30 columns into the CSV that nobody asked for.
+        "a device with no profile records every event register",
+        NO_PROFILE,
+        "    if not profile:\n"
+        "        for name, meta in registers.items():\n"
+        "            address = _address_of(str(name), meta)\n"
+        '            if address not in CORE_REGISTERS and "Event" in _access_of(meta):\n'
+        "                result.recorded[address] = str(name).lower()\n"
+        "        return result",
+    ),
+    (
+        "a profile is required, so an unrecognised device has no actions either",
+        NO_PROFILE,
+        "    if not profile:\n        return Derived()",
+    ),
+    # --- "Write and Read registers become actions" ---
+    (
+        "Write registers do not become actions",
+        '_ACTION_ACCESS = frozenset({"Read", "Write"})',
+        '_ACTION_ACCESS = frozenset({"Read"})',
+    ),
+    (
+        "Read registers do not become actions",
+        '_ACTION_ACCESS = frozenset({"Read", "Write"})',
+        '_ACTION_ACCESS = frozenset({"Write"})',
+    ),
+    (
+        # An Event register is the device talking to us; there is nothing to
+        # call, and offering it in the node editor is an action that times out.
+        "Event registers become actions",
+        '_ACTION_ACCESS = frozenset({"Read", "Write"})',
+        '_ACTION_ACCESS = frozenset({"Read", "Write", "Event"})',
+    ),
+    (
+        "nothing becomes an action",
+        '_ACTION_ACCESS = frozenset({"Read", "Write"})',
+        "_ACTION_ACCESS = frozenset()",
+    ),
+    (
+        # ``access: [Write, Event]`` is ordinary. Read as one opaque value it
+        # matches nothing, and a writable register vanishes from the graph.
+        "a list of access modes is read as a single mode",
+        ACCESS_LIST,
+        "    if isinstance(access, (list, tuple, set, frozenset)):\n"
+        "        return frozenset({str(access)})",
+    ),
+    # --- what a profile selects, and under what name ---
+    (
+        "the profile's column name is ignored and the register name is used",
+        "        result.recorded[address] = column",
+        "        result.recorded[address] = str(register)",
+    ),
+    (
+        # RegisterCache is built from address -> name; keyed by name it would
+        # match no frame, and every column would stay at its initial value.
+        "recorded is keyed by register name rather than address",
+        "        result.recorded[address] = column",
+        "        result.recorded[str(register)] = column",
+    ),
+    (
+        "a profile naming a register the device does not have is ignored",
+        '            raise ValueError(f"Profile entry names unknown register {register!r}")',
+        "            continue",
+    ),
+    (
+        "a profile records the same register twice, keeping whichever came last",
+        "        if address in result.recorded:",
+        "        if False:",
+    ),
+    (
+        "a profile written for another device is accepted",
+        "    _check_who_am_i(schema, profile)",
+        "    pass",
+    ),
+    (
+        # The other half: a schema that does not say who it is must not be
+        # rejected, or every hand-written schema fails against every profile.
+        "a schema that declares no WhoAmI is rejected by every profile",
+        "    if declared is None or expected is None:\n        return",
+        "    if False:\n        return",
+    ),
+    # --- the column-name invariant this module owns ---
+    (
+        "an empty column name is accepted",
+        "        if not isinstance(column, str) or not column:",
+        "        if False:",
+    ),
+    (
+        "a column name that is not a string is accepted",
+        "        if not isinstance(column, str) or not column:",
+        "        if not column:",
+    ),
+    (
+        # "harp1:lick:state" -- nothing downstream can tell which colon was the
+        # separator. BaseDevice.state_columns forbids it.
+        "a colon in a column name is accepted",
+        '        if ":" in column:',
+        "        if False:",
+    ),
+    (
+        "two registers may share a column name",
+        "        if column in claimed:",
+        "        if False:",
+    ),
+    (
+        # The degenerate version: the collision check tracks register names, so
+        # it never fires for two different registers -- which is the only case
+        # that can collide.
+        "the collision check tracks register names instead of column names",
+        "        claimed[column] = str(register)",
+        "        claimed[str(register)] = str(register)",
+    ),
+    # --- a recorded register that cannot report anything ---
+    (
+        "recording a register that emits no events passes without a word",
+        "            logger.warning(\n"
+        '                "Harp profile records register %r, which is not an Event register; "\n'
+        '                "its columns will never change",\n'
+        "                register,\n"
+        "            )",
+        "            pass",
+    ),
+    (
+        "the warning fires for event registers instead",
+        '        if "Event" not in _access_of(registers[str(register)]):',
+        '        if "Event" in _access_of(registers[str(register)]):',
+    ),
+    # --- load_profile: a name from a device setting, resolved inside the package ---
+    (
+        "a profile name is used as a path",
+        "    if not _PROFILE_NAME.match(name):",
+        "    if False:",
+    ),
+    (
+        "a missing profile yields an empty one instead of raising",
+        "        raise FileNotFoundError(",
+        "        return {}\n        raise FileNotFoundError(",
+    ),
+]
+
 # (target file, mutants). Each file is restored before the next is touched.
 SUITES: list[tuple[Path, list[tuple[str, str, str]]]] = [
     (FRAMES_TARGET, FRAME_MUTANTS),
     (READER_TARGET, READER_MUTANTS + HARP_READER_MUTANTS),
+    (SCHEMA_TARGET, SCHEMA_MUTANTS),
+    (DERIVATION_TARGET, DERIVATION_MUTANTS),
 ]
 
 EXPECTED_SURVIVORS = {
