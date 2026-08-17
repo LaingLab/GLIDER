@@ -136,12 +136,17 @@ class BaseDevice(ABC):
 
         Return ``None`` (the default) for single-column behaviour: the
         recorder emits one column named ``{device_id}:{device_type}`` and
-        writes whatever ``get_state()`` returns as a scalar.
+        writes this device's recorded state as a scalar.
 
         Return a list of names to contribute several columns. The recorder
-        then emits ``{device_id}:{name}`` per entry and expects
-        ``get_state()`` to return a dict keyed by those names. Missing keys
-        are written as empty cells.
+        then emits ``{device_id}:{name}`` per entry and expects this
+        device's recorded state to be a dict keyed by those names. Missing
+        keys are written as empty cells.
+
+        Names must be non-empty, unique within the device, and must not
+        contain ``:`` (the recorder splits column headers on that
+        character to recover the device id and sub-column name). A device
+        with a single column returns ``None``, never ``[]``.
         """
         return None
 
