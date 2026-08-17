@@ -31,15 +31,27 @@ say less than it appears to:
   behaviour.
 * ``EQUIVALENT:`` -- provably unkillable, asserted to survive (above).
 * ``RACE-WINDOW:`` -- the two lock mutants. These are killed **only because the
-  mutant itself inserts a ``time.sleep`` into the window it opens**. Under
-  CPython's GIL the concurrency test also passes with the lock removed and no
-  sleep added: 15/15 green, and a stress harness at 16 writers x 3000 events
-  found zero lost updates over 40 trials. So their kill shows the suite catches
-  an artificially widened race -- not that the lock as written is load-bearing
-  on this interpreter. The lock stays regardless: it is correct, costs three
-  attribute writes, and is genuinely required on free-threaded builds where the
-  GIL is not quietly doing the work. Do not quote these two alongside the
-  killable score as if they measured the same thing.
+  mutant itself inserts a ``time.sleep`` into the window it opens**. With the
+  lock simply removed and no sleep added, the concurrency tests still pass:
+  15/15 green, and a stress harness at 8-16 writers x 3000 events found zero
+  lost updates over 40 trials, down to a switch interval of 1e-7.
+
+  That is structural, not luck, and not something a harsher setting will
+  overturn: CPython 3.12 offers a thread switch only at bytecodes like
+  ``RESUME`` and ``JUMP_BACKWARD``, and neither critical section contains one,
+  so no interleaving exists to find at any switch interval. Squeezing the
+  interval will never promote these two.
+
+  So their kill shows the suite catches an artificially widened race -- not
+  that the lock as written is load-bearing on this interpreter. The lock stays
+  regardless, because "unobservable on today's CPython" is not "unnecessary":
+  the property is an implementation detail of one interpreter, unspecified by
+  the language, and it does not hold on a free-threaded build. Do not quote
+  these two alongside the killable score as if they measured the same thing.
+
+  Exit condition: if a free-threaded (3.13t/3.14t) job ever lands in CI, the
+  interleaving becomes reachable and these stop being self-fulfilling. Drop the
+  ``RACE-WINDOW:`` prefix then and let them count as plain killable mutants.
 """
 
 from __future__ import annotations

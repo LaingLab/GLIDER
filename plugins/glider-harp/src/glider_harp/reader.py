@@ -93,17 +93,16 @@ class RegisterCache:
     everybody else. See ``peek`` for why that distinction is not optional.
 
     Thread-safe: the reader thread ingests while the event loop reads. Be
-    precise about what that rests on, because the tests cannot show it. On
+    precise about what that rests on, because no test here can show it. On
     CPython today the lock is unobservable -- the suite passes with it removed,
     and not by luck: the interpreter offers a thread switch only at bytecodes
     like ``RESUME`` and ``JUMP_BACKWARD``, and neither critical section here
-    contains one, so there is no interleaving available to find at any switch
-    interval. That is a property of one interpreter's implementation, not a
-    guarantee of the language, and it does not hold on a free-threaded build
-    (3.13t/3.14t), where a snapshot could clear a count it never reported and
-    lose events in silence. Unobservable here, unspecified by the language,
-    required there -- so do not remove it because the tests still pass without
-    it.
+    contains one, so no interleaving exists to find at any switch interval.
+    That is an implementation detail of one interpreter, unspecified by the
+    language, and it does not hold on a free-threaded build (3.13t/3.14t),
+    where a read could clear a count it never reported and lose events in
+    silence. Unobservable here, unspecified by the language, required there --
+    so do not remove it on the strength of a green suite.
 
     Every read returns a fresh dict, so a caller may hold rows and batch them.
     """
