@@ -17,13 +17,15 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 
 import pytest
 import yaml
 
 from glider.hal.base_device import DeviceConfig
+from glider.hal.value_spec import KIND_WHOLE
 from glider_harp.board import HarpBoard
-from glider_harp.device import OPERATION_CONTROL
+from glider_harp.device import OPERATION_CONTROL, ROUND_TRIP_TIMEOUT_S
 from glider_harp.frames import MESSAGE_EVENT, MESSAGE_WRITE, decode, encode
 from glider_harp.mock import DEFAULT_OPERATION_CONTROL, MockHarpDevice
 
@@ -410,6 +412,60 @@ async def test_shutdown_joins_the_reader_off_the_event_loop(device):
     assert seen["thread"] != loop_thread, "joined the reader on the event loop"
 
 
+async def test_the_port_lock_is_held_across_the_close(board, schema_path):
+    """Released before the close, an action already waiting on the lock wakes
+    up and writes into a handle that is closing underneath it -- the exact
+    interleaving the lock is documented to prevent, and it surfaces as an
+    ``OSError`` that reads like a hardware fault rather than like a shutdown.
+
+    Asserted on the lock while the close is in flight, which is the invariant
+    itself; racing an action against it would only be a test that usually
+    passes.
+    """
+    dev = make_device(board, schema_path)
+    await dev.initialize()
+
+    closing = threading.Event()
+    release = threading.Event()
+    real_close = dev.port_handle.close
+
+    def slow_close():
+        closing.set()
+        release.wait(2.0)
+        return real_close()
+
+    dev.port_handle.close = slow_close
+    shutdown = asyncio.create_task(dev.shutdown())
+    try:
+        assert await asyncio.to_thread(closing.wait, 2.0), "close was never reached"
+        assert dev._port_lock.locked(), "released the port lock before closing the port"
+    finally:
+        release.set()
+        await shutdown
+    assert dev.port_handle.closed
+
+
+async def test_settings_cannot_be_edited_while_a_refusing_reader_holds_the_port(device):
+    """``apply_settings`` is keyed on the port, exactly as initialize() is.
+
+    The two differ in one reachable case: a shutdown whose join was refused
+    clears ``_initialized`` while the thread still owns the handle. Keyed on
+    the flag, an edit there renames the port this device is still reading.
+    """
+    reader = device.reader
+    real_stop = reader.stop
+    reader.stop = lambda *args, **kwargs: False
+    await device.shutdown()
+    assert not device.is_initialized
+
+    device.apply_settings({"port": "COM-somewhere-else"})
+    assert device.port == "COM-fake", "renamed a port the reader is still holding"
+    assert device.config.settings["port"] == "COM-somewhere-else", "the edit must still be saved"
+
+    reader.stop = real_stop
+    await device.shutdown()
+
+
 async def test_shutdown_closes_the_port_even_if_standby_fails(board, schema_path):
     """A device that will not answer is still a device whose port has to be
     released; an unreleased handle blocks the next session."""
@@ -511,6 +567,140 @@ async def test_a_value_too_wide_for_the_register_is_refused(device):
         await device.execute_action("StimulusOn", 300)
 
 
+# --- access modes: which half of an action a caller actually gets ---------
+
+
+async def test_reading_a_write_only_register_is_refused_at_once(board, schema_path):
+    """A Read sent to a write-only register gets no reply, so without the
+    schema check the caller waits out the whole round-trip timeout and is then
+    told the device did not answer -- which reads as broken hardware rather
+    than as an action that was never readable.
+
+    ``DeviceReadNode`` calls ``execute_action`` with no args, so this is the
+    dedicated read node pointed at a write-only register.
+    """
+    dev = make_device(board, schema_path, profile="")
+    await dev.initialize()
+    try:
+        quiet = len(dev.port_handle.writes)
+        started = time.monotonic()
+        with pytest.raises(ValueError, match="not readable"):
+            await dev.execute_action("StimulusOn")
+        assert time.monotonic() - started < ROUND_TRIP_TIMEOUT_S / 2, "waited for the wire"
+        assert len(dev.port_handle.writes) == quiet, "sent a request nothing could answer"
+    finally:
+        await dev.shutdown()
+
+
+async def test_writing_a_read_only_register_is_refused(board, tmp_path):
+    """A device answers a write to a read-only register by ignoring it, so the
+    alternative is an action that reports success and does nothing all
+    session."""
+    schema = {
+        "whoAmI": LICKETYSPLIT_WHO_AM_I,
+        "registers": {"Serial": {"address": 35, "type": "U16", "access": "Read"}},
+    }
+    path = tmp_path / "readonly.yml"
+    path.write_text(yaml.safe_dump(schema), encoding="utf-8")
+    dev = make_device(board, path, profile="", registers={35: (7).to_bytes(2, "little")})
+    await dev.initialize()
+    try:
+        quiet = len(dev.port_handle.writes)
+        with pytest.raises(ValueError, match="not writable"):
+            await dev.execute_action("Serial", 3)
+        assert len(dev.port_handle.writes) == quiet, "sent a write the device would ignore"
+        # And the readable half still works.
+        assert await dev.execute_action("Serial") == 7
+    finally:
+        await dev.shutdown()
+
+
+async def test_a_recorded_register_is_read_from_the_cache(board, tmp_path):
+    """The register the reader already owns is answerable without the wire.
+
+    This is what makes ``DeviceReadNode`` usable against a recording device at
+    all: the round-trip cannot work while the reader consumes every reply, and
+    the value it would have fetched is already in the cache. It also works for
+    a Write+Event register, which the wire would refuse to read.
+    """
+    schema = {
+        "whoAmI": LICKETYSPLIT_WHO_AM_I,
+        "registers": {"LickState": {"address": 32, "type": "U8", "access": ["Write", "Event"]}},
+    }
+    path = tmp_path / "both.yml"
+    path.write_text(yaml.safe_dump(schema), encoding="utf-8")
+    dev = make_device(board, path, frames=[event(32, 1, 0.5), event(32, 7, 0.9)])
+    await dev.initialize()
+    try:
+        assert dev.wait_for_replay()
+        assert await dev.execute_action("LickState") == 7
+        # Non-consuming: a read node polling this must not eat the record.
+        assert (await dev.get_state())["lick_count"] == 2
+    finally:
+        await dev.shutdown()
+
+
+# --- value specs: how the runner tells a command from a measurement -------
+
+
+async def test_a_writable_register_declares_its_width_as_its_range(device):
+    """``DeviceControlsPanel`` classifies every control by ``value_spec``.
+
+    Answering None for everything makes each Harp action a bare button that is
+    invoked with no value -- i.e. every button on the runner panel becomes a
+    read, which is wrong for every writable register and impossible for most.
+    """
+    spec = device.value_spec("Threshold")
+    assert spec is not None
+    assert spec.kind == KIND_WHOLE
+    assert (spec.min, spec.max) == (0, 0xFFFF), "U16's own range, not a byte's"
+    assert spec.validate() == []
+
+    narrow = device.value_spec("StimulusOn")
+    assert (narrow.min, narrow.max) == (0, 0xFF)
+
+
+async def test_a_read_only_register_declares_no_value(board, tmp_path):
+    """None is the answer that makes the runner draw a button that reads."""
+    schema = {
+        "whoAmI": LICKETYSPLIT_WHO_AM_I,
+        "registers": {"Serial": {"address": 35, "type": "U16", "access": "Read"}},
+    }
+    path = tmp_path / "readonly.yml"
+    path.write_text(yaml.safe_dump(schema), encoding="utf-8")
+    assert make_device(board, path, profile="").value_spec("Serial") is None
+
+
+async def test_a_wide_register_declares_a_range_a_control_can_hold(board, tmp_path):
+    """A U64's true range is meaningless to a Qt slider, whose bounds are
+    32-bit. ``_pack`` stays the authority on what actually fits, so clamping
+    the declared range cannot admit a bad write."""
+    schema = {
+        "whoAmI": LICKETYSPLIT_WHO_AM_I,
+        "registers": {"Big": {"address": 36, "type": "U64", "access": "Write"}},
+    }
+    path = tmp_path / "wide.yml"
+    path.write_text(yaml.safe_dump(schema), encoding="utf-8")
+    dev = make_device(board, path, profile="")
+
+    spec = dev.value_spec("Big")
+    assert spec.validate() == []
+    assert spec.max == (1 << 31) - 1
+
+    # The register itself still takes its full width.
+    await dev.initialize()
+    try:
+        await dev.execute_action("Big", 1 << 40)
+        assert len(decode(dev.port_handle.writes[-1]).payload) == 8
+    finally:
+        await dev.shutdown()
+
+
+async def test_value_specs_are_available_before_initialize(board, schema_path):
+    """The runner builds its panel from a hardware map, not from live ports."""
+    assert make_device(board, schema_path).value_spec("Threshold") is not None
+
+
 # --- warnings that have to outlive the log -------------------------------
 
 
@@ -533,6 +723,37 @@ async def test_recording_a_non_event_register_is_reported_for_the_csv(board, tmp
 
 async def test_an_event_register_produces_no_warning(device):
     assert device.recording_warnings() == []
+
+
+async def test_the_warning_is_derive_s_own_finding(board, tmp_path):
+    """The device passes on what ``derive`` reported rather than deciding
+    again. One predicate, one wording, one place -- the second copy this
+    replaced got the list-of-access-modes case wrong."""
+    from glider_harp.derivation import derive, load_profile
+
+    schema = {
+        "whoAmI": LICKETYSPLIT_WHO_AM_I,
+        "registers": {"LickState": {"address": 32, "type": "U8", "access": "Write"}},
+    }
+    path = tmp_path / "quiet.yml"
+    path.write_text(yaml.safe_dump(schema), encoding="utf-8")
+
+    expected = derive(schema, load_profile("licketysplit")).warnings
+    assert expected, "derive should have found this itself"
+    assert make_device(board, path).recording_warnings() == expected
+
+
+async def test_a_failed_device_still_names_the_columns_it_was_configured_for(board, schema_path):
+    """A device that never came up has no cache and still has a profile.
+
+    Answered from the cache alone it would collapse to one unnamed column
+    while ``recording_warnings()`` went on describing columns no longer in the
+    header. Empty cells say "not recording"; a missing column says nothing.
+    """
+    dev = make_device(board, schema_path)
+    assert not dev.is_initialized
+    assert dev.state_columns() == LICK_COLUMNS
+    assert await dev.get_state() is None
 
 
 async def test_a_list_of_access_modes_is_read_as_a_list(board, tmp_path):

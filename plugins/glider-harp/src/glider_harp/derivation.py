@@ -87,10 +87,27 @@ class Derived:
 
     ``actions`` maps a register name to its address, keyed by name because that
     is what a person picks in the node editor.
+
+    ``access`` carries each non-core register's access modes, and it is here
+    because an address alone cannot answer the question every caller
+    downstream has to ask: is this action a read or a write? Without it a
+    device holding only ``actions`` must send a Read to a write-only register
+    to find out, which on real hardware is a round-trip that times out --
+    and a GUI cannot tell which control to draw at all.
+
+    ``warnings`` are things the record will not say that it looks like it
+    says, in a form a caller can write into a CSV. They are *also* logged as
+    they are found, but a log line during a long unattended run reaches
+    nobody, so the finding is carried rather than only emitted. Kept here
+    rather than rebuilt by the caller so the predicate and the message have
+    one home: a second copy in a caller is a second copy that can be subtly
+    wrong about, say, a register whose ``access`` is a list.
     """
 
     recorded: dict[int, str] = field(default_factory=dict)
     actions: dict[str, int] = field(default_factory=dict)
+    access: dict[str, frozenset[str]] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
 
 
 def load_profile(name: str) -> dict[str, Any]:
@@ -163,7 +180,9 @@ def derive(schema: Mapping[str, Any], profile: Mapping[str, Any] | None) -> Deri
         address = _address_of(str(name), meta)
         if address in CORE_REGISTERS:
             continue
-        if _access_of(meta) & _ACTION_ACCESS:
+        modes = _access_of(meta)
+        result.access[str(name)] = modes
+        if modes & _ACTION_ACCESS:
             result.actions[str(name)] = address
 
     if not profile:
@@ -228,11 +247,17 @@ def derive(schema: Mapping[str, Any], profile: Mapping[str, Any] | None) -> Deri
             # Not fatal -- a schema may simply be incomplete -- but the column
             # would sit at its initial value for the whole session, and nothing
             # further down can tell that apart from a device that never licked.
-            logger.warning(
-                "Harp profile records register %r, which is not an Event register; "
-                "its columns will never change",
-                register,
+            #
+            # Carried on the result as well as logged, because logging it is
+            # not the same as reporting it: the run this matters to is the
+            # unattended one, whose log nobody opens. The caller writes this
+            # into the CSV metadata, which is what outlives the session.
+            warning = (
+                f"register {register} (column {column}) is not an Event register; "
+                "its columns will never change"
             )
+            logger.warning("Harp profile records a register that cannot report: %s", warning)
+            result.warnings.append(warning)
 
         claimed[column] = register
         result.recorded[address] = column

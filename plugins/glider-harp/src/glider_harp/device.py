@@ -63,7 +63,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from glider.hal.base_device import BaseDevice, DeviceConfig
-from glider_harp.derivation import Derived, derive, load_profile
+from glider.hal.value_spec import KIND_WHOLE, ActionValueSpec
+from glider_harp.derivation import PROFILE_DIR, Derived, derive, load_profile
 from glider_harp.frames import (
     MESSAGE_READ,
     MESSAGE_WRITE,
@@ -108,6 +109,29 @@ ROUND_TRIP_TIMEOUT_S = 1.0
 ROUND_TRIP_READ_TIMEOUT_S = 0.05
 
 _DEFAULT_BAUDRATE = 115200
+
+# Widest bound a declared ``ActionValueSpec`` will carry. A U32 or U64
+# register's true range is meaningless to the controls that read this -- the
+# runner builds a Qt slider, whose bounds are 32-bit -- so the *declared*
+# range is clamped here while ``_pack`` stays the authority on what actually
+# fits the register and raises on anything that does not. Clamping the
+# display bound cannot admit a bad write; widening it past what Qt can hold
+# would produce a control that silently misbehaves.
+_MAX_SPEC_VALUE = (1 << 31) - 1
+_MIN_SPEC_VALUE = -(1 << 31)
+
+
+def _profile_choices() -> list[list[str]]:
+    """Every profile shipped in the package, for the hardware panel's dropdown.
+
+    Free text here is a setting whose only failure mode is a typo discovered
+    at initialize() time, on a bench, with the animal already in the rig. The
+    list is short, fixed at install time, and enumerable -- so enumerate it.
+    The empty choice is a real one: no profile means record nothing, which is
+    ``derive``'s documented default rather than an unset field.
+    """
+    names = sorted(path.stem for path in PROFILE_DIR.glob("*.json"))
+    return [["", "None (record nothing)"], *([name, name] for name in names)]
 
 
 class HarpDevice(BaseDevice):
@@ -154,9 +178,10 @@ class HarpDevice(BaseDevice):
         {
             "key": "profile",
             "label": "Recording profile",
-            "type": "str",
+            "type": "enum",
             "default": "",
-            "help": "Name of a shipped profile naming the registers to record. Blank records none.",
+            "choices": _profile_choices(),
+            "help": "Which registers to record. Without one the device records nothing.",
         },
     ]
 
@@ -175,7 +200,6 @@ class HarpDevice(BaseDevice):
         self._registers: dict[str, Any] = {}
         self._derived = Derived()
         self._actions: dict[str, Callable] = {}
-        self._warnings: list[str] = []
         self._who_am_i: int | None = None
         # Whether the schema/profile have been resolved at least once. The node
         # editor asks for ``actions`` long before any hardware exists, so the
@@ -209,13 +233,19 @@ class HarpDevice(BaseDevice):
 
         Every setting here decides how the port was opened or what the running
         reader is filling, none of which can change under a live handle, so
-        while the device is initialized the edit is recorded for the saved file
-        and takes effect on the next initialize(). Before init the caches are
+        while the port is held the edit is recorded for the saved file and
+        takes effect on the next initialize(). Before that the caches are
         refreshed immediately. Mirrors ``GenericSerialDevice``.
+
+        Keyed on the port still being held, exactly as ``initialize()`` is,
+        rather than on ``_initialized``. The two differ in one reachable case:
+        a shutdown whose join was refused clears ``_initialized`` while the
+        reader thread still owns the handle. Keyed on the flag, an edit there
+        would rewrite ``_port`` to name a device this one is still reading.
         """
         parsed = self._parse_settings({**self._config.settings, **settings})
         self._config.settings.update(settings)
-        if self._initialized:
+        if self._serial is not None or self._reader is not None:
             logger.info("Harp %s: settings saved; reconnect to apply", self._name)
             return
         self._port = parsed["port"]
@@ -270,15 +300,56 @@ class HarpDevice(BaseDevice):
         self._ensure_derivation()
         return dict(self._actions)
 
+    def _declared_value_spec(self, action_name: str) -> ActionValueSpec | None:
+        """What an action's value means, or ``None`` for one that carries none.
+
+        This is the hook every layer already asks -- node property editors,
+        the runner's generated controls, write-time clamping -- and answering
+        it is what makes a Harp register usable from the GUI at all. Without
+        it ``DeviceControlsPanel`` finds no spec for any action, renders every
+        one as a bare button, and invokes each with no value: every button on
+        the panel becomes a *read*, which is wrong for every writable register
+        and impossible for most of them.
+
+        So a **writable** register declares a spec, and the register's own
+        width supplies the range; a **read-only** register declares none,
+        which is exactly how the runner learns to draw it as a button that
+        reads. The two halves of the answer come from ``Derived.access``,
+        which is why that had to exist.
+        """
+        self._ensure_derivation()
+        if "Write" not in self._derived.access.get(action_name, frozenset()):
+            return None
+        built = self._registers.get(action_name)
+        if built is None:
+            return None
+        name = str(built.payload_type.name)
+        if name == "Float":
+            # No fractional value kind exists yet (see value_spec), and a
+            # float register cannot be written at all -- see _pack.
+            return None
+        bits = built.payload_type.numpy_dtype.itemsize * 8
+        if name.startswith("S"):
+            low, high = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+        else:
+            low, high = 0, (1 << bits) - 1
+        return ActionValueSpec(
+            KIND_WHOLE,
+            max(low, _MIN_SPEC_VALUE),
+            min(high, _MAX_SPEC_VALUE),
+            label=action_name,
+        )
+
     def recording_warnings(self) -> list[str]:
         """Ways this device's columns will say less than they look like they do.
 
-        Written into the CSV metadata block by ``DataRecorder``. ``derive``
-        already logs these, and a log line during a long unattended run reaches
-        nobody -- the CSV is the artefact that outlives the session.
+        Written into the CSV metadata block by ``DataRecorder``. Reported by
+        ``derive``, which owns the predicate and the wording; this only passes
+        them on. A second copy of the predicate here was the previous shape,
+        and it got the list-of-access-modes case wrong.
         """
         self._ensure_derivation()
-        return list(self._warnings)
+        return list(self._derived.warnings)
 
     def _ensure_derivation(self) -> None:
         """Resolve the schema and profile once, tolerating failure.
@@ -306,14 +377,26 @@ class HarpDevice(BaseDevice):
     # --- what the recorder reads ---
 
     def state_columns(self) -> list[str] | None:
-        """The cache's columns, or None when nothing is recorded.
+        """The columns the profile asks for, or None when it asks for none.
+
+        Answered from the profile rather than from the live cache, so a device
+        whose initialize() failed still contributes the columns it was
+        configured for -- empty, since ``get_state()`` has nothing to return,
+        which is what a device that is not recording should write. Answered
+        from the cache alone it would instead collapse to one unnamed column
+        while ``recording_warnings()`` went on describing columns that were no
+        longer in the header.
 
         ``None`` rather than ``[]``: an empty list reads to ``DataRecorder`` as
         single-column behaviour anyway, and ``BaseDevice`` documents ``None``
         as the way to ask for it.
         """
         cache = self._cache
-        return cache.columns() if cache is not None else None
+        if cache is not None:
+            return cache.columns()
+        self._ensure_derivation()
+        recorded = self._derived.recorded
+        return _columns_for_recorded(recorded) if recorded else None
 
     async def get_state(self) -> dict[str, int | float | None] | None:
         """The consuming read, for whoever writes the CSV.
@@ -448,15 +531,24 @@ class HarpDevice(BaseDevice):
         self._cache = None
 
     async def _close_port(self) -> None:
-        """Release the handle, whatever close() thinks of it."""
+        """Release the handle, whatever close() thinks of it.
+
+        The lock is held **across** the close, not merely while the reference
+        is taken. Released first, an action already waiting on the lock wakes
+        up and writes to a handle that is closing underneath it, which is the
+        exact interleaving the lock is claimed to prevent (and which raises
+        ``OSError: the port is closed`` from somewhere that looks like a
+        hardware fault). Held across it, the waiter acquires afterwards, finds
+        ``_serial`` is None, and refuses cleanly.
+        """
         async with self._port_lock:
             handle, self._serial = self._serial, None
-        if handle is None:
-            return
-        try:
-            await asyncio.to_thread(handle.close)
-        except Exception as e:  # close is best-effort
-            logger.warning("Harp %s: error closing %s: %s", self._name, self._port, e)
+            if handle is None:
+                return
+            try:
+                await asyncio.to_thread(handle.close)
+            except Exception as e:  # close is best-effort
+                logger.warning("Harp %s: error closing %s: %s", self._name, self._port, e)
 
     def _open_port(self) -> Any:
         """Open the serial handle. Overridden by ``MockHarpDevice``."""
@@ -497,40 +589,7 @@ class HarpDevice(BaseDevice):
         self._actions = {
             name: self._make_action(name, address) for name, address in derived.actions.items()
         }
-        self._warnings = self._collect_warnings(schema, derived)
         self._derivation_loaded = True
-
-    @staticmethod
-    def _collect_warnings(schema: Mapping[str, Any], derived: Derived) -> list[str]:
-        """Recorded registers that cannot report anything.
-
-        ``derive`` already notices this and logs it. The same finding is
-        rebuilt here rather than captured from the log because a warning that
-        only exists in a log line is a warning nobody reads six months later
-        with the CSV open -- and the CSV is what the trial leaves behind.
-        """
-        registers = schema.get("registers") or {}
-        if not isinstance(registers, Mapping):
-            return []
-        by_address: dict[int, tuple[str, Any]] = {}
-        for name, meta in registers.items():
-            if isinstance(meta, Mapping) and isinstance(meta.get("address"), int):
-                by_address[meta["address"]] = (str(name), meta)
-
-        warnings: list[str] = []
-        for address, column in derived.recorded.items():
-            entry = by_address.get(address)
-            if entry is None:
-                continue
-            name, meta = entry
-            access = meta.get("access")
-            modes = {access} if isinstance(access, str) else set(map(str, access or ()))
-            if "Event" not in modes:
-                warnings.append(
-                    f"register {name} (column {column}) is not an Event register; "
-                    "its columns will never change"
-                )
-        return warnings
 
     def _check_identity(self) -> None:
         """Refuse a schema written for a different board.
@@ -608,11 +667,15 @@ class HarpDevice(BaseDevice):
         Events to the cache, so the reply to this is decoded and dropped and
         this call can only ever time out.
         """
-        handle = self._serial
-        if handle is None:
-            raise RuntimeError(f"Harp {self._name} is not connected")
         request = encode(MESSAGE_READ, address, payload_type)
         async with self._port_lock:
+            # Read inside the lock, never captured before it: a handle taken
+            # first is a handle that shutdown() may have closed by the time
+            # this runs, and the failure surfaces as an I/O error rather than
+            # as "not connected".
+            handle = self._serial
+            if handle is None:
+                raise RuntimeError(f"Harp {self._name} is not connected")
             return await asyncio.to_thread(
                 _exchange, handle, request, address, ROUND_TRIP_TIMEOUT_S, self._name
             )
@@ -624,10 +687,10 @@ class HarpDevice(BaseDevice):
         writer -- precisely because it reads nothing back. The device's echo is
         decoded by the reader thread, found not to be an Event, and dropped.
         """
-        handle = self._serial
-        if handle is None:
-            raise RuntimeError(f"Harp {self._name} is not connected")
         async with self._port_lock:
+            handle = self._serial  # inside the lock; see _round_trip
+            if handle is None:
+                raise RuntimeError(f"Harp {self._name} is not connected")
             await asyncio.to_thread(_write_frame, handle, request)
 
     # --- actions ---
@@ -649,25 +712,68 @@ class HarpDevice(BaseDevice):
 
         A ``DeviceAction`` node forwards an input port only when it carries a
         value, so an unconnected port arrives here as ``None`` -- which is
-        exactly the request to read.
+        exactly the request to read. ``DeviceReadNode`` and the runner's
+        buttons call with no value at all, and mean the same thing.
         """
         if self._serial is None:
             raise RuntimeError(f"Harp {self._name} is not connected")
-        payload_type = self._payload_type_of(register)
 
         if value is None:
-            reader = self._reader
-            if reader is not None and reader.is_alive():
-                raise RuntimeError(
-                    f"Harp {self._name}: cannot read register {register!r} while recording. "
-                    "The reader thread consumes every reply, so this would wait for one that "
-                    "never arrives. Record the register instead by naming it in the profile."
-                )
-            frame = await self._round_trip(address, payload_type)
-            return int.from_bytes(frame.payload, "little") if frame.payload else None
+            return await self._read_register(register, address)
 
+        if "Write" not in self._derived.access.get(register, frozenset()):
+            # Checked against the schema rather than discovered on the wire.
+            # A device answers a write to a read-only register by ignoring it,
+            # so the alternative is an action that reports success and does
+            # nothing for the rest of the session.
+            raise ValueError(
+                f"Harp {self._name}: register {register!r} is not writable "
+                f"({self._access_description(register)})"
+            )
+        payload_type = self._payload_type_of(register)
         await self._send(encode(MESSAGE_WRITE, address, payload_type, self._pack(register, value)))
         return None
+
+    async def _read_register(self, register: str, address: int) -> Any:
+        """Answer a read: from the cache if it is recorded, else from the wire."""
+        column = self._derived.recorded.get(address)
+        cache = self._cache
+        if column is not None and cache is not None:
+            # A recorded register is already being read, continuously, by the
+            # reader thread. Answering from the cache is not a shortcut -- it
+            # is the only answer available at all while the reader owns the
+            # port, and it is a better one than the wire could give: no
+            # round-trip, and it works for a Write+Event register that the
+            # wire would refuse to read. ``peek``, so a DeviceRead node
+            # dropped onto the graph cannot eat counts out of the CSV.
+            return cache.peek().get(f"{column}_state")
+
+        if "Read" not in self._derived.access.get(register, frozenset()):
+            # Refused from the schema, instantly. A Read sent to a write-only
+            # register gets no reply, so without this the caller waits out the
+            # full round-trip timeout and is then told the device did not
+            # answer -- which reads as broken hardware rather than as an
+            # action that never existed.
+            raise ValueError(
+                f"Harp {self._name}: register {register!r} is not readable "
+                f"({self._access_description(register)}); "
+                "record it in the profile to read it continuously instead"
+            )
+
+        reader = self._reader
+        if reader is not None and reader.is_alive():
+            raise RuntimeError(
+                f"Harp {self._name}: cannot read register {register!r} while recording. "
+                "The reader thread consumes every reply, so this would wait for one that "
+                "never arrives. Record the register instead by naming it in the profile."
+            )
+        frame = await self._round_trip(address, self._payload_type_of(register))
+        return int.from_bytes(frame.payload, "little") if frame.payload else None
+
+    def _access_description(self, register: str) -> str:
+        """How a message should describe what a register does allow."""
+        modes = sorted(self._derived.access.get(register, frozenset()))
+        return f"access {', '.join(modes)}" if modes else "no access modes declared"
 
     def _payload_type_of(self, register: str) -> str:
         """The register's payload-type name, from the class ``schema`` built."""
@@ -709,6 +815,18 @@ class HarpDevice(BaseDevice):
         instance = cls(board, config, data.get("name"))
         instance._id = data.get("id", instance._id)
         return instance
+
+
+def _columns_for_recorded(recorded: Mapping[int, str]) -> list[str]:
+    """The columns a register map produces, spelled by the one authority.
+
+    A throwaway ``RegisterCache`` rather than a second copy of the naming
+    rule. The cache is pure state -- no thread, no port, no side effect --
+    so building one costs a dict and a lock, while an f-string here would be
+    a second place the ``_state``/``_count``/``_last_ms`` suffixes are
+    written and the first opportunity for a header to disagree with its rows.
+    """
+    return RegisterCache(dict(recorded)).columns()
 
 
 def _as_who_am_i(raw: Any) -> int | None:

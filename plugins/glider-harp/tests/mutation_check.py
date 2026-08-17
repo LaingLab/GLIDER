@@ -1118,6 +1118,14 @@ ACCESS_LIST = (
     "    if isinstance(access, (list, tuple, set, frozenset)):\n"
     "        return frozenset(str(item) for item in access)"
 )
+NON_EVENT_WARNING = (
+    "            warning = (\n"
+    '                f"register {register} (column {column}) is not an Event register; "\n'
+    '                "its columns will never change"\n'
+    "            )\n"
+    '            logger.warning("Harp profile records a register that cannot report: %s", warning)\n'
+    "            result.warnings.append(warning)"
+)
 
 # ``derivation``. Written against the three rules the module docstring states
 # and the four validation rules it owns, not against the branches -- a rule
@@ -1343,12 +1351,25 @@ DERIVATION_MUTANTS: list[tuple[str, str, str]] = [
     # --- a recorded register that cannot report anything ---
     (
         "recording a register that emits no events passes without a word",
-        "            logger.warning(\n"
-        '                "Harp profile records register %r, which is not an Event register; "\n'
-        '                "its columns will never change",\n'
-        "                register,\n"
-        "            )",
+        NON_EVENT_WARNING,
         "            pass",
+    ),
+    (
+        # The half that only surfaces an experiment later. Logged and not
+        # carried, the finding exists solely in a file nobody opens during an
+        # unattended run, and the CSV it is about says nothing at all.
+        "the warning is logged but never carried, so it dies where nobody looks",
+        "            result.warnings.append(warning)",
+        "            pass",
+    ),
+    (
+        # Without access modes on the result, a caller holding only addresses
+        # cannot tell a read from a write and has to find out by sending a
+        # Read to a write-only register and waiting out the timeout -- and a
+        # GUI cannot tell which control to draw at all.
+        "Derived carries no access modes, so a caller cannot tell a read from a write",
+        "        result.access[str(name)] = modes",
+        "        result.access[str(name)] = frozenset()",
     ),
     (
         "the warning fires for event registers instead",
@@ -1530,20 +1551,33 @@ FRESH_READER = (
 )
 STOP_RESULT = "            if not await asyncio.to_thread(reader.stop):"
 READ_ACTION_GUARD = (
-    "            reader = self._reader\n"
-    "            if reader is not None and reader.is_alive():\n"
-    "                raise RuntimeError("
+    "        reader = self._reader\n"
+    "        if reader is not None and reader.is_alive():\n"
+    "            raise RuntimeError("
 )
 CONFIRM_READBACK = (
     "        confirmed = await self._read_operation_control()\n"
     "        if confirmed & _OPERATION_MODE_MASK != mode:"
 )
-NON_EVENT_WARNING = (
-    '            if "Event" not in modes:\n'
-    "                warnings.append(\n"
-    '                    f"register {name} (column {column}) is not an Event register; "\n'
-    '                    "its columns will never change"\n'
-    "                )"
+READ_ACCESS_GUARD = '        if "Read" not in self._derived.access.get(register, frozenset()):'
+WRITE_ACCESS_GUARD = '        if "Write" not in self._derived.access.get(register, frozenset()):'
+CACHE_READ = (
+    "        if column is not None and cache is not None:\n"
+    "            # A recorded register is already being read, continuously, by the"
+)
+CLOSE_BODY = (
+    "        async with self._port_lock:\n"
+    "            handle, self._serial = self._serial, None\n"
+    "            if handle is None:\n"
+    "                return\n"
+    "            try:\n"
+    "                await asyncio.to_thread(handle.close)\n"
+    "            except Exception as e:  # close is best-effort\n"
+    '                logger.warning("Harp %s: error closing %s: %s", self._name, self._port, e)'
+)
+SPEC_RANGE = (
+    "        bits = built.payload_type.numpy_dtype.itemsize * 8\n"
+    '        if name.startswith("S"):'
 )
 
 # ``HarpDevice``. This module is composition, so the mutants are written
@@ -1716,8 +1750,17 @@ DEVICE_MUTANTS: list[tuple[str, str, str]] = [
         # single-column behaviour and then looks the device *type* up in a dict
         # keyed by columns, so every row gets an empty cell.
         "state_columns() returns [] rather than None when nothing is recorded",
-        "        return cache.columns() if cache is not None else None",
-        "        return cache.columns() if cache is not None else []",
+        "        return _columns_for_recorded(recorded) if recorded else None",
+        "        return _columns_for_recorded(recorded) if recorded else []",
+    ),
+    (
+        # A device whose initialize() failed has no cache and still has a
+        # profile. Answered from the cache alone it collapses to one unnamed
+        # column while recording_warnings() goes on describing columns that
+        # are no longer in the header.
+        "state_columns() forgets the profile as soon as there is no cache",
+        "        return _columns_for_recorded(recorded) if recorded else None",
+        "        return None",
     ),
     (
         # state and last_ms are None while count > 0 for an untimestamped or
@@ -1752,23 +1795,103 @@ DEVICE_MUTANTS: list[tuple[str, str, str]] = [
     ),
     # --- the warning that has to outlive the log ---
     (
-        # derive() logs this and nothing else does. A log line during an
-        # unattended overnight run reaches nobody; the CSV is what survives.
-        "a recorded register that emits no events is not reported for the CSV",
-        NON_EVENT_WARNING,
-        '            if "Event" not in modes:\n                pass',
+        # The predicate and the wording live in ``derive`` (see the
+        # derivation section, which mutates both); this device only has to
+        # pass them on rather than drop them on the floor.
+        "the device swallows the warnings derive reported",
+        "        return list(self._derived.warnings)",
+        "        return []",
+    ),
+    # --- which half of an action a caller gets: read or write ---
+    (
+        # ``derive`` puts Read *or* Write registers into actions, so an action
+        # name alone says nothing about which. A Read sent to a write-only
+        # register gets no reply at all, so without this the caller waits out
+        # the whole round-trip timeout and is told the device did not answer
+        # -- which reads as broken hardware rather than as an action that was
+        # never readable. DeviceReadNode calls with no args, so it is reachable
+        # from a stock node.
+        "a read of a write-only register goes to the wire and times out",
+        READ_ACCESS_GUARD,
+        "        if False:",
     ),
     (
-        "the warning fires for event registers instead",
-        '            if "Event" not in modes:',
-        '            if "Event" in modes:',
+        # A device answers a write to a read-only register by ignoring it, so
+        # the mutant is an action that reports success and does nothing for
+        # the rest of the session.
+        "a write to a read-only register is sent anyway",
+        WRITE_ACCESS_GUARD,
+        "        if False:",
     ),
     (
-        # ``access: [Write, Event]`` is ordinary. Read as one opaque value it
-        # matches nothing, and every recorded register looks silent.
-        "a list of access modes is read as a single mode",
-        "            modes = {access} if isinstance(access, str) else set(map(str, access or ()))",
-        "            modes = {str(access)}",
+        # The register the reader already owns is the one a round-trip can
+        # never reach. Reading it from the wire is the failure that makes
+        # DeviceReadNode unusable against a recording device.
+        "a recorded register is read from the wire instead of from the cache",
+        CACHE_READ,
+        "        if False:\n"
+        "            # A recorded register is already being read, continuously, by the",
+    ),
+    (
+        # Same rule as read(): a node polling a recorded register must not
+        # consume the counters the CSV is owed.
+        "the cache-backed read consumes the counters",
+        '            return cache.peek().get(f"{column}_state")',
+        '            return cache.snapshot().get(f"{column}_state")',
+    ),
+    # --- value_spec: how every GUI layer tells a command from a measurement ---
+    (
+        # DeviceControlsPanel classifies each control by value_spec. None for
+        # everything makes every Harp action a bare button invoked with no
+        # value -- so every button on the runner panel becomes a read, which
+        # is wrong for every writable register and impossible for most.
+        "no action declares a value, so every runner control becomes a read",
+        '        if "Write" not in self._derived.access.get(action_name, frozenset()):\n'
+        "            return None",
+        "        if True:\n            return None",
+    ),
+    (
+        # The other direction: a read-only register offered as a slider is a
+        # control that writes to something that cannot be written.
+        "a read-only register declares a value, so the runner writes to it",
+        '        if "Write" not in self._derived.access.get(action_name, frozenset()):\n'
+        "            return None",
+        "        if False:\n            return None",
+    ),
+    (
+        # The range is the register's own width. A U16 offered as 0..255 caps
+        # the control at a quarter of a percent of what the register takes.
+        "the declared range ignores the register's width",
+        SPEC_RANGE,
+        "        bits = 8\n" '        if name.startswith("S"):',
+    ),
+    # --- the port lock, which is only a lock if it spans the close ---
+    (
+        # Released before the close, an action already waiting on it wakes up
+        # and writes into a handle that is closing underneath it -- the exact
+        # interleaving the lock is documented to prevent, surfacing as an
+        # OSError that looks like a hardware fault.
+        "the port lock is released before the port is closed",
+        CLOSE_BODY,
+        "        async with self._port_lock:\n"
+        "            handle, self._serial = self._serial, None\n"
+        "        if handle is None:\n"
+        "            return\n"
+        "        try:\n"
+        "            await asyncio.to_thread(handle.close)\n"
+        "        except Exception as e:\n"
+        '            logger.warning("Harp %s: error closing %s: %s", self._name, self._port, e)',
+    ),
+    (
+        # _initialized is already False after a shutdown whose join was
+        # refused, while the reader thread still owns the handle. Keyed on the
+        # flag, an edit there rewrites _port to name a device this one is
+        # still reading.
+        "settings may be edited while a refusing reader still holds the port",
+        "        if self._serial is not None or self._reader is not None:\n"
+        '            logger.info("Harp %s: settings saved; reconnect to apply", self._name)',
+        "        if self._initialized:\n"
+        '            logger.info("Harp %s: settings saved; reconnect to apply", self._name)',
     ),
     # --- what a device with no profile is ---
     (
