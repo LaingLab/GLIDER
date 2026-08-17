@@ -175,6 +175,11 @@ def test_splitter_buffers_partial_frame():
     raw = _frame(3, 32, 0x01, bytes([1]))
     assert list(splitter.feed(raw[:3])) == []
     assert list(splitter.feed(raw[3:])) == [raw]
+    # Consuming one byte too few here leaves the frame's checksum byte behind,
+    # which desynchronises everything after it. It has to be asserted on a
+    # single frame: with two, resync coincidentally drains the stale byte and
+    # the yielded frames come out right anyway.
+    assert splitter._buffer == b""
 
 
 def test_splitter_recovers_after_garbage():
@@ -184,6 +189,31 @@ def test_splitter_recovers_after_garbage():
     list(splitter.feed(b"\x00"))
     frames = list(splitter.feed(raw))
     assert raw in frames
+
+
+def test_feed_takes_effect_when_called_not_when_iterated():
+    """Absorbing the chunk must be tied to the call, not to consumption.
+
+    Written as a generator function, ``feed`` would defer its buffer append
+    until the caller iterated. A caller that ignored the return value would
+    then silently lose the chunk, and two feeds consumed out of order would
+    splice the stream backwards -- both invisible until a device produces them.
+    """
+    splitter = FrameSplitter()
+    raw = _valid()
+    splitter.feed(raw[:3])  # return value deliberately dropped
+    assert list(splitter.feed(raw[3:])) == [raw]
+
+    # Same property from the other side: iterators taken before either is
+    # consumed still reflect the order the chunks were fed in, not read in.
+    a = _valid()
+    b = _other()
+    splitter = FrameSplitter()
+    stream = a + b
+    first = splitter.feed(stream[:3])
+    second = splitter.feed(stream[3:])
+    assert list(second) == [a, b]
+    assert list(first) == []
 
 
 def test_resync_consumes_the_frame_it_recovers():

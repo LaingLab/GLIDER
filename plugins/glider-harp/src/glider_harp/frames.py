@@ -169,10 +169,12 @@ class FrameSplitter:
             if frame is None:
                 break
             frames.append(frame)
-        # Deliberately eager rather than a generator: the buffer is mutated as
-        # frames are produced, and a caller that abandoned a lazy iterator
-        # half-way would leave the splitter holding frames it had already
-        # decided to emit.
+        # Deliberately not a generator function. Making this ``yield`` would
+        # defer the buffer append above until the caller iterated, so a caller
+        # that ignored the return value would silently drop the chunk, and two
+        # feeds consumed out of order would splice the stream out of order.
+        # Returning an iterator over an already-built list keeps the buffer
+        # update tied to the call rather than to the consumption.
         return iter(frames)
 
     def _take_frame(self) -> bytes | None:
@@ -211,15 +213,17 @@ class FrameSplitter:
     def _frame_at(self, offset: int) -> bytes | None:
         """Return the complete valid frame starting at ``offset``, else None.
 
-        None covers all three ways an offset can fail to be a frame start: too
-        few bytes held, a length byte claiming an impossible size, and a
-        complete candidate that decoding rejects.
+        None covers both ways an offset can fail to be a frame start: too few
+        bytes held to judge yet, and a complete candidate that decoding
+        rejects. A length byte claiming an impossible size needs no check of
+        its own -- it yields a candidate under the minimum frame length, which
+        ``decode`` rejects on its first statement, before reading any content.
         """
         available = len(self._buffer) - offset
         if available < _MIN_FRAME_LEN:
             return None
         size = self._buffer[offset + _LENGTH_OFFSET] + 2
-        if size < _MIN_FRAME_LEN or available < size:
+        if available < size:
             return None
         candidate = bytes(self._buffer[offset : offset + size])
         try:
