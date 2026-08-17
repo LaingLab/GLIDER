@@ -9,10 +9,7 @@ from glider.hal.mock_board import MockBoard
 
 
 class MultiDevice(BaseDevice):
-    """A device that contributes two sub-columns instead of one.
-
-    Shared fixture for the recorder tests that consume ``state_columns()``.
-    """
+    """A device that contributes two sub-columns instead of one."""
 
     @property
     def device_type(self) -> str:

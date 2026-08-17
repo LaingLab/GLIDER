@@ -144,9 +144,15 @@ class BaseDevice(ABC):
         keys are written as empty cells.
 
         Names must be non-empty, unique within the device, and must not
-        contain ``:`` (the recorder splits column headers on that
-        character to recover the device id and sub-column name). A device
-        with a single column returns ``None``, never ``[]``.
+        contain ``:``. The recorder builds headers as
+        ``{device_id}:{name}`` and recovers the pair by splitting on the
+        *first* colon, so a colon inside the name would in fact survive
+        the round trip — the restriction is for the humans and downstream
+        tools that read these headers, which have no way to know which
+        colon was the separator. (A colon in the *device id* genuinely
+        does break the split, but that is not something a device
+        controls.) A device with a single column returns ``None``, never
+        ``[]``.
         """
         return None
 

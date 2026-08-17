@@ -12,6 +12,7 @@ import csv
 
 import pytest
 
+from glider.analysis._io import parse_csv
 from glider.core.data_recorder import DataRecorder
 
 
@@ -129,6 +130,43 @@ def test_failing_state_columns_falls_back_to_device_type():
     assert recorder._get_device_columns() == ["flaky:broken"]
 
 
+# --- Malformed state_columns() returns ---------------------------------
+#
+# A device may come from a third-party package (the Harp driver does), so
+# core validates the value rather than trusting anything that didn't
+# raise. The bare-string case is the dangerous one: a str is iterable, so
+# "state" would silently expand into one column per character.
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param("state", id="bare_string"),
+        pytest.param([1, 2], id="non_string_entries"),
+        pytest.param(["a", "a"], id="duplicate_names"),
+        pytest.param(["a", ""], id="empty_name"),
+    ],
+)
+def test_malformed_state_columns_degrades_to_single_column(bad):
+    """Anything but a list of unique non-empty strings is refused."""
+    recorder = _recorder_for({"lick": _FakeDevice("harp", columns=bad)})
+    assert recorder._get_device_columns() == ["lick:harp"]
+    assert recorder._degraded_devices == ["lick"]
+
+
+def test_empty_state_columns_falls_back_without_a_warning():
+    """``[]`` means "no sub-columns", so the single-column path applies.
+
+    The contract says a single-column device returns ``None``, never
+    ``[]``, but ``[]`` is unambiguous and harmless — it asks for nothing.
+    Treating it as degraded would put a warning in the CSV for a device
+    that is in fact recording its scalar fine.
+    """
+    recorder = _recorder_for({"lick": _FakeDevice("harp", columns=[])})
+    assert recorder._get_device_columns() == ["lick:harp"]
+    assert recorder._degraded_devices == []
+
+
 # --- Row values --------------------------------------------------------
 
 
@@ -207,9 +245,7 @@ def test_degraded_device_is_reported_in_metadata(tmp_path):
     lines = _metadata_lines(recorder, tmp_path)
 
     warnings = [line for line in lines if line.startswith("# WARNING")]
-    assert warnings == [
-        "# WARNING device flaky state_columns() failed,recorded as single column"
-    ], lines
+    assert warnings == ["# WARNING,flaky,state_columns() failed; recorded as single column"], lines
 
 
 def test_healthy_devices_produce_no_warning(tmp_path):
@@ -221,3 +257,39 @@ def test_healthy_devices_produce_no_warning(tmp_path):
         }
     )
     assert [line for line in _metadata_lines(recorder, tmp_path) if "WARNING" in line] == []
+
+
+def test_warning_row_survives_the_analysis_reader(tmp_path):
+    """The real reader must still parse a file carrying a warning row.
+
+    Asserting on raw line text only proves the string was written; this
+    pins the contract that actually matters. The device id here contains
+    a comma — ids are free-text, and a comma in an interpolated cell
+    would make csv quote it, pushing the quote to the front of the line
+    where it stops being a comment row.
+    """
+    recorder = _recorder_for({"fl,aky": _RaisingDevice(), "lever": _FakeDevice("button")})
+    path = tmp_path / "metadata.csv"
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        recorder._writer = csv.writer(fh)
+        recorder._write_metadata("degraded_test")
+    recorder._writer = None
+
+    warning_line = next(
+        line for line in path.read_text(encoding="utf-8").splitlines() if "WARNING" in line
+    )
+    assert warning_line.startswith("#"), warning_line
+
+    metadata, df = parse_csv(path)
+    # `_parse_metadata_header` splits on the first comma rather than
+    # csv-parsing, so the quoted id cell keeps its quotes here; what
+    # matters is that the row was read as metadata at all, and that it
+    # names the device.
+    assert "fl,aky" in metadata["WARNING"]
+    assert "recorded as single column" in metadata["WARNING"]
+    assert metadata["Experiment Name"] == "degraded_test"
+    # The header row survived: comment rows were skipped, not consumed.
+    assert list(df.columns) == ["frame", "timestamp", "elapsed_ms", "flow_elapsed_ms"] + [
+        "fl,aky:broken",
+        "lever:button",
+    ]

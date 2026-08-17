@@ -69,9 +69,11 @@ class DataRecorder:
         self._flow_anchor: float | None = None
         self._sample_task: asyncio.Task | None = None
         self._device_columns: list[str] = []
-        # Devices whose state_columns() raised. They fall back to a single
-        # column but still report a dict state, so every cell they write is
-        # empty; _write_metadata says so in the CSV itself.
+        # Devices whose state_columns() raised or returned something
+        # malformed. They fall back to a single column, and
+        # _read_device_state hits the same failure on every sample and
+        # yields None — so the device records nothing but empty cells for
+        # the whole session. _write_metadata says so in the CSV itself.
         self._degraded_devices: list[str] = []
         self._zone_columns: list[str] = []
         self._zone_config: ZoneConfiguration | None = None
@@ -190,8 +192,15 @@ class DataRecorder:
         ``state_columns()``; those become ``{device_id}:{name}``. Devices
         returning ``None`` keep the historical ``{device_id}:{device_type}``.
 
+        The return value is validated, not merely trusted not to raise:
+        devices can arrive from third-party packages, and a bare string
+        (say ``"state"``) is iterable, so it would otherwise expand into
+        one column per character. Anything that isn't ``None`` or a list
+        of unique non-empty strings is refused.
+
         Also refreshes ``_degraded_devices`` with the ids whose
-        ``state_columns()`` raised, for ``_write_metadata`` to report.
+        ``state_columns()`` raised or misbehaved, for ``_write_metadata``
+        to report.
         """
         columns = []
         self._degraded_devices = []
@@ -202,6 +211,16 @@ class DataRecorder:
                     sub_columns = device.state_columns()
                 except Exception:
                     logger.exception("state_columns() failed for device %s", device_id)
+                    sub_columns = None
+                    self._degraded_devices.append(device_id)
+                if sub_columns is not None and (
+                    not isinstance(sub_columns, list)
+                    or not all(isinstance(n, str) and n for n in sub_columns)
+                    or len(set(sub_columns)) != len(sub_columns)
+                ):
+                    logger.error(
+                        "state_columns() returned %r for device %s", sub_columns, device_id
+                    )
                     sub_columns = None
                     self._degraded_devices.append(device_id)
             if sub_columns:
@@ -337,19 +356,19 @@ class DataRecorder:
             pins = config.pins if config else {}
             pin_str = ", ".join(f"{k}={v}" for k, v in pins.items())
             self._writer.writerow(["#", device_id, device_type, f"board={board_id}", pin_str])
-        # A device whose state_columns() raised is recorded as a single
-        # column, but it still reports a dict state — so every one of its
-        # cells comes out empty for the whole session. Say so here; the log
-        # line it also emits is not something anyone watches mid-run. Split
-        # across two cells so the comma lands as the CSV delimiter and the
-        # row keeps its `#` prefix (a single cell containing a comma would
-        # be quoted, and readers key off that prefix to skip comments).
+        # A device whose state_columns() failed is recorded as a single
+        # column, and _read_device_state hits that same failure on every
+        # sample and yields None — so the device writes nothing but empty
+        # cells for the whole session. Say so here: the log line it also
+        # emits is not something anyone watches mid-run.
+        #
+        # Cell 0 is a fixed literal, never interpolated. Readers key off
+        # the leading `#` to skip comment rows, and csv quotes any cell
+        # containing a comma — so an id like "fl,aky" in cell 0 would
+        # push the quote to the front of the line and break them.
         for device_id in self._degraded_devices:
             self._writer.writerow(
-                [
-                    f"# WARNING device {device_id} state_columns() failed",
-                    "recorded as single column",
-                ]
+                ["# WARNING", device_id, "state_columns() failed; recorded as single column"]
             )
         self._writer.writerow([])
 
