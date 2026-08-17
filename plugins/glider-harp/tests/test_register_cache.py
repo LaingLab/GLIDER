@@ -91,6 +91,22 @@ def test_columns_agree_with_snapshot_order_too():
     assert cache.columns() == list(cache.snapshot().keys())
 
 
+def test_each_snapshot_is_a_fresh_dict():
+    """A caller batching rows holds onto them; a shared dict would rewrite history.
+
+    Reusing one dict makes row N silently change when row N+1 is taken -- a
+    corruption that looks like nothing at all, since every value in it is one
+    the cache really did report at some point.
+    """
+    cache = RegisterCache({32: "lick"})
+    first = cache.snapshot()
+    cache.ingest(_event(32, 1, timestamp=5.0))
+    second = cache.snapshot()
+    assert first is not second
+    assert first == {"lick:state": None, "lick:count": 0, "lick:last_ms": None}
+    assert second["lick:count"] == 1
+
+
 def test_columns_do_not_change_when_the_caller_mutates_its_map():
     """The CSV header is written once; a later edit must not reshape the rows."""
     registers = {32: "lick"}
@@ -217,6 +233,18 @@ def test_last_ms_converts_seconds_to_milliseconds(timestamp, expected):
     cache = RegisterCache({32: "lick"})
     cache.ingest(_event(32, 1, timestamp=timestamp))
     assert cache.snapshot()["lick:last_ms"] == pytest.approx(expected)
+
+
+def test_last_ms_keeps_sub_millisecond_precision():
+    """Device time ticks in 32 us units, so sub-millisecond digits are real data.
+
+    A Harp timestamp is Seconds(U32) + Micros(U16) at 32 us per tick. Rounding
+    to whole milliseconds would throw away resolution the device actually has,
+    which is the resolution a lick-to-reward latency is measured in.
+    """
+    cache = RegisterCache({32: "lick"})
+    cache.ingest(_event(32, 1, timestamp=7 + 501 * 32e-6))
+    assert cache.snapshot()["lick:last_ms"] == pytest.approx(7016.032)
 
 
 def test_last_ms_tracks_the_most_recent_event():

@@ -63,6 +63,13 @@ class RegisterCache:
     that when a device needs it rather than guessing now.
 
     Thread-safe: the reader thread ingests while the event loop snapshots.
+    The lock is not decoration, and the suite passing without it is not
+    evidence that it can go: under CPython's GIL these few attribute writes are
+    very hard to interleave destructively, so no test here can tell locked from
+    unlocked code. On a free-threaded build they can, and a snapshot that
+    cleared a count it never reported would lose events silently.
+
+    Each snapshot is a fresh dict, so a caller may hold rows and batch them.
     """
 
     def __init__(self, registers: dict[int, str]) -> None:

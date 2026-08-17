@@ -23,6 +23,23 @@ Mutants are written against the *contract* each module documents, not against
 the code as written -- including rules the implementation might have obeyed by
 halves. Writing them off the implementation only measures the author's
 imagination.
+
+Three categories, tallied separately, because one number over all of them would
+say less than it appears to:
+
+* plain -- must be killed, and a kill is ordinary evidence that a test pins the
+  behaviour.
+* ``EQUIVALENT:`` -- provably unkillable, asserted to survive (above).
+* ``RACE-WINDOW:`` -- the two lock mutants. These are killed **only because the
+  mutant itself inserts a ``time.sleep`` into the window it opens**. Under
+  CPython's GIL the concurrency test also passes with the lock removed and no
+  sleep added: 15/15 green, and a stress harness at 16 writers x 3000 events
+  found zero lost updates over 40 trials. So their kill shows the suite catches
+  an artificially widened race -- not that the lock as written is load-bearing
+  on this interpreter. The lock stays regardless: it is correct, costs three
+  attribute writes, and is genuinely required on free-threaded builds where the
+  GIL is not quietly doing the work. Do not quote these two alongside the
+  killable score as if they measured the same thing.
 """
 
 from __future__ import annotations
@@ -179,9 +196,10 @@ FRAME_MUTANTS: list[tuple[str, str, str]] = [
 ]
 
 # ``ingest``'s guarded write, and ``snapshot``'s read-and-clear. Quoted whole so
-# the lock mutants below can remove the lock and widen the window in one edit --
-# a lock only fails where two threads meet, so mutating it in place would just
-# be dropping a statement no single-threaded test can see.
+# the race-window mutants below can remove the lock and widen the window in one
+# edit -- a lock only fails where two threads meet, so mutating it in place would
+# just be dropping a statement no single-threaded test can see. Read the
+# RACE_WINDOW note above before quoting their result as coverage.
 INGEST_WRITE = (
     "        with self._lock:\n"
     "            register.state = value\n"
@@ -371,6 +389,22 @@ READER_MUTANTS: list[tuple[str, str, str]] = [
         '            for column in (f"{name}:count", f"{name}:state", f"{name}:last_ms")',
     ),
     (
+        # Every value in the shared dict is one the cache really did report, so
+        # a caller batching rows sees row N rewrite itself when row N+1 is
+        # taken, with nothing anywhere looking wrong.
+        "snapshot returns one shared dict reused across calls",
+        "        values: dict[str, int | float | None] = {}",
+        '        values: dict[str, int | float | None] = getattr(self, "_shared", {})\n'
+        "        self._shared = values",
+    ),
+    (
+        # Device time is Seconds(U32) + Micros(U16) at 32 us per tick, so the
+        # sub-millisecond digits are resolution the device really has.
+        "last_ms is rounded to whole milliseconds",
+        "frame.timestamp * _MS_PER_SECOND",
+        "float(int(frame.timestamp * _MS_PER_SECOND))",
+    ),
+    (
         "the caller's register map is aliased rather than copied",
         "        self._names = dict(registers)",
         "        self._names = registers",
@@ -380,9 +414,9 @@ READER_MUTANTS: list[tuple[str, str, str]] = [
         "        if duplicates:",
         "        if False:",
     ),
-    # --- the lock: the reader thread writes while the event loop reads ---
+    # --- the lock; see the RACE_WINDOW note, these are not coverage evidence ---
     (
-        "snapshot reads and clears without the lock",
+        "RACE-WINDOW: snapshot reads and clears without the lock",
         SNAPSHOT_BODY,
         "        for address, name in self._names.items():\n"
         "            register = self._states[address]\n"
@@ -393,7 +427,7 @@ READER_MUTANTS: list[tuple[str, str, str]] = [
         "            register.count = 0",
     ),
     (
-        "ingest increments without the lock",
+        "RACE-WINDOW: ingest increments without the lock",
         INGEST_WRITE,
         "        register.state = value\n"
         "        seen = register.count\n"
@@ -411,6 +445,10 @@ SUITES: list[tuple[Path, list[tuple[str, str, str]]]] = [
 
 EXPECTED_SURVIVORS = {
     name for _, mutants in SUITES for name, _, _ in mutants if name.startswith("EQUIVALENT:")
+}
+
+RACE_WINDOW = {
+    name for _, mutants in SUITES for name, _, _ in mutants if name.startswith("RACE-WINDOW:")
 }
 
 
@@ -488,13 +526,23 @@ def main() -> int:
     # killable total misattributes a killed expected-survivor, which is not a
     # killable mutant at all, to the killable set.
     all_mutants = [mutant for _, mutants in SUITES for mutant in mutants]
-    killable = [name for name, _, _ in all_mutants if name not in EXPECTED_SURVIVORS]
+    excluded = EXPECTED_SURVIVORS | RACE_WINDOW
+    killable = [name for name, _, _ in all_mutants if name not in excluded]
     killed_count = sum(name not in unexpected for name in killable)
     print(f"{killed_count}/{len(killable)} killable mutants killed")
+
+    # Reported apart from the score on purpose. Folding these in would inflate
+    # the headline number with kills the mutants arrange for themselves.
+    race_killed = sum(name not in unexpected for name in RACE_WINDOW)
+    print(f"{race_killed}/{len(RACE_WINDOW)} race-window mutants killed -- NOT coverage evidence")
+
     if unexpected:
         print("PROBLEMS: " + ", ".join(unexpected))
     # A score is only ever evidence about the mutants someone thought to write.
-    print(f"({len(all_mutants)} mutants total; a clean sweep is not proof of coverage)")
+    print(
+        f"({len(all_mutants)} mutants total, {len(EXPECTED_SURVIVORS)} equivalent, "
+        f"{len(RACE_WINDOW)} race-window; a clean sweep is not proof of coverage)"
+    )
     return 1 if unexpected or restored.returncode != 0 else 0
 
 
