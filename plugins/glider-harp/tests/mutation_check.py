@@ -1,7 +1,16 @@
 """Mutation check for every module in ``glider_harp`` that fails quietly.
 
-``FrameSplitter``, ``RegisterCache``, ``HarpReader``, ``schema`` and
-``derivation``.
+``FrameSplitter``, ``RegisterCache``, ``HarpReader``, ``schema``,
+``derivation`` and ``board``.
+
+``board`` is the odd one out and is included with lower expectations: it is a
+transport shim with no state machine of its own, so most of its mutants are
+trivially killed by a single direct assertion and prove little beyond that the
+assertion exists. Two are worth the run -- the pin operation that returns
+instead of raising (a flow graph that runs green and drives nothing) and the
+harp stack check that tests the *module* rather than a *name* (which is exactly
+what a mis-resolved harp-protocol 0.4.0 passes). Do not read the board section's
+clean sweep as evidence of the same kind the splitter's is.
 
 Not collected by pytest -- deliberately named without a ``test_`` prefix, since
 it rewrites source files on disk and shells out to pytest. Run it directly:
@@ -72,6 +81,7 @@ FRAMES_TARGET = SOURCE / "frames.py"
 READER_TARGET = SOURCE / "reader.py"
 SCHEMA_TARGET = SOURCE / "schema.py"
 DERIVATION_TARGET = SOURCE / "derivation.py"
+BOARD_TARGET = SOURCE / "board.py"
 TESTS = "plugins/glider-harp/tests/"
 
 CONSUME = "                del self._buffer[: len(candidate)]\n                self._synced = True"
@@ -1347,12 +1357,164 @@ DERIVATION_MUTANTS: list[tuple[str, str, str]] = [
     ),
 ]
 
+NO_PINS_BODY = (
+    "        raise NotImplementedError(\n"
+    '            f"HarpBoard has no GPIO pins ({op} is not supported). "\n'
+    '            "Harp hardware is addressed by register, not by pin -- use a Harp "\n'
+    '            "device to talk to it."\n'
+    "        )"
+)
+HARP_CHECK_FAILURE = (
+    "            self._set_state(BoardConnectionState.ERROR)\n"
+    "            raise RuntimeError(\n"
+    '                f"The Harp protocol stack is not usable: {e}. "'
+)
+SCAN_APPEND = "                results.append((p.device, label or p.device))"
+
+# ``board``. A transport shim, so the set is short and derived from the four
+# things the contract actually states: no GPIO, both halves of the stack
+# verified at connect, the state transitions, and what scan() reports. See the
+# caveat in the module docstring before quoting this section's score.
+BOARD_MUTANTS: list[tuple[str, str, str]] = [
+    # --- "every pin operation raises" ---
+    (
+        # The whole reason the board defines these at all. A board that accepts
+        # write_digital and returns is a flow graph that runs green while no
+        # hardware moves, and nothing anywhere reports a problem.
+        "a pin operation succeeds silently instead of raising",
+        NO_PINS_BODY,
+        "        return None",
+    ),
+    (
+        # The partial version: one method forgotten. Only a test that covers
+        # all five sees it.
+        "write_digital alone forgets to refuse",
+        "    async def write_digital(self, pin: int, value: bool) -> None:\n"
+        '        self._no_pins("write_digital")',
+        "    async def write_digital(self, pin: int, value: bool) -> None:\n        return None",
+    ),
+    (
+        "the refusal does not say which operation was attempted",
+        '            f"HarpBoard has no GPIO pins ({op} is not supported). "',
+        '            "HarpBoard has no GPIO pins. "',
+    ),
+    # --- connect(): the stack check, which is the only real logic here ---
+    (
+        # The mutant this file was worth writing for. `import harp.protocol`
+        # succeeds under the incompatible harp-protocol 0.4.0 that harp's
+        # unbounded requirement resolves to, so a module-level check reports a
+        # healthy stack and the mismatch resurfaces as a missing name deep
+        # inside a register build, pointing at nothing.
+        "connect() checks that harp.protocol imports rather than that it has the right names",
+        "            from harp.protocol import HarpMessage  # noqa: F401",
+        "            import harp.protocol  # noqa: F401",
+    ),
+    (
+        "connect() never checks the harp stack at all",
+        "            from harp.protocol import HarpMessage  # noqa: F401",
+        "            pass",
+    ),
+    (
+        "connect() never checks pyserial",
+        "            import serial  # noqa: F401  (pyserial)",
+        "            pass",
+    ),
+    (
+        "connect() reports success when the harp stack is unusable",
+        HARP_CHECK_FAILURE,
+        # The trailing raise is dead code, kept only so the string continuation
+        # lines that follow the anchor still complete a valid statement.
+        "            return True\n"
+        "            raise RuntimeError(\n"
+        '                f"The Harp protocol stack is not usable: {e}. "',
+    ),
+    (
+        "a failed connect leaves the board looking merely disconnected",
+        HARP_CHECK_FAILURE,
+        "            raise RuntimeError(\n"
+        '                f"The Harp protocol stack is not usable: {e}. "',
+    ),
+    (
+        "the failure message does not name the mis-resolved package",
+        "                \"Install a matched pair: pip install 'harp>=0.5.0rc1' \"\n"
+        "                \"'harp-protocol>=0.5.0rc1'. (harp's own requirement on \"\n"
+        '                "harp-protocol has no lower bound, so a plain install can "\n'
+        '                "resolve to an incompatible 0.4.0 and report success.)"',
+        '                "Reinstall GLIDER."',
+    ),
+    (
+        "connect() returns True without ever reaching CONNECTED",
+        "        self._set_state(BoardConnectionState.CONNECTED)\n"
+        '        logger.info("HarpBoard: transport ready")',
+        '        logger.info("HarpBoard: transport ready")',
+    ),
+    (
+        "disconnect() leaves the board connected",
+        "        self._set_state(BoardConnectionState.DISCONNECTED)\n"
+        '        logger.info("HarpBoard: transport released")',
+        '        logger.info("HarpBoard: transport released")',
+    ),
+    # --- scan(): (port, description), every port, failures surfaced ---
+    (
+        # "No devices found" for a machine whose serial subsystem is broken
+        # sends the operator hunting for a cable that is fine.
+        "scan() swallows an enumeration failure and reports no ports",
+        "        results = await asyncio.to_thread(_list)",
+        "        try:\n"
+        "            results = await asyncio.to_thread(_list)\n"
+        "        except Exception:\n"
+        "            results = []",
+    ),
+    (
+        # The order SerialBoard and BLEBoard use. Silently wrong here: both
+        # halves are strings, so a caller unpacking them puts a COM port in the
+        # label and a product string in the device's port setting.
+        "scan() returns (description, port) instead of (port, description)",
+        SCAN_APPEND,
+        "                results.append((label or p.device, p.device))",
+    ),
+    (
+        "scan() reports an empty description rather than falling back to the port",
+        SCAN_APPEND,
+        "                results.append((p.device, label))",
+    ),
+    (
+        "scan() discards the description the OS gave it",
+        '                label = (p.description or "").strip()',
+        '                label = ""',
+    ),
+    (
+        # Harp boards enumerate as generic FTDI/CDC adapters, so this hides real
+        # hardware and leaves no way to select it.
+        "scan() hides ports whose description does not mention Harp",
+        SCAN_APPEND,
+        '                if "harp" not in label.lower():\n'
+        "                    continue\n"
+        "                results.append((p.device, label or p.device))",
+    ),
+    # --- identity, which the hardware map is keyed by ---
+    (
+        "the board reports the plain serial transport's type",
+        '        return "harp"',
+        '        return "serial"',
+    ),
+    (
+        # capabilities.pins is what the GUI filters pin dropdowns off, so a
+        # single entry offers the operator a pin that does not exist.
+        "capabilities advertise a pin",
+        '        return BoardCapabilities(name="Harp", pins={})',
+        "        from glider.hal.base_board import PinCapability\n\n"
+        '        return BoardCapabilities(name="Harp", pins={0: PinCapability(0)})',
+    ),
+]
+
 # (target file, mutants). Each file is restored before the next is touched.
 SUITES: list[tuple[Path, list[tuple[str, str, str]]]] = [
     (FRAMES_TARGET, FRAME_MUTANTS),
     (READER_TARGET, READER_MUTANTS + HARP_READER_MUTANTS),
     (SCHEMA_TARGET, SCHEMA_MUTANTS),
     (DERIVATION_TARGET, DERIVATION_MUTANTS),
+    (BOARD_TARGET, BOARD_MUTANTS),
 ]
 
 EXPECTED_SURVIVORS = {
