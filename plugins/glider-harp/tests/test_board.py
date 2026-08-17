@@ -127,16 +127,30 @@ async def test_connect_fails_when_pyserial_is_missing(monkeypatch):
 # --- scan ----------------------------------------------------------------
 
 
-async def test_scan_returns_port_description_pairs(fake_ports):
+async def test_scan_returns_description_port_pairs(fake_ports):
+    """Label first, identifier second -- the order ``SerialBoard`` and
+    ``BLEBoard`` use, and the one the hardware panel unpacks."""
     fake_ports.append(_FakePort("COM3", "Harp Behavior (FTDI)"))
     fake_ports.append(_FakePort("/dev/ttyUSB0", "USB Serial"))
 
     results = await HarpBoard.scan()
 
     assert results == [
-        ("COM3", "Harp Behavior (FTDI)"),
-        ("/dev/ttyUSB0", "USB Serial"),
+        ("Harp Behavior (FTDI)", "COM3"),
+        ("USB Serial", "/dev/ttyUSB0"),
     ]
+
+
+async def test_scan_agrees_with_the_other_transport_boards_on_field_order(fake_ports):
+    """The reversed order raises nothing -- both halves are strings -- so the
+    panel would show the port as a label and write the product string into the
+    device's ``port`` setting. Pinned against ``SerialBoard`` directly rather
+    than against a literal, so the two cannot drift apart silently."""
+    from glider.hal.boards.serial_board import SerialBoard
+
+    fake_ports.append(_FakePort("COM3", "Harp Behavior (FTDI)"))
+
+    assert await HarpBoard.scan() == await SerialBoard.scan()
 
 
 async def test_scan_falls_back_to_the_port_when_there_is_no_description(fake_ports):
@@ -156,7 +170,7 @@ async def test_scan_does_not_filter_out_ports_that_do_not_look_like_harp(fake_po
     label would hide real hardware with no way to get it back."""
     fake_ports.append(_FakePort("COM4", "USB Serial Device"))
 
-    assert await HarpBoard.scan() == [("COM4", "USB Serial Device")]
+    assert await HarpBoard.scan() == [("USB Serial Device", "COM4")]
 
 
 async def test_scan_surfaces_an_enumeration_failure(monkeypatch):

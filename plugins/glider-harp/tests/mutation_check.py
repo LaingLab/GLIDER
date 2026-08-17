@@ -1369,7 +1369,7 @@ HARP_CHECK_FAILURE = (
     "            raise RuntimeError(\n"
     '                f"The Harp protocol stack is not usable: {e}. "'
 )
-SCAN_APPEND = "                results.append((p.device, label or p.device))"
+SCAN_APPEND = "                results.append((label or p.device, p.device))"
 
 # ``board``. A transport shim, so the set is short and derived from the four
 # things the contract actually states: no GPIO, both halves of the stack
@@ -1466,17 +1466,19 @@ BOARD_MUTANTS: list[tuple[str, str, str]] = [
         "            results = []",
     ),
     (
-        # The order SerialBoard and BLEBoard use. Silently wrong here: both
-        # halves are strings, so a caller unpacking them puts a COM port in the
-        # label and a product string in the device's port setting.
-        "scan() returns (description, port) instead of (port, description)",
+        # The order this task was originally briefed with, and the reason the
+        # brief was corrected. Silently wrong: both halves are strings, so the
+        # panel unpacking them as (label, port) shows the COM port as the label
+        # and writes the USB product string into the device's port setting,
+        # which then fails to open with a message about a port that is not one.
+        "scan() returns (port, description), disagreeing with SerialBoard and BLEBoard",
         SCAN_APPEND,
-        "                results.append((label or p.device, p.device))",
+        "                results.append((p.device, label or p.device))",
     ),
     (
         "scan() reports an empty description rather than falling back to the port",
         SCAN_APPEND,
-        "                results.append((p.device, label))",
+        "                results.append((label, p.device))",
     ),
     (
         "scan() discards the description the OS gave it",
@@ -1490,7 +1492,7 @@ BOARD_MUTANTS: list[tuple[str, str, str]] = [
         SCAN_APPEND,
         '                if "harp" not in label.lower():\n'
         "                    continue\n"
-        "                results.append((p.device, label or p.device))",
+        "                results.append((label or p.device, p.device))",
     ),
     # --- identity, which the hardware map is keyed by ---
     (

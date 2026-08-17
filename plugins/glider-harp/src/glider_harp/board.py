@@ -101,12 +101,20 @@ class HarpBoard(BaseBoard):
     async def scan() -> list[tuple[str, str]]:
         """Enumerate the host's serial ports.
 
-        Returns a list of ``(port, description)`` tuples, where ``port`` is the
-        path/name to put in a device's ``port`` setting (e.g. ``"COM3"`` or
-        ``"/dev/ttyUSB0"``) and ``description`` is a human-readable label,
-        usually the USB product string, falling back to the port itself when
-        the OS reports none. Static so callers can enumerate the host without
-        needing a board instance.
+        Returns a list of ``(description, device)`` tuples, where ``device`` is
+        the port path/name to put in a device's ``port`` setting (e.g.
+        ``"/dev/ttyUSB0"`` or ``"COM3"``) and ``description`` is a human-readable
+        label (often the USB product string), falling back to the port itself
+        when the OS reports none. Static so callers can enumerate the host
+        without needing a board instance, mirroring ``SerialBoard.scan``.
+
+        Label first, identifier second, matching ``SerialBoard`` and
+        ``BLEBoard``: the hardware panel unpacks these as ``for nm, addr in
+        results``, showing the first element and storing the second as the
+        port. Both halves are strings, so the reversed order raises nothing --
+        it displays the port as a label and writes the USB product string into
+        the device's ``port`` setting, which then fails to open with a message
+        about a port that is not a port.
 
         Every port is returned, not just the ones that look like Harp hardware:
         Harp boards enumerate as ordinary FTDI/CDC adapters with descriptions
@@ -121,7 +129,7 @@ class HarpBoard(BaseBoard):
             results = []
             for p in list_ports.comports():
                 label = (p.description or "").strip()
-                results.append((p.device, label or p.device))
+                results.append((label or p.device, p.device))
             return results
 
         # comports() does blocking I/O on some platforms; keep it off the loop.
