@@ -1,21 +1,28 @@
-"""Mutation check for ``FrameSplitter``.
+"""Mutation check for ``FrameSplitter`` and ``RegisterCache``.
 
 Not collected by pytest -- deliberately named without a ``test_`` prefix, since
-it rewrites ``frames.py`` on disk and shells out to pytest. Run it directly:
+it rewrites source files on disk and shells out to pytest. Run it directly:
 
     python plugins/glider-harp/tests/mutation_check.py
 
-Every mutant below must be killed by ``test_frames.py``, except those marked
-EQUIVALENT, which provably cannot be killed and are asserted to survive so that
-a future change making one observable shows up as a failure rather than as a
-silently stricter suite. That has already earned its keep once: the lazy-genexp
-mutant was EQUIVALENT until ``feed`` was annotated ``list[bytes]``, and this
-check is what flagged that the justification had gone stale.
+Every mutant below must be killed by the suite, except those marked EQUIVALENT,
+which provably cannot be killed and are asserted to survive so that a future
+change making one observable shows up as a failure rather than as a silently
+stricter suite. That has already earned its keep once: the lazy-genexp mutant
+was EQUIVALENT until ``feed`` was annotated ``list[bytes]``, and this check is
+what flagged that the justification had gone stale.
 
-This exists because the splitter's failure modes are quiet: several bugs found
-in review (a stale byte after each frame, noise stranding the frames behind it)
+This exists because both modules fail quietly. Several splitter bugs found in
+review (a stale byte after each frame, noise stranding the frames behind it)
 left the yielded frames looking correct and were invisible to assertions on
-output alone. A mutant that survives means a test constant is doing the work.
+output alone; a register cache that drops an event writes a CSV that is wrong
+in no visible way at all. A mutant that survives means a test constant is doing
+the work.
+
+Mutants are written against the *contract* each module documents, not against
+the code as written -- including rules the implementation might have obeyed by
+halves. Writing them off the implementation only measures the author's
+imagination.
 """
 
 from __future__ import annotations
@@ -26,7 +33,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-TARGET = ROOT / "plugins" / "glider-harp" / "src" / "glider_harp" / "frames.py"
+SOURCE = ROOT / "plugins" / "glider-harp" / "src" / "glider_harp"
+FRAMES_TARGET = SOURCE / "frames.py"
+READER_TARGET = SOURCE / "reader.py"
 TESTS = "plugins/glider-harp/tests/"
 
 CONSUME = "                del self._buffer[: len(candidate)]\n                self._synced = True"
@@ -48,7 +57,7 @@ FRAME_AT_DECODE = (
 )
 
 # (name, exact source to replace, replacement)
-MUTANTS: list[tuple[str, str, str]] = [
+FRAME_MUTANTS: list[tuple[str, str, str]] = [
     ("never buffers the remainder", "self._buffer += chunk", "self._buffer = bytearray(chunk)"),
     ("never resyncs", "        return self._resync()", "        return None"),
     ("returns frames in reverse order", "        return frames", "        return frames[::-1]"),
@@ -169,7 +178,240 @@ MUTANTS: list[tuple[str, str, str]] = [
     ),
 ]
 
-EXPECTED_SURVIVORS = {name for name, _, _ in MUTANTS if name.startswith("EQUIVALENT:")}
+# ``ingest``'s guarded write, and ``snapshot``'s read-and-clear. Quoted whole so
+# the lock mutants below can remove the lock and widen the window in one edit --
+# a lock only fails where two threads meet, so mutating it in place would just
+# be dropping a statement no single-threaded test can see.
+INGEST_WRITE = (
+    "        with self._lock:\n"
+    "            register.state = value\n"
+    "            register.count += 1\n"
+    "            register.last_ms = last_ms"
+)
+SNAPSHOT_BODY = (
+    "        with self._lock:\n"
+    "            for address, name in self._names.items():\n"
+    "                register = self._states[address]\n"
+    '                values[f"{name}:state"] = register.state\n'
+    '                values[f"{name}:count"] = register.count\n'
+    '                values[f"{name}:last_ms"] = register.last_ms\n'
+    "                register.count = 0"
+)
+LOOKUP = (
+    "        register = self._states.get(frame.address)\n"
+    "        if register is None:\n"
+    "            return"
+)
+COLUMNS = '            for column in (f"{name}:state", f"{name}:count", f"{name}:last_ms")'
+
+READER_MUTANTS: list[tuple[str, str, str]] = [
+    # --- "state -- latest value seen, persists across snapshots" ---
+    (
+        "state keeps the first value instead of the latest",
+        "            register.state = value",
+        "            register.state = register.state if register.state is not None else value",
+    ),
+    (
+        "snapshot clears state as well as count",
+        "                register.count = 0",
+        "                register.count = 0\n                register.state = None",
+    ),
+    (
+        "payload read big-endian",
+        'int.from_bytes(frame.payload, "little")',
+        'int.from_bytes(frame.payload, "big")',
+    ),
+    (
+        "only the first payload byte is read",
+        'value = int.from_bytes(frame.payload, "little") if frame.payload else None',
+        "value = frame.payload[0] if frame.payload else None",
+    ),
+    (
+        # The documented rule is that an unknown value is reported as unknown,
+        # not carried forward. Zero is a real lick level, so this mutant writes
+        # a reading the device never sent.
+        "an empty payload reports 0 instead of no value",
+        'value = int.from_bytes(frame.payload, "little") if frame.payload else None',
+        'value = int.from_bytes(frame.payload, "little")',
+    ),
+    (
+        "an empty payload leaves the previous state standing",
+        "            register.state = value",
+        "            if value is not None:\n                register.state = value",
+    ),
+    # --- "count -- events since the previous snapshot, cleared on read" ---
+    (
+        "count never increments",
+        "            register.count += 1",
+        "            register.count += 0",
+    ),
+    (
+        "count increments by two",
+        "            register.count += 1",
+        "            register.count += 2",
+    ),
+    (
+        # The degenerate "did anything happen" column: right for a single event
+        # in the interval, wrong for the two-licks-in-one-frame case the counter
+        # exists for.
+        "count is a flag rather than a count",
+        "            register.count += 1",
+        "            register.count = 1",
+    ),
+    (
+        "count is not cleared on read",
+        "                register.count = 0",
+        "                pass",
+    ),
+    (
+        "count is cleared before it is reported, so every row reads zero",
+        '                values[f"{name}:count"] = register.count\n'
+        '                values[f"{name}:last_ms"] = register.last_ms\n'
+        "                register.count = 0",
+        "                register.count = 0\n"
+        '                values[f"{name}:count"] = register.count\n'
+        '                values[f"{name}:last_ms"] = register.last_ms',
+    ),
+    (
+        # Dedented, so only the last register in the loop is cleared: the CSV
+        # then double-counts every register but one.
+        "only one register's count is cleared per snapshot",
+        "                register.count = 0\n        return values",
+        "            register.count = 0\n        return values",
+    ),
+    # --- "last_ms -- device timestamp of the most recent event, in ms" ---
+    (
+        "last_ms reports seconds",
+        "frame.timestamp * _MS_PER_SECOND",
+        "frame.timestamp * 1.0",
+    ),
+    (
+        "last_ms reports microseconds",
+        "frame.timestamp * _MS_PER_SECOND",
+        "frame.timestamp * _MS_PER_SECOND * 1000.0",
+    ),
+    (
+        "last_ms keeps the first event's time instead of the latest",
+        "            register.last_ms = last_ms",
+        "            if register.last_ms is None:\n                register.last_ms = last_ms",
+    ),
+    (
+        "snapshot clears last_ms",
+        "                register.count = 0",
+        "                register.count = 0\n                register.last_ms = None",
+    ),
+    (
+        # The other half of the timestamp-is-None decision: an untimestamped
+        # event would leave the previous event's device time in place, so a row
+        # would read count=1 beside a last_ms that never moved.
+        "an untimestamped event leaves the previous device time standing",
+        "            register.last_ms = last_ms",
+        "            if last_ms is not None:\n                register.last_ms = last_ms",
+    ),
+    # --- "only message_type == 3 (Event) frames count" ---
+    (
+        "every message type is counted",
+        "        if frame.message_type != _EVENT:\n            return\n",
+        "",
+    ),
+    (
+        "Write echoes are counted as events",
+        "        if frame.message_type != _EVENT:",
+        "        if frame.message_type not in (2, _EVENT):",
+    ),
+    (
+        "Read replies are counted as events",
+        "        if frame.message_type != _EVENT:",
+        "        if frame.message_type not in (1, _EVENT):",
+    ),
+    (
+        "the wrong message type is treated as the event",
+        "_EVENT = 3",
+        "_EVENT = 2",
+    ),
+    # --- "frames for unmapped addresses are ignored" ---
+    (
+        # Not simply deleting the guard, which would raise and be killed by any
+        # unmapped frame at all. This is the quiet version: the frame lands in
+        # somebody else's column.
+        "an unmapped address falls into the first register",
+        LOOKUP,
+        "        register = self._states.get(frame.address, next(iter(self._states.values())))",
+    ),
+    (
+        "every register absorbs every event",
+        INGEST_WRITE,
+        "        with self._lock:\n"
+        "            for register in self._states.values():\n"
+        "                register.state = value\n"
+        "                register.count += 1\n"
+        "                register.last_ms = last_ms",
+    ),
+    (
+        "the address is ignored and every event lands in one register",
+        "        register = self._states.get(frame.address)",
+        "        register = self._states.get(frame.address)\n"
+        "        for register in self._states.values():\n"
+        "            pass",
+    ),
+    # --- columns() is the CSV header; it must be exactly what snapshot fills ---
+    (
+        "columns omits last_ms",
+        COLUMNS,
+        '            for column in (f"{name}:state", f"{name}:count")',
+    ),
+    (
+        "columns uses a different separator from snapshot",
+        COLUMNS,
+        '            for column in (f"{name}_state", f"{name}_count", f"{name}_last_ms")',
+    ),
+    (
+        "columns orders the fields differently from snapshot",
+        COLUMNS,
+        '            for column in (f"{name}:count", f"{name}:state", f"{name}:last_ms")',
+    ),
+    (
+        "the caller's register map is aliased rather than copied",
+        "        self._names = dict(registers)",
+        "        self._names = registers",
+    ),
+    (
+        "duplicate register names are accepted",
+        "        if duplicates:",
+        "        if False:",
+    ),
+    # --- the lock: the reader thread writes while the event loop reads ---
+    (
+        "snapshot reads and clears without the lock",
+        SNAPSHOT_BODY,
+        "        for address, name in self._names.items():\n"
+        "            register = self._states[address]\n"
+        '            values[f"{name}:state"] = register.state\n'
+        '            values[f"{name}:count"] = register.count\n'
+        '            __import__("time").sleep(0.0002)\n'
+        '            values[f"{name}:last_ms"] = register.last_ms\n'
+        "            register.count = 0",
+    ),
+    (
+        "ingest increments without the lock",
+        INGEST_WRITE,
+        "        register.state = value\n"
+        "        seen = register.count\n"
+        '        __import__("time").sleep(0.0002)\n'
+        "        register.count = seen + 1\n"
+        "        register.last_ms = last_ms",
+    ),
+]
+
+# (target file, mutants). Each file is restored before the next is touched.
+SUITES: list[tuple[Path, list[tuple[str, str, str]]]] = [
+    (FRAMES_TARGET, FRAME_MUTANTS),
+    (READER_TARGET, READER_MUTANTS),
+]
+
+EXPECTED_SURVIVORS = {
+    name for _, mutants in SUITES for name, _, _ in mutants if name.startswith("EQUIVALENT:")
+}
 
 
 def run_tests() -> subprocess.CompletedProcess[str]:
@@ -183,19 +425,12 @@ def run_tests() -> subprocess.CompletedProcess[str]:
     )
 
 
-def main() -> int:
-    original = TARGET.read_text(encoding="utf-8")
-
-    baseline = run_tests()
-    if baseline.returncode != 0:
-        print("BASELINE FAILS -- fix the suite before mutating")
-        print(baseline.stdout[-3000:])
-        return 1
-    print("baseline: PASS\n")
-
-    unexpected: list[str] = []
+def run_suite(target: Path, mutants: list[tuple[str, str, str]], unexpected: list[str]) -> None:
+    """Apply every mutant to ``target`` in turn, restoring it afterwards."""
+    original = target.read_text(encoding="utf-8")
+    print(f"--- {target.name} ---")
     try:
-        for name, old, new in MUTANTS:
+        for name, old, new in mutants:
             count = original.count(old)
             if count != 1:
                 print(f"[NOT APPLIED] {name}: pattern matched {count} times, expected 1")
@@ -208,8 +443,8 @@ def main() -> int:
                 unexpected.append(name)
                 continue
 
-            TARGET.write_text(mutated, encoding="utf-8")
-            if TARGET.read_text(encoding="utf-8") != mutated:
+            target.write_text(mutated, encoding="utf-8")
+            if target.read_text(encoding="utf-8") != mutated:
                 print(f"[NOT ON DISK] {name}")
                 unexpected.append(name)
                 continue
@@ -231,20 +466,35 @@ def main() -> int:
                 print(f"[SURVIVED] {name}  <-- NOT COVERED")
                 unexpected.append(name)
     finally:
-        TARGET.write_text(original, encoding="utf-8")
+        target.write_text(original, encoding="utf-8")
+    print()
+
+
+def main() -> int:
+    baseline = run_tests()
+    if baseline.returncode != 0:
+        print("BASELINE FAILS -- fix the suite before mutating")
+        print(baseline.stdout[-3000:])
+        return 1
+    print("baseline: PASS\n")
+
+    unexpected: list[str] = []
+    for target, mutants in SUITES:
+        run_suite(target, mutants, unexpected)
 
     restored = run_tests()
-    print(f"\nrestored baseline: {'PASS' if restored.returncode == 0 else 'FAIL'}")
+    print(f"restored baseline: {'PASS' if restored.returncode == 0 else 'FAIL'}")
     # Tallied over the killable names only. Subtracting every problem from the
     # killable total misattributes a killed expected-survivor, which is not a
     # killable mutant at all, to the killable set.
-    killable = [name for name, _, _ in MUTANTS if name not in EXPECTED_SURVIVORS]
+    all_mutants = [mutant for _, mutants in SUITES for mutant in mutants]
+    killable = [name for name, _, _ in all_mutants if name not in EXPECTED_SURVIVORS]
     killed_count = sum(name not in unexpected for name in killable)
     print(f"{killed_count}/{len(killable)} killable mutants killed")
     if unexpected:
         print("PROBLEMS: " + ", ".join(unexpected))
     # A score is only ever evidence about the mutants someone thought to write.
-    print(f"({len(MUTANTS)} mutants total; a clean sweep is not proof of coverage)")
+    print(f"({len(all_mutants)} mutants total; a clean sweep is not proof of coverage)")
     return 1 if unexpected or restored.returncode != 0 else 0
 
 
