@@ -130,6 +130,21 @@ class BaseDevice(ABC):
         """
         ...
 
+    def state_columns(self) -> list[str] | None:
+        """
+        Sub-column names this device contributes to the data CSV.
+
+        Return ``None`` (the default) for single-column behaviour: the
+        recorder emits one column named ``{device_id}:{device_type}`` and
+        writes whatever ``get_state()`` returns as a scalar.
+
+        Return a list of names to contribute several columns. The recorder
+        then emits ``{device_id}:{name}`` per entry and expects
+        ``get_state()`` to return a dict keyed by those names. Missing keys
+        are written as empty cells.
+        """
+        return None
+
     @property
     def input_behaviors(self) -> list["InputBehavior"]:
         """Wait/input behaviors this device offers to WaitForInput (default none).
