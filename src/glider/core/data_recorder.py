@@ -69,6 +69,10 @@ class DataRecorder:
         self._flow_anchor: float | None = None
         self._sample_task: asyncio.Task | None = None
         self._device_columns: list[str] = []
+        # Devices whose state_columns() raised. They fall back to a single
+        # column but still report a dict state, so every cell they write is
+        # empty; _write_metadata says so in the CSV itself.
+        self._degraded_devices: list[str] = []
         self._zone_columns: list[str] = []
         self._zone_config: ZoneConfiguration | None = None
         self._cv_processor: CVProcessor | None = None
@@ -185,8 +189,12 @@ class DataRecorder:
         A device may contribute several columns by returning names from
         ``state_columns()``; those become ``{device_id}:{name}``. Devices
         returning ``None`` keep the historical ``{device_id}:{device_type}``.
+
+        Also refreshes ``_degraded_devices`` with the ids whose
+        ``state_columns()`` raised, for ``_write_metadata`` to report.
         """
         columns = []
+        self._degraded_devices = []
         for device_id, device in self._hardware_manager.devices.items():
             sub_columns = None
             if hasattr(device, "state_columns"):
@@ -195,6 +203,7 @@ class DataRecorder:
                 except Exception:
                     logger.exception("state_columns() failed for device %s", device_id)
                     sub_columns = None
+                    self._degraded_devices.append(device_id)
             if sub_columns:
                 columns.extend(f"{device_id}:{name}" for name in sub_columns)
             else:
@@ -211,6 +220,13 @@ class DataRecorder:
     async def _read_device_state(self, device) -> Any:
         """Read the current state of a device."""
         try:
+            # Multi-column devices must be read through get_state(), which
+            # returns a dict; `_state` (if present) is a scalar and would
+            # silently win the checks below.
+            sub_columns = device.state_columns() if hasattr(device, "state_columns") else None
+            if sub_columns and hasattr(device, "get_state"):
+                return await device.get_state()
+
             # Try different methods to get device state
             if hasattr(device, "_state"):
                 return device._state
@@ -243,6 +259,12 @@ class DataRecorder:
         """Write metadata header to the CSV file."""
         if self._writer is None:
             return
+
+        # Resolve columns up front: the device section below reports any
+        # device that degraded while doing so, and the header row at the
+        # bottom of this method consumes the result.
+        self._device_columns = self._get_device_columns()
+        self._zone_columns = self._get_zone_columns()
 
         # Write metadata section
         self._writer.writerow(["# GLIDER Experiment Data"])
@@ -315,6 +337,20 @@ class DataRecorder:
             pins = config.pins if config else {}
             pin_str = ", ".join(f"{k}={v}" for k, v in pins.items())
             self._writer.writerow(["#", device_id, device_type, f"board={board_id}", pin_str])
+        # A device whose state_columns() raised is recorded as a single
+        # column, but it still reports a dict state — so every one of its
+        # cells comes out empty for the whole session. Say so here; the log
+        # line it also emits is not something anyone watches mid-run. Split
+        # across two cells so the comma lands as the CSV delimiter and the
+        # row keeps its `#` prefix (a single cell containing a comma would
+        # be quoted, and readers key off that prefix to skip comments).
+        for device_id in self._degraded_devices:
+            self._writer.writerow(
+                [
+                    f"# WARNING device {device_id} state_columns() failed",
+                    "recorded as single column",
+                ]
+            )
         self._writer.writerow([])
 
         # Write column headers. `frame` is the canonical camera frame index
@@ -325,8 +361,7 @@ class DataRecorder:
         # is empty until ``set_flow_anchor()`` is called (pre-flow
         # samples), then carries time-since-flow-start so this CSV's
         # sensor traces align at t=0 with the tracking CSV and runner.
-        self._device_columns = self._get_device_columns()
-        self._zone_columns = self._get_zone_columns()
+        # (Both column lists were resolved at the top of this method.)
         headers = (
             ["frame", "timestamp", "elapsed_ms", "flow_elapsed_ms"]
             + self._device_columns
@@ -445,10 +480,15 @@ class DataRecorder:
             flow_elapsed_cell,
         ]
 
-        # Device states (in column order).
+        # Device states (in column order). A column is either
+        # "{device_id}:{device_type}" for single-column devices or
+        # "{device_id}:{sub_column}" for multi-column ones; the dict branch
+        # below distinguishes them by what get_state() returned.
         for col in self._device_columns:
-            device_id = col.split(":")[0]
+            device_id, _, sub_key = col.partition(":")
             state = states.get(device_id)
+            if isinstance(state, dict):
+                state = state.get(sub_key)
             if state is None:
                 row.append("")
             elif isinstance(state, bool):
