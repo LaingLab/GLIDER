@@ -149,6 +149,24 @@ target-version = ["py311", "py312", "py313"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests/unit", "tests/integration"]
+# Import test modules by their full path rather than by inserting a rootdir on
+# sys.path. Under the default ("prepend") mode a module's identity is its
+# *basename*, so two test files that share one are the same module and
+# collecting both raises "import file mismatch" before a single test runs --
+# which is what `pytest tests/ plugins/glider-harp/tests/` did, on
+# test_schema.py and test_device.py. Both pairs are correctly named after what
+# they test (glider_harp.schema vs the .glider file schema; glider_harp.device
+# vs the pose device), so the collision is between trees, not a naming
+# mistake.
+#
+# The repository's older answer -- __init__.py markers, as under
+# tests/unit/analysis -- does not extend across the plugin boundary: a package
+# marker in plugins/glider-harp/tests names it `tests`, which then collides
+# with the repository's own tests/ directory and breaks collection outright.
+# importlib mode has no such shared namespace, needs no marker files, and
+# covers every future plugin as well. Nothing here imports test modules from
+# other test modules, which is the one thing the mode does not support.
+addopts = "--import-mode=importlib"
 markers = [
     "slow: marks tests as slow (deselect with -m 'not slow')",
     "hardware: marks tests requiring real hardware (deselect with -m 'not hardware')",

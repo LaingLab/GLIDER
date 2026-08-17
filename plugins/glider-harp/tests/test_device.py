@@ -443,6 +443,10 @@ async def test_a_device_with_no_profile_records_nothing_but_still_acts(board, sc
         assert await dev.read() is None
         assert dev.reader is None
         assert set(dev.actions) == {"StimulusOn", "Threshold"}
+        # And left in Standby, which is the one configuration that wants it.
+        # Active is what makes events flow; with no reader draining them they
+        # would stream into a port nobody reads.
+        assert dev.operation_control & 0x03 == 0x00
     finally:
         await dev.shutdown()
 

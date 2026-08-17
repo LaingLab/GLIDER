@@ -194,6 +194,18 @@ class FakeHarpPort:
         *over* would signal a frame the reader had not looked at yet, and a
         test asserting on counts would fail once in a while on a loaded
         machine.
+
+        **Precondition, and it is the whole argument's foundation: while a
+        replay is running, only the reader thread may call ``read`` or
+        ``in_waiting``.** The happens-before is inherited from *that* loop's
+        shape, so it says nothing about any other caller. A second thread
+        draining the handle satisfies the event without any frame reaching the
+        cache at all -- ``wait_for_replay()`` then returns ``True`` beside a
+        count of zero, which reads as a device that recorded nothing rather
+        than as a test that broke its own fixture. Nothing in this package does
+        that (``HarpDevice`` does every round-trip before ``start()`` or after
+        ``stop()``, for its own reasons), so this is a rule for whoever adds
+        the next thing, not a defect.
         """
         if self._pending or not self._replaying:
             return

@@ -1566,8 +1566,19 @@ DEVICE_MUTANTS: list[tuple[str, str, str]] = [
         # emits no events. Skip this and the device connects, identifies,
         # reports no error, and records nothing for the whole session.
         "never takes the device out of Standby",
-        "            await self._set_operation_mode(_MODE_ACTIVE)",
-        "            pass",
+        "                await self._set_operation_mode(_MODE_ACTIVE)",
+        "                pass",
+    ),
+    (
+        # The other side of the same line. Active exists to make events flow,
+        # so a device with nothing recorded wants Standby: unconditionally
+        # Active streams into a port with no reader draining it.
+        "a device with nothing recorded is put into streaming mode anyway",
+        "            if self._derived.recorded:\n"
+        "                # Active is what makes events flow, so it belongs with the",
+        "            await self._set_operation_mode(_MODE_ACTIVE)\n"
+        "            if self._derived.recorded:\n"
+        "                # Active is what makes events flow, so it belongs with the",
     ),
     (
         # The write is not the guarantee; the readback is. A device that

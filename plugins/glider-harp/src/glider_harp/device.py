@@ -8,19 +8,30 @@ module owns the port and the order the three are driven in.
 The lifecycle is not negotiable, and each step is here because leaving it out
 fails silently:
 
-1. Open the port.
-2. Read ``WhoAmI`` (register 0) and check it against the schema. A schema for
+1. Build the register classes (``build_registers``), which is where a schema
+   fault raises instead of decoding every event of the session wrongly, and
+   resolve the profile (``derive``) into columns and actions.
+2. Open the port.
+3. Read ``WhoAmI`` (register 0) and check it against the schema. A schema for
    the wrong board derives cleanly and records the wrong registers.
-3. Build the register classes (``build_registers``), which is where a schema
-   fault raises instead of decoding every event of the session wrongly.
-4. Resolve the profile (``derive``) into columns and actions.
-5. **Write ``OperationControl`` (register 10) to Active, and read it back.**
-   A Harp device boots in **Standby**, where it answers commands but emits no
-   events at all. Miss this and the device connects, answers, records nothing,
-   and reports no error anywhere -- the recording simply comes back empty.
-6. Build a ``RegisterCache`` and a fresh ``HarpReader``, and start it.
+4. **Write ``OperationControl`` (register 10) to Active, and read it back** --
+   but only when the profile asked for something to be recorded. A Harp device
+   boots in **Standby**, where it answers commands but emits no events at all.
+   Miss this and the device connects, answers, records nothing, and reports no
+   error anywhere -- the recording simply comes back empty. A device with no
+   profile is the one case that genuinely wants Standby: nothing would drain
+   what Active makes it emit.
+5. Build a ``RegisterCache`` and a fresh ``HarpReader``, and start it.
 
-Steps 2 to 5 are register round-trips, and they are all before step 6 for the
+Step 1 is before step 2 rather than after it, which is the one place this
+differs from the order the steps are numbered in elsewhere: everything in it
+can fail (a moved ``device.yml``, a register type that will not build, a
+profile naming a register the board does not have), and doing it first means
+those failures cost nothing to recover from, because there is no handle open
+yet. ``MockHarpDevice._open_port`` also reads the schema, so the dependency is
+now real as well as convenient.
+
+Steps 3 and 4 are register round-trips, and they are both before step 5 for the
 reason ``HarpReader`` states: the reader consumes every byte the port produces
 and hands only Events to the cache, so a reply arriving while it runs is
 decoded, counted, and dropped. A round-trip during a run does not race -- it
@@ -355,8 +366,14 @@ class HarpDevice(BaseDevice):
         try:
             self._who_am_i = await self._read_who_am_i()
             self._check_identity()
-            await self._set_operation_mode(_MODE_ACTIVE)
             if self._derived.recorded:
+                # Active is what makes events flow, so it belongs with the
+                # reader that drains them and not before it. A device with no
+                # profile has nothing listening: putting it in Active would
+                # stream into a port nobody reads, which is the one
+                # configuration where Standby is the right answer rather than
+                # the failure this whole sequence exists to prevent.
+                await self._set_operation_mode(_MODE_ACTIVE)
                 cache = RegisterCache(self._derived.recorded)
                 # A fresh reader per connection, always. ``HarpReader`` is
                 # one-shot -- start() after a stop() raises -- and a reused one
@@ -370,7 +387,8 @@ class HarpDevice(BaseDevice):
                 self._reader = reader
             else:
                 logger.info(
-                    "Harp %s: no profile, so nothing is recorded; %d action(s) available",
+                    "Harp %s: no profile, so nothing is recorded and the device is left "
+                    "in Standby; %d action(s) available",
                     self._name,
                     len(self._derived.actions),
                 )
