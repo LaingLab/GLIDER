@@ -141,16 +141,25 @@ async def test_scan_returns_description_port_pairs(fake_ports):
     ]
 
 
-async def test_scan_agrees_with_the_other_transport_boards_on_field_order(fake_ports):
-    """The reversed order raises nothing -- both halves are strings -- so the
-    panel would show the port as a label and write the product string into the
-    device's ``port`` setting. Pinned against ``SerialBoard`` directly rather
-    than against a literal, so the two cannot drift apart silently."""
+async def test_scan_agrees_with_serial_board_on_which_half_is_the_identifier(fake_ports):
+    """Drift insurance, not coverage: the order mutant is already killed above.
+
+    This pins one thing only -- that the identifier is in the same position as
+    ``SerialBoard`` puts it -- because that is the half whose reversal is
+    silent. Asserting full equality would also pin the fallback rule, the
+    ``strip()``, the absence of filtering and the tuple arity, and core has no
+    test for ``SerialBoard.scan()`` at all. A legitimate core change (say,
+    disambiguating duplicate descriptions) would then break nothing in core and
+    surface here as a list-inequality in a plugin, pointing at neither the
+    change nor the convention.
+    """
     from glider.hal.boards.serial_board import SerialBoard
 
     fake_ports.append(_FakePort("COM3", "Harp Behavior (FTDI)"))
 
-    assert await HarpBoard.scan() == await SerialBoard.scan()
+    assert [ident for _, ident in await HarpBoard.scan()] == [
+        ident for _, ident in await SerialBoard.scan()
+    ]
 
 
 async def test_scan_falls_back_to_the_port_when_there_is_no_description(fake_ports):

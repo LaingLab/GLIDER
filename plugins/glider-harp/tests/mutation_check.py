@@ -3,14 +3,24 @@
 ``FrameSplitter``, ``RegisterCache``, ``HarpReader``, ``schema``,
 ``derivation`` and ``board``.
 
-``board`` is the odd one out and is included with lower expectations: it is a
-transport shim with no state machine of its own, so most of its mutants are
-trivially killed by a single direct assertion and prove little beyond that the
-assertion exists. Two are worth the run -- the pin operation that returns
-instead of raising (a flow graph that runs green and drives nothing) and the
-harp stack check that tests the *module* rather than a *name* (which is exactly
-what a mis-resolved harp-protocol 0.4.0 passes). Do not read the board section's
-clean sweep as evidence of the same kind the splitter's is.
+``board`` is the odd one out and is included with lower expectations. It is a
+transport shim with no state machine of its own, and the eighteen mutants break
+down as: **thirteen trivial**, killed by a single direct assertion and proving
+nothing beyond that the assertion exists (board_type, capabilities.pins, the
+state transitions); **three of modest value** (only one pin method forgets to
+refuse; scan's field order; scan swallowing an OSError into "no devices
+found"); and **two worth the run** -- the pin operation that returns instead of
+raising, which is a flow graph running green while no hardware moves, and the
+harp stack check that tests the *module* rather than a *name*, which is exactly
+what a mis-resolved harp-protocol 0.4.0 passes.
+
+Quote that breakdown, not "18/18". Two caveats sharpen it further: the field
+order is killed by a literal assertion before the sibling-agreement test is
+reached, so that test is drift insurance rather than coverage; and the canary
+mutant is only *reachable* because the test stubs ``sys.modules`` after import
+-- in a real mis-resolve ``frames.py`` raises at import time and neither the
+guard nor its message is ever reached. Do not read this section's clean sweep
+as evidence of the same kind the splitter's is.
 
 Not collected by pytest -- deliberately named without a ``test_`` prefix, since
 it rewrites source files on disk and shells out to pytest. Run it directly:
@@ -1454,7 +1464,7 @@ BOARD_MUTANTS: list[tuple[str, str, str]] = [
         '        logger.info("HarpBoard: transport released")',
         '        logger.info("HarpBoard: transport released")',
     ),
-    # --- scan(): (port, description), every port, failures surfaced ---
+    # --- scan(): (description, port), every port, failures surfaced ---
     (
         # "No devices found" for a machine whose serial subsystem is broken
         # sends the operator hunting for a cable that is fine.

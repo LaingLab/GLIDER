@@ -17,11 +17,23 @@ Why connect() checks two stacks rather than one, which is the only place this
 differs materially from ``SerialBoard``: ``harp``'s ``Requires-Dist:
 harp-protocol`` carries no lower bound, so a naive resolve installs an
 incompatible ``harp-protocol`` 0.4.0 alongside a 0.5.x ``harp`` and reports
-success. The two releases share no API. Left unchecked, that mis-resolve
-surfaces much later as an ``AttributeError`` or a missing name deep inside a
-register build, at which point nothing points at the real cause. So the check
-imports a *name* rather than the module: ``harp.protocol`` itself imports fine
-under either version, and only the name tells the two apart.
+success. The two releases share no API. The check imports a *name* rather than
+the module, because ``harp.protocol`` itself imports fine under either version
+and only the name tells them apart.
+
+**This guard is defence-in-depth, not the first line, and in a real
+mis-resolve it will not be what fires.** ``frames`` does
+``from harp.protocol import HarpMessage, HarpParseError`` at module level and
+the package ``__init__`` imports ``frames``, so importing *anything* from
+``glider_harp`` -- including this module, since a submodule import runs the
+package ``__init__`` first -- already raises ``ImportError`` at ``frames.py``
+before ``HarpBoard`` is so much as a name. The install message below is
+therefore unlikely ever to reach an operator; the failure they will actually
+see is the one from ``frames``. The guard stays because it is a cheap
+assertion that costs nothing and stays correct if the import graph is ever
+rearranged, but do not mistake it for the thing standing between a bad install
+and a confusing error. Pinning the dependency at packaging time is what does
+that.
 
 Nothing here opens a port, owns a device, or knows about registers -- that is
 all ``HarpDevice``'s.

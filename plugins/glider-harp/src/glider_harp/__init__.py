@@ -18,9 +18,22 @@ Four layers, and they are separable on purpose:
 * ``derivation`` -- what this experiment wants of it. ``derive`` decides which
   registers become columns and which become actions.
 
-``frames`` and ``schema`` are the only two modules that name ``harp.protocol``,
-and they name disjoint halves of it -- the message codec and the register DSL.
-An upstream change lands in one of those two files and no other.
+Three modules name ``harp.protocol``, and an upstream change lands in those
+three files and no other:
+
+* ``frames`` -- the message codec (``HarpMessage``, ``HarpParseError``).
+* ``schema`` -- the register DSL. Disjoint from ``frames``' half.
+* ``board`` -- ``HarpMessage`` again, but not to use it: it is imported as a
+  *canary*, to tell a correctly resolved ``harp-protocol`` from the
+  incompatible 0.4.0 that ``harp``'s unbounded requirement also accepts. So an
+  upstream **rename** of ``HarpMessage`` does not merely break ``frames``; it
+  silently turns that guard into a false alarm, reporting a bad install to
+  anyone with a good one. Retarget the canary along with the codec.
+
+``board`` is also the only module here that imports ``glider``, which is why it
+is not re-exported below: ``import glider_harp`` pulls in no ``glider`` modules
+at all, while ``import glider_harp.board`` pulls in 36, including all of
+``glider.vision``. Import it as ``from glider_harp.board import HarpBoard``.
 """
 
 from glider_harp.derivation import CORE_REGISTERS, Derived, derive, load_profile
