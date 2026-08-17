@@ -1,4 +1,4 @@
-"""Mutation check for ``FrameSplitter`` and ``RegisterCache``.
+"""Mutation check for ``FrameSplitter``, ``RegisterCache`` and ``HarpReader``.
 
 Not collected by pytest -- deliberately named without a ``test_`` prefix, since
 it rewrites source files on disk and shells out to pytest. Run it directly:
@@ -517,10 +517,254 @@ READER_MUTANTS: list[tuple[str, str, str]] = [
     ),
 ]
 
+DECODE_CALL = (
+    "            try:\n                frame = decode(raw)\n            except FrameError:"
+)
+FLUSH = (
+    "        self._splitter._synced = False\n"
+    '        self._ingest_frames(self._splitter.feed(b""))'
+)
+READ_TIMEOUT = (
+    "        self._serial.timeout = max(\n"
+    "            _MIN_READ_TIMEOUT_S, min(self._idle_flush_s / 2, _MAX_READ_TIMEOUT_S)\n"
+    "        )"
+)
+STALL_CHECK = (
+    "        if not self._splitter._buffer:\n"
+    "            return False\n"
+    "        return time.monotonic() - self._last_data_at >= self._idle_flush_s"
+)
+
+# ``HarpReader``. Written against the rules the thread inherited from the three
+# pieces it composes -- the exception hierarchy, the counter meanings, the
+# splitter's residual stall, cache ownership -- rather than against the loop as
+# written, since a rule obeyed by halves looks fully covered from the code.
+HARP_READER_MUTANTS: list[tuple[str, str, str]] = [
+    # --- branch on the exception TYPE, never the message ---
+    (
+        # The inherited defect this task exists to avoid: FrameError is the base
+        # of all three, and anything narrower lets a sibling end the thread. The
+        # recording then comes back empty with no error anywhere.
+        "catches only ChecksumError, so a plain FrameError ends the thread",
+        DECODE_CALL,
+        "            from glider_harp.frames import ChecksumError\n\n"
+        "            try:\n"
+        "                frame = decode(raw)\n"
+        "            except ChecksumError:",
+    ),
+    (
+        "no decode failure is caught at all",
+        DECODE_CALL,
+        "            if True:\n                frame = decode(raw)\n            if False:",
+    ),
+    (
+        # Upstream validates the checksum before the length field, so a
+        # truncated frame's message reads "Checksum mismatch". Any handler that
+        # reads the text is deciding on a string upstream never promised.
+        "branches on the exception message instead of its type",
+        "            except FrameError:\n",
+        '            except FrameError as exc:\n                if "checksum" not in str(exc).lower():\n                    raise\n',
+    ),
+    (
+        # Provably unkillable: FrameError subclasses ValueError and decode
+        # raises nothing else, a pairing test_frames pins directly. Kept so that
+        # decoupling the hierarchy from ValueError shows up here as a kill
+        # rather than as a silently weaker handler.
+        "EQUIVALENT: catches ValueError rather than FrameError",
+        "            except FrameError:\n",
+        "            except ValueError:\n",
+    ),
+    (
+        # Requirement 4: HarpParseError is not a ValueError, so a frame parsed
+        # directly throws straight past the handler above.
+        "parses frames directly instead of through decode()",
+        "                frame = decode(raw)\n",
+        "                from harp.protocol import HarpMessage\n\n"
+        "                frame = HarpMessage.parse(raw)\n",
+    ),
+    # --- error_count is corruption, and nothing else ---
+    (
+        "error_count folds in resyncs, so a noisy connect reads as a bad cable",
+        "        return self._splitter.checksum_errors",
+        "        return self._splitter.checksum_errors + self._splitter.resyncs",
+    ),
+    (
+        "error_count reports discarded bytes",
+        "        return self._splitter.checksum_errors",
+        "        return self._splitter.bytes_discarded",
+    ),
+    (
+        "error_count folds in decode failures",
+        "        return self._splitter.checksum_errors",
+        "        return self._splitter.checksum_errors + self._decode_failures",
+    ),
+    (
+        "error_count folds in a dead port",
+        "        return self._splitter.checksum_errors",
+        "        return self._splitter.checksum_errors + (1 if self.failure else 0)",
+    ),
+    (
+        "corruption is never surfaced at all",
+        "        return self._splitter.checksum_errors",
+        "        return 0",
+    ),
+    # --- the idle flush: the stall only a clock can resolve ---
+    (
+        "never flushes, so frames behind a stalled head are lost at the end of a trial",
+        "            elif self._is_stalled():",
+        "            elif False:",
+    ),
+    (
+        "flushes on every read that came back empty",
+        STALL_CHECK,
+        "        return bool(self._splitter._buffer)",
+    ),
+    (
+        "flushes on a silent line even with nothing held",
+        STALL_CHECK,
+        "        return time.monotonic() - self._last_data_at >= self._idle_flush_s",
+    ),
+    (
+        # The window is silence on the line. Timed from anywhere else it expires
+        # mid-stream and tears a frame that was merely arriving slowly.
+        "the idle window is not restarted by the bytes that arrive",
+        "            if chunk:\n                self._last_data_at = time.monotonic()\n",
+        "            if chunk:\n",
+    ),
+    (
+        "a buffer with nothing framable in it is rescanned on every read",
+        "        # Restart the window rather than flushing on every read from here on:",
+        "        return\n        # Restart the window rather than flushing on every read from here on:",
+    ),
+    (
+        "the flush drops the held bytes instead of reframing them",
+        FLUSH,
+        "        self._splitter._buffer.clear()",
+    ),
+    (
+        "the flush confirms the head as a boundary instead of doubting it",
+        FLUSH,
+        "        self._splitter._synced = True\n"
+        '        self._ingest_frames(self._splitter.feed(b""))',
+    ),
+    (
+        # Requirement 5: feed() returns the frames it completed, so a caller that
+        # ignores the return value silently drops them.
+        "the flush reframes but throws away what came back",
+        FLUSH,
+        "        self._splitter._synced = False\n" '        self._splitter.feed(b"")',
+    ),
+    (
+        "the read path throws away what feed returned",
+        "                self._ingest_frames(self._splitter.feed(chunk))",
+        "                self._splitter.feed(chunk)",
+    ),
+    # --- exactly one caller may poll snapshot(), and it is not this thread ---
+    (
+        "the thread polls snapshot() each time round the loop",
+        "            elif self._is_stalled():",
+        "            self._cache.snapshot()\n            if self._is_stalled():",
+    ),
+    (
+        "the flush consumes the cache it just filled",
+        FLUSH,
+        "        self._splitter._synced = False\n"
+        '        self._ingest_frames(self._splitter.feed(b""))\n'
+        "        self._cache.snapshot()",
+    ),
+    # --- what the frames do on the way to the cache ---
+    (
+        "frame_count counts frames that never decoded",
+        DECODE_CALL,
+        "            self._frame_count += 1\n"
+        "            try:\n"
+        "                frame = decode(raw)\n"
+        "            except FrameError:",
+    ),
+    (
+        "frame_count never moves, so a live link is indistinguishable from a dead one",
+        "            self._frame_count += 1",
+        "            self._frame_count += 0",
+    ),
+    (
+        "a swallowed decode failure leaves no trace",
+        "                self._decode_failures += 1",
+        "                pass",
+    ),
+    (
+        "reads one byte per call however much the port is holding",
+        '        waiting = getattr(self._serial, "in_waiting", 0) or 0\n'
+        "        return self._serial.read(max(1, waiting))",
+        "        return self._serial.read(1)",
+    ),
+    # --- lifecycle: the thread the event loop is trusting to be gone ---
+    (
+        "stop() asks nothing to stop",
+        "        self._stop_event.set()\n        thread = self._thread",
+        "        thread = self._thread",
+    ),
+    (
+        # Killed by the 0.2 s empty read in the fixture, not by a sleep this
+        # mutant inserts: without the join the thread is provably still inside
+        # that read when stop() returns.
+        "stop() returns without waiting for the thread",
+        "        thread.join(timeout)",
+        "        pass",
+    ),
+    (
+        "stop() reports success by forgetting the thread it left running",
+        "        thread.join(timeout)",
+        "        self._thread = None",
+    ),
+    (
+        "the reader thread is not a daemon",
+        'name="harp-reader", daemon=True',
+        'name="harp-reader", daemon=False',
+    ),
+    (
+        "a failing port is retried forever instead of stopping the reader",
+        "                self._stop_event.set()\n                return",
+        "                continue",
+    ),
+    (
+        "a failing port leaves no record of what happened",
+        "                self.failure = exc\n",
+        "",
+    ),
+    (
+        "start() leaves the port's read timeout as it found it",
+        READ_TIMEOUT,
+        "        pass",
+    ),
+    (
+        "the read timeout ignores the idle window",
+        READ_TIMEOUT,
+        "        self._serial.timeout = _MAX_READ_TIMEOUT_S",
+    ),
+    (
+        "the read timeout is unbounded above, so stop() cannot join",
+        READ_TIMEOUT,
+        "        self._serial.timeout = max(_MIN_READ_TIMEOUT_S, self._idle_flush_s / 2)",
+    ),
+    (
+        "start() may be called on a reader that is already running",
+        "        if self._thread is not None or self._stop_event.is_set():",
+        "        if False:",
+    ),
+    (
+        # The half that is easy to leave out: the stop event is latched, so a
+        # reader started after a stop runs a thread that ends on its first loop
+        # test and takes the whole recording with it, silently.
+        "a reader that was already stopped starts a thread that exits at once",
+        "        if self._thread is not None or self._stop_event.is_set():",
+        "        if self._thread is not None:",
+    ),
+]
+
 # (target file, mutants). Each file is restored before the next is touched.
 SUITES: list[tuple[Path, list[tuple[str, str, str]]]] = [
     (FRAMES_TARGET, FRAME_MUTANTS),
-    (READER_TARGET, READER_MUTANTS),
+    (READER_TARGET, READER_MUTANTS + HARP_READER_MUTANTS),
 ]
 
 EXPECTED_SURVIVORS = {
