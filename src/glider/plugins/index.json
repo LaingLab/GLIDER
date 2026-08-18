@@ -11,7 +11,13 @@
       "author": "Laing Lab",
       "homepage": "https://github.com/LaingLab/glider-harp",
       "glider_requires": ">=1.0,<2.0",
-      "provides": ["driver", "device"]
+      "provides": [
+        "driver",
+        "device"
+      ],
+      "requirements": [
+        "harp-protocol>=0.5.0rc1,<0.6"
+      ]
     }
   ]
 }
