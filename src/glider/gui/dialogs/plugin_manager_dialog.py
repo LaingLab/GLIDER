@@ -187,6 +187,12 @@ class PluginManagerDialog(QDialog):
         # Non-modal on purpose: an install takes minutes and must not hold a
         # running experiment still.
         self.setModal(False)
+        # Constructed with parent=MainWindow, so without this Qt's ownership
+        # keeps every closed window alive for the life of the application --
+        # one full dialog leaked per open-after-close. `finished` (which the
+        # main window uses to drop its reference) fires before the deferred
+        # delete runs.
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.resize(760, 560)
 
         self._index = index
