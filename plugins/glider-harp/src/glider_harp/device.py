@@ -1004,4 +1004,18 @@ def _exchange(
             f"{timeout:.1f}s"
         )
     finally:
-        handle.timeout = previous
+        # Guarded for the reason ``HarpReader._restore_timeout`` documents: on
+        # pyserial this is not an assignment, it reconfigures the open port,
+        # and that raises on a device that has been unplugged -- which is
+        # exactly when the read above has just failed. Unguarded, the
+        # reconfigure error replaces the true failure and the operator reads
+        # "cannot reconfigure a port" instead of the disconnect.
+        try:
+            handle.timeout = previous
+        except Exception:
+            logger.warning(
+                "Harp %s: could not restore the port read timeout (the device may be "
+                "gone); reporting the original failure instead",
+                device_name,
+                exc_info=True,
+            )

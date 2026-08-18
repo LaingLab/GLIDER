@@ -1070,3 +1070,38 @@ async def test_concurrent_reads_and_the_reader_do_not_deadlock(device):
     may hold the other up."""
     results = await asyncio.gather(*(device.read() for _ in range(20)))
     assert all(list(r) == LICK_COLUMNS for r in results)
+
+
+async def test_a_vanished_device_surfaces_the_read_failure_not_the_timeout_restore():
+    """`_exchange` borrows the handle's read timeout and puts it back in a
+    `finally`. On pyserial that assignment reconfigures the open port, and it
+    raises when the device has been unplugged -- which is exactly when the read
+    it wraps has just failed. Unguarded, the operator sees "cannot reconfigure
+    a port" instead of the disconnect. Same rationale as
+    ``HarpReader._restore_timeout``."""
+    from glider_harp.device import _exchange
+
+    class VanishingHandle:
+        in_waiting = 0
+
+        def __init__(self) -> None:
+            self._timeout_sets = 0
+
+        @property
+        def timeout(self) -> float:
+            return 1.0
+
+        @timeout.setter
+        def timeout(self, value: float) -> None:
+            self._timeout_sets += 1
+            if self._timeout_sets > 1:  # the restore, after the device is gone
+                raise OSError("could not reconfigure port: device disconnected")
+
+        def write(self, data: bytes) -> None:
+            pass
+
+        def read(self, size: int) -> bytes:
+            raise OSError("device vanished mid-exchange")
+
+    with pytest.raises(OSError, match="vanished mid-exchange"):
+        _exchange(VanishingHandle(), b"\x01", 32, timeout=0.2, device_name="test")

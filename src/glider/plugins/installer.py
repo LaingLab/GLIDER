@@ -11,6 +11,7 @@ import asyncio
 import importlib
 import importlib.util
 import logging
+import re
 import shutil
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -30,6 +31,51 @@ _UNREADABLE = (InvalidSpecifier, InvalidVersion, TypeError)
 
 class NoInstallerError(RuntimeError):
     """Neither pip nor uv is available to install with."""
+
+
+class MalformedEntryError(ValueError):
+    """A catalogue token that must not reach an installer's argv.
+
+    :func:`install` catches this and puts it on the plugin's row, exactly like
+    :class:`NoInstallerError`: a poisoned index entry is a condition to report,
+    not to crash on.
+    """
+
+
+#: PEP 508 subset: a package name, optional extras, optional comma-separated
+#: version specifiers. The same shape ``PluginManager._REQUIREMENT_PATTERN``
+#: enforces before its own pip call, widened only by the comma between
+#: specifiers (the bundled harp entry pins ``>=0.5.0rc1,<0.6``). Deliberately
+#: redefined rather than imported: the two modules must stay independently
+#: importable.
+_SPECIFIER = r"(~=|==|!=|<=?|>=?|===)\s*[A-Za-z0-9.*+!_-]+"
+_REQUIREMENT_PATTERN = re.compile(
+    r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?(\[[A-Za-z0-9,._-]+\])?"
+    rf"(\s*{_SPECIFIER}(\s*,\s*{_SPECIFIER})*)?$"
+)
+
+
+def _refuse_argv_injection(package: str, requirements: Sequence[str]) -> None:
+    """Refuse any token that pip or uv would read as an option, not a package.
+
+    ``package`` and ``requirements`` come from the catalogue -- which is JSON
+    off a web server, or the user-writable ``plugin_index.json`` cache trusted
+    at the same level. Spliced into argv unchecked, a token like
+    ``--index-url=...`` or ``-e git+...`` turns the Install button into
+    arbitrary installer options, and pip reports success.
+    """
+    for token in (package, *requirements):
+        if token.startswith("-"):
+            raise MalformedEntryError(
+                f"Refusing to install: {token!r} would be read as an installer "
+                "option, not a package. The catalogue entry is malformed."
+            )
+    for token in requirements:
+        if not _REQUIREMENT_PATTERN.match(token):
+            raise MalformedEntryError(
+                f"Refusing to install: {token!r} is not a package requirement. "
+                "The catalogue entry is malformed."
+            )
 
 
 def _pip_is_importable() -> bool:
@@ -74,7 +120,12 @@ def installer_command(
     Raises:
         NoInstallerError: if neither is available. The caller shows this on the
             plugin's row; it is a condition to report, not to crash on.
+        MalformedEntryError: if any token would reach argv as an installer
+            option or is not requirement-shaped. Checked here, before the
+            pip/uv split, so both command shapes are covered.
     """
+    _refuse_argv_injection(package, requirements)
+
     if pip_available():
         return [sys.executable, "-m", "pip", "install", package, *requirements]
 
@@ -224,6 +275,9 @@ async def install(
         args = build_command(package, tuple(entry.get("requirements") or ()))
     except NoInstallerError as exc:
         logger.error("No installer available: %s", exc)
+        return InstallResult(ok=False, message=str(exc))
+    except MalformedEntryError as exc:
+        logger.error("Refusing a malformed catalogue entry %r: %s", entry.get("name"), exc)
         return InstallResult(ok=False, message=str(exc))
 
     returncode, output = await run(args, on_output)

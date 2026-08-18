@@ -21,6 +21,24 @@ DEFAULT_INDEX_URL = "https://raw.githubusercontent.com/LaingLab/glider-plugins/m
 CACHE_FILENAME = "plugin_index.json"
 FETCH_TIMEOUT_SECONDS = 3.0
 
+#: A curated catalogue is kilobytes; a megabyte is generous. Anything larger
+#: is a misconfigured or hostile server, and buffering it unbounded before
+#: parsing is the wrong response.
+INDEX_MAX_BYTES = 1024 * 1024
+
+
+def _within_cap(data: bytes, cap: int = INDEX_MAX_BYTES) -> bytes:
+    """Pass *data* through, or refuse it as too large to be a catalogue.
+
+    Raising makes an oversize body a *failed fetch*: ``resolve`` catches it and
+    falls through to cache/bundled, the same as every other malformed-network
+    case. Split out of the fetcher so the rule is testable without a network.
+    """
+    if len(data) > cap:
+        raise ValueError(f"plugin index exceeds {cap} bytes; refusing it")
+    return data
+
+
 Fetcher = Callable[[str, float], Awaitable[str]]
 
 
@@ -77,7 +95,9 @@ async def _default_fetcher(url: str, timeout: float) -> str:
 
     def _get() -> str:
         with urllib.request.urlopen(url, timeout=timeout) as response:
-            return response.read().decode("utf-8")
+            # Read one byte past the cap, never the whole body: the cap has to
+            # bound what is buffered, not just what is accepted afterwards.
+            return _within_cap(response.read(INDEX_MAX_BYTES + 1)).decode("utf-8")
 
     return await asyncio.to_thread(_get)
 

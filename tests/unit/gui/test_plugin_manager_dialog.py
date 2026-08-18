@@ -576,3 +576,70 @@ def test_glider_core_exposes_the_plugin_manager():
     from glider.core.glider_core import GliderCore
 
     assert isinstance(GliderCore.plugin_manager, property)
+
+
+# --- lifetime: closing the window must free it -------------------------------
+#
+# The window is constructed with `parent=MainWindow`, so Qt's ownership keeps
+# it alive after `close()` unless WA_DeleteOnClose is set. Without it, every
+# open-after-close leaked a full dialog -- cards, scroll area, pinned pip
+# transcripts -- for the life of the main window.
+
+
+def test_closing_the_window_deletes_it_rather_than_parking_it_on_the_parent(qtbot):
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QApplication
+
+    parent = QMainWindow()
+    qtbot.addWidget(parent)
+    dialog = PluginManagerDialog(index=INDEX, installed={}, parent=parent)
+
+    events: list[str] = []
+    dialog.finished.connect(lambda _result: events.append("finished"))
+    dialog.destroyed.connect(lambda *_: events.append("destroyed"))
+
+    dialog.show()
+    dialog.close()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    # `finished` first: the main window clears its reference on that signal,
+    # and it must have fired before the C++ object went away.
+    assert events == ["finished", "destroyed"]
+
+
+async def test_the_menu_survives_a_close_and_opens_a_fresh_window(qtbot, monkeypatch):
+    """After DeleteOnClose the C++ object dies while `_plugins_dialog` would
+    still hold the Python wrapper; the `finished` handler must have cleared it,
+    or the reopen path calls `raise_()` on a dead wrapper (sip RuntimeError)."""
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QApplication
+
+    opened: list[object] = []
+
+    async def fake_open_for(parent, plugin_manager):
+        dialog = PluginManagerDialog(index=INDEX, installed={}, parent=parent)
+        dialog.show()
+        opened.append(dialog)
+        return dialog
+
+    monkeypatch.setattr(PluginManagerDialog, "open_for", fake_open_for)
+
+    win = _window_with_a_plugin_manager()
+    try:
+        win._on_open_plugins()
+        await win._plugins_task
+        await asyncio.sleep(0)
+        assert win._plugins_dialog is not None
+
+        win._plugins_dialog.close()
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert win._plugins_dialog is None
+
+        win._on_open_plugins()
+        await win._plugins_task
+        await asyncio.sleep(0)
+
+        assert len(opened) == 2
+        assert win._plugins_dialog is opened[1]
+    finally:
+        win.deleteLater()
