@@ -65,6 +65,19 @@ WARNING = "#fbbf24"
 ERROR = "#f87171"
 INFO = "#60a5fa"
 
+# === Semantic state (kept deliberately apart from ACCENT) ===
+#
+# Used by state chips that say what a thing *is* -- a plugin row's Enabled /
+# Not compatible / Install failed pill, for example. Held separate from the
+# cyan ACCENT on purpose: the accent marks the primary *action*, so if
+# "needs attention" were painted in it too, the two would compete and neither
+# would read at a glance. Slightly brighter than the SUCCESS/WARNING/ERROR
+# above, which are tuned for thin strokes and small text rather than for
+# coloured text sitting on a tinted chip.
+STATE_OK = "#4ade80"
+STATE_WARN = "#fbbf24"
+STATE_ERR = "#f87171"
+
 # === Node Categories ===
 CAT_HARDWARE = "#1a4a2e"
 CAT_LOGIC = "#1e3a5f"
