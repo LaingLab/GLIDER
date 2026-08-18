@@ -227,7 +227,9 @@ The declarative Custom Device builder is appropriate for simple GPIO or I2C devi
 
 ### Python plugins
 
-Python packages can register board drivers, device types, node types, and related UI components. Entry points use the `glider.driver`, `glider.device`, and `glider.node` groups. The project itself registers its built-in drivers through this mechanism.
+Python packages can register board drivers, device types, node types, and related UI components. Entry points use the `glider.driver`, `glider.device`, and `glider.node` groups. An entry point must resolve to a setup *function*; the loader calls it, then registers components by reading `BOARD_DRIVERS`, `DEVICE_TYPES`, and `NODE_TYPES` from the module. An entry point pointing at a class instead loads silently and registers nothing.
+
+GLIDER's own built-in drivers are registered explicitly in `HardwareManager` rather than through entry points, so the entry-point path is exercised only by third-party packages.
 
 Directory-based plugins are also supported, but they execute Python code and are disabled by default. A laboratory must explicitly enable directory plugins in its GLIDER configuration and should load only trusted code. This safety boundary is important in reviewer-facing statements: plugin support makes extension possible; it does not make untrusted plugins safe.
 

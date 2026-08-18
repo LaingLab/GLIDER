@@ -113,7 +113,14 @@ pc = [
 glider = "glider.__main__:main"
 
 [project.entry-points."glider.driver"]
-# Built-in drivers are registered here
+# NOTE: these four do NOT register the built-in drivers, despite appearances.
+# PluginManager calls the attribute after the colon as a setup function and then
+# registers components by reading BOARD_DRIVERS/DEVICE_TYPES/NODE_TYPES off the
+# module; these point at classes and define no such dicts, so they register
+# nothing. The built-ins are registered explicitly in HardwareManager
+# (_register_builtin_drivers). Left in place because removing them is a
+# behaviour change to plugin discovery that wants its own review -- see the
+# plugin-marketplace work.
 arduino = "glider.hal.boards.telemetrix_board:TelemetrixBoard"
 raspberry_pi = "glider.hal.boards.pi_gpio_board:PiGPIOBoard"
 bluetooth = "glider.hal.boards.ble_board:BLEBoard"
