@@ -85,6 +85,19 @@ async def test_a_malformed_cache_falls_through_to_bundled(cache_dir):
     assert result.source == "bundled"
 
 
+async def test_an_index_entry_that_is_not_an_object_is_dropped(cache_dir):
+    """`_parse` guarded the shape of the index but not the shape of its entries,
+    and every consumer downstream calls `entry.get(...)`."""
+
+    async def fetch(url, timeout):
+        return json.dumps({**GOOD, "plugins": ["glider-harp", {"name": "a", "pypi": "a"}]})
+
+    result = await PluginRegistry(cache_dir=cache_dir, fetcher=fetch).resolve()
+
+    assert result.source == "network"
+    assert [p["name"] for p in result.plugins] == ["a"]
+
+
 def test_the_bundled_index_is_valid_json_and_lists_harp():
     """A packaging guard: the shipped file is the last line of defence, so a
     typo in it is not something to discover at runtime on a lab machine."""

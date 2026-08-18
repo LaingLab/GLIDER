@@ -7,9 +7,10 @@ carries which source won and how old it is; the Plugins window prints both.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -39,17 +40,31 @@ def _parse(text: str) -> ResolvedIndex | None:
     Callers use None to mean "try the next source". A bad index is a reason to
     fall back, not a reason to fail: the alternative is that one broken file on
     a web server bricks the Plugins window for everyone.
+
+    Entries that are not objects are dropped rather than passed on. Every
+    consumer downstream reads an entry with ``entry.get(...)``, so a bare string
+    in the list would fail somewhere far from here with nothing naming the
+    index. One bad entry costs one row, not the whole catalogue.
     """
     try:
         data = json.loads(text)
-        return ResolvedIndex(
-            plugins=list(data["plugins"]),
-            updated=str(data.get("updated", "")),
-            schema_version=str(data.get("schema_version", "")),
-        )
+        raw = list(data["plugins"])
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         logger.warning("Ignoring malformed plugin index: %s", exc)
         return None
+
+    plugins: list[dict[str, Any]] = []
+    for entry in raw:
+        if isinstance(entry, Mapping):
+            plugins.append(dict(entry))
+        else:
+            logger.warning("Ignoring a plugin index entry that is not an object: %r", entry)
+
+    return ResolvedIndex(
+        plugins=plugins,
+        updated=str(data.get("updated", "")),
+        schema_version=str(data.get("schema_version", "")),
+    )
 
 
 async def _default_fetcher(url: str, timeout: float) -> str:
@@ -58,7 +73,6 @@ async def _default_fetcher(url: str, timeout: float) -> str:
     urllib is blocking, and this runs on the Qt event loop via qasync -- calling
     it directly would freeze the UI for the whole timeout.
     """
-    import asyncio
     import urllib.request
 
     def _get() -> str:
@@ -66,6 +80,19 @@ async def _default_fetcher(url: str, timeout: float) -> str:
             return response.read().decode("utf-8")
 
     return await asyncio.to_thread(_get)
+
+
+def _read_text(path: Path) -> str | None:
+    """Read a file, or None if it is not there or cannot be read.
+
+    One call rather than ``exists()`` then ``read_text()``: two trips to a file
+    that may live on an SMB share cost twice as much and still race.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.debug("Could not read %s: %s", path, exc)
+        return None
 
 
 class PluginRegistry:
@@ -97,11 +124,18 @@ class PluginRegistry:
         return parsed
 
     async def resolve(self) -> ResolvedIndex:
+        """Network, then cache, then the bundled copy.
+
+        Every filesystem touch here goes through a worker thread for the same
+        reason the fetch does: this runs on the Qt event loop via qasync, and
+        both the cache and the wheel can sit on a network share where a read is
+        not the instant operation ``Path.read_text`` looks like.
+        """
         try:
             text = await self._fetch(self._url, FETCH_TIMEOUT_SECONDS)
             parsed = _parse(text)
             if parsed is not None:
-                self._write_cache(text)
+                await asyncio.to_thread(self._write_cache, text)
                 return ResolvedIndex(
                     plugins=parsed.plugins,
                     updated=parsed.updated,
@@ -111,8 +145,9 @@ class PluginRegistry:
         except Exception as exc:
             logger.info("Plugin index fetch failed, falling back: %s", exc)
 
-        if self._cache_path.exists():
-            parsed = _parse(self._cache_path.read_text(encoding="utf-8"))
+        cached = await asyncio.to_thread(_read_text, self._cache_path)
+        if cached is not None:
+            parsed = _parse(cached)
             if parsed is not None:
                 return ResolvedIndex(
                     plugins=parsed.plugins,
@@ -121,7 +156,7 @@ class PluginRegistry:
                     source="cache",
                 )
 
-        return self.load_bundled()
+        return await asyncio.to_thread(self.load_bundled)
 
     def _write_cache(self, text: str) -> None:
         try:
