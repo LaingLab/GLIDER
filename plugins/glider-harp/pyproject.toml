@@ -9,14 +9,21 @@ build-backend = "setuptools.build_meta"
 name = "glider-harp"
 version = "0.1.0"
 description = "Harp binary-protocol support for GLIDER"
+readme = "README.md"
 license = "MIT"
+# PEP 639. Without this the SPDX string above is the only trace of the licence
+# and the wheel ships no licence text at all.
+license-files = ["LICENSE"]
 requires-python = ">=3.11,<3.14"
 authors = [
     {name = "LaingLab"}
 ]
 keywords = ["harp", "glider", "laboratory", "automation", "hardware"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    # Alpha, not Beta: this package has never been run against real Harp
+    # hardware. Everything green in CI is MockHarpDevice. Promote it once a
+    # physical device has completed the acceptance checklist.
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",

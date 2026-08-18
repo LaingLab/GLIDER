@@ -1,0 +1,134 @@
+name: Release glider-harp
+
+# Publishes the glider-harp plugin to PyPI via Trusted Publishing (OIDC).
+#
+# No API token exists anywhere -- not in the repository, not in Actions secrets,
+# not on a maintainer's machine. GitHub mints a short-lived identity token for
+# this specific workflow in this specific repository, and PyPI trades it for an
+# equally short-lived upload token. Nothing to leak and nothing to rotate.
+#
+# One-time setup on PyPI, before the first run:
+#   https://pypi.org/manage/account/publishing/ -> "Add a new pending publisher"
+#     PyPI project name : glider-harp
+#     Owner             : LaingLab
+#     Repository name   : glider
+#     Workflow name     : release-glider-harp.yml
+#     Environment name  : pypi
+# A *pending* publisher is the right choice while the project does not exist on
+# PyPI yet; it becomes a normal publisher when the first upload creates it.
+#
+# To release: bump `version` in plugins/glider-harp/pyproject.toml, merge, then
+#   git tag glider-harp-v0.1.0 && git push origin glider-harp-v0.1.0
+#
+# The tag is namespaced because this repository also releases GLIDER itself; a
+# bare `v0.1.0` would be ambiguous about which artifact it refers to.
+
+on:
+  push:
+    tags:
+      - "glider-harp-v*"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish"
+        required: true
+        default: testpypi
+        type: choice
+        options: [testpypi, pypi]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: plugins/glider-harp
+
+jobs:
+  build:
+    name: Build and check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build twine
+
+      - name: Refuse a tag that disagrees with the version
+        # A tag naming one version while pyproject declares another publishes
+        # the wrong thing under the right name, and PyPI never lets a version
+        # be re-uploaded -- so this has to fail before the build, not after.
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          declared=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          tagged="${GITHUB_REF_NAME#glider-harp-v}"
+          echo "declared=$declared tagged=$tagged"
+          if [ "$declared" != "$tagged" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match pyproject version $declared"
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Check metadata renders
+        run: twine check dist/*
+
+      - name: Verify the wheel is not missing its data files
+        # The profile JSON and the licence are package *data*: both are present
+        # in a source checkout whether or not anything declares them, so their
+        # absence only shows up once installed. That is exactly the failure
+        # test_packaging.py exists to prevent, repeated here because a release
+        # is the last place to notice it.
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          whl = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(whl).namelist()
+          missing = [
+              what
+              for what, hit in (
+                  ("profile JSON", any(n.endswith("profiles/licketysplit.json") for n in names)),
+                  ("LICENSE", any("LICENSE" in n for n in names)),
+              )
+              if not hit
+          ]
+          if missing:
+              sys.exit("wheel is missing: " + ", ".join(missing))
+          print("wheel contains its data files")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: plugins/glider-harp/dist/
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'pypi' }}
+    permissions:
+      id-token: write # the OIDC token; this is what replaces an API token
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
+
+      - name: Publish to PyPI
+        if: github.event_name != 'workflow_dispatch' || inputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
