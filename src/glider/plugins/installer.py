@@ -1,4 +1,4 @@
-"""Install a catalogue entry with pip.
+"""Install a catalogue entry with pip, or with uv when pip is absent.
 
 pip runs as a subprocess of *this* interpreter rather than being imported: pip's
 API is explicitly not public, and installing into a different environment than
@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import importlib.util
 import logging
+import shutil
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -24,6 +26,61 @@ logger = logging.getLogger(__name__)
 #: fields. ``TypeError`` is in here because the index is JSON from a web server:
 #: ``glider_requires`` may arrive as a list or a number, not just as bad text.
 _UNREADABLE = (InvalidSpecifier, InvalidVersion, TypeError)
+
+
+class NoInstallerError(RuntimeError):
+    """Neither pip nor uv is available to install with."""
+
+
+def _pip_is_importable() -> bool:
+    """Can the interpreter we install into actually run ``-m pip``?
+
+    Checked in-process rather than by shelling out, which is exact here: we
+    always install into ``sys.executable``, so pip being importable *now* is the
+    same question as ``sys.executable -m pip`` working.
+    """
+    return importlib.util.find_spec("pip") is not None
+
+
+def _find_uv() -> str | None:
+    return shutil.which("uv")
+
+
+def installer_command(
+    package: str,
+    *,
+    pip_available: Callable[[], bool] = _pip_is_importable,
+    uv_path: Callable[[], str | None] = _find_uv,
+) -> list[str]:
+    """Build the command that installs ``package`` into this interpreter.
+
+    pip is not a given. GLIDER's documented setup is ``uv venv`` + ``uv sync``
+    (CLAUDE.md), and ``uv venv`` does not install pip -- so on the *primary*
+    supported environment ``sys.executable -m pip`` fails outright with "No
+    module named pip". uv is the fallback, and on such an environment it is
+    almost certainly present, since it is what built the venv.
+
+    pip wins when both exist: it is the interpreter's own installer and needs no
+    assumption about which environment uv would otherwise choose.
+
+    Raises:
+        NoInstallerError: if neither is available. The caller shows this on the
+            plugin's row; it is a condition to report, not to crash on.
+    """
+    if pip_available():
+        return [sys.executable, "-m", "pip", "install", package]
+
+    uv = uv_path()
+    if uv:
+        # --python is not optional. Without it uv picks its own target, and the
+        # plugin lands in an environment GLIDER never imports from -- an install
+        # that reports success and changes nothing.
+        return [uv, "pip", "install", "--python", sys.executable, package]
+
+    raise NoInstallerError(
+        "Neither pip nor uv is available in this environment, so plugins cannot "
+        "be installed. Install pip into GLIDER's environment, or install uv."
+    )
 
 
 @dataclass(frozen=True)
@@ -132,6 +189,7 @@ async def install(
     glider_version: str,
     runner=None,
     on_output: Callable[[str], None] | None = None,
+    command: Callable[[str], list[str]] | None = None,
 ) -> InstallResult:
     """Install one catalogue entry, refusing before pip runs if it cannot fit."""
     run = runner or _default_runner
@@ -153,11 +211,20 @@ async def install(
             message="This catalogue entry names no package, so there is nothing to install.",
         )
 
-    args = [sys.executable, "-m", "pip", "install", package]
+    build_command = command or installer_command
+    try:
+        args = build_command(package)
+    except NoInstallerError as exc:
+        logger.error("No installer available: %s", exc)
+        return InstallResult(ok=False, message=str(exc))
+
     returncode, output = await run(args, on_output)
 
     if returncode != 0:
-        return InstallResult(ok=False, message=f"pip exited with code {returncode}.", output=output)
+        tool = "uv" if args and args[0] != sys.executable else "pip"
+        return InstallResult(
+            ok=False, message=f"{tool} exited with code {returncode}.", output=output
+        )
 
     # A freshly installed plugin has to be importable without a restart.
     importlib.invalidate_caches()

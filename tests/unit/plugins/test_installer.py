@@ -17,9 +17,11 @@ import pytest
 
 from glider.plugins.installer import (
     InstallResult,
+    NoInstallerError,
     _default_runner,
     incompatibility_message,
     install,
+    installer_command,
     is_compatible,
 )
 
@@ -51,9 +53,17 @@ async def test_a_compatible_plugin_installs():
     assert "Successfully installed" in result.output
 
 
-async def test_the_pip_command_targets_this_interpreter():
+async def test_the_default_command_targets_this_interpreter():
     """Installing with the wrong python puts the plugin somewhere GLIDER will
-    never import from -- and it would look like it worked."""
+    never import from -- and it would look like it worked.
+
+    This used to assert the literal pip argv, which encoded the assumption that
+    pip exists. On GLIDER's documented setup (``uv venv``) it does not, and the
+    hard-coded shape was the bug. The invariant is not "pip is used"; it is
+    "whatever installer is used, it installs into *this* interpreter" -- so the
+    assertion is now against ``installer_command``'s real answer for this
+    environment, which the shape tests above pin for both branches.
+    """
     seen = {}
 
     async def run(args, on_output=None):
@@ -62,7 +72,8 @@ async def test_the_pip_command_targets_this_interpreter():
 
     await install(ENTRY, glider_version="1.0.0", runner=run)
 
-    assert seen["args"][:4] == [sys.executable, "-m", "pip", "install"]
+    assert seen["args"] == installer_command("glider-harp")
+    assert sys.executable in seen["args"]
     assert seen["args"][-1] == "glider-harp"
 
 
@@ -289,3 +300,79 @@ async def test_the_runner_survives_undecodable_output():
     assert returncode == 0
     assert "Collecting" in output
     assert "harp" in output
+
+
+# --- choosing an installer -------------------------------------------------
+#
+# GLIDER's documented setup is `uv venv` + `uv sync` (CLAUDE.md), and `uv venv`
+# does not install pip. So `sys.executable -m pip` -- the obvious command --
+# fails with "No module named pip" on the *primary* supported environment. Every
+# other test in this file injects a fake runner, which is exactly why this
+# survived: the fake stood in for the one thing that was broken.
+
+
+def test_pip_is_used_when_it_is_importable():
+    cmd = installer_command("glider-harp", pip_available=lambda: True, uv_path=lambda: None)
+
+    assert cmd == [sys.executable, "-m", "pip", "install", "glider-harp"]
+
+
+def test_uv_is_used_when_pip_is_absent():
+    cmd = installer_command(
+        "glider-harp", pip_available=lambda: False, uv_path=lambda: "/opt/bin/uv"
+    )
+
+    assert cmd == [
+        "/opt/bin/uv",
+        "pip",
+        "install",
+        "--python",
+        sys.executable,
+        "glider-harp",
+    ]
+
+
+def test_uv_installs_into_this_interpreter_not_uv_s_default():
+    """Without --python, uv picks its own target and the plugin lands somewhere
+    GLIDER will never import from -- which would look like a successful install."""
+    cmd = installer_command("x", pip_available=lambda: False, uv_path=lambda: "uv")
+
+    assert "--python" in cmd
+    assert cmd[cmd.index("--python") + 1] == sys.executable
+
+
+def test_pip_wins_when_both_are_available():
+    cmd = installer_command("x", pip_available=lambda: True, uv_path=lambda: "uv")
+
+    assert cmd[:3] == [sys.executable, "-m", "pip"]
+
+
+def test_neither_available_raises_with_a_message_naming_both():
+    with pytest.raises(NoInstallerError) as excinfo:
+        installer_command("x", pip_available=lambda: False, uv_path=lambda: None)
+
+    message = str(excinfo.value)
+    assert "pip" in message and "uv" in message
+
+
+async def test_install_reports_the_missing_installer_instead_of_crashing():
+    """The window must show this on the row, not raise out of the click."""
+    result = await install(
+        ENTRY,
+        glider_version="1.0.0",
+        runner=_runner(0, ""),
+        command=lambda pkg: (_ for _ in ()).throw(NoInstallerError("no pip, no uv")),
+    )
+
+    assert result.ok is False
+    assert "no pip, no uv" in result.message
+
+
+async def test_the_real_detectors_agree_with_this_interpreter():
+    """Guard against the detector drifting from reality: whatever it reports for
+    pip must match whether `import pip` actually works here."""
+    import importlib.util
+
+    from glider.plugins.installer import _pip_is_importable
+
+    assert _pip_is_importable() is (importlib.util.find_spec("pip") is not None)
