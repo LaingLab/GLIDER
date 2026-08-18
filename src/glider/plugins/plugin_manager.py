@@ -15,6 +15,7 @@ Plugins are discovered from:
 import asyncio
 import importlib
 import importlib.util
+import inspect
 import json
 import logging
 import re
@@ -71,6 +72,61 @@ class PluginInfo:
             enabled=data.get("enabled", True),
             path=data.get("path"),
         )
+
+
+def _registry_for(kind: str) -> dict[str, type] | None:
+    """Return the mutable registry dict a plugin component of ``kind`` belongs in.
+
+    Returned by reference on purpose: the caller needs to *read* the current
+    occupant to decide whether a write is a no-op, a conflict, or new, and the
+    three registries expose no such query in common.
+    """
+    if kind == "driver":
+        from glider.core.hardware_manager import HardwareManager
+
+        return HardwareManager._driver_registry
+    if kind == "device":
+        from glider.hal.base_device import DEVICE_REGISTRY
+
+        return DEVICE_REGISTRY
+    if kind == "node":
+        from glider.core.flow_engine import FlowEngine
+
+        return FlowEngine._node_registry
+    return None
+
+
+def _register_component(kind: str, name: str, component: type, plugin: str) -> None:
+    """Register one component, tolerating the same thing arriving twice.
+
+    Duplicates are normal rather than exceptional: a package may declare both a
+    ``module:Class`` entry point and a ``BOARD_DRIVERS`` table naming the same
+    class, and both paths now register. Same class under the same name is a
+    no-op. A *different* class under the same name is a real collision between
+    two plugins, so it is logged and the first registration is kept -- silently
+    overwriting would mean load order decides which hardware driver the lab gets.
+    """
+    registry = _registry_for(kind)
+    if registry is None:
+        logger.warning("Plugin %s: unknown component kind %r for %r", plugin, kind, name)
+        return
+
+    existing = registry.get(name)
+    if existing is component:
+        logger.debug("Plugin %s: %s %r already registered", plugin, kind, name)
+        return
+    if existing is not None:
+        logger.warning(
+            "Plugin %s: %s %r is already registered to %s; keeping the first",
+            plugin,
+            kind,
+            name,
+            getattr(existing, "__name__", existing),
+        )
+        return
+
+    registry[name] = component
+    logger.debug("Plugin %s: registered %s %r", plugin, kind, name)
 
 
 class PluginManager:
@@ -336,13 +392,30 @@ class PluginManager:
 
                 info.module = module
 
-                # Call setup function if it exists
+                # What follows the colon may be a setup function *or* a
+                # component class. Both shapes appear in the wild and the
+                # syntax does not distinguish them, so branch on the object.
                 if hasattr(module, attr_name):
-                    setup_func = getattr(module, attr_name)
-                    if asyncio.iscoroutinefunction(setup_func):
-                        await setup_func()
+                    attr = getattr(module, attr_name)
+                    if inspect.isclass(attr):
+                        _register_component(info.plugin_type, info.name, attr, info.name)
+                    elif callable(attr):
+                        if asyncio.iscoroutinefunction(attr):
+                            await attr()
+                        else:
+                            attr()
                     else:
-                        setup_func()
+                        raise TypeError(
+                            f"entry point {info.entry_point!r} names {attr!r}, "
+                            "which is neither a class nor a callable"
+                        )
+                elif ":" in info.entry_point:
+                    # An explicit attribute that does not exist is an error. A
+                    # bare module entry point is not: `setup` is optional.
+                    raise AttributeError(
+                        f"{module_name} has no attribute {attr_name!r} "
+                        f"(from entry point {info.entry_point!r})"
+                    )
 
                 # Register plugin components
                 await self._register_plugin_components(info, module)
@@ -394,30 +467,17 @@ class PluginManager:
             return False
 
     async def _register_plugin_components(self, info: PluginInfo, module: Any) -> None:
-        """Register components provided by a plugin."""
-        # Register board drivers
-        if hasattr(module, "BOARD_DRIVERS"):
-            from glider.core.hardware_manager import HardwareManager
-
-            for driver_name, driver_class in module.BOARD_DRIVERS.items():
-                HardwareManager.register_driver(driver_name, driver_class)
-                logger.debug(f"Registered driver from plugin {info.name}: {driver_name}")
-
-        # Register device types
-        if hasattr(module, "DEVICE_TYPES"):
-            from glider.hal.base_device import DEVICE_REGISTRY
-
-            for device_name, device_class in module.DEVICE_TYPES.items():
-                DEVICE_REGISTRY[device_name] = device_class
-                logger.debug(f"Registered device from plugin {info.name}: {device_name}")
-
-        # Register node types
-        if hasattr(module, "NODE_TYPES"):
-            from glider.core.flow_engine import FlowEngine
-
-            for node_name, node_class in module.NODE_TYPES.items():
-                FlowEngine.register_node(node_name, node_class)
-                logger.debug(f"Registered node from plugin {info.name}: {node_name}")
+        """Register components a plugin exposes as module-level tables."""
+        for attr_name, kind in (
+            ("BOARD_DRIVERS", "driver"),
+            ("DEVICE_TYPES", "device"),
+            ("NODE_TYPES", "node"),
+        ):
+            table = getattr(module, attr_name, None)
+            if not table:
+                continue
+            for name, component in table.items():
+                _register_component(kind, name, component, info.name)
 
     async def unload_plugin(self, name: str) -> bool:
         """

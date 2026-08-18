@@ -200,8 +200,9 @@ async def test_plugin_manager_registers_the_board_and_device_from_the_package():
     Not a stand-in for ``PluginManager`` -- the real class, the real
     ``_register_plugin_components``, resolving the tables through the module
     ``__getattr__``. This is the module-valued entry point shape
-    (``glider_harp``, no ``:Class``); the ``module:Class`` shape registers
-    nothing, which is why the pyproject declares both.
+    (``glider_harp``, no ``:Class``). The ``module:Class`` shape now registers
+    the named class too, under the entry point's own name; the pyproject
+    declares both, and registering the same class twice is a no-op.
     """
     hardware_manager = pytest.importorskip("glider.core.hardware_manager")
     from glider.hal.base_device import DEVICE_REGISTRY
