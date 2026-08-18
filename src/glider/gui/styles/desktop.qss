@@ -852,7 +852,8 @@ QFrame#PluginCard[state="incompatible"] {
     border-color: rgba(251, 191, 36, 0.30);         /* STATE_WARN */
 }
 
-QFrame#PluginCard[state="failed"] {
+QFrame#PluginCard[state="failed"],
+QFrame#PluginCard[state="broken"] {
     border-color: rgba(248, 113, 113, 0.35);        /* STATE_ERR */
 }
 
@@ -930,7 +931,11 @@ QLabel#pluginStatePill[state="incompatible"] {
     color: #fbbf24;                                 /* STATE_WARN */
 }
 
-QLabel#pluginStatePill[state="failed"] {
+/* An install that failed and a package that installed but will not import are
+ * the same colour on purpose: both need a human, and the pill text and the
+ * message underneath say which is which. */
+QLabel#pluginStatePill[state="failed"],
+QLabel#pluginStatePill[state="broken"] {
     background-color: rgba(248, 113, 113, 0.13);    /* STATE_ERR @ 13% */
     border-color: rgba(248, 113, 113, 0.30);
     color: #f87171;                                 /* STATE_ERR */
@@ -1021,7 +1026,8 @@ QLabel#pluginCardMessage[state="incompatible"] {
     color: #fbbf24;                                 /* STATE_WARN */
 }
 
-QLabel#pluginCardMessage[state="failed"] {
+QLabel#pluginCardMessage[state="failed"],
+QLabel#pluginCardMessage[state="broken"] {
     color: #f87171;                                 /* STATE_ERR */
 }
 

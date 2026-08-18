@@ -46,7 +46,13 @@ from glider.gui.widgets.tool_ui import data_font
 
 __all__ = ["PluginCard"]
 
-#: The six states from the spec's error table, and the pill text for each.
+#: The states from the spec's table, and the pill text for each.
+#:
+#: ``broken`` is the seventh, added because the other six could not tell the
+#: truth about a package that pip installed and Python then refused to import.
+#: "Install failed" is wrong -- the install worked -- and "Enabled" is worse.
+#: It is a *separate* state rather than a flavour of ``failed`` because the
+#: package is on disk, so the Installed filter has to keep showing it.
 PILL_TEXT: dict[str, str] = {
     "enabled": "Enabled",
     "disabled": "Disabled",
@@ -54,6 +60,7 @@ PILL_TEXT: dict[str, str] = {
     "installing": "Installing",
     "incompatible": "Not compatible",
     "failed": "Install failed",
+    "broken": "Not loaded",
 }
 
 #: Button labels per state, in the order they appear on the row. The order is
@@ -65,6 +72,9 @@ STATE_ACTIONS: dict[str, tuple[str, ...]] = {
     "installing": ("Cancel",),
     "incompatible": ("Install",),
     "failed": ("Retry",),
+    # Reload, not Retry: the package is already there, so the thing worth
+    # repeating is the import, not the pip run.
+    "broken": ("Reload",),
 }
 
 #: Which signal a given label fires. ``Cancel`` fires nothing: an in-flight pip
@@ -84,6 +94,20 @@ _SIGNAL_FOR_LABEL: dict[str, str] = {
 _DISABLED_IN_STATE: dict[str, frozenset[str]] = {
     "incompatible": frozenset({"Install"}),
     "installing": frozenset({"Cancel"}),
+}
+
+#: Tooltips for controls that do less than their label implies. Disable is the
+#: only one so far, and the gap is wide enough to be worth a sentence: it marks
+#: the plugin so the next load skips it, and stops there. It does not unregister
+#: the drivers, devices or nodes the plugin already put in the registries, and
+#: it is not written down anywhere, so a restart brings the plugin back.
+_TOOLTIPS: dict[str, str] = {
+    "Disable": (
+        "Skips this plugin the next time plugins are loaded.\n"
+        "Types it has already registered stay usable for the rest of this "
+        "session, and the setting is not saved — a restart re-enables it.\n"
+        "To remove a plugin for good, uninstall the package and restart."
+    ),
 }
 
 
@@ -276,6 +300,9 @@ class PluginCard(QFrame):
             button = QPushButton(label, self)
             if label in ("Install", "Retry"):
                 button.setProperty("role", "primary")
+            tooltip = _TOOLTIPS.get(label)
+            if tooltip:
+                button.setToolTip(tooltip)
             if label in disabled:
                 button.setEnabled(False)
             else:
@@ -295,6 +322,19 @@ class PluginCard(QFrame):
         _restyle(self._message)
         self._message.setText(message)
         self._message.setVisible(bool(message))
+
+    def set_version(self, version: str) -> None:
+        """Replace the version shown in the identity line.
+
+        The catalogue only *advertises* a version; pip decides which one lands.
+        Without this the row went on quoting the catalogue after an install --
+        and the version is the one thing on the row a user cannot check against
+        anything else.
+        """
+        text = str(version or "")
+        self._entry["version"] = text
+        self._version_label.setText(text)
+        self._version_label.setVisible(bool(text))
 
     def set_output(self, output: str) -> None:
         """Replace the pip transcript. Hidden while empty."""
