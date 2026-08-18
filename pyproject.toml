@@ -147,6 +147,10 @@ glider = [
     # combos and checkboxes with no indicator at all.
     "gui/styles/icons/*.svg",
     "assets/*.png",
+    # The curated plugin catalogue PluginRegistry falls back to when the
+    # machine is offline; without this line it exists in a source checkout and
+    # is missing from an installed wheel.
+    "plugins/index.json",
 ]
 
 [tool.black]
