@@ -117,15 +117,37 @@ Install button.
   not interruptible partway through, and a button that pretended otherwise would
   be worse than one that says so.
 
-!!! note "There is no uninstall — only disable"
-    Nothing in this window removes a package. **Disable** switches a plugin off
-    so GLIDER stops loading it, which is what you want in almost every case:
-    the device types it registered disappear, but any experiment file that
-    references them is still readable when you turn it back on.
+!!! warning "What Disable actually does — and does not do"
+    **Disable marks the plugin so it is skipped the next time plugins are
+    loaded. That is the whole of it.** It is worth being precise about the three
+    things it does *not* do, because each one is easy to assume:
 
-    To remove the package itself, uninstall it the way you installed it, from
-    the same environment GLIDER runs in — `uv pip uninstall <package>` (or
-    `pip uninstall <package>`) — and restart.
+    - **It does not unload anything.** Drivers, device types and nodes the
+      plugin already registered stay in GLIDER's registries and stay usable for
+      the rest of the session. A disabled plugin's device types do not disappear
+      from Add Device.
+    - **It does not stop code that is already running.** A plugin holding a
+      serial port or a background task keeps holding it.
+    - **It is not saved.** Nothing writes the setting to disk, so the next time
+      you start GLIDER the plugin is enabled again.
+
+    So Disable is useful for one thing: stopping a plugin from being loaded
+    again in this session, typically before a **Reload**. If you need a plugin
+    genuinely gone, uninstall the package from the same environment GLIDER runs
+    in — `uv pip uninstall <package>` (or `pip uninstall <package>`) — and
+    restart. Nothing in this window removes a package.
+
+### When a plugin installs but does not load
+
+pip succeeding and the plugin working are two different things. A package can
+install cleanly and then raise on import — a missing system library, a
+dependency that resolved to the wrong version, a typo in an entry point.
+
+When that happens the row says **Not loaded** rather than Enabled, and carries
+the import error underneath it. That message is the diagnosis: read it before
+retrying, because a second pip run will not change it. **Reload** retries the
+import in place, which is worth doing once after fixing whatever the message
+names; anything it cannot fix needs a restart.
 
 The window is deliberately **non-modal**: an install can take minutes, and it
 must not freeze a rig that is mid-experiment. You can leave it open and keep

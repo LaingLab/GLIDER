@@ -31,7 +31,21 @@ Goals:
 
 - **Uninstall.** Removing a package whose modules are already imported cannot
   fully take effect until restart, and half-removing a plugin that owns live
-  hardware drivers is worse than leaving it disabled. Disable is offered instead.
+  hardware drivers is worse than doing nothing at all. So the window does not
+  offer it, and the documented answer is `pip uninstall` plus a restart.
+
+    This is *not* justified by "Disable is offered instead". Disable sets
+    `PluginInfo.enabled = False` and stops: it does not unload the module, it
+    does not unregister the drivers, devices or nodes already in the registries,
+    and it is not persisted, so a restart undoes it. It suppresses the *next*
+    load and nothing more. That is a real if narrow use, but it is not a
+    substitute for removal, and the UI and docs must not imply that it is.
+
+- **Real disable.** Unloading a plugin's components and persisting the choice is
+  deliberately deferred, not overlooked. Doing it properly means unregistering
+  from three registries whose entries may already be instantiated and driving
+  hardware, and deciding what happens to a running experiment that references
+  them. Until that is designed, the honest position is the one above.
 - **Automatic update checks.** No background polling; the index is fetched when
   the window opens.
 - **Signing, sandboxing, or permission prompts.** See §9.
@@ -191,8 +205,16 @@ so "needs attention" reads at a glance without competing with the primary action
 | Disabled | Enable |
 | Available | Install |
 | Installing | Cancel, with streamed pip output |
-| Not compatible | Install (disabled), with both versions named |
+| Not compatible | Install (disabled), with both versions named, or the reason the entry is unreadable |
 | Install failed | Retry, with pip output |
+| Not loaded | Reload, with the import error |
+
+"Not loaded" is a seventh state added after review. It covers a package that pip
+installed and Python then refused to import — `enabled=True`, `loaded=False`,
+`error` set. None of the other six can say that: "Install failed" is untrue (the
+install worked) and "Enabled" is worse. It counts as installed for the filters,
+because the package *is* on disk and hiding it from the Installed list hides the
+one row that needs attention.
 
 The footer permanently shows which index source won, its `updated` date, and the
 restart caveat. Per §9 that footer *is* the security model, so it is furniture,
@@ -212,7 +234,9 @@ Harp spec and unchanged here.
 |---|---|
 | Index fetch fails or times out | Silent fallback to cache, then bundled; winning source named in footer |
 | Index from network is malformed | Treated as a failed fetch; falls through |
-| Bundled index is malformed | Raises — this is a packaging bug |
+| An index entry is not an object | That entry is dropped; the rest of the catalogue still lists |
+| An entry's `glider_requires` does not parse | The row renders as not installable and says the entry is unreadable — never raised, the index is untrusted input |
+| Bundled index is malformed | Raises — this is a packaging bug — and `open_for` catches it and shows the user a message box. A raise nobody catches is a menu item that does nothing. |
 | Unknown plugin name | Error naming the resolved index source |
 | `glider_requires` mismatch | Install refused, both versions named on the row |
 | pip fails | Exit code and last output lines inline on the row; state unchanged |

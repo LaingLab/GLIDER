@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Plugin catalogue and installer** — **Tools → Plugins…** opens a non-modal window listing a curated catalogue of published plugins, with search and All / Installed / Available filters. Install runs `pip` as a subprocess of GLIDER's own interpreter and streams its output onto the row; failures render inline on the row that caused them, with pip's message verbatim, never in a modal. A newly installed plugin loads without a restart; upgrading one already in use does not, and the window says so. Rows offer Disable / Enable / Reload — there is no uninstall.
+- A plugin that installs but then fails to import reads as **Not loaded**, with the import error on its own row, rather than as a green "Enabled". pip succeeding and the plugin working are different things, and the load error was previously recorded and then discarded.
+- A row whose catalogue entry has an unreadable `glider_requires` says so instead of taking the window down. The index arrives over the network and nothing validates its fields, so `"1.0"` where `">=1.0"` was meant is data, not a crash.
+- A failure that stops the Plugins window opening at all now reaches the user as a message box, instead of a garbage-collection-time warning behind a menu item that appeared to do nothing. Opening the window twice reuses the one that is already up.
 - Plugin catalogue resolution with three sources in order — the live index, the last cached copy, then the copy bundled in the release. The window's footer permanently names which one won and how old it is: the catalogue is curated, installing runs arbitrary code with GLIDER's privileges, and that footer is where the trust question is answered.
 - Compatibility gate: a plugin declaring a `glider_requires` specifier the running version does not satisfy is shown greyed out with both versions named, rather than offering an Install that pip would then decline.
 - Documentation: "Installing plugins from the catalogue" in the Custom Devices & Plugins guide.
@@ -17,7 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Entry points of the `module:Class` shape now register the class, instead of calling it and discarding the result.
-- Desktop theme: styling for the Plugins window — card rows, the six state pills, filter chips, the pip transcript and the indeterminate progress bar — added to `desktop.qss`. The plugin card and dialog set no colours from Python at all, so the whole surface stays restylable from the stylesheet.
+- Desktop theme: styling for the Plugins window — card rows, the seven state pills, filter chips, the pip transcript and the indeterminate progress bar — added to `desktop.qss`. The plugin card and dialog set no colours from Python at all, so the whole surface stays restylable from the stylesheet.
+- The Plugins window shows the version pip actually installed, not the one the catalogue advertised, and no longer hides a row at the moment its install completes when a filter is active.
+- **Reload** says when a package registers no entry points, rather than reporting "Reloaded." for having reloaded nothing.
+- Documentation now describes what **Disable** really does: it skips the plugin at the *next* load, does not unregister anything already registered, and is not saved across restarts. The previous text claimed the opposite. Disable's behaviour is unchanged; only the claims about it are.
 
 ## [1.0.0] — 2026-08-07
 
