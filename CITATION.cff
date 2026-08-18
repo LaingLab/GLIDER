@@ -15,7 +15,6 @@ authors:
     address: University of Mississippi
 version: 1.0.0
 date-released: '2026-08-07'
-doi: 10.5281/zenodo.21840294
 license: MIT
 repository-code: 'https://github.com/LaingLab/glider'
 url: 'https://github.com/LaingLab/glider'
@@ -35,8 +34,7 @@ keywords:
   - open-source scientific software
 identifiers:
   - type: doi
-    value: 10.5281/zenodo.21840294
-    description: Analysis code and results for this release
-  - type: doi
-    value: 10.5281/zenodo.21840428
-    description: Source video recordings
+    value: 10.17632/vd2h64x7wg
+    description: >-
+      Mendeley Data deposit holding the data, analysis code and results.
+      Unversioned DOI, so it resolves to the most recent version.
