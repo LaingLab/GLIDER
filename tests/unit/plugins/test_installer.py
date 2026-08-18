@@ -361,7 +361,7 @@ async def test_install_reports_the_missing_installer_instead_of_crashing():
         ENTRY,
         glider_version="1.0.0",
         runner=_runner(0, ""),
-        command=lambda pkg: (_ for _ in ()).throw(NoInstallerError("no pip, no uv")),
+        command=lambda pkg, reqs: (_ for _ in ()).throw(NoInstallerError("no pip, no uv")),
     )
 
     assert result.ok is False
@@ -376,3 +376,88 @@ async def test_the_real_detectors_agree_with_this_interpreter():
     from glider.plugins.installer import _pip_is_importable
 
     assert _pip_is_importable() is (importlib.util.find_spec("pip") is not None)
+
+
+# --- catalogue-declared direct requirements ---------------------------------
+#
+# glider-harp depends on harp-protocol>=0.5.0rc1, and 0.5.0 is pre-release-only
+# upstream. pip honours a pre-release marker wherever it appears (PEP 440); uv
+# honours it only on a DIRECT requirement, so as a transitive dependency the
+# resolve fails on every uv-built environment -- which is the documented GLIDER
+# setup. The catalogue entry names the requirement and the installer passes it
+# directly, which flips uv's policy for exactly that package and nothing else.
+
+
+def test_catalogue_requirements_are_passed_directly_to_pip():
+    cmd = installer_command(
+        "glider-harp",
+        requirements=("harp-protocol>=0.5.0rc1,<0.6",),
+        pip_available=lambda: True,
+        uv_path=lambda: None,
+    )
+
+    assert cmd == [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "glider-harp",
+        "harp-protocol>=0.5.0rc1,<0.6",
+    ]
+
+
+def test_catalogue_requirements_are_passed_directly_to_uv():
+    cmd = installer_command(
+        "glider-harp",
+        requirements=("harp-protocol>=0.5.0rc1,<0.6",),
+        pip_available=lambda: False,
+        uv_path=lambda: "uv",
+    )
+
+    assert cmd == [
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        sys.executable,
+        "glider-harp",
+        "harp-protocol>=0.5.0rc1,<0.6",
+    ]
+
+
+async def test_install_reads_requirements_from_the_entry():
+    seen = {}
+
+    async def run(args, on_output=None):
+        seen["args"] = args
+        return 0, ""
+
+    await install(
+        {**ENTRY, "requirements": ["harp-protocol>=0.5.0rc1,<0.6"]},
+        glider_version="1.0.0",
+        runner=run,
+    )
+
+    assert seen["args"][-2:] == ["glider-harp", "harp-protocol>=0.5.0rc1,<0.6"]
+
+
+async def test_an_entry_without_requirements_is_unchanged():
+    seen = {}
+
+    async def run(args, on_output=None):
+        seen["args"] = args
+        return 0, ""
+
+    await install(ENTRY, glider_version="1.0.0", runner=run)
+
+    assert seen["args"][-1] == "glider-harp"
+
+
+def test_the_bundled_harp_entry_declares_its_prerelease_requirement():
+    """Without this the Install button fails on every uv-built environment --
+    the resolve refuses the transitive pre-release. Pinned here so nobody
+    'tidies' the field away without knowing what it holds up."""
+    from glider.plugins.registry import PluginRegistry
+
+    entry = next(p for p in PluginRegistry.load_bundled().plugins if p["name"] == "glider-harp")
+    assert any(r.startswith("harp-protocol>=0.5.0rc1") for r in entry["requirements"])

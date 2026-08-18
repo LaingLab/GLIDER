@@ -13,7 +13,7 @@ import importlib.util
 import logging
 import shutil
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -48,6 +48,7 @@ def _find_uv() -> str | None:
 
 def installer_command(
     package: str,
+    requirements: Sequence[str] = (),
     *,
     pip_available: Callable[[], bool] = _pip_is_importable,
     uv_path: Callable[[], str | None] = _find_uv,
@@ -60,6 +61,13 @@ def installer_command(
     module named pip". uv is the fallback, and on such an environment it is
     almost certainly present, since it is what built the venv.
 
+    ``requirements`` are catalogue-declared direct requirements, appended to
+    the command. They exist for one reason: uv honours a pre-release marker
+    (``>=0.5.0rc1``) only on a *direct* requirement, so a plugin whose
+    dependency pins a pre-release resolves under pip and fails under uv unless
+    the catalogue names that pin directly. Harmless under pip, which honours
+    the marker wherever it appears (PEP 440).
+
     pip wins when both exist: it is the interpreter's own installer and needs no
     assumption about which environment uv would otherwise choose.
 
@@ -68,14 +76,14 @@ def installer_command(
             plugin's row; it is a condition to report, not to crash on.
     """
     if pip_available():
-        return [sys.executable, "-m", "pip", "install", package]
+        return [sys.executable, "-m", "pip", "install", package, *requirements]
 
     uv = uv_path()
     if uv:
         # --python is not optional. Without it uv picks its own target, and the
         # plugin lands in an environment GLIDER never imports from -- an install
         # that reports success and changes nothing.
-        return [uv, "pip", "install", "--python", sys.executable, package]
+        return [uv, "pip", "install", "--python", sys.executable, package, *requirements]
 
     raise NoInstallerError(
         "Neither pip nor uv is available in this environment, so plugins cannot "
@@ -189,7 +197,7 @@ async def install(
     glider_version: str,
     runner=None,
     on_output: Callable[[str], None] | None = None,
-    command: Callable[[str], list[str]] | None = None,
+    command: Callable[[str, tuple[str, ...]], list[str]] | None = None,
 ) -> InstallResult:
     """Install one catalogue entry, refusing before pip runs if it cannot fit."""
     run = runner or _default_runner
@@ -213,7 +221,7 @@ async def install(
 
     build_command = command or installer_command
     try:
-        args = build_command(package)
+        args = build_command(package, tuple(entry.get("requirements") or ()))
     except NoInstallerError as exc:
         logger.error("No installer available: %s", exc)
         return InstallResult(ok=False, message=str(exc))
