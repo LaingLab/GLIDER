@@ -3,11 +3,18 @@
 pip is driven as a subprocess rather than imported, so every test here fakes the
 subprocess. That is the point: the failures worth testing are pip's, and pip's
 failures are exit codes and text, not exceptions.
+
+The default runner is the exception: it is the only code here that really spawns
+a process, so faking it would leave every one of its failure modes untested, and
+each of those failures is silent. Those tests drive a short ``python -c`` program
+instead -- a real subprocess, but no pip and no network.
 """
+
+import sys
 
 import pytest
 
-from glider.plugins.installer import InstallResult, install
+from glider.plugins.installer import InstallResult, _default_runner, install
 
 ENTRY = {
     "name": "glider-harp",
@@ -47,8 +54,6 @@ async def test_the_pip_command_targets_this_interpreter():
         return 0, ""
 
     await install(ENTRY, glider_version="1.0.0", runner=run)
-
-    import sys
 
     assert seen["args"][:4] == [sys.executable, "-m", "pip", "install"]
     assert seen["args"][-1] == "glider-harp"
@@ -116,3 +121,68 @@ async def test_the_version_gate(spec, version, ok):
         {**ENTRY, "glider_requires": spec}, glider_version=version, runner=_runner(0, "")
     )
     assert result.ok is ok
+
+
+# ---------------------------------------------------------------------------
+# The default runner, against a real subprocess.
+#
+# Every test above fakes the runner, which leaves the one function that actually
+# spawns a process uncovered -- and its failure modes are all silent. A lost
+# stderr merge drops the error text that is usually the whole answer; a wrong
+# returncode reports a failed install as a success; a decode error on unusual
+# output crashes an install that in fact worked. These drive `python -c` rather
+# than pip: a real process, no network, no package index, exits immediately.
+# ---------------------------------------------------------------------------
+
+
+async def _run_program(source: str, on_output=None):
+    """Run a short Python program through the real runner."""
+    try:
+        return await _default_runner([sys.executable, "-c", source], on_output)
+    except NotImplementedError:  # pragma: no cover - loop without subprocess support
+        pytest.skip("this event loop does not support subprocesses")
+
+
+async def test_the_runner_streams_each_line_as_a_separate_call():
+    """Not just 'the joined output is right' -- an implementation that buffered
+    everything and flushed once at the end would satisfy that, and it is exactly
+    the bug that freezes the progress row until the install is already over."""
+    lines = []
+    returncode, output = await _run_program(
+        "for line in ('Collecting glider-harp', 'Downloading', 'Installing'):\n"
+        "    print(line, flush=True)\n",
+        lines.append,
+    )
+
+    assert lines == ["Collecting glider-harp", "Downloading", "Installing"]
+    assert returncode == 0
+    assert output == "Collecting glider-harp\nDownloading\nInstalling"
+
+
+async def test_the_runner_reports_a_nonzero_exit():
+    """`returncode or 0` must not launder a failure into a success."""
+    returncode, _ = await _run_program("import sys; sys.exit(3)")
+
+    assert returncode == 3
+
+
+async def test_the_runner_captures_stderr_too():
+    """pip writes its errors to stderr, so dropping the stderr=STDOUT merge would
+    leave a failed install with an empty explanation."""
+    _, output = await _run_program(
+        "import sys; sys.stderr.write('ERROR: no matching distribution\\n')"
+    )
+
+    assert "ERROR: no matching distribution" in output
+
+
+async def test_the_runner_survives_undecodable_output():
+    """A stray non-UTF-8 byte in a dependency's output must not raise and abort
+    an install that is otherwise working."""
+    returncode, output = await _run_program(
+        "import sys; sys.stdout.buffer.write(b'Collecting \\xff\\xfe harp\\n')"
+    )
+
+    assert returncode == 0
+    assert "Collecting" in output
+    assert "harp" in output
