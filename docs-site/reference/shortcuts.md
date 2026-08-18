@@ -36,7 +36,7 @@ convention: **++ctrl++ on Windows/Linux, ++cmd++ on macOS**.
 
 | Action | Shortcut |
 |---|---|
-| Switch desktop ↔ Runner mode | ++f11++ |
+| Switch Builder ↔ Dashboard (the 2×2 operator view; the menu item is labelled **Switch to Runner View**) | ++f11++ |
 | Help | ++f1++ |
 
 !!! tip "Discover the rest"

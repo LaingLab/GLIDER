@@ -9,7 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Plugin catalogue and installer** — **Tools → Plugins…** opens a non-modal window listing a curated catalogue of published plugins, with search and All / Installed / Available filters. Install runs `pip` as a subprocess of GLIDER's own interpreter and streams its output onto the row; failures render inline on the row that caused them, with pip's message verbatim, never in a modal. A newly installed plugin loads without a restart; upgrading one already in use does not, and the window says so. Rows offer Disable / Enable / Reload — there is no uninstall.
+- **Harp device support, as an installable plugin** — `glider-harp`, a separate plugin distribution living in `plugins/glider-harp`, adds a Harp transport board and a schema-driven Harp device: binary frame decoding with resync after line noise, a register cache, and a background reader draining the port. Harp stays a plugin; GLIDER keeps the master clock.
+- Core support the Harp work needed, usable by any driver: a device can declare **multiple state columns** and the `DataRecorder` expands them into CSV headers and per-row values; a device that degrades mid-recording writes a **warning row** into the CSV instead of failing silently; a pulled cable is survived and noted in the recording rather than ending it.
+- **PyPI release workflow for glider-harp** — `.github/workflows/release-glider-harp.yml` publishes the plugin to PyPI via Trusted Publishing (OIDC — no API token stored anywhere), driven by namespaced tags (`glider-harp-v*`) with a guard that refuses a tag disagreeing with the package version. `glider-harp` 0.1.0 is published on PyPI.
+- **Plugin catalogue and installer** — **Tools → Plugins…** opens a non-modal window listing a curated catalogue of published plugins, with search and All / Installed / Available filters. Install runs `pip` — or `uv pip install --python …` when the environment has no pip — as a subprocess targeting GLIDER's own interpreter, and streams its output onto the row; failures render inline on the row that caused them, with pip's message verbatim, never in a modal. A newly installed plugin loads without a restart; upgrading one already in use does not, and the window says so. Rows offer Disable / Enable / Reload — there is no uninstall.
 - A plugin that installs but then fails to import reads as **Not loaded**, with the import error on its own row, rather than as a green "Enabled". pip succeeding and the plugin working are different things, and the load error was previously recorded and then discarded.
 - A row whose catalogue entry has an unreadable `glider_requires` says so instead of taking the window down. The index arrives over the network and nothing validates its fields, so `"1.0"` where `">=1.0"` was meant is data, not a crash.
 - A failure that stops the Plugins window opening at all now reaches the user as a message box, instead of a garbage-collection-time warning behind a menu item that appeared to do nothing. Opening the window twice reuses the one that is already up.
@@ -24,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Plugins window shows the version pip actually installed, not the one the catalogue advertised, and no longer hides a row at the moment its install completes when a filter is active.
 - **Reload** says when a package registers no entry points, rather than reporting "Reloaded." for having reloaded nothing.
 - Documentation now describes what **Disable** really does: it skips the plugin at the *next* load, does not unregister anything already registered, and is not saved across restarts. The previous text claimed the opposite. Disable's behaviour is unchanged; only the claims about it are.
+
+### Fixed
+
+- The plugin installer now works on the documented setup. `uv venv` + `uv sync` creates an environment **without pip**, and the installer ran `sys.executable -m pip`, which failed immediately. It now uses pip when the interpreter has it and falls back to `uv pip install --python <GLIDER's interpreter>` otherwise — the `--python` is what keeps the plugin in GLIDER's environment. Neither being available is reported on the row, not raised.
+- A catalogue entry can carry **direct `requirements`** — PEP 508 strings appended to the install command. uv honours a pre-release marker only on a *direct* requirement, so this is what lets `glider-harp` (whose dependency pins `harp-protocol>=0.5.0rc1`, pre-release-only upstream) install through the catalogue in uv-built environments; under pip the field is a no-op.
 
 ## [1.0.0] — 2026-08-07
 
@@ -60,7 +68,7 @@ Initial public release. This is the version described in Bradham et al.
 - `CONTRIBUTING.md` covering dev setup, code style, hardware contribution, and `.glider` file-format change procedure.
 - `SECURITY.md` for responsible disclosure of safety-relevant bugs (e.g., Pi sudoers rule, hardware-safety regressions).
 - Comprehensive `README.md` covering what GLIDER does, supported hardware, install across all four platforms, CLI options, citation, troubleshooting, and known limitations.
-- `.github/workflows/ci.yml` — test + lint + type-check + PyInstaller smoke build on every push and PR, across Python 3.11/3.12/3.13 on Ubuntu/Windows/macOS.
+- `.github/workflows/ci.yml` — test + lint + type-check + PyInstaller smoke build on every push and PR, across Python 3.11/3.12/3.13 on Ubuntu/Windows/macOS. *(correction: at release the test matrix ran Python 3.11 only across the three OSes, the PyInstaller smoke build had been removed, and mypy is advisory — it runs but does not fail CI)*
 - Parametric test asserting every registered node class round-trips its `get_state()` through `set_state()` without loss (catches `property_names`-style silent state drops in CI).
 - Parametric test asserting every exported node class registers with the `FlowEngine` (catches the "node in the library but engine can't instantiate it" class of bug).
 - Round-trip test `tests/unit/serialization/test_serializer.py` covering save → load → save with at least one board, one device, one node, and one connection (catches the API-mismatch class of bug in the apply path).
@@ -78,9 +86,9 @@ Initial public release. This is the version described in Bradham et al.
 - `uv.lock` is now tracked (was gitignored). Reproducible installs for the application.
 - `__main__.spec` (the auto-generated PyInstaller stub at repo root) deleted. `packaging/windows/glider.spec` is the canonical spec; new contributors building locally are no longer routed to the broken stub.
 - Removed install one-liner curl-pipe-bash references from the README; the `install.sh` / `install.ps1` scripts they pointed at do not exist and the pattern is a supply-chain risk.
-- **Runner UI replaced by a customizable Dashboard.** The four-tab Runner view was replaced by a customizable 2×2 quadrant Dashboard (`gui/dashboard/`) shared by both the desktop and Pi surfaces, with bidirectional Builder↔Dashboard switching. Each quadrant hosts a user-pickable panel (camera, hardware, run control, experiment info, etc.).
+- **Runner UI replaced by a customizable Dashboard.** The four-tab Runner view was replaced by a customizable 2×2 quadrant Dashboard (`gui/dashboard/`) shared by both the desktop and Pi surfaces, with bidirectional Builder↔Dashboard switching. Each quadrant hosts a user-pickable panel (camera, hardware, run control, experiment info, etc.). *(correction: before release the Pi surface was returned to the four-tab RunnerShell, which fits the 480px touchscreen; the quadrant Dashboard is the desktop-only operator view)*
 - ~2,500 LOC of dead `gui/` code purged (`runner/dashboard.py`, `runner/widget_factory.py`, `widgets/touch_widgets.py`, `widgets/device_card.py`, `controllers/hardware_controller.py`, `controllers/device_control_controller.py`, `panels/experiment_panel.py`). Active runner UI is the quadrant Dashboard in `gui/dashboard/`; active hardware UI is `panels/hardware_panel.py`; etc.
-- CI now runs unit + integration tests with coverage, type-check (mypy), lint (ruff), format check (black), and a PyInstaller smoke build that asserts `dist/glider/glider --version` succeeds.
+- CI now runs unit + integration tests with coverage, type-check (mypy), lint (ruff), format check (black), and a PyInstaller smoke build that asserts `dist/glider/glider --version` succeeds. *(correction: the PyInstaller smoke build was removed before release, and mypy is advisory — it does not fail CI)*
 
 ### Fixed
 

@@ -3,7 +3,7 @@
 The most common home for GLIDER's [Runner screen](runner.md) is a Raspberry Pi
 with a small touchscreen, bolted to the rig and left running. This page covers
 the two ways to get there: flashing the **prebuilt GLIDER Pi image** (the easy
-path), and understanding the **systemd service and in-app updater** that keep it
+path), and understanding the **systemd service and update script** that keep it
 running and up to date.
 
 ## The prebuilt Pi image (recommended)
@@ -28,7 +28,8 @@ included (the GUI needs it), and it's preconfigured with:
   once the graphical session is up.
 - **lightdm autologin** for the `glider` user, so the Pi boots straight to the
   kiosk with no login prompt.
-- The **in-app updater** and a tightly-scoped permission rule for it.
+- An **update helper script** (`/opt/glider/scripts/glider-update.sh`) and a
+  tightly-scoped permission rule for it.
 - A data directory at **`/home/glider/data/`** for your experiment output.
 
 The default **`pi`** user is left intact for recovery — if the kiosk ever breaks,
@@ -106,12 +107,18 @@ systemctl status glider.service
 
 ## Keeping GLIDER updated
 
-The image includes an **in-app updater** so you can move the kiosk to a newer
-GLIDER release without reflashing the card. It's exposed inside GLIDER as an
-**Update GLIDER** action in Settings.
+The image ships an **update helper script**,
+`/opt/glider/scripts/glider-update.sh`, so you can move the kiosk to a newer
+GLIDER release without reflashing the card. There is **no in-app update action
+yet** — the only updater inside GLIDER is the release check, which can open the
+GitHub Releases page in a browser. To update the kiosk, SSH in and run the
+script:
 
-When you run it, a small helper script (`/opt/glider/scripts/glider-update.sh`)
-does the work:
+```bash
+sudo /opt/glider/scripts/glider-update.sh
+```
+
+The script does the work:
 
 1. Fetches the latest tagged GLIDER release.
 2. Checks it out in `/opt/glider/repo`.
@@ -119,11 +126,11 @@ does the work:
    dependencies).
 4. Restarts `glider.service`, so the kiosk relaunches on the new version.
 
-The updater runs with a narrowly-scoped permission: the `glider` user is allowed
-to run **only that one script** without a password, and nothing else. Its log is
-written to `/var/log/glider-update.log`.
+The script runs with a narrowly-scoped permission: the `glider` user is allowed
+to run **only that one script** with `sudo` and no password, and nothing else.
+Its log is written to `/var/log/glider-update.log`.
 
-!!! warning "The updater only updates GLIDER"
+!!! warning "The update script only updates GLIDER"
     It refreshes GLIDER itself, not the operating system. It does **not** run
     `apt upgrade` or update the kernel. To pick up OS-level updates, reflash the
     SD card with a newer image.

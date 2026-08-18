@@ -31,6 +31,7 @@ Open **Hardware → Add Board...**. Pick a board type:
 | **telemetrix** | Arduino | Needs the Telemetrix4Arduino firmware flashed on the board. Choose the serial port (or let GLIDER auto-detect it). |
 | **pigpio** | Raspberry Pi | Uses the Pi's own GPIO. No serial port needed. |
 | **bluetooth** | Bluetooth LE | Connects to a BLE peripheral. No serial port — the address is set on the device. |
+| **serial** | Serial (UART) | A transport for serial-attached devices. The board has no pins and no board-level port — each serial device opens its own port. Works on every desktop OS via pyserial. |
 
 Give the board an ID (or accept the default), pick a serial port where it
 applies, and confirm. Once boards are added, connect them all with

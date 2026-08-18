@@ -241,20 +241,41 @@ SETTINGS_SCHEMA = [
     (`BOARD_DRIVERS`) and node types (`NODE_TYPES`), not just devices. Devices
     are the most common thing to add.
 
-!!! warning "`entry_point` names a function, not a class"
-    The attribute after the colon is **called** during load, and registration
-    happens separately, by reading the `DEVICE_TYPES` / `BOARD_DRIVERS` /
-    `NODE_TYPES` dictionaries off the module. So `my_plugin:setup` is correct and
-    `my_plugin:MyDeviceClass` is not — the latter constructs your class with no
-    arguments, discards it, finds no dictionaries, and registers nothing. The
-    plugin loads without raising, which is what makes this worth stating: the
-    only symptom is that your device never appears in **Add Device**.
+!!! warning "`entry_point` may name a setup function *or* a component class"
+    The attribute after the colon can be either shape, and the loader branches
+    on what it finds:
 
-    GLIDER's own Arduino, Raspberry Pi, Bluetooth, and serial drivers are *not*
-    registered this way. They are registered explicitly in
-    `HardwareManager`, and the `glider.driver` entry points declared in the
-    project's own `pyproject.toml` have the `module:Class` shape above and
-    register nothing.
+    - A **function** (like `my_plugin:setup`) is called during load — and
+      awaited, if it is async. Registration then happens separately, by
+      reading the `DEVICE_TYPES` / `BOARD_DRIVERS` / `NODE_TYPES`
+      dictionaries off the module.
+    - A **class** (like `my_plugin:MyDeviceClass`) is registered directly,
+      into the registry the plugin's type implies (`driver`, `device`, or
+      `node`) — under the **plugin's name**, not the class's. The module's
+      dictionaries are still read afterwards, and registering the same class
+      under the same name twice is a harmless no-op.
+
+    The traps that remain are loud rather than silent:
+
+    - A class whose plugin type maps to **no registry** fails the load, with
+      the error shown on the plugin's row. The way to hit this is a directory
+      plugin whose manifest omits `plugin_type` (it defaults to `generic`);
+      for installed packages the entry-point group (`glider.driver`,
+      `glider.device`, `glider.node`) supplies the type, so it cannot happen
+      there.
+    - Explicitly naming an attribute that does not exist (`my_plugin:setpu`)
+      fails the load, with the missing attribute named in the error. A bare
+      `my_plugin` entry point is different: `setup` is looked up but optional.
+    - Two plugins registering **different classes under the same name** is a
+      real collision: the first registration is kept and the second is logged
+      as a warning, so load order never silently decides which driver the lab
+      gets.
+
+    GLIDER's own Arduino, Raspberry Pi, Bluetooth, and serial drivers are
+    registered explicitly in `HardwareManager`. The `glider.driver` entry
+    points declared in the project's own `pyproject.toml` have the
+    `module:Class` shape and register those same four classes again — an
+    exact duplicate, and therefore a no-op.
 
 ### Advanced: custom wait behaviors
 

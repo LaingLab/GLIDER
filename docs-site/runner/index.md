@@ -22,7 +22,7 @@ command-line flag.
   Functions buttons, and how to run an experiment from the touchscreen.
 - **[Raspberry Pi Kiosk](pi-kiosk.md)** — the prebuilt Raspberry Pi SD-card
   image, the systemd service that auto-launches GLIDER in Runner mode on boot,
-  and the in-app updater.
+  and the update script that moves a kiosk to a newer release.
 
 ## How GLIDER chooses Runner mode
 
