@@ -113,14 +113,16 @@ pc = [
 glider = "glider.__main__:main"
 
 [project.entry-points."glider.driver"]
-# NOTE: these four do NOT register the built-in drivers, despite appearances.
-# PluginManager calls the attribute after the colon as a setup function and then
-# registers components by reading BOARD_DRIVERS/DEVICE_TYPES/NODE_TYPES off the
-# module; these point at classes and define no such dicts, so they register
-# nothing. The built-ins are registered explicitly in HardwareManager
-# (_register_builtin_drivers). Left in place because removing them is a
-# behaviour change to plugin discovery that wants its own review -- see the
-# plugin-marketplace work.
+# NOTE: these four DO register the classes they name. PluginManager binds the
+# class after the colon to the entry point's own name in
+# HardwareManager._driver_registry. That duplicates the explicit registration in
+# HardwareManager._register_builtin_drivers, which binds the same four names to
+# the same four classes -- and the duplication is harmless precisely because it
+# is exact: _register_component treats a same-name-same-class registration as a
+# no-op, so no warning fires and no load order can change the outcome. Keep them
+# in sync with _register_builtin_drivers; a name bound here to a *different*
+# class than the built-in would log a collision and the built-in would win.
+# Left in place because removing them is still a separate decision.
 arduino = "glider.hal.boards.telemetrix_board:TelemetrixBoard"
 raspberry_pi = "glider.hal.boards.pi_gpio_board:PiGPIOBoard"
 bluetooth = "glider.hal.boards.ble_board:BLEBoard"
@@ -147,6 +149,10 @@ glider = [
     # combos and checkboxes with no indicator at all.
     "gui/styles/icons/*.svg",
     "assets/*.png",
+    # The curated plugin catalogue PluginRegistry falls back to when the
+    # machine is offline; without this line it exists in a source checkout and
+    # is missing from an installed wheel.
+    "plugins/index.json",
 ]
 
 [tool.black]

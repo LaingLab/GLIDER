@@ -1,0 +1,376 @@
+"""One plugin, as a row in the Plugins window.
+
+The card owns a single plugin's identity, description, state pill, actions and
+inline failure text. It holds **no** registry, installer or ``PluginManager``
+reference -- the dialog wires its signals and drives its state. That is
+deliberate: it keeps the card constructible from a plain dict, so every state
+in the table below can be pinned by a test without a network or a subprocess.
+
+Two things here carry meaning rather than decoration:
+
+* **The package name and version are monospace**, and visually distinct from
+  the human-readable display name. They are what you type into ``pip`` and
+  what a bug report needs; the display name is not.
+* **Failures render on the row, never in a modal**, and pip's own output is
+  shown verbatim. pip's message is usually the actual answer ("no matching
+  distribution for zmq>=26"), and summarising it destroys the useful part.
+
+**No colour is set from Python here.** Every label, button, pill, transcript
+and bar carries an ``objectName`` -- and, where it varies, a ``state``
+property -- and ``desktop.qss`` owns the rest. A widget-level stylesheet
+out-prioritises the application stylesheet, so a single ``setStyleSheet`` call
+on one label would silently make that label the one thing on the row that QSS
+cannot restyle. "All card styling lives in desktop.qss" is a rule worth being
+able to rely on; "all of it except this label" is not.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+from glider.gui.widgets.tool_ui import data_font
+
+__all__ = ["PluginCard"]
+
+#: The states from the spec's table, and the pill text for each.
+#:
+#: ``broken`` is the seventh, added because the other six could not tell the
+#: truth about a package that pip installed and Python then refused to import.
+#: "Install failed" is wrong -- the install worked -- and "Enabled" is worse.
+#: It is a *separate* state rather than a flavour of ``failed`` because the
+#: package is on disk, so the Installed filter has to keep showing it.
+PILL_TEXT: dict[str, str] = {
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "available": "Available",
+    "installing": "Installing",
+    "incompatible": "Not compatible",
+    "failed": "Install failed",
+    "broken": "Not loaded",
+}
+
+#: Button labels per state, in the order they appear on the row. The order is
+#: part of the contract -- ``buttons()`` is indexed by it.
+STATE_ACTIONS: dict[str, tuple[str, ...]] = {
+    "enabled": ("Disable", "Reload"),
+    "disabled": ("Enable",),
+    "available": ("Install",),
+    "installing": ("Cancel",),
+    "incompatible": ("Install",),
+    "failed": ("Retry",),
+    # Reload, not Retry: the package is already there, so the thing worth
+    # repeating is the import, not the pip run.
+    "broken": ("Reload",),
+}
+
+#: Which signal a given label fires. ``Cancel`` fires nothing: an in-flight pip
+#: run is not interruptible mid-resolve, so the button exists to say so and is
+#: shown disabled rather than lying about what it can do.
+_SIGNAL_FOR_LABEL: dict[str, str] = {
+    "Install": "install_requested",
+    "Retry": "install_requested",
+    "Enable": "enable_requested",
+    "Disable": "disable_requested",
+    "Reload": "reload_requested",
+}
+
+#: Labels that are shown but cannot be pressed, keyed by the state that owns
+#: them. Incompatible plugins keep a visible Install button so the reason
+#: underneath it has something to point at.
+_DISABLED_IN_STATE: dict[str, frozenset[str]] = {
+    "incompatible": frozenset({"Install"}),
+    "installing": frozenset({"Cancel"}),
+}
+
+#: Tooltips for controls that do less than their label implies. Disable is the
+#: only one so far, and the gap is wide enough to be worth a sentence: it marks
+#: the plugin so the next load skips it, and stops there. It does not unregister
+#: the drivers, devices or nodes the plugin already put in the registries, and
+#: it is not written down anywhere, so a restart brings the plugin back.
+_TOOLTIPS: dict[str, str] = {
+    "Disable": (
+        "Skips this plugin the next time plugins are loaded.\n"
+        "Types it has already registered stay usable for the rest of this "
+        "session, and the setting is not saved — a restart re-enables it.\n"
+        "To remove a plugin for good, uninstall the package and restart."
+    ),
+}
+
+
+def _restyle(widget: QWidget) -> None:
+    """Make Qt re-evaluate *widget* after a dynamic property changed.
+
+    Qt resolves property selectors at polish time, not when the property is
+    set, so a ``[state="failed"]`` rule applied later never takes effect
+    without this.
+    """
+    style = widget.style()
+    if style is not None:
+        style.unpolish(widget)
+        style.polish(widget)
+
+
+class PluginCard(QFrame):
+    """A single plugin row.
+
+    Args:
+        entry: A catalogue entry. ``name`` is required; ``display_name``,
+            ``pypi``, ``version``, ``description``, ``author`` and ``provides``
+            are used when present.
+        state: One of the keys of :data:`PILL_TEXT`.
+        message: Inline status text -- the version-gate refusal, or pip's exit
+            code. Hidden when empty.
+        output: Verbatim pip output. Hidden when empty.
+    """
+
+    install_requested = pyqtSignal(str)
+    enable_requested = pyqtSignal(str)
+    disable_requested = pyqtSignal(str)
+    reload_requested = pyqtSignal(str)
+
+    def __init__(
+        self,
+        entry: Mapping[str, Any],
+        *,
+        state: str = "available",
+        message: str = "",
+        output: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("PluginCard")
+        self.setFrameShape(QFrame.Shape.NoFrame)
+
+        self._entry = dict(entry)
+        self.plugin_name: str = str(self._entry.get("name", ""))
+        self.state: str = state
+
+        self._buttons: list[QPushButton] = []
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(18, 14, 18, 14)
+        outer.setSpacing(6)
+
+        outer.addLayout(self._build_header())
+        outer.addWidget(self._build_description())
+        outer.addWidget(self._build_meta())
+        outer.addWidget(self._build_progress())
+        outer.addWidget(self._build_message())
+        outer.addWidget(self._build_output())
+
+        self.set_state(state, message=message, output=output)
+
+    # ---------------------------------------------------------------- build
+
+    def _build_header(self) -> QHBoxLayout:
+        """Identity line: display name, then the pip-facing name and version."""
+        header = QHBoxLayout()
+        header.setSpacing(10)
+
+        self._name_label = QLabel(str(self._entry.get("display_name") or self.plugin_name), self)
+        self._name_label.setObjectName("pluginCardName")
+        header.addWidget(self._name_label)
+
+        package = str(self._entry.get("pypi") or self.plugin_name)
+        self._package_label = QLabel(package, self)
+        self._package_label.setObjectName("pluginCardPackage")
+        # Font, not colour: the monospace face is load-bearing (see the module
+        # docstring) and QSS has no way to name a fallback stack.
+        self._package_label.setFont(data_font(12))
+        self._package_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        header.addWidget(self._package_label)
+
+        self._version_label = QLabel(str(self._entry.get("version", "")), self)
+        self._version_label.setObjectName("pluginCardVersion")
+        self._version_label.setFont(data_font(12))
+        self._version_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._version_label.setVisible(bool(self._version_label.text()))
+        header.addWidget(self._version_label)
+
+        # The pill deliberately carries no stylesheet of its own: desktop.qss
+        # owns every state colour via QLabel#pluginStatePill[state="..."].
+        self._pill = QLabel(self)
+        self._pill.setObjectName("pluginStatePill")
+        self._pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.addWidget(self._pill)
+
+        header.addStretch(1)
+
+        self._actions = QHBoxLayout()
+        self._actions.setSpacing(8)
+        header.addLayout(self._actions)
+        return header
+
+    def _build_description(self) -> QLabel:
+        self._description = QLabel(str(self._entry.get("description", "")), self)
+        self._description.setObjectName("pluginCardDescription")
+        self._description.setWordWrap(True)
+        self._description.setVisible(bool(self._description.text()))
+        return self._description
+
+    def _build_meta(self) -> QLabel:
+        """Author and what the plugin registers, on one muted line."""
+        parts: list[str] = []
+        author = str(self._entry.get("author", "")).strip()
+        if author:
+            parts.append(author)
+        provides = self._entry.get("provides") or []
+        if provides:
+            parts.append("provides " + ", ".join(str(p) for p in provides))
+
+        self._meta = QLabel(" · ".join(parts), self)
+        self._meta.setObjectName("pluginCardMeta")
+        self._meta.setVisible(bool(parts))
+        return self._meta
+
+    def _build_progress(self) -> QProgressBar:
+        self._progress = QProgressBar(self)
+        self._progress.setObjectName("pluginCardProgress")
+        # Indeterminate: pip reports no total, so a percentage would be a lie.
+        self._progress.setRange(0, 0)
+        self._progress.setTextVisible(False)
+        self._progress.setFixedHeight(4)
+        self._progress.setVisible(False)
+        return self._progress
+
+    def _build_message(self) -> QLabel:
+        self._message = QLabel("", self)
+        self._message.setObjectName("pluginCardMessage")
+        self._message.setWordWrap(True)
+        self._message.setVisible(False)
+        return self._message
+
+    def _build_output(self) -> QPlainTextEdit:
+        self._output = QPlainTextEdit(self)
+        self._output.setObjectName("pluginCardOutput")
+        self._output.setReadOnly(True)
+        self._output.setFont(data_font(11))
+        self._output.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self._output.setMaximumHeight(96)
+        self._output.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self._output.setVisible(False)
+        return self._output
+
+    # ----------------------------------------------------------------- state
+
+    def set_state(self, state: str, *, message: str = "", output: str | None = None) -> None:
+        """Move the card to *state*, rebuilding its actions.
+
+        Passing ``output=None`` leaves whatever pip has already written in
+        place; pass ``""`` to clear it.
+        """
+        self.state = state
+        # The frame carries the state too, so QSS can tint the row's border for
+        # the two states that need to be findable by scrolling past them.
+        self.setProperty("state", state)
+        _restyle(self)
+        self._pill.setText(PILL_TEXT.get(state, state))
+        self._pill.setProperty("state", state)
+        _restyle(self._pill)
+
+        self._rebuild_actions(state)
+        self.set_message(message, state=state)
+        if output is not None:
+            self.set_output(output)
+        self._progress.setVisible(state == "installing")
+
+    def _rebuild_actions(self, state: str) -> None:
+        while (item := self._actions.takeAt(0)) is not None:
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._buttons = []
+
+        disabled = _DISABLED_IN_STATE.get(state, frozenset())
+        for label in STATE_ACTIONS.get(state, ()):
+            button = QPushButton(label, self)
+            if label in ("Install", "Retry"):
+                button.setProperty("role", "primary")
+            tooltip = _TOOLTIPS.get(label)
+            if tooltip:
+                button.setToolTip(tooltip)
+            if label in disabled:
+                button.setEnabled(False)
+            else:
+                signal_name = _SIGNAL_FOR_LABEL.get(label)
+                if signal_name is not None:
+                    signal = getattr(self, signal_name)
+                    button.clicked.connect(
+                        lambda _checked=False, s=signal: s.emit(self.plugin_name)
+                    )
+            _restyle(button)
+            self._actions.addWidget(button)
+            self._buttons.append(button)
+
+    def set_message(self, message: str, *, state: str | None = None) -> None:
+        """Show inline status text, or hide the line when *message* is empty."""
+        self._message.setProperty("state", state or self.state)
+        _restyle(self._message)
+        self._message.setText(message)
+        self._message.setVisible(bool(message))
+
+    def set_version(self, version: str) -> None:
+        """Replace the version shown in the identity line.
+
+        The catalogue only *advertises* a version; pip decides which one lands.
+        Without this the row went on quoting the catalogue after an install --
+        and the version is the one thing on the row a user cannot check against
+        anything else.
+        """
+        text = str(version or "")
+        self._entry["version"] = text
+        self._version_label.setText(text)
+        self._version_label.setVisible(bool(text))
+
+    def set_output(self, output: str) -> None:
+        """Replace the pip transcript. Hidden while empty."""
+        self._output.setPlainText(output)
+        self._output.setVisible(bool(output))
+
+    def append_output(self, chunk: str) -> None:
+        """Append a line of pip output as it arrives, and keep the tail in view."""
+        if not chunk:
+            return
+        self._output.appendPlainText(chunk.rstrip("\n"))
+        self._output.setVisible(True)
+        scrollbar = self._output.verticalScrollBar()
+        if scrollbar is not None:
+            scrollbar.setValue(scrollbar.maximum())
+
+    # ------------------------------------------------------------- accessors
+
+    def buttons(self) -> list[QPushButton]:
+        """The row's action buttons, in the order the spec's table gives them."""
+        return list(self._buttons)
+
+    def identity_text(self) -> str:
+        """Display name, package name and version, as one string."""
+        return " ".join(
+            part
+            for part in (
+                self._name_label.text(),
+                self._package_label.text(),
+                self._version_label.text(),
+            )
+            if part
+        )
+
+    def message_text(self) -> str:
+        return self._message.text()
+
+    def output_text(self) -> str:
+        return self._output.toPlainText()

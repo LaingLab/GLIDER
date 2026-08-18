@@ -67,19 +67,19 @@ dependencies = [
 # shape below matches the root pyproject's own `glider.driver` entries.
 #
 # Read `PluginManager.load_plugin` before adding to these, because the value
-# shape decides what actually happens, and it is not what the shape suggests:
-# the part after the colon is treated as a **setup function and called**, and
-# the part before it is the module `_register_plugin_components` then reads
-# `BOARD_DRIVERS` / `DEVICE_TYPES` / `NODE_TYPES` off. So a `module:Class`
-# entry constructs a throwaway instance and registers nothing -- `HarpBoard`
-# is `glider_harp.board`'s, and `glider_harp.board` has no `BOARD_DRIVERS`.
-# The `glider_harp` entry below is the module-valued form, which is the only
-# shape that reaches the registration code: no attribute is named, so
-# `load_plugin` looks for `setup` (absent, correctly, since the package's
-# PEP 562 `__getattr__` raises for it) and goes straight to registering
-# `BOARD_DRIVERS` and `DEVICE_TYPES`. That is what actually puts `HarpBoard`
-# into `HardwareManager._driver_registry` and `HarpDevice` into
-# `DEVICE_REGISTRY`.
+# shape decides what happens. `load_plugin` branches on what the name after
+# the colon actually *is*: a class is registered under the entry point's
+# **name** into the group's registry, while a callable is still called as a
+# setup function. So `harp = "glider_harp.board:HarpBoard"` puts `HarpBoard`
+# into `HardwareManager._driver_registry` under `harp`.
+# The `glider_harp` entry below is the module-valued form: no attribute is
+# named, so `load_plugin` looks for `setup` (absent, correctly, since the
+# package's PEP 562 `__getattr__` raises for it -- a bare module entry point
+# without `setup` is not an error) and goes on to register the package's
+# `BOARD_DRIVERS` and `DEVICE_TYPES` tables. Both shapes are declared on
+# purpose: they register the same classes under the same names, and
+# re-registering an identical class is a deliberate no-op, so the redundancy
+# is free.
 [project.entry-points."glider.driver"]
 harp = "glider_harp.board:HarpBoard"
 glider_harp = "glider_harp"
@@ -87,11 +87,11 @@ glider_harp = "glider_harp"
 # Declared for discovery/inspection parity with the driver group. Note that
 # `discover_plugins` keys the registry by entry point *name* across all three
 # groups and keeps the first one it sees, so this `harp` is shadowed by the
-# `glider.driver` `harp` above and is never loaded. That is the benign
-# outcome: were it loaded, `load_plugin` would call `HarpDevice()` as a setup
-# function and fail with "missing 2 required positional arguments: 'board' and
-# 'config'". `DEVICE_TYPES` on the package is what actually registers the
-# device. See tests/test_packaging.py.
+# `glider.driver` `harp` above and is never loaded. Harmless either way: were
+# it loaded, `load_plugin` would register the `HarpDevice` *class* under the
+# name `harp` rather than calling it. `DEVICE_TYPES` on the package is what
+# registers the device under its canonical `Harp` name.
+# See tests/test_packaging.py.
 [project.entry-points."glider.device"]
 harp = "glider_harp.device:HarpDevice"
 

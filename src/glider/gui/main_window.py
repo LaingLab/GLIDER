@@ -153,6 +153,12 @@ class MainWindow(QMainWindow):
         self._analysis_dock: QDockWidget | None = None
         self._analysis_panel = None  # AnalysisPanel, imported + created lazily
 
+        # The Plugins window, and the in-flight open that will produce it.
+        # Both are needed to answer "is one already coming?": the catalogue
+        # fetch takes seconds, and the menu item is clickable throughout.
+        self._plugins_dialog = None  # PluginManagerDialog, created lazily
+        self._plugins_task = None  # asyncio.Task for the open in progress
+
         # Operator (non-Builder) view. Exactly ONE of these is built, chosen by
         # startup mode: the 4-tab RunnerShell in runner mode (Pi touchscreen),
         # the 2x2 DashboardView in desktop mode. The other stays None, so every
@@ -1038,6 +1044,11 @@ class MainWindow(QMainWindow):
         gpu_check_action = QAction("&GPU / Device Check…", self)
         gpu_check_action.triggered.connect(self._on_gpu_check)
         tools_menu.addAction(gpu_check_action)
+
+        plugins_action = QAction("&Plugins…", self)
+        plugins_action.setStatusTip("Browse the plugin catalogue and install from it")
+        plugins_action.triggered.connect(self._on_open_plugins)
+        tools_menu.addAction(plugins_action)
 
         # Help menu
         help_menu = menubar.addMenu("&Help")
@@ -2078,6 +2089,71 @@ class MainWindow(QMainWindow):
                 f"Custom device '{dialog.device_name}' created — add it via Hardware → Add Device",
                 5000,
             )
+
+    def _on_open_plugins(self) -> None:
+        """Open the plugin browser. Non-modal: an install takes minutes.
+
+        Before ``discover_plugins`` has run there is no manager, and opening a
+        window then would list nothing — which reads as a broken index rather
+        than a cold start. Say so instead.
+        """
+        if self._core.plugin_manager is None:
+            QMessageBox.information(
+                self,
+                "Plugins",
+                "The plugin system has not started yet. Finish loading the "
+                "session and try again.",
+            )
+            return
+
+        if self._plugins_dialog is not None:
+            self._plugins_dialog.raise_()
+            self._plugins_dialog.activateWindow()
+            return
+        if self._plugins_task is not None and not self._plugins_task.done():
+            # The catalogue fetch takes seconds and the menu stays clickable
+            # throughout, so without this three clicks are three windows and
+            # three fetches.
+            return
+
+        # Lazy import, as with the other tool windows: keeps startup free of the
+        # dialog and its registry/installer imports until the menu is used.
+        from glider.gui.dialogs.plugin_manager_dialog import PluginManagerDialog
+
+        # Keep the task and read its result. A bare `ensure_future` is the exact
+        # hazard the dialog's own `_spawn` documents: asyncio holds only a weak
+        # reference, and an exception with nobody to raise to becomes a GC-time
+        # log line the user never sees.
+        task = asyncio.ensure_future(
+            PluginManagerDialog.open_for(parent=self, plugin_manager=self._core.plugin_manager)
+        )
+        self._plugins_task = task
+        task.add_done_callback(self._on_plugins_window_ready)
+
+    def _on_plugins_window_ready(self, task) -> None:
+        """Take delivery of the Plugins window, or say why there isn't one."""
+        self._plugins_task = None
+        try:
+            dialog = task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.exception("Opening the Plugins window failed")
+            QMessageBox.warning(
+                self,
+                "Plugins",
+                f"The Plugins window could not be opened:\n\n{exc}",
+            )
+            return
+
+        if dialog is None:
+            # `open_for` already told the user why.
+            return
+        self._plugins_dialog = dialog
+        dialog.finished.connect(self._on_plugins_window_closed)
+
+    def _on_plugins_window_closed(self, _result: int = 0) -> None:
+        self._plugins_dialog = None
 
     def _on_open_analysis_panel(self, directory: str) -> None:
         """Open (or reuse) the Analysis dock and load a finished recording.

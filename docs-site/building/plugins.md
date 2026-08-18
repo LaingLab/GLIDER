@@ -9,7 +9,10 @@ gives you two ways to add it:
 2. **Python plugins** — a folder of code that registers new device types (and
    more). Best for hardware with real logic behind it.
 
-Start with the builder; reach for a plugin when you outgrow it.
+Start with the builder; reach for a plugin when you outgrow it. If the hardware
+you need is already supported by a published plugin, you may not have to write
+anything at all — see [Installing plugins from the
+catalogue](#installing-plugins-from-the-catalogue).
 
 ## No-code custom devices
 
@@ -60,6 +63,95 @@ encoders. Turn it on and GLIDER continuously reads the encoder's angle register
 and unwraps it into a running total of turns, adding read operations for
 revolutions, angle, and total counts, plus settings for the angle register and
 counts-per-turn. Downstream nodes then just read a finished number.
+
+## Installing plugins from the catalogue
+
+Open **Tools → Plugins…**. GLIDER shows a curated catalogue of published plugins
+— one row each, with the package name, version, what it provides, and its
+current state. Search the list or use the **All / Installed / Available** filters
+to narrow it.
+
+Press **Install** on a row and GLIDER runs `pip` as a subprocess of its *own*
+interpreter, so the plugin lands in the environment GLIDER is actually running
+from. pip's output streams onto the row as it goes. If it fails, the row keeps
+pip's message verbatim — that text is usually the real answer ("no matching
+distribution for `zmq>=26`"), so read it before retrying.
+
+!!! danger "Installing a plugin runs arbitrary code with your privileges"
+    A catalogue plugin is a Python package. Installing it executes its build and
+    install steps, and loading it executes its code — with the same privileges as
+    GLIDER, on a machine wired to your rig. There is no sandbox.
+
+    This is why the catalogue is **curated**: it is a hand-maintained list, not a
+    search of PyPI, and that list is the entire security boundary. Install only
+    what you would be willing to run as a script on the same machine.
+
+### What the footer is telling you
+
+The line along the bottom of the window names **which catalogue GLIDER is
+reading and how old it is**. It is permanent furniture, not a status blip,
+because it is the only place the trust question is answered. GLIDER tries three
+sources in order and the footer says which one won:
+
+| Footer says | Where it came from |
+|---|---|
+| `downloaded over the network` | The live index, fetched just now. |
+| `local cache` | The last successful download, reused because the fetch failed. |
+| `bundled with GLIDER` | The copy shipped inside the release, because there was no network *and* no cache. |
+
+The `updated` date is the catalogue's own — a bundled index on an old release
+can be a long way behind. If the footer says *bundled* and a plugin you expect
+is missing, that is why.
+
+### Enabling, disabling and upgrading
+
+Installed plugins carry **Disable**, **Enable** and **Reload** instead of an
+Install button.
+
+- A **newly installed** plugin loads immediately. No restart.
+- **Upgrading** a plugin that is already loaded needs a **restart**. Python
+  cannot swap out a module that is already imported and in use, so the running
+  session keeps the old code however the pip run went. **Reload** is offered for
+  the same reason and will tell you when it cannot do the job.
+- **Cancel** during an install is shown greyed out on purpose. A pip resolve is
+  not interruptible partway through, and a button that pretended otherwise would
+  be worse than one that says so.
+
+!!! warning "What Disable actually does — and does not do"
+    **Disable marks the plugin so it is skipped the next time plugins are
+    loaded. That is the whole of it.** It is worth being precise about the three
+    things it does *not* do, because each one is easy to assume:
+
+    - **It does not unload anything.** Drivers, device types and nodes the
+      plugin already registered stay in GLIDER's registries and stay usable for
+      the rest of the session. A disabled plugin's device types do not disappear
+      from Add Device.
+    - **It does not stop code that is already running.** A plugin holding a
+      serial port or a background task keeps holding it.
+    - **It is not saved.** Nothing writes the setting to disk, so the next time
+      you start GLIDER the plugin is enabled again.
+
+    So Disable is useful for one thing: stopping a plugin from being loaded
+    again in this session, typically before a **Reload**. If you need a plugin
+    genuinely gone, uninstall the package from the same environment GLIDER runs
+    in — `uv pip uninstall <package>` (or `pip uninstall <package>`) — and
+    restart. Nothing in this window removes a package.
+
+### When a plugin installs but does not load
+
+pip succeeding and the plugin working are two different things. A package can
+install cleanly and then raise on import — a missing system library, a
+dependency that resolved to the wrong version, a typo in an entry point.
+
+When that happens the row says **Not loaded** rather than Enabled, and carries
+the import error underneath it. That message is the diagnosis: read it before
+retrying, because a second pip run will not change it. **Reload** retries the
+import in place, which is worth doing once after fixing whatever the message
+names; anything it cannot fix needs a restart.
+
+The window is deliberately **non-modal**: an install can take minutes, and it
+must not freeze a rig that is mid-experiment. You can leave it open and keep
+working.
 
 ## Python plugins
 
