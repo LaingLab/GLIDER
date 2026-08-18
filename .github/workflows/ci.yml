@@ -19,6 +19,15 @@ jobs:
   # ------------------------------------------------------------------------
   lint:
     name: Lint + format + type-check
+    # Skip the duplicate run when a PR is merged: the same commits already
+    # passed CI on the pull_request event. Direct pushes to main are NOT
+    # merges, so they still run -- that is the case worth keeping, since
+    # nothing else tests them. A squash or rebase merge produces no
+    # "Merge pull request" subject and so still runs, which is the safe
+    # direction to fail: a redundant run, never a missing one.
+    if: >-
+      github.event_name != 'push' ||
+      !startsWith(github.event.head_commit.message, 'Merge pull request ')
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +65,15 @@ jobs:
   # ------------------------------------------------------------------------
   test:
     name: Test (Python ${{ matrix.python-version }} on ${{ matrix.os }})
+    # Skip the duplicate run when a PR is merged: the same commits already
+    # passed CI on the pull_request event. Direct pushes to main are NOT
+    # merges, so they still run -- that is the case worth keeping, since
+    # nothing else tests them. A squash or rebase merge produces no
+    # "Merge pull request" subject and so still runs, which is the safe
+    # direction to fail: a redundant run, never a missing one.
+    if: >-
+      github.event_name != 'push' ||
+      !startsWith(github.event.head_commit.message, 'Merge pull request ')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
