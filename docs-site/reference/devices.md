@@ -11,6 +11,7 @@ how to add and bind them, see [Devices & Hardware](../building/devices.md).
 | **Arduino** | USB serial | Uses the Telemetrix firmware protocol. The most common desktop setup. |
 | **Raspberry Pi** | On-board GPIO | Requires the `rpi` extra (gpiozero + lgpio). Great for kiosk rigs. |
 | **Bluetooth (BLE)** | Bluetooth Low Energy | Cross-platform (Windows/macOS/Linux) via `bleak`. |
+| **Serial (UART)** | Host serial ports | Cross-platform via `pyserial`. A transport with no pins of its own — each serial device opens its own port. A Bluetooth-Classic (SPP) pairing shows up here as an ordinary serial port. |
 
 ## Device types
 

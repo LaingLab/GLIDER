@@ -4,7 +4,7 @@ GLIDER is a cross-platform laboratory-automation application for designing, runn
 
 **Audience:** laboratory scientists, collaborators, reviewers, and technically literate contributors who need a durable mental model of the current system.
 
-**Code baseline:** this document describes the repository's `main` branch at the time of writing. The package currently identifies itself as `0.3.0-dev`; installed releases and laboratory deployments may differ.
+**Code baseline:** this document describes the repository's `main` branch at the time of writing; installed releases and laboratory deployments may differ.
 
 ## GLIDER in one page
 
@@ -227,9 +227,9 @@ The declarative Custom Device builder is appropriate for simple GPIO or I2C devi
 
 ### Python plugins
 
-Python packages can register board drivers, device types, node types, and related UI components. Entry points use the `glider.driver`, `glider.device`, and `glider.node` groups. An entry point must resolve to a setup *function*; the loader calls it, then registers components by reading `BOARD_DRIVERS`, `DEVICE_TYPES`, and `NODE_TYPES` from the module. An entry point pointing at a class instead loads silently and registers nothing.
+Python packages can register board drivers, device types, node types, and related UI components. Entry points use the `glider.driver`, `glider.device`, and `glider.node` groups. An entry point may resolve to a setup *function* or to a component *class*: a function is called during load (and awaited if asynchronous); a class is registered directly into the registry its group implies, under the entry point's name. In both cases the loader then reads `BOARD_DRIVERS`, `DEVICE_TYPES`, and `NODE_TYPES` from the module and registers their contents. Failures are recorded on the plugin rather than silent: an explicitly named attribute that does not exist fails the load, as does a class whose plugin type maps to no registry (a directory plugin left at the default type `generic`, for example). When two plugins claim the same name with *different* classes, the first registration is kept and the collision is logged.
 
-GLIDER's own built-in drivers are registered explicitly in `HardwareManager` rather than through entry points, so the entry-point path is exercised only by third-party packages.
+GLIDER's own built-in drivers are registered explicitly in `HardwareManager`; the `glider.driver` entry points in the project's `pyproject.toml` name those same classes, so their registrations are exact, harmless no-ops.
 
 Directory-based plugins are also supported, but they execute Python code and are disabled by default. A laboratory must explicitly enable directory plugins in its GLIDER configuration and should load only trusted code. This safety boundary is important in reviewer-facing statements: plugin support makes extension possible; it does not make untrusted plugins safe.
 

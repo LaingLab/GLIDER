@@ -35,7 +35,7 @@ orchestrates the apply half.
 
 ## Step 1 — Pose becomes per-frame numbers
 
-`compute_features()` (`src/glider/analysis/behavior/features.py:198`) turns a
+`compute_features()` (`src/glider/analysis/behavior/features.py::compute_features`) turns a
 `(F, K, 2)` array of keypoint coordinates into a `(F, n_features)` DataFrame. For
 **K** keypoints it emits:
 
@@ -72,7 +72,7 @@ feature that depends on it. Nothing is imputed at any later stage.
 ## Step 2 — Frames become windows
 
 A single frame cannot distinguish *grooming* from *resting* — behavior lives in a
-span of time. `apply_rolling()` (`windowing.py:40`) replaces each per-frame column
+span of time. `apply_rolling()` (`windowing.py::apply_rolling`) replaces each per-frame column
 with one column per rolling statistic:
 
 ```
@@ -98,7 +98,7 @@ N's opening window would average in the tail of session N−1.
 
 ## Step 3 — Annotations become labels
 
-`build_label_and_group_series()` (`labels.py:58`) projects your annotation zones
+`build_label_and_group_series()` (`labels.py::build_label_and_group_series`) projects your annotation zones
 onto a per-frame vector, and emits a second vector of **zone group IDs**. Each
 frame ends up as one of:
 
@@ -116,7 +116,7 @@ zone lands on the same side.
 
 ## Step 4 — Rows are dropped
 
-`_assemble_and_filter()` (`pipeline.py:766`) applies one mask:
+`_assemble_and_filter()` (`pipeline.py::_assemble_and_filter`) applies one mask:
 
 ```python
 keep_mask = (y != "") & (y != AMBIGUOUS) & ~X.isna().any(axis=1)
@@ -135,7 +135,7 @@ a full recording and the model learns "always predict background."
 ## Step 5 — The classifier is constructed and fit
 
 Everything above is backend-agnostic. This is the only place LightGBM appears
-(`pipeline.py:1393`):
+(`pipeline.py::_build_classifier`):
 
 ```python
 from lightgbm import LGBMClassifier
@@ -196,7 +196,7 @@ round. 200 rounds × 5 behaviors = **1,000 trees**, each up to 31 leaves.
 
 ### The defaults are deliberately tighter than stock LightGBM
 
-`LgbmReg` (`pipeline.py:143`) ships mildly regularized defaults, because the
+`LgbmReg` (`pipeline.py::LgbmReg`) ships mildly regularized defaults, because the
 failure mode in this domain is not underfitting — it is a model that scores 100%
 on your training sessions and 60% on a new mouse.
 
@@ -208,7 +208,7 @@ on your training sessions and 60% on a new mouse.
 | `reg_lambda` | **1.0** | 0.0 | Shrinks confident leaves toward the mean |
 | `num_leaves`, `learning_rate`, `max_depth`, `min_split_gain` | 31 / 0.1 / −1 / 0.0 | same | Left at stock so existing models reproduce |
 
-All nine are exposed in the GUI under **Train ▸ Advanced…** (`gui/behavior/window.py:117`),
+All nine are exposed in the GUI under **Train ▸ Advanced…** (`gui/behavior/window.py::LgbmAdvancedDialog`),
 which is enabled only for the `lightgbm` backend — the Random Forest path ignores
 every one of them.
 
@@ -229,9 +229,9 @@ different thread counts or LightGBM versions are not guaranteed.
 The trained classifier is saved with everything needed to rebuild its input:
 the fitted booster, the `FeatureSpec`, the **exact ordered column names**, the
 window length, the stat list, and the training fps — one joblib pickle,
-`format_version: 2` (`model.py:228`).
+`format_version: 2` (`model.py::BehaviorModel.save`).
 
-At predict time (`model.py:107`):
+At predict time (`model.py::BehaviorModel.predict`):
 
 1. Columns are reordered by name to `feature_names` — a reordering upstream cannot
    silently shift values into the wrong feature.
@@ -261,11 +261,11 @@ frame of the 5-frame centered-gradient window, `ddof=1` on the standard deviatio
 After prediction, labels pass through a `MajorityVoteSmoother` (with hysteresis on
 ties), and a thresholded **speed axis** overrides the postural label wherever it
 fires — freezing and darting are direct measurements of displacement, and beat a
-classifier's guess about posture (`classify/batch.py:328`).
+classifier's guess about posture (`classify/batch.py::resolve_labels`).
 
 ## The hybrid model
 
-`train_hybrid_model()` (`pipeline.py:505`) wraps a LightGBM base in a
+`train_hybrid_model()` (`pipeline.py::train_hybrid_model`) wraps a LightGBM base in a
 `HybridModel` that blends the model's posterior with a hand-built kinematic prior
 in log space:
 
@@ -283,7 +283,7 @@ vocabularies.
 base is fit, λ is grid-searched 0.0–1.0 by validation macro-F1, ties resolve to the
 smaller λ (so λ=0 wins on no improvement), and only then is the shipped base refit
 on all kept rows. **LightGBM is hard-required here** — no Random Forest fallback
-(`pipeline.py:604`).
+(`train_hybrid_model` passes `require=True` to `_build_classifier`).
 
 ## Reading the training summary
 
@@ -302,7 +302,7 @@ Train accuracy alone is not evidence of anything. Use either:
 
 - **`holdout_sessions`** — train on some recordings, test on others. The split
   strategy is recorded as `cross_session`.
-- **`cross_validate_sessions()`** (`pipeline.py:928`) — `GroupKFold` over *whole
+- **`cross_validate_sessions()`** (`pipeline.py::cross_validate_sessions`) — `GroupKFold` over *whole
   sessions*, so every fold's test rows come from recordings the model never saw.
   Mirror-augmented copies stay with their parent session and are used for training
   only; scoring is always on un-mirrored rows.
@@ -330,7 +330,7 @@ and raises `RuntimeError` instead. Check `summary["classifier_type"]` to see whi
 backend actually ran.
 
 !!! warning "LightGBM's version is not recorded in the bundle"
-    `capture_library_versions()` (`model.py:289`) records numpy, pandas, scipy,
+    `capture_library_versions()` (`model.py::capture_library_versions`) records numpy, pandas, scipy,
     sklearn, and joblib, and the loader warns on major.minor drift in any of them.
     `lightgbm` is **not** in that list, even though it is the library that pickled
     the booster. A LightGBM major-version change between training and loading will
