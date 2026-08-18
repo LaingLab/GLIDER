@@ -754,3 +754,299 @@ QLabel[statusState="RUNNING"] { background-color: rgba(56, 189, 248, 0.15); colo
 QLabel[statusState="PAUSED"], QLabel[statusState="STOPPING"] { background-color: rgba(251, 191, 36, 0.15); color: #fbbf24; }
 QLabel[statusState="ERROR"] { background-color: rgba(248, 113, 113, 0.15); color: #f87171; }
 QLabel[statusState="INITIALIZING"] { background-color: rgba(96, 165, 250, 0.15); color: #60a5fa; }
+
+/* === Plugins window ===
+ *
+ * Every colour on a plugin row lives here rather than on the widget. A
+ * widget-level stylesheet out-prioritises this file, so one stray
+ * `setStyleSheet` in plugin_card.py would make that one label the only thing
+ * on the row the theme cannot reach. The card and dialog therefore set nothing
+ * but `objectName` and a dynamic `state` property.
+ *
+ * Property selectors are resolved at polish time, not when the property is
+ * set, so `PluginCard.set_state` re-polishes the widgets it retags. Without
+ * that these `[state="..."]` rules would never fire on a state change.
+ *
+ * Hex values are the tokens from glider/gui/styles/colors.py, named in the
+ * comments -- QSS cannot import them. The semantic STATE_OK / STATE_WARN /
+ * STATE_ERR family is held apart from the cyan ACCENT on purpose: the accent
+ * marks the primary action, so painting "needs attention" in it too would put
+ * the two in competition.
+ */
+
+QDialog#PluginManagerDialog {
+    background-color: #0f1419;                      /* BASE */
+}
+
+/* -- toolbar: search field and the three filter chips -- */
+
+QLineEdit#pluginSearch {
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 7px;
+    padding: 7px 11px;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+}
+
+QLineEdit#pluginSearch:focus {
+    border-color: #38bdf8;                          /* ACCENT */
+}
+
+/* A chip, not a button: rounded to half its height. QSS has no `999px`
+ * shorthand, and a radius larger than half the box is clamped anyway. */
+QPushButton#pluginFilter {
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 13px;
+    padding: 6px 14px;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QPushButton#pluginFilter:hover {
+    background-color: #151c25;                      /* SURFACE_2 */
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+}
+
+QPushButton#pluginFilter:checked {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    border-color: rgba(56, 189, 248, 0.45);
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+/* -- the list -- */
+
+QScrollArea#pluginScroll {
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#pluginEmpty {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 13px;
+    padding: 32px 0;
+}
+
+/* -- one row -- */
+
+QFrame#PluginCard {
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 9px;
+}
+
+QFrame#PluginCard:hover {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border-color: #2a3440;
+}
+
+/* A row doing something, and a row that failed, are findable by scrolling
+ * past them rather than by reading every pill. */
+QFrame#PluginCard[state="installing"] {
+    border-color: rgba(56, 189, 248, 0.35);         /* ACCENT */
+}
+
+QFrame#PluginCard[state="incompatible"] {
+    border-color: rgba(251, 191, 36, 0.30);         /* STATE_WARN */
+}
+
+QFrame#PluginCard[state="failed"] {
+    border-color: rgba(248, 113, 113, 0.35);        /* STATE_ERR */
+}
+
+/* Every label states its own background: the global `QWidget` rule at the top
+ * of this file matches QLabel too, so an unset label paints a #0f1419 box on
+ * the #111820 card. `QFrame#PluginCard QLabel { background: transparent }`
+ * would be the shorter fix and the wrong one -- at specificity 102 it
+ * out-ranks `QLabel#pluginStatePill` at 101 and would erase the pill tint. */
+
+QLabel#pluginCardName {
+    background-color: transparent;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    font-size: 15px;
+    font-weight: 600;
+}
+
+QLabel#pluginCardPackage {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+}
+
+QLabel#pluginCardVersion {
+    background-color: transparent;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+}
+
+QLabel#pluginCardDescription {
+    background-color: transparent;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 13px;
+}
+
+QLabel#pluginCardMeta {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 12px;
+}
+
+/* -- the state pill, all six states -- */
+
+QLabel#pluginStatePill {
+    background-color: rgba(113, 128, 150, 0.15);    /* TEXT_MUTED @ 15% */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 9px;
+    padding: 2px 9px;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QLabel#pluginStatePill[state="enabled"] {
+    background-color: rgba(74, 222, 128, 0.13);     /* STATE_OK @ 13% */
+    border-color: rgba(74, 222, 128, 0.30);
+    color: #4ade80;                                 /* STATE_OK */
+}
+
+/* Disabled and available share the neutral chip. Neither is a problem and
+ * neither is running -- what separates them is the button beside them. */
+QLabel#pluginStatePill[state="disabled"],
+QLabel#pluginStatePill[state="available"] {
+    background-color: rgba(113, 128, 150, 0.15);    /* TEXT_MUTED @ 15% */
+    border-color: #1e2530;                          /* BORDER */
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+}
+
+QLabel#pluginStatePill[state="installing"] {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    border-color: rgba(56, 189, 248, 0.35);
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+QLabel#pluginStatePill[state="incompatible"] {
+    background-color: rgba(251, 191, 36, 0.13);     /* STATE_WARN @ 13% */
+    border-color: rgba(251, 191, 36, 0.30);
+    color: #fbbf24;                                 /* STATE_WARN */
+}
+
+QLabel#pluginStatePill[state="failed"] {
+    background-color: rgba(248, 113, 113, 0.13);    /* STATE_ERR @ 13% */
+    border-color: rgba(248, 113, 113, 0.30);
+    color: #f87171;                                 /* STATE_ERR */
+}
+
+/* -- row actions --
+ *
+ * The file-wide default QPushButton is accent-filled, which would make Disable,
+ * Reload, Enable and Cancel all shout as loudly as Install. Inside a card the
+ * default is a quiet surface control and only [role="primary"] carries the
+ * accent. */
+
+QFrame#PluginCard QPushButton {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+    font-weight: 500;
+}
+
+QFrame#PluginCard QPushButton:hover {
+    background-color: #1e2530;                      /* BORDER */
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+}
+
+QFrame#PluginCard QPushButton:pressed {
+    background-color: #111820;                      /* SURFACE_1 */
+}
+
+QFrame#PluginCard QPushButton:disabled {
+    background-color: #111820;                      /* SURFACE_1 */
+    border-color: #1e2530;                          /* BORDER */
+    color: #475569;                                 /* TEXT_DISABLED */
+}
+
+QFrame#PluginCard QPushButton[role="primary"] {
+    background-color: #38bdf8;                      /* ACCENT */
+    border-color: #38bdf8;
+    color: #04222f;                                 /* dark ink on a light fill */
+    font-weight: 600;
+}
+
+QFrame#PluginCard QPushButton[role="primary"]:hover {
+    background-color: #0ea5e9;                      /* ACCENT_HOVER */
+    border-color: #0ea5e9;
+}
+
+QFrame#PluginCard QPushButton[role="primary"]:pressed {
+    background-color: #0284c7;                      /* ACCENT_PRESSED */
+    border-color: #0284c7;
+}
+
+/* Incompatible keeps a visible Install so the reason underneath it has
+ * something to point at, so the primary fill needs a disabled form. */
+QFrame#PluginCard QPushButton[role="primary"]:disabled {
+    background-color: #111820;                      /* SURFACE_1 */
+    border-color: #1e2530;                          /* BORDER */
+    color: #475569;                                 /* TEXT_DISABLED */
+}
+
+/* -- progress, inline message, pip transcript -- */
+
+/* Indeterminate: pip reports no total, so the bar is a heartbeat, not a
+ * measurement. Kept to a hairline so it does not read as a quantity. */
+QProgressBar#pluginCardProgress {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border: none;
+    border-radius: 2px;
+}
+
+QProgressBar#pluginCardProgress::chunk {
+    background-color: #38bdf8;                      /* ACCENT */
+    border-radius: 2px;
+}
+
+QLabel#pluginCardMessage {
+    background-color: transparent;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 12px;
+}
+
+QLabel#pluginCardMessage[state="installing"] {
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+QLabel#pluginCardMessage[state="incompatible"] {
+    color: #fbbf24;                                 /* STATE_WARN */
+}
+
+QLabel#pluginCardMessage[state="failed"] {
+    color: #f87171;                                 /* STATE_ERR */
+}
+
+/* Recessed below the card surface: pip output is evidence, not chrome. */
+QPlainTextEdit#pluginCardOutput {
+    background-color: #0a0e13;                      /* CANVAS */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: #718096;                                 /* TEXT_MUTED */
+    selection-background-color: #38bdf8;            /* ACCENT */
+}
+
+/* Read-only. The file-wide cyan focus ring would promise an edit that the
+ * transcript will not accept. */
+QPlainTextEdit#pluginCardOutput:focus {
+    border-color: #1e2530;                          /* BORDER */
+}
+
+/* -- footer: which index won, and how old it is -- */
+
+QLabel#pluginFooter {
+    background-color: transparent;
+    border-top: 1px solid #1e2530;                  /* BORDER */
+    padding-top: 10px;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 12px;
+}

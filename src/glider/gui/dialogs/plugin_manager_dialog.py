@@ -45,7 +45,6 @@ from PyQt6.QtWidgets import (
 )
 
 from glider._version import __version__ as GLIDER_VERSION
-from glider.gui.styles import colors
 from glider.gui.widgets.plugin_card import PluginCard
 from glider.plugins.installer import incompatibility_message, install, is_compatible
 from glider.plugins.registry import PluginRegistry, ResolvedIndex
@@ -236,8 +235,8 @@ class PluginManagerDialog(QDialog):
         self._card_layout.addStretch(1)
 
         self._empty = QLabel("No plugins match.", container)
+        self._empty.setObjectName("pluginEmpty")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty.setStyleSheet(f"color: {colors.TEXT_MUTED}; font-size: 13px;")
         self._empty.setVisible(False)
         self._card_layout.insertWidget(self._card_layout.count() - 1, self._empty)
 
@@ -248,7 +247,6 @@ class PluginManagerDialog(QDialog):
         self._footer = QLabel(self)
         self._footer.setObjectName("pluginFooter")
         self._footer.setWordWrap(True)
-        self._footer.setStyleSheet(f"color: {colors.TEXT_MUTED}; font-size: 12px;")
         self._footer.setText(self._compose_footer())
         return self._footer
 

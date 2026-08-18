@@ -5,6 +5,20 @@ All notable changes to GLIDER are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Plugin catalogue and installer** — **Tools → Plugins…** opens a non-modal window listing a curated catalogue of published plugins, with search and All / Installed / Available filters. Install runs `pip` as a subprocess of GLIDER's own interpreter and streams its output onto the row; failures render inline on the row that caused them, with pip's message verbatim, never in a modal. A newly installed plugin loads without a restart; upgrading one already in use does not, and the window says so. Rows offer Disable / Enable / Reload — there is no uninstall.
+- Plugin catalogue resolution with three sources in order — the live index, the last cached copy, then the copy bundled in the release. The window's footer permanently names which one won and how old it is: the catalogue is curated, installing runs arbitrary code with GLIDER's privileges, and that footer is where the trust question is answered.
+- Compatibility gate: a plugin declaring a `glider_requires` specifier the running version does not satisfy is shown greyed out with both versions named, rather than offering an Install that pip would then decline.
+- Documentation: "Installing plugins from the catalogue" in the Custom Devices & Plugins guide.
+
+### Changed
+
+- Entry points of the `module:Class` shape now register the class, instead of calling it and discarding the result.
+- Desktop theme: styling for the Plugins window — card rows, the six state pills, filter chips, the pip transcript and the indeterminate progress bar — added to `desktop.qss`. The plugin card and dialog set no colours from Python at all, so the whole surface stays restylable from the stylesheet.
+
 ## [1.0.0] — 2026-08-07
 
 Initial public release. This is the version described in Bradham et al.

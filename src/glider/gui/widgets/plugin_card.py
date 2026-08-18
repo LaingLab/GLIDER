@@ -15,9 +15,13 @@ Two things here carry meaning rather than decoration:
   shown verbatim. pip's message is usually the actual answer ("no matching
   distribution for zmq>=26"), and summarising it destroys the useful part.
 
-Colours live in :mod:`glider.gui.styles.colors`; the state pill carries none at
-all, only an ``objectName`` and a ``state`` property for ``desktop.qss`` to
-select on.
+**No colour is set from Python here.** Every label, button, pill, transcript
+and bar carries an ``objectName`` -- and, where it varies, a ``state``
+property -- and ``desktop.qss`` owns the rest. A widget-level stylesheet
+out-prioritises the application stylesheet, so a single ``setStyleSheet`` call
+on one label would silently make that label the one thing on the row that QSS
+cannot restyle. "All card styling lives in desktop.qss" is a rule worth being
+able to rely on; "all of it except this label" is not.
 """
 
 from __future__ import annotations
@@ -38,7 +42,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.gui.styles import colors
 from glider.gui.widgets.tool_ui import data_font
 
 __all__ = ["PluginCard"]
@@ -81,13 +84,6 @@ _SIGNAL_FOR_LABEL: dict[str, str] = {
 _DISABLED_IN_STATE: dict[str, frozenset[str]] = {
     "incompatible": frozenset({"Install"}),
     "installing": frozenset({"Cancel"}),
-}
-
-#: The message colour per state. A token, never a literal.
-_MESSAGE_COLOR: dict[str, str] = {
-    "installing": colors.ACCENT,
-    "incompatible": colors.STATE_WARN,
-    "failed": colors.STATE_ERR,
 }
 
 
@@ -162,21 +158,21 @@ class PluginCard(QFrame):
         header.setSpacing(10)
 
         self._name_label = QLabel(str(self._entry.get("display_name") or self.plugin_name), self)
-        self._name_label.setStyleSheet(
-            f"color: {colors.TEXT_PRIMARY}; font-size: 15px; font-weight: 600;"
-        )
+        self._name_label.setObjectName("pluginCardName")
         header.addWidget(self._name_label)
 
         package = str(self._entry.get("pypi") or self.plugin_name)
         self._package_label = QLabel(package, self)
+        self._package_label.setObjectName("pluginCardPackage")
+        # Font, not colour: the monospace face is load-bearing (see the module
+        # docstring) and QSS has no way to name a fallback stack.
         self._package_label.setFont(data_font(12))
-        self._package_label.setStyleSheet(f"color: {colors.TEXT_MUTED};")
         self._package_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         header.addWidget(self._package_label)
 
         self._version_label = QLabel(str(self._entry.get("version", "")), self)
+        self._version_label.setObjectName("pluginCardVersion")
         self._version_label.setFont(data_font(12))
-        self._version_label.setStyleSheet(f"color: {colors.TEXT_TERTIARY};")
         self._version_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._version_label.setVisible(bool(self._version_label.text()))
         header.addWidget(self._version_label)
@@ -197,8 +193,8 @@ class PluginCard(QFrame):
 
     def _build_description(self) -> QLabel:
         self._description = QLabel(str(self._entry.get("description", "")), self)
+        self._description.setObjectName("pluginCardDescription")
         self._description.setWordWrap(True)
-        self._description.setStyleSheet(f"color: {colors.TEXT_TERTIARY}; font-size: 13px;")
         self._description.setVisible(bool(self._description.text()))
         return self._description
 
@@ -213,7 +209,7 @@ class PluginCard(QFrame):
             parts.append("provides " + ", ".join(str(p) for p in provides))
 
         self._meta = QLabel(" · ".join(parts), self)
-        self._meta.setStyleSheet(f"color: {colors.TEXT_MUTED}; font-size: 12px;")
+        self._meta.setObjectName("pluginCardMeta")
         self._meta.setVisible(bool(parts))
         return self._meta
 
@@ -254,6 +250,10 @@ class PluginCard(QFrame):
         place; pass ``""`` to clear it.
         """
         self.state = state
+        # The frame carries the state too, so QSS can tint the row's border for
+        # the two states that need to be findable by scrolling past them.
+        self.setProperty("state", state)
+        _restyle(self)
         self._pill.setText(PILL_TEXT.get(state, state))
         self._pill.setProperty("state", state)
         _restyle(self._pill)
@@ -291,8 +291,8 @@ class PluginCard(QFrame):
 
     def set_message(self, message: str, *, state: str | None = None) -> None:
         """Show inline status text, or hide the line when *message* is empty."""
-        colour = _MESSAGE_COLOR.get(state or self.state, colors.TEXT_TERTIARY)
-        self._message.setStyleSheet(f"color: {colour}; font-size: 12px;")
+        self._message.setProperty("state", state or self.state)
+        _restyle(self._message)
         self._message.setText(message)
         self._message.setVisible(bool(message))
 
