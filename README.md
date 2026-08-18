@@ -119,9 +119,13 @@ If you use GLIDER in your research, please cite it:
   title  = {GLIDER: General Laboratory Interface for Design, Experimentation, and Recording},
   author = {Laing Lab},
   year   = {2026},
+  doi    = {10.17632/vd2h64x7wg},
   url    = {https://github.com/LaingLab/GLIDER}
 }
 ```
+
+The data, analysis code and results are archived at Mendeley Data:
+<https://doi.org/10.17632/vd2h64x7wg>
 
 ## Contributing
 
