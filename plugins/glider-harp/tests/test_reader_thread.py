@@ -88,6 +88,29 @@ class _FakeSerial:
         self.is_open = False
 
 
+class _ManualClock:
+    """A stand-in for ``time`` inside the reader, advanced only by the test.
+
+    The reader consults ``time.monotonic()`` for exactly one policy decision --
+    has the line been silent for a whole window -- so substituting the module
+    makes "inside the window" a fact the test constructs rather than a bet on
+    the host scheduler. Only ``monotonic`` is provided, on purpose: a reader
+    that grew a real sleep would fail loudly here instead of timing a test.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._now = 0.0
+
+    def monotonic(self):
+        with self._lock:
+            return self._now
+
+    def advance(self, seconds):
+        with self._lock:
+            self._now += seconds
+
+
 class _BufferedFakeSerial:
     """A handle that reports ``in_waiting``, as pyserial does.
 
@@ -452,21 +475,46 @@ def test_a_quiet_link_with_nothing_held_never_flushes(cache, reader_for):
     assert reader.idle_flushes == 0
 
 
-def test_a_buffer_with_nothing_framable_is_rescanned_once_per_window(reader_for):
+def test_a_buffer_with_nothing_framable_is_rescanned_once_per_window(reader_for, monkeypatch):
     """A head that never resolves must cost one rescan per window, not one per read.
 
     These two bytes claim a 257-byte frame that will never arrive, so the flush
     releases nothing and the buffer stays exactly as it was -- the shape a
     device that died mid-frame leaves behind. Rescanning it on every read means
     decoding at every offset several times a second for the rest of the trial.
+
+    The reader's clock is substituted rather than raced. Measured in wall
+    time, "many reads well inside one window" was a bet that thirty ~5 ms
+    reads finish inside 0.5 s, and a loaded macOS runner loses it: each sleep
+    can oversleep past 16 ms, the window genuinely elapses, and the reader's
+    correct once-per-window flush read as a failure. With the clock held
+    still, a second flush can only be the per-read rescan this test forbids.
     """
+    import glider_harp.reader as reader_module
+
+    clock = _ManualClock()
+    monkeypatch.setattr(reader_module, "time", clock)
+
     fake = _FakeSerial([bytes([3, 255])])
     reader = reader_for(fake, idle_flush_s=0.5)
 
+    # A second read has begun, so the loop has finished processing the chunk
+    # and the silence being timed started, on the manual clock, at zero.
+    assert _wait_until(lambda: fake.reads >= 2)
+    clock.advance(0.6)  # one window of silence
     assert _wait_until(lambda: reader.idle_flushes >= 1)
+
+    # Any number of further empty reads inside the frozen window: no rescan.
     reads = fake.reads
-    assert _wait_until(lambda: fake.reads >= reads + 30)  # well inside the next window
+    assert _wait_until(lambda: fake.reads >= reads + 30)
     assert reader.idle_flushes == 1
+
+    # And the next window costs exactly one more, however many reads it holds.
+    clock.advance(0.6)
+    assert _wait_until(lambda: reader.idle_flushes >= 2)
+    reads = fake.reads
+    assert _wait_until(lambda: fake.reads >= reads + 30)
+    assert reader.idle_flushes == 2
 
 
 # --- what the counters mean ---
