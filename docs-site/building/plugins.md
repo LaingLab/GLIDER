@@ -71,11 +71,15 @@ Open **Tools → Plugins…**. GLIDER shows a curated catalogue of published plu
 current state. Search the list or use the **All / Installed / Available** filters
 to narrow it.
 
-Press **Install** on a row and GLIDER runs `pip` as a subprocess of its *own*
-interpreter, so the plugin lands in the environment GLIDER is actually running
-from. pip's output streams onto the row as it goes. If it fails, the row keeps
-pip's message verbatim — that text is usually the real answer ("no matching
-distribution for `zmq>=26`"), so read it before retrying.
+Press **Install** on a row and GLIDER installs into its *own* interpreter, so
+the plugin lands in the environment GLIDER is actually running from. It uses
+`pip` when the environment has it, and falls back to `uv pip install` when it
+does not — which is the normal case, since the documented setup (`uv venv` +
+`uv sync`) creates an environment without pip. The installer's output streams
+onto the row as it goes. If it fails, the row keeps the message verbatim — that
+text is usually the real answer ("no matching distribution for `zmq>=26`"), so
+read it before retrying. If the row says neither pip nor uv is available,
+install one of them into GLIDER's environment first.
 
 !!! danger "Installing a plugin runs arbitrary code with your privileges"
     A catalogue plugin is a Python package. Installing it executes its build and
