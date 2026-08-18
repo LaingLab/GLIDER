@@ -99,7 +99,7 @@ Index schema is unchanged from the Harp spec:
       "description": "Harp-protocol instruments (lickometers, behavior boards, olfactometers).",
       "author": "Laing Lab",
       "homepage": "https://github.com/LaingLab/glider-harp",
-      "glider_requires": ">=1.1,<2.0",
+      "glider_requires": ">=1.0,<2.0",
       "provides": ["driver", "device"]
     }
   ]
