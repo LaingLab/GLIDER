@@ -2,7 +2,7 @@
 
 Thanks for your interest. GLIDER is a scientific instrument that researchers rely on for reproducible experimental data, so the contribution bar is *"would I trust this to run unattended overnight?"*
 
-This document covers the practical workflow. For architectural context, read [`code-review-laing.md`](code-review-laing.md) — it documents the systems and known limitations.
+This document covers the practical workflow. For architectural context, read the [GLIDER Ecosystem Reference](docs-site/reference/ecosystem-reference.md) — it explains what each subsystem is responsible for and which claims should be made with appropriate scope.
 
 ---
 
@@ -16,18 +16,18 @@ cd glider
 # See https://docs.astral.sh/uv/getting-started/installation/
 
 uv venv
-source venv/bin/activate   # or venv\Scripts\Activate on Windows
-uv sync --extra dev        # pulls pc, vision, i2c via [dev] self-reference
+uv sync --extra dev        # pulls pc, vision, i2c, behavior via [dev] self-reference
 ```
 
-Verify your environment:
+Verify your environment (`uv run` executes commands inside the `.venv` that
+`uv venv` created — no activation needed):
 
 ```bash
-ruff check src tests
-black --check src tests
-mypy src
-pytest tests/ -v
-glider --help
+uv run ruff check src tests
+uv run black --check src tests
+uv run mypy src
+uv run pytest tests/ -v
+uv run glider --help
 ```
 
 If any of those fail on a clean checkout, open an issue.
@@ -48,10 +48,10 @@ For new features, hardware drivers, or anything that changes saved-file format: 
 
 - **Formatter:** `black` with line length 100.
 - **Linter:** `ruff` with the configuration in `pyproject.toml`. Don't disable rules to suppress your own warnings — fix the warning or open a discussion if the rule is wrong for this codebase.
-- **Type hints:** required on every public function and method. Run `mypy src` before sending a PR; CI enforces this.
+- **Type hints:** required on every public function and method. Run `mypy src` before sending a PR and keep it clean; CI runs mypy and surfaces its findings, but does not yet fail the build on them.
 - **Logging, not print:** every module has `logger = logging.getLogger(__name__)` at the top. Use it. The codebase is `print()`-free.
 - **No `eval`, `exec`, `pickle`, `shell=True`, `yaml.load` without `SafeLoader`.** If you genuinely need one of these (you almost certainly don't), open an issue first explaining why.
-- **Async patterns:** every coroutine that does hardware I/O must have a timeout. The pattern is `await asyncio.wait_for(device.write(...), timeout=DEVICE_IO_TIMEOUT_S)`. Fire-and-forget `asyncio.create_task` without storing the task handle is a recipe for "STOP doesn't actually stop" bugs — see Section 1 of [`code-review-laing.md`](code-review-laing.md).
+- **Async patterns:** every coroutine that does hardware I/O must have a timeout. The pattern is `await asyncio.wait_for(device.write(...), timeout=DEVICE_IO_TIMEOUT_S)`. Fire-and-forget `asyncio.create_task` without storing the task handle is a recipe for "STOP doesn't actually stop" bugs — an unreferenced task can be garbage-collected mid-flight, and nothing can cancel a task nobody holds.
 
 ---
 
@@ -77,9 +77,9 @@ GUI tests use `pytest-qt`'s `qtbot` fixture. Don't add tests that require a real
 
 Adding support for a new board or device:
 
-1. **Board:** subclass `BaseBoard` in `src/glider/hal/boards/`. Implement `connect`, `disconnect`, `set_pin_mode`, `write_digital`, `write_analog`, `read_digital`, `read_analog`, **and `emergency_stop`** (now `@abstractmethod`). Every I/O method must be `async` and have an internal timeout — read [`code-review-laing.md`](code-review-laing.md) Section 2 to understand why.
+1. **Board:** subclass `BaseBoard` in `src/glider/hal/boards/`. Implement `connect`, `disconnect`, `set_pin_mode`, `write_digital`, `write_analog`, `read_digital`, `read_analog`, **and `emergency_stop`** (now `@abstractmethod`). Every I/O method must be `async` and have an internal timeout — a wedged cable or board must not be able to hang the GUI, a running experiment, or an emergency stop.
 2. **Device class:** subclass `BaseDevice` in `src/glider/hal/base_device.py`. Implement `initialize` and `shutdown`. Always clear `self._initialized = False` in `shutdown` (don't leave the device in a half-state if reinit later fails).
-3. **Entry point:** register the board in `pyproject.toml` under `[project.entry-points."glider.driver"]`. Document the wiring in `docs/`.
+3. **Entry point:** register the board in `pyproject.toml` under `[project.entry-points."glider.driver"]`. Document the wiring in `docs-site/`.
 4. **Tests:** add a test file in `tests/unit/hal/`. Faithful fake boards beat MagicMocks every time.
 
 ---
@@ -134,7 +134,7 @@ When opening a bug report, please include:
 - **Hardware** (board type, devices connected, camera model if relevant)
 - **Steps to reproduce**
 - **Expected vs. actual behavior**
-- **Logs** — include the last ~100 lines from `~/.glider/logs/` if available
+- **Logs** — GLIDER logs to the terminal it was launched from (there are no log files); include the last ~100 lines of that output. On a Pi kiosk, use `journalctl -u glider`.
 - **`.glider` file** if relevant (sanitise any subject IDs first)
 
 Bugs that involve potential data corruption (CSV truncation, video file unplayable, wrong sensor values) or hardware safety (outputs driving after STOP, hung shutdown) are highest priority and should be tagged `safety`.
