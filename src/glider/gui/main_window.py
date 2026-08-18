@@ -1039,6 +1039,11 @@ class MainWindow(QMainWindow):
         gpu_check_action.triggered.connect(self._on_gpu_check)
         tools_menu.addAction(gpu_check_action)
 
+        plugins_action = QAction("&Plugins…", self)
+        plugins_action.setStatusTip("Browse the plugin catalogue and install from it")
+        plugins_action.triggered.connect(self._on_open_plugins)
+        tools_menu.addAction(plugins_action)
+
         # Help menu
         help_menu = menubar.addMenu("&Help")
 
@@ -2078,6 +2083,30 @@ class MainWindow(QMainWindow):
                 f"Custom device '{dialog.device_name}' created — add it via Hardware → Add Device",
                 5000,
             )
+
+    def _on_open_plugins(self) -> None:
+        """Open the plugin browser. Non-modal: an install takes minutes.
+
+        Before ``discover_plugins`` has run there is no manager, and opening a
+        window then would list nothing — which reads as a broken index rather
+        than a cold start. Say so instead.
+        """
+        if self._core.plugin_manager is None:
+            QMessageBox.information(
+                self,
+                "Plugins",
+                "The plugin system has not started yet. Finish loading the "
+                "session and try again.",
+            )
+            return
+
+        # Lazy import, as with the other tool windows: keeps startup free of the
+        # dialog and its registry/installer imports until the menu is used.
+        from glider.gui.dialogs.plugin_manager_dialog import PluginManagerDialog
+
+        asyncio.ensure_future(
+            PluginManagerDialog.open_for(parent=self, plugin_manager=self._core.plugin_manager)
+        )
 
     def _on_open_analysis_panel(self, directory: str) -> None:
         """Open (or reuse) the Analysis dock and load a finished recording.

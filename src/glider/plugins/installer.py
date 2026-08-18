@@ -11,7 +11,7 @@ import asyncio
 import importlib
 import logging
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,6 +26,32 @@ class InstallResult:
     ok: bool
     message: str
     output: str = ""
+
+
+def is_compatible(entry: Mapping[str, Any], glider_version: str) -> bool:
+    """Whether *entry*'s ``glider_requires`` admits *glider_version*.
+
+    Split out of :func:`install` so the Plugins window can grey a row out under
+    exactly the rule the installer would refuse it by. A window offering an
+    Install button that pip then declines is worse than no button at all.
+    """
+    requires = entry.get("glider_requires", "") or ""
+    if not requires:
+        return True
+    return Version(glider_version) in SpecifierSet(requires)
+
+
+def incompatibility_message(entry: Mapping[str, Any], glider_version: str) -> str:
+    """Say *which* two versions disagree.
+
+    "incompatible" on its own sends people to the issue tracker to ask which
+    half is wrong, so both halves are always named -- and named identically
+    whether the refusal came from the window or from :func:`install`.
+    """
+    return (
+        f"{entry['name']} needs GLIDER {entry.get('glider_requires', '')}. "
+        f"You are running {glider_version}."
+    )
 
 
 async def _default_runner(args: list[str], on_output: Callable[[str], None] | None = None):
@@ -52,21 +78,15 @@ async def install(
 ) -> InstallResult:
     """Install one catalogue entry, refusing before pip runs if it cannot fit."""
     run = runner or _default_runner
-    requires = entry.get("glider_requires", "") or ""
 
-    if requires and Version(glider_version) not in SpecifierSet(requires):
-        # Name both versions: "incompatible" alone sends people to the issue
-        # tracker to ask which half is wrong.
+    if not is_compatible(entry, glider_version):
         logger.info(
             "Refusing to install %s: needs GLIDER %s, running %s",
             entry.get("name"),
-            requires,
+            entry.get("glider_requires", ""),
             glider_version,
         )
-        return InstallResult(
-            ok=False,
-            message=(f"{entry['name']} needs GLIDER {requires}. You are running {glider_version}."),
-        )
+        return InstallResult(ok=False, message=incompatibility_message(entry, glider_version))
 
     args = [sys.executable, "-m", "pip", "install", entry["pypi"]]
     returncode, output = await run(args, on_output)

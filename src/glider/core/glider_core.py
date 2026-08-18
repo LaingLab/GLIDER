@@ -159,6 +159,16 @@ class GliderCore:
         return self._flow_engine
 
     @property
+    def plugin_manager(self) -> "PluginManager | None":
+        """Plugin manager instance, or None before ``_load_plugins`` has run.
+
+        None is a real state on a cold start, not a defect: callers must say so
+        rather than presenting an empty plugin list, which reads as a broken
+        index instead of an uninitialised one.
+        """
+        return self._plugin_manager
+
+    @property
     def data_recorder(self) -> DataRecorder:
         """Data recorder instance."""
         return self._data_recorder
