@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -63,8 +64,10 @@ FILTERS: tuple[tuple[str, str], ...] = (
     ("available", "Available"),
 )
 
-#: Row states that mean "this package is on disk".
-_INSTALLED_STATES = frozenset({"enabled", "disabled"})
+#: Row states that mean "this package is on disk". ``broken`` belongs here: the
+#: package installed, it just does not import. Leaving it out would hide the one
+#: row a user filtering to **Installed** most needs to see.
+_INSTALLED_STATES = frozenset({"enabled", "disabled", "broken"})
 
 #: How each index source reads in the footer. Each phrase contains its own key
 #: word, so the footer names the source whichever branch of `resolve()` won.
@@ -102,13 +105,21 @@ def _entry_point_names(pypi: str) -> list[str]:
 
 def installed_state(
     index: ResolvedIndex, plugin_manager: PluginManager | None
-) -> tuple[dict[str, str], set[str]]:
-    """Work out what is on disk, and what is on disk but switched off.
+) -> tuple[dict[str, str], set[str], dict[str, str]]:
+    """Work out what is on disk, what is switched off, and what is broken.
 
     "Installed" is answered by ``importlib.metadata``, not by the plugin
     manager: the manager only knows about packages whose entry points loaded,
     so a package that installed correctly but failed to import would otherwise
     read as "available" and invite a pointless second pip run.
+
+    The third return value is why this function is not just a version lookup.
+    ``PluginInfo.enabled`` defaults to ``True`` and **no failure path clears
+    it** -- ``load_plugin`` records the reason on ``info.error``, returns False,
+    and leaves ``enabled`` alone. So a plugin that pip installed and Python then
+    refused to import is ``enabled=True, loaded=False, error="..."``, and any
+    reading that consults ``enabled`` alone paints it green. What makes a plugin
+    working is that it *loaded*; what says why it did not is ``error``.
     """
     from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as dist_version
@@ -116,6 +127,7 @@ def installed_state(
     known = plugin_manager.plugins if plugin_manager is not None else {}
     installed: dict[str, str] = {}
     disabled: set[str] = set()
+    failed: dict[str, str] = {}
 
     for entry in index.plugins:
         name = str(entry.get("name", ""))
@@ -131,12 +143,18 @@ def installed_state(
             continue
 
         seen = [known[ep] for ep in _entry_point_names(pypi) if ep in known]
+        # An error only counts while the plugin is meant to be running. A
+        # switched-off plugin keeps whatever error it had last time, and
+        # reporting that as a live failure would be stale.
+        broken = [info for info in seen if info.enabled and not info.loaded and info.error]
+        if broken:
+            failed[name] = "; ".join(str(info.error) for info in broken)
         # Only call it disabled when the manager knows the plugin and every
         # part of it is off. Silence from the manager is not a "no".
-        if seen and not any(info.enabled for info in seen):
+        elif seen and not any(info.enabled for info in seen):
             disabled.add(name)
 
-    return installed, disabled
+    return installed, disabled, failed
 
 
 class PluginManagerDialog(QDialog):
@@ -146,6 +164,7 @@ class PluginManagerDialog(QDialog):
         index: The resolved catalogue, including where it came from.
         installed: ``{catalogue name: installed version}`` for packages on disk.
         disabled: Names among *installed* the plugin manager has switched off.
+        failed: ``{catalogue name: why}`` for packages on disk that did not load.
         plugin_manager: Used for enable/disable/reload and post-install
             rediscovery. Optional so tests can build the window without one.
         glider_version: The running version, for the compatibility gate.
@@ -157,6 +176,7 @@ class PluginManagerDialog(QDialog):
         installed: Mapping[str, str],
         *,
         disabled: Iterable[str] = (),
+        failed: Mapping[str, str] | None = None,
         plugin_manager: PluginManager | None = None,
         glider_version: str | None = None,
         parent: QWidget | None = None,
@@ -172,6 +192,7 @@ class PluginManagerDialog(QDialog):
         self._index = index
         self._installed: dict[str, str] = dict(installed)
         self._disabled: set[str] = set(disabled)
+        self._failed: dict[str, str] = dict(failed or {})
         self._plugin_manager = plugin_manager
         self._glider_version = glider_version or GLIDER_VERSION
 
@@ -184,6 +205,9 @@ class PluginManagerDialog(QDialog):
 
         self._filter = "all"
         self._search = ""
+        # Rows exempted from the filter because they *just* changed state. See
+        # `_apply_filters`.
+        self._pinned: set[str] = set()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 18, 20, 16)
@@ -285,6 +309,11 @@ class PluginManagerDialog(QDialog):
     def _state_for(self, entry: Mapping[str, Any]) -> tuple[str, str]:
         name = str(entry.get("name", ""))
         if name in self._installed:
+            # Being on disk is not the same as working. A package that pip
+            # installed and Python then refused to import is `broken`, and the
+            # row carries the import error rather than a green pill.
+            if name in self._failed:
+                return "broken", self._failed[name]
             return ("disabled" if name in self._disabled else "enabled", "")
         if not is_compatible(entry, self._glider_version):
             return "incompatible", incompatibility_message(entry, self._glider_version)
@@ -298,6 +327,7 @@ class PluginManagerDialog(QDialog):
         button = self._filter_buttons.get(name)
         if button is not None and not button.isChecked():
             button.setChecked(True)
+        self._pinned.clear()
         self._apply_filters()
 
     def set_search(self, text: str) -> None:
@@ -305,12 +335,25 @@ class PluginManagerDialog(QDialog):
         self._search = text.strip().lower()
         if self._search_box.text() != text:
             self._search_box.setText(text)
+        self._pinned.clear()
         self._apply_filters()
 
-    def _apply_filters(self) -> None:
+    def _apply_filters(self, *, keep: str | None = None) -> None:
+        """Re-run the filter, optionally exempting the row named by *keep*.
+
+        The exemption exists because an install *changes which filter a row
+        matches*. Under **Available**, a row that finishes installing stops
+        matching at the exact moment it has something to say, and re-filtering
+        then would delete the success message and the whole pip transcript from
+        under the user who was watching it. A row that just transitioned stays
+        put until the user touches the filter or the search box again -- both of
+        which clear the exemption, so the controls never lie about what they do.
+        """
+        if keep:
+            self._pinned.add(keep)
         any_visible = False
         for card in self._cards:
-            visible = self._matches(card)
+            visible = self._matches(card) or card.plugin_name in self._pinned
             card.setVisible(visible)
             any_visible = any_visible or visible
         self._empty.setVisible(not any_visible)
@@ -358,10 +401,14 @@ class PluginManagerDialog(QDialog):
 
         self._installed[name] = str(entry.get("version", ""))
         self._disabled.discard(name)
+        self._failed.pop(name, None)
         card.set_state("enabled", message=result.message)
         await self._rediscover()
-        self._refresh_row(name)
-        self._apply_filters()
+        # `_refresh_row` has the last word on the state: pip finishing is not
+        # the same as the plugin working, and only the load attempt knows which
+        # happened. `result.message` survives only if nothing went wrong.
+        self._refresh_row(name, fallback_message=result.message)
+        self._apply_filters(keep=name)
 
     async def _rediscover(self) -> None:
         """Let a freshly installed plugin register without a restart."""
@@ -373,21 +420,29 @@ class PluginManagerDialog(QDialog):
         except Exception as exc:
             logger.warning("Rediscovery after install failed: %s", exc)
 
-    def _refresh_row(self, name: str) -> None:
+    def _refresh_row(self, name: str, *, fallback_message: str = "") -> None:
         """Recompute one row from disk. Deliberately not a full rebuild --
         another row may be mid-install with live pip output on it."""
         card = self._cards_by_name.get(name)
         entry = self._entries.get(name)
         if card is None or entry is None:
             return
-        installed, disabled = installed_state(
+        installed, disabled, failed = installed_state(
             ResolvedIndex(plugins=[dict(entry)]), self._plugin_manager
         )
         if name in installed:
             self._installed[name] = installed[name]
+            # The catalogue advertised a version; pip resolved one. Say which
+            # one is actually there.
+            card.set_version(installed[name])
         self._disabled = (self._disabled - {name}) | (disabled & {name})
+        if name in failed:
+            self._failed[name] = failed[name]
+        else:
+            self._failed.pop(name, None)
         state, message = self._state_for(entry)
-        card.set_state(state, message=message)
+        # `output=None`: whatever pip wrote stays on the row.
+        card.set_state(state, message=message or fallback_message)
 
     def _on_enable_requested(self, name: str) -> None:
         self._toggle(name, enable=True)
@@ -442,6 +497,18 @@ class PluginManagerDialog(QDialog):
         card = self._cards_by_name.get(name)
         if card is None or self._plugin_manager is None:
             return
+        if not targets:
+            # No entry points means the loop below does nothing, and reporting
+            # "Reloaded." for having done nothing is the worst of the three
+            # possible answers. The package may predate its entry points, or
+            # declare none, or not be importable from this interpreter at all.
+            entry = self._entries.get(name, {})
+            package = str(entry.get("pypi") or name)
+            card.set_message(
+                f"Nothing to reload: {package} registers no GLIDER entry point in this "
+                "environment. If it was just installed, a restart will pick it up."
+            )
+            return
         failures = []
         for plugin in targets:
             try:
@@ -489,31 +556,56 @@ class PluginManagerDialog(QDialog):
             logger.warning("Install failure for unknown plugin %s: %s", name, message)
             return
         card.set_state("failed", message=message, output=output)
-        self._apply_filters()
+        # `keep`: under the **Available** filter a failed row still matches, but
+        # under **Installed** it does not -- and hiding the row is hiding the
+        # transcript that explains the failure. See `_apply_filters`.
+        self._apply_filters(keep=name)
 
     # ------------------------------------------------------------ entry point
 
     @classmethod
     async def open_for(
         cls, parent: QWidget | None, plugin_manager: PluginManager | None
-    ) -> PluginManagerDialog:
+    ) -> PluginManagerDialog | None:
         """Resolve the catalogue, then show the window.
 
         The only place in this module that touches the network.
+
+        **Nothing may escape this method invisibly.** It is awaited from a menu
+        handler through ``ensure_future``, so an exception here has no caller to
+        land on -- it becomes a "Task exception was never retrieved" at garbage
+        collection time and the user sees a menu item that does nothing at all.
+        `PluginRegistry.load_bundled` is *documented* to raise on a malformed
+        bundled index, and a single unreadable field in a network index used to
+        raise out of the constructor, so this is a live path, not a formality.
+        Returns None when the window could not be built; the failure is put in
+        front of the user first.
         """
         from glider.core.config import get_config
 
-        cache_dir = Path(get_config().paths.user_config_dir)
-        index = await PluginRegistry(cache_dir=cache_dir).resolve()
-        installed, disabled = installed_state(index, plugin_manager)
+        try:
+            cache_dir = Path(get_config().paths.user_config_dir)
+            index = await PluginRegistry(cache_dir=cache_dir).resolve()
+            installed, disabled, failed = installed_state(index, plugin_manager)
 
-        dialog = cls(
-            index=index,
-            installed=installed,
-            disabled=disabled,
-            plugin_manager=plugin_manager,
-            parent=parent,
-        )
+            dialog = cls(
+                index=index,
+                installed=installed,
+                disabled=disabled,
+                failed=failed,
+                plugin_manager=plugin_manager,
+                parent=parent,
+            )
+        except Exception as exc:
+            logger.exception("Could not open the Plugins window")
+            QMessageBox.warning(
+                parent,
+                "Plugins",
+                f"The plugin catalogue could not be read, so the Plugins window "
+                f"could not open:\n\n{exc}",
+            )
+            return None
+
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
