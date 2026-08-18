@@ -1,0 +1,105 @@
+[build-system]
+# setuptools>=77 for the PEP 639 `license = "MIT"` string form; the older
+# `License ::` trove classifier it replaces now emits a deprecation warning on
+# every build, which is noise in test_packaging.py's captured build output.
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glider-harp"
+version = "0.1.0"
+description = "Harp binary-protocol support for GLIDER"
+license = "MIT"
+requires-python = ">=3.11,<3.14"
+authors = [
+    {name = "LaingLab"}
+]
+keywords = ["harp", "glider", "laboratory", "automation", "hardware"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    # `harp-protocol`, NOT the `harp` meta-package. Every `harp.` import in
+    # this package is `harp.protocol` (frames.py, schema.py, board.py's
+    # canary, and nothing else); `harp.device` and `harp.serial` are named
+    # only in prose. `harp` is a meta-package whose sole content is a
+    # `py.typed` marker plus `Requires-Dist` on harp-protocol, harp-device,
+    # harp-serial and harp-data -- so depending on it drags in three
+    # distributions this package never imports, and their pandas/pyserial
+    # trees with them.
+    #
+    # The lower bound is explicit and is the whole point. `harp`'s own
+    # `Requires-Dist: harp-protocol` carries NO lower bound, so a resolve
+    # that goes through the meta-package can pick up the incompatible
+    # 0.4.0 -- which shares no API with 0.5.x, imports perfectly happily as
+    # `harp.protocol`, and reports install success. Only a *name* tells the
+    # two apart, which is what board.py's `from harp.protocol import
+    # HarpMessage` canary and test_packaging.py both check.
+    #
+    # 0.5.0 is still pre-release upstream, so installers need `--pre` (or an
+    # explicit `==0.5.0rc1`) to see it; a PEP 440 pre-release lower bound
+    # makes pre-releases eligible for *this* specifier, but tooling that
+    # globally refuses pre-releases will still need telling.
+    "harp-protocol>=0.5.0rc1,<0.6",
+    "pyserial>=3.5",
+    # GLIDER itself is deliberately NOT a dependency. The plugin is installed
+    # into an environment that already has it; declaring it would make the
+    # editable dev install fight the root project.
+]
+
+# `glider.driver`, `glider.device` and `glider.node` are the three groups
+# `PluginManager._discover_from_entry_points` scans. The `module:Class` value
+# shape below matches the root pyproject's own `glider.driver` entries.
+#
+# Read `PluginManager.load_plugin` before adding to these, because the value
+# shape decides what actually happens, and it is not what the shape suggests:
+# the part after the colon is treated as a **setup function and called**, and
+# the part before it is the module `_register_plugin_components` then reads
+# `BOARD_DRIVERS` / `DEVICE_TYPES` / `NODE_TYPES` off. So a `module:Class`
+# entry constructs a throwaway instance and registers nothing -- `HarpBoard`
+# is `glider_harp.board`'s, and `glider_harp.board` has no `BOARD_DRIVERS`.
+# The `glider_harp` entry below is the module-valued form, which is the only
+# shape that reaches the registration code: no attribute is named, so
+# `load_plugin` looks for `setup` (absent, correctly, since the package's
+# PEP 562 `__getattr__` raises for it) and goes straight to registering
+# `BOARD_DRIVERS` and `DEVICE_TYPES`. That is what actually puts `HarpBoard`
+# into `HardwareManager._driver_registry` and `HarpDevice` into
+# `DEVICE_REGISTRY`.
+[project.entry-points."glider.driver"]
+harp = "glider_harp.board:HarpBoard"
+glider_harp = "glider_harp"
+
+# Declared for discovery/inspection parity with the driver group. Note that
+# `discover_plugins` keys the registry by entry point *name* across all three
+# groups and keeps the first one it sees, so this `harp` is shadowed by the
+# `glider.driver` `harp` above and is never loaded. That is the benign
+# outcome: were it loaded, `load_plugin` would call `HarpDevice()` as a setup
+# function and fail with "missing 2 required positional arguments: 'board' and
+# 'config'". `DEVICE_TYPES` on the package is what actually registers the
+# device. See tests/test_packaging.py.
+[project.entry-points."glider.device"]
+harp = "glider_harp.device:HarpDevice"
+
+[project.urls]
+Homepage = "https://github.com/LaingLab/glider"
+Repository = "https://github.com/LaingLab/glider"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# `derivation.load_profile` resolves `Path(__file__).parent / "profiles"`, so
+# the shipped profiles must be in the wheel. Under a src layout setuptools
+# includes no non-Python file unless it is named here, and the failure mode is
+# invisible from a source checkout: `load_profile("licketysplit")` keeps
+# working in the repo and raises FileNotFoundError only once installed.
+# tests/test_packaging.py builds a wheel and asserts the file is in it.
+glider_harp = ["profiles/*.json"]

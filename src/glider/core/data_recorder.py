@@ -69,6 +69,15 @@ class DataRecorder:
         self._flow_anchor: float | None = None
         self._sample_task: asyncio.Task | None = None
         self._device_columns: list[str] = []
+        # Devices whose state_columns() raised or returned something
+        # malformed. They fall back to a single column, and
+        # _read_device_state hits the same failure on every sample and
+        # yields None — so the device records nothing but empty cells for
+        # the whole session. _write_metadata says so in the CSV itself.
+        self._degraded_devices: list[str] = []
+        # (device_id, message) pairs already written as `# WARNING` rows, so a
+        # warning reported both before the run and after it appears once.
+        self._reported_warnings: set[tuple[str, str]] = set()
         self._zone_columns: list[str] = []
         self._zone_config: ZoneConfiguration | None = None
         self._cv_processor: CVProcessor | None = None
@@ -179,11 +188,49 @@ class DataRecorder:
         self._cv_processor = cv_processor
 
     def _get_device_columns(self) -> list[str]:
-        """Get list of device column names."""
+        """
+        Get list of device column names.
+
+        A device may contribute several columns by returning names from
+        ``state_columns()``; those become ``{device_id}:{name}``. Devices
+        returning ``None`` keep the historical ``{device_id}:{device_type}``.
+
+        The return value is validated, not merely trusted not to raise:
+        devices can arrive from third-party packages, and a bare string
+        (say ``"state"``) is iterable, so it would otherwise expand into
+        one column per character. Anything that isn't ``None`` or a list
+        of unique non-empty strings is refused.
+
+        Also refreshes ``_degraded_devices`` with the ids whose
+        ``state_columns()`` raised or misbehaved, for ``_write_metadata``
+        to report.
+        """
         columns = []
+        self._degraded_devices = []
         for device_id, device in self._hardware_manager.devices.items():
-            device_type = getattr(device, "device_type", "unknown")
-            columns.append(f"{device_id}:{device_type}")
+            sub_columns = None
+            if hasattr(device, "state_columns"):
+                try:
+                    sub_columns = device.state_columns()
+                except Exception:
+                    logger.exception("state_columns() failed for device %s", device_id)
+                    sub_columns = None
+                    self._degraded_devices.append(device_id)
+                if sub_columns is not None and (
+                    not isinstance(sub_columns, list)
+                    or not all(isinstance(n, str) and n for n in sub_columns)
+                    or len(set(sub_columns)) != len(sub_columns)
+                ):
+                    logger.error(
+                        "state_columns() returned %r for device %s", sub_columns, device_id
+                    )
+                    sub_columns = None
+                    self._degraded_devices.append(device_id)
+            if sub_columns:
+                columns.extend(f"{device_id}:{name}" for name in sub_columns)
+            else:
+                device_type = getattr(device, "device_type", "unknown")
+                columns.append(f"{device_id}:{device_type}")
         return columns
 
     def _get_zone_columns(self) -> list[str]:
@@ -195,6 +242,13 @@ class DataRecorder:
     async def _read_device_state(self, device) -> Any:
         """Read the current state of a device."""
         try:
+            # Multi-column devices must be read through get_state(), which
+            # returns a dict; `_state` (if present) is a scalar and would
+            # silently win the checks below.
+            sub_columns = device.state_columns() if hasattr(device, "state_columns") else None
+            if sub_columns and hasattr(device, "get_state"):
+                return await device.get_state()
+
             # Try different methods to get device state
             if hasattr(device, "_state"):
                 return device._state
@@ -221,12 +275,42 @@ class DataRecorder:
             states[device_id] = state
         return states
 
+    @staticmethod
+    def _device_warnings(device_id: str, device: Any) -> list[str]:
+        """A device's own recording-fidelity warnings, validated.
+
+        Validated rather than trusted for the same reason ``state_columns()``
+        is: devices arrive from third-party packages, and a bare string is
+        iterable, so it would otherwise be written out one character per row.
+        Anything that isn't a list of non-empty strings is dropped with a log
+        line — a malformed warning must not cost the recording its metadata
+        block.
+        """
+        getter = getattr(device, "recording_warnings", None)
+        if getter is None:
+            return []
+        try:
+            warnings = getter()
+        except Exception:
+            logger.exception("recording_warnings() failed for device %s", device_id)
+            return []
+        if not isinstance(warnings, list) or not all(isinstance(w, str) and w for w in warnings):
+            logger.error("recording_warnings() returned %r for device %s", warnings, device_id)
+            return []
+        return warnings
+
     def _write_metadata(
         self, experiment_name: str, session: Optional["ExperimentSession"] = None
     ) -> None:
         """Write metadata header to the CSV file."""
         if self._writer is None:
             return
+
+        # Resolve columns up front: the device section below reports any
+        # device that degraded while doing so, and the header row at the
+        # bottom of this method consumes the result.
+        self._device_columns = self._get_device_columns()
+        self._zone_columns = self._get_zone_columns()
 
         # Write metadata section
         self._writer.writerow(["# GLIDER Experiment Data"])
@@ -299,6 +383,31 @@ class DataRecorder:
             pins = config.pins if config else {}
             pin_str = ", ".join(f"{k}={v}" for k, v in pins.items())
             self._writer.writerow(["#", device_id, device_type, f"board={board_id}", pin_str])
+        # A device whose state_columns() failed is recorded as a single
+        # column, and _read_device_state hits that same failure on every
+        # sample and yields None — so the device writes nothing but empty
+        # cells for the whole session. Say so here: the log line it also
+        # emits is not something anyone watches mid-run.
+        #
+        # Cell 0 is a fixed literal, never interpolated. Readers key off
+        # the leading `#` to skip comment rows, and csv quotes any cell
+        # containing a comma — so an id like "fl,aky" in cell 0 would
+        # push the quote to the front of the line and break them.
+        for device_id in self._degraded_devices:
+            self._writer.writerow(
+                ["# WARNING", device_id, "state_columns() failed; recorded as single column"]
+            )
+        # The same row shape for a device that knows its own columns will be
+        # less informative than they look (e.g. a Harp register that emits no
+        # events, so its column can never change). Those are reported by the
+        # device rather than discovered here, and for the same reason the
+        # rows above exist: the log line each one also emits is not something
+        # anyone watches during an unattended run.
+        self._reported_warnings = set()
+        for device_id, device in self._hardware_manager.devices.items():
+            for message in self._device_warnings(device_id, device):
+                self._writer.writerow(["# WARNING", device_id, message])
+                self._reported_warnings.add((device_id, message))
         self._writer.writerow([])
 
         # Write column headers. `frame` is the canonical camera frame index
@@ -309,8 +418,7 @@ class DataRecorder:
         # is empty until ``set_flow_anchor()`` is called (pre-flow
         # samples), then carries time-since-flow-start so this CSV's
         # sensor traces align at t=0 with the tracking CSV and runner.
-        self._device_columns = self._get_device_columns()
-        self._zone_columns = self._get_zone_columns()
+        # (Both column lists were resolved at the top of this method.)
         headers = (
             ["frame", "timestamp", "elapsed_ms", "flow_elapsed_ms"]
             + self._device_columns
@@ -429,10 +537,15 @@ class DataRecorder:
             flow_elapsed_cell,
         ]
 
-        # Device states (in column order).
+        # Device states (in column order). A column is either
+        # "{device_id}:{device_type}" for single-column devices or
+        # "{device_id}:{sub_column}" for multi-column ones; the dict branch
+        # below distinguishes them by what get_state() returned.
         for col in self._device_columns:
-            device_id = col.split(":")[0]
+            device_id, _, sub_key = col.partition(":")
             state = states.get(device_id)
+            if isinstance(state, dict):
+                state = state.get(sub_key)
             if state is None:
                 row.append("")
             elif isinstance(state, bool):
@@ -549,6 +662,22 @@ class DataRecorder:
 
         # Write footer
         if self._writer:
+            # Warnings a device only learned during the run — a serial link
+            # that died mid-session is the motivating case. The header block
+            # was written before the first row, so it cannot carry these, and
+            # the failure they describe is precisely the kind that leaves a
+            # CSV looking like a plausible result (a sensor that reports the
+            # same value for three hours reads exactly like an animal that
+            # stopped responding). Only what wasn't already reported at the
+            # top, so a static warning isn't repeated.
+            for device_id, device in self._hardware_manager.devices.items():
+                for message in self._device_warnings(device_id, device):
+                    if (device_id, message) in self._reported_warnings:
+                        continue
+                    self._reported_warnings.add((device_id, message))
+                    self._writer.writerow([])
+                    self._writer.writerow(["# WARNING", device_id, message])
+
             end_time = datetime.now()
             duration = (end_time - self._start_time).total_seconds() if self._start_time else 0
             self._writer.writerow([])

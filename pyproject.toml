@@ -113,7 +113,14 @@ pc = [
 glider = "glider.__main__:main"
 
 [project.entry-points."glider.driver"]
-# Built-in drivers are registered here
+# NOTE: these four do NOT register the built-in drivers, despite appearances.
+# PluginManager calls the attribute after the colon as a setup function and then
+# registers components by reading BOARD_DRIVERS/DEVICE_TYPES/NODE_TYPES off the
+# module; these point at classes and define no such dicts, so they register
+# nothing. The built-ins are registered explicitly in HardwareManager
+# (_register_builtin_drivers). Left in place because removing them is a
+# behaviour change to plugin discovery that wants its own review -- see the
+# plugin-marketplace work.
 arduino = "glider.hal.boards.telemetrix_board:TelemetrixBoard"
 raspberry_pi = "glider.hal.boards.pi_gpio_board:PiGPIOBoard"
 bluetooth = "glider.hal.boards.ble_board:BLEBoard"
@@ -148,7 +155,30 @@ target-version = ["py311", "py312", "py313"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests/unit", "tests/integration"]
+# Plugins under plugins/ are separate distributions but live in this
+# repository and are tested by this repository's pytest run. Listing the tree
+# here is what makes a bare `pytest` (and `pytest --collect-only`) see them --
+# without it the plugin's suite is local-only and CI proves nothing about it.
+# Each new plugin needs its own line; there is no glob form for testpaths.
+testpaths = ["tests/unit", "tests/integration", "plugins/glider-harp/tests"]
+# Import test modules by their full path rather than by inserting a rootdir on
+# sys.path. Under the default ("prepend") mode a module's identity is its
+# *basename*, so two test files that share one are the same module and
+# collecting both raises "import file mismatch" before a single test runs --
+# which is what `pytest tests/ plugins/glider-harp/tests/` did, on
+# test_schema.py and test_device.py. Both pairs are correctly named after what
+# they test (glider_harp.schema vs the .glider file schema; glider_harp.device
+# vs the pose device), so the collision is between trees, not a naming
+# mistake.
+#
+# The repository's older answer -- __init__.py markers, as under
+# tests/unit/analysis -- does not extend across the plugin boundary: a package
+# marker in plugins/glider-harp/tests names it `tests`, which then collides
+# with the repository's own tests/ directory and breaks collection outright.
+# importlib mode has no such shared namespace, needs no marker files, and
+# covers every future plugin as well. Nothing here imports test modules from
+# other test modules, which is the one thing the mode does not support.
+addopts = "--import-mode=importlib"
 markers = [
     "slow: marks tests as slow (deselect with -m 'not slow')",
     "hardware: marks tests requiring real hardware (deselect with -m 'not hardware')",
@@ -163,6 +193,12 @@ ignore_missing_imports = true
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Import roots, so first-party packages sort into their own block. This
+# EXTENDS ruff's default of [".", "src"] rather than replacing it -- both
+# defaults must be repeated here. Dropping "." reclassifies the top-level
+# packaging/ directory as third-party and breaks the import order in
+# src/glider/updater.py, which imports the real `packaging` distribution.
+src = [".", "src", "plugins/glider-harp/src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]

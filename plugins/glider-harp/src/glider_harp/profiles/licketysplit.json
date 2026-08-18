@@ -1,0 +1,8 @@
+{
+  "schema_version": "1.0",
+  "name": "LicketySplit",
+  "who_am_i": 1400,
+  "record": [
+    {"register": "LickState", "as": "lick", "mode": "boolean"}
+  ]
+}

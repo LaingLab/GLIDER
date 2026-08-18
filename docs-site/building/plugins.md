@@ -142,9 +142,23 @@ SETTINGS_SCHEMA = [
 
 !!! note "Plugins can add more than devices"
     The same folder-plus-contract mechanism can expose board drivers
-    (`BOARD_DRIVERS`) and node types (`NODE_TYPES`), not just devices. GLIDER's
-    own Arduino, Raspberry Pi, and Bluetooth board drivers are registered the same
-    way, through entry points. Devices are the most common thing to add.
+    (`BOARD_DRIVERS`) and node types (`NODE_TYPES`), not just devices. Devices
+    are the most common thing to add.
+
+!!! warning "`entry_point` names a function, not a class"
+    The attribute after the colon is **called** during load, and registration
+    happens separately, by reading the `DEVICE_TYPES` / `BOARD_DRIVERS` /
+    `NODE_TYPES` dictionaries off the module. So `my_plugin:setup` is correct and
+    `my_plugin:MyDeviceClass` is not — the latter constructs your class with no
+    arguments, discards it, finds no dictionaries, and registers nothing. The
+    plugin loads without raising, which is what makes this worth stating: the
+    only symptom is that your device never appears in **Add Device**.
+
+    GLIDER's own Arduino, Raspberry Pi, Bluetooth, and serial drivers are *not*
+    registered this way. They are registered explicitly in
+    `HardwareManager`, and the `glider.driver` entry points declared in the
+    project's own `pyproject.toml` have the `module:Class` shape above and
+    register nothing.
 
 ### Advanced: custom wait behaviors
 

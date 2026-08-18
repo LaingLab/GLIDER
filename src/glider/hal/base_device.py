@@ -130,6 +130,50 @@ class BaseDevice(ABC):
         """
         ...
 
+    def state_columns(self) -> list[str] | None:
+        """
+        Sub-column names this device contributes to the data CSV.
+
+        Return ``None`` (the default) for single-column behaviour: the
+        recorder emits one column named ``{device_id}:{device_type}`` and
+        writes this device's recorded state as a scalar.
+
+        Return a list of names to contribute several columns. The recorder
+        then emits ``{device_id}:{name}`` per entry and expects this
+        device's recorded state to be a dict keyed by those names. Missing
+        keys are written as empty cells.
+
+        Names must be non-empty, unique within the device, and must not
+        contain ``:``. The recorder builds headers as
+        ``{device_id}:{name}`` and recovers the pair by splitting on the
+        *first* colon, so a colon inside the name would in fact survive
+        the round trip — the restriction is for the humans and downstream
+        tools that read these headers, which have no way to know which
+        colon was the separator. (A colon in the *device id* genuinely
+        does break the split, but that is not something a device
+        controls.) A device with a single column returns ``None``, never
+        ``[]``.
+        """
+        return None
+
+    def recording_warnings(self) -> list[str]:
+        """
+        Ways this device's columns will say less than they look like they do.
+
+        Each string becomes a ``# WARNING`` row in the CSV metadata block,
+        beside the device id. Return short sentences describing a *known*
+        limitation of what will be recorded — a column that is wired to
+        something that never changes, a sensor configured out of range —
+        not transient errors, which belong in the log.
+
+        The CSV is what outlives the session. A device that only logs its
+        limitation announces it to nobody: an unattended overnight run
+        writes the log to a file nobody opens, and the person reading the
+        recording six months later has no way to learn that a column was
+        never going to move. Default: none.
+        """
+        return []
+
     @property
     def input_behaviors(self) -> list["InputBehavior"]:
         """Wait/input behaviors this device offers to WaitForInput (default none).
