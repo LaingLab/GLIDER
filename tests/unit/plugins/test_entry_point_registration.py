@@ -39,6 +39,29 @@ def fake_module(monkeypatch):
     return module
 
 
+@pytest.fixture
+def table_modules(monkeypatch):
+    """Two distinct plugins whose ``BOARD_DRIVERS`` claim the same driver name."""
+    first = types.ModuleType("fake_plugin_a")
+    first.BOARD_DRIVERS = {"shared": _Board}
+    second = types.ModuleType("fake_plugin_b")
+    second.BOARD_DRIVERS = {"shared": _OtherBoard}
+    monkeypatch.setitem(sys.modules, "fake_plugin_a", first)
+    monkeypatch.setitem(sys.modules, "fake_plugin_b", second)
+    return first, second
+
+
+@pytest.fixture
+def restore_sys_path():
+    """`load_plugin` prepends a directory plugin's parent to ``sys.path``."""
+    saved_path = list(sys.path)
+    saved_modules = set(sys.modules)
+    yield
+    sys.path[:] = saved_path
+    for name in set(sys.modules) - saved_modules:
+        del sys.modules[name]
+
+
 @pytest.fixture(autouse=True)
 def clean_registries():
     """Registries are class-level and leak between tests otherwise."""
@@ -117,15 +140,73 @@ async def test_registering_the_same_class_twice_is_a_no_op(fake_module, caplog):
     assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
 
-async def test_a_conflicting_class_is_logged_and_the_first_wins(fake_module, caplog):
+async def test_a_class_in_an_unmappable_group_fails_the_load(fake_module):
+    """A class that registers nowhere must not report success.
+
+    ``generic`` is the default ``plugin_type``, so this is the easy accident,
+    and reporting True while registering nothing is the exact silent failure
+    this module exists to remove. The error has to reach ``info.error``, since
+    that is what the plugin row can show; a log warning is not a substitute.
+    """
     manager = PluginManager()
-    first = PluginInfo(name="clash", entry_point="fake_plugin_mod:Board", plugin_type="driver")
+    info = PluginInfo(name="orphan", entry_point="fake_plugin_mod:Board")
+
+    assert info.plugin_type == "generic"
+    assert await _load(manager, info) is False
+    assert info.error is not None
+    assert "generic" in info.error
+    assert "orphan" not in HardwareManager._driver_registry
+
+
+async def test_a_conflicting_class_is_logged_and_the_first_wins(table_modules, caplog):
+    """Two *different* plugins claiming one driver name.
+
+    Reachable as written: ``discover_plugins`` keys plugins by their own name,
+    so the collision cannot come from one name loaded twice -- it comes from
+    two distinct plugins whose ``BOARD_DRIVERS`` share a key.
+    """
+    manager = PluginManager()
+    await _load(manager, PluginInfo(name="plugin_a", entry_point="fake_plugin_a"))
+    await _load(manager, PluginInfo(name="plugin_b", entry_point="fake_plugin_b"))
+
+    assert HardwareManager._driver_registry["shared"] is _Board
+    assert any("shared" in r.message for r in caplog.records if r.levelname == "WARNING")
+
+
+async def test_a_table_collides_with_a_class_entry_point(fake_module, table_modules, caplog):
+    """The two registration routes share one namespace, so they can collide."""
+    manager = PluginManager()
+    first = PluginInfo(name="shared", entry_point="fake_plugin_mod:Board", plugin_type="driver")
     await _load(manager, first)
+    await _load(manager, PluginInfo(name="plugin_b", entry_point="fake_plugin_b"))
 
-    second = PluginInfo(
-        name="clash", entry_point="fake_plugin_mod:OtherBoard", plugin_type="driver"
+    assert HardwareManager._driver_registry["shared"] is _Board
+    assert any("shared" in r.message for r in caplog.records if r.levelname == "WARNING")
+
+
+async def test_a_directory_plugin_without_setup_still_loads(tmp_path, restore_sys_path, caplog):
+    """`setup` is optional, and directory plugins are how that gets broken.
+
+    Discovery synthesizes the entry point for a bare package directory. If it
+    synthesizes one *with* a colon, `load_plugin` cannot tell the difference
+    between an author naming an attribute (missing => error) and discovery
+    defaulting to `setup` (missing => fine), and every directory plugin that
+    registers through tables instead of a setup function stops loading.
+    """
+    pkg = tmp_path / "dirplug"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text(
+        "class Board:\n    pass\n\n\nBOARD_DRIVERS = {'dirboard': Board}\n",
+        encoding="utf-8",
     )
-    await _load(manager, second)
 
-    assert HardwareManager._driver_registry["clash"] is _Board
-    assert any("clash" in r.message for r in caplog.records if r.levelname == "WARNING")
+    manager = PluginManager()
+    discovered = await manager._discover_from_directory(tmp_path)
+    assert [d.name for d in discovered] == ["dirplug"]
+
+    info = discovered[0]
+    assert await _load(manager, info) is True, info.error
+    assert HardwareManager._driver_registry["dirboard"].__name__ == "Board"
+    # Asserted last so that a regression fails on the behaviour above rather
+    # than on this, which is only the mechanism.
+    assert ":" not in info.entry_point

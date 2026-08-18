@@ -74,12 +74,21 @@ class PluginInfo:
         )
 
 
+class PluginRegistrationError(Exception):
+    """A plugin named a component that could not be registered."""
+
+
 def _registry_for(kind: str) -> dict[str, type] | None:
     """Return the mutable registry dict a plugin component of ``kind`` belongs in.
 
     Returned by reference on purpose: the caller needs to *read* the current
     occupant to decide whether a write is a no-op, a conflict, or new, and the
     three registries expose no such query in common.
+
+    That is also why ``HardwareManager.register_driver`` and
+    ``FlowEngine.register_node`` are deliberately not the write path here: both
+    overwrite unconditionally, which would silently let load order pick the
+    winner in a collision. Do not "simplify" this back to them.
     """
     if kind == "driver":
         from glider.core.hardware_manager import HardwareManager
@@ -105,11 +114,19 @@ def _register_component(kind: str, name: str, component: type, plugin: str) -> N
     no-op. A *different* class under the same name is a real collision between
     two plugins, so it is logged and the first registration is kept -- silently
     overwriting would mean load order decides which hardware driver the lab gets.
+
+    Raises:
+        PluginRegistrationError: if ``kind`` maps to no registry. This fails the
+            load rather than warning, because a class that registers nowhere is
+            precisely the silent-non-registration failure this code exists to
+            remove -- reporting success would hide it in a log nobody opens.
     """
     registry = _registry_for(kind)
     if registry is None:
-        logger.warning("Plugin %s: unknown component kind %r for %r", plugin, kind, name)
-        return
+        raise PluginRegistrationError(
+            f"cannot register {name!r}: plugin type {kind!r} maps to no registry "
+            f"(expected one of 'driver', 'device', 'node')"
+        )
 
     existing = registry.get(name)
     if existing is component:
@@ -313,8 +330,15 @@ class PluginManager:
                 elif (item / "__init__.py").exists():
                     try:
                         info = PluginInfo(
+                            # Module-valued on purpose. `load_plugin` already
+                            # defaults the attribute to `setup`, so naming it
+                            # here changes nothing for plugins that define one
+                            # -- but a synthesized colon would be
+                            # indistinguishable from an author writing
+                            # `mod:attr`, and a missing *named* attribute is an
+                            # error while a missing `setup` is not.
                             name=item.name,
-                            entry_point=f"{item.name}:setup",
+                            entry_point=item.name,
                             path=str(item),
                         )
                         discovered.append(info)
@@ -458,6 +482,13 @@ class PluginManager:
         except PermissionError as e:
             info.error = f"Permission denied: {e.filename}"
             logger.error(f"Plugin {name} failed - permission denied: {e.filename}")
+            return False
+
+        except PluginRegistrationError as e:
+            # Well-understood, and the message is written to be shown to a user
+            # on the plugin's row -- so it is not wrapped in "Unexpected error".
+            info.error = str(e)
+            logger.error(f"Plugin {name} failed to register a component: {e}")
             return False
 
         except Exception as e:
