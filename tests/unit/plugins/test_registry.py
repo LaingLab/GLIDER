@@ -105,3 +105,46 @@ def test_the_bundled_index_is_valid_json_and_lists_harp():
 
     assert result.schema_version == "1.0"
     assert any(p["name"] == "glider-harp" for p in result.plugins)
+
+
+# --- the fetch is capped ------------------------------------------------------
+#
+# A curated catalogue is kilobytes. `response.read()` unbounded meant a
+# misconfigured or hostile server could hand back gigabytes and the whole
+# thing was buffered before parsing. Over the cap is a failed fetch, which
+# falls through to cache/bundled like every other malformed-network case.
+
+
+def test_an_index_within_the_cap_passes_through_untouched():
+    from glider.plugins.registry import _within_cap
+
+    assert _within_cap(b'{"plugins": []}') == b'{"plugins": []}'
+
+
+def test_an_oversize_index_is_refused():
+    from glider.plugins.registry import INDEX_MAX_BYTES, _within_cap
+
+    with pytest.raises(ValueError, match="plugin index"):
+        _within_cap(b"x" * (INDEX_MAX_BYTES + 1))
+
+
+async def test_the_default_fetcher_enforces_the_cap(tmp_path):
+    """Through the real fetcher, via a file:// URL -- no network, no fake."""
+    from glider.plugins.registry import INDEX_MAX_BYTES, _default_fetcher
+
+    oversize = tmp_path / "index.json"
+    oversize.write_bytes(b"x" * (INDEX_MAX_BYTES + 1))
+
+    with pytest.raises(ValueError, match="plugin index"):
+        await _default_fetcher(oversize.as_uri(), 1.0)
+
+
+async def test_the_default_fetcher_still_reads_a_normal_index(tmp_path):
+    from glider.plugins.registry import _default_fetcher
+
+    path = tmp_path / "index.json"
+    path.write_text(json.dumps(GOOD), encoding="utf-8")
+
+    text = await _default_fetcher(path.as_uri(), 1.0)
+
+    assert json.loads(text)["updated"] == "2026-08-01"
