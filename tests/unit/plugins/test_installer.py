@@ -10,11 +10,18 @@ each of those failures is silent. Those tests drive a short ``python -c`` progra
 instead -- a real subprocess, but no pip and no network.
 """
 
+import asyncio
 import sys
 
 import pytest
 
-from glider.plugins.installer import InstallResult, _default_runner, install
+from glider.plugins.installer import (
+    InstallResult,
+    _default_runner,
+    incompatibility_message,
+    install,
+    is_compatible,
+)
 
 ENTRY = {
     "name": "glider-harp",
@@ -124,6 +131,73 @@ async def test_the_version_gate(spec, version, ok):
 
 
 # ---------------------------------------------------------------------------
+# A catalogue entry the maintainer got wrong.
+#
+# The index comes over the network and nothing validates its fields, so a
+# malformed `glider_requires` is data arriving from outside -- not a programming
+# error. `"1.0"` where `">=1.0"` was meant is the natural authoring mistake, and
+# it used to raise `InvalidSpecifier` out of `is_compatible`, up through the
+# window's constructor, into a task nobody was watching.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("requires", ["1.0", "not a specifier", ">=<1", "1.0.0"])
+def test_an_unparseable_requirement_is_answered_not_raised(requires):
+    assert is_compatible({**ENTRY, "glider_requires": requires}, "1.0.0") is False
+
+
+def test_an_unparseable_requirement_says_the_entry_is_unreadable(requires="1.0"):
+    """ "needs GLIDER 1.0, you are running 1.0.0" would be a nonsense sentence --
+    it reads as a version mismatch when the entry itself is the problem."""
+    message = incompatibility_message({**ENTRY, "glider_requires": requires}, "1.0.0")
+
+    assert "unreadable" in message.lower()
+    assert "1.0" in message
+
+
+async def test_an_unparseable_requirement_never_runs_pip():
+    ran = False
+
+    async def run(args, on_output=None):
+        nonlocal ran
+        ran = True
+        return 0, ""
+
+    result = await install({**ENTRY, "glider_requires": "1.0"}, glider_version="1.0.0", runner=run)
+
+    assert result.ok is False
+    assert ran is False
+
+
+async def test_an_entry_with_no_package_name_is_refused_rather_than_crashing():
+    """`entry["pypi"]` was the one bracket access to a key everything else
+    tolerated the absence of."""
+    ran = False
+
+    async def run(args, on_output=None):
+        nonlocal ran
+        ran = True
+        return 0, ""
+
+    result = await install({"version": "1.0.0"}, glider_version="1.0.0", runner=run)
+
+    assert result.ok is False
+    assert ran is False
+
+
+async def test_an_entry_with_only_a_name_installs_that_name():
+    seen = {}
+
+    async def run(args, on_output=None):
+        seen["args"] = args
+        return 0, ""
+
+    await install({"name": "glider-harp"}, glider_version="1.0.0", runner=run)
+
+    assert seen["args"][-1] == "glider-harp"
+
+
+# ---------------------------------------------------------------------------
 # The default runner, against a real subprocess.
 #
 # Every test above fakes the runner, which leaves the one function that actually
@@ -164,6 +238,35 @@ async def test_the_runner_reports_a_nonzero_exit():
     returncode, _ = await _run_program("import sys; sys.exit(3)")
 
     assert returncode == 3
+
+
+async def test_the_runner_does_not_launder_an_unknown_exit_into_a_success(monkeypatch):
+    """`returncode or 0` mapped None -- "the process never reported" -- onto zero,
+    which is the wrong default direction for the value gating "did pip work"."""
+
+    class _NeverReports:
+        returncode = None
+
+        def __init__(self):
+            self.stdout = self
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        async def wait(self):
+            return None
+
+    async def fake_exec(*args, **kwargs):
+        return _NeverReports()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    returncode, _ = await _default_runner([sys.executable, "-c", "pass"])
+
+    assert returncode != 0
 
 
 async def test_the_runner_captures_stderr_too():
