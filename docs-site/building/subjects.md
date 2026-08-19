@@ -91,15 +91,15 @@ five of the fields across them:
 | **Strain** | Biological | Dropdown you can also type into |
 | **Solution** | Solution | Dropdown you can also type into |
 | **Route** | Solution | Dropdown you can also type into |
-| **Sex** | Biological | Dropdown only — pick from the list |
+| **Sex** | Biological | Dropdown you can also type into |
 
 Every one of them opens on a blank row, so nothing is ever pre-selected for you:
 an animal never ends up quietly labelled with whichever group happens to be
 first in the list.
 
-**Sex is the exception to free text.** It is a plain dropdown, so the options
-you put in the Sexes list in Lab Setup are the complete set of choices on the
-subject form. The other four stay typeable.
+All five behave the same way. The list you define in Lab Setup is what the
+dropdown offers, but none of the five is a closed set — you can always type
+something the list does not have.
 
 ### New terms are learned as you go
 
@@ -117,10 +117,10 @@ saved normally — only the new term goes unremembered.
 !!! tip "Old experiment files keep working"
     A `.glider` file written before any of this existed opens unchanged. When
     you edit one of its subjects, values that are not in your vocabulary are
-    still shown in the Group, Strain, Solution and Route boxes, because those
-    boxes accept free text. Sex is the exception: if a saved subject's sex is
-    not one of the terms in your Sexes list, that box opens blank, so check it
-    before pressing **OK**.
+    still shown in all five boxes, because all five accept free text. That
+    holds for terms you later remove from a list too: removing `Unknown` from
+    your Sexes list changes what the dropdown offers, but a subject already
+    recorded as `Unknown` still opens showing `Unknown` and re-saves unchanged.
 
 ## Where the vocabulary is stored
 

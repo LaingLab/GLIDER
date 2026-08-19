@@ -59,9 +59,14 @@ class SubjectDialog(QDialog):
 
     Group, strain, solution, route and sex are offered from the lab's
     vocabulary (:mod:`glider.core.vocabulary`) so that ``Control`` and
-    ``control`` do not become two treatment groups. All but sex stay editable:
-    a term the lab has not defined can always be typed, and is learned for the
+    ``control`` do not become two treatment groups. All five stay editable: a
+    term the lab has not defined can always be typed, and is learned for the
     next subject.
+
+    All five go through :meth:`_vocabulary_combo` deliberately. A field built
+    inline instead once looked up its stored value with ``findText`` and showed
+    a blank when it did not match, so opening and saving a subject recorded
+    with a term the lab had since removed silently erased it.
     """
 
     def __init__(
@@ -210,8 +215,7 @@ class SubjectDialog(QDialog):
         form.addRow("Age:", age_layout)
 
         # Sex
-        self._sex_combo = QComboBox()
-        self._sex_combo.addItems(["", *self._vocabulary.sexes])
+        self._sex_combo = self._vocabulary_combo("sexes", "e.g., Male, Female")
         form.addRow("Sex:", self._sex_combo)
 
         # Weight
@@ -316,10 +320,7 @@ class SubjectDialog(QDialog):
                 if idx >= 0:
                     self._age_unit_combo.setCurrentIndex(idx)
 
-        # Sex
-        idx = self._sex_combo.findText(subject.sex)
-        if idx >= 0:
-            self._sex_combo.setCurrentIndex(idx)
+        self._sex_combo.setCurrentText(subject.sex)
 
         # Parse weight (e.g., "25.5 g" -> "25.5", "g")
         if subject.weight:
@@ -384,7 +385,7 @@ class SubjectDialog(QDialog):
             "name": self._name_edit.text().strip(),
             "group": self._group_combo.currentText().strip(),
             "age": age,
-            "sex": self._sex_combo.currentText(),
+            "sex": self._sex_combo.currentText().strip(),
             "weight": weight,
             "strain": self._strain_combo.currentText().strip(),
             "solution": self._solution_combo.currentText().strip(),

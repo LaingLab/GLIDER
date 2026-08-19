@@ -28,6 +28,38 @@ def items(combo) -> list[str]:
     return [combo.itemText(i) for i in range(combo.count())]
 
 
+#: Every vocabulary-backed field: Subject attribute, widget, vocabulary list.
+#: Tests parametrise over this rather than naming fields by hand, so a field
+#: that behaves unlike the others cannot escape by being the one nobody
+#: remembered to write a case for.
+VOCABULARY_FIELDS = [
+    ("group", "_group_combo", "groups"),
+    ("strain", "_strain_combo", "strains"),
+    ("solution", "_solution_combo", "solutions"),
+    ("route", "_route_combo", "routes"),
+    ("sex", "_sex_combo", "sexes"),
+]
+FIELD_IDS = [field[0] for field in VOCABULARY_FIELDS]
+
+#: Values absent from the ``vocab`` fixture below.
+UNRECOGNISED_VALUES = {
+    "group": "Legacy Cohort",
+    "strain": "Wistar",
+    "solution": "DMSO",
+    "route": "ICV",
+    "sex": "M",
+}
+
+#: Values present in the ``vocab`` fixture below.
+RECOGNISED_VALUES = {
+    "group": "Control",
+    "strain": "C57BL/6J",
+    "solution": "Saline",
+    "route": "IP",
+    "sex": "Male",
+}
+
+
 @pytest.fixture(autouse=True)
 def library_dir(tmp_path, monkeypatch):
     """Point the vocabulary file at a tmp dir, never the developer's ~/.glider."""
@@ -139,6 +171,7 @@ def test_an_empty_vocabulary_leaves_every_editable_field_usable(dialog, library_
     d._strain_combo.setCurrentText("C57BL/6J")
     d._solution_combo.setCurrentText("Saline")
     d._route_combo.setCurrentText("IP")
+    d._sex_combo.setCurrentText("Male")
 
     subject = d.get_subject()
 
@@ -146,6 +179,7 @@ def test_an_empty_vocabulary_leaves_every_editable_field_usable(dialog, library_
     assert subject.strain == "C57BL/6J"
     assert subject.solution == "Saline"
     assert subject.route == "IP"
+    assert subject.sex == "Male"
 
 
 def test_a_fresh_install_still_offers_the_standard_routes_and_sexes(dialog, library_dir):
@@ -225,20 +259,81 @@ def test_editing_shows_the_subjects_existing_values(dialog, vocab):
     assert d._route_combo.currentText() == "IP"
 
 
-def test_editing_a_subject_whose_values_predate_the_vocabulary(dialog, vocab):
-    """An old .glider file must load unchanged even if nothing matches."""
-    existing = Subject(subject_id="M001", group="Legacy Cohort", strain="Wistar")
+# --- Recorded values survive a round trip, for every field alike ---------------
+#
+# These are parametrised over all five fields rather than written out for the
+# ones that came to mind. Sex was the field that came to mind last, was built
+# inline instead of through the shared helper, and was the only one that
+# silently discarded a recorded value it did not recognise.
+
+
+def test_every_vocabulary_field_is_editable(dialog, vocab):
+    """One combo behaving unlike its four neighbours is how the sex data-loss
+    bug hid: a reader had to notice the asymmetry to suspect it."""
+    d = dialog(vocabulary=vocab)
+
+    for _, widget, _ in VOCABULARY_FIELDS:
+        assert getattr(d, widget).isEditable(), f"{widget} is not editable"
+
+
+@pytest.mark.parametrize("attribute, widget, list_name", VOCABULARY_FIELDS, ids=FIELD_IDS)
+def test_a_value_the_vocabulary_never_had_survives_open_and_save(
+    dialog, vocab, attribute, widget, list_name
+):
+    """An old .glider file must load, display and re-save unchanged.
+
+    Opening a subject and pressing OK must never alter what was recorded. This
+    is a provenance tool; silently rewriting metadata is its worst failure.
+    """
+    recorded = UNRECOGNISED_VALUES[attribute]
+    existing = Subject(subject_id="M001", **{attribute: recorded})
+
     d = dialog(subject=existing, vocabulary=vocab)
 
-    assert d._group_combo.currentText() == "Legacy Cohort"
-    assert d._strain_combo.currentText() == "Wistar"
+    assert getattr(d, widget).currentText() == recorded
+    assert getattr(d.get_subject(), attribute) == recorded
 
-    subject = d.get_subject()
-    assert subject.group == "Legacy Cohort"
-    assert subject.strain == "Wistar"
+
+@pytest.mark.parametrize("attribute, widget, list_name", VOCABULARY_FIELDS, ids=FIELD_IDS)
+def test_a_value_removed_from_the_vocabulary_survives_open_and_save(
+    dialog, vocab, attribute, widget, list_name
+):
+    """Tidying a list must not rewrite the subjects already recorded with it.
+
+    Before the vocabulary existed these option sets were fixed constants, so
+    no user could provoke this. Making them editable in Lab Setup is what
+    turned it into a live data-loss path.
+    """
+    recorded = RECOGNISED_VALUES[attribute]
+    existing = Subject(subject_id="M001", **{attribute: recorded})
+    assert vocab.remove(list_name, recorded) is True  # the lab tidies its list
+
+    d = dialog(subject=existing, vocabulary=vocab)
+
+    assert getattr(d, widget).currentText() == recorded
+    assert getattr(d.get_subject(), attribute) == recorded
 
 
 # --- Learn on save ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("attribute, widget, list_name", VOCABULARY_FIELDS, ids=FIELD_IDS)
+def test_a_novel_value_in_any_field_is_learned(
+    dialog, vocab, library_dir, attribute, widget, list_name
+):
+    """Every entry in _LEARNED_FIELDS must be reachable through the widget.
+
+    The sexes entry was dead code while the sex combo refused typing.
+    """
+    novel = UNRECOGNISED_VALUES[attribute]
+    d = dialog(vocabulary=vocab)
+    d._subject_id_edit.setText("M001")
+    getattr(d, widget).setCurrentText(novel)
+
+    d.get_subject()
+
+    assert novel in vocab.get(list_name)
+    assert novel in load(library_dir).get(list_name)
 
 
 def test_a_novel_value_is_learned_and_written(dialog, vocab, library_dir):
