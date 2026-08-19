@@ -190,13 +190,29 @@ def load(library_dir: Path) -> Vocabulary:
             )
             continue
 
-        vocab.get(name).clear()
+        # De-duplicated against a set built once, rather than by calling `add`
+        # per entry. `add` rescans everything read so far, which is quadratic,
+        # and `_key` normalises Unicode, case-folds and strips invisible
+        # characters, so the constant is heavy too: 5 000 terms took about
+        # three seconds, on the GUI thread, in the constructor of every
+        # subject form. The rules stay `add`'s -- clean, key, first spelling
+        # wins -- so a file reads the same as it always did, just linearly.
+        values = vocab.get(name)
+        values.clear()
+        seen: set[str] = set()
         dropped = 0
         for item in stored:
-            if isinstance(item, str):
-                vocab.add(name, item)
-            else:
+            if not isinstance(item, str):
                 dropped += 1
+                continue
+            cleaned = _clean(item)
+            if not cleaned:
+                continue
+            key = _key(cleaned)
+            if key in seen:
+                continue
+            seen.add(key)
+            values.append(cleaned)
         if dropped:
             logger.warning(
                 "Vocabulary file %s: dropped %d non-text entr%s from %r",

@@ -8,6 +8,7 @@ code can tell the two apart afterwards.
 
 import json
 import logging
+import time
 
 from glider.core.vocabulary import LISTS, Vocabulary, load, save
 
@@ -95,6 +96,50 @@ def test_values_in_a_hand_edited_file_are_de_duplicated_on_read(tmp_path):
     )
 
     assert load(tmp_path).groups == ["Control"]
+
+
+def test_a_hand_edited_file_keeps_the_first_spelling_of_a_duplicate(tmp_path):
+    """First spelling wins on read, not just on add.
+
+    Pinned separately because ``load`` builds its own de-duplication rather
+    than deferring to ``add`` for every entry, and "keeps a duplicate's later
+    spelling" is a silent way for that to be wrong.
+    """
+    (tmp_path / "vocabulary.json").write_text(
+        json.dumps({"schema_version": "1.0", "groups": ["Drug A", "drug a", "Vehicle"]}),
+        encoding="utf-8",
+    )
+
+    assert load(tmp_path).groups == ["Drug A", "Vehicle"]
+
+
+def test_a_large_file_loads_in_linear_time(tmp_path):
+    """``load`` must not be quadratic in the number of terms.
+
+    It used to call ``add`` once per entry, and ``add`` re-derives the
+    comparison key of every entry already read. The key normalises Unicode,
+    case-folds and strips invisible characters, so the constant is not small
+    either: 5 000 terms took about three seconds, and both ``SubjectDialog``
+    and ``LabSetupDialog`` call ``load`` on the GUI thread in ``__init__``, so
+    that was three seconds of frozen window before Add Subject painted. No lab
+    hand-types 5 000 terms, but a merge between rigs or a scripted import
+    reaches that easily.
+
+    The bound is deliberately loose. This is a guard against a return to
+    O(n^2) -- which at this size is orders of magnitude over the line -- not a
+    measurement of the machine it runs on.
+    """
+    terms = [f"Group {index}" for index in range(5000)]
+    (tmp_path / "vocabulary.json").write_text(
+        json.dumps({"schema_version": "1.0", "groups": terms}), encoding="utf-8"
+    )
+
+    start = time.perf_counter()
+    vocab = load(tmp_path)
+    elapsed = time.perf_counter() - start
+
+    assert vocab.groups == terms
+    assert elapsed < 1.0, f"loading {len(terms)} terms took {elapsed:.2f}s"
 
 
 def test_an_unknown_schema_version_still_loads(tmp_path):
