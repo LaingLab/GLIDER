@@ -7,8 +7,15 @@ treatment groups no analysis can reconcile. :mod:`glider.core.vocabulary` is
 the store that prevents that; this dialog is where a lab fills it in, and the
 answer to the complaint that nobody ever found these fields.
 
-Three behaviours here are deliberate, and each is a way this could fail quietly:
+Four behaviours here are deliberate, and each is a way this could fail quietly:
 
+* **Neither button is the window default.** Return in a ``QLineEdit`` reaches
+  the dialog's default button as well as emitting ``returnPressed``, and
+  ``QDialogButtonBox`` promotes Done to default on its own Show event. Left
+  alone, the documented "type a term and press Enter" also saved the file and
+  closed the form on the first term given -- and the caller records the offer
+  as seen before opening this, so there was no second chance. See
+  :meth:`LabSetupDialog.showEvent`.
 * **Skip is a first-class exit.** The person doing first launch is often not the
   person who knows the lab's strains. Skip closes the dialog and writes nothing
   -- no file, no half-vocabulary. The caller marks the setup seen either way, so
@@ -30,6 +37,7 @@ leaves the caller's object as untouched as the file.
 import logging
 from pathlib import Path
 
+from PyQt6.QtGui import QShowEvent
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -237,9 +245,38 @@ class LabSetupDialog(QDialog):
         self.done_button = buttons.addButton("Done", QDialogButtonBox.ButtonRole.AcceptRole)
         self.skip_button = buttons.addButton("Skip", QDialogButtonBox.ButtonRole.RejectRole)
         self.skip_button.setToolTip("Close without saving; you can set this up later")
+        self._clear_default_buttons()
         self.done_button.clicked.connect(self._on_done)
         self.skip_button.clicked.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _clear_default_buttons(self) -> None:
+        """Make sure neither button is the window's default.
+
+        Return in a ``QLineEdit`` reaches the dialog's default button as well
+        as emitting ``returnPressed``, so a default button here turns the "type
+        a term and press Enter" this whole form is built around into "add the
+        term, save the file and close the form". On a first launch that is the
+        entire vocabulary -- one entry -- because the caller records the offer
+        as seen *before* opening this dialog and never asks again.
+        """
+        for button in (self.done_button, self.skip_button):
+            button.setAutoDefault(False)
+            button.setDefault(False)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """Undo Qt's promotion of Done to default button.
+
+        ``QDialogButtonBox`` promotes its first AcceptRole button to default on
+        its own Show event, overriding whatever was set at construction: Done
+        reports ``isDefault() is False`` before ``show()`` and True after. That
+        gap is why the Enter-saves-and-closes bug survived a full test file --
+        every test in it ran against an unshown dialog, a state no user is ever
+        in. Children are shown before the dialog's own show event, so clearing
+        here lands after the promotion, on every show.
+        """
+        super().showEvent(event)
+        self._clear_default_buttons()
 
     def _on_done(self) -> None:
         """Write the vocabulary, or explain why it could not be written.

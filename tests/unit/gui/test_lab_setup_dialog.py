@@ -39,9 +39,21 @@ def library_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def dialog(qtbot):
+    """A dialog that has been ``show()``n, as every real one has.
+
+    Showing is not cosmetic. ``QDialog.showEvent`` promotes the first
+    auto-default button in a ``QDialogButtonBox`` to the window's default
+    button, so Done is ``isDefault() is False`` before ``show()`` and True
+    after. A suite that never shows the dialog therefore tests a widget in a
+    state no user is ever in, and cannot see Return reaching the default
+    button at all -- which is exactly how "type a term and press Enter" came
+    to also save the file and close the form.
+    """
+
     def _make(**kwargs):
         d = LabSetupDialog(**kwargs)
         qtbot.addWidget(d)
+        d.show()
         return d
 
     return _make
@@ -133,6 +145,51 @@ def test_a_value_is_stored_trimmed(dialog, qtbot):
     type_value(qtbot, d.editors["groups"], "  Control  ")
 
     assert d.editors["groups"].values() == ["Control"]
+
+
+def test_pressing_enter_adds_the_term_and_leaves_the_form_open(dialog, qtbot, library_dir):
+    """The interaction the form documents must not also be the way out of it.
+
+    ``QDialogButtonBox`` promotes its AcceptRole button to the window default
+    once the dialog is shown, and ``QLineEdit`` lets Return fall through to the
+    default button as well as emitting ``returnPressed``. So Enter added the
+    term *and* pressed Done: the file was written and the form closed on the
+    first term it was given. On a first launch that is the whole vocabulary --
+    one entry -- because the caller burns the seen-it flag before the dialog
+    opens and never offers it again.
+    """
+    d = dialog(vocabulary=Vocabulary())
+
+    type_value(qtbot, d.editors["groups"], "Control")
+
+    assert d.editors["groups"].values() == ["Control"]
+    assert d.isVisible(), "Enter closed the form"
+    assert not (library_dir / "vocabulary.json").exists(), "Enter saved the vocabulary"
+
+
+def test_neither_button_is_the_window_default(dialog):
+    """The mechanism behind the test above, pinned directly.
+
+    Leave either button auto-default and Return in any of the five entry
+    fields reaches it again.
+    """
+    d = dialog(vocabulary=Vocabulary())
+
+    assert d.done_button.isDefault() is False
+    assert d.skip_button.isDefault() is False
+    assert d.done_button.autoDefault() is False
+    assert d.skip_button.autoDefault() is False
+
+
+def test_enter_stays_harmless_in_every_list(dialog, qtbot, library_dir):
+    """Five entry fields, one shared default button: all five have to be safe."""
+    d = dialog(vocabulary=Vocabulary(routes=[], sexes=[]))
+
+    for name in LISTS:
+        type_value(qtbot, d.editors[name], f"value-for-{name}")
+        assert d.isVisible(), f"Enter in {name} closed the form"
+
+    assert not (library_dir / "vocabulary.json").exists()
 
 
 def test_every_list_accepts_input(dialog, qtbot):
@@ -244,7 +301,6 @@ def test_skip_writes_nothing(dialog, qtbot, library_dir):
 
 def test_skip_closes_the_dialog(dialog):
     d = dialog(vocabulary=Vocabulary())
-    d.show()
 
     d.skip_button.click()
 
@@ -300,7 +356,6 @@ def test_done_persists_a_removal(dialog, library_dir):
 
 def test_done_closes_the_dialog(dialog):
     d = dialog(vocabulary=Vocabulary())
-    d.show()
 
     d.done_button.click()
 
@@ -334,7 +389,6 @@ def test_a_failed_save_keeps_the_dialog_open_with_a_visible_message(dialog, qtbo
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(get_config().paths, "library_dir", tmp_path / "blocker" / "lib")
         d = dialog(vocabulary=Vocabulary())
-        d.show()
         type_value(qtbot, d.editors["groups"], "Control")
 
         d.done_button.click()
@@ -368,7 +422,6 @@ def test_a_retried_save_that_succeeds_clears_the_message_and_closes(dialog, qtbo
         library_dir = blocker / "lib"
         patch.setattr(get_config().paths, "library_dir", library_dir)
         d = dialog(vocabulary=Vocabulary())
-        d.show()
         type_value(qtbot, d.editors["groups"], "Control")
         d.done_button.click()
         assert d.isVisible()
@@ -389,7 +442,6 @@ def test_skip_still_works_after_a_failed_save(dialog, qtbot, tmp_path):
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(get_config().paths, "library_dir", tmp_path / "blocker" / "lib")
         d = dialog(vocabulary=Vocabulary())
-        d.show()
         type_value(qtbot, d.editors["groups"], "Control")
         d.done_button.click()
 
