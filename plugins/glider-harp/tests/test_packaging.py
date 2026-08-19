@@ -164,6 +164,30 @@ def test_importing_the_package_pulls_in_no_glider_modules():
     assert result.stdout.strip() == "[]", result.stdout
 
 
+def test_importing_derivation_pulls_in_no_glider_modules_either():
+    """``derivation`` resolves ``~/.glider`` through GLIDER's own config, and
+    that lookup has to stay *inside the call*.
+
+    A top-level ``from glider.core.config import get_config`` would be the
+    obvious way to write it and would drag the whole GLIDER core -- and every
+    import failure it can have -- into a module that is otherwise pure data
+    handling. ``glider_harp.derivation`` is the module a profile round-trip
+    test imports on its own, so pin it on its own.
+    """
+    code = textwrap.dedent("""
+        import sys
+        import glider_harp.derivation
+        leaked = sorted(m for m in sys.modules if m == "glider" or m.startswith("glider."))
+        leaked = [m for m in leaked if not m.startswith("glider_harp")]
+        print(repr(leaked))
+        """)
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, env=_child_env()
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "[]", result.stdout
+
+
 def test_the_plugin_tables_resolve_lazily_and_only_on_access():
     """PEP 562 ``__getattr__`` is what ``PluginManager``'s ``hasattr`` sees."""
     code = textwrap.dedent("""

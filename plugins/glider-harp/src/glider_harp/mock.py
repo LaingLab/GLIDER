@@ -188,6 +188,21 @@ class FakeHarpPort:
             if not self._frames:
                 self._replayed.set()
 
+    def queue(self, *frames: bytes) -> None:
+        """Add event frames to a replay, including one already under way.
+
+        For the test that cannot know its frames until the device is running --
+        a round trip, where the bytes to replay are the ones the device itself
+        just wrote. ``wait_for_replay`` is re-armed with them: a replay that
+        already ran dry leaves the event set, and a test would otherwise be
+        told the new frames had reached the cache before the reader had seen a
+        byte of them.
+        """
+        with self._lock:
+            self._frames.extend(bytes(frame) for frame in frames)
+            if self._frames:
+                self._replayed.clear()
+
     def wait_for_replay(self, timeout: float = 2.0) -> bool:
         """Block until every replayed frame has reached the cache.
 
