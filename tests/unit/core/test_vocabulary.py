@@ -315,12 +315,64 @@ def test_zero_width_characters_do_not_fork_an_entry(tmp_path):
         assert vocab.remove("groups", f"Control{invisible}") is True
 
 
+def test_a_soft_hyphen_does_not_fork_an_entry(tmp_path):
+    """The classic invisible passenger on a paste out of Word or a PDF.
+
+    A soft hyphen is a *conditional* line break: it renders as nothing unless
+    the word wraps at exactly that point, so it survives a copy-paste out of
+    justified text completely unseen. It is neither whitespace nor removed by
+    NFKC, and it lands mid-word rather than at the ends, where trimming would
+    never have reached it anyway.
+    """
+    vocab = load(tmp_path)
+
+    assert vocab.add("groups", "Control") is True
+    assert vocab.add("groups", "Con\u00adtrol") is False
+    assert vocab.groups == ["Control"]
+    assert vocab.remove("groups", "Cont\u00adrol") is True
+
+
+def test_other_invisible_formatting_characters_do_not_fork_an_entry(tmp_path):
+    """U+2060..U+206F: the word joiner, invisible operators and bidi isolates.
+
+    Same family and same failure as U+200B..U+200F -- they render as nothing,
+    ``str.strip()`` ignores them and NFKC keeps them -- so covering one block
+    and not its neighbour just moves the invisible duplicate one code point
+    along.
+    """
+    for invisible in ("\u2060", "\u2062", "\u2066", "\u206a", "\u206f"):
+        vocab = load(tmp_path)
+        assert vocab.add("groups", "Control") is True
+        assert vocab.add("groups", f"Con{invisible}trol") is False, repr(invisible)
+        assert vocab.groups == ["Control"]
+
+
 def test_a_value_that_is_only_zero_width_characters_is_refused(tmp_path):
     """Otherwise an invisible row appears in Lab Setup with nothing to click."""
     vocab = load(tmp_path)
 
     assert vocab.add("groups", "\u200b\ufeff") is False
+    assert vocab.add("groups", "\u00ad\u2060") is False
     assert vocab.groups == []
+
+
+def test_the_fold_does_not_reach_characters_that_render(tmp_path):
+    """The fold removes characters that show nothing, and stops there.
+
+    Widening it far enough to swallow a real hyphen or a line break would
+    merge terms a lab meant to keep apart, which is the same silent damage as
+    splitting them -- just in the other direction, and much harder to notice.
+    """
+    distinct = (
+        ("C57BL/6J", "C57BL/6-J"),  # U+002D, a real hyphen-minus
+        ("Control", "Con\u2011trol"),  # U+2011, a non-breaking hyphen that shows
+        ("Drug A", "Drug\u2028A"),  # U+2028, line separator
+        ("Cohort", "Cohort\u02bc"),  # U+02BC, modifier letter apostrophe
+    )
+    for first, second in distinct:
+        vocab = load(tmp_path)
+        assert vocab.add("groups", first) is True
+        assert vocab.add("groups", second) is True, f"{second!r} folded into {first!r}"
 
 
 def test_a_dropped_non_string_entry_is_logged(tmp_path, caplog):

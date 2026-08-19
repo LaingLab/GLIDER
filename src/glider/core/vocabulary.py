@@ -50,15 +50,26 @@ DEFAULT_SEXES = ["Male", "Female", "Unknown"]
 DEFAULT_ROUTES = ["IP", "IV", "PO", "SC", "IM", "Topical", "Inhalation", "Other"]
 
 
-#: Zero-width and bidi-control characters: U+200B..U+200F and U+FEFF. None of
-#: them is whitespace, so ``str.strip()`` leaves them alone and NFKC keeps
-#: them. Without removing them a pasted ``Control`` carrying a stray U+200B
-#: sits beside a typed ``Control`` as a second, pixel-identical entry -- the
-#: duplicate-cohort failure this module exists to prevent, arriving through a
-#: character nobody can see to delete. They are the commonest invisible
-#: passenger on a paste out of Excel, a PDF or a web page, which is how a lab
-#: vocabulary actually gets filled in.
-_INVISIBLE = re.compile("[\u200b-\u200f\ufeff]")
+#: Characters that render as nothing: the soft hyphen U+00AD, the zero-width
+#: and bidi-control block U+200B..U+200F, the word joiner and its neighbours
+#: U+2060..U+206F, and the byte-order mark U+FEFF. None of them is whitespace,
+#: so ``str.strip()`` leaves them alone, and NFKC keeps every one. Without
+#: removing them a pasted ``Control`` carrying a stray U+200B sits beside a
+#: typed ``Control`` as a second, pixel-identical entry -- the duplicate-cohort
+#: failure this module exists to prevent, arriving through a character nobody
+#: can see to delete. They are the commonest invisible passengers on a paste
+#: out of Excel, Word, a PDF or a web page, which is how a lab vocabulary
+#: actually gets filled in. The soft hyphen earns its place separately: it is
+#: a *conditional* line break, showing only if the word happens to wrap there,
+#: so it comes out of justified text entirely unseen and lands mid-word, where
+#: trimming would never have reached it.
+#:
+#: The class stops at characters that show nothing. Widening it to swallow a
+#: real hyphen or a line separator would merge terms a lab meant to keep
+#: apart, which is the same silent damage as splitting them and much harder to
+#: spot. NFKC already folds the space-like characters (U+00A0, U+3000 and the
+#: U+2000..U+200A block) down to an ordinary space, so they need nothing here.
+_INVISIBLE = re.compile("[\u00ad\u200b-\u200f\u2060-\u206f\ufeff]")
 
 
 def _clean(value: str) -> str:
