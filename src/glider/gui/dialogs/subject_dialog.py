@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Optional
 
 from PyQt6.QtWidgets import (
     QComboBox,
+    QCompleter,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -154,6 +155,13 @@ class SubjectDialog(QDialog):
         combo.setCurrentIndex(0)
         if line_edit := combo.lineEdit():
             line_edit.setPlaceholderText(placeholder)
+        # Qt's default for an editable combo is inline completion, which puts
+        # the completed term *in the field*: with "Control Group" on the list,
+        # typing "Control" recorded "Control Group". The same swallows "C57"
+        # into "C57BL/6J" and "Saline" into "Saline + vehicle". A popup offers
+        # the longer term without ever assuming it.
+        if completer := combo.completer():
+            completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         self._vocabulary_combos[list_name] = combo
         return combo
 

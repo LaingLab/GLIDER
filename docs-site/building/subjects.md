@@ -105,6 +105,10 @@ All five behave the same way. The list you define in Lab Setup is what the
 dropdown offers, but none of the five is a closed set — you can always type
 something the list does not have.
 
+As you type, matching terms are offered in a small list underneath. They are
+only ever suggestions: what stays in the box is what you typed, so entering
+`C57` when your list has `C57BL/6J` records `C57`.
+
 ### New terms are learned as you go
 
 You never have to stop and go define a term first. Type a group the lab has not

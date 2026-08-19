@@ -543,3 +543,46 @@ def test_retyping_a_removed_term_teaches_it_again(dialog, vocab, library_dir):
 
     assert vocab.groups == ["Drug A", "Control"]
     assert load(library_dir).groups == ["Drug A", "Control"]
+
+
+# --- Completion must not rewrite what was typed --------------------------------
+
+
+def test_typing_a_term_that_is_a_prefix_of_a_longer_one_records_what_was_typed(
+    dialog, qtbot, library_dir
+):
+    """Qt's default inline completion silently upgrades a typed term.
+
+    With ``Control Group`` on the list, typing ``Control`` left the longer
+    term in the box and that is what got recorded -- so an animal the user
+    labelled Control was filed under Control Group. Real pairs: ``C57`` vs
+    ``C57BL/6J``, ``Saline`` vs ``Saline + vehicle``. A popup offers the longer
+    term without ever putting it in the field.
+    """
+    d = dialog(vocabulary=Vocabulary(groups=["Control Group"]))
+    d._subject_id_edit.setText("M001")
+
+    # Shown, activated and focused: QLineEdit only runs its completer for a
+    # focused widget, so an unshown dialog cannot see this at all.
+    d.show()
+    d.activateWindow()
+    d._group_combo.setFocus()
+    qtbot.wait(1)
+
+    qtbot.keyClicks(d._group_combo.lineEdit(), "Control")
+
+    assert d._group_combo.currentText() == "Control"
+    assert d.get_subject().group == "Control"
+
+
+def test_every_vocabulary_combo_completes_in_a_popup(dialog, vocab):
+    """The mechanism, pinned for all five: inline completion is the default,
+    so a combo built without changing it silently gets the old behaviour."""
+    from PyQt6.QtWidgets import QCompleter
+
+    d = dialog(vocabulary=vocab)
+
+    for _, widget, _ in VOCABULARY_FIELDS:
+        completer = getattr(d, widget).completer()
+        assert completer is not None, f"{widget} has no completer"
+        assert completer.completionMode() == QCompleter.CompletionMode.PopupCompletion, widget
