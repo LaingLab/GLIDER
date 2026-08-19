@@ -1056,3 +1056,105 @@ QLabel#pluginFooter {
     color: #718096;                                 /* TEXT_MUTED */
     font-size: 12px;
 }
+
+/* === Builder shell: side panels ===
+ *
+ * Every colour on a side panel lives here rather than on the widget, for the
+ * same reason as the plugin rows above: a widget-level stylesheet
+ * out-prioritises this file, so one `setStyleSheet` in side_panel.py would
+ * make that widget the only part of the shell the theme cannot reach.
+ * `side_panel.py` sets nothing but `objectName` and two dynamic properties.
+ *
+ * `state` is "expanded" or "collapsed"; `side` is "left" or "right" and only
+ * decides which edge carries the divider, so the rail always sits against the
+ * window edge and the content always sits against the centre surface.
+ *
+ * Property selectors resolve at polish time, so `SidePanel.set_expanded`
+ * re-polishes itself after retagging. Without that these rules never fire.
+ *
+ * Hex values are the tokens from glider/gui/styles/colors.py, named in the
+ * comments -- QSS cannot import them.
+ */
+
+QFrame#sidePanel {
+    background-color: #0f1419;                      /* BASE */
+}
+
+/* The rail is the collapsed panel: 34 px of icons rather than nothing, so the
+ * areas stay discoverable for a first-time user. Recessed to chrome depth so
+ * it reads as an edge rather than as a second panel. */
+QFrame#sidePanelRail {
+    background-color: #0b0f14;                      /* CHROME */
+}
+
+QFrame#sidePanel[side="left"] QFrame#sidePanelRail {
+    border-right: 1px solid #1e2530;                /* BORDER */
+}
+
+QFrame#sidePanel[side="right"] QFrame#sidePanelRail {
+    border-left: 1px solid #1e2530;                 /* BORDER */
+}
+
+QToolButton#sidePanelRailButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QToolButton#sidePanelRailButton:hover {
+    background-color: #151c25;                      /* SURFACE_2 */
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+}
+
+QToolButton#sidePanelRailButton:checked {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+/* -- expanded: tab strip over the content -- */
+
+QFrame#sidePanelBody {
+    background-color: #0f1419;                      /* BASE */
+}
+
+QFrame#sidePanel[side="left"] QFrame#sidePanelBody {
+    border-right: 1px solid #1e2530;                /* BORDER */
+}
+
+QFrame#sidePanel[side="right"] QFrame#sidePanelBody {
+    border-left: 1px solid #1e2530;                 /* BORDER */
+}
+
+QFrame#sidePanelTabs {
+    background-color: transparent;
+    border-bottom: 1px solid #1e2530;               /* BORDER */
+}
+
+/* No dock title bar, no close button: the tab strip is the whole header. */
+QToolButton#sidePanelTab {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 10px;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 12px;
+    font-weight: 500;
+}
+
+QToolButton#sidePanelTab:hover {
+    background-color: #151c25;                      /* SURFACE_2 */
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+}
+
+QToolButton#sidePanelTab:checked {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+QStackedWidget#sidePanelStack {
+    background-color: #0f1419;                      /* BASE */
+    border: none;
+}
