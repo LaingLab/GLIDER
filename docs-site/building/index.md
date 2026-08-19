@@ -22,6 +22,12 @@ hardware ones to real devices, and press **Start**.
     Add boards and devices, bind a device to a node, and understand how a
     value's range is decided.
 
+-   :material-rabbit: **[Subjects & Lab Vocabulary](subjects.md)**
+
+    Record the animals in an experiment, and define the treatment groups,
+    strains, solutions and routes your lab uses so they are spelled the same
+    way every time.
+
 -   :material-function-variant: **[Functions](functions.md)**
 
     Package a reusable chunk of your graph as a named function you can call
