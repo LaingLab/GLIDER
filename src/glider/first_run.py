@@ -12,6 +12,9 @@ a non-technical user:
 * Persist a ``first_run/complete`` flag in :class:`QSettings` so subsequent
   launches skip the welcome. (The tour records its own completion separately;
   it stays replayable from Help → Replay Tutorial.)
+* Hand off to the one-time Lab Setup offer when no tour was started, since the
+  window's own launch-time offer was spent inside this dialog's nested event
+  loop. See :func:`_offer_lab_setup_soon`.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PyQt6.QtCore import QSettings, QStandardPaths, QUrl
+from PyQt6.QtCore import QSettings, QStandardPaths, QTimer, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
@@ -145,11 +148,37 @@ def run_first_run_if_needed(
             # button, we want to flip the flag — never prompt the same person
             # twice.
             _mark_complete(s)
+        started_tour = False
         if choice == "tour":
             try:
                 parent._start_tour()
+                started_tour = True
             except Exception:
                 # The tour is a nice-to-have; a failure here must never break
                 # the first launch.
                 logger.warning("Could not start the onboarding tour", exc_info=True)
+        if not started_tour:
+            _offer_lab_setup_soon(parent)
     return data_dir
+
+
+def _offer_lab_setup_soon(parent: QWidget | None) -> None:
+    """Ask the main window to offer lab setup once this welcome is out of the way.
+
+    The window queues its own launch-time offer in ``__init__``, but that one
+    comes due *inside* this dialog's nested event loop, where the first-run
+    gate correctly turns it away -- and it is then spent. Everything after that
+    depended on the walkthrough resolving, so a fresh install that answered the
+    welcome with anything but **Take the Tour** was never offered setup that
+    session, despite the docs promising it appears shortly after launch. The
+    person missed is the new lab member who skips things: exactly who a shared
+    vocabulary exists for.
+
+    Deferred a tick so it lands after this dialog has actually gone. Guarded by
+    ``getattr`` because ``parent`` is a bare ``QWidget`` in Runner mode and in
+    tests; ``offer_lab_setup_once`` re-checks the seen-it flag itself, so this
+    cannot double-offer alongside the launch-time call.
+    """
+    offer = getattr(parent, "offer_lab_setup_once", None)
+    if callable(offer):
+        QTimer.singleShot(0, offer)

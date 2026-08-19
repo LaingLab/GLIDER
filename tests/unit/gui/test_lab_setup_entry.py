@@ -253,6 +253,23 @@ def test_the_walkthrough_resolving_offers_setup(qtbot, window, monkeypatch):
     qtbot.waitUntil(lambda: calls == [True], timeout=1000)
 
 
+def _welcome_answering(choice: str):
+    """A stand-in welcome dialog that answers ``choice``.
+
+    It pumps the event loop, because the real ``QMessageBox.exec`` does: the
+    launch-time lab-setup offer is queued during ``MainWindow.__init__`` and
+    comes due *inside* that nested loop, where the first-run gate turns it
+    away and spends it. A fake that skips the pumping leaves the timer
+    unfired, and the test then passes on a path no user takes.
+    """
+
+    def _welcome(parent, data_dir, *, offer_tour=False):
+        QApplication.processEvents()
+        return choice
+
+    return _welcome
+
+
 # --- At launch, on a real window -----------------------------------------------
 
 
@@ -272,10 +289,18 @@ def test_an_existing_install_is_offered_setup_at_launch(
     assert lab_setup_complete(existing_install) is True
 
 
-def test_a_user_who_skipped_the_welcome_is_offered_setup_at_launch(
+def test_the_launch_after_a_skipped_welcome_offers_setup(
     qtbot, main_window_factory, settings, dialogs
 ):
-    """Declining the tour leaves first_run/tour_complete unset forever."""
+    """The launch *after* the welcome was answered without taking the tour.
+
+    Pre-setting first_run/complete is what makes this the second launch: on the
+    first one the welcome is still up and the offer is turned away. Declining
+    the tour leaves first_run/tour_complete unset forever, so nothing on this
+    or any later launch would ask if the offer were gated on the walkthrough.
+    The same launch they skipped on is covered by
+    ``test_a_fresh_install_that_declines_the_tour_is_still_offered_setup``.
+    """
     settings.setValue(FIRST_RUN_COMPLETE_KEY, True)
 
     main_window_factory(settings=settings)
@@ -357,6 +382,74 @@ def test_a_fresh_install_gets_welcome_then_tour_then_setup(
     win._on_tour_finished()
     qtbot.wait(100)
     assert len(dialogs.opened) == 1, "offered twice on one install"
+
+
+def test_a_fresh_install_that_declines_the_tour_is_still_offered_setup(
+    qtbot, main_window_factory, settings, dialogs, monkeypatch, tmp_path
+):
+    """The path that reached nobody: a fresh install that skips the tour.
+
+    The launch-time offer is queued in ``MainWindow.__init__`` and comes due
+    inside the welcome dialog's own nested event loop, where the first-run gate
+    correctly turns it away -- and that ``singleShot`` is then spent. Only the
+    tour-finished path asked again, so answering the welcome with anything but
+    **Take the Tour** meant no offer at all that session. The person missed is
+    the new lab member who skips things, which is exactly who the vocabulary
+    exists for.
+    """
+    import glider.first_run as first_run_mod
+
+    monkeypatch.setattr(first_run_mod, "ensure_data_dir", lambda path=None: tmp_path)
+
+    monkeypatch.setattr(first_run_mod, "show_welcome_dialog", _welcome_answering("start"))
+
+    win = main_window_factory(settings=settings)
+    first_run_mod.run_first_run_if_needed(win, settings=settings)
+
+    qtbot.waitUntil(lambda: len(dialogs.opened) == 1, timeout=3000)
+    assert lab_setup_complete(settings) is True
+
+
+def test_a_walkthrough_that_fails_to_start_still_leads_to_setup(
+    qtbot, main_window_factory, settings, dialogs, monkeypatch, tmp_path
+):
+    """The tour is a nice-to-have and its failure is swallowed. If the offer
+    rode on the tour alone, that swallowed failure would silently take the
+    lab vocabulary down with it."""
+    import glider.first_run as first_run_mod
+
+    monkeypatch.setattr(first_run_mod, "ensure_data_dir", lambda path=None: tmp_path)
+    monkeypatch.setattr(first_run_mod, "show_welcome_dialog", _welcome_answering("tour"))
+
+    win = main_window_factory(settings=settings)
+    monkeypatch.setattr(win, "_start_tour", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    first_run_mod.run_first_run_if_needed(win, settings=settings)
+
+    qtbot.waitUntil(lambda: len(dialogs.opened) == 1, timeout=3000)
+
+
+def test_a_started_walkthrough_does_not_also_get_the_declined_offer(
+    qtbot, main_window_factory, settings, dialogs, monkeypatch, tmp_path
+):
+    """Taking the tour must still wait for it, not be offered underneath it."""
+    import glider.first_run as first_run_mod
+    import glider.gui.onboarding as onboarding
+
+    fake = _FakeTour()
+    monkeypatch.setattr(first_run_mod, "ensure_data_dir", lambda path=None: tmp_path)
+    monkeypatch.setattr(first_run_mod, "show_welcome_dialog", _welcome_answering("tour"))
+
+    def _fake_start_tour(host):
+        host._active_tour = fake
+        return fake
+
+    monkeypatch.setattr(onboarding, "start_tour", _fake_start_tour)
+
+    win = main_window_factory(settings=settings)
+    first_run_mod.run_first_run_if_needed(win, settings=settings)
+
+    qtbot.wait(100)
+    assert dialogs.opened == [], "offered while the walkthrough was on screen"
 
 
 # --- Re-entry from the menu ----------------------------------------------------

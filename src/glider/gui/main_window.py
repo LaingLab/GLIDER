@@ -2530,11 +2530,19 @@ class MainWindow(QMainWindow):
     def offer_lab_setup_once(self, settings: QSettings | None = None) -> bool:
         """Show the lab setup form the first time, and never again.
 
-        Returns True if it was shown. Called from two places -- at launch, and
-        again when the walkthrough resolves -- because neither alone reaches
-        everyone: a launch-time offer would land on top of the tour, and a
-        tour-only offer never reaches an existing install, whose walkthrough was
-        finished long ago.
+        Returns True if it was shown. Called from three places, because no one
+        of them reaches everyone:
+
+        * **At launch.** The only path that reaches an existing install, whose
+          walkthrough was finished long ago and will never resolve again.
+        * **When the walkthrough resolves.** On a fresh install the launch-time
+          offer comes due inside the welcome dialog's nested event loop, where
+          the first-run gate turns it away.
+        * **When the welcome resolves without starting a tour**
+          (:func:`glider.first_run.run_first_run_if_needed`). Otherwise the
+          fresh install that declines the tour gets no offer at all that
+          session -- and someone who skips the tour is exactly the person who
+          later cannot find these fields.
 
         The flag is recorded *before* the dialog opens, so every way out of it
         -- Done, Skip, Esc, the window close button, even a crash -- counts as
