@@ -45,6 +45,66 @@ def test_a_file_that_is_not_an_object_yields_defaults(tmp_path):
     assert load(tmp_path).groups == []
 
 
+def test_a_partially_valid_file_keeps_what_it_can(tmp_path):
+    """One bad key must not cost the lab the rest of its vocabulary."""
+    (tmp_path / "vocabulary.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "groups": ["Control", 7, None, "Drug A"],
+                "strains": "not a list",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    vocab = load(tmp_path)
+
+    assert vocab.groups == ["Control", "Drug A"]  # non-strings dropped
+    assert vocab.strains == []  # wrong type falls back to the default
+
+
+def test_an_explicit_empty_list_clears_the_defaults(tmp_path):
+    """A lab that deliberately emptied its routes must not find them back."""
+    (tmp_path / "vocabulary.json").write_text(
+        json.dumps({"schema_version": "1.0", "routes": []}), encoding="utf-8"
+    )
+
+    assert load(tmp_path).routes == []
+
+
+def test_a_missing_key_keeps_its_defaults(tmp_path):
+    """Absent is not the same as emptied -- only an explicit [] clears."""
+    (tmp_path / "vocabulary.json").write_text(
+        json.dumps({"schema_version": "1.0", "groups": ["Control"]}), encoding="utf-8"
+    )
+
+    vocab = load(tmp_path)
+
+    assert vocab.groups == ["Control"]
+    assert "IP" in vocab.routes
+    assert "Male" in vocab.sexes
+
+
+def test_values_in_a_hand_edited_file_are_de_duplicated_on_read(tmp_path):
+    """The fold applies to what is read, not only to what is added."""
+    (tmp_path / "vocabulary.json").write_text(
+        json.dumps({"schema_version": "1.0", "groups": ["Control", "control", " CONTROL "]}),
+        encoding="utf-8",
+    )
+
+    assert load(tmp_path).groups == ["Control"]
+
+
+def test_an_unknown_schema_version_still_loads(tmp_path):
+    """A future v2 file must yield a usable vocabulary, not an empty form."""
+    (tmp_path / "vocabulary.json").write_text(
+        json.dumps({"schema_version": "99.0", "groups": ["Control"]}), encoding="utf-8"
+    )
+
+    assert load(tmp_path).groups == ["Control"]
+
+
 def test_case_insensitive_dedup(tmp_path):
     """The failure this module exists to prevent."""
     vocab = load(tmp_path)
@@ -93,12 +153,39 @@ def test_add_reports_whether_it_changed_anything(tmp_path):
     assert vocab.add("groups", "Control") is False
 
 
+def test_unicode_spellings_of_one_name_are_one_entry(tmp_path):
+    """Same class of bug as Control/control, through a different door.
+
+    macOS favours decomposed forms, Windows composed ones, so one lab typing
+    the same strain on two machines produces two strings that a dropdown
+    renders identically. Written as explicit escapes so this file's own
+    encoding cannot quietly make the test vacuous.
+    """
+    composed = "Br\u00e9gy"  # precomposed e-acute
+    decomposed = "Bre\u0301gy"  # e + combining acute
+    assert composed != decomposed, "the two spellings must differ as raw strings"
+
+    vocab = load(tmp_path)
+    assert vocab.add("strains", composed) is True
+    assert vocab.add("strains", decomposed) is False
+
+    assert vocab.strains == [composed]
+    assert vocab.remove("strains", decomposed) is True
+
+
 def test_remove(tmp_path):
     vocab = load(tmp_path)
     vocab.add("groups", "Control")
 
     assert vocab.remove("groups", "control") is True
     assert vocab.groups == []
+
+
+def test_remove_reports_when_there_was_nothing_to_remove(tmp_path):
+    """Task 3's remove control reads this return value."""
+    vocab = load(tmp_path)
+
+    assert vocab.remove("groups", "Never added") is False
 
 
 def test_unknown_list_name_is_refused(tmp_path):
@@ -111,16 +198,37 @@ def test_unknown_list_name_is_refused(tmp_path):
     raise AssertionError("expected KeyError for an unknown list")
 
 
-def test_an_unwritable_directory_reports_rather_than_raising(tmp_path, monkeypatch):
-    """A read-only home must not take the app down; the caller shows the failure."""
+def test_an_unwritable_directory_reports_rather_than_raising(tmp_path):
+    """A read-only home must not take the app down; the caller shows the failure.
+
+    The failure is a real one -- a library path whose parent is a file, so
+    ``mkdir`` genuinely fails -- rather than a patched write method, so this
+    stays honest if the write mechanism is ever rewritten.
+    """
+    (tmp_path / "blocker").write_text("not a directory", encoding="utf-8")
     vocab = load(tmp_path)
 
-    def boom(*args, **kwargs):
-        raise OSError("read-only")
+    assert save(vocab, tmp_path / "blocker" / "lib") is False
 
-    monkeypatch.setattr("pathlib.Path.write_text", boom)
+
+def test_save_reports_success(tmp_path):
+    """Without this, a save that always returned False would pass every test."""
+    assert save(load(tmp_path), tmp_path) is True
+
+
+def test_a_failed_save_leaves_the_previous_vocabulary_intact(tmp_path):
+    """The whole vocabulary is one file; a broken write must not eat it."""
+    vocab = load(tmp_path)
+    vocab.add("groups", "Control")
+    save(vocab, tmp_path)
+
+    # A directory where the temporary file wants to be: the write fails, but
+    # the vocabulary already on disk is never truncated.
+    (tmp_path / "vocabulary.json.tmp").mkdir()
+    vocab.add("groups", "Drug A")
 
     assert save(vocab, tmp_path) is False
+    assert load(tmp_path).groups == ["Control"]
 
 
 def test_saved_file_is_readable_json(tmp_path):

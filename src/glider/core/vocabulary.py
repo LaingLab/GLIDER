@@ -20,6 +20,8 @@ This module imports no Qt, so it can be used and tested headlessly.
 
 import json
 import logging
+import os
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -33,7 +35,9 @@ LISTS = ("groups", "strains", "solutions", "routes", "sexes")
 
 # Defaults are duplicated from SEX_OPTIONS/ROUTE_OPTIONS in
 # glider.gui.dialogs.subject_dialog rather than imported, because importing
-# that module would drag Qt into this one. A test pins the two together.
+# that module would drag Qt into this one. NOTHING PINS THE TWO TOGETHER YET:
+# Task 2 of the lab-vocabulary plan adds the test that asserts they match, and
+# until it lands, editing either copy can silently drift from the other.
 # The leading "" of those constants is a combo-box affordance meaning
 # "nothing chosen", not a vocabulary value, so it is deliberately absent here.
 DEFAULT_SEXES = ["Male", "Female", "Unknown"]
@@ -41,8 +45,16 @@ DEFAULT_ROUTES = ["IP", "IV", "PO", "SC", "IM", "Topical", "Inhalation", "Other"
 
 
 def _key(value: str) -> str:
-    """The comparison key for a vocabulary value: trimmed and case-folded."""
-    return value.strip().casefold()
+    """The comparison key for a vocabulary value: normalized, trimmed, folded.
+
+    NFKC normalization matters as much as case folding here. macOS favours
+    decomposed forms and Windows composed ones, so the same strain typed on
+    two machines in one lab arrives as two different strings that render
+    identically -- ``Bre`` + combining acute versus a precomposed ``é``.
+    Without normalizing, that splits one cohort in two exactly as
+    ``Control``/``control`` would, just through a different door.
+    """
+    return unicodedata.normalize("NFKC", value).strip().casefold()
 
 
 @dataclass
@@ -56,7 +68,12 @@ class Vocabulary:
     sexes: list[str] = field(default_factory=lambda: list(DEFAULT_SEXES))
 
     def get(self, name: str) -> list[str]:
-        """The live list called ``name``. Raises ``KeyError`` if there is none."""
+        """The live list called ``name``. Raises ``KeyError`` if there is none.
+
+        This is the stored list, not a copy. Mutate it only through ``add``
+        and ``remove`` -- appending to it directly bypasses the de-duplication
+        that is the entire purpose of this module.
+        """
         if name not in LISTS:
             raise KeyError(f"Unknown vocabulary list: {name!r}")
         return getattr(self, name)
@@ -119,6 +136,17 @@ def load(library_dir: Path) -> Vocabulary:
         logger.warning("Ignoring vocabulary file %s: expected a JSON object", path)
         return Vocabulary()
 
+    stored_version = data.get("schema_version")
+    if stored_version is not None and stored_version != SCHEMA_VERSION:
+        # Never fatal -- a future v2 file must still yield a usable vocabulary
+        # rather than an empty subject form. The warning leaves the trace.
+        logger.warning(
+            "Vocabulary file %s declares schema_version %r, expected %r; reading it anyway",
+            path,
+            stored_version,
+            SCHEMA_VERSION,
+        )
+
     vocab = Vocabulary()
     for name in LISTS:
         stored = data.get(name)
@@ -136,13 +164,25 @@ def save(vocab: Vocabulary, library_dir: Path) -> bool:
 
     A read-only home directory must not take the application down, so an
     ``OSError`` is logged and reported as ``False`` for the caller to surface.
+
+    The write goes to a temporary file and is then moved into place, so an
+    interrupted save leaves the previous vocabulary intact. This file holds
+    the lab's whole vocabulary and, once subjects learn novel values on save,
+    is rewritten on every subject save -- a truncating write would put the
+    entire vocabulary at risk on each one.
     """
     path = vocabulary_path(library_dir)
+    tmp = path.with_suffix(".json.tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(vocab.to_dict(), indent=2), encoding="utf-8")
+        tmp.write_text(json.dumps(vocab.to_dict(), indent=2), encoding="utf-8")
+        os.replace(tmp, path)
     except OSError as e:
         logger.warning("Could not save vocabulary to %s: %s", path, e)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
         return False
     logger.debug("Saved vocabulary to %s", path)
     return True
