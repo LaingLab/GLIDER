@@ -21,6 +21,7 @@ very form meant to prevent that.
 
 import pytest
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QDialog
 
 from glider.core.vocabulary import LISTS, Vocabulary, load, save
 from glider.gui.dialogs.lab_setup_dialog import LabSetupDialog
@@ -63,6 +64,19 @@ def type_value(qtbot, editor, value: str) -> None:
     """Enter a value the way a user does: type it, press Enter."""
     editor.entry.setText(value)
     qtbot.keyClick(editor.entry, Qt.Key.Key_Return)
+
+
+def focus(qtbot, widget) -> None:
+    """Give ``widget`` keyboard focus, the way tabbing to it would.
+
+    ``setFocus`` alone is not enough: the window has to become active first,
+    and that happens on the event loop rather than inside the call. Asserting
+    on the focus that follows keeps a test that meant to press Enter on a
+    button from quietly pressing it nowhere.
+    """
+    widget.activateWindow()
+    widget.setFocus()
+    qtbot.waitUntil(widget.hasFocus)
 
 
 # --- Every list is offered -----------------------------------------------------
@@ -171,7 +185,15 @@ def test_neither_button_is_the_window_default(dialog):
     """The mechanism behind the test above, pinned directly.
 
     Leave either button auto-default and Return in any of the five entry
-    fields reaches it again.
+    fields reaches it again -- not just while that button holds focus, but
+    permanently. Measured on a shown dialog with ``autoDefault`` restored:
+    focusing Done sets ``isDefault()`` True and it *stays* True after focus
+    moves back to an entry field, and focusing Skip then leaving promotes
+    Done, because ``QDialogButtonBox``'s Show handler registered Done as the
+    dialog's remembered main default and every auto-default focus-out
+    restores it. ``autoDefault`` is therefore unusable here, and Enter on a
+    focused button is handled explicitly instead --
+    see :meth:`LabSetupDialog.keyPressEvent` and the tests below it.
     """
     d = dialog(vocabulary=Vocabulary())
 
@@ -179,6 +201,89 @@ def test_neither_button_is_the_window_default(dialog):
     assert d.skip_button.isDefault() is False
     assert d.done_button.autoDefault() is False
     assert d.skip_button.autoDefault() is False
+
+
+# --- Enter on a focused button -------------------------------------------------
+
+
+def test_enter_on_a_focused_done_button_saves_and_closes(dialog, qtbot, library_dir):
+    """Clearing the default button must not cost the focused button its Enter.
+
+    ``QPushButton`` acts on Return only when ``autoDefault or isDefault``, so
+    clearing both leaves a keyboard-only user tabbing to Done, pressing Enter
+    and watching nothing happen -- with Space the sole way to activate either
+    button, against the convention every platform has.
+    """
+    d = dialog(vocabulary=Vocabulary())
+    type_value(qtbot, d.editors["groups"], "Control")
+
+    focus(qtbot, d.done_button)
+    qtbot.keyClick(d.done_button, Qt.Key.Key_Return)
+
+    assert not d.isVisible()
+    assert d.result() == QDialog.DialogCode.Accepted
+    assert load(library_dir).groups == ["Control"]
+
+
+def test_enter_on_a_focused_skip_button_closes_without_saving(dialog, qtbot, library_dir):
+    """Skip is the other half: reachable by keyboard, and still writing nothing."""
+    d = dialog(vocabulary=Vocabulary())
+    type_value(qtbot, d.editors["groups"], "Control")
+
+    focus(qtbot, d.skip_button)
+    qtbot.keyClick(d.skip_button, Qt.Key.Key_Return)
+
+    assert not d.isVisible()
+    assert d.result() == QDialog.DialogCode.Rejected
+    assert not (library_dir / "vocabulary.json").exists()
+
+
+def test_escape_closes_without_saving(dialog, qtbot, library_dir):
+    """Escape is Skip. A dialog whose key handling is overridden can lose it."""
+    d = dialog(vocabulary=Vocabulary())
+    type_value(qtbot, d.editors["groups"], "Control")
+
+    qtbot.keyClick(d, Qt.Key.Key_Escape)
+
+    assert not d.isVisible()
+    assert d.result() == QDialog.DialogCode.Rejected
+    assert not (library_dir / "vocabulary.json").exists()
+
+
+def test_closing_the_window_writes_nothing(dialog, qtbot, library_dir):
+    """The title-bar close is Skip too, not a silent save."""
+    d = dialog(vocabulary=Vocabulary())
+    type_value(qtbot, d.editors["groups"], "Control")
+
+    assert d.close() is True
+
+    assert not d.isVisible()
+    assert d.result() == QDialog.DialogCode.Rejected
+    assert not (library_dir / "vocabulary.json").exists()
+
+
+@pytest.mark.parametrize("button", ["done_button", "skip_button"])
+def test_enter_in_an_entry_stays_harmless_after_a_button_held_focus(
+    dialog, qtbot, library_dir, button
+):
+    """The trap that rules ``autoDefault`` out, pinned so it cannot come back.
+
+    With ``autoDefault`` restored, a button that has *once* held focus leaves
+    Done promoted to window default for the rest of the dialog's life -- Skip
+    included, because Qt restores the remembered main default on focus-out. So
+    a user who tabs to a button, tabs back to a field and keeps typing terms
+    hits the original bug: the next Enter saves the file and closes the form.
+    """
+    d = dialog(vocabulary=Vocabulary())
+
+    focus(qtbot, getattr(d, button))
+    focus(qtbot, d.editors["groups"].entry)
+
+    type_value(qtbot, d.editors["groups"], "Control")
+
+    assert d.editors["groups"].values() == ["Control"]
+    assert d.isVisible(), "a button that once held focus turned Enter back into Done"
+    assert not (library_dir / "vocabulary.json").exists()
 
 
 def test_enter_stays_harmless_in_every_list(dialog, qtbot, library_dir):

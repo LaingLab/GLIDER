@@ -15,7 +15,10 @@ Four behaviours here are deliberate, and each is a way this could fail quietly:
   alone, the documented "type a term and press Enter" also saved the file and
   closed the form on the first term given -- and the caller records the offer
   as seen before opening this, so there was no second chance. See
-  :meth:`LabSetupDialog.showEvent`.
+  :meth:`LabSetupDialog.showEvent`. Return on a *focused* Done or Skip is
+  given back explicitly in :meth:`LabSetupDialog.keyPressEvent`, because the
+  ``autoDefault`` flag that normally provides it also drags the window default
+  back.
 * **Skip is a first-class exit.** The person doing first launch is often not the
   person who knows the lab's strains. Skip closes the dialog and writes nothing
   -- no file, no half-vocabulary. The caller marks the setup seen either way, so
@@ -37,7 +40,8 @@ leaves the caller's object as untouched as the file.
 import logging
 from pathlib import Path
 
-from PyQt6.QtGui import QShowEvent
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QKeyEvent, QShowEvent
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -259,10 +263,54 @@ class LabSetupDialog(QDialog):
         term, save the file and close the form". On a first launch that is the
         entire vocabulary -- one entry -- because the caller records the offer
         as seen *before* opening this dialog and never asks again.
+
+        ``autoDefault`` has to go as well as ``default``, and that is not
+        belt-and-braces. ``QDialogButtonBox`` promotes Done with
+        ``setDefault(true)``, which also registers Done as the dialog's
+        remembered *main* default -- a private field this class cannot reach.
+        Every focus-out of an auto-default button asks the dialog to restore
+        that remembered default, so with ``autoDefault`` left on, one visit to
+        either button (Skip included) makes Done the window default for the
+        rest of the session and Enter in a text field saves and closes again.
+        Measured, on a shown dialog, with ``autoDefault`` restored and
+        ``default`` cleared: focus Done, and ``isDefault()`` is True and stays
+        True after focus returns to an entry field; focus Skip and leave, and
+        Done is default. The next Enter in any entry field wrote the file and
+        closed the form.
+
+        Clearing ``autoDefault`` costs Return on a *focused* button, since
+        ``QPushButton`` acts on it only when ``autoDefault or isDefault``. That
+        is given back deliberately and narrowly in :meth:`keyPressEvent`.
         """
         for button in (self.done_button, self.skip_button):
             button.setAutoDefault(False)
             button.setDefault(False)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Return activates the button that has focus, and nothing else.
+
+        This is the half of Qt's Return handling worth keeping. Neither button
+        may be the window default (see :meth:`_clear_default_buttons`), and the
+        ``autoDefault`` flag that would normally let a focused button act on
+        Return cannot be used here without dragging the window default back
+        with it. Cleared outright, though, Space became the only way to
+        activate Done or Skip: a keyboard-only user tabs to Done, presses
+        Enter, and nothing at all happens -- silent, and against the
+        convention every platform has.
+
+        Keying off the focused widget rather than a flag is what keeps the two
+        apart. A Return in a text field arrives here too, having been ignored
+        by the ``QLineEdit``, and falls straight through to ``QDialog``, which
+        finds no default button and does nothing. Escape keeps reaching
+        ``QDialog`` as well, so it still rejects.
+        """
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            focused = self.focusWidget()
+            if focused in (self.done_button, self.skip_button):
+                focused.click()
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def showEvent(self, event: QShowEvent) -> None:
         """Undo Qt's promotion of Done to default button.
