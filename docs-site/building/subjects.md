@@ -23,11 +23,13 @@ every time, by everyone.
     normalising Unicode. `Control`, `control` and `  CONTROL  ` are one entry,
     and so are the composed and decomposed spellings of an accented strain name
     — which matters when one bench machine is a Mac and another is a PC, since
-    they favour different spellings that look identical on screen. Zero-width
-    characters, which spreadsheets and PDFs like to smuggle into a copy-paste,
-    are stripped for the same reason: they would otherwise give you two rows
-    you cannot tell apart. The **first** spelling your lab used is the one
-    kept, so your own capitalisation survives.
+    they favour different spellings that look identical on screen. The
+    characters that render as nothing — zero-width spaces, soft hyphens, word
+    joiners and the byte-order mark, which spreadsheets, Word and PDFs like to
+    smuggle into a copy-paste — are stripped for the same reason: they would
+    otherwise give you two rows you cannot tell apart. Characters that do show,
+    including a real hyphen, are left alone. The **first** spelling your lab
+    used is the one kept, so your own capitalisation survives.
 
 ## Setting up your vocabulary
 
@@ -70,8 +72,11 @@ you skipped it. That is where the lab's strains get filled in later, and where
 you tidy up terms that crept in.
 
 A removal here sticks. Subjects already recorded with the term keep it — see
-below — but they will not put it back on the list, so you can retire a
-misspelling without hunting down every animal that carries it.
+below — but simply opening and saving one will not put it back on the list, so
+you can retire a misspelling without hunting down every animal that carries it.
+What does put it back is editing that particular field on such a subject: any
+change to it, even one that ends on the same term, counts as you choosing the
+term, and it is learned again.
 
 !!! note "Runner mode"
     The setup form is a desktop feature. It is never offered on the Raspberry Pi
@@ -118,9 +123,11 @@ You never have to stop and go define a term first. Type a group the lab has not
 used before, press **OK**, and it is added to the vocabulary there and then —
 so the second animal you enter is offered what the first one introduced.
 
-Only terms you actually type into the form are learned, and only when you press
-**OK**. A value a subject already carried is left alone, and pressing **Cancel**
-teaches nothing at all.
+Only fields you actually change are learned from, and only when you press
+**OK**. A value a subject already carried is left alone as long as you leave
+that field alone — change it at all, even if you end up back on the same term,
+and it is treated as your choice and learned. Pressing **Cancel** teaches
+nothing at all.
 
 This is what makes skipping the setup form genuinely free: a lab that never
 opens Lab Setup still ends up with a vocabulary, built out of what people

@@ -16,6 +16,7 @@ they just typed.
 """
 
 import pytest
+from PyQt6.QtCore import Qt
 
 from glider.core.experiment_session import Subject
 from glider.core.vocabulary import DEFAULT_ROUTES, DEFAULT_SEXES, Vocabulary, load, save
@@ -539,6 +540,40 @@ def test_retyping_a_removed_term_teaches_it_again(dialog, vocab, library_dir):
     d = dialog(subject=existing, vocabulary=vocab)
     d._group_combo.setCurrentText("")
     d._group_combo.setCurrentText("Control")
+    press_ok(d)
+
+    assert vocab.groups == ["Drug A", "Control"]
+    assert load(library_dir).groups == ["Drug A", "Control"]
+
+
+def test_touching_a_field_teaches_the_value_that_was_already_in_it(
+    dialog, vocab, library_dir, qtbot
+):
+    """The narrow gap in "a value a subject already carried is left alone".
+
+    A field counts as edited the moment its text changes at all, so a user who
+    clicks into the group box of an old subject, types a character and deletes
+    it again has edited it -- and OK teaches the term the subject arrived
+    carrying, though nothing about the subject changed. It takes deliberate
+    interaction with that one field, which is why a removal in Lab Setup is
+    durable in practice, but "never" is too strong and the docs no longer say
+    it.
+
+    Tracking edits rather than diffing before and after is still the right
+    trade: a diff cannot tell a cleared-and-retyped term from an untouched
+    one, and refusing to learn *that* would be the worse surprise. See
+    ``test_retyping_a_removed_term_teaches_it_again``.
+    """
+    existing = Subject(subject_id="M001", group="Control")
+    assert vocab.remove("groups", "Control") is True
+
+    d = dialog(subject=existing, vocabulary=vocab)
+    line_edit = d._group_combo.lineEdit()
+    line_edit.setCursorPosition(len(line_edit.text()))
+    qtbot.keyClick(line_edit, "x")
+    qtbot.keyClick(line_edit, Qt.Key.Key_Backspace)
+    assert d._group_combo.currentText() == "Control", "the field did not end where it started"
+
     press_ok(d)
 
     assert vocab.groups == ["Drug A", "Control"]
