@@ -176,16 +176,19 @@ def test_unknown_list_name_is_refused(tmp_path):
     raise AssertionError("expected KeyError for an unknown list")
 
 
-def test_an_unwritable_directory_reports_rather_than_raising(tmp_path, monkeypatch):
-    """A read-only home must not take the app down; the caller shows the failure."""
+def test_an_unwritable_directory_reports_rather_than_raising(tmp_path):
+    """A read-only home must not take the app down; the caller shows the failure.
+
+    Provokes a real filesystem error rather than monkeypatching the write, so
+    the test does not pin *how* the file is written. An earlier draft patched
+    ``pathlib.Path.write_text``; that would have broken when save became atomic
+    (write to ``.tmp``, then ``os.replace``) for no behavioural reason, and
+    would then have been describing a failure it no longer provoked.
+    """
     vocab = load(tmp_path)
+    (tmp_path / "blocker").write_text("not a directory", encoding="utf-8")
 
-    def boom(*args, **kwargs):
-        raise OSError("read-only")
-
-    monkeypatch.setattr("pathlib.Path.write_text", boom)
-
-    assert save(vocab, tmp_path) is False
+    assert save(vocab, tmp_path / "blocker" / "lib") is False
 
 
 def test_saved_file_is_readable_json(tmp_path):
