@@ -171,6 +171,28 @@ def test_changing_the_run_state_repolishes_so_the_new_colour_lands(themed_strip)
     assert _text_colour(themed_strip.pill()) == STATE_ERR
 
 
+def test_the_pill_carries_a_detail_when_it_is_given_one(strip):
+    """The mockup reads "Recording 04:12". The strip renders the clock; it does
+    not run one -- a widget that owns a timer is a widget that keeps ticking
+    after the run it was describing has stopped."""
+    strip.set_run_state("recording", "04:12")
+
+    assert strip.pill().text() == "Recording 04:12"
+    assert strip.pill().property("state") == "recording"
+    assert strip.run_detail() == "04:12"
+
+
+def test_a_state_given_without_a_detail_drops_the_previous_one(strip):
+    """Otherwise the elapsed clock of the last run survives into the next
+    state, which is the same class of lie as a stale pill."""
+    strip.set_run_state("recording", "04:12")
+
+    strip.set_run_state("idle")
+
+    assert strip.pill().text() == "Idle"
+    assert strip.run_detail() == ""
+
+
 # --------------------------------------------------------------------- devices
 
 

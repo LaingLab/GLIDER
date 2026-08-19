@@ -142,6 +142,7 @@ class StatusStrip(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self._run_state = "idle"
+        self._run_detail = ""
         self._device_names: list[str] = []
         self._chips: list[QFrame] = []
         self._dots: list[QLabel] = []
@@ -235,11 +236,22 @@ class StatusStrip(QFrame):
         """The current run state."""
         return self._run_state
 
-    def set_run_state(self, state: str) -> None:
-        """Move the pill to *state*.
+    def run_detail(self) -> str:
+        """The text shown after the state word, or ``""``."""
+        return self._run_detail
+
+    def set_run_state(self, state: str, detail: str | None = None) -> None:
+        """Move the pill to *state*, optionally followed by *detail*.
 
         Args:
             state: One of the keys of :data:`RUN_STATE_TEXT`.
+            detail: Extra text rendered after the state word -- the mockup's
+                elapsed clock, ``set_run_state("recording", "04:12")``, reads
+                "Recording 04:12". **Nothing here runs a timer**: a widget that
+                owned one would keep ticking after the run it describes had
+                stopped, which is the same lie as a stale pill. Omitting it
+                clears any previous detail, so last run's clock cannot survive
+                into the next state.
 
         Raises:
             ValueError: *state* is not one of the four. Deliberately loud: run
@@ -252,7 +264,9 @@ class StatusStrip(QFrame):
                 f"unknown run state {state!r}; expected one of {sorted(RUN_STATE_TEXT)}"
             )
         self._run_state = state
-        self._pill.setText(RUN_STATE_TEXT[state])
+        self._run_detail = str(detail).strip() if detail else ""
+        text = RUN_STATE_TEXT[state]
+        self._pill.setText(f"{text} {self._run_detail}" if self._run_detail else text)
         self._pill.setProperty("state", state)
         _restyle(self._pill)
 
