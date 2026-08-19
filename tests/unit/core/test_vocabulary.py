@@ -305,6 +305,36 @@ def test_a_wrong_typed_list_is_logged(tmp_path, caplog):
     assert any("strains" in r.getMessage() for r in caplog.records), caplog.text
 
 
+def test_an_explicit_null_list_is_logged(tmp_path, caplog):
+    """``"routes": null`` is a hand-edit mistake, not an omission.
+
+    Absent means "I never touched this list", and restoring its defaults in
+    silence is right. ``null`` means someone edited the file and got it wrong,
+    and it takes the same route as ``"routes": "IP"`` -- the terms revert --
+    so it deserves the same warning rather than the silent path.
+    """
+    (tmp_path / "vocabulary.json").write_text(
+        json.dumps({"schema_version": "1.0", "routes": None}), encoding="utf-8"
+    )
+
+    with caplog.at_level(logging.WARNING, logger="glider.core.vocabulary"):
+        assert "IP" in load(tmp_path).routes
+
+    assert any("routes" in r.getMessage() for r in caplog.records), caplog.text
+
+
+def test_an_absent_list_is_not_logged(tmp_path, caplog):
+    """The other side of it: absent stays silent, or every load warns."""
+    (tmp_path / "vocabulary.json").write_text(
+        json.dumps({"schema_version": "1.0", "groups": ["Control"]}), encoding="utf-8"
+    )
+
+    with caplog.at_level(logging.WARNING, logger="glider.core.vocabulary"):
+        assert "IP" in load(tmp_path).routes
+
+    assert caplog.records == []
+
+
 def test_a_well_formed_file_logs_nothing(tmp_path, caplog):
     """A warning on every normal load teaches people to ignore warnings."""
     stored = Vocabulary(groups=["Control"])

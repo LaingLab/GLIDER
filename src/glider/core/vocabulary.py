@@ -171,9 +171,13 @@ def load(library_dir: Path) -> Vocabulary:
 
     vocab = Vocabulary()
     for name in LISTS:
-        stored = data.get(name)
-        if stored is None:
-            continue  # Absent: keep this list's default, as documented.
+        # Absent means "never touched this list": keep its defaults, silently,
+        # as documented. An explicit null is a different thing -- someone
+        # edited the file and got it wrong -- so it falls through to the
+        # wrong-typed warning below rather than taking the silent path.
+        if name not in data:
+            continue
+        stored = data[name]
         if not isinstance(stored, list):
             # Wrong-typed: the list silently reverts to its defaults, which
             # from the user's side looks like the terms they hand-edited in
@@ -182,9 +186,10 @@ def load(library_dir: Path) -> Vocabulary:
                 "Vocabulary file %s: %r is %s, not a list; using the defaults for it",
                 path,
                 name,
-                type(stored).__name__,
+                "null" if stored is None else type(stored).__name__,
             )
             continue
+
         vocab.get(name).clear()
         dropped = 0
         for item in stored:
