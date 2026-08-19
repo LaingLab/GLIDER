@@ -93,6 +93,17 @@ def dialog(qtbot):
     return _make
 
 
+def press_ok(d) -> None:
+    """Press OK the way a user does.
+
+    Learning happens here and nowhere else. ``get_subject`` is a getter and
+    must stay one: it used to write ``vocabulary.json`` as a side effect, so
+    Cancel's safety depended on every caller remembering to check the result
+    code rather than on the dialog.
+    """
+    d._on_accept()
+
+
 # --- The defaults the two modules must agree on -------------------------------
 
 
@@ -315,13 +326,20 @@ def test_a_value_removed_from_the_vocabulary_survives_open_and_save(
 
 
 # --- Learn on save ------------------------------------------------------------
+#
+# Learning is deliberately narrow: only a term the user *typed into this form*
+# teaches the vocabulary. A term merely loaded from the subject does not, which
+# is what makes removing one in Lab Setup stick. Re-learning whatever a subject
+# still carried meant "remove" silently failed for exactly the terms anyone
+# wants to remove -- the ones already in saved files -- with no user edit
+# involved at all: opening a subject and pressing OK was enough.
 
 
 @pytest.mark.parametrize("attribute, widget, list_name", VOCABULARY_FIELDS, ids=FIELD_IDS)
 def test_a_novel_value_in_any_field_is_learned(
     dialog, vocab, library_dir, attribute, widget, list_name
 ):
-    """Every entry in _LEARNED_FIELDS must be reachable through the widget.
+    """Every vocabulary-backed combo must be reachable by learn-on-save.
 
     The sexes entry was dead code while the sex combo refused typing.
     """
@@ -330,7 +348,7 @@ def test_a_novel_value_in_any_field_is_learned(
     d._subject_id_edit.setText("M001")
     getattr(d, widget).setCurrentText(novel)
 
-    d.get_subject()
+    press_ok(d)
 
     assert novel in vocab.get(list_name)
     assert novel in load(library_dir).get(list_name)
@@ -341,7 +359,7 @@ def test_a_novel_value_is_learned_and_written(dialog, vocab, library_dir):
     d._subject_id_edit.setText("M001")
     d._strain_combo.setCurrentText("BALB/c")
 
-    d.get_subject()
+    press_ok(d)
 
     assert "BALB/c" in vocab.strains
     assert "BALB/c" in load(library_dir).strains
@@ -352,7 +370,7 @@ def test_a_novel_value_typed_while_editing_is_also_learned(dialog, vocab, librar
     d = dialog(subject=existing, vocabulary=vocab)
     d._group_combo.setCurrentText("Drug Q")
 
-    d.get_subject()
+    press_ok(d)
 
     assert "Drug Q" in load(library_dir).groups
 
@@ -368,7 +386,7 @@ def test_nothing_novel_means_the_file_is_not_rewritten(dialog, vocab, monkeypatc
     d._group_combo.setCurrentText("Control")
     d._route_combo.setCurrentText("IP")
 
-    d.get_subject()
+    press_ok(d)
 
     assert saves == []
 
@@ -383,7 +401,7 @@ def test_a_differently_cased_value_is_not_a_new_entry(dialog, vocab, monkeypatch
     d._subject_id_edit.setText("M001")
     d._group_combo.setCurrentText("control")
 
-    d.get_subject()
+    press_ok(d)
 
     assert vocab.groups == ["Control", "Drug A"]
     assert saves == []
@@ -396,6 +414,7 @@ def test_a_failed_save_does_not_cost_the_user_the_subject(dialog, vocab, monkeyp
     d._subject_id_edit.setText("M001")
     d._group_combo.setCurrentText("Drug Z")
 
+    press_ok(d)
     subject = d.get_subject()
 
     assert subject.subject_id == "M001"
@@ -410,9 +429,117 @@ def test_blank_fields_are_not_learned(dialog, vocab, library_dir, monkeypatch):
     d = dialog(vocabulary=vocab)
     d._subject_id_edit.setText("M001")
 
-    d.get_subject()
+    press_ok(d)
 
     assert saves == []
     assert "" not in vocab.groups
     assert "" not in vocab.strains
     assert "" not in vocab.solutions
+
+
+# --- Learning is a write, so it belongs on the accept path only ----------------
+
+
+def test_reading_the_form_writes_nothing(dialog, vocab, library_dir):
+    """``get_subject`` is a getter, and a getter must not touch the disk.
+
+    It used to add to the vocabulary and rewrite ``vocabulary.json`` with no
+    guard on the result code, so Cancel was safe only because the one caller
+    happened to check ``Accepted`` first. That is a caller convention, not a
+    property of the dialog, and the next caller does not inherit it.
+    """
+    d = dialog(vocabulary=vocab)
+    d._subject_id_edit.setText("M001")
+    d._group_combo.setCurrentText("Drug Z")
+
+    d.get_subject()
+
+    assert "Drug Z" not in vocab.groups
+    assert not (library_dir / "vocabulary.json").exists()
+
+
+def test_a_cancelled_dialog_teaches_the_vocabulary_nothing(dialog, vocab, library_dir):
+    """Cancel means the animal was not entered; nothing it named was either."""
+    d = dialog(vocabulary=vocab)
+    d._subject_id_edit.setText("M001")
+    d._group_combo.setCurrentText("Drug Z")
+
+    d.reject()
+
+    assert "Drug Z" not in vocab.groups
+    assert not (library_dir / "vocabulary.json").exists()
+
+
+def test_a_rejected_required_field_learns_nothing(dialog, vocab, library_dir, monkeypatch):
+    """OK with no Subject ID is refused, so nothing on the form is real yet."""
+    monkeypatch.setattr(subject_dialog_module.QMessageBox, "warning", lambda *a, **k: None)
+    d = dialog(vocabulary=vocab)
+    d._group_combo.setCurrentText("Drug Z")
+
+    press_ok(d)
+
+    assert "Drug Z" not in vocab.groups
+    assert not (library_dir / "vocabulary.json").exists()
+
+
+# --- Removal has to stick ------------------------------------------------------
+
+
+@pytest.mark.parametrize("attribute, widget, list_name", VOCABULARY_FIELDS, ids=FIELD_IDS)
+def test_a_term_the_lab_removed_is_not_relearned_from_an_old_subject(
+    dialog, vocab, library_dir, attribute, widget, list_name
+):
+    """Removing a term in Lab Setup must not be undone by opening a subject.
+
+    This needed no user edit at all: the term was still on the subject, so
+    learn-on-save put it straight back. Which meant "remove" failed for exactly
+    the terms a lab wants to remove -- the ones already written into saved
+    files -- and the only way to make one stick was to never open an animal
+    recorded with it again.
+    """
+    recorded = RECOGNISED_VALUES[attribute]
+    existing = Subject(subject_id="M001", **{attribute: recorded})
+    assert vocab.remove(list_name, recorded) is True  # the lab tidies its list
+    before = list(vocab.get(list_name))
+
+    d = dialog(subject=existing, vocabulary=vocab)
+    press_ok(d)
+
+    assert vocab.get(list_name) == before, f"{recorded} came back"
+    assert not (library_dir / "vocabulary.json").exists()
+    assert getattr(d.get_subject(), attribute) == recorded, "the subject's own value changed"
+
+
+def test_a_removed_term_stays_removed_when_the_subject_is_otherwise_edited(
+    dialog, vocab, library_dir
+):
+    """Editing another field must not smuggle the untouched one back in."""
+    existing = Subject(subject_id="M001", group="Control", strain="C57BL/6J")
+    assert vocab.remove("groups", "Control") is True
+
+    d = dialog(subject=existing, vocabulary=vocab)
+    d._strain_combo.setCurrentText("BALB/c")
+    press_ok(d)
+
+    assert vocab.groups == ["Drug A"]
+    assert "BALB/c" in vocab.strains
+    assert load(library_dir).groups == ["Drug A"]
+
+
+def test_retyping_a_removed_term_teaches_it_again(dialog, vocab, library_dir):
+    """Removal is durable, not permanent: the user is still in charge.
+
+    A snapshot-and-compare would get this wrong -- the text ends where it
+    started -- so what is tracked is whether the field was edited at all, not
+    whether its value moved.
+    """
+    existing = Subject(subject_id="M001", group="Control")
+    assert vocab.remove("groups", "Control") is True
+
+    d = dialog(subject=existing, vocabulary=vocab)
+    d._group_combo.setCurrentText("")
+    d._group_combo.setCurrentText("Control")
+    press_ok(d)
+
+    assert vocab.groups == ["Drug A", "Control"]
+    assert load(library_dir).groups == ["Drug A", "Control"]

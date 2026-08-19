@@ -37,15 +37,6 @@ logger = logging.getLogger(__name__)
 SEX_OPTIONS = ["", "Male", "Female", "Unknown"]
 ROUTE_OPTIONS = ["", "IP", "IV", "PO", "SC", "IM", "Topical", "Inhalation", "Other"]
 
-#: Which Subject attribute feeds which vocabulary list, for learn-on-save.
-_LEARNED_FIELDS = (
-    ("groups", "group"),
-    ("strains", "strain"),
-    ("solutions", "solution"),
-    ("routes", "route"),
-    ("sexes", "sex"),
-)
-
 
 class SubjectDialog(QDialog):
     """
@@ -67,6 +58,12 @@ class SubjectDialog(QDialog):
     inline instead once looked up its stored value with ``findText`` and showed
     a blank when it did not match, so opening and saving a subject recorded
     with a term the lab had since removed silently erased it.
+
+    Learning is narrow on purpose: only a field the user *edited here* teaches
+    the vocabulary, and only when OK is pressed. Re-learning whatever a subject
+    still carried undid removals in Lab Setup with no user edit at all --
+    opening an old subject and pressing OK put the deleted term straight back,
+    so "remove" failed for exactly the terms a lab wants gone.
     """
 
     def __init__(
@@ -83,10 +80,21 @@ class SubjectDialog(QDialog):
         self._library_dir = get_config().paths.library_dir
         self._vocabulary = vocabulary if vocabulary is not None else load(self._library_dir)
 
+        #: Vocabulary list name -> the combo that offers it, registered by
+        #: ``_vocabulary_combo`` so a sixth field cannot be added and then
+        #: forgotten by learn-on-save.
+        self._vocabulary_combos: dict[str, QComboBox] = {}
+        #: Which of those the user has touched. See ``_watch_for_edits``.
+        self._edited_lists: set[str] = set()
+
         self._setup_ui()
 
         if subject:
             self._load_subject(subject)
+
+        # Only after loading: the setCurrentText calls above are this dialog
+        # displaying what was already recorded, not the user typing.
+        self._watch_for_edits()
 
     def _setup_ui(self) -> None:
         """Set up the dialog UI."""
@@ -146,7 +154,23 @@ class SubjectDialog(QDialog):
         combo.setCurrentIndex(0)
         if line_edit := combo.lineEdit():
             line_edit.setPlaceholderText(placeholder)
+        self._vocabulary_combos[list_name] = combo
         return combo
+
+    def _watch_for_edits(self) -> None:
+        """Remember which vocabulary fields the user changes.
+
+        Learn-on-save consults this rather than comparing the final text with
+        the loaded one. Both distinguish "the user typed a term" from "the
+        subject already carried one", which is what makes a removal in Lab
+        Setup durable -- but only this one also handles the user clearing a
+        field and retyping the same term, where a before/after comparison sees
+        no change and would refuse to teach it back.
+        """
+        for list_name, combo in self._vocabulary_combos.items():
+            combo.currentTextChanged.connect(
+                lambda _text, name=list_name: self._edited_lists.add(name)
+            )
 
     def _create_basic_tab(self) -> QWidget:
         """Create the basic info tab."""
@@ -358,6 +382,12 @@ class SubjectDialog(QDialog):
             self._subject_id_edit.setFocus()
             return
 
+        # Learning lives here, not in get_subject: it writes vocabulary.json,
+        # and a write must not happen on a form the user is about to cancel.
+        # get_subject used to do it with no guard on the result code, which
+        # left Cancel safe only by the grace of its one caller checking
+        # Accepted first -- a caller convention, not a property of the dialog.
+        self._learn_vocabulary()
         self.accept()
 
     def get_subject(self) -> "Subject":
@@ -403,11 +433,15 @@ class SubjectDialog(QDialog):
         else:
             subject = Subject(**values)
 
-        self._learn_vocabulary(subject)
         return subject
 
-    def _learn_vocabulary(self, subject: "Subject") -> None:
-        """Teach the lab's vocabulary any term this subject introduced.
+    def _learn_vocabulary(self) -> None:
+        """Teach the lab's vocabulary any term the user typed into this form.
+
+        Only edited fields are considered. A term the subject arrived carrying
+        is *not* re-learned: doing so silently undid a removal made in Lab
+        Setup, because the old subjects still holding the deleted term put it
+        back the moment anyone opened one and pressed OK.
 
         The file is rewritten only when something was actually new -- that is
         what ``Vocabulary.add``'s bool return is for. A failed write is logged
@@ -415,12 +449,15 @@ class SubjectDialog(QDialog):
         subject they just typed.
         """
         learned = False
-        for list_name, attribute in _LEARNED_FIELDS:
-            if self._vocabulary.add(list_name, getattr(subject, attribute)):
+        for list_name in self._edited_lists:
+            if self._vocabulary.add(list_name, self._vocabulary_combos[list_name].currentText()):
                 learned = True
 
         if not learned:
             return
 
         if not save(self._vocabulary, self._library_dir):
-            logger.warning("Could not record new vocabulary terms from subject %s", subject.id)
+            logger.warning(
+                "Could not record new vocabulary terms from subject %s",
+                self._subject_id_edit.text().strip(),
+            )

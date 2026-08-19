@@ -66,6 +66,10 @@ it and stops offering.
 you skipped it. That is where the lab's strains get filled in later, and where
 you tidy up terms that crept in.
 
+A removal here sticks. Subjects already recorded with the term keep it — see
+below — but they will not put it back on the list, so you can retire a
+misspelling without hunting down every animal that carries it.
+
 !!! note "Runner mode"
     The setup form is a desktop feature. It is never offered on the Raspberry Pi
     runner screen — a 480-pixel touch surface with no menu bar is the wrong
@@ -107,6 +111,10 @@ You never have to stop and go define a term first. Type a group the lab has not
 used before, press **OK**, and it is added to the vocabulary there and then —
 so the second animal you enter is offered what the first one introduced.
 
+Only terms you actually type into the form are learned, and only when you press
+**OK**. A value a subject already carried is left alone, and pressing **Cancel**
+teaches nothing at all.
+
 This is what makes skipping the setup form genuinely free: a lab that never
 opens Lab Setup still ends up with a vocabulary, built out of what people
 actually typed. The setup form is the shortcut, not the requirement.
@@ -120,7 +128,9 @@ saved normally — only the new term goes unremembered.
     still shown in all five boxes, because all five accept free text. That
     holds for terms you later remove from a list too: removing `Unknown` from
     your Sexes list changes what the dropdown offers, but a subject already
-    recorded as `Unknown` still opens showing `Unknown` and re-saves unchanged.
+    recorded as `Unknown` still opens showing `Unknown` and re-saves unchanged
+    — and does *not* put `Unknown` back on the list on its way out. If you want
+    it back, type it in again.
 
 ## Where the vocabulary is stored
 
