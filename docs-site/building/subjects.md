@@ -23,8 +23,11 @@ every time, by everyone.
     normalising Unicode. `Control`, `control` and `  CONTROL  ` are one entry,
     and so are the composed and decomposed spellings of an accented strain name
     — which matters when one bench machine is a Mac and another is a PC, since
-    they favour different spellings that look identical on screen. The **first**
-    spelling your lab used is the one kept, so your own capitalisation survives.
+    they favour different spellings that look identical on screen. Zero-width
+    characters, which spreadsheets and PDFs like to smuggle into a copy-paste,
+    are stripped for the same reason: they would otherwise give you two rows
+    you cannot tell apart. The **first** spelling your lab used is the one
+    kept, so your own capitalisation survives.
 
 ## Setting up your vocabulary
 
@@ -180,7 +183,10 @@ A few things worth knowing before you do:
 - **A broken file will not stop GLIDER starting.** If the JSON is malformed or
   unreadable, GLIDER logs a warning, falls back to the defaults, and carries on.
   So if your terms suddenly vanish from the subject form, suspect a typo in the
-  file.
+  file. Smaller mistakes are logged the same way rather than passed over in
+  silence: a list given something other than an array (`"routes": "IP"`) is
+  named in the log as it reverts to its defaults, and so is any entry that is
+  not text (`"groups": ["Control", 7]` loses the `7`).
 - **Close the Lab Setup form before editing the file.** That form holds its own
   copy of the vocabulary from the moment it opens, and **Done** writes that copy
   over the whole file — so a hand-edit made while it is open would be

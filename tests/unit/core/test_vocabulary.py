@@ -7,6 +7,7 @@ code can tell the two apart afterwards.
 """
 
 import json
+import logging
 
 from glider.core.vocabulary import LISTS, Vocabulary, load, save
 
@@ -251,3 +252,65 @@ def test_every_declared_list_round_trips(tmp_path):
     reloaded = load(tmp_path)
     for name in LISTS:
         assert f"value-for-{name}" in reloaded.get(name)
+
+
+def test_zero_width_characters_do_not_fork_an_entry(tmp_path):
+    """The commonest invisible passenger on a paste out of Excel or a PDF.
+
+    ``str.strip()`` does not touch U+200B/U+200D/U+FEFF, and NFKC does not
+    remove them either, so two rows that are pixel-identical on screen could
+    sit in the same list -- the exact duplicate-cohort failure this module
+    exists to prevent, arriving through a character nobody can see to delete.
+    """
+    for invisible in ("\u200b", "\u200c", "\u200d", "\u200e", "\u200f", "\ufeff"):
+        vocab = load(tmp_path)
+        assert vocab.add("groups", "Control") is True
+        assert vocab.add("groups", f"{invisible}Control{invisible}") is False, repr(invisible)
+        assert vocab.groups == ["Control"]
+        assert vocab.remove("groups", f"Control{invisible}") is True
+
+
+def test_a_value_that_is_only_zero_width_characters_is_refused(tmp_path):
+    """Otherwise an invisible row appears in Lab Setup with nothing to click."""
+    vocab = load(tmp_path)
+
+    assert vocab.add("groups", "\u200b\ufeff") is False
+    assert vocab.groups == []
+
+
+def test_a_dropped_non_string_entry_is_logged(tmp_path, caplog):
+    """The docs tell the reader a hand-edited file that GLIDER cannot use gets
+    a warning. Dropping entries in silence means terms vanish from the subject
+    form with nothing to explain it."""
+    (tmp_path / "vocabulary.json").write_text(
+        json.dumps({"schema_version": "1.0", "groups": ["Control", 7]}), encoding="utf-8"
+    )
+
+    with caplog.at_level(logging.WARNING, logger="glider.core.vocabulary"):
+        assert load(tmp_path).groups == ["Control"]
+
+    assert any("groups" in r.getMessage() for r in caplog.records), caplog.text
+
+
+def test_a_wrong_typed_list_is_logged(tmp_path, caplog):
+    """Silently restoring the defaults for a list the user thought they had
+    edited is the same vanishing act, one level up."""
+    (tmp_path / "vocabulary.json").write_text(
+        json.dumps({"schema_version": "1.0", "strains": "not a list"}), encoding="utf-8"
+    )
+
+    with caplog.at_level(logging.WARNING, logger="glider.core.vocabulary"):
+        assert load(tmp_path).strains == []
+
+    assert any("strains" in r.getMessage() for r in caplog.records), caplog.text
+
+
+def test_a_well_formed_file_logs_nothing(tmp_path, caplog):
+    """A warning on every normal load teaches people to ignore warnings."""
+    stored = Vocabulary(groups=["Control"])
+    assert save(stored, tmp_path) is True
+
+    with caplog.at_level(logging.WARNING, logger="glider.core.vocabulary"):
+        assert load(tmp_path).groups == ["Control"]
+
+    assert caplog.records == []

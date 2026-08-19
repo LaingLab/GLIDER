@@ -21,6 +21,7 @@ This module imports no Qt, so it can be used and tested headlessly.
 import json
 import logging
 import os
+import re
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,17 +36,38 @@ LISTS = ("groups", "strains", "solutions", "routes", "sexes")
 
 # Defaults are duplicated from SEX_OPTIONS/ROUTE_OPTIONS in
 # glider.gui.dialogs.subject_dialog rather than imported, because importing
-# that module would drag Qt into this one. NOTHING PINS THE TWO TOGETHER YET:
-# Task 2 of the lab-vocabulary plan adds the test that asserts they match, and
-# until it lands, editing either copy can silently drift from the other.
-# The leading "" of those constants is a combo-box affordance meaning
+# that module would drag Qt into this one. The two copies are pinned together
+# by test_the_dialog_options_match_the_vocabulary_defaults in
+# tests/unit/gui/test_subject_dialog_vocabulary.py -- edit one and that test
+# fails. The leading "" of those constants is a combo-box affordance meaning
 # "nothing chosen", not a vocabulary value, so it is deliberately absent here.
+#
+# The dialog no longer reads SEX_OPTIONS/ROUTE_OPTIONS: every one of its five
+# fields is populated from a Vocabulary instead. They survive only as the other
+# half of that pin, which is what keeps these defaults honest about what a
+# subject form used to offer before any lab had defined a vocabulary.
 DEFAULT_SEXES = ["Male", "Female", "Unknown"]
 DEFAULT_ROUTES = ["IP", "IV", "PO", "SC", "IM", "Topical", "Inhalation", "Other"]
 
 
+#: Zero-width and bidi-control characters: U+200B..U+200F and U+FEFF. None of
+#: them is whitespace, so ``str.strip()`` leaves them alone and NFKC keeps
+#: them. Without removing them a pasted ``Control`` carrying a stray U+200B
+#: sits beside a typed ``Control`` as a second, pixel-identical entry -- the
+#: duplicate-cohort failure this module exists to prevent, arriving through a
+#: character nobody can see to delete. They are the commonest invisible
+#: passenger on a paste out of Excel, a PDF or a web page, which is how a lab
+#: vocabulary actually gets filled in.
+_INVISIBLE = re.compile("[\u200b-\u200f\ufeff]")
+
+
+def _clean(value: str) -> str:
+    """The value as it should be stored: no invisible characters, trimmed."""
+    return _INVISIBLE.sub("", value or "").strip()
+
+
 def _key(value: str) -> str:
-    """The comparison key for a vocabulary value: normalized, trimmed, folded.
+    """The comparison key for a vocabulary value: cleaned, normalized, folded.
 
     NFKC normalization matters as much as case folding here. macOS favours
     decomposed forms and Windows composed ones, so the same strain typed on
@@ -54,7 +76,7 @@ def _key(value: str) -> str:
     Without normalizing, that splits one cohort in two exactly as
     ``Control``/``control`` would, just through a different door.
     """
-    return unicodedata.normalize("NFKC", value).strip().casefold()
+    return unicodedata.normalize("NFKC", _clean(value)).casefold()
 
 
 @dataclass
@@ -85,7 +107,7 @@ class Vocabulary:
         file when nothing was learned.
         """
         values = self.get(name)
-        cleaned = (value or "").strip()
+        cleaned = _clean(value)
         if not cleaned:
             return False
         key = _key(cleaned)
@@ -150,12 +172,34 @@ def load(library_dir: Path) -> Vocabulary:
     vocab = Vocabulary()
     for name in LISTS:
         stored = data.get(name)
+        if stored is None:
+            continue  # Absent: keep this list's default, as documented.
         if not isinstance(stored, list):
-            continue  # Absent or wrong-typed: keep this list's default.
+            # Wrong-typed: the list silently reverts to its defaults, which
+            # from the user's side looks like the terms they hand-edited in
+            # simply vanishing. Say so; the docs promise a warning.
+            logger.warning(
+                "Vocabulary file %s: %r is %s, not a list; using the defaults for it",
+                path,
+                name,
+                type(stored).__name__,
+            )
+            continue
         vocab.get(name).clear()
+        dropped = 0
         for item in stored:
             if isinstance(item, str):
                 vocab.add(name, item)
+            else:
+                dropped += 1
+        if dropped:
+            logger.warning(
+                "Vocabulary file %s: dropped %d non-text entr%s from %r",
+                path,
+                dropped,
+                "y" if dropped == 1 else "ies",
+                name,
+            )
     return vocab
 
 
