@@ -1,5 +1,6 @@
 """Per-register cache backing the CSV columns."""
 
+import struct
 import threading
 
 import pytest
@@ -512,3 +513,116 @@ def test_concurrent_ingest_leaves_a_consistent_final_state():
     values = cache.snapshot()
     assert values["lick_count"] == 6 * 200
     assert values["lick_state"] == 3
+
+
+# --- decoding by declared type -------------------------------------------
+#
+# The cache used to read every payload as one unsigned little-endian integer,
+# and ``derivation`` refused to record anything else because of it. These pin
+# the half that had to move first.
+
+
+def _payload_event(address, payload, timestamp=1.0):
+    """One Event frame carrying exactly these payload bytes."""
+    return HarpFrame(3, address, 0xFF, 0x11, bytes(payload), timestamp)
+
+
+@pytest.mark.parametrize(
+    "declared, payload, expected",
+    [
+        ("S8", b"\xff", -1),
+        ("S8", b"\x7f", 127),
+        ("S16", b"\xff\xff", -1),
+        ("S16", (-1234).to_bytes(2, "little", signed=True), -1234),
+        ("S32", (-70000).to_bytes(4, "little", signed=True), -70000),
+        ("S64", (-(2**40)).to_bytes(8, "little", signed=True), -(2**40)),
+    ],
+)
+def test_a_signed_register_decodes_as_signed(declared, payload, expected):
+    """An S16 of -1 used to be recorded as 65535, in a CSV that opened cleanly."""
+    cache = RegisterCache({32: "offset"}, {32: declared})
+    cache.ingest(_payload_event(32, payload))
+
+    assert cache.snapshot()["offset_state"] == expected
+
+
+@pytest.mark.parametrize("declared", ["U8", "U16", "U32", "U64"])
+def test_an_unsigned_register_still_decodes_as_unsigned(declared):
+    """The top bit is a value, not a sign: 255 in a U8 is 255."""
+    cache = RegisterCache({32: "level"}, {32: declared})
+    cache.ingest(_payload_event(32, b"\xff"))
+
+    assert cache.snapshot()["level_state"] == 255
+
+
+def test_a_float_register_decodes_as_a_float():
+    """1.5 used to be recorded as 1069547520."""
+    cache = RegisterCache({32: "temp"}, {32: "Float"})
+    cache.ingest(_payload_event(32, struct.pack("<f", 1.5)))
+
+    assert cache.snapshot()["temp_state"] == pytest.approx(1.5)
+
+
+def test_a_float_register_reports_a_negative_value_as_negative():
+    cache = RegisterCache({32: "temp"}, {32: "Float"})
+    cache.ingest(_payload_event(32, struct.pack("<f", -0.25)))
+
+    assert cache.snapshot()["temp_state"] == pytest.approx(-0.25)
+
+
+def test_a_float_payload_of_the_wrong_width_reports_no_value():
+    """A Float register whose device sends three bytes is a schema that
+    disagrees with the hardware. Reported as unknown -- a blank column is a
+    visible gap; a number invented from three bytes is not -- and the event is
+    still counted, because it did happen.
+    """
+    cache = RegisterCache({32: "temp"}, {32: "Float"})
+    cache.ingest(_payload_event(32, b"\x00\x00\x80"))
+
+    values = cache.snapshot()
+    assert values["temp_state"] is None
+    assert values["temp_count"] == 1
+
+
+def test_a_cache_given_no_types_reads_every_payload_unsigned():
+    """The default is what the cache has always done, so a caller that has no
+    schema to hand -- ``_columns_for_recorded``, and every test written before
+    types existed -- keeps working."""
+    cache = RegisterCache({32: "lick"})
+    cache.ingest(_payload_event(32, b"\xff\xff"))
+
+    assert cache.snapshot()["lick_state"] == 65535
+
+
+def test_types_are_per_register_not_per_cache():
+    cache = RegisterCache({32: "lick", 33: "offset"}, {33: "S16"})
+    cache.ingest(_payload_event(32, b"\xff\xff"))
+    cache.ingest(_payload_event(33, b"\xff\xff"))
+
+    values = cache.snapshot()
+    assert values["lick_state"] == 65535
+    assert values["offset_state"] == -1
+
+
+def test_a_type_the_cache_cannot_decode_is_rejected_when_the_cache_is_built():
+    """The last line of defence behind ``derivation``'s gate. A type nobody
+    decodes has to raise while a device is being configured, not silently
+    become an unsigned column halfway through a trial."""
+    with pytest.raises(ValueError, match="Uint16"):
+        RegisterCache({32: "lick"}, {32: "Uint16"})
+
+
+def test_a_type_for_an_unknown_address_is_rejected():
+    """``recorded`` and its types are two dicts that have to agree; a type for
+    an address the cache was not given means they have drifted."""
+    with pytest.raises(ValueError, match="33"):
+        RegisterCache({32: "lick"}, {33: "S16"})
+
+
+def test_an_empty_payload_still_reports_no_value_whatever_the_type():
+    for declared in ("U16", "S16", "Float"):
+        cache = RegisterCache({32: "reg"}, {32: declared})
+        cache.ingest(_payload_event(32, b""))
+        values = cache.snapshot()
+        assert values["reg_state"] is None, declared
+        assert values["reg_count"] == 1, declared

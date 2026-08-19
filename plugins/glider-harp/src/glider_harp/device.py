@@ -70,7 +70,14 @@ from typing import TYPE_CHECKING, Any
 
 from glider.hal.base_device import BaseDevice, DeviceConfig
 from glider.hal.value_spec import KIND_WHOLE, ActionValueSpec
-from glider_harp.derivation import PROFILE_DIR, Derived, derive, load_profile
+from glider_harp.derivation import (
+    PROFILE_DIR,
+    Derived,
+    available_profiles,
+    derive,
+    load_profile,
+    user_profile_dir,
+)
 from glider_harp.frames import (
     MESSAGE_READ,
     MESSAGE_WRITE,
@@ -80,7 +87,7 @@ from glider_harp.frames import (
     decode,
     encode,
 )
-from glider_harp.reader import HarpReader, RegisterCache
+from glider_harp.reader import HarpReader, RegisterCache, decode_payload
 from glider_harp.schema import build_registers, load_schema
 
 if TYPE_CHECKING:
@@ -137,16 +144,31 @@ _MIN_SPEC_VALUE = -(1 << 31)
 
 
 def _profile_choices() -> list[list[str]]:
-    """Every profile shipped in the package, for the hardware panel's dropdown.
+    """Every profile a device may be set to, for the hardware panel's dropdown.
 
     Free text here is a setting whose only failure mode is a typo discovered
     at initialize() time, on a bench, with the animal already in the rig. The
-    list is short, fixed at install time, and enumerable -- so enumerate it.
-    The empty choice is a real one: no profile means record nothing, which is
-    ``derive``'s documented default rather than an unset field.
+    list is short and enumerable -- so enumerate it, from both the package and
+    the user's own directory. The empty choice is a real one: no profile means
+    record nothing, which is ``derive``'s documented default rather than an
+    unset field.
+
+    The labels carry provenance, and that is the price of letting a user
+    profile override a shipped one of the same name. The override is the
+    feature -- it is how a lab corrects a shipped profile that does not match
+    its firmware -- but once a device is configured it is invisible, so the one
+    screen where somebody chooses says which file they are choosing.
     """
-    names = sorted(path.stem for path in PROFILE_DIR.glob("*.json"))
-    return [["", "None (record nothing)"], *([name, name] for name in names)]
+    choices = [["", "None (record nothing)"]]
+    for name, path in available_profiles().items():
+        if path.parent == PROFILE_DIR:
+            label = name
+        elif (PROFILE_DIR / f"{name}.json").is_file():
+            label = f"{name} (user profile, overrides shipped)"
+        else:
+            label = f"{name} (user profile)"
+        choices.append([name, label])
+    return choices
 
 
 class HarpDevice(BaseDevice):
@@ -159,12 +181,14 @@ class HarpDevice(BaseDevice):
     - ``device_yml``: path to the board's vendor ``device.yml``. Required --
       it is what says which registers exist, how wide they are, and which of
       them can be written. Nothing here guesses it.
-    - ``profile``: name of a profile shipped inside this package (see
-      ``glider_harp/profiles``), naming the registers worth recording. A
-      **name**, never a path: a device setting that could name any file on
-      disk is a setting that can read one we never shipped. Optional --
-      without it the device records nothing and still exposes every writable
-      register as an action, which is ``derive``'s documented rule.
+    - ``profile``: name of a profile, naming the registers worth recording.
+      Resolved from the user's own ``~/.glider/harp_profiles`` first and then
+      from the profiles shipped in this package (see ``glider_harp/profiles``
+      and ``derivation.available_profiles``). A **name**, never a path: a
+      device setting that could name any file on disk is a setting that can
+      read one nobody meant it to. Optional -- without it the device records
+      nothing and still exposes every writable register as an action, which is
+      ``derive``'s documented rule.
     """
 
     # Rendered by the hardware panel's schema form when adding/editing a device.
@@ -196,7 +220,10 @@ class HarpDevice(BaseDevice):
             "type": "enum",
             "default": "",
             "choices": _profile_choices(),
-            "help": "Which registers to record. Without one the device records nothing.",
+            "help": (
+                "Which registers to record. Without one the device records nothing. "
+                f"Add your own profiles as JSON files in {user_profile_dir()}."
+            ),
         },
     ]
 
@@ -531,7 +558,7 @@ class HarpDevice(BaseDevice):
                 # configuration where Standby is the right answer rather than
                 # the failure this whole sequence exists to prevent.
                 await self._set_operation_mode(_MODE_ACTIVE)
-                cache = RegisterCache(self._derived.recorded)
+                cache = RegisterCache(self._derived.recorded, self._derived.recorded_types)
                 # A fresh reader per connection, always. ``HarpReader`` is
                 # one-shot -- start() after a stop() raises -- and a reused one
                 # would also still hold the previous session's bytes in its
@@ -875,8 +902,13 @@ class HarpDevice(BaseDevice):
                 "The reader thread consumes every reply, so this would wait for one that "
                 "never arrives. Record the register instead by naming it in the profile."
             )
-        frame = await self._round_trip(address, self._payload_type_of(register))
-        return int.from_bytes(frame.payload, "little") if frame.payload else None
+        payload_type = self._payload_type_of(register)
+        frame = await self._round_trip(address, payload_type)
+        # Decoded by the same rule the record uses. A signed register read
+        # over the wire and the same register read out of the cache
+        # disagreeing about its sign would be a difference nothing in the
+        # flow graph could see the cause of.
+        return decode_payload(frame.payload, payload_type)
 
     def _access_description(self, register: str) -> str:
         """How a message should describe what a register does allow."""

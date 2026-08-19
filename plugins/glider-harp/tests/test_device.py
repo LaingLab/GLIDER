@@ -16,6 +16,7 @@ reply. None of these raise; all of them come back as an empty or wrong CSV.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -26,6 +27,8 @@ import yaml
 from glider.hal.base_board import BoardConnectionState
 from glider.hal.base_device import DeviceConfig
 from glider.hal.value_spec import KIND_WHOLE
+from glider_harp import derivation
+from glider_harp import device as device_module
 from glider_harp.board import HarpBoard
 from glider_harp.device import (
     OPERATION_CONTROL,
@@ -1105,3 +1108,158 @@ async def test_a_vanished_device_surfaces_the_read_failure_not_the_timeout_resto
 
     with pytest.raises(OSError, match="vanished mid-exchange"):
         _exchange(VanishingHandle(), b"\x01", 32, timeout=0.2, device_name="test")
+
+
+# --- a profile the lab wrote, and the types it can now record -------------
+#
+# Two features that meet in one place: a second Harp device needs a profile
+# that does not live inside an installed package, and the device it describes
+# is unlikely to report only unsigned bytes.
+
+SIGNED_SCHEMA = {
+    "device": "SignedRig",
+    "whoAmI": LICKETYSPLIT_WHO_AM_I,
+    "registers": {
+        # Written *and* reported back, which is what makes a round trip
+        # observable at all.
+        "Offset": {"address": 40, "type": "S16", "access": ["Write", "Event"]},
+    },
+}
+
+
+@pytest.fixture
+def signed_rig(tmp_path, user_profiles):
+    """A signed Write+Event register, described by a profile in the user directory."""
+    path = tmp_path / "signed.yml"
+    path.write_text(yaml.safe_dump(SIGNED_SCHEMA), encoding="utf-8")
+    (user_profiles / "signedrig.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "name": "SignedRig",
+                "who_am_i": LICKETYSPLIT_WHO_AM_I,
+                "record": [{"register": "Offset", "as": "offset"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+async def test_a_signed_register_written_as_minus_one_records_as_minus_one(board, signed_rig):
+    """The asymmetry the recordable gate existed to prevent, now closed.
+
+    ``_pack`` has always sent -1 out as ``ff ff``, correctly signed for an S16.
+    The cache read it back as 65535, so a value written and reported back
+    inside one program came out as a different number -- and the CSV that held
+    it opened cleanly. Both halves are the point: the bytes on the wire are the
+    device's own, and the number that reaches the record is the one that was
+    written.
+    """
+    dev = make_device(board, signed_rig, profile="signedrig")
+    await dev.initialize()
+    try:
+        await dev.actions["Offset"](-1)
+        written = decode(dev.port_handle.writes[-1])
+        assert written.payload == b"\xff\xff", "the write was not packed as a signed S16"
+
+        # Replayed as the device reporting the register it was just given.
+        dev.port_handle.queue(encode(MESSAGE_EVENT, 40, "S16", written.payload))
+        assert dev.wait_for_replay(), "the replayed frame never reached the cache"
+        state = await dev.get_state()
+    finally:
+        await dev.shutdown()
+
+    assert state["offset_state"] == -1
+
+
+async def test_a_user_profile_drives_a_real_device(board, signed_rig):
+    """The end the directory exists for: a profile nobody shipped, naming the
+    columns of a board nobody shipped a profile for."""
+    dev = make_device(board, signed_rig, profile="signedrig")
+    await dev.initialize()
+    try:
+        assert dev.state_columns() == ["offset_state", "offset_count", "offset_last_ms"]
+    finally:
+        await dev.shutdown()
+
+
+async def test_a_profile_name_that_names_nothing_still_fails_at_initialize(board, schema_path):
+    """A user directory does not turn a typo into a device that records
+    nothing; it is still an error, and it still names what is available."""
+    dev = make_device(board, schema_path, profile="notaprofile")
+
+    with pytest.raises(FileNotFoundError, match="notaprofile"):
+        await dev.initialize()
+
+
+# --- the dropdown a person picks a profile from --------------------------
+
+
+def test_the_dropdown_offers_shipped_and_user_profiles(user_profiles):
+    (user_profiles / "ourrig.json").write_text("{}", encoding="utf-8")
+
+    values = [value for value, _ in device_module._profile_choices()]
+
+    assert values[0] == "", "the empty choice -- record nothing -- must stay first"
+    assert "licketysplit" in values and "ourrig" in values
+
+
+def test_the_dropdown_says_which_profiles_are_the_labs_own(user_profiles):
+    """Free text was rejected here because a typo surfaces on a bench with the
+    animal already in the rig. A user profile silently replacing a shipped one
+    is the same class of surprise, so the label carries the provenance."""
+    (user_profiles / "ourrig.json").write_text("{}", encoding="utf-8")
+    (user_profiles / "licketysplit.json").write_text("{}", encoding="utf-8")
+
+    labels = dict(device_module._profile_choices())
+
+    assert "user" in labels["ourrig"].lower()
+    assert "overrides" in labels["licketysplit"].lower()
+
+
+def test_the_dropdown_leaves_a_purely_shipped_profile_unadorned():
+    labels = dict(device_module._profile_choices())
+
+    assert labels["licketysplit"] == "licketysplit"
+
+
+def test_an_unreadable_user_profile_directory_does_not_break_the_dropdown(monkeypatch):
+    """``_profile_choices`` runs while the class body is executing, so an
+    exception here does not misconfigure a device -- it stops the plugin from
+    importing at all."""
+
+    class Exploding:
+        def glob(self, _pattern):
+            raise OSError("permission denied")
+
+    monkeypatch.setattr(derivation, "user_profile_dir", Exploding)
+
+    assert "licketysplit" in dict(device_module._profile_choices())
+
+
+async def test_a_signed_register_read_over_the_wire_comes_back_signed(board, tmp_path):
+    """The read path that does not go through the cache at all.
+
+    A register nothing records is answered by a round trip, and it has to
+    decode by the same rule the record does: a DeviceRead node returning -1
+    while the same register recorded returns 65535 would be a contradiction
+    with nothing in the graph able to show its cause.
+    """
+    schema = {
+        "device": "SignedRig",
+        "whoAmI": LICKETYSPLIT_WHO_AM_I,
+        "registers": {"Offset": {"address": 40, "type": "S16", "access": ["Read", "Write"]}},
+    }
+    path = tmp_path / "device.yml"
+    path.write_text(yaml.safe_dump(schema), encoding="utf-8")
+
+    # No profile: nothing is recorded, so no reader owns the port and the read
+    # is a real round trip.
+    dev = make_device(board, path, profile="")
+    await dev.initialize()
+    try:
+        await dev.actions["Offset"](-1)
+        assert await dev.actions["Offset"]() == -1
+    finally:
+        await dev.shutdown()
