@@ -93,6 +93,7 @@ nav:
       - building/index.md
       - The Node Graph: building/node-graph.md
       - Devices & Hardware: building/devices.md
+      - Subjects & Lab Vocabulary: building/subjects.md
       - Functions: building/functions.md
       - Custom Devices & Plugins: building/plugins.md
   - Camera & Behavior:

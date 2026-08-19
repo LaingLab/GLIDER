@@ -1,0 +1,201 @@
+# Subjects & Lab Vocabulary
+
+Every experiment you record can carry information about the animals in it: an
+ID, a name, a treatment group, a strain, a solution and dose, a route of
+administration. GLIDER keeps that information on **subjects**, and it keeps the
+*terms* your lab uses for it in a **lab vocabulary** — one shared list of the
+groups, strains, solutions, routes and sexes that this lab actually works with.
+
+## Why a vocabulary
+
+Left as free text, these fields drift. One person types `Control`, another
+types `control`, a third types `  CONTROL  `, and now there are three treatment
+groups where the lab only ever had one. Nothing downstream can tell that they
+were meant to be the same, and putting them back together is manual work
+somebody does months later at analysis time.
+
+The vocabulary is the fix. You define your terms once, and from then on every
+subject form offers them as choices — so the same group is spelled the same way
+every time, by everyone.
+
+!!! info "Case, spacing and accents are all treated as the same term"
+    The vocabulary compares terms after trimming spaces, ignoring case, and
+    normalising Unicode. `Control`, `control` and `  CONTROL  ` are one entry,
+    and so are the composed and decomposed spellings of an accented strain name
+    — which matters when one bench machine is a Mac and another is a PC, since
+    they favour different spellings that look identical on screen. The
+    characters that render as nothing — zero-width spaces, soft hyphens, word
+    joiners and the byte-order mark, which spreadsheets, Word and PDFs like to
+    smuggle into a copy-paste — are stripped for the same reason: they would
+    otherwise give you two rows you cannot tell apart. Characters that do show,
+    including a real hyphen, are left alone. The **first** spelling your lab
+    used is the one kept, so your own capitalisation survives.
+
+## Setting up your vocabulary
+
+GLIDER offers the setup form once, on its own, shortly after launch — after the
+first-run welcome dialog and the guided tour are out of the way. It is a plain
+list editor:
+
+- Type a term into the box at the top of a list and press ++enter++ to add it.
+- Press **✕** next to a term to remove it.
+- Duplicates and blank entries are simply ignored — if you type `Control`
+  twice, you still get one row.
+
+There are five lists:
+
+| List | What goes in it | Starts as |
+|---|---|---|
+| **Treatment groups** | `Control`, `Vehicle`, `Drug A`… | Empty |
+| **Strains** | `C57BL/6J`, `Long-Evans`… | Empty |
+| **Solutions and drugs** | `Saline`, `Drug X`… | Empty |
+| **Routes of administration** | How a solution is given | `IP`, `IV`, `PO`, `SC`, `IM`, `Topical`, `Inhalation`, `Other` |
+| **Sexes** | `Male`, `Female`, `Unknown` | Those three |
+
+The three lists that are specific to your lab start empty; routes and sexes
+come pre-filled with the usual options, which you are free to edit.
+
+### Skip is a real option
+
+The person who happens to do the first launch is often not the person who knows
+the lab's strains. **Skip** closes the form and writes nothing at all — no file,
+no half-filled vocabulary — and GLIDER does not ask again. Only **Done** saves.
+
+Either way, the offer is one-time. Whichever button you press (or if you close
+the form with ++esc++ or the window button), GLIDER records that you have seen
+it and stops offering.
+
+### Reopening it later
+
+**Experiment → Lab Setup...** opens the same form at any time, whether or not
+you skipped it. That is where the lab's strains get filled in later, and where
+you tidy up terms that crept in.
+
+A removal here sticks. Subjects already recorded with the term keep it — see
+below — but simply opening and saving one will not put it back on the list, so
+you can retire a misspelling without hunting down every animal that carries it.
+What does put it back is editing that particular field on such a subject: any
+change to it, even one that ends on the same term, counts as you choosing the
+term, and it is learned again.
+
+!!! note "Runner mode"
+    The setup form is a desktop feature. It is never offered on the Raspberry Pi
+    runner screen — a 480-pixel touch surface with no menu bar is the wrong
+    shape for five editable lists. A runner uses whatever vocabulary was defined
+    on the desktop side.
+
+!!! warning "If saving fails"
+    If GLIDER cannot write the file — a read-only home directory, a missing
+    folder — **Done** does not close the form. It shows you the reason and
+    stays open with everything you typed still on screen, so you can fix the
+    problem and press **Done** again. Nothing is lost silently.
+
+## Filling in a subject
+
+Open **Experiment → Add Subject...**, or use the **Subjects** table in
+**Experiment → Experiment Settings...** to add and edit them. The subject form
+has four tabs — Basic, Biological, Solution and Notes — and the vocabulary feeds
+five of the fields across them:
+
+| Field | Tab | Behaves like |
+|---|---|---|
+| **Group** | Basic | Dropdown you can also type into |
+| **Strain** | Biological | Dropdown you can also type into |
+| **Solution** | Solution | Dropdown you can also type into |
+| **Route** | Solution | Dropdown you can also type into |
+| **Sex** | Biological | Dropdown you can also type into |
+
+Every one of them opens on a blank row, so nothing is ever pre-selected for you:
+an animal never ends up quietly labelled with whichever group happens to be
+first in the list.
+
+All five behave the same way. The list you define in Lab Setup is what the
+dropdown offers, but none of the five is a closed set — you can always type
+something the list does not have.
+
+As you type, matching terms are offered in a small list underneath. They are
+only ever suggestions: what stays in the box is what you typed, so entering
+`C57` when your list has `C57BL/6J` records `C57`.
+
+### New terms are learned as you go
+
+You never have to stop and go define a term first. Type a group the lab has not
+used before, press **OK**, and it is added to the vocabulary there and then —
+so the second animal you enter is offered what the first one introduced.
+
+Only fields you actually change are learned from, and only when you press
+**OK**. A value a subject already carried is left alone as long as you leave
+that field alone — change it at all, even if you end up back on the same term,
+and it is treated as your choice and learned. Pressing **Cancel** teaches
+nothing at all.
+
+This is what makes skipping the setup form genuinely free: a lab that never
+opens Lab Setup still ends up with a vocabulary, built out of what people
+actually typed. The setup form is the shortcut, not the requirement.
+
+If the vocabulary file cannot be written at that moment, your subject is still
+saved normally — only the new term goes unremembered.
+
+!!! tip "Old experiment files keep working"
+    A `.glider` file written before any of this existed opens unchanged. When
+    you edit one of its subjects, values that are not in your vocabulary are
+    still shown in all five boxes, because all five accept free text. That
+    holds for terms you later remove from a list too: removing `Unknown` from
+    your Sexes list changes what the dropdown offers, but a subject already
+    recorded as `Unknown` still opens showing `Unknown` and re-saves unchanged
+    — and does *not* put `Unknown` back on the list on its way out. If you want
+    it back, type it in again.
+
+## Where the vocabulary is stored
+
+One JSON file, next to the device library:
+
+```
+~/.glider/library/vocabulary.json
+```
+
+On Windows that is `C:\Users\<you>\.glider\library\vocabulary.json`.
+
+The file only appears once something writes it — pressing **Done** in Lab Setup,
+or saving a subject that introduced a new term. Until then GLIDER just uses the
+built-in defaults. Writes are done to a temporary file and then moved into
+place, so an interrupted save leaves your previous vocabulary intact.
+
+Because it is a single small file, it is easy to copy: setting up a second rig
+with the same vocabulary is a matter of copying `vocabulary.json` across.
+
+### Editing it by hand
+
+You can edit the file in any text editor. It looks like this:
+
+```json
+{
+  "schema_version": "1.0",
+  "groups": ["Control", "Vehicle", "Drug A"],
+  "strains": ["C57BL/6J"],
+  "solutions": ["Saline", "Drug X"],
+  "routes": ["IP", "SC"],
+  "sexes": ["Male", "Female", "Unknown"]
+}
+```
+
+A few things worth knowing before you do:
+
+- **Duplicates are folded when the file is read.** If a hand-edit (or a merge
+  between two rigs) leaves both `Control` and `control` in the list, GLIDER
+  keeps the first and drops the rest. You do not have to de-duplicate by hand.
+- **Leaving a list out restores its defaults.** Delete the `routes` key
+  entirely and you get the standard routes back. To genuinely empty a list,
+  give it an empty array: `"routes": []`.
+- **A broken file will not stop GLIDER starting.** If the JSON is malformed or
+  unreadable, GLIDER logs a warning, falls back to the defaults, and carries on.
+  So if your terms suddenly vanish from the subject form, suspect a typo in the
+  file. Smaller mistakes are logged the same way rather than passed over in
+  silence: a list given something other than an array (`"routes": "IP"`) is
+  named in the log as it reverts to its defaults, and so is any entry that is
+  not text (`"groups": ["Control", 7]` loses the `7`).
+- **Close the Lab Setup form before editing the file.** That form holds its own
+  copy of the vocabulary from the moment it opens, and **Done** writes that copy
+  over the whole file — so a hand-edit made while it is open would be
+  overwritten. Changes you make on disk are picked up the next time you open a
+  subject form or Lab Setup.

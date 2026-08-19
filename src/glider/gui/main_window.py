@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
@@ -58,6 +58,25 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# QSettings flag, namespaced alongside the existing first_run/* keys and kept
+# separate from ``first_run/tour_complete``: one shared flag would mean sitting
+# through the walkthrough silences the setup form nobody has seen yet.
+LAB_SETUP_COMPLETE_KEY = "first_run/setup_complete"
+
+
+def lab_setup_complete(
+    settings: QSettings | None = None,
+    key: str = LAB_SETUP_COMPLETE_KEY,
+) -> bool:
+    """Return True once the lab setup form has been shown -- skipped or filled in.
+
+    Mirrors :func:`glider.gui.onboarding.tour.tour_complete`. "Seen" is the
+    question, not "answered": Skip is a first-class exit from that form, so a
+    skipped setup must never be offered again.
+    """
+    s = settings if settings is not None else QSettings()
+    return bool(s.value(key, False, type=bool))
+
 
 class MainWindow(QMainWindow):
     """
@@ -83,6 +102,7 @@ class MainWindow(QMainWindow):
         core: "GliderCore",
         view_manager: ViewManager | None = None,
         view_mode: ViewMode = ViewMode.AUTO,
+        settings: QSettings | None = None,
     ):
         super().__init__()
 
@@ -98,6 +118,10 @@ class MainWindow(QMainWindow):
             pass
 
         self._core = core
+        # Injectable so a test never reads or writes the developer's real
+        # first_run/* state -- and, more sharply, so the one-time Lab Setup
+        # offer below cannot pop a modal dialog in the middle of a test run.
+        self._settings = settings if settings is not None else QSettings()
         if view_manager is not None:
             self._view_manager = view_manager
         else:
@@ -193,6 +217,18 @@ class MainWindow(QMainWindow):
         self._view_manager.apply_stylesheet(self)
 
         logger.info(f"MainWindow initialized in {self._view_manager.mode.name} mode")
+
+        # Offer the one-time lab setup on a launch where it has never been seen.
+        # Deferred so it lands after this window is shown, and after
+        # ``first_run.run_first_run_if_needed`` has had its say -- on a fresh
+        # install this fires inside the welcome dialog's nested event loop,
+        # where the first-run gate turns it away.
+        #
+        # Without this second call site the offer would reach new installs only:
+        # every existing install already has first_run/tour_complete set, so
+        # nothing would ever ask them, and they are the people who reported not
+        # being able to find these fields in the first place.
+        QTimer.singleShot(0, self.offer_lab_setup_once)
 
     # --- Properties ---
 
@@ -881,6 +917,13 @@ class MainWindow(QMainWindow):
         add_subject_action = QAction("&Add Subject...", self)
         add_subject_action.triggered.connect(lambda: self._on_edit_subject(""))
         experiment_menu.addAction(add_subject_action)
+
+        lab_setup_action = QAction("&Lab Setup...", self)
+        lab_setup_action.setToolTip(
+            "Define the groups, strains, solutions and routes this lab uses"
+        )
+        lab_setup_action.triggered.connect(self._on_lab_setup)
+        experiment_menu.addAction(lab_setup_action)
 
         # View menu
         view_menu = menubar.addMenu("&View")
@@ -2471,7 +2514,82 @@ class MainWindow(QMainWindow):
         """Launch the interactive walkthrough (Help ▸ Replay Tutorial)."""
         from glider.gui.onboarding import start_tour
 
-        start_tour(self)
+        tour = start_tour(self)
+        # Lab Setup follows the walkthrough rather than racing it. Gating on the
+        # flag alone would never fire: nothing else asks after the tour resolves,
+        # and asking any earlier puts a modal form over the spotlight.
+        tour.finished.connect(self._on_tour_finished)
+
+    def _on_tour_finished(self) -> None:
+        """Offer the one-time lab setup now the walkthrough has resolved."""
+        # Deferred a tick: the overlay is deleteLater'd, and a replay started
+        # from the Tutorial button finishes the previous tour before registering
+        # itself, so an immediate offer could land on top of the new one.
+        QTimer.singleShot(0, self.offer_lab_setup_once)
+
+    def offer_lab_setup_once(self, settings: QSettings | None = None) -> bool:
+        """Show the lab setup form the first time, and never again.
+
+        Returns True if it was shown. Called from three places, because no one
+        of them reaches everyone:
+
+        * **At launch.** The only path that reaches an existing install, whose
+          walkthrough was finished long ago and will never resolve again.
+        * **When the walkthrough resolves.** On a fresh install the launch-time
+          offer comes due inside the welcome dialog's nested event loop, where
+          the first-run gate turns it away.
+        * **When the welcome resolves without starting a tour**
+          (:func:`glider.first_run.run_first_run_if_needed`). Otherwise the
+          fresh install that declines the tour gets no offer at all that
+          session -- and someone who skips the tour is exactly the person who
+          later cannot find these fields.
+
+        The flag is recorded *before* the dialog opens, so every way out of it
+        -- Done, Skip, Esc, the window close button, even a crash -- counts as
+        seen. Recording only on ``QDialog.Accepted`` would re-ask at every launch
+        until something was typed in, which is how a skippable form becomes a
+        nag and how junk treatment groups get entered to make it go away. It is
+        also what keeps the two call sites from double-offering in one session:
+        whichever runs first closes the gate.
+        """
+        from glider.first_run import is_first_run
+
+        s = settings if settings is not None else self._settings
+        if lab_setup_complete(s):
+            return False
+        # Not on the Pi runner: a 480px touch surface with no menu bar, where a
+        # modal form of five editable lists is the wrong shape entirely. Left
+        # deliberately unreachable there rather than overlooked -- the runner's
+        # vocabulary is whatever the desktop side already defined.
+        if self._view_manager.is_runner_mode:
+            return False
+        # Not while the first-launch welcome is still up: this fires from a
+        # timer inside that dialog's own nested event loop.
+        if is_first_run(s):
+            return False
+        # Not over the walkthrough -- a modal form covers the very widget the
+        # spotlight is pointing at.
+        if getattr(self, "_active_tour", None) is not None:
+            return False
+
+        s.setValue(LAB_SETUP_COMPLETE_KEY, True)
+        self._on_lab_setup()
+        return True
+
+    def _on_lab_setup(self) -> None:
+        """Open the lab vocabulary form (Experiment ▸ Lab Setup...).
+
+        Unconditional: the person doing first launch is often not the person who
+        knows the lab's strains, so this is how that knowledge gets in after the
+        one-time offer has already been answered.
+        """
+        from glider.gui.dialogs.lab_setup_dialog import LabSetupDialog
+
+        dialog = LabSetupDialog(
+            parent=self,
+            is_touch_mode=self._view_manager.is_runner_mode,
+        )
+        dialog.exec()
 
     def _on_gpu_check(self) -> None:
         """Show accelerator diagnostics (Tools ▸ GPU / Device Check).
