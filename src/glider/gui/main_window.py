@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
@@ -57,6 +57,25 @@ if TYPE_CHECKING:
     from glider.core.glider_core import GliderCore
 
 logger = logging.getLogger(__name__)
+
+# QSettings flag, namespaced alongside the existing first_run/* keys and kept
+# separate from ``first_run/tour_complete``: one shared flag would mean sitting
+# through the walkthrough silences the setup form nobody has seen yet.
+LAB_SETUP_COMPLETE_KEY = "first_run/setup_complete"
+
+
+def lab_setup_complete(
+    settings: QSettings | None = None,
+    key: str = LAB_SETUP_COMPLETE_KEY,
+) -> bool:
+    """Return True once the lab setup form has been shown -- skipped or filled in.
+
+    Mirrors :func:`glider.gui.onboarding.tour.tour_complete`. "Seen" is the
+    question, not "answered": Skip is a first-class exit from that form, so a
+    skipped setup must never be offered again.
+    """
+    s = settings if settings is not None else QSettings()
+    return bool(s.value(key, False, type=bool))
 
 
 class MainWindow(QMainWindow):
@@ -881,6 +900,13 @@ class MainWindow(QMainWindow):
         add_subject_action = QAction("&Add Subject...", self)
         add_subject_action.triggered.connect(lambda: self._on_edit_subject(""))
         experiment_menu.addAction(add_subject_action)
+
+        lab_setup_action = QAction("&Lab Setup...", self)
+        lab_setup_action.setToolTip(
+            "Define the groups, strains, solutions and routes this lab uses"
+        )
+        lab_setup_action.triggered.connect(self._on_lab_setup)
+        experiment_menu.addAction(lab_setup_action)
 
         # View menu
         view_menu = menubar.addMenu("&View")
@@ -2471,7 +2497,59 @@ class MainWindow(QMainWindow):
         """Launch the interactive walkthrough (Help ▸ Replay Tutorial)."""
         from glider.gui.onboarding import start_tour
 
-        start_tour(self)
+        tour = start_tour(self)
+        # Lab Setup follows the walkthrough rather than racing it. Gating on the
+        # flag alone would never fire: nothing else asks after the tour resolves,
+        # and asking any earlier puts a modal form over the spotlight.
+        tour.finished.connect(self._on_tour_finished)
+
+    def _on_tour_finished(self) -> None:
+        """Offer the one-time lab setup now the walkthrough has resolved."""
+        # Deferred a tick: the overlay is deleteLater'd, and a replay started
+        # from the Tutorial button finishes the previous tour before registering
+        # itself, so an immediate offer could land on top of the new one.
+        QTimer.singleShot(0, self.offer_lab_setup_once)
+
+    def offer_lab_setup_once(self, settings: QSettings | None = None) -> bool:
+        """Show the lab setup form the first time, and never again.
+
+        Returns True if it was shown. The flag is recorded *before* the dialog
+        opens, so every way out of it -- Done, Skip, Esc, the window close
+        button, even a crash -- counts as seen. Recording only on
+        ``QDialog.Accepted`` would re-ask at every launch until something was
+        typed in, which is how a skippable form becomes a nag and how junk
+        treatment groups get entered to make it go away.
+        """
+        from glider.gui.onboarding import tour_complete
+
+        s = settings if settings is not None else QSettings()
+        if lab_setup_complete(s):
+            return False
+        # Never before the walkthrough has resolved, and never while one is on
+        # screen -- a modal form covers the widget the spotlight points at.
+        if not tour_complete(s):
+            return False
+        if getattr(self, "_active_tour", None) is not None:
+            return False
+
+        s.setValue(LAB_SETUP_COMPLETE_KEY, True)
+        self._on_lab_setup()
+        return True
+
+    def _on_lab_setup(self) -> None:
+        """Open the lab vocabulary form (Experiment ▸ Lab Setup...).
+
+        Unconditional: the person doing first launch is often not the person who
+        knows the lab's strains, so this is how that knowledge gets in after the
+        one-time offer has already been answered.
+        """
+        from glider.gui.dialogs.lab_setup_dialog import LabSetupDialog
+
+        dialog = LabSetupDialog(
+            parent=self,
+            is_touch_mode=self._view_manager.is_runner_mode,
+        )
+        dialog.exec()
 
     def _on_gpu_check(self) -> None:
         """Show accelerator diagnostics (Tools ▸ GPU / Device Check).

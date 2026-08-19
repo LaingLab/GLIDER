@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QObject, QSettings, QTimer
+from PyQt6.QtCore import QObject, QSettings, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QDockWidget,
@@ -335,6 +335,14 @@ def tour_complete(
 class Tour(QObject):
     """Drives a :class:`TourOverlay` through a list of :class:`TourStep`."""
 
+    #: Emitted once the walkthrough has resolved -- finished, skipped or
+    #: dismissed with Esc, which are all the same thing to anything waiting for
+    #: the overlay to go away. Setting the completion flag is not enough on its
+    #: own: a follow-on step (the first-run Lab Setup form) has no other way to
+    #: learn that the scrim has lifted, and showing itself any earlier would
+    #: cover the very widget the spotlight is pointing at.
+    finished = pyqtSignal()
+
     def __init__(
         self,
         host: QWidget,
@@ -446,6 +454,7 @@ class Tour(QObject):
             self._overlay.hide()
             self._overlay.deleteLater()
             self._overlay = None
+        self.finished.emit()
 
 
 def start_tour(
