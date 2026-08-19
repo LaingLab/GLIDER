@@ -1,13 +1,21 @@
-"""How Lab Setup is reached: once after the walkthrough, and always from the menu.
+"""How Lab Setup is reached: once per install, and always from the menu.
 
-Two failures this file exists to catch, both silent.
+Three failures this file exists to catch, all silent.
 
 **Skip and Done both mean "seen".** ``LabSetupDialog`` exits through
 ``reject()`` for Skip and ``accept()`` for Done. Recording the first run as
 complete only on ``Accepted`` would re-ask at every launch, turning a
 first-class exit into a nag -- and a wizard that punishes skipping is exactly
-what gets junk typed into it to make it go away. That is the whole point of
+what gets junk typed into it to make it go away. See
 ``test_skipping_setup_does_not_re_offer_it``.
+
+**An existing install must be offered it.** Gating the offer on the golden-path
+walkthrough finishing reaches new installs only: every lab already running
+GLIDER resolved that walkthrough long ago, and they are precisely the people
+who reported that the subject fields are invisible. So the offer is made at
+launch as well as when a tour resolves, and both paths are gated on one flag
+written before the dialog opens, so they cannot double-offer. See
+``test_an_existing_install_is_offered_setup_at_launch``.
 
 **Re-entry is required, not optional.** The person doing first launch is often
 not the person who knows the lab's strains, so the knowledge arrives after the
@@ -28,8 +36,9 @@ import pytest
 pytest.importorskip("PyQt6")
 
 from PyQt6.QtCore import QObject, QSettings, pyqtSignal  # noqa: E402
-from PyQt6.QtWidgets import QDialog, QMainWindow, QWidget  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QDialog, QMainWindow, QWidget  # noqa: E402
 
+from glider.first_run import FIRST_RUN_COMPLETE_KEY  # noqa: E402
 from glider.gui.main_window import LAB_SETUP_COMPLETE_KEY, lab_setup_complete  # noqa: E402
 from glider.gui.onboarding.tour import TOUR_COMPLETE_KEY, Tour, TourStep  # noqa: E402
 
@@ -38,6 +47,18 @@ from glider.gui.onboarding.tour import TOUR_COMPLETE_KEY, Tour, TourStep  # noqa
 def settings(tmp_path) -> QSettings:
     """A QSettings backed by a fresh INI file -- no leakage either way."""
     return QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+
+
+@pytest.fixture
+def existing_install(settings) -> QSettings:
+    """A machine that has been running GLIDER since before this feature.
+
+    The welcome is long since answered and the walkthrough long since resolved,
+    so nothing will ever fire the tour-finished path for them again.
+    """
+    settings.setValue(FIRST_RUN_COMPLETE_KEY, True)
+    settings.setValue(TOUR_COMPLETE_KEY, True)
+    return settings
 
 
 @pytest.fixture(autouse=True)
@@ -115,42 +136,52 @@ def _lab_setup_action(win):
     )
 
 
-# --- The first-run offer -------------------------------------------------------
+# --- The gate ------------------------------------------------------------------
 
 
-def test_setup_is_offered_when_unseen_and_the_walkthrough_has_resolved(window, settings, dialogs):
-    settings.setValue(TOUR_COMPLETE_KEY, True)
-
-    assert window.offer_lab_setup_once(settings) is True
+def test_setup_is_offered_when_it_has_never_been_seen(window, existing_install, dialogs):
+    assert window.offer_lab_setup_once(existing_install) is True
     assert len(dialogs.opened) == 1
 
 
-def test_setup_is_not_offered_once_it_has_been_seen(window, settings, dialogs):
-    settings.setValue(TOUR_COMPLETE_KEY, True)
-    settings.setValue(LAB_SETUP_COMPLETE_KEY, True)
+def test_setup_is_not_offered_once_it_has_been_seen(window, existing_install, dialogs):
+    existing_install.setValue(LAB_SETUP_COMPLETE_KEY, True)
 
-    assert window.offer_lab_setup_once(settings) is False
+    assert window.offer_lab_setup_once(existing_install) is False
     assert dialogs.opened == []
 
 
-def test_setup_is_not_offered_before_the_walkthrough_resolves(window, settings, dialogs):
-    """A form popped over the spotlight overlay hides the thing it points at."""
+def test_setup_is_not_offered_while_the_welcome_is_still_up(window, settings, dialogs):
+    """The launch-time offer fires from a timer inside the welcome's own nested
+    event loop, so an ungated one would land on top of it."""
     assert lab_setup_complete(settings) is False
 
     assert window.offer_lab_setup_once(settings) is False
     assert dialogs.opened == []
 
 
-def test_setup_is_not_offered_while_a_walkthrough_is_on_screen(window, settings, dialogs):
-    """The flag can be set by an earlier walkthrough while a replay is running."""
-    settings.setValue(TOUR_COMPLETE_KEY, True)
+def test_setup_is_not_offered_while_a_walkthrough_is_on_screen(window, existing_install, dialogs):
+    """A modal form covers the very widget the spotlight is pointing at."""
     window._active_tour = object()
 
-    assert window.offer_lab_setup_once(settings) is False
+    assert window.offer_lab_setup_once(existing_install) is False
     assert dialogs.opened == []
 
 
-def test_skipping_setup_does_not_re_offer_it(window, settings, dialogs):
+def test_setup_does_not_require_the_walkthrough_to_have_been_taken(window, settings, dialogs):
+    """Skipping the welcome never sets first_run/tour_complete.
+
+    Gating on that flag would leave everyone who declined the tour -- one of the
+    two populations this offer exists to reach -- permanently unasked.
+    """
+    settings.setValue(FIRST_RUN_COMPLETE_KEY, True)
+    assert settings.value(TOUR_COMPLETE_KEY, False, type=bool) is False
+
+    assert window.offer_lab_setup_once(settings) is True
+    assert len(dialogs.opened) == 1
+
+
+def test_skipping_setup_does_not_re_offer_it(window, existing_install, dialogs):
     """The one way this feature turns into a nag.
 
     Skip closes the dialog with ``Rejected``. If "seen" were recorded only on
@@ -158,22 +189,20 @@ def test_skipping_setup_does_not_re_offer_it(window, settings, dialogs):
     -- anything -- to stop it, which is precisely the junk data the vocabulary
     exists to prevent.
     """
-    settings.setValue(TOUR_COMPLETE_KEY, True)
     dialogs.result = QDialog.DialogCode.Rejected.value
 
-    assert window.offer_lab_setup_once(settings) is True
-    assert lab_setup_complete(settings) is True
+    assert window.offer_lab_setup_once(existing_install) is True
+    assert lab_setup_complete(existing_install) is True
 
-    assert window.offer_lab_setup_once(settings) is False
+    assert window.offer_lab_setup_once(existing_install) is False
     assert len(dialogs.opened) == 1, "skipping re-asked on the next launch"
 
 
-def test_completing_setup_does_not_re_offer_it(window, settings, dialogs):
-    settings.setValue(TOUR_COMPLETE_KEY, True)
+def test_completing_setup_does_not_re_offer_it(window, existing_install, dialogs):
     dialogs.result = QDialog.DialogCode.Accepted.value
 
-    assert window.offer_lab_setup_once(settings) is True
-    assert window.offer_lab_setup_once(settings) is False
+    assert window.offer_lab_setup_once(existing_install) is True
+    assert window.offer_lab_setup_once(existing_install) is False
     assert len(dialogs.opened) == 1
 
 
@@ -208,7 +237,8 @@ def test_a_resolved_walkthrough_announces_itself(qtbot, settings):
 
 
 def test_the_walkthrough_resolving_offers_setup(qtbot, window, monkeypatch):
-    """Gating alone is not enough: something has to ask once the tour is done."""
+    """A fresh install turns the launch-time offer away while the welcome is up,
+    so something has to ask again once the walkthrough is done."""
     import glider.gui.onboarding as onboarding
 
     fake = _FakeTour()
@@ -221,6 +251,112 @@ def test_the_walkthrough_resolving_offers_setup(qtbot, window, monkeypatch):
 
     fake.finished.emit()
     qtbot.waitUntil(lambda: calls == [True], timeout=1000)
+
+
+# --- At launch, on a real window -----------------------------------------------
+
+
+def test_an_existing_install_is_offered_setup_at_launch(
+    qtbot, main_window_factory, existing_install, dialogs
+):
+    """The case the whole feature exists for.
+
+    A lab already running GLIDER finished the walkthrough long ago, so the
+    tour-finished path will never fire for them again -- and they are exactly
+    the people who reported the subject fields being invisible and went back to
+    spreadsheets.
+    """
+    main_window_factory(settings=existing_install)
+
+    qtbot.waitUntil(lambda: len(dialogs.opened) == 1, timeout=3000)
+    assert lab_setup_complete(existing_install) is True
+
+
+def test_a_user_who_skipped_the_welcome_is_offered_setup_at_launch(
+    qtbot, main_window_factory, settings, dialogs
+):
+    """Declining the tour leaves first_run/tour_complete unset forever."""
+    settings.setValue(FIRST_RUN_COMPLETE_KEY, True)
+
+    main_window_factory(settings=settings)
+
+    qtbot.waitUntil(lambda: len(dialogs.opened) == 1, timeout=3000)
+
+
+def test_runner_mode_is_never_offered_setup(qtbot, main_window_factory, existing_install, dialogs):
+    """The Pi runner is a 480px touch surface with no menu bar; a modal form of
+    five editable lists is the wrong shape there, and there is no way to dismiss
+    it into a menu that would let it be reopened."""
+    win = main_window_factory(desktop_mode=False, settings=existing_install)
+
+    assert win.offer_lab_setup_once(existing_install) is False
+    qtbot.wait(100)
+    assert dialogs.opened == []
+    assert lab_setup_complete(existing_install) is False, "the flag was burned unseen"
+
+
+def test_setup_is_not_offered_twice_in_one_session(
+    qtbot, main_window_factory, existing_install, dialogs
+):
+    """Launch offers it, then the user replays the tutorial: still once."""
+    win = main_window_factory(settings=existing_install)
+    qtbot.waitUntil(lambda: len(dialogs.opened) == 1, timeout=3000)
+
+    win._on_tour_finished()
+    qtbot.wait(100)
+
+    assert len(dialogs.opened) == 1
+
+
+def test_a_fresh_install_gets_welcome_then_tour_then_setup(
+    qtbot, main_window_factory, settings, dialogs, monkeypatch, tmp_path
+):
+    """The ordering that has to hold on a genuinely fresh install.
+
+    The launch-time offer is queued during ``MainWindow.__init__``, so it comes
+    due inside the welcome dialog's nested event loop -- before the walkthrough
+    has even started. Setup must appear after both, exactly once.
+    """
+    import glider.first_run as first_run_mod
+    import glider.gui.onboarding as onboarding
+
+    order: list[str] = []
+    fake = _FakeTour()
+
+    monkeypatch.setattr(first_run_mod, "ensure_data_dir", lambda path=None: tmp_path)
+
+    def _fake_welcome(parent, data_dir, *, offer_tour=False):
+        order.append("welcome")
+        assert offer_tour, "a fresh Builder launch should offer the tour"
+        QApplication.processEvents()  # what the real box.exec() nested loop does
+        assert dialogs.opened == [], "lab setup opened on top of the welcome dialog"
+        return "tour"
+
+    def _fake_start_tour(host):
+        order.append("tour")
+        host._active_tour = fake  # the overlay is now dimming the window
+        return fake
+
+    monkeypatch.setattr(first_run_mod, "show_welcome_dialog", _fake_welcome)
+    monkeypatch.setattr(onboarding, "start_tour", _fake_start_tour)
+
+    win = main_window_factory(settings=settings)
+    first_run_mod.run_first_run_if_needed(win, settings=settings)
+
+    qtbot.wait(100)
+    assert order == ["welcome", "tour"]
+    assert dialogs.opened == [], "lab setup opened while the walkthrough was on screen"
+
+    win._active_tour = None  # the user finished or skipped it
+    fake.finished.emit()
+    qtbot.waitUntil(lambda: len(dialogs.opened) == 1, timeout=3000)
+    order.append("setup")
+
+    assert order == ["welcome", "tour", "setup"]
+
+    win._on_tour_finished()
+    qtbot.wait(100)
+    assert len(dialogs.opened) == 1, "offered twice on one install"
 
 
 # --- Re-entry from the menu ----------------------------------------------------
@@ -239,10 +375,9 @@ def test_the_menu_action_opens_the_dialog(window, dialogs):
     assert len(dialogs.opened) == 1
 
 
-def test_the_menu_action_still_works_after_first_run_is_complete(window, settings, dialogs):
+def test_the_menu_action_still_works_after_first_run_is_complete(window, existing_install, dialogs):
     """Re-entry is the whole point: the knowledge usually arrives later."""
-    settings.setValue(TOUR_COMPLETE_KEY, True)
-    settings.setValue(LAB_SETUP_COMPLETE_KEY, True)
+    existing_install.setValue(LAB_SETUP_COMPLETE_KEY, True)
 
     _lab_setup_action(window).trigger()
 

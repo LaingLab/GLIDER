@@ -102,6 +102,7 @@ class MainWindow(QMainWindow):
         core: "GliderCore",
         view_manager: ViewManager | None = None,
         view_mode: ViewMode = ViewMode.AUTO,
+        settings: QSettings | None = None,
     ):
         super().__init__()
 
@@ -117,6 +118,10 @@ class MainWindow(QMainWindow):
             pass
 
         self._core = core
+        # Injectable so a test never reads or writes the developer's real
+        # first_run/* state -- and, more sharply, so the one-time Lab Setup
+        # offer below cannot pop a modal dialog in the middle of a test run.
+        self._settings = settings if settings is not None else QSettings()
         if view_manager is not None:
             self._view_manager = view_manager
         else:
@@ -212,6 +217,18 @@ class MainWindow(QMainWindow):
         self._view_manager.apply_stylesheet(self)
 
         logger.info(f"MainWindow initialized in {self._view_manager.mode.name} mode")
+
+        # Offer the one-time lab setup on a launch where it has never been seen.
+        # Deferred so it lands after this window is shown, and after
+        # ``first_run.run_first_run_if_needed`` has had its say -- on a fresh
+        # install this fires inside the welcome dialog's nested event loop,
+        # where the first-run gate turns it away.
+        #
+        # Without this second call site the offer would reach new installs only:
+        # every existing install already has first_run/tour_complete set, so
+        # nothing would ever ask them, and they are the people who reported not
+        # being able to find these fields in the first place.
+        QTimer.singleShot(0, self.offer_lab_setup_once)
 
     # --- Properties ---
 
@@ -2513,22 +2530,37 @@ class MainWindow(QMainWindow):
     def offer_lab_setup_once(self, settings: QSettings | None = None) -> bool:
         """Show the lab setup form the first time, and never again.
 
-        Returns True if it was shown. The flag is recorded *before* the dialog
-        opens, so every way out of it -- Done, Skip, Esc, the window close
-        button, even a crash -- counts as seen. Recording only on
-        ``QDialog.Accepted`` would re-ask at every launch until something was
-        typed in, which is how a skippable form becomes a nag and how junk
-        treatment groups get entered to make it go away.
-        """
-        from glider.gui.onboarding import tour_complete
+        Returns True if it was shown. Called from two places -- at launch, and
+        again when the walkthrough resolves -- because neither alone reaches
+        everyone: a launch-time offer would land on top of the tour, and a
+        tour-only offer never reaches an existing install, whose walkthrough was
+        finished long ago.
 
-        s = settings if settings is not None else QSettings()
+        The flag is recorded *before* the dialog opens, so every way out of it
+        -- Done, Skip, Esc, the window close button, even a crash -- counts as
+        seen. Recording only on ``QDialog.Accepted`` would re-ask at every launch
+        until something was typed in, which is how a skippable form becomes a
+        nag and how junk treatment groups get entered to make it go away. It is
+        also what keeps the two call sites from double-offering in one session:
+        whichever runs first closes the gate.
+        """
+        from glider.first_run import is_first_run
+
+        s = settings if settings is not None else self._settings
         if lab_setup_complete(s):
             return False
-        # Never before the walkthrough has resolved, and never while one is on
-        # screen -- a modal form covers the widget the spotlight points at.
-        if not tour_complete(s):
+        # Not on the Pi runner: a 480px touch surface with no menu bar, where a
+        # modal form of five editable lists is the wrong shape entirely. Left
+        # deliberately unreachable there rather than overlooked -- the runner's
+        # vocabulary is whatever the desktop side already defined.
+        if self._view_manager.is_runner_mode:
             return False
+        # Not while the first-launch welcome is still up: this fires from a
+        # timer inside that dialog's own nested event loop.
+        if is_first_run(s):
+            return False
+        # Not over the walkthrough -- a modal form covers the very widget the
+        # spotlight is pointing at.
         if getattr(self, "_active_tour", None) is not None:
             return False
 
