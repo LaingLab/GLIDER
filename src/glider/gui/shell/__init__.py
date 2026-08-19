@@ -8,5 +8,6 @@ constructing a window.
 from __future__ import annotations
 
 from glider.gui.shell.side_panel import DEFAULT_WIDTH, RAIL_WIDTH, SidePanel
+from glider.gui.shell.status_strip import STRIP_HEIGHT, StatusStrip
 
-__all__ = ["DEFAULT_WIDTH", "RAIL_WIDTH", "SidePanel"]
+__all__ = ["DEFAULT_WIDTH", "RAIL_WIDTH", "STRIP_HEIGHT", "SidePanel", "StatusStrip"]

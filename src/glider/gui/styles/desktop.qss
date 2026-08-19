@@ -1158,3 +1158,200 @@ QStackedWidget#sidePanelStack {
     background-color: #0f1419;                      /* BASE */
     border: none;
 }
+
+/* === Builder shell: the status strip ===
+ *
+ * The one piece of chrome that cannot be summoned, so it is the one place the
+ * theme has to get right without anyone opening a panel to check. As with the
+ * side panels above, every colour lives here and `status_strip.py` sets nothing
+ * but `objectName` and a dynamic `state` property; a widget-level stylesheet
+ * would out-prioritise this file and make that widget unthemeable.
+ *
+ * `state` is the run state on the pill (idle/running/recording/error) and the
+ * device state on a dot and its chip (ok/warn/error/unknown). Selectors resolve
+ * at polish time, so `set_run_state` and `set_devices` re-polish after
+ * retagging -- without that these rules never fire.
+ *
+ * Hex values are the tokens from glider/gui/styles/colors.py, named in the
+ * comments -- QSS cannot import them.
+ */
+
+QFrame#statusStrip {
+    background-color: #0b0f14;                      /* CHROME */
+    border-bottom: 1px solid #1e2530;               /* BORDER */
+}
+
+QFrame#statusStripToggles,
+QFrame#statusStripDevices {
+    background-color: transparent;
+}
+
+/* -- panel toggles -- */
+
+QToolButton#statusStripToggle {
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 5px;
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 22px;
+    max-height: 22px;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 11px;
+}
+
+QToolButton#statusStripToggle:hover {
+    background-color: #151c25;                      /* SURFACE_2 */
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+}
+
+/* Checked means "that panel is open". It echoes the panel rather than owning
+ * it, which is why status_strip.py sets it with signals blocked. */
+QToolButton#statusStripToggle:checked {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    border-color: rgba(56, 189, 248, 0.40);
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+/* -- experiment name and its dirty marker -- */
+
+QLabel#statusStripExperiment {
+    background-color: transparent;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* Quieter than the name on purpose: "edited" is a fact about the file, not a
+ * problem, and the strip has louder things to say. */
+QLabel#statusStripDirty {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 13px;
+    font-weight: 400;
+}
+
+/* -- the run-state pill --
+ *
+ * Recording is red because record-red is near-universal, and `error` therefore
+ * cannot also be a red tint or the two would be indistinguishable in the one
+ * state that matters. Error is the only *filled* thing on the strip: nothing
+ * else can out-shout it, which is the whole point of it.
+ */
+
+QLabel#statusStripPill {
+    background-color: rgba(113, 128, 150, 0.15);    /* TEXT_MUTED @ 15% */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 9px;
+    padding: 2px 9px;
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+    font-size: 11px;
+    font-weight: 600;
+}
+
+QLabel#statusStripPill[state="idle"] {
+    background-color: rgba(113, 128, 150, 0.15);    /* TEXT_MUTED @ 15% */
+    border-color: #1e2530;                          /* BORDER */
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+}
+
+QLabel#statusStripPill[state="running"] {
+    background-color: rgba(74, 222, 128, 0.13);     /* STATE_OK @ 13% */
+    border-color: rgba(74, 222, 128, 0.30);
+    color: #4ade80;                                 /* STATE_OK */
+}
+
+QLabel#statusStripPill[state="recording"] {
+    background-color: rgba(248, 113, 113, 0.13);    /* STATE_ERR @ 13% */
+    border-color: rgba(248, 113, 113, 0.32);
+    color: #f87171;                                 /* STATE_ERR */
+}
+
+QLabel#statusStripPill[state="error"] {
+    background-color: #f87171;                      /* STATE_ERR */
+    border-color: #f87171;
+    color: #2a0a0a;                                 /* dark ink on a light fill */
+}
+
+/* -- devices --
+ *
+ * A healthy device is a quiet dot with a name. A down one becomes a tinted chip
+ * whose name is red too, so it differs from the devices *beside* it and not
+ * only from itself a moment ago -- nobody was watching a moment ago. That is
+ * the mockup's third state: a device down while the pill says Recording.
+ */
+
+QFrame#statusStripDevice {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    padding: 1px 2px;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 12px;
+}
+
+QFrame#statusStripDevice[state="error"] {
+    background-color: rgba(248, 113, 113, 0.13);    /* STATE_ERR @ 13% */
+    border-color: rgba(248, 113, 113, 0.30);
+    padding: 1px 7px;
+    color: #f87171;                                 /* STATE_ERR */
+}
+
+QFrame#statusStripDevice[state="unknown"] {
+    color: #718096;                                 /* TEXT_MUTED */
+}
+
+/* No colour of its own: it inherits the chip's, so a red chip has a red name
+ * without a second rule to keep in step. */
+QLabel#statusStripDeviceName {
+    background-color: transparent;
+    font-size: 12px;
+}
+
+/* The dot's `color` is set alongside its fill so the resolved state is legible
+ * to a test without screenshotting the widget. */
+QLabel#statusStripDot {
+    background-color: #718096;                      /* TEXT_MUTED */
+    color: #718096;
+    border-radius: 4px;                             /* half of the 8 px side */
+}
+
+QLabel#statusStripDot[state="ok"] {
+    background-color: #4ade80;                      /* STATE_OK */
+    color: #4ade80;
+}
+
+QLabel#statusStripDot[state="warn"] {
+    background-color: #fbbf24;                      /* STATE_WARN */
+    color: #fbbf24;
+}
+
+QLabel#statusStripDot[state="error"] {
+    background-color: #f87171;                      /* STATE_ERR */
+    color: #f87171;
+}
+
+QLabel#statusStripDot[state="unknown"] {
+    background-color: #475569;                      /* TEXT_DISABLED */
+    color: #475569;
+}
+
+/* -- the palette hint --
+ *
+ * Styled as a key cap, and pressable: a hint that teaches a shortcut and then
+ * refuses to perform it is worse than no hint.
+ */
+
+QToolButton#statusStripPaletteHint {
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 4px;
+    padding: 2px 6px;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 11px;
+}
+
+QToolButton#statusStripPaletteHint:hover {
+    background-color: #151c25;                      /* SURFACE_2 */
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+}
