@@ -6,7 +6,7 @@ These exercise the panel-side wiring around
 (mismatched keypoint count), the happy path (models load → frames fan out →
 preview label updates), and clean thread teardown on Stop/close.
 
-The ultralytics stack is faked (``_load_yolo`` is monkeypatched) so nothing
+The ultralytics stack is faked (``_load_backend`` is monkeypatched) so nothing
 here touches torch or a real pose net.
 """
 
@@ -16,6 +16,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+
+from glider.vision.pose.backend import UltralyticsBackend
 
 pytest.importorskip("PyQt6")
 
@@ -105,7 +107,7 @@ def test_live_behavior_group_gating(qtbot):
 
     # Only paths, no names → still disabled.
     panel._behavior_pkl = Path("m.pkl")
-    panel._yolo_pt = Path("y.pt")
+    panel._pose_model_path = Path("y.pt")
     panel._update_live_controls_enabled()
     assert panel._live_behavior_btn.isEnabled() is False
 
@@ -134,7 +136,11 @@ def test_live_behavior_load_failed_ends_stopped(qtbot, tiny_behavior_model, tmp_
 
     pkl = tmp_path / "m.pkl"
     tiny_behavior_model.save(pkl)
-    monkeypatch.setattr(lb, "_load_yolo", lambda path: FakeYolo(_distinct_kps(4)))
+    monkeypatch.setattr(
+        lb,
+        "_load_backend",
+        lambda path, names, conf=0.25: UltralyticsBackend(FakeYolo(_distinct_kps(4)), names),
+    )
 
     warnings: list[tuple] = []
     from PyQt6.QtWidgets import QMessageBox
@@ -145,7 +151,7 @@ def test_live_behavior_load_failed_ends_stopped(qtbot, tiny_behavior_model, tmp_
 
     panel = _make_panel(qtbot)
     panel._behavior_pkl = pkl
-    panel._yolo_pt = tmp_path / "y.pt"
+    panel._pose_model_path = tmp_path / "y.pt"
     panel._kp_names_edit.setText("a, b")  # WRONG count: model expects 4
     panel._update_live_controls_enabled()
 
@@ -171,11 +177,15 @@ def test_live_behavior_valid_flow_updates_preview(
     pkl = tmp_path / "m.pkl"
     tiny_behavior_model.save(pkl)
     k = lb.model_keypoint_count(tiny_behavior_model)
-    monkeypatch.setattr(lb, "_load_yolo", lambda path: FakeYolo(_distinct_kps(k)))
+    monkeypatch.setattr(
+        lb,
+        "_load_backend",
+        lambda path, names, conf=0.25: UltralyticsBackend(FakeYolo(_distinct_kps(k)), names),
+    )
 
     panel = _make_panel(qtbot)
     panel._behavior_pkl = pkl
-    panel._yolo_pt = tmp_path / "y.pt"
+    panel._pose_model_path = tmp_path / "y.pt"
     panel._kp_names_edit.setText(", ".join(f"k{i}" for i in range(k)))
     panel._update_live_controls_enabled()
 
@@ -226,11 +236,15 @@ def test_result_ready_updates_preview(qtbot, tiny_behavior_model, tmp_path, monk
     pkl = tmp_path / "m.pkl"
     tiny_behavior_model.save(pkl)
     k = lb.model_keypoint_count(tiny_behavior_model)
-    monkeypatch.setattr(lb, "_load_yolo", lambda path: FakeYolo(_distinct_kps(k)))
+    monkeypatch.setattr(
+        lb,
+        "_load_backend",
+        lambda path, names, conf=0.25: UltralyticsBackend(FakeYolo(_distinct_kps(k)), names),
+    )
 
     panel = _make_panel(qtbot)
     panel._behavior_pkl = pkl
-    panel._yolo_pt = tmp_path / "y.pt"
+    panel._pose_model_path = tmp_path / "y.pt"
     panel._kp_names_edit.setText(", ".join(f"k{i}" for i in range(k)))
     panel._update_live_controls_enabled()
     panel._toggle_live_behavior()
@@ -258,11 +272,15 @@ def test_stop_live_behavior_joins_thread(qtbot, tiny_behavior_model, tmp_path, m
     pkl = tmp_path / "m.pkl"
     tiny_behavior_model.save(pkl)
     k = lb.model_keypoint_count(tiny_behavior_model)
-    monkeypatch.setattr(lb, "_load_yolo", lambda path: FakeYolo(_distinct_kps(k)))
+    monkeypatch.setattr(
+        lb,
+        "_load_backend",
+        lambda path, names, conf=0.25: UltralyticsBackend(FakeYolo(_distinct_kps(k)), names),
+    )
 
     panel = _make_panel(qtbot)
     panel._behavior_pkl = pkl
-    panel._yolo_pt = tmp_path / "y.pt"
+    panel._pose_model_path = tmp_path / "y.pt"
     panel._kp_names_edit.setText(", ".join(f"k{i}" for i in range(k)))
     panel._update_live_controls_enabled()
     panel._toggle_live_behavior()

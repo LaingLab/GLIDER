@@ -51,6 +51,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+#: Shown under the keypoint-names field when the operator must type the names.
+#: YOLO checkpoints record class names and a kpt_shape, never body-part names.
+_MANUAL_NAMES_HINT = "Names must be in the model's training order."
+
+#: How each detected pose-model format is described in the panel.
+_KIND_LABELS = {"yolo": "YOLO", "dlc": "DeepLabCut", "sleap": "SLEAP"}
+
+
 def _picker_row(label: QLabel, button: QPushButton) -> QHBoxLayout:
     """A file-picker row: stretched label + a tight Browse button.
 
@@ -329,7 +337,7 @@ class CameraPanel(QWidget):
         # --- Live behavior inference state ---
         # Chosen model paths (set via the pickers); both required to Start.
         self._behavior_pkl: Path | None = None
-        self._yolo_pt: Path | None = None
+        self._pose_model_path: Path | None = None
         self._behavior_thread: QThread | None = None
         self._behavior_worker: Any | None = None
         self._behavior_running = False
@@ -348,6 +356,9 @@ class CameraPanel(QWidget):
         self._cv_worker.moveToThread(self._cv_thread)
         self._cv_thread.start()
 
+        # Models and videos can be dragged straight onto the panel; the drop is
+        # routed by type (see gui/panels/model_drop.py).
+        self.setAcceptDrops(True)
         self._setup_ui()
         self._connect_signals()
 
@@ -556,7 +567,15 @@ class CameraPanel(QWidget):
         self._pose_model_label = QLabel("Pose model: (none)")
         pose_model_btn = QPushButton("Browse…")
         pose_model_btn.clicked.connect(self._on_choose_pose_model)
-        behavior_layout.addLayout(_picker_row(self._pose_model_label, pose_model_btn))
+        pose_folder_btn = QPushButton("Folder…")
+        pose_folder_btn.setToolTip(
+            "Choose a DeepLabCut or SLEAP exported-model folder "
+            "(or just drag one onto this panel)."
+        )
+        pose_folder_btn.clicked.connect(self._on_choose_pose_model_folder)
+        pose_row = _picker_row(self._pose_model_label, pose_model_btn)
+        pose_row.addWidget(pose_folder_btn)
+        behavior_layout.addLayout(pose_row)
 
         self._kp_names_edit = QLineEdit()
         self._kp_names_edit.setPlaceholderText("nose, left_ear, right_ear, ... (comma-separated)")
@@ -566,9 +585,9 @@ class CameraPanel(QWidget):
         kp_row.addWidget(self._kp_names_edit, 1)
         behavior_layout.addLayout(kp_row)
 
-        kp_hint = QLabel("Names must be in the model's training order.")
-        kp_hint.setProperty("textRole", "muted")
-        behavior_layout.addWidget(kp_hint)
+        self._kp_hint = QLabel(_MANUAL_NAMES_HINT)
+        self._kp_hint.setProperty("textRole", "muted")
+        behavior_layout.addWidget(self._kp_hint)
 
         self._live_behavior_btn = QPushButton("Start")
         self._live_behavior_btn.setEnabled(False)
@@ -1198,16 +1217,22 @@ class CameraPanel(QWidget):
             self._preview_stack.setCurrentWidget(self._preview)
 
     def _on_browse_video(self) -> None:
-        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+        from PyQt6.QtWidgets import QFileDialog
 
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open video", "", "Video files (*.mp4 *.avi *.mov *.mkv);;All files (*)"
-        )
-        if not path:
-            return
+        from glider.vision.pose.batch import VIDEO_FILTER
+
+        path, _ = QFileDialog.getOpenFileName(self, "Open video", "", VIDEO_FILTER)
+        if path:
+            self._apply_video(Path(path))
+
+    def _apply_video(self, path: Path) -> bool:
+        """Load *path* as the video source and arm the scrub/run controls."""
+        from PyQt6.QtWidgets import QMessageBox
+
+        path = str(path)
         if not self._video_source.load(path):
             QMessageBox.warning(self, "Video", f"Could not open:\n{path}")
-            return
+            return False
         n = self._video_source.frame_count
         self._seek_slider.setEnabled(True)
         self._seek_slider.setRange(0, n - 1)
@@ -1215,6 +1240,7 @@ class CameraPanel(QWidget):
         self._draw_zones_btn.setEnabled(True)
         self._run_btn.setEnabled(True)
         self._on_seek(0)
+        return True
 
     def _on_seek(self, n: int) -> None:
         if not self._video_source.is_loaded:
@@ -1364,23 +1390,145 @@ class CameraPanel(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self, "Choose behavior model", "", "Model files (*.pkl);;All files (*)"
         )
-        if not path:
-            return
-        self._behavior_pkl = Path(path)
-        self._behavior_model_label.setText(f"Behavior model: {path}")
-        self._update_live_controls_enabled()
+        if path:
+            self._apply_behavior_model(Path(path))
 
     def _on_choose_pose_model(self) -> None:
         from PyQt6.QtWidgets import QFileDialog
 
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose pose model", "", "Weights (*.pt);;All files (*)"
+            self,
+            "Choose pose model",
+            "",
+            "Pose models (*.pt *.onnx);;All files (*)",
         )
         if not path:
             return
-        self._yolo_pt = Path(path)
-        self._pose_model_label.setText(f"Pose model: {path}")
+        self._apply_pose_model(Path(path))
+
+    def _on_choose_pose_model_folder(self) -> None:
+        """Pick a DeepLabCut / SLEAP exported-model *folder*."""
+        from PyQt6.QtWidgets import QFileDialog
+
+        path = QFileDialog.getExistingDirectory(self, "Choose exported model folder")
+        if path:
+            self._apply_pose_model(Path(path))
+
+    # ------------------------------------------------------------------
+    # Applying a chosen/dropped model (shared by the pickers and drag-drop)
+    # ------------------------------------------------------------------
+
+    def _apply_pose_model(self, path: Path) -> bool:
+        """Adopt *path* as the pose model, filling in names when it knows them.
+
+        DeepLabCut and SLEAP folders carry their body-part names in training
+        order, so those are filled in and locked — that ordering is the one
+        thing an operator cannot reliably retype, and getting it wrong yields
+        all-NaN angle features and uniformly blank predictions rather than an
+        error. YOLO checkpoints carry no names, so the field stays editable.
+        """
+        from PyQt6.QtWidgets import QMessageBox
+
+        from glider.vision.pose.spec import PoseModelError, identify_pose_model
+
+        try:
+            # Pure path/JSON/YAML work — safe on the UI thread, unlike reading
+            # a .pt, which would import torch and stall for seconds.
+            spec = identify_pose_model(path)
+        except PoseModelError as exc:
+            QMessageBox.warning(self, "Pose model", str(exc))
+            return False
+
+        self._pose_model_path = Path(path)
+        kind = _KIND_LABELS.get(spec.kind, spec.kind)
+
+        if spec.keypoint_names:
+            self._kp_names_edit.setText(", ".join(spec.keypoint_names))
+            self._kp_names_edit.setReadOnly(True)
+            self._kp_hint.setText(
+                f"Names read from the {kind} model — {spec.n_keypoints} keypoints."
+            )
+            self._pose_model_label.setText(
+                f"Pose model: {Path(path).name} ({kind}, {spec.n_keypoints} kp)"
+            )
+        else:
+            self._kp_names_edit.setReadOnly(False)
+            self._kp_hint.setText(_MANUAL_NAMES_HINT)
+            self._pose_model_label.setText(f"Pose model: {Path(path).name} ({kind})")
+
         self._update_live_controls_enabled()
+        return True
+
+    def _apply_behavior_model(self, path: Path) -> bool:
+        self._behavior_pkl = Path(path)
+        self._behavior_model_label.setText(f"Behavior model: {path}")
+        self._update_live_controls_enabled()
+        return True
+
+    # ------------------------------------------------------------------
+    # Drag and drop
+    # ------------------------------------------------------------------
+
+    # Qt camelCase overrides (N802 is suppressed project-wide).
+    def dragEnterEvent(self, event):
+        from glider.gui.panels.model_drop import DropKind, classify_drop, paths_from_mime
+
+        paths = paths_from_mime(event.mimeData())
+        if any(classify_drop(p) is not DropKind.UNKNOWN for p in paths):
+            event.acceptProposedAction()
+            self._set_drop_active(True)
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):  # noqa: ARG002
+        self._set_drop_active(False)
+
+    def dropEvent(self, event):
+        from glider.gui.panels.model_drop import DropKind, paths_from_mime, route_drops
+
+        self._set_drop_active(False)
+        routed = route_drops(paths_from_mime(event.mimeData()))
+        if not routed:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+        if DropKind.POSE_MODEL in routed or DropKind.BEHAVIOR_MODEL in routed:
+            if self._behavior_running:
+                # Swapping models mid-run would leave the worker holding one set
+                # and the panel showing another.
+                self._show_status("Stop live behavior before changing models.")
+                return
+        if DropKind.POSE_MODEL in routed:
+            self._apply_pose_model(routed[DropKind.POSE_MODEL])
+        if DropKind.BEHAVIOR_MODEL in routed:
+            self._apply_behavior_model(routed[DropKind.BEHAVIOR_MODEL])
+        if DropKind.VIDEO in routed:
+            self._apply_video(routed[DropKind.VIDEO])
+
+    def _set_drop_active(self, active: bool) -> None:
+        """Toggle the accent border via a dynamic property + repolish.
+
+        Matches the panel's existing property-driven styling (see the "textRole"
+        usages) rather than layering an overlay widget over the preview.
+        """
+        self.setProperty("dropActive", "true" if active else "false")
+        style = self.style()
+        if style is not None:
+            style.unpolish(self)
+            style.polish(self)
+
+    def _show_status(self, message: str) -> None:
+        """Surface a short message; falls back to the log when there's no bar."""
+        window = self.window()
+        bar = getattr(window, "statusBar", None)
+        if callable(bar):
+            try:
+                bar().showMessage(message, 5000)
+                return
+            except Exception:
+                pass
+        logger.info("%s", message)
 
     def _parse_keypoint_names(self) -> list[str]:
         """Split the keypoint-names field into a trimmed, non-empty name list."""
@@ -1396,7 +1544,7 @@ class CameraPanel(QWidget):
             return
         ready = (
             self._behavior_pkl is not None
-            and self._yolo_pt is not None
+            and self._pose_model_path is not None
             and bool(self._parse_keypoint_names())
         )
         self._live_behavior_btn.setEnabled(ready)
@@ -1411,7 +1559,7 @@ class CameraPanel(QWidget):
     def _start_live_behavior(self) -> None:
         """Spin up the BehaviorInferenceWorker on its own thread and load models."""
         names = self._parse_keypoint_names()
-        if self._behavior_pkl is None or self._yolo_pt is None or not names:
+        if self._behavior_pkl is None or self._pose_model_path is None or not names:
             return
 
         from glider.gui.panels.live_behavior import BehaviorInferenceWorker
@@ -1432,7 +1580,9 @@ class CameraPanel(QWidget):
         # to an enabled "Start" if loading fails.
         self._live_behavior_btn.setEnabled(False)
         self._behavior_thread.start()
-        self._behavior_init_requested.emit(str(self._behavior_pkl), str(self._yolo_pt), names)
+        self._behavior_init_requested.emit(
+            str(self._behavior_pkl), str(self._pose_model_path), names
+        )
 
     def _on_behavior_ready(self) -> None:
         """Models loaded successfully — go live."""
