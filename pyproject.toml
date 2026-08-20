@@ -58,6 +58,16 @@ vision = [
     # up front and we never hit the AutoUpdate path.
     "lap>=0.5.12",
 ]
+pose-onnx = [
+    # Runs DeepLabCut/SLEAP models exported to ONNX. CPU-only by design: it
+    # covers py3.11-3.13 on Windows/macOS/Linux *and* ARM, which is what makes
+    # this viable on the Raspberry Pi runner without torch on the hot path.
+    # Deliberately NOT the full `deeplabcut` / `sleap` packages: sleap is
+    # TensorFlow-pinned and has historically capped out around py3.10, so it
+    # cannot share this environment. Conversion happens in the user's own env
+    # via tools/export_pose_onnx.py.
+    "onnxruntime>=1.17",
+]
 audio = [
     "sounddevice>=0.4.6",
     "soundfile>=0.12.0",
@@ -102,7 +112,7 @@ dev = [
     "pyinstaller>=6.19.0",
     # Pull the full PC + ML + I2C surface for development so dev installs can
     # exercise every code path without remembering individual extras.
-    "GLIDER[pc,vision,i2c,behavior]",
+    "GLIDER[pc,vision,i2c,behavior,pose-onnx]",
 ]
 pc = [
     "PyQt6>=6.4.0",
@@ -188,6 +198,10 @@ addopts = "--import-mode=importlib"
 markers = [
     "slow: marks tests as slow (deselect with -m 'not slow')",
     "hardware: marks tests requiring real hardware (deselect with -m 'not hardware')",
+    # Decode parity against real DeepLabCut/SLEAP output. Cannot run in CI: it
+    # needs real model weights plus the reference CSV those tools produced, so
+    # it is skipped unless GLIDER_POSE_FIXTURES points at a fixtures directory.
+    "pose_parity: compares decode against real DLC/SLEAP output (needs GLIDER_POSE_FIXTURES)",
 ]
 
 [tool.mypy]
