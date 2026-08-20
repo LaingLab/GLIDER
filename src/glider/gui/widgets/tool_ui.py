@@ -38,7 +38,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.gui.styles import STYLES_DIR, load_stylesheet
+from glider.gui.styles import STYLES_DIR, load_stylesheet, restyle
 
 __all__ = [
     "Card",
@@ -159,20 +159,6 @@ def apply_tool_theme(widget: QWidget) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _restyle(widget: QWidget) -> None:
-    """Make Qt re-evaluate a widget's style after a dynamic property changes.
-
-    Qt resolves property selectors when the style is polished, not when the
-    property is set, so a ``[role="primary"]`` rule applied later never takes
-    effect without this.
-    """
-    style = widget.style()
-    if style is not None:
-        style.unpolish(widget)
-        style.polish(widget)
-    widget.update()
-
-
 def set_button_role(button: QPushButton, role: str) -> QPushButton:
     """Tag a button as ``primary``, ``danger``, ``ghost`` or ``icon``.
 
@@ -181,14 +167,14 @@ def set_button_role(button: QPushButton, role: str) -> QPushButton:
     button.setProperty("role", role)
     if role == "primary":
         button.setCursor(Qt.CursorShape.PointingHandCursor)
-    _restyle(button)
+    restyle(button)
     return button
 
 
 def set_text_role(label: QLabel, role: str) -> QLabel:
     """Tag a label as ``caption``/``muted``/``hint``/``value``/``path``/status."""
     label.setProperty("textRole", role)
-    _restyle(label)
+    restyle(label)
     return label
 
 
@@ -225,7 +211,7 @@ def set_path_text(label: QLabel, text: str, *, filled: bool) -> None:
     """Update a :func:`path_label`, keeping its filled/empty styling in step."""
     label.setText(text)
     label.setProperty("filled", "true" if filled else "false")
-    _restyle(label)
+    restyle(label)
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +412,7 @@ class StatusPill(QLabel):
         self.setProperty("state", state)
         if text is not None:
             self.setText(text)
-        _restyle(self)
+        restyle(self)
 
 
 class Card(QFrame):

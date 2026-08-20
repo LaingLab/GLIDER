@@ -8,14 +8,16 @@ what data flows where). This page walks through building and running a graph.
 
 When GLIDER opens in its design layout you'll see three main areas:
 
-- **Node Library** (a dockable panel, usually on the left) — the palette of
+- **Node Library** (the **Nodes** tab of the left panel) — the palette of
   nodes you can add, grouped into sections.
 - **The canvas** (the center) — the graph itself, where nodes live and get
   wired together.
-- **Properties** (a dockable panel) — shows the settings for whichever node you
-  have selected, such as a delay's duration or a node's bound device.
+- **Properties** (the **Properties** tab of the right panel) — shows the
+  settings for whichever node you have selected, such as a delay's duration or a
+  node's bound device.
 
-You can show or hide these panels from the **View** menu.
+You can collapse either panel from the status strip or the **View** menu — see
+[The Builder Window](builder-window.md).
 
 <figure markdown="span">
   ![The Builder layout: Node Library on the left, the graph canvas in the center, Properties on the right](../assets/screenshots/builder.png)

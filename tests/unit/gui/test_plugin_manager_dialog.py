@@ -469,9 +469,15 @@ def _menu_only_window():
 
 
 def _tools_menu(win):
-    for action in win.menuBar().actions():
-        if action.text().replace("&", "") == "Tools":
-            return action.menu()
+    """The Tools menu, read off the window's registry rather than the bar.
+
+    Task 6 took Tools off the menu bar; the menu itself is still built and is
+    what the command palette reads. See ``test_main_window_tools_menu.py``,
+    where the reasoning is written out.
+    """
+    for menu in win.menus():
+        if menu.title().replace("&", "") == "Tools":
+            return menu
     return None
 
 

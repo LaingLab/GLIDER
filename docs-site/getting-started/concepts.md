@@ -87,8 +87,10 @@ See [Camera & Recording](../camera-behavior/camera.md).
 
 ## Desktop mode vs Runner mode
 
-- **Desktop mode** is where you *design* — the full graph editor, docks, and
-  menus.
+- **Desktop mode** is where you *design* — the full graph editor, with a
+  collapsible panel either side of the canvas and a
+  [command palette](../building/builder-window.md#command-palette) on
+  ++ctrl+k++.
 - **Runner mode** is where you *operate* — a touch-first, four-tab kiosk
   (**Setup, Run, Manual, Camera**) meant for a bench touchscreen or a Raspberry
   Pi. It runs the same `.glider` experiments, adds big manual device controls,

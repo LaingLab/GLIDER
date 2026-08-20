@@ -67,7 +67,7 @@ behavior rig.
 | | Desktop mode | Runner mode |
 |---|---|---|
 | **Best for** | Designing experiments | Running them at the bench |
-| **Interface** | Full node-graph editor, docks, menus | Four big touch tabs: Setup, Run, Manual, Camera |
+| **Interface** | Full node-graph editor, two collapsible side panels, a command palette | Four big touch tabs: Setup, Run, Manual, Camera |
 | **Typical device** | Laptop / workstation | Touchscreen or Raspberry Pi kiosk |
 
 You design an experiment once in desktop mode, save it as a `.glider` file, and

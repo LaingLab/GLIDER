@@ -1,4 +1,11 @@
-"""Tests for the Tools → Behavior Analysis menu entry in MainWindow.
+"""Tests for the Tools → Behavior Analysis entry in MainWindow.
+
+"Menu" here means the ``QMenu`` the window builds, not a menu on the menu bar:
+Task 6 took Tools off the bar and left the menu itself intact as the palette's
+source. What these tests guard is unchanged either way -- that the entry exists,
+and that it is disabled with an install tooltip when its optional dependency
+stack is absent.
+
 
 A full ``MainWindow`` build against a mock core blocks (panel construction
 spins up async/mocked machinery), so these tests exercise the real
@@ -34,9 +41,17 @@ def _menu_only_window():
 
 
 def _find_menu(win, title):
-    for action in win.menuBar().actions():
-        if action.text().replace("&", "") == title:
-            return action.menu()
+    """The named menu, read off the window's registry rather than the bar.
+
+    Since Task 6 the Tools menu is built, populated and owned by the window but
+    never added to the menu bar -- it reaches the user through the command
+    palette instead. ``win.menus()`` is the list both the bar and the palette
+    are views of, so it is the honest place to ask what Tools contains. Asking
+    the bar would now answer ``None`` for a menu that is very much there.
+    """
+    for menu in win.menus():
+        if menu.title().replace("&", "") == title:
+            return menu
     return None
 
 

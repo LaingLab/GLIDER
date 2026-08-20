@@ -121,9 +121,15 @@ def window(qtbot):
 
 
 def _menu(win, title):
-    for action in win.menuBar().actions():
-        if action.text().replace("&", "") == title:
-            return action.menu()
+    """The named menu, read off the window's registry rather than the bar.
+
+    Task 6 took Experiment off the menu bar; the menu is still built, and is
+    what the command palette reads. See ``test_main_window_tools_menu.py``,
+    where the reasoning is written out.
+    """
+    for menu in win.menus():
+        if menu.title().replace("&", "") == title:
+            return menu
     return None
 
 

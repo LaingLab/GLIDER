@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.styles import restyle
 from glider.gui.widgets.tool_ui import data_font
 
 __all__ = ["PluginCard"]
@@ -109,19 +110,6 @@ _TOOLTIPS: dict[str, str] = {
         "To remove a plugin for good, uninstall the package and restart."
     ),
 }
-
-
-def _restyle(widget: QWidget) -> None:
-    """Make Qt re-evaluate *widget* after a dynamic property changed.
-
-    Qt resolves property selectors at polish time, not when the property is
-    set, so a ``[state="failed"]`` rule applied later never takes effect
-    without this.
-    """
-    style = widget.style()
-    if style is not None:
-        style.unpolish(widget)
-        style.polish(widget)
 
 
 class PluginCard(QFrame):
@@ -277,10 +265,10 @@ class PluginCard(QFrame):
         # The frame carries the state too, so QSS can tint the row's border for
         # the two states that need to be findable by scrolling past them.
         self.setProperty("state", state)
-        _restyle(self)
+        restyle(self)
         self._pill.setText(PILL_TEXT.get(state, state))
         self._pill.setProperty("state", state)
-        _restyle(self._pill)
+        restyle(self._pill)
 
         self._rebuild_actions(state)
         self.set_message(message, state=state)
@@ -312,14 +300,14 @@ class PluginCard(QFrame):
                     button.clicked.connect(
                         lambda _checked=False, s=signal: s.emit(self.plugin_name)
                     )
-            _restyle(button)
+            restyle(button)
             self._actions.addWidget(button)
             self._buttons.append(button)
 
     def set_message(self, message: str, *, state: str | None = None) -> None:
         """Show inline status text, or hide the line when *message* is empty."""
         self._message.setProperty("state", state or self.state)
-        _restyle(self._message)
+        restyle(self._message)
         self._message.setText(message)
         self._message.setVisible(bool(message))
 
