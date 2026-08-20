@@ -1279,6 +1279,11 @@ QLabel#statusStripPill[state="error"] {
  * whose name is red too, so it differs from the devices *beside* it and not
  * only from itself a moment ago -- nobody was watching a moment ago. That is
  * the mockup's third state: a device down while the pill says Recording.
+ *
+ * An amber board gets the same chip in its own colour, and for the same
+ * argument: `warn` covers a board that has *already dropped once* and is trying
+ * to come back, which nobody was watching either. An 8 px dot beside a
+ * normally-coloured name is not a thing you notice walking past a rig.
  */
 
 QFrame#statusStripDevice {
@@ -1288,6 +1293,13 @@ QFrame#statusStripDevice {
     padding: 1px 2px;
     color: #94a3b8;                                 /* TEXT_TERTIARY */
     font-size: 12px;
+}
+
+QFrame#statusStripDevice[state="warn"] {
+    background-color: rgba(251, 191, 36, 0.13);     /* STATE_WARN @ 13% */
+    border-color: rgba(251, 191, 36, 0.30);
+    padding: 1px 7px;
+    color: #fbbf24;                                 /* STATE_WARN */
 }
 
 QFrame#statusStripDevice[state="error"] {

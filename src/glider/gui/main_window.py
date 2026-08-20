@@ -111,6 +111,34 @@ DEVICE_STATE_BY_BOARD_STATE = {
     BoardConnectionState.ERROR: "error",
 }
 
+
+def _board_state_text(state: object) -> str:
+    """A board's *own* word for its state -- ``"reconnecting"``, not ``"warn"``.
+
+    ``DEVICE_STATE_BY_BOARD_STATE`` collapses five board states onto four
+    colours, and two of the five share amber. Mapping is what the dot needs and
+    is destructive for everything else: "handshake in flight" and "dropped
+    mid-recording" are the same colour and are not the same news. This is the
+    text that survives the mapping and reaches the tooltip.
+    """
+    name = getattr(state, "name", None)
+    if isinstance(name, str):
+        return name.lower()
+    return str(state) if state is not None else "unknown"
+
+
+def _board_detail(board: object, state: object) -> str:
+    """What a device dot says on hover, after the board id the strip prefixes.
+
+    The dot is labelled by board id, so the type -- which is what ``board.name``
+    actually is -- goes here, where it tells the operator what to go and look
+    for rather than which one it is.
+    """
+    text = _board_state_text(state)
+    type_name = getattr(board, "name", None)
+    return f"{type_name}, {text}" if type_name else text
+
+
 # How a session state is shown on the run-state pill: ``(pill, detail)``.
 #
 # The pill has four words and the session has seven states, so three of them
@@ -944,17 +972,25 @@ class MainWindow(QMainWindow):
         Read from ``board.state`` rather than from whatever last transition was
         reported, so the strip describes the rig as it is now. See
         :data:`DEVICE_STATE_BY_BOARD_STATE` for why only CONNECTED is green.
+
+        **The label is the board id, not ``board.name``.** ``name`` is the board
+        *type* (see :meth:`~glider.hal.base_board.BaseBoard.name`), so a rig with
+        two Unos would render "Arduino Uno" twice -- and a label that cannot say
+        *which* board to go and look at fails at the one job the dot could not do
+        on its own. The id is unique by construction and is the same word every
+        log line and disconnection dialog uses. The type is not lost: it goes to
+        the tooltip, beside the board's own word for its state.
         """
         strip = self._strip()
         if strip is None:
             return
         devices = []
         for board_id, board in self._core.hardware_manager.boards.items():
-            name = getattr(board, "name", None) or board_id
-            state = DEVICE_STATE_BY_BOARD_STATE.get(getattr(board, "state", None))
+            raw = getattr(board, "state", None)
+            state = DEVICE_STATE_BY_BOARD_STATE.get(raw)
             # An unmapped state keeps its raw text: the strip renders anything
             # it does not recognise neutral, with the real value in the tooltip.
-            devices.append((str(name), state or str(getattr(board, "state", "unknown"))))
+            devices.append((board_id, state or _board_state_text(raw), _board_detail(board, raw)))
         strip.set_devices(devices)
 
     def _refresh_strip_run_state(self, state_name: str) -> None:

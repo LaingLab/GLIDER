@@ -48,11 +48,19 @@ def _is_descendant(widget: QWidget, ancestor: QWidget) -> bool:
 
 
 class _FakeBoard:
-    """Just enough board for the strip: a name and a connection state."""
+    """Just enough board for the strip: a name and a connection state.
 
-    def __init__(self, name: str, state: BoardConnectionState) -> None:
+    ``port`` is here because a *connected* board is read by more than the strip:
+    ``compute_readiness`` asks the manager for a connected board's description,
+    from a deferred refresh that lands mid-test. Without it the double raises
+    inside the Qt event loop, which pytest-qt reports as a failure of whatever
+    test happened to be running.
+    """
+
+    def __init__(self, name: str, state: BoardConnectionState, port: str | None = None) -> None:
         self.name = name
         self.state = state
+        self.port = port
 
     @property
     def is_connected(self) -> bool:
@@ -347,12 +355,65 @@ def test_device_dots_come_from_real_board_state(qtbot, main_window_factory):
     assert strip.device_names() == []  # an empty rig says nothing
 
     boards = window._core.hardware_manager._boards
-    boards["a"] = _FakeBoard("Arduino", BoardConnectionState.CONNECTED)
-    boards["b"] = _FakeBoard("Pi", BoardConnectionState.ERROR)
+    boards["uno_1"] = _FakeBoard("Arduino Uno", BoardConnectionState.CONNECTED)
+    boards["pi_1"] = _FakeBoard("Raspberry Pi", BoardConnectionState.ERROR)
     window._refresh_strip_devices()
 
-    assert strip.device_names() == ["Arduino", "Pi"]
+    assert strip.device_names() == ["uno_1", "pi_1"]
     assert [dot.property("state") for dot in strip.device_dots()] == ["ok", "error"]
+
+
+def test_two_boards_of_the_same_type_are_told_apart(qtbot, main_window_factory):
+    """``board.name`` is the board *type*, so two Unos share it. A label that
+    cannot say *which* board to go and look at is the thing the dot already
+    could not say."""
+    window = _builder(main_window_factory)
+    boards = window._core.hardware_manager._boards
+    boards["uno_left"] = _FakeBoard("Arduino Uno", BoardConnectionState.CONNECTED)
+    boards["uno_right"] = _FakeBoard("Arduino Uno", BoardConnectionState.ERROR)
+    window._refresh_strip_devices()
+
+    names = window._builder_view.strip.device_names()
+    assert names == ["uno_left", "uno_right"]
+    assert len(set(names)) == len(names)
+
+
+def test_a_board_dot_still_names_its_type_on_hover(qtbot, main_window_factory):
+    """The label says which board; the tooltip says what to go and look for."""
+    window = _builder(main_window_factory)
+    window._core.hardware_manager._boards["uno_1"] = _FakeBoard(
+        "Arduino Uno", BoardConnectionState.CONNECTED
+    )
+    window._refresh_strip_devices()
+
+    tip = window._builder_view.strip.device_chips()[0].toolTip()
+    assert "uno_1" in tip
+    assert "Arduino Uno" in tip
+
+
+@pytest.mark.parametrize(
+    ("board_state", "word", "not_word"),
+    [
+        (BoardConnectionState.CONNECTING, "connecting", "reconnecting"),
+        (BoardConnectionState.RECONNECTING, "reconnecting", "warn"),
+        (BoardConnectionState.DISCONNECTED, "disconnected", "warn"),
+        (BoardConnectionState.CONNECTED, "connected", "warn"),
+    ],
+)
+def test_the_raw_board_state_survives_the_mapping(
+    qtbot, main_window_factory, board_state, word, not_word
+):
+    """Connecting and Reconnecting are both amber, and they are not the same
+    thing: one is a handshake in flight, the other a board that has already
+    dropped mid-recording. The tooltip is where that distinction lives -- and
+    ``warn`` is our word for the colour, not the board's word for itself."""
+    window = _builder(main_window_factory)
+    window._core.hardware_manager._boards["uno_1"] = _FakeBoard("Arduino Uno", board_state)
+    window._refresh_strip_devices()
+
+    tip = window._builder_view.strip.device_chips()[0].toolTip().lower()
+    assert word in tip
+    assert not_word not in tip
 
 
 @pytest.mark.parametrize(

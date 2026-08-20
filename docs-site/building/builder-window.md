@@ -113,14 +113,19 @@ the pill says *idle* only when nothing is live.
 
 There is one dot per **board** registered in this session — an Arduino, a
 Raspberry Pi, a mock board — not one per device attached to a board. Each dot
-carries the board's name beside it, because a colour alone cannot tell you
-*which* board to go and look at. Hovering a dot shows `name — state`.
+carries the board's **id** beside it, because a colour alone cannot tell you
+*which* board to go and look at — and because a rig with two Arduino Unos would
+otherwise show the same word twice. The id is the name you gave the board in the
+**Hardware** tab, and it is the same word the logs and the disconnection dialog
+use. Hovering a dot shows `id — board type, state`, with the state in the
+board's own words: an amber dot that says *reconnecting* has already dropped at
+least once, while one that says *connecting* has not connected yet.
 
 | Dot | Board's connection state | What it means |
 |---|---|---|
 | :material-circle:{ style="color:#4ade80" } **Green** | Connected | The board is up and usable. This is the only state that is ever green. |
-| :material-circle:{ style="color:#fbbf24" } **Amber** | Connecting **or** Reconnecting | The board is **not** usable right now. *Connecting* is a handshake still in flight. *Reconnecting* is a board that has **already dropped at least once** and is trying to come back. |
-| :material-circle:{ style="color:#f87171" } **Red** | Disconnected **or** Error | The board is down. The whole chip tints red and the board's name turns red with it, so it stands out from the healthy boards beside it and not only from how it looked a moment ago. |
+| :material-circle:{ style="color:#fbbf24" } **Amber** | Connecting **or** Reconnecting | The board is **not** usable right now. *Connecting* is a handshake still in flight. *Reconnecting* is a board that has **already dropped at least once** and is trying to come back. The whole chip tints amber, so it stands out from the healthy boards beside it. Hover it to find out which of the two it is. |
+| :material-circle:{ style="color:#f87171" } **Red** | Disconnected **or** Error | The board is down. The whole chip tints red and the board's id turns red with it, so it stands out from the healthy boards beside it and not only from how it looked a moment ago. |
 | :material-circle:{ style="color:#718096" } **Grey** | Anything GLIDER does not recognise | A state reported by a driver that this version of the strip has no colour for. Hover the dot to read the raw value. Never assume grey is healthy. |
 
 !!! warning "Amber is not 'fine'"

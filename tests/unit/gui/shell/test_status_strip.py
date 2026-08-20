@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QWidget
 
 import glider.gui.styles
 from glider.gui.shell.status_strip import STRIP_HEIGHT, StatusStrip
-from glider.gui.styles.colors import STATE_ERR
+from glider.gui.styles.colors import STATE_ERR, STATE_WARN
 
 #: The mockup's rig: two healthy boards and a camera that wants a look at.
 DEVICES = [("arduino", "ok"), ("harp1", "ok"), ("camera", "warn")]
@@ -264,7 +264,44 @@ def test_an_unfamiliar_device_state_never_renders_as_healthy(strip):
     assert "reconnecting" in strip.device_chips()[0].toolTip()
 
 
+def test_a_mapped_state_can_still_say_what_it_really_was(strip):
+    """The raw text is what tells a handshake in flight from a board that has
+    already dropped, and both of those paint the same amber."""
+    strip.set_devices([("uno_1", "warn", "reconnecting"), ("uno_2", "warn", "connecting")])
+
+    assert [dot.property("state") for dot in strip.device_dots()] == ["warn", "warn"]
+    tips = [chip.toolTip() for chip in strip.device_chips()]
+    assert "reconnecting" in tips[0]
+    assert "connecting" in tips[1]
+    assert "reconnecting" not in tips[1]
+
+
+def test_a_detail_that_changes_reaches_the_tooltip_without_a_rebuild(strip):
+    """Amber to amber is not a state change, but "connecting" to "reconnecting"
+    is the whole story, so it cannot ride on the re-polish path."""
+    strip.set_devices([("uno_1", "warn", "connecting")])
+    before = strip.device_chips()
+
+    strip.set_devices([("uno_1", "warn", "reconnecting")])
+
+    assert strip.device_chips() == before, "same names must reuse the same widgets"
+    assert "reconnecting" in strip.device_chips()[0].toolTip()
+
+
 # ------------------------------------------------------ mockup state 3, in full
+
+
+def test_a_warn_device_stands_out_from_its_neighbours(themed_strip):
+    """Amber is "a board you cannot trust", and the docs tell operators to treat
+    it as they would red. An 8 px dot beside a normally-coloured name does not
+    do that -- the chip has to differ from the healthy devices *beside* it."""
+    themed_strip.set_devices([("arduino", "ok"), ("harp1", "warn"), ("camera", "ok")])
+
+    warn, healthy = themed_strip.device_chips()[1], themed_strip.device_chips()[0]
+
+    assert warn.property("state") == "warn"
+    assert _text_colour(warn) != _text_colour(healthy), "the name must carry the warning too"
+    assert _text_colour(warn) == STATE_WARN
 
 
 def test_a_device_down_mid_recording_stands_out_from_its_neighbours(themed_strip):

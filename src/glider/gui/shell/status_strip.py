@@ -22,7 +22,10 @@ Four decisions carry meaning rather than convenience:
   from drivers, so the vocabulary can widen without this file changing. Painting
   a word nobody recognises the same green as a working board is the one
   behaviour that would make this widget actively harmful, so unfamiliar states
-  go neutral and keep their raw text in the tooltip.
+  go neutral and keep their raw text in the tooltip. A caller that *has* mapped
+  its own vocabulary onto these four passes the raw text alongside the state,
+  so the same promise holds for it: ``warn`` cannot tell a handshake in flight
+  from a board that has already dropped mid-recording, and the tooltip must.
 
 * **An unrecognised *run* state raises.** The asymmetry is deliberate. Device
   states come from hardware and the outside world gets the benefit of the doubt;
@@ -97,6 +100,17 @@ _UNNAMED = "Untitled"
 #: stylesheet can grey it without greying the name and so a caller reading the
 #: name back gets the name.
 _DIRTY_MARK = "— edited"
+
+
+def _as_device(device: Sequence[str]) -> tuple[str, str, str]:
+    """``(name, state)`` or ``(name, state, detail)`` as a full triple.
+
+    A caller that gives no detail is saying the state word *is* the raw text,
+    which is true of anything that has not mapped a wider vocabulary onto these
+    four states.
+    """
+    name, state, *rest = (str(part) for part in device)
+    return name, state, rest[0] if rest else state
 
 
 class StatusStrip(QFrame):
@@ -265,33 +279,39 @@ class StatusStrip(QFrame):
         """Show one dot, named, per device.
 
         Args:
-            devices: ``(name, state)`` pairs, in the order they should appear.
-                A state outside :data:`DEVICE_STATES` renders neutral and keeps
-                its raw text in the tooltip -- never the healthy green.
+            devices: ``(name, state)`` pairs -- or ``(name, state, detail)``
+                triples -- in the order they should appear. A state outside
+                :data:`DEVICE_STATES` renders neutral and keeps its raw text in
+                the tooltip, never the healthy green. *detail* is what the
+                tooltip says instead of the state word, and exists because a
+                caller that maps its own vocabulary onto these four states would
+                otherwise destroy the only text there was: ``warn`` cannot tell
+                a handshake in flight from a board that has already dropped, and
+                that difference is the whole reason anyone hovers a dot.
 
         When the names are unchanged the existing widgets are updated in place
         and only the dots whose state actually moved are re-polished. That keeps
         a strip refreshed on a timer from churning every widget on it, and it is
         what makes "only that device changed" a claim anyone can check.
         """
-        items = [(str(name), str(state)) for name, state in devices]
-        names = [name for name, _ in items]
+        items = [_as_device(device) for device in devices]
+        names = [name for name, _, _ in items]
 
         if names != self._device_names:
             self._rebuild(items)
             return
 
-        for chip, dot, (name, raw) in zip(self._chips, self._dots, items, strict=True):
-            self._apply_device(chip, dot, name, raw)
+        for chip, dot, item in zip(self._chips, self._dots, items, strict=True):
+            self._apply_device(chip, dot, *item)
 
-    def _rebuild(self, items: list[tuple[str, str]]) -> None:
+    def _rebuild(self, items: list[tuple[str, str, str]]) -> None:
         for chip in self._chips:
             self._device_layout.removeWidget(chip)
             chip.setParent(None)
             chip.deleteLater()
         self._chips, self._dots, self._names = [], [], []
 
-        for name, raw in items:
+        for name, raw, detail in items:
             chip = QFrame(self._devices)
             chip.setObjectName("statusStripDevice")
             chip.setFrameShape(QFrame.Shape.NoFrame)
@@ -308,20 +328,22 @@ class StatusStrip(QFrame):
             label.setObjectName("statusStripDeviceName")
             layout.addWidget(label)
 
-            self._apply_device(chip, dot, name, raw)
+            self._apply_device(chip, dot, name, raw, detail)
             self._device_layout.addWidget(chip)
             self._chips.append(chip)
             self._dots.append(dot)
             self._names.append(label)
 
-        self._device_names = [name for name, _ in items]
+        self._device_names = [name for name, _, _ in items]
         # An empty rig is the normal first thing this widget is told, and an
         # empty container would still claim its spacing beside the hint.
         self._devices.setVisible(bool(items))
 
-    def _apply_device(self, chip: QFrame, dot: QLabel, name: str, raw: str) -> None:
+    def _apply_device(self, chip: QFrame, dot: QLabel, name: str, raw: str, detail: str) -> None:
         state = raw if raw in DEVICE_STATES else "unknown"
-        chip.setToolTip(f"{name} — {raw}")
+        # Set before the early return: a device can stay amber while what made
+        # it amber changes, and that change is exactly what the tooltip is for.
+        chip.setToolTip(f"{name} — {detail}")
         if dot.property("state") == state:
             return
         for widget in (chip, dot):
