@@ -848,8 +848,14 @@ class MainWindow(QMainWindow):
 
         # The Builder's HardwarePanel is a distinct instance from the
         # dashboard's _dash_hardware_panel; its hardware_changed fans out only
-        # to the Builder's own _device_control_panel.
+        # to the Builder's own _device_control_panel -- and to the strip, which
+        # is the roster half of what the dots show. ``hardware_connection_change``
+        # reports a board *changing state*, which is not a board being registered
+        # or dropped from the manager; without this wire a board added or removed
+        # in this panel would not appear on (or leave) the strip until something
+        # else happened to that board.
         self._hardware_panel.hardware_changed.connect(self._device_control_panel.refresh_devices)
+        self._hardware_panel.hardware_changed.connect(self._refresh_strip_devices)
 
         # Wire flow_functions_changed from node editor to node library
         self._node_editor.flow_functions_changed.connect(
@@ -1584,6 +1590,12 @@ class MainWindow(QMainWindow):
         self.session_changed.connect(self._runner_device_controls.refresh)
         self.session_changed.connect(self._surface_load_warnings)
         self.session_changed.connect(self._refresh_strip_experiment)
+        # A new or newly-opened session is a *new rig*: both paths call
+        # ``hardware_manager.clear()``, and File -> Open then registers the
+        # boards the file names. Nothing about that is a board changing state,
+        # so without this the strip would keep rendering the previous
+        # experiment's boards -- green -- over an empty manager.
+        self.session_changed.connect(self._refresh_strip_devices)
         # Dashboard-only panels (desktop mode).
         if self._run_control_panel is not None:
             self.session_changed.connect(lambda: self._run_control_panel.update_experiment_name())

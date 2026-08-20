@@ -137,7 +137,11 @@ least once, while one that says *connecting* has not connected yet.
 
 The dots follow each board's real connection state, so the strip describes the
 rig as it is now rather than replaying the last transition it happened to hear
-about.
+about. The row of dots is rebuilt from the boards actually registered — when you
+add or remove a board in the **Hardware** tab, and again whenever the session
+changes — so **File ▸ New** and **File ▸ Open**, which both replace the rig,
+replace the dots with it. A board that is no longer in the experiment cannot
+leave a green dot behind.
 
 ## The command palette { #command-palette }
 

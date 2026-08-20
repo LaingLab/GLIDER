@@ -464,6 +464,78 @@ def test_a_board_dropping_reaches_the_strip(qtbot, main_window_factory):
     assert window._builder_view.strip.device_dots()[0].property("state") == "warn"
 
 
+# ------------------------------------------------------------- the board roster
+#
+# The dots had drop *detection* wired -- a board changing state reaches the
+# strip -- and nothing at all wired to the board **set**. A board state
+# transition is not a registration event, so a rig that was emptied or replaced
+# left the strip rendering the old roster, green, while the manager held
+# nothing. These three drive the real paths rather than the refresh helper.
+
+
+def test_clearing_the_rig_empties_the_strip(qtbot, main_window_factory):
+    """File -> New clears the hardware manager. The strip has to notice."""
+    window = _builder(main_window_factory)
+    strip = window._builder_view.strip
+    window._core.hardware_manager.add_board("uno_1", "telemetrix", port="COM9")
+    window._refresh_strip_devices()
+    assert strip.device_names() == ["uno_1"]
+
+    window._core.session._dirty = False  # so File -> New does not ask to save
+    window._on_new()
+
+    assert window._core.hardware_manager.boards == {}
+    assert strip.device_names() == []
+    assert strip.device_dots() == []
+
+
+def test_opening_an_experiment_over_another_replaces_the_roster(
+    qtbot, main_window_factory, tmp_path, monkeypatch
+):
+    """Open B over A and the strip must describe B's rig, not accumulate."""
+    from PyQt6.QtWidgets import QFileDialog
+
+    from glider.core.experiment_session import BoardConfig
+
+    window = _builder(main_window_factory)
+    strip = window._builder_view.strip
+
+    # Experiment B, on disk: one Raspberry Pi and nothing else.
+    window._core.session.hardware.boards.append(BoardConfig(id="pi_b", driver_type="raspberry_pi"))
+    path = tmp_path / "b.glider"
+    window._core.save_session(str(path))
+
+    # Experiment A, in the window: one Arduino, and nothing of B's.
+    window._core.new_session()
+    window._core.hardware_manager.clear()
+    window._core.hardware_manager.add_board("uno_a", "telemetrix", port="COM9")
+    window._refresh_strip_devices()
+    assert strip.device_names() == ["uno_a"]
+
+    window._core.session._dirty = False
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: (str(path), ""))
+    )
+    window._on_open()
+
+    assert list(window._core.hardware_manager.boards) == ["pi_b"]
+    assert strip.device_names() == ["pi_b"]
+
+
+def test_a_board_registered_through_the_hardware_panel_reaches_the_strip(
+    qtbot, main_window_factory
+):
+    """Every add and remove in the Hardware panel ends in ``refresh_tree``."""
+    window = _builder(main_window_factory)
+    strip = window._builder_view.strip
+    assert strip.device_names() == []
+
+    window._core.hardware_manager.add_board("uno_1", "telemetrix", port="COM9")
+    window._hardware_panel.refresh_tree()
+
+    assert strip.device_names() == ["uno_1"]
+
+
 # ----------------------------------------------------------- layout on restart
 
 
