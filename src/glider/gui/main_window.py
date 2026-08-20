@@ -24,10 +24,8 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QSizePolicy,
-    QSplitter,
     QStackedWidget,
     QStatusBar,
-    QTabBar,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -47,6 +45,7 @@ from glider.gui.panels.device_control_panel import DeviceControlPanel
 from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController, node_category_for_type
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
+from glider.gui.shell import AppShell
 from glider.gui.styles import colors
 from glider.gui.view_manager import ViewManager, ViewMode
 from glider.hal.base_board import BoardConnectionState
@@ -62,6 +61,83 @@ logger = logging.getLogger(__name__)
 # separate from ``first_run/tour_complete``: one shared flag would mean sitting
 # through the walkthrough silences the setup form nobody has seen yet.
 LAB_SETUP_COMPLETE_KEY = "first_run/setup_complete"
+
+# How a board's connection state is painted on the status strip.
+#
+# **Only CONNECTED is ever green.** RECONNECTING is a board that has already
+# dropped once and is trying to come back -- painting that the same green as a
+# working board is the single behaviour that would make the strip actively
+# harmful, because the whole point of it is that a board failing 40 minutes into
+# an unattended run is visible to whoever walks past the rig. CONNECTING gets
+# the same amber: an in-flight handshake is not yet a working board either.
+# DISCONNECTED is red rather than neutral, matching the status bar's existing
+# reading of "no board" as a problem to act on. Anything the strip does not
+# recognise -- a driver vocabulary that widened without this file changing --
+# falls through to the strip's neutral grey with its raw value in the tooltip.
+DEVICE_STATE_BY_BOARD_STATE = {
+    BoardConnectionState.CONNECTED: "ok",
+    BoardConnectionState.CONNECTING: "warn",
+    BoardConnectionState.RECONNECTING: "warn",
+    BoardConnectionState.DISCONNECTED: "error",
+    BoardConnectionState.ERROR: "error",
+}
+
+# How a session state is shown on the run-state pill: ``(pill, detail)``.
+#
+# The pill has four words and the session has seven states, so three of them
+# ride on a detail rather than getting a colour of their own. PAUSED, STOPPING
+# and INITIALIZING are all "a run is live and mid-something", which is closer to
+# Running than to Idle -- the failure this pill exists to prevent is reading
+# "Idle" while hardware is driven. RUNNING becomes "recording" whenever the data
+# recorder is actually recording; that is resolved at call time, not here.
+RUN_PILL_BY_SESSION_STATE = {
+    "IDLE": ("idle", ""),
+    "READY": ("idle", "Ready"),
+    "INITIALIZING": ("running", "Starting"),
+    "RUNNING": ("running", ""),
+    "PAUSED": ("running", "Paused"),
+    "STOPPING": ("running", "Stopping"),
+    "ERROR": ("error", ""),
+}
+
+
+class PropertiesHost(QWidget):
+    """A swappable container for the node editor's properties form.
+
+    ``NodeEditorController`` builds a fresh form on every selection and hands it
+    over with ``setWidget`` -- the API it used when the properties surface was a
+    ``QDockWidget``. Keeping that call shape means the controller did not have
+    to change when the dock did, and it is the only thing the controller ever
+    asked of the dock.
+
+    Unlike ``QDockWidget.setWidget``, the outgoing form is deleted rather than
+    left parented and hidden. A dock quietly accumulated one dead form per node
+    the user ever clicked; nothing referenced them again.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("propertiesHost")
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(0)
+        self._widget: QWidget | None = None
+
+    def widget(self) -> QWidget | None:
+        """The form currently on show, or ``None`` before the first one."""
+        return self._widget
+
+    def setWidget(self, widget: QWidget) -> None:  # noqa: N802 - Qt-shaped API
+        """Show *widget*, destroying whatever it replaces."""
+        previous = self._widget
+        if previous is widget:
+            return
+        if previous is not None:
+            self._layout.removeWidget(previous)
+            previous.setParent(None)
+            previous.deleteLater()
+        self._widget = widget
+        self._layout.addWidget(widget)
 
 
 def lab_setup_complete(
@@ -136,13 +212,19 @@ class MainWindow(QMainWindow):
 
         # UI components
         self._stack: QStackedWidget | None = None
-        self._builder_view: QWidget | None = None
-        self._node_library_dock: QDockWidget | None = None
-        self._properties_dock: QDockWidget | None = None
-        # Per-dock visibility captured when the operator view hides the Builder
-        # docks, so switch_to_builder restores each to its prior shown/hidden
-        # state (e.g. a Files dock the user never opened stays hidden).
-        self._builder_dock_visibility: dict[str, bool] = {}
+        # The Builder frame, and a page of _stack rather than something around
+        # it. That is the whole reason there is no "hide the Builder panels"
+        # helper: switching the stack takes the entire frame off screen, so
+        # nothing can linger over the operator view (issue #39).
+        self._builder_view: AppShell | None = None
+        # The node editor's properties form lives inside this; see PropertiesHost.
+        self._properties_host: PropertiesHost | None = None
+        self._properties_widget: QWidget | None = None
+        self._files_panel: QWidget | None = None
+        # View menu panel toggles, kept as attributes so their checked state can
+        # follow a panel collapsed by any other route.
+        self._left_panel_action: QAction | None = None
+        self._right_panel_action: QAction | None = None
 
         # Toolbar status (initialised here so _on_core_state_change can test)
         self._toolbar_status: QLabel | None = None
@@ -169,9 +251,13 @@ class MainWindow(QMainWindow):
         self._camera_panel: CameraPanel | None = None
         # Dashboard camera-quadrant occupant: a lightweight container that is
         # ALWAYS the dashboard's "camera" panel. The single CameraPanel is
-        # reparented into this slot (dashboard shown) or the desktop camera
-        # dock (Builder shown) on view switch — never duplicated (Task 12).
+        # reparented into this slot (dashboard shown) or the Builder's Camera
+        # tab slot (Builder shown) on view switch — never duplicated (Task 12).
+        # Both ends are slots rather than the panel itself: a SidePanel tab
+        # whose widget were carried off would leave the panel's stack holding
+        # nothing to come back to.
         self._camera_slot: QWidget | None = None
+        self._camera_tab_slot: QWidget | None = None
         # Lazily created when the camera panel hands off a finished video
         # tracking run for review (analysis_requested signal).
         self._analysis_dock: QDockWidget | None = None
@@ -279,16 +365,17 @@ class MainWindow(QMainWindow):
             self._stack.setCurrentIndex(1)
         else:
             self._stack.setCurrentIndex(0)
-            self._setup_dock_widgets()
+            self._populate_builder_panels()
 
     def _create_builder_view(self) -> None:
-        """Create the builder (desktop) view."""
-        self._builder_view = QWidget()
-        layout = QVBoxLayout(self._builder_view)
-        layout.setContentsMargins(0, 0, 0, 0)
+        """Build the Builder frame: the shell, with the graph as its centre.
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-
+        The shell is a page of ``_stack``, not a wrapper around the window.
+        Everything the Builder shows lives inside it, so switching the stack to
+        the operator view removes the lot in one move — which is why there is no
+        helper here that hides Builder panels. Its two side panels start empty;
+        ``_populate_builder_panels`` fills them once the panel widgets exist.
+        """
         self._graph_view = NodeGraphView()
         self._graph_view.setMinimumSize(400, 300)
 
@@ -307,8 +394,17 @@ class MainWindow(QMainWindow):
         self._node_editor.status_message.connect(self._show_status_message)
         self._node_editor.undo_redo_changed.connect(self._update_undo_redo_actions)
 
-        splitter.addWidget(self._graph_view)
-        layout.addWidget(splitter)
+        self._builder_view = AppShell(centre=self._graph_view)
+        self._builder_view.strip.palette_requested.connect(self._on_palette_requested)
+
+    def _on_palette_requested(self) -> None:
+        """The strip's ``Ctrl K`` hint was pressed.
+
+        The palette itself is a later task. Until it exists the hint says so
+        rather than doing nothing at all, because a control that teaches a
+        shortcut and then silently ignores it teaches the wrong thing.
+        """
+        self._show_status_message("The command palette is not available yet", 3000)
 
     def _create_runner_view(self) -> None:
         """Build the operator (non-Builder) view for the detected mode.
@@ -566,84 +662,35 @@ class MainWindow(QMainWindow):
             return
         if self._camera_slot is not None:
             self._camera_slot.layout().addWidget(self._camera_panel)  # dashboard slot
-            # The Builder camera dock is an empty husk while the dashboard
-            # hosts the panel — hide it so it doesn't linger as a blank strip
-            # (switch_to_builder shows it again when the panel returns).
-            dock = getattr(self, "_camera_dock", None)
-            if dock is not None:
-                dock.hide()
-                self._camera_dock_hidden_for_dashboard = True
         elif self._runner_shell is not None:
             self._runner_shell.rehost_camera()  # RunnerShell Camera tab
 
     def _move_camera_to_builder(self) -> None:
-        """Host the single CameraPanel in the desktop Camera dock (if it exists).
+        """Host the single CameraPanel in the Builder's Camera tab slot.
 
-        No-op in runner-only mode, which never builds docks — the camera then
-        stays in the dashboard slot, which is correct.
+        No-op in runner-only mode, which has not built the Builder's panels yet
+        — the camera then stays in the operator view, which is correct.
+
+        Nothing needs hiding at the far end any more. The empty slot the camera
+        leaves behind sits inside the Builder frame, and the Builder frame is
+        the stack page that has just been switched away from, so it is not on
+        screen to look empty.
         """
-        dock = getattr(self, "_camera_dock", None)
-        if dock is not None and self._camera_panel is not None:
-            dock.setWidget(self._camera_panel)  # reparents
-            # Re-show only if the dashboard hid it (not on the startup call,
-            # which runs before the dock is added to the window) — a dock left
-            # hidden here would swallow the camera entirely.
-            if getattr(self, "_camera_dock_hidden_for_dashboard", False):
-                self._camera_dock_hidden_for_dashboard = False
-                dock.show()
+        if self._camera_tab_slot is not None and self._camera_panel is not None:
+            self._camera_tab_slot.layout().addWidget(self._camera_panel)  # reparents
 
-    # Builder-only docks that must be hidden while the operator view is shown.
-    # The camera dock is deliberately excluded — it is managed separately by the
-    # _move_camera_to_* helpers, which hide/show it as the CameraPanel moves.
-    _BUILDER_DOCK_ATTRS = (
-        "_node_library_dock",
-        "_properties_dock",
-        "_hardware_dock",
-        "_control_dock",
-        "_files_dock",
-    )
+    def _populate_builder_panels(self) -> None:
+        """Build the Builder's panel widgets and host them in the shell.
 
-    def _hide_builder_docks(self) -> None:
-        """Hide the Builder dock panels on entry to the operator view.
-
-        The docks live in the QMainWindow dock areas that surround the central
-        QStackedWidget, so switching the stack to the dashboard does not remove
-        them — without this they linger around the operator view (issue #39).
-        Each dock's shown/hidden state is captured first so switch_to_builder
-        can restore the user's exact arrangement. No-op in runner-only mode,
-        where the docks were never built.
+        Each widget here is the same object the Builder's dock widgets used to
+        wrap — this method re-hosts rather than rewrites. Left panel: Nodes,
+        Hardware, Control, Files. Right panel: Properties, Camera.
         """
-        saved: dict[str, bool] = {}
-        for attr in self._BUILDER_DOCK_ATTRS:
-            dock = getattr(self, attr, None)
-            if dock is None:
-                continue
-            saved[attr] = not dock.isHidden()
-            dock.hide()
-        self._builder_dock_visibility = saved
-
-    def _show_builder_docks(self) -> None:
-        """Restore Builder docks hidden by _hide_builder_docks.
-
-        Each dock returns to the visibility it had before the operator view was
-        entered. No-op if nothing was hidden (e.g. docks freshly built, or
-        runner-only mode).
-        """
-        if not self._builder_dock_visibility:
-            return
-        for attr, was_visible in self._builder_dock_visibility.items():
-            dock = getattr(self, attr, None)
-            if dock is not None:
-                dock.setVisible(was_visible)
-        self._builder_dock_visibility = {}
-
-    def _setup_dock_widgets(self) -> None:
-        """Set up dock widgets for desktop mode."""
 
         def session_fn():
             return self._core.session
 
-        # Node Library dock
+        # --- Nodes ---
         self._node_library_panel = NodeLibraryPanel(
             session_fn=session_fn,
             graph_view=self._graph_view,
@@ -651,31 +698,19 @@ class MainWindow(QMainWindow):
         self._node_library_panel.status_message.connect(self._show_status_message)
         self._node_library_panel._zone_config = self._zone_config
 
-        self._node_library_dock = QDockWidget("Node Library", self)
-        self._node_library_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        self._node_library_dock.setWidget(self._node_library_panel)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._node_library_dock)
-
-        # Properties dock
-        self._properties_dock = QDockWidget("Properties", self)
-        self._properties_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        properties_widget = QWidget()
-        properties_layout = QVBoxLayout(properties_widget)
+        # --- Properties ---
+        # The node editor replaces this form on every selection, so the tab
+        # hosts a container and the form lives inside it. See PropertiesHost.
+        self._properties_host = PropertiesHost()
+        self._properties_widget = QWidget()
+        properties_layout = QVBoxLayout(self._properties_widget)
         properties_layout.addWidget(QLabel("Select a node to view properties"))
         properties_layout.addStretch()
-        self._properties_dock.setWidget(properties_widget)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._properties_dock)
+        self._properties_host.setWidget(self._properties_widget)
+        self._node_editor.set_properties_dock(self._properties_host)
 
-        # Wire properties dock to node editor
-        self._node_editor.set_properties_dock(self._properties_dock)
-
-        # Hardware Panel dock. The desktop dock owns its own HardwarePanel,
-        # distinct from the dashboard's _dash_hardware_panel. Build it if not
-        # already present.
+        # --- Hardware. The Builder owns its own HardwarePanel, distinct from
+        # the dashboard's _dash_hardware_panel. Build it if not already present.
         if getattr(self, "_hardware_panel", None) is None:
             self._hardware_panel = HardwarePanel(
                 hardware_manager=self._core.hardware_manager,
@@ -684,37 +719,16 @@ class MainWindow(QMainWindow):
             )
             self._hardware_panel.status_message.connect(self._show_status_message)
 
-        self._hardware_dock = QDockWidget("Hardware", self)
-        self._hardware_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        self._hardware_dock.setWidget(self._hardware_panel)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._hardware_dock)
-
-        # Device Control Panel dock
+        # --- Control ---
         self._device_control_panel = DeviceControlPanel(
             hardware_manager=self._core.hardware_manager,
             run_async_fn=self._run_async,
         )
         self._device_control_panel.status_message.connect(self._show_status_message)
 
-        self._control_dock = QDockWidget("Device Control", self)
-        self._control_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea
-            | Qt.DockWidgetArea.RightDockWidgetArea
-            | Qt.DockWidgetArea.BottomDockWidgetArea
-        )
-        self._control_dock.setWidget(self._device_control_panel)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._control_dock)
-
-        # Group left docks: Node Library + Hardware + Device Control
-        self.tabifyDockWidget(self._node_library_dock, self._hardware_dock)
-        self.tabifyDockWidget(self._hardware_dock, self._control_dock)
-        self._node_library_dock.raise_()
-
-        # The desktop dock's HardwarePanel is a distinct instance from the
+        # The Builder's HardwarePanel is a distinct instance from the
         # dashboard's _dash_hardware_panel; its hardware_changed fans out only
-        # to the desktop _device_control_panel below.
+        # to the Builder's own _device_control_panel.
         self._hardware_panel.hardware_changed.connect(self._device_control_panel.refresh_devices)
 
         # Wire flow_functions_changed from node editor to node library
@@ -722,36 +736,23 @@ class MainWindow(QMainWindow):
             self._node_library_panel.refresh_flow_functions
         )
 
-        # Camera Panel dock
-        self._camera_dock = QDockWidget("Camera", self)
-        self._camera_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
-        )
+        # --- Camera. A slot rather than the panel itself: the single
+        # CameraPanel commutes between here and the operator view, and a tab
+        # whose widget were carried off would have nothing to come back to.
+        self._camera_tab_slot = QWidget()
+        camera_tab_layout = QVBoxLayout(self._camera_tab_slot)
+        camera_tab_layout.setContentsMargins(0, 0, 0, 0)
         if getattr(self, "_camera_panel", None) is None:
             self._camera_panel = self._build_camera_panel()
-        # Only steal the single CameraPanel into the dock when Builder is the
-        # active view; otherwise it stays in the dashboard slot. This runs at
-        # desktop startup (and on runner->desktop switch) with Builder shown,
-        # so the camera correctly lands in the dock there.
+        # Only take the single CameraPanel when Builder is the active view;
+        # otherwise it stays in the operator view. This runs at desktop startup
+        # (and on runner->desktop switch) with Builder shown, so the camera
+        # correctly lands here then.
         if self._stack is not None and self._stack.currentIndex() == 0:
             self._move_camera_to_builder()
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._camera_dock)
 
-        # Group right docks: Properties + Camera
-        self.tabifyDockWidget(self._properties_dock, self._camera_dock)
-        self._properties_dock.raise_()
-
-        # Files dock
-        from PyQt6.QtWidgets import QFrame, QScrollArea
-
-        self._files_dock = QDockWidget("Files", self)
-        self._files_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea
-            | Qt.DockWidgetArea.RightDockWidgetArea
-            | Qt.DockWidgetArea.BottomDockWidgetArea
-        )
-
-        from PyQt6.QtWidgets import QPushButton
+        # --- Files ---
+        from PyQt6.QtWidgets import QFrame, QPushButton, QScrollArea
 
         files_scroll = QScrollArea()
         files_scroll.setWidgetResizable(True)
@@ -786,61 +787,100 @@ class MainWindow(QMainWindow):
         files_layout.addStretch()
 
         files_scroll.setWidget(files_widget)
-        self._files_dock.setWidget(files_scroll)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._files_dock)
+        self._files_panel = files_scroll
 
-        if not self._view_manager.is_runner_mode:
-            self._files_dock.setVisible(False)
+        # --- Into the shell. Files was a dock the desktop kept hidden by
+        # default; as a tab it costs nothing to leave in place, and the rail
+        # keeps it discoverable rather than hidden behind a menu item.
+        left = self._builder_view.left
+        left.add_tab("nodes", "Nodes", self._node_library_panel, "N")
+        left.add_tab("hardware", "Hardware", self._hardware_panel, "H")
+        left.add_tab("control", "Control", self._device_control_panel, "D")
+        left.add_tab("files", "Files", self._files_panel, "F")
+
+        right = self._builder_view.right
+        right.add_tab("properties", "Properties", self._properties_host, "P")
+        right.add_tab("camera", "Camera", self._camera_tab_slot, "C")
 
         # Refresh hardware tree (which also triggers device combo + runner refresh)
         self._hardware_panel.refresh_tree()
 
-        # Tabbed docks share an auto-built QTabBar whose tabs otherwise size to
-        # their labels, leaving the strip behind them exposed. Stretch the tabs
-        # to fill the full width. Immediate + deferred because QMainWindow can
-        # rebuild the tab bar during first layout, which would drop the flag.
-        self._stretch_dock_tab_bars()
-        QTimer.singleShot(0, self._stretch_dock_tab_bars)
+        self._refresh_strip_devices()
+        self._refresh_strip_experiment()
 
-        # Any dock show/hide moves the QMainWindow::separator positions; on
-        # Windows the 1px column at the old separator position is sometimes
-        # left unrepainted when the central widget expands over it, leaving a
-        # ghost hairline across the operator view. Heal after every change.
-        for dock in (
-            self._node_library_dock,
-            self._properties_dock,
-            self._hardware_dock,
-            self._control_dock,
-            self._camera_dock,
-            self._files_dock,
-        ):
-            dock.visibilityChanged.connect(self._heal_stale_paint)
+        # The layout the user left the Builder in last time. Applied after the
+        # tabs exist, because a saved tab key means nothing before then.
+        self._builder_view.restore_layout(self._settings)
+        self._sync_panel_actions()
 
     def _heal_stale_paint(self, *_args) -> None:
-        """Schedule a deferred full-window repaint after a dock/central relayout.
+        """Schedule a deferred full-window repaint after a central relayout.
 
-        On Windows, relayouts that move QMainWindow dock separators (hiding
-        docks, switching the central stack, maximize/restore) can leave the
-        1px column at an old separator position unrepainted — it shows as a
+        On Windows, relayouts that move QMainWindow separators (switching the
+        central stack, showing the Analysis dock, maximize/restore) can leave
+        the 1px column at an old separator position unrepainted — it shows as a
         stale #0f1419 hairline over whatever now occupies that area. Deferred
         so it runs after the relayout settles; update() coalesces, so repeated
         triggers cost one repaint.
         """
         QTimer.singleShot(0, self.update)
 
-    def _stretch_dock_tab_bars(self) -> None:
-        """Stretch tabbed-dock tabs to fill the full width of their tab bar.
+    # --- The status strip ---
 
-        When docks are tabified, QMainWindow builds a QTabBar whose tabs size to
-        their labels, leaving the strip behind them exposed. Flipping the bar to
-        expanding makes the tabs share the full width edge-to-edge. Only the
-        window's own dock tab bars are touched — panel-internal tab bars (e.g.
-        the Camera panel, the runner shell) parent to their panels, not to the
-        window.
+    def _strip(self):
+        """The Builder's status strip, or ``None`` before the frame exists.
+
+        Every refresh below is reached from a signal that can fire during
+        construction or in runner mode, so none of them may assume a frame.
         """
-        for tab_bar in self.findChildren(QTabBar):
-            if tab_bar.parentWidget() is self:
-                tab_bar.setExpanding(True)
+        return getattr(self._shell(), "strip", None)
+
+    def _refresh_strip_experiment(self) -> None:
+        """Put the session's name and unsaved state on the strip."""
+        strip = self._strip()
+        if strip is None:
+            return
+        session = self._core.session
+        if session is None:
+            strip.set_experiment("", False)
+            return
+        strip.set_experiment(session.metadata.name or "", bool(session.is_dirty))
+
+    def _refresh_strip_devices(self) -> None:
+        """Put one dot per registered board on the strip, from real state.
+
+        Read from ``board.state`` rather than from whatever last transition was
+        reported, so the strip describes the rig as it is now. See
+        :data:`DEVICE_STATE_BY_BOARD_STATE` for why only CONNECTED is green.
+        """
+        strip = self._strip()
+        if strip is None:
+            return
+        devices = []
+        for board_id, board in self._core.hardware_manager.boards.items():
+            name = getattr(board, "name", None) or board_id
+            state = DEVICE_STATE_BY_BOARD_STATE.get(getattr(board, "state", None))
+            # An unmapped state keeps its raw text: the strip renders anything
+            # it does not recognise neutral, with the real value in the tooltip.
+            devices.append((str(name), state or str(getattr(board, "state", "unknown"))))
+        strip.set_devices(devices)
+
+    def _refresh_strip_run_state(self, state_name: str) -> None:
+        """Move the run pill to match the session state."""
+        strip = self._strip()
+        if strip is None:
+            return
+        pill, detail = RUN_PILL_BY_SESSION_STATE.get(state_name, (None, ""))
+        if pill is None:
+            # Run state comes from our own code, so an unrecognised one is a
+            # bug here rather than a wider vocabulary. Show it as an error
+            # carrying the raw name: never as a state that reads as healthy.
+            logger.warning("Unrecognised session state %r on the status strip", state_name)
+            strip.set_run_state("error", state_name)
+            return
+        if pill == "running" and not detail and self._core.data_recorder.is_recording:
+            pill = "recording"
+        strip.set_run_state(pill, detail or None)
 
     # --- Menu / Toolbar / Status bar ---
 
@@ -935,35 +975,35 @@ class MainWindow(QMainWindow):
 
         view_menu.addSeparator()
 
-        if hasattr(self, "_node_library_dock") and self._node_library_dock:
-            node_library_action = self._node_library_dock.toggleViewAction()
-            node_library_action.setText("&Node Library")
-            view_menu.addAction(node_library_action)
+        # Six dock toggles became two panel toggles. Every panel that used to
+        # need its own menu item is now a tab, and a collapsed panel is a rail
+        # of those tabs rather than nothing — so the menu no longer has to be
+        # the way back to a panel somebody closed.
+        self._left_panel_action = QAction("&Left Panel", self)
+        self._left_panel_action.setCheckable(True)
+        self._left_panel_action.setChecked(True)
+        self._left_panel_action.triggered.connect(
+            lambda checked: self._set_panel_expanded("left", checked)
+        )
+        view_menu.addAction(self._left_panel_action)
 
-        if hasattr(self, "_properties_dock") and self._properties_dock:
-            properties_action = self._properties_dock.toggleViewAction()
-            properties_action.setText("&Properties Panel")
-            view_menu.addAction(properties_action)
+        self._right_panel_action = QAction("&Right Panel", self)
+        self._right_panel_action.setCheckable(True)
+        self._right_panel_action.setChecked(True)
+        self._right_panel_action.triggered.connect(
+            lambda checked: self._set_panel_expanded("right", checked)
+        )
+        view_menu.addAction(self._right_panel_action)
 
-        if hasattr(self, "_hardware_dock"):
-            hardware_action = self._hardware_dock.toggleViewAction()
-            hardware_action.setText("&Hardware Panel")
-            view_menu.addAction(hardware_action)
-
-        if hasattr(self, "_control_dock"):
-            control_action = self._control_dock.toggleViewAction()
-            control_action.setText("&Device Control")
-            view_menu.addAction(control_action)
-
-        if hasattr(self, "_camera_dock"):
-            camera_action = self._camera_dock.toggleViewAction()
-            camera_action.setText("&Camera Panel")
-            view_menu.addAction(camera_action)
-
-        if hasattr(self, "_files_dock"):
-            files_action = self._files_dock.toggleViewAction()
-            files_action.setText("&Files Panel")
-            view_menu.addAction(files_action)
+        # The return path. A panel collapsed from the strip, from its rail or by
+        # a restored layout has to move the menu item too, or the tick describes
+        # a state that is not on screen. (The strip's own buttons are already
+        # kept in step by AppShell; this is the same idea one level out.)
+        shell = self._shell()
+        if shell is not None:
+            shell.left.expanded_changed.connect(self._left_panel_action.setChecked)
+            shell.right.expanded_changed.connect(self._right_panel_action.setChecked)
+        self._sync_panel_actions()
 
         view_menu.addSeparator()
 
@@ -1163,6 +1203,35 @@ class MainWindow(QMainWindow):
         self._session_review_window.raise_()
         self._session_review_window.activateWindow()
 
+    def _shell(self) -> AppShell | None:
+        """The Builder frame, or ``None`` if there is not one yet.
+
+        ``getattr`` rather than the attribute, because ``_setup_menu`` is
+        exercised on its own against an instance whose ``__init__`` was bypassed
+        -- the pattern the dock toggles used before it, for the same reason.
+        """
+        return getattr(self, "_builder_view", None)
+
+    def _set_panel_expanded(self, side: str, expanded: bool) -> None:
+        """Expand or collapse one side panel from the View menu."""
+        shell = self._shell()
+        if shell is None:
+            return
+        panel = shell.left if side == "left" else shell.right
+        panel.set_expanded(expanded)
+
+    def _sync_panel_actions(self) -> None:
+        """Make the View menu ticks match the panels as they actually are."""
+        shell = self._shell()
+        if shell is None:
+            return
+        for action, panel in (
+            (getattr(self, "_left_panel_action", None), shell.left),
+            (getattr(self, "_right_panel_action", None), shell.right),
+        ):
+            if action is not None:
+                action.setChecked(panel.expanded)
+
     def _setup_toolbar(self) -> None:
         """Set up the toolbar."""
         if self._view_manager.is_runner_mode:
@@ -1335,6 +1404,7 @@ class MainWindow(QMainWindow):
         # _runner_device_controls is built in both operator views (shared).
         self.session_changed.connect(self._runner_device_controls.refresh)
         self.session_changed.connect(self._surface_load_warnings)
+        self.session_changed.connect(self._refresh_strip_experiment)
         # Dashboard-only panels (desktop mode).
         if self._run_control_panel is not None:
             self.session_changed.connect(lambda: self._run_control_panel.update_experiment_name())
@@ -1371,6 +1441,8 @@ class MainWindow(QMainWindow):
             self._dashboard_view.update_banner(state_name, recording)
         if self._runner_shell is not None:
             self._runner_shell.update_state(state_name)
+
+        self._refresh_strip_run_state(state_name)
 
         # Update toolbar status indicator
         if self._toolbar_status is not None:
@@ -1431,6 +1503,7 @@ class MainWindow(QMainWindow):
         """
         # (1) Always refresh the indicator — this is the only wire-up point.
         self._update_connection_status()
+        self._refresh_strip_devices()
 
         # (2) Pause-on-drop guard only applies to terminal-failure states
         # reached while an experiment is actually running.
@@ -1612,7 +1685,8 @@ class MainWindow(QMainWindow):
         reflected on entry. Shared by the menu toggle and programmatic switch."""
         self._stack.setCurrentIndex(1)
         self._move_camera_to_operator_view()
-        self._hide_builder_docks()
+        # Nothing to hide: the Builder frame is the stack page that just went
+        # away, and everything the Builder shows is inside it (issue #39).
         if self._dash_hardware_panel:
             self._dash_hardware_panel.refresh_tree()
         self._heal_stale_paint()
@@ -1625,7 +1699,6 @@ class MainWindow(QMainWindow):
 
     def switch_to_builder(self) -> None:
         self._stack.setCurrentIndex(0)
-        self._show_builder_docks()
         self._move_camera_to_builder()
         self._heal_stale_paint()
 
@@ -1645,101 +1718,32 @@ class MainWindow(QMainWindow):
         self._show_status_message(f"Window resized to {width}x{height}", 2000)
 
     def _set_pi_touchscreen_layout(self) -> None:
-        """Set up Pi Touchscreen layout with tabbed panels."""
+        """Shrink to the Pi touchscreen size and show the operator view.
+
+        There is nothing to re-tabify any more: the Builder's panels are tabs
+        inside its own frame, and 480 px is not a Builder-sized window in any
+        case. So this now does the one thing that was ever load-bearing — put
+        the window on the surface that fits the screen.
+        """
         self.setMinimumSize(480, 480)
         self.resize(480, 800)
 
-        # NOTE: This hybrid Pi-touchscreen layout shows the dashboard (index 1)
-        # while keeping the camera dock as a bottom tab. Since there is a single
-        # reparented CameraPanel, it lives in the dock here and the dashboard's
-        # camera quadrant is empty in this specific layout. Resolving that needs
-        # a design decision about which surface owns the camera in this hybrid;
-        # tracked separately, not a regression from the dashboard work.
         if self._stack is not None:
-            self._stack.setCurrentIndex(1)
+            self._enter_dashboard()
 
-        docks = []
-        if getattr(self, "_files_dock", None) is not None:
-            docks.append(self._files_dock)
-        if getattr(self, "_hardware_dock", None) is not None:
-            docks.append(self._hardware_dock)
-        if getattr(self, "_control_dock", None) is not None:
-            docks.append(self._control_dock)
-        if getattr(self, "_camera_dock", None) is not None:
-            docks.append(self._camera_dock)
-
-        if getattr(self, "_node_library_dock", None) is not None:
-            self._node_library_dock.setVisible(False)
-        if getattr(self, "_properties_dock", None) is not None:
-            self._properties_dock.setVisible(False)
-
-        if len(docks) < 2:
-            return
-
-        for dock in docks:
-            dock.setVisible(True)
-            dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable)
-            dock.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea)
-            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
-
-        first_dock = docks[0]
-        for dock in docks[1:]:
-            self.tabifyDockWidget(first_dock, dock)
-
-        self._stretch_dock_tab_bars()
-
-        first_dock.raise_()
         self._show_status_message("Pi Touchscreen layout applied", 2000)
 
     def _set_default_layout(self) -> None:
-        """Restore default desktop layout."""
+        """Restore the default desktop layout: both panels open, first tabs."""
         self.resize(1400, 900)
 
-        default_features = (
-            QDockWidget.DockWidgetFeature.DockWidgetMovable
-            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-            | QDockWidget.DockWidgetFeature.DockWidgetClosable
-        )
-        default_areas = Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
-
-        if getattr(self, "_node_library_dock", None) is not None:
-            self._node_library_dock.setFeatures(default_features)
-            self._node_library_dock.setAllowedAreas(default_areas)
-            self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._node_library_dock)
-            self._node_library_dock.setVisible(True)
-
-        if getattr(self, "_properties_dock", None) is not None:
-            self._properties_dock.setFeatures(default_features)
-            self._properties_dock.setAllowedAreas(default_areas)
-            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._properties_dock)
-            self._properties_dock.setVisible(True)
-
-        if getattr(self, "_hardware_dock", None) is not None:
-            self._hardware_dock.setFeatures(default_features)
-            self._hardware_dock.setAllowedAreas(default_areas)
-            self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._hardware_dock)
-            self._hardware_dock.setVisible(True)
-
-        if getattr(self, "_control_dock", None) is not None:
-            self._control_dock.setFeatures(default_features)
-            self._control_dock.setAllowedAreas(
-                default_areas | Qt.DockWidgetArea.BottomDockWidgetArea
-            )
-            self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._control_dock)
-            if getattr(self, "_hardware_dock", None) is not None:
-                self.tabifyDockWidget(self._hardware_dock, self._control_dock)
-                self._hardware_dock.raise_()
-
-        if getattr(self, "_camera_dock", None) is not None:
-            self._camera_dock.setFeatures(default_features)
-            self._camera_dock.setAllowedAreas(default_areas)
-            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._camera_dock)
-            self._camera_dock.setVisible(True)
-
-        if getattr(self, "_files_dock", None) is not None:
-            self._files_dock.setVisible(False)
-
-        self._stretch_dock_tab_bars()
+        if self._builder_view is not None:
+            for panel in (self._builder_view.left, self._builder_view.right):
+                panel.set_expanded(True)
+                keys = panel.keys()
+                if keys:
+                    panel.set_current(keys[0])
+            self._sync_panel_actions()
 
         self._show_status_message("Default layout restored", 2000)
 
@@ -1751,19 +1755,15 @@ class MainWindow(QMainWindow):
 
         self._stack.setCurrentIndex(0)
 
-        if getattr(self, "_node_library_dock", None) is None:
-            self._setup_dock_widgets()
+        if self._node_library_panel is None:
+            self._populate_builder_panels()
 
-        # Ensure the single reparented CameraPanel lands in the Builder dock. On
-        # first invocation _setup_dock_widgets already did this (idempotent); on
-        # repeat invocations (docks already exist) the camera is still in the
-        # dashboard slot from switch_to_runner, so this explicit move prevents a
-        # blank Camera dock. Mirrors switch_to_builder().
+        # Ensure the single reparented CameraPanel lands in the Builder's Camera
+        # tab. On first invocation _populate_builder_panels already did this
+        # (idempotent); on repeat invocations (the panels already exist) the
+        # camera is still in the operator view from switch_to_runner, so this
+        # explicit move prevents an empty Camera tab. Mirrors switch_to_builder().
         self._move_camera_to_builder()
-        # Reached from the dashboard's "switch to desktop" button, which
-        # bypasses switch_to_builder — restore any docks _hide_builder_docks
-        # hid on the F11 entry into the dashboard.
-        self._show_builder_docks()
 
         screen_size = self._view_manager.screen_size
         if screen_size.width() <= 800:
@@ -1936,6 +1936,7 @@ class MainWindow(QMainWindow):
         if self._core.session and self._core.session.file_path:
             try:
                 self._core.save_session()
+                self._refresh_strip_experiment()
                 self._show_status_message("Saved")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save: {e}")
@@ -1959,6 +1960,7 @@ class MainWindow(QMainWindow):
         if file_path:
             try:
                 self._core.save_session(file_path)
+                self._refresh_strip_experiment()
                 self._show_status_message(f"Saved: {file_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save: {e}")
@@ -2223,6 +2225,7 @@ class MainWindow(QMainWindow):
 
     def _on_experiment_metadata_changed(self) -> None:
         self._core.session._dirty = True
+        self._refresh_strip_experiment()
 
     def _on_recording_directory_changed(self, directory: str) -> None:
         if directory:
@@ -2478,8 +2481,9 @@ class MainWindow(QMainWindow):
     def tour_targets(self) -> dict[str, QWidget | None]:
         """Registry mapping tour step keys to live widgets to spotlight.
 
-        Values may be None (e.g. in runner mode the docks don't exist); the
-        tour renders those steps centered with no spotlight rather than failing.
+        Values may be None (e.g. in runner mode the Builder's panels are not
+        built); the tour renders those steps centered with no spotlight rather
+        than failing.
         """
         start_btn: QWidget | None = None
         toolbar = getattr(self, "_toolbar", None)
@@ -2487,28 +2491,26 @@ class MainWindow(QMainWindow):
         if toolbar is not None and start_action is not None:
             start_btn = toolbar.widgetForAction(start_action)
         return {
-            "node_library": getattr(self, "_node_library_dock", None),
-            "dock_tabs": self._dock_tab_bar("Node Library"),
+            "node_library": self._node_library_panel,
+            "dock_tabs": self._panel_tab_strip("left"),
             "canvas": getattr(self, "_graph_view", None),
-            "hardware": getattr(self, "_hardware_dock", None),
-            "properties": getattr(self, "_properties_dock", None),
-            "camera": getattr(self, "_camera_dock", None),
+            "hardware": self._hardware_panel,
+            "properties": self._properties_host,
+            "camera": self._camera_panel,
             "run": start_btn,
         }
 
-    def _dock_tab_bar(self, tab_title: str) -> QWidget | None:
-        """The QMainWindow-owned dock QTabBar that hosts a tab named ``tab_title``.
+    def _panel_tab_strip(self, side: str) -> QWidget | None:
+        """One side panel's row of tab buttons, for the tour to spotlight.
 
-        QMainWindow builds these tab bars when docks are tabified; there's one
-        per tabbed dock group, so we pick the group containing the given tab.
+        Found by the objectName ``SidePanel`` publishes rather than by reaching
+        into the panel's internals.
         """
-        for tab_bar in self.findChildren(QTabBar):
-            if tab_bar.parentWidget() is not self:
-                continue
-            for i in range(tab_bar.count()):
-                if tab_bar.tabText(i).replace("&", "") == tab_title:
-                    return tab_bar
-        return None
+        shell = self._shell()
+        if shell is None:
+            return None
+        panel = shell.left if side == "left" else shell.right
+        return panel.findChild(QFrame, "sidePanelTabs")
 
     def _start_tour(self) -> None:
         """Launch the interactive walkthrough (Help ▸ Replay Tutorial)."""
@@ -2712,6 +2714,11 @@ class MainWindow(QMainWindow):
         if not self._check_save():
             event.ignore()
             return
+
+        # The Builder frame is a page of the stack, not a window, so the window
+        # is what remembers its layout. Never raises; see AppShell.save_layout.
+        if self._builder_view is not None:
+            self._builder_view.save_layout(self._settings)
 
         # Deterministically stop the CameraPanel CV thread now that we are
         # committed to closing. Runner mode always builds a CameraPanel (nested

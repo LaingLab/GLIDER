@@ -60,8 +60,8 @@ def golden_path_steps() -> list[TourStep]:
         TourStep(
             "dock_tabs",
             "2 · Switch panels",
-            "Panels share space as tabs. Click a tab along the bottom to switch "
-            "between Node Library, Hardware, and Device Control.",
+            "Panels share space as tabs. Click a tab at the top of the panel to "
+            "switch between Nodes, Hardware, Control, and Files.",
         ),
         TourStep(
             "hardware",
