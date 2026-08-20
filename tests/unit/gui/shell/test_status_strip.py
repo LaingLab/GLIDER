@@ -392,6 +392,80 @@ def test_the_palette_hint_names_the_shortcut(strip):
     assert "K" in text
 
 
+# --------------------------------------------------------------- the toggles
+
+
+def _span(strip, widget: QWidget) -> tuple[int, int]:
+    """*widget*'s left and right edges in the strip's own coordinates."""
+    left = widget.mapTo(strip, widget.rect().topLeft()).x()
+    return left, left + widget.width()
+
+
+def test_each_toggle_sits_at_the_edge_of_the_panel_it_controls(strip):
+    """A control belongs beside the thing it controls.
+
+    Both toggles used to be bunched at the far left, so the button for the
+    *right* panel sat as far from that panel as the strip allows -- 900 px away
+    in this test, and the width of a monitor in the running app.
+    """
+    left = _span(strip, strip.left_toggle())
+    right = _span(strip, strip.right_toggle())
+    between = [_span(strip, w) for w in (strip.name_label(), strip.pill(), strip.palette_hint())]
+    between += [_span(strip, chip) for chip in strip.device_chips()]
+
+    assert between, "nothing between the toggles makes this claim vacuous"
+    assert all(left[1] <= start for start, _ in between)
+    assert all(right[0] >= end for _, end in between)
+
+
+def test_a_toggle_carries_no_text_so_no_font_has_to_have_its_glyph(strip):
+    """The half-block characters this replaced are not in every font, and where
+    they were they read as a rendering artefact rather than as a control. The
+    arrow is drawn by the style, so it needs no glyph and takes its colour from
+    the same ``desktop.qss`` rule as the button around it."""
+    for toggle in (strip.left_toggle(), strip.right_toggle()):
+        assert toggle.text() == ""
+        assert toggle.arrowType() != Qt.ArrowType.NoArrow
+
+
+def test_a_toggle_names_the_side_it_controls(strip):
+    """Position says it to anyone looking; this says it to anyone who is not."""
+    assert "left" in strip.left_toggle().accessibleName().lower()
+    assert "right" in strip.right_toggle().accessibleName().lower()
+    assert "left" in strip.left_toggle().toolTip().lower()
+    assert "right" in strip.right_toggle().toolTip().lower()
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_an_open_panel_and_a_collapsed_one_do_not_draw_the_same_toggle(strip, side):
+    """Read from the pixels the button actually painted, not from the property
+    that was set: a state that is provably correct and looks identical is the
+    whole complaint this replaces. Shapes, not glyphs, so this holds on a
+    machine with no fonts."""
+    toggle = getattr(strip, f"{side}_toggle")()
+    tell = getattr(strip, f"set_{side}_expanded")
+
+    tell(True)
+    opened = toggle.grab().toImage()
+    tell(False)
+    collapsed = toggle.grab().toImage()
+
+    assert opened != collapsed
+    assert toggle.arrowType() != Qt.ArrowType.NoArrow
+
+
+def test_the_arrow_turns_when_the_panel_is_toggled_by_a_click(strip, qtbot):
+    """The click path and the told path must agree. A button whose arrow only
+    turns when something echoes back would point the wrong way for any strip
+    whose signal nobody has connected yet."""
+    toggle = strip.left_toggle()
+    before = toggle.arrowType()
+
+    qtbot.mouseClick(toggle, Qt.MouseButton.LeftButton)
+
+    assert toggle.arrowType() != before
+
+
 # -------------------------------------------------------- geometry and styling
 
 
