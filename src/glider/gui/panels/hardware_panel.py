@@ -149,7 +149,7 @@ class HardwarePanel(QWidget):
                         cfg = getattr(device, "_config", None)
                         settings = getattr(cfg, "settings", {}) if cfg else {}
                         pin_str = settings.get("port", "") or "no port"
-                    elif device_type == "BLE":
+                    elif device_type in ("BLE", "Maimu"):
                         cfg = getattr(device, "_config", None)
                         settings = getattr(cfg, "settings", {}) if cfg else {}
                         pin_str = settings.get("address") or settings.get("name") or "no address"
@@ -393,6 +393,75 @@ class HardwarePanel(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to add board: {e}")
 
+    def _build_ble_address_row(self, layout, out: dict, dialog) -> None:
+        """Add an editable BLE address combo with a Scan button to ``layout``.
+
+        Shared by every BLE-transport device in the Add Device dialog -- the
+        generic BLEWrite and the Maimu both need exactly this widget. The chosen
+        address lands in ``out["address"]``; read it back with
+        :meth:`_read_ble_address`.
+        """
+        addr_combo = QComboBox()
+        addr_combo.setEditable(True)
+        addr_combo.setMinimumWidth(240)
+        addr_combo.lineEdit().setPlaceholderText("BLE address (or Scan)")
+        out["address"] = addr_combo
+
+        scan_btn = QPushButton("Scan")
+        scan_btn.setToolTip("Discover nearby BLE peripherals (~5s)")
+
+        def do_scan(_=False, combo=addr_combo, btn=scan_btn):
+            btn.setEnabled(False)
+            btn.setText("Scanning…")
+
+            async def _scan():
+                try:
+                    # Scanning discovers peripherals via the host BLE adapter --
+                    # it does not depend on which board is selected, so scan
+                    # directly via the BLE board's (static) scanner.
+                    from glider.hal.boards.ble_board import BLEBoard
+
+                    results = await BLEBoard.scan(timeout=8.0)
+                    combo.clear()
+                    if not results:
+                        combo.addItem("(no devices found)", None)
+                    for nm, addr in results:
+                        # Show the advertised name; fall back to the address for
+                        # unnamed peripherals so they stay distinguishable. The
+                        # address is kept as the item data (and tooltip) and is
+                        # what gets saved.
+                        label = nm if nm and nm != "(unknown)" else addr
+                        combo.addItem(label, addr)
+                        combo.setItemData(combo.count() - 1, addr, Qt.ItemDataRole.ToolTipRole)
+                except ImportError:
+                    QMessageBox.critical(dialog, "Scan failed", "bleak is not installed.")
+                except Exception as e:  # noqa: BLE001 - surfaced to user
+                    QMessageBox.critical(dialog, "Scan failed", str(e))
+                finally:
+                    btn.setEnabled(True)
+                    btn.setText("Scan")
+
+            self._run_async(_scan())
+
+        scan_btn.clicked.connect(do_scan)
+
+        addr_row = QHBoxLayout()
+        addr_row.addWidget(addr_combo)
+        addr_row.addWidget(scan_btn)
+        addr_container = QWidget()
+        addr_container.setLayout(addr_row)
+        layout.addRow("Address:", addr_container)
+
+    @staticmethod
+    def _read_ble_address(out: dict) -> str:
+        """Read the address chosen in a row built by _build_ble_address_row."""
+        addr = out["address"].currentData()
+        if not addr:
+            # Manually typed, or "addr (name)" picked without data.
+            raw = out["address"].currentText().strip()
+            addr = raw.split(" (")[0].strip() if raw else ""
+        return addr
+
     def _build_schema_widgets(self, layout, schema, out: dict) -> None:
         """Render a device SETTINGS_SCHEMA into a form layout.
 
@@ -433,6 +502,7 @@ class HardwarePanel(QWidget):
             "Serial / UART Device": ("GenericSerial", []),
             "BLE Device (write characteristic)": ("BLEWrite", []),
             "BLE Device (read / notify / write)": ("BLE", []),
+            "Maimu (BLE stimulator)": ("Maimu", []),
         }
 
         # Surface plugin-registered device types (anything in DEVICE_REGISTRY
@@ -496,70 +566,21 @@ class HardwarePanel(QWidget):
             is_ads1115 = device_type == "ADS1115"
             is_generic_i2c = device_type == "GenericI2C"
             is_ble = device_type == "BLEWrite"
+            is_maimu = device_type == "Maimu"
             is_stepper = device_type == "StepperA4988"
             is_hx711 = device_type == "HX711"
 
             # Plugin devices may declare a SETTINGS_SCHEMA for an auto-rendered form.
             device_class = DEVICE_REGISTRY.get(device_type)
             schema = getattr(device_class, "SETTINGS_SCHEMA", None) if device_class else None
-            is_schema = schema and not (is_ads1115 or is_generic_i2c or is_ble or is_stepper)
+            is_schema = schema and not (
+                is_ads1115 or is_generic_i2c or is_ble or is_maimu or is_stepper
+            )
 
             if is_schema:
                 self._build_schema_widgets(pin_layout, schema, schema_widgets)
             elif is_ble:
-                addr_combo = QComboBox()
-                addr_combo.setEditable(True)
-                addr_combo.setMinimumWidth(240)
-                addr_combo.lineEdit().setPlaceholderText("BLE address (or Scan)")
-                ble_settings["address"] = addr_combo
-
-                scan_btn = QPushButton("Scan")
-                scan_btn.setToolTip("Discover nearby BLE peripherals (~5s)")
-
-                def do_scan(_=False, combo=addr_combo, btn=scan_btn):
-                    btn.setEnabled(False)
-                    btn.setText("Scanning…")
-
-                    async def _scan():
-                        try:
-                            # Scanning discovers peripherals via the host BLE
-                            # adapter -- it does not depend on which board is
-                            # selected, so scan directly via the BLE board's
-                            # (static) scanner.
-                            from glider.hal.boards.ble_board import BLEBoard
-
-                            results = await BLEBoard.scan(timeout=8.0)
-                            combo.clear()
-                            if not results:
-                                combo.addItem("(no devices found)", None)
-                            for nm, addr in results:
-                                # Show the advertised name; fall back to the
-                                # address for unnamed peripherals so they stay
-                                # distinguishable. The address is kept as the
-                                # item data (and tooltip) and is what gets saved.
-                                label = nm if nm and nm != "(unknown)" else addr
-                                combo.addItem(label, addr)
-                                combo.setItemData(
-                                    combo.count() - 1, addr, Qt.ItemDataRole.ToolTipRole
-                                )
-                        except ImportError:
-                            QMessageBox.critical(dialog, "Scan failed", "bleak is not installed.")
-                        except Exception as e:  # noqa: BLE001 - surfaced to user
-                            QMessageBox.critical(dialog, "Scan failed", str(e))
-                        finally:
-                            btn.setEnabled(True)
-                            btn.setText("Scan")
-
-                    self._run_async(_scan())
-
-                scan_btn.clicked.connect(do_scan)
-
-                addr_row = QHBoxLayout()
-                addr_row.addWidget(addr_combo)
-                addr_row.addWidget(scan_btn)
-                addr_container = QWidget()
-                addr_container.setLayout(addr_row)
-                pin_layout.addRow("Address:", addr_container)
+                self._build_ble_address_row(pin_layout, ble_settings, dialog)
 
                 char_edit = QLineEdit()
                 char_edit.setPlaceholderText("writable characteristic UUID")
@@ -583,6 +604,43 @@ class HardwarePanel(QWidget):
                 note = QLabel(
                     "Send commands from the flow with a Device Action node: "
                     "action 'write', arg1 = 'on' / 'off' / '20,10'."
+                )
+                note.setProperty("textRole", "muted")
+                note.setWordWrap(True)
+                pin_layout.addRow(note)
+            elif is_maimu:
+                from glider.hal.devices.maimu import (
+                    DEFAULT_SERVICE_UUID,
+                    DEFAULT_WRITE_CHAR_UUID,
+                )
+
+                self._build_ble_address_row(pin_layout, ble_settings, dialog)
+
+                name_ble_edit = QLineEdit()
+                name_ble_edit.setPlaceholderText("advertised name (optional)")
+                name_ble_edit.setToolTip(
+                    "Set this instead of an address and the unit is found by name "
+                    "at connect time, so the same file opens on Windows and macOS."
+                )
+                ble_settings["name"] = name_ble_edit
+                pin_layout.addRow("Advertised name:", name_ble_edit)
+
+                # Pre-filled: the Maimu's GATT layout is known. Editable so a
+                # firmware revision that moves it needs a config change, not a
+                # code change.
+                char_edit = QLineEdit(DEFAULT_WRITE_CHAR_UUID)
+                char_edit.setToolTip("Advanced: the writable command characteristic.")
+                ble_settings["write_char_uuid"] = char_edit
+                pin_layout.addRow("Characteristic:", char_edit)
+
+                svc_edit = QLineEdit(DEFAULT_SERVICE_UUID)
+                svc_edit.setToolTip("Advanced: reference only.")
+                ble_settings["service_uuid"] = svc_edit
+                pin_layout.addRow("Service:", svc_edit)
+
+                note = QLabel(
+                    "Drive it from the flow with a Maimu node: pick On, Off or "
+                    "Pulse, and set the period and duration in its properties."
                 )
                 note.setProperty("textRole", "muted")
                 note.setWordWrap(True)
@@ -802,17 +860,17 @@ class HardwarePanel(QWidget):
                 if i2c_settings["read_word"].isChecked():
                     settings["read_word"] = True
             elif device_type == "BLEWrite" and ble_settings:
-                addr = ble_settings["address"].currentData()
-                if not addr:
-                    # Manually typed, or "addr (name)" picked without data.
-                    raw = ble_settings["address"].currentText().strip()
-                    addr = raw.split(" (")[0].strip() if raw else ""
-                settings["address"] = addr
+                settings["address"] = self._read_ble_address(ble_settings)
                 settings["char_uuid"] = ble_settings["char_uuid"].text().strip()
                 svc = ble_settings["service_uuid"].text().strip()
                 if svc:
                     settings["service_uuid"] = svc
                 settings["write_response"] = ble_settings["write_response"].isChecked()
+            elif device_type == "Maimu" and ble_settings:
+                settings["address"] = self._read_ble_address(ble_settings)
+                settings["name"] = ble_settings["name"].text().strip()
+                settings["write_char_uuid"] = ble_settings["write_char_uuid"].text().strip()
+                settings["service_uuid"] = ble_settings["service_uuid"].text().strip()
             elif device_type == "StepperA4988" and stepper_settings:
                 settings["steps_per_rev"] = stepper_settings["steps_per_rev"].value()
                 settings["steptype"] = stepper_settings["steptype"].currentText()
@@ -829,7 +887,7 @@ class HardwarePanel(QWidget):
 
             try:
                 self._hardware_manager.add_device_multi_pin(
-                    device_id, device_type, board_id, pins, name=name, **settings
+                    device_id, device_type, board_id, pins, name=name, settings=settings
                 )
 
                 board = self._hardware_manager.get_board(board_id)

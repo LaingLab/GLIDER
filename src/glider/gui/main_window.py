@@ -1822,7 +1822,7 @@ class MainWindow(QMainWindow):
                         device_config.board_id,
                         device_config.pins,
                         name=device_config.name,
-                        **settings,
+                        settings=settings,
                     )
                 else:
                     self._core.hardware_manager.add_device_multi_pin(
@@ -1831,7 +1831,7 @@ class MainWindow(QMainWindow):
                         device_config.board_id,
                         {},
                         name=device_config.name,
-                        **settings,
+                        settings=settings,
                     )
             except Exception as e:
                 logger.warning(f"Failed to add device {device_config.id}: {e}")

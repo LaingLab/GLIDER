@@ -634,7 +634,7 @@ class ExperimentSerializer:
                     board_id=device_config.board_id,
                     pin=device_config.pin,
                     name=device_config.name,
-                    **device_config.settings,
+                    settings=device_config.settings,
                 )
             else:
                 hardware_manager.add_device_multi_pin(
@@ -643,7 +643,7 @@ class ExperimentSerializer:
                     board_id=device_config.board_id,
                     pins=device_config.pins,
                     name=device_config.name,
-                    **device_config.settings,
+                    settings=device_config.settings,
                 )
 
     def _apply_flow_config(self, config: FlowConfigSchema, flow_engine: "FlowEngine") -> None:

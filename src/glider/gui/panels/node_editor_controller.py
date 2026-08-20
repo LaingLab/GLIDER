@@ -59,7 +59,7 @@ def node_category_for_type(node_type: str) -> str:
             "EndFunction",
         },
         "interface": {"Loop", "WaitForInput", "ZoneInput"},
-        "hardware": {"Output", "Input", "MotorGovernor"},
+        "hardware": {"Output", "Input", "MotorGovernor", "Maimu"},
     }
 
     for category, node_types in categories.items():
@@ -448,7 +448,14 @@ class NodeEditorController(QObject):
         self._add_divider(props_layout)
 
         # Add device selector for I/O nodes
-        if node_type in ["Output", "Input", "WaitForInput", "MotorGovernor", "DeviceAction"]:
+        if node_type in [
+            "Output",
+            "Input",
+            "WaitForInput",
+            "MotorGovernor",
+            "DeviceAction",
+            "Maimu",
+        ]:
             self._add_section_header(props_layout, "DEVICE")
             device_combo = QComboBox()
             device_combo.addItem("-- Select Device --", None)
@@ -508,6 +515,71 @@ class NodeEditorController(QObject):
                     "Args are split on commas and passed to the action (numbers "
                     "auto-detected). Used when no data inputs are wired — e.g. a "
                     "BLE 'write' with 'on' / 'off' / '20,10'."
+                )
+                note.setProperty("textRole", "muted")
+                note.setWordWrap(True)
+                props_layout.addRow(note)
+
+            if node_type == "Maimu":
+                from glider.nodes.hardware.maimu_nodes import (
+                    DEFAULT_DURATION_S,
+                    DEFAULT_PERIOD_MS,
+                    MODE_PULSE,
+                )
+
+                self._add_section_header(props_layout, "COMMAND")
+                saved_state = (node_config.state if node_config else None) or {}
+
+                mode_combo = QComboBox()
+                for label, value in (("On", "on"), ("Off", "off"), ("Pulse", MODE_PULSE)):
+                    mode_combo.addItem(label, value)
+                saved_mode = saved_state.get("mode", MODE_PULSE)
+                mode_index = mode_combo.findData(saved_mode)
+                mode_combo.setCurrentIndex(mode_index if mode_index >= 0 else 0)
+                props_layout.addRow("Mode:", mode_combo)
+
+                period_spin = QSpinBox()
+                period_spin.setRange(1, 3_600_000)
+                period_spin.setSuffix(" ms")
+                period_spin.setValue(int(saved_state.get("period_ms", DEFAULT_PERIOD_MS)))
+                period_spin.setToolTip(
+                    "On/off toggle period in milliseconds — a period, not a "
+                    "frequency. 500 ms toggles about once a second."
+                )
+                props_layout.addRow("Period:", period_spin)
+
+                duration_spin = QSpinBox()
+                duration_spin.setRange(1, 86_400)
+                duration_spin.setSuffix(" s")
+                duration_spin.setValue(int(saved_state.get("duration_s", DEFAULT_DURATION_S)))
+                duration_spin.setToolTip("How long the pulse train runs.")
+                props_layout.addRow("Duration:", duration_spin)
+
+                def _sync_pulse_fields(_=None, combo=mode_combo):
+                    # Period and duration only mean anything for a pulse; greying
+                    # them out beats leaving stale numbers looking active.
+                    is_pulse = combo.currentData() == MODE_PULSE
+                    period_spin.setEnabled(is_pulse)
+                    duration_spin.setEnabled(is_pulse)
+
+                _sync_pulse_fields()
+                mode_combo.currentIndexChanged.connect(_sync_pulse_fields)
+                mode_combo.currentIndexChanged.connect(
+                    lambda _idx, nid=node_id, combo=mode_combo: self._on_node_property_changed(
+                        nid, "mode", combo.currentData()
+                    )
+                )
+                period_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(nid, "period_ms", val)
+                )
+                duration_spin.valueChanged.connect(
+                    lambda val, nid=node_id: self._on_node_property_changed(nid, "duration_s", val)
+                )
+
+                note = QLabel(
+                    "Pulse returns as soon as the command is sent — the "
+                    "stimulator runs the pattern itself. Add a Delay node to "
+                    "hold the flow for the duration."
                 )
                 note.setProperty("textRole", "muted")
                 note.setWordWrap(True)

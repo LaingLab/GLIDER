@@ -8,7 +8,7 @@ connection/disconnection, device initialization, and error recovery.
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from glider.hal.base_board import BaseBoard, BoardConnectionState
 from glider.hal.base_device import BaseDevice, create_device_from_dict
@@ -462,6 +462,7 @@ class HardwareManager:
         pin: int,
         name: str | None = None,
         pin_name: str | None = None,
+        settings: dict[str, Any] | None = None,
         **kwargs,
     ) -> None:
         """
@@ -474,7 +475,8 @@ class HardwareManager:
             pin: Pin number
             name: Optional display name
             pin_name: Name for the pin (e.g., "output", "input", "signal")
-            **kwargs: Additional device settings
+            settings: Device settings as a dict — see add_device_multi_pin.
+            **kwargs: Additional device settings, merged over ``settings``.
         """
         board = self._boards.get(board_id)
         if board is None:
@@ -499,7 +501,7 @@ class HardwareManager:
             "board_id": board_id,
             "config": {
                 "pins": {pin_name: pin},
-                "settings": kwargs,
+                "settings": {**(settings or {}), **kwargs},
             },
         }
 
@@ -527,6 +529,7 @@ class HardwareManager:
         board_id: str,
         pins: dict[str, int],
         name: str | None = None,
+        settings: dict[str, Any] | None = None,
         **kwargs,
     ) -> None:
         """
@@ -538,11 +541,17 @@ class HardwareManager:
             board_id: ID of the board this device is on
             pins: Dictionary mapping pin names to pin numbers
             name: Optional display name
-            **kwargs: Additional device settings
+            settings: Device settings as a dict. Prefer this over ``**kwargs``:
+                a device whose settings include a key that collides with a
+                parameter here -- ``name``, which BLE devices use for the
+                advertised local name -- cannot be passed by splatting.
+            **kwargs: Additional device settings, merged over ``settings``.
         """
         board = self._boards.get(board_id)
         if board is None:
             raise BoardNotFoundError(f"Board not found: {board_id}")
+
+        device_settings = {**(settings or {}), **kwargs}
 
         # Create device data for factory
         device_data = {
@@ -552,7 +561,7 @@ class HardwareManager:
             "board_id": board_id,
             "config": {
                 "pins": pins,
-                "settings": kwargs,
+                "settings": device_settings,
             },
         }
 
@@ -574,8 +583,8 @@ class HardwareManager:
         if pins:
             detail = ", ".join(f"{k}={v}" for k, v in pins.items())
             logger.info(f"Added device: {device_id} (type: {device_type}, pins: {detail})")
-        elif kwargs:
-            detail = ", ".join(f"{k}={v}" for k, v in kwargs.items())
+        elif device_settings:
+            detail = ", ".join(f"{k}={v}" for k, v in device_settings.items())
             logger.info(f"Added device: {device_id} (type: {device_type}, {detail})")
         else:
             logger.info(f"Added device: {device_id} (type: {device_type})")

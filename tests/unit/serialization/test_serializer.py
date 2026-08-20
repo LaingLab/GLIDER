@@ -569,6 +569,49 @@ def test_binding_to_a_device_missing_from_the_file_is_survivable(
     assert node.device is None
 
 
+def test_device_with_a_name_setting_round_trips(
+    tmp_path: Path,
+    serializer: ExperimentSerializer,
+    hardware_manager_with_mock,
+    flow_engine_with_nodes,
+):
+    """A BLE device's advertised local name lives in a setting called `name`,
+    which collides with add_device_multi_pin's display-name parameter. Loading
+    used to splat the settings dict, so such a file raised TypeError on open."""
+    hardware_manager_with_mock.add_board(board_id="board1", driver_type="mock", port=None)
+    hardware_manager_with_mock.add_device_multi_pin(
+        device_id="stim1",
+        device_type="Maimu",
+        board_id="board1",
+        pins={},
+        name="Left stimulator",
+        settings={"name": "Maimu-01", "address": ""},
+    )
+
+    out = tmp_path / "maimu.glider"
+    serializer.save(
+        out,
+        session=ExperimentSession(),
+        flow_engine=flow_engine_with_nodes,
+        hardware_manager=hardware_manager_with_mock,
+    )
+
+    fresh_hm = HardwareManager()
+    HardwareManager.register_driver("mock", MockBoard)
+    schema = serializer.load(out)
+    serializer.apply_to_session(
+        schema,
+        session=ExperimentSession(),
+        flow_engine=_make_engine_with_all_nodes(),
+        hardware_manager=fresh_hm,
+    )
+
+    device = fresh_hm.devices.get("stim1")
+    assert device is not None, f"stim1 lost on round-trip: {list(fresh_hm.devices)}"
+    assert device.name == "Left stimulator"
+    assert device._config.settings["name"] == "Maimu-01"
+
+
 def test_single_pin_device_dict_stays_old_version_readable(
     tmp_path: Path,
     serializer: ExperimentSerializer,

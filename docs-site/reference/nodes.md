@@ -53,6 +53,7 @@ Properties panel.
 | **Device Action** | Executes a named action on a device (e.g. a Bluetooth `write`). |
 | **Device Read** | Reads a value from a device. |
 | **MotorGovernor** | Controls a motor governor — up, down, or stop. |
+| **Maimu** | Drives a Maimu BLE stimulator — On, Off, or a Pulse of a given period and duration. |
 
 ## Logic & math
 
