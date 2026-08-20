@@ -8,6 +8,7 @@ import threading
 import time
 from typing import Any
 
+from glider.core.timer_resolution import high_resolution_timers
 from glider.nodes.base_node import (
     ExecNode,
     NodeCategory,
@@ -54,9 +55,12 @@ class DelayNode(ExecNode):
        device polls) is too congested for sub-100ms wakeup accuracy.
        Field reports showed a 10-second delay returning in 10.01-10.27s
        (260 ms jitter). ``threading.Event.wait(timeout)`` is backed by
-       an OS condition variable (precision ~1 ms on macOS/Linux) and
-       runs on a thread that isn't competing with Qt for loop time, so
-       a 10s delay reliably returns within a few ms of 10s.
+       an OS condition variable and runs on a thread that isn't
+       competing with Qt for loop time, so a 10s delay reliably
+       returns close to 10s. The condition variable cannot resolve
+       finer than the system timer tick, which is ~1 ms on macOS and
+       Linux but ~15.6 ms on Windows by default, so the wait is taken
+       under :func:`~glider.core.timer_resolution.high_resolution_timers`.
 
     2. **Clean cancellation.** ``Event.set()`` returns control to the
        waiting thread immediately, which then unblocks the ``to_thread``
@@ -112,7 +116,12 @@ class DelayNode(ExecNode):
         # the event was set (cancellation), False on timeout (delay
         # completed normally). Either way we just unblock and fall
         # through — only fire Completed on the normal path.
-        cancelled = await asyncio.to_thread(self._stop_event.wait, duration)
+        # Hold a 1 ms system timer tick for the wait. Event.wait cannot
+        # resolve finer than the tick, and Windows' default is ~15.6 ms, so
+        # without this a delay overshoots by a median of 31 ms and up to 63 ms
+        # -- quantised to the tick, not scattered. A no-op off Windows.
+        with high_resolution_timers():
+            cancelled = await asyncio.to_thread(self._stop_event.wait, duration)
         if cancelled:
             return
 
