@@ -333,6 +333,9 @@ class MainWindow(QMainWindow):
         # Lazily created when the camera panel hands off a finished video
         # tracking run for review (analysis_requested signal).
         self._analysis_dock: QDockWidget | None = None
+        # Whether the dock was up when the operator view took the window, so
+        # coming back can restore it without reopening one the user closed.
+        self._analysis_dock_was_visible = False
         self._analysis_panel = None  # AnalysisPanel, imported + created lazily
 
         # The Plugins window, and the in-flight open that will produce it.
@@ -1914,8 +1917,11 @@ class MainWindow(QMainWindow):
         reflected on entry. Shared by the menu toggle and programmatic switch."""
         self._stack.setCurrentIndex(1)
         self._move_camera_to_operator_view()
-        # Nothing to hide: the Builder frame is the stack page that just went
-        # away, and everything the Builder shows is inside it (issue #39).
+        # Everything the Builder shows is inside the stack page that just went
+        # away -- except the Analysis dock, which is a dock on the window and so
+        # is painted over the operator view exactly as the Builder docks used to
+        # be (issue #39). It is the only one left, and it is the only one hidden.
+        self._hide_analysis_dock()
         if self._dash_hardware_panel:
             self._dash_hardware_panel.refresh_tree()
         self._heal_stale_paint()
@@ -1929,7 +1935,33 @@ class MainWindow(QMainWindow):
     def switch_to_builder(self) -> None:
         self._stack.setCurrentIndex(0)
         self._move_camera_to_builder()
+        self._restore_analysis_dock()
         self._heal_stale_paint()
+
+    def _hide_analysis_dock(self) -> None:
+        """Take the Analysis dock off the operator view, remembering it was up.
+
+        The Builder's panels are inside the stack page, so switching pages is
+        all it takes for them; a ``QDockWidget`` is a child of the *window* and
+        stays where it is over whatever the stack now shows.
+        """
+        dock = self._analysis_dock
+        if dock is None:
+            return
+        self._analysis_dock_was_visible = dock.isVisible()
+        dock.hide()
+
+    def _restore_analysis_dock(self) -> None:
+        """Put it back, but only if it was up when we left.
+
+        Hiding on the way out must not become showing on the way back: a dock
+        the operator closed is a decision, and reopening it on every view switch
+        would make it un-closable.
+        """
+        dock = self._analysis_dock
+        if dock is None or not self._analysis_dock_was_visible:
+            return
+        dock.show()
 
     def changeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         # Maximize/restore reflows the dock areas the same way a dock
@@ -1983,6 +2015,7 @@ class MainWindow(QMainWindow):
         self.showNormal()
 
         self._stack.setCurrentIndex(0)
+        self._restore_analysis_dock()
 
         if self._node_library_panel is None:
             self._populate_builder_panels()

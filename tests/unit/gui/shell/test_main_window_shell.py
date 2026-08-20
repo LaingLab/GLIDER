@@ -153,6 +153,71 @@ def test_no_builder_docks_are_created(qtbot, main_window_factory):
     assert window.findChildren(QDockWidget) == []
 
 
+def _open_analysis_dock(window, monkeypatch, tmp_path):
+    """Open the Analysis dock the way the app does, with a stub panel.
+
+    The real ``AnalysisPanel`` wants a finished recording on disk; what is
+    under test is the dock, so the panel is the part that is stood in for.
+    """
+    import glider.gui.panels.analysis as analysis_module
+
+    class _StubAnalysisPanel(QWidget):
+        def load_recording(self, _directory) -> bool:
+            return True
+
+    monkeypatch.setattr(analysis_module, "AnalysisPanel", _StubAnalysisPanel)
+    window._on_open_analysis_panel(str(tmp_path))
+    assert window._analysis_dock is not None
+    assert window._analysis_dock.isVisible()
+    return window._analysis_dock
+
+
+def test_the_analysis_dock_does_not_linger_over_the_operator_view(
+    qtbot, main_window_factory, monkeypatch, tmp_path
+):
+    """Analysis is the one dock that stayed, and it is still a dock -- so it is
+    still painted over the operator view, which is the whole of issue #39. The
+    guard above only passes because nothing in it ever opens one."""
+    window = _builder(main_window_factory)
+    dock = _open_analysis_dock(window, monkeypatch, tmp_path)
+
+    window.switch_to_runner()
+    assert not dock.isVisible()
+
+    window.switch_to_builder()
+    assert dock.isVisible()
+
+
+def test_switch_to_desktop_mode_brings_the_analysis_dock_back_too(
+    qtbot, main_window_factory, monkeypatch, tmp_path
+):
+    """The dashboard's own "switch to desktop" button bypasses
+    switch_to_builder, exactly as it does for the camera."""
+    window = _builder(main_window_factory)
+    dock = _open_analysis_dock(window, monkeypatch, tmp_path)
+
+    window._toggle_view()
+    assert not dock.isVisible()
+
+    window._switch_to_desktop_mode()
+    assert dock.isVisible()
+
+
+def test_an_analysis_dock_the_user_closed_stays_closed(
+    qtbot, main_window_factory, monkeypatch, tmp_path
+):
+    """Hiding it on the way out must not turn into showing it on the way back."""
+    window = _builder(main_window_factory)
+    dock = _open_analysis_dock(window, monkeypatch, tmp_path)
+    dock.close()
+    assert not dock.isVisible()
+
+    window.switch_to_runner()
+    window.switch_to_builder()
+
+    assert not dock.isVisible()
+
+
 def test_nothing_lingers_over_the_operator_view(qtbot, main_window_factory):
     """The regression issue #39 named, now guarded by structure not a helper."""
     window = _builder(main_window_factory)
