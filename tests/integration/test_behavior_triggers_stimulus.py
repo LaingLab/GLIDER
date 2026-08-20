@@ -1,4 +1,4 @@
-"""Closed loop: the animal freezes, the Maimu stimulates.
+"""Closed loop: the animal behaves, the stimulator fires.
 
 This is the whole point of live behavior classification in GLIDER -- a stimulus
 delivered because of what the animal is doing, not because a timer expired. The
@@ -11,6 +11,11 @@ once and asserts on the bytes that reach the peripheral:
 Nothing here is stubbed except the two ends that are genuinely external: the
 classifier (a plain label per frame, which is exactly what
 ``LiveBehaviorClassifier.classify_frame`` yields) and bleak.
+
+Freezing is the worked example, not a special case: the node compares the
+emitted label against a configured one, so any behavior the model was trained
+to recognise -- darting included -- drives hardware the same way. The tests at
+the bottom hold that open.
 """
 
 from __future__ import annotations
@@ -58,8 +63,10 @@ def fake_bleak(monkeypatch):
     created = {}
 
     def make_client(address, *a, **k):
-        created["client"] = _FakeClient(address)
-        return created["client"]
+        client = _FakeClient(address)
+        created["client"] = client  # the most recent, for single-device rigs
+        created.setdefault("by_address", {})[address] = client
+        return client
 
     module = MagicMock(name="bleak")
     module.BleakClient = make_client
@@ -77,7 +84,7 @@ async def _wait_for(predicate, timeout=2.0):
     return True
 
 
-async def _rig(fake_bleak):
+async def _rig(fake_bleak, behavior: str = FREEZING):
     """Build the whole chain and return (bus, engine, fake client)."""
     HardwareManager.register_driver("mock", MockBoard)
     hardware = HardwareManager()
@@ -99,7 +106,7 @@ async def _rig(fake_bleak):
     register_hardware_nodes(engine)
 
     watcher = engine.create_node(node_id="watch", node_type="BehaviorInput", position=(0.0, 0.0))
-    watcher.target_behavior = FREEZING
+    watcher.target_behavior = behavior
     watcher.min_frames = MIN_FRAMES
 
     stim = engine.create_node(
@@ -216,5 +223,106 @@ async def test_the_warmup_label_does_not_stimulate(fake_bleak):
 
         await asyncio.sleep(0.1)
         assert client.written == []
+    finally:
+        await engine.stop()
+
+
+# --- the node is behavior-agnostic -------------------------------------------
+
+
+@pytest.mark.parametrize("behavior", ["darting", "grooming", "rearing", "head dips"])
+async def test_any_behavior_in_the_model_can_trigger(fake_bleak, behavior):
+    """Nothing about this is freezing-specific. The node compares the label the
+    classifier emitted against the one it was configured with, so whatever the
+    model was trained to recognise can drive hardware -- darting included."""
+    bus, engine, client = await _rig(fake_bleak, behavior=behavior)
+    try:
+        for i in range(MIN_FRAMES):
+            bus.publish_behavior(_frame(behavior, i))
+
+        assert await _wait_for(lambda: client.written), f"{behavior!r} never triggered"
+        assert client.written == [b"500,10"]
+    finally:
+        await engine.stop()
+
+
+async def test_a_watcher_ignores_every_other_behavior(fake_bleak):
+    """Selectivity is the other half of that: a darting watcher must not fire on
+    a sustained freeze."""
+    bus, engine, client = await _rig(fake_bleak, behavior="darting")
+    try:
+        for i in range(MIN_FRAMES * 3):
+            bus.publish_behavior(_frame(FREEZING, i))
+
+        await asyncio.sleep(0.1)
+        assert client.written == []
+    finally:
+        await engine.stop()
+
+
+async def test_two_behaviors_drive_two_different_stimuli(fake_bleak):
+    """The real shape of an experiment: several behaviors watched at once, each
+    wired to its own hardware, on one shared bus."""
+    HardwareManager.register_driver("mock", MockBoard)
+    hardware = HardwareManager()
+    hardware._boards["b1"] = MockBoard()
+    for dev_id, address in (("dart_stim", "AA:01"), ("freeze_stim", "AA:02")):
+        hardware.add_device_multi_pin(
+            dev_id, "Maimu", "b1", pins={}, name=dev_id, settings={"address": address}
+        )
+        await hardware.initialize_device(dev_id)
+
+    bus = LiveSignalBus()
+    engine = FlowEngine(hardware)
+    engine.set_live_signals(bus)
+    register_behavior_nodes(engine)
+    register_hardware_nodes(engine)
+
+    watchers = {}
+    for behavior, dev_id, period in (("darting", "dart_stim", 100), (FREEZING, "freeze_stim", 500)):
+        watcher = engine.create_node(
+            node_id=f"watch_{behavior}", node_type="BehaviorInput", position=(0.0, 0.0)
+        )
+        watcher.target_behavior = behavior
+        watcher.min_frames = MIN_FRAMES
+        watchers[behavior] = watcher
+
+        stim = engine.create_node(
+            node_id=f"stim_{behavior}", node_type="Maimu", position=(1.0, 0.0), device_id=dev_id
+        )
+        stim.mode = "pulse"
+        stim.period_ms = period
+        stim.duration_s = DURATION_S
+
+        engine.create_connection(
+            connection_id=f"c_{behavior}",
+            from_node_id=f"watch_{behavior}",
+            from_output=2,
+            to_node_id=f"stim_{behavior}",
+            to_input=0,
+            connection_type="exec",
+        )
+
+    await engine.start()
+    assert await _wait_for(lambda: all(w._subscribed for w in watchers.values()))
+
+    try:
+        darting = fake_bleak["by_address"]["AA:01"]
+        freezing = fake_bleak["by_address"]["AA:02"]
+
+        for i in range(MIN_FRAMES):
+            bus.publish_behavior(_frame("darting", i))
+        assert await _wait_for(lambda: darting.written)
+
+        # Only the darting stimulator fired, and with its own parameters.
+        assert darting.written == [b"100,10"]
+        assert freezing.written == []
+
+        for i in range(MIN_FRAMES):
+            bus.publish_behavior(_frame(FREEZING, 10 + i))
+        assert await _wait_for(lambda: freezing.written)
+
+        assert freezing.written == [b"500,10"]
+        assert darting.written == [b"100,10"], "the darting stimulus repeated"
     finally:
         await engine.stop()
