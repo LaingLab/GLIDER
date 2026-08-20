@@ -528,6 +528,11 @@ class ExperimentSession:
         self._file_path: str | None = None
 
         self._manual_controls: list[dict[str, Any]] = []  # runner manual-control buttons
+        # CV/vision settings, carried opaquely as a plain dict so this module
+        # never imports cv2. GliderCore owns the CVSettings <-> dict
+        # conversion on both ends. Empty means the file said nothing about
+        # vision -- which is every file written before this block existed.
+        self._vision: dict[str, Any] = {}
 
         # Callbacks for state changes
         self._state_callbacks: list[Callable[[SessionState], None]] = []
@@ -776,6 +781,16 @@ class ExperimentSession:
         self._manual_controls = list(entries)
         self.mark_dirty()
 
+    @property
+    def vision(self) -> dict[str, Any]:
+        """CV settings as an opaque dict (``CVSettings.to_dict()`` shape)."""
+        return self._vision
+
+    def set_vision(self, settings: dict[str, Any] | None) -> None:
+        """Replace the vision settings block and mark the session dirty."""
+        self._vision = dict(settings or {})
+        self.mark_dirty()
+
     # Serialization
     def to_dict(self) -> dict[str, Any]:
         """Serialize session to dictionary."""
@@ -789,6 +804,10 @@ class ExperimentSession:
         }
         if self._manual_controls:
             result["manual_controls"] = self._manual_controls
+        # Omitted when empty so a session that never configured CV writes the
+        # same file it always did.
+        if self._vision:
+            result["vision"] = self._vision
         return result
 
     @classmethod
@@ -802,6 +821,7 @@ class ExperimentSession:
         session._camera = CameraConfig.from_dict(data.get("camera", {}))
         session._zones = ZoneConfig.from_dict(data.get("zones", {}))
         session._manual_controls = data.get("manual_controls", [])
+        session._vision = data.get("vision", {}) or {}
         return session
 
     def to_json(self, indent: int = 2) -> str:
@@ -865,6 +885,7 @@ class ExperimentSession:
         self._camera = CameraConfig()
         self._zones = ZoneConfig()
         self._manual_controls = []
+        self._vision = {}
         self._state = SessionState.IDLE
         self._file_path = None
         self._mark_dirty()

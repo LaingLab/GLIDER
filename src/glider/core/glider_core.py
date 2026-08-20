@@ -7,6 +7,7 @@ and flow execution.
 """
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -15,7 +16,12 @@ from typing import TYPE_CHECKING, Any
 
 from glider.core.data_recorder import DataRecorder
 from glider.core.event_logger import DeviceEventLogger
-from glider.core.experiment_session import ExperimentSession, SessionState
+from glider.core.experiment_session import (
+    ConnectionConfig,
+    ExperimentSession,
+    NodeConfig,
+    SessionState,
+)
 from glider.core.flow_engine import FlowEngine
 from glider.core.hardware_manager import HardwareManager
 from glider.vision.audio_recorder import AudioRecorder, mux_audio_video
@@ -589,10 +595,61 @@ class GliderCore:
         # Clear the flow engine to reset state
         self._flow_engine.clear()
 
-        self._session = ExperimentSession.load(file_path)
+        self._session = self._read_session_file(file_path)
         self._session.on_state_change(self._notify_state_change)
+        self._apply_vision_settings(self._session.vision, file_path)
         self._notify_session_change()
         return self._session
+
+    def _read_session_file(self, file_path: str | Path) -> ExperimentSession:
+        """Read a ``.glider`` file in either historical format.
+
+        The session format is the one the app writes, and the one every file in
+        ``examples/`` uses. Files written by the old ``save_experiment`` used
+        the ExperimentSerializer schema instead, and the two are not mutually
+        readable -- so those are detected and routed through the serializer.
+        Saving such a file afterwards rewrites it in the session format.
+        """
+        from glider.serialization import is_schema_format
+
+        with open(file_path) as f:
+            data = json.load(f)
+        if not is_schema_format(data):
+            return ExperimentSession.load(str(file_path))
+
+        logger.info("%s is in the legacy serializer format; converting on load", file_path)
+        from glider.serialization import ExperimentSerializer
+
+        serializer = ExperimentSerializer()
+        schema = serializer.load(Path(file_path))
+        session = ExperimentSession()
+        # No managers passed: this fills the session model only, so the caller
+        # populates hardware and flow identically for both formats.
+        serializer.apply_to_session(schema, session)
+        if schema.vision.settings:
+            session.set_vision(dict(schema.vision.settings))
+        # Adopt the path so File > Save rewrites it in the current format
+        # rather than forcing a Save As.
+        session._file_path = str(file_path)
+        return session
+
+    def _apply_vision_settings(self, settings: dict[str, Any], source: str | Path) -> None:
+        """Push a file's vision block onto the CV processor.
+
+        Absent for every file written before the block existed -- leave the
+        processor's current settings alone rather than stomping them with
+        defaults, so opening an older experiment does not silently discard the
+        operator's model choice.
+        """
+        if not settings:
+            return
+        try:
+            self._cv_processor.update_settings(CVSettings.from_dict(settings))
+        except Exception:
+            logger.exception(
+                "Could not apply vision settings from %s; keeping current CV configuration",
+                source,
+            )
 
     async def load_experiment(self, file_path: Path) -> None:
         """
@@ -601,39 +658,16 @@ class GliderCore:
         Args:
             file_path: Path to the .glider experiment file
         """
-        from glider.serialization import ExperimentSerializer
+        self.load_session(str(file_path))
 
-        serializer = ExperimentSerializer()
-        schema = serializer.load(file_path)
+        # Opening a file replaces the experiment, so start from a clean
+        # manager: without this, opening a second file stacks its boards and
+        # devices on top of the first one's.
+        self._hardware_manager.clear()
+        await self._create_hardware_from_session()
+        self.setup_flow()
 
-        # Create new session if needed
-        if self._session is None:
-            self._session = ExperimentSession()
-            self._session.on_state_change(self._notify_state_change)
-
-        # Apply schema to session
-        serializer.apply_to_session(
-            schema,
-            self._session,
-            self._flow_engine,
-            self._hardware_manager,
-        )
-
-        # Apply the vision block. The serializer carries it opaquely (it must
-        # not import cv2), so the conversion back to CVSettings lives here.
-        # Absent for files written before schema 1.1.0 — leave the processor's
-        # current settings alone rather than stomping them with defaults.
-        if schema.vision.settings:
-            try:
-                self._cv_processor.update_settings(CVSettings.from_dict(schema.vision.settings))
-            except Exception:
-                logger.exception(
-                    "Could not apply vision settings from %s; keeping current CV configuration",
-                    file_path,
-                )
-
-        self._notify_session_change()
-        logger.info(f"Loaded experiment: {schema.metadata.name}")
+        logger.info(f"Loaded experiment: {self._session.name}")
 
     async def save_experiment(self, file_path: Path) -> None:
         """
@@ -645,17 +679,62 @@ class GliderCore:
         if self._session is None:
             raise RuntimeError("No session to save")
 
-        from glider.serialization import ExperimentSerializer
-
-        serializer = ExperimentSerializer()
-        serializer.save(
-            file_path,
-            self._session,
-            self._flow_engine,
-            self._hardware_manager,
-            vision_settings=self._cv_processor.settings.to_dict(),
-        )
+        self._adopt_flow_engine_graph()
+        self.save_session(str(file_path))
         logger.info(f"Saved experiment to {file_path}")
+
+    def _adopt_flow_engine_graph(self) -> None:
+        """Copy flow-engine nodes and connections the session model lacks.
+
+        ``save_experiment`` used to serialize the *flow engine*, while the file
+        format serializes the session model. The graph editor keeps both in
+        step, so the GUI is unaffected -- but code that builds a graph directly
+        on the engine (scripts, and the golden-path test) would otherwise save
+        an empty flow.
+
+        Additive only. A session freshly loaded from a file has its nodes in
+        the model and nothing in the engine until ``setup_flow`` runs, so
+        replacing rather than merging here could empty a saved experiment.
+        """
+        engine = self._flow_engine
+        type_names = {engine.get_node_class(name): name for name in engine.get_available_nodes()}
+        device_keys = {id(d): dev_id for dev_id, d in self._hardware_manager.devices.items()}
+
+        known_nodes = {node.id for node in self._session.flow.nodes}
+        for node_id, node in engine.nodes.items():
+            if node_id in known_nodes:
+                continue
+            position = getattr(node, "gui_position", None)
+            if isinstance(position, dict):
+                position = (float(position.get("x", 0.0)), float(position.get("y", 0.0)))
+            elif not isinstance(position, tuple):
+                position = (0.0, 0.0)
+            device = getattr(node, "device", None)
+            self._session.add_node(
+                NodeConfig(
+                    id=node_id,
+                    node_type=type_names.get(type(node), type(node).__name__),
+                    position=position,
+                    state=node.get_state() if hasattr(node, "get_state") else {},
+                    device_id=device_keys.get(id(device)) if device is not None else None,
+                    visible_in_runner=bool(getattr(node, "_visible_in_runner", False)),
+                )
+            )
+
+        known_connections = {conn.id for conn in self._session.flow.connections}
+        for conn in engine.get_connections():
+            if conn["id"] in known_connections:
+                continue
+            self._session.add_connection(
+                ConnectionConfig(
+                    id=conn["id"],
+                    from_node=conn["from_node"],
+                    from_output=conn["from_output"],
+                    to_node=conn["to_node"],
+                    to_input=conn["to_input"],
+                    connection_type=conn.get("type", "data"),
+                )
+            )
 
     def _on_device_settings_changed(self, device_id: str, device) -> None:
         """Adopt a device's runtime settings mutation into the session."""
@@ -686,6 +765,12 @@ class GliderCore:
             if session_config is not None and session_config.settings != device.config.settings:
                 self._session.update_device(device_id, settings=dict(device.config.settings))
 
+        # Persist the operator's CV *configuration*. settings (not
+        # active_backend) is deliberate: a processor that degraded at runtime
+        # because the weights were missing must not write that degradation back
+        # as the choice.
+        self._session.set_vision(self._cv_processor.settings.to_dict())
+
         return self._session.save(file_path)
 
     async def setup_hardware(self) -> bool:
@@ -701,28 +786,34 @@ class GliderCore:
             raise RuntimeError("No session loaded")
 
         self._session.state = SessionState.INITIALIZING
-        success = True
 
         try:
-            # Create boards
-            for board_config in self._session.hardware.boards:
-                try:
-                    await self._hardware_manager.create_board(board_config)
-                except Exception as e:
-                    logger.error(f"Failed to create board {board_config.id}: {e}")
-                    success = False
-
-            # Create devices
-            for device_config in self._session.hardware.devices:
-                try:
-                    await self._hardware_manager.create_device(device_config)
-                except Exception as e:
-                    logger.error(f"Failed to create device {device_config.id}: {e}")
-                    success = False
-
+            return await self._create_hardware_from_session()
         except Exception as e:
             logger.error(f"Error setting up hardware: {e}")
-            success = False
+            return False
+
+    async def _create_hardware_from_session(self) -> bool:
+        """Instantiate the session's boards and devices. Opens no connections.
+
+        Shared by ``setup_hardware`` and the file-open path, and deliberately
+        free of any session-state change: opening a file must not leave the
+        session in INITIALIZING, which would then refuse to start.
+        """
+        success = True
+        for board_config in self._session.hardware.boards:
+            try:
+                await self._hardware_manager.create_board(board_config)
+            except Exception as e:
+                logger.error(f"Failed to create board {board_config.id}: {e}")
+                success = False
+
+        for device_config in self._session.hardware.devices:
+            try:
+                await self._hardware_manager.create_device(device_config)
+            except Exception as e:
+                logger.error(f"Failed to create device {device_config.id}: {e}")
+                success = False
 
         return success
 
