@@ -39,6 +39,7 @@ class NodeType(Enum):
     PWM_WRITE = "PWMWrite"
     DEVICE_ACTION = "DeviceAction"
     DEVICE_READ = "DeviceRead"
+    MAIMU = "Maimu"
 
     # Logic nodes - Math
     ADD = "Add"
