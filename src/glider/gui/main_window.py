@@ -2160,22 +2160,16 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Failed to open file: {e}")
 
     def _populate_hardware_from_session(self) -> None:
-        """Populate hardware manager from session configuration."""
+        """Rebuild the hardware manager from the open session.
+
+        Delegates to the core rather than carrying a second implementation:
+        this used to guess the driver from the board id, which turned every
+        non-Arduino board into a Raspberry Pi one.
+        """
         if not self._core.session:
             return
 
-        self._core.hardware_manager.clear()
-
-        for board_config in self._core.session.hardware.boards:
-            try:
-                board_type = "telemetrix" if board_config.driver_type == "arduino" else "pigpio"
-                self._core.hardware_manager.add_board(
-                    board_config.id,
-                    board_type,
-                    port=board_config.port,
-                )
-            except Exception as e:
-                logger.warning(f"Failed to add board {board_config.id}: {e}")
+        self._core.populate_hardware_from_session()
 
         for device_config in self._core.session.hardware.devices:
             try:

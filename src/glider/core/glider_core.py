@@ -682,8 +682,7 @@ class GliderCore:
         # Opening a file replaces the experiment, so start from a clean
         # manager: without this, opening a second file stacks its boards and
         # devices on top of the first one's.
-        self._hardware_manager.clear()
-        await self._create_hardware_from_session()
+        self.populate_hardware_from_session()
         self.setup_flow()
 
         logger.info(f"Loaded experiment: {self._session.name}")
@@ -813,23 +812,49 @@ class GliderCore:
             return False
 
     async def _create_hardware_from_session(self) -> bool:
+        """Async spelling of :meth:`populate_hardware_from_session`."""
+        return self.populate_hardware_from_session(clear_first=False)
+
+    def populate_hardware_from_session(self, clear_first: bool = True) -> bool:
         """Instantiate the session's boards and devices. Opens no connections.
 
-        Shared by ``setup_hardware`` and the file-open path, and deliberately
-        free of any session-state change: opening a file must not leave the
-        session in INITIALIZING, which would then refuse to start.
+        The single implementation behind ``setup_hardware`` and File > Open.
+        The GUI previously carried its own copy that guessed the driver as
+        ``"telemetrix" if driver_type == "arduino" else "pigpio"``, so every
+        board that was neither Arduino nor Pi -- a Bluetooth adapter, a serial
+        board -- came back as PiGPIO and the devices on it could not
+        initialise. It also had no way to set ``board_type`` or
+        ``auto_reconnect``, both of which the shipped examples carry.
+
+        Deliberately free of any session-state change: opening a file must not
+        leave the session in INITIALIZING, which would then refuse to start.
+
+        Args:
+            clear_first: Drop existing hardware first, so opening a second file
+                replaces the first one's boards rather than stacking onto them.
+                False when adding to hardware that is already set up.
+
+        Returns:
+            False if any board or device failed; the rest are still created, so
+            one unknown driver cannot stop a file from opening.
         """
+        if self._session is None:
+            raise RuntimeError("No session loaded")
+
+        if clear_first:
+            self._hardware_manager.clear()
+
         success = True
         for board_config in self._session.hardware.boards:
             try:
-                await self._hardware_manager.create_board(board_config)
+                self._hardware_manager.build_board(board_config)
             except Exception as e:
                 logger.error(f"Failed to create board {board_config.id}: {e}")
                 success = False
 
         for device_config in self._session.hardware.devices:
             try:
-                await self._hardware_manager.create_device(device_config)
+                self._hardware_manager.build_device(device_config)
             except Exception as e:
                 logger.error(f"Failed to create device {device_config.id}: {e}")
                 success = False
