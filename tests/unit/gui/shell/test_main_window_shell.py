@@ -21,6 +21,7 @@ import pytest
 from PyQt6.QtWidgets import QDockWidget, QWidget
 
 from glider.gui.shell import AppShell, SidePanel
+from glider.gui.styles import colors
 from glider.hal.base_board import BoardConnectionState
 
 pytestmark = pytest.mark.usefixtures("qtbot")
@@ -577,6 +578,98 @@ def test_a_board_dropping_reaches_the_strip(qtbot, main_window_factory):
     board.state = BoardConnectionState.RECONNECTING
     window._on_hardware_connection_change("a", BoardConnectionState.RECONNECTING)
     assert window._builder_view.strip.device_dots()[0].property("state") == "warn"
+
+
+# ---------------------------------------------------- the two hardware readouts
+#
+# The strip and the status bar describe the same rig. They are allowed to say
+# different amounts; they are not allowed to disagree. The status bar preferred
+# any connected board and stopped looking, so an Uno up and a Pi in ERROR read
+# "Arduino Uno - Connected" at the bottom while the strip showed a red dot.
+
+
+def _conn_text(window) -> str:
+    return window._conn_label.text()
+
+
+def _conn_is_green(window) -> bool:
+    return colors.SUCCESS in window._conn_dot.styleSheet()
+
+
+def test_the_status_bar_will_not_call_the_rig_healthy_while_a_board_is_down(
+    qtbot, main_window_factory
+):
+    window = _builder(main_window_factory)
+    boards = window._core.hardware_manager._boards
+    boards["uno_1"] = _FakeBoard("Arduino Uno", BoardConnectionState.CONNECTED)
+    boards["pi_1"] = _FakeBoard("Raspberry Pi", BoardConnectionState.ERROR)
+
+    window._update_connection_status()
+
+    assert not _conn_is_green(window)
+    assert colors.ERROR in window._conn_dot.styleSheet()
+    assert "pi_1" in _conn_text(window)  # and it names the one to go and look at
+
+
+def test_the_status_bar_agrees_with_the_strip_about_a_healthy_rig(qtbot, main_window_factory):
+    window = _builder(main_window_factory)
+    window._core.hardware_manager._boards["uno_1"] = _FakeBoard(
+        "Arduino Uno", BoardConnectionState.CONNECTED
+    )
+
+    window._update_connection_status()
+
+    assert _conn_is_green(window)
+    assert "uno_1" in _conn_text(window)
+    assert "Connected" in _conn_text(window)
+
+
+def test_the_status_bar_counts_a_rig_of_more_than_one(qtbot, main_window_factory):
+    window = _builder(main_window_factory)
+    boards = window._core.hardware_manager._boards
+    boards["uno_1"] = _FakeBoard("Arduino Uno", BoardConnectionState.CONNECTED)
+    boards["uno_2"] = _FakeBoard("Arduino Uno", BoardConnectionState.CONNECTED)
+
+    window._update_connection_status()
+
+    assert _conn_is_green(window)
+    assert "2" in _conn_text(window)
+
+
+def test_a_board_still_shaking_hands_is_not_down_and_is_not_up(qtbot, main_window_factory):
+    window = _builder(main_window_factory)
+    window._core.hardware_manager._boards["uno_1"] = _FakeBoard(
+        "Arduino Uno", BoardConnectionState.RECONNECTING
+    )
+
+    window._update_connection_status()
+
+    assert not _conn_is_green(window)
+    assert colors.WARNING in window._conn_dot.styleSheet()
+    assert "Reconnecting" in _conn_text(window)
+
+
+def test_an_empty_rig_still_says_so(qtbot, main_window_factory):
+    window = _builder(main_window_factory)
+    window._update_connection_status()
+    assert _conn_text(window) == "No board"
+
+
+def test_both_readouts_follow_the_roster_together(qtbot, main_window_factory):
+    """Wiring one and not the other is how they came to disagree."""
+    window = _builder(main_window_factory)
+    window._core.hardware_manager._boards["uno_1"] = _FakeBoard(
+        "Arduino Uno", BoardConnectionState.CONNECTED
+    )
+    window._hardware_panel.refresh_tree()
+    assert _conn_is_green(window)
+    assert window._builder_view.strip.device_names() == ["uno_1"]
+
+    window._core.session._dirty = False
+    window._on_new()
+
+    assert _conn_text(window) == "No board"
+    assert window._builder_view.strip.device_names() == []
 
 
 # ------------------------------------------------------------- the board roster

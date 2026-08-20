@@ -139,6 +139,22 @@ def _board_detail(board: object, state: object) -> str:
     return f"{type_name}, {text}" if type_name else text
 
 
+def _rig_summary(subset: list[tuple[str, object]], total: int, word: str) -> str:
+    """One line for *subset* of a rig of *total* boards.
+
+    A single board is named -- an operator who has to act needs to know which
+    one, and one line has room for it. More than one is counted instead, out of
+    the total, because "3 of 4 boards down" is the fact that matters and a list
+    of ids would not fit the status bar anyway.
+    """
+    if len(subset) == 1:
+        board_id, state = subset[0]
+        return f"{board_id} — {_board_state_text(state).title()}"
+    if len(subset) == total:
+        return f"{total} boards — {word.title()}"
+    return f"{len(subset)} of {total} boards {word}"
+
+
 # How a session state is shown on the run-state pill: ``(pill, detail)``.
 #
 # The pill has four words and the session has seven states, so three of them
@@ -857,13 +873,13 @@ class MainWindow(QMainWindow):
         # The Builder's HardwarePanel is a distinct instance from the
         # dashboard's _dash_hardware_panel; its hardware_changed fans out only
         # to the Builder's own _device_control_panel -- and to the strip, which
-        # is the roster half of what the dots show. ``hardware_connection_change``
-        # reports a board *changing state*, which is not a board being registered
-        # or dropped from the manager; without this wire a board added or removed
-        # in this panel would not appear on (or leave) the strip until something
-        # else happened to that board.
+        # is the roster half of what the two hardware readouts show.
+        # ``hardware_connection_change`` reports a board *changing state*, which
+        # is not a board being registered or dropped from the manager; without
+        # this wire a board added or removed in this panel would not appear on
+        # (or leave) the strip until something else happened to that board.
         self._hardware_panel.hardware_changed.connect(self._device_control_panel.refresh_devices)
-        self._hardware_panel.hardware_changed.connect(self._refresh_strip_devices)
+        self._hardware_panel.hardware_changed.connect(self._refresh_hardware_readouts)
 
         # Wire flow_functions_changed from node editor to node library
         self._node_editor.flow_functions_changed.connect(
@@ -1619,9 +1635,9 @@ class MainWindow(QMainWindow):
         # A new or newly-opened session is a *new rig*: both paths call
         # ``hardware_manager.clear()``, and File -> Open then registers the
         # boards the file names. Nothing about that is a board changing state,
-        # so without this the strip would keep rendering the previous
+        # so without this the readouts would keep describing the previous
         # experiment's boards -- green -- over an empty manager.
-        self.session_changed.connect(self._refresh_strip_devices)
+        self.session_changed.connect(self._refresh_hardware_readouts)
         # Dashboard-only panels (desktop mode).
         if self._run_control_panel is not None:
             self.session_changed.connect(lambda: self._run_control_panel.update_experiment_name())
@@ -1726,16 +1742,15 @@ class MainWindow(QMainWindow):
         """Handle hardware connection state changes.
 
         Two jobs:
-          1. Refresh the status-bar connection indicator (every transition —
-             CONNECTING, CONNECTED, DISCONNECTED, ERROR, RECONNECTING). This
-             must run unconditionally; previously it was gated behind the
-             disconnect path and the dot never turned green on connect.
+          1. Refresh both hardware readouts (every transition — CONNECTING,
+             CONNECTED, DISCONNECTED, ERROR, RECONNECTING). This must run
+             unconditionally; previously it was gated behind the disconnect
+             path and the dot never turned green on connect.
           2. If the board dropped *during* a running experiment, pause and
              surface the hardware-disconnection dialog.
         """
-        # (1) Always refresh the indicator — this is the only wire-up point.
-        self._update_connection_status()
-        self._refresh_strip_devices()
+        # (1) Always refresh the readouts.
+        self._refresh_hardware_readouts()
 
         # (2) Pause-on-drop guard only applies to terminal-failure states
         # reached while an experiment is actually running.
@@ -1755,6 +1770,19 @@ class MainWindow(QMainWindow):
         self._run_async(self._core.pause())
         self._show_hardware_disconnection_dialog(board_id, state)
 
+    def _refresh_hardware_readouts(self) -> None:
+        """Both readouts of the same rig, refreshed together.
+
+        The strip's dots and the status bar's line describe one thing, and they
+        are allowed to say different *amounts* about it -- they are not allowed
+        to disagree. Refreshing them from one call is what makes that
+        structural: wiring one of them to an event and forgetting the other is
+        exactly how the bottom line came to read "Arduino Uno \u2014 Connected"
+        beside a red dot.
+        """
+        self._update_connection_status()
+        self._refresh_strip_devices()
+
     def _update_connection_status(self) -> None:
         """Update the status bar connection indicator.
 
@@ -1762,42 +1790,48 @@ class MainWindow(QMainWindow):
         CONNECTING case). The old check probed ``_connected`` / ``connected``
         attributes that don't exist on any BaseBoard subclass, so even when
         this method *was* reached, it always reported "No board".
+
+        **It reports the worst board, not the first healthy one.** The old
+        version preferred any connected board and stopped looking, so an Uno up
+        and a Pi in ERROR read "Arduino Uno \u2014 Connected" while the strip showed
+        a red dot for the Pi. One line cannot describe a mixed rig in full, but
+        it must not describe it as healthy: down beats mid-handshake beats up,
+        and the boards are named by id, which is what the strip, the logs and
+        the disconnection dialog all use.
         """
         if self._conn_dot is None or self._conn_label is None:
             return
 
         boards = self._core.hardware_manager.boards
         if not boards:
-            self._conn_dot.setStyleSheet(f"color: {colors.ERROR}; font-size: 16px;")
-            self._conn_label.setText("No board")
+            self._set_connection_readout(colors.ERROR, "No board")
             return
 
-        # Prefer a connected board; fall back to CONNECTING so the user sees
-        # feedback during the connect handshake.
-        connected_board = None
-        connecting_board = None
+        up, waiting, down = [], [], []
         for board_id, board in boards.items():
-            name = getattr(board, "name", board_id)
+            state = getattr(board, "state", None)
             if getattr(board, "is_connected", False):
-                connected_board = (name, board)
-                break
-            if getattr(board, "state", None) in (
-                BoardConnectionState.CONNECTING,
-                BoardConnectionState.RECONNECTING,
-            ):
-                connecting_board = (name, board)
+                up.append((board_id, state))
+            elif state in (BoardConnectionState.CONNECTING, BoardConnectionState.RECONNECTING):
+                waiting.append((board_id, state))
+            else:
+                # DISCONNECTED, ERROR -- and anything unrecognised, which is not
+                # given the benefit of the doubt here any more than on the strip.
+                down.append((board_id, state))
 
-        if connected_board is not None:
-            name, _ = connected_board
-            self._conn_dot.setStyleSheet(f"color: {colors.SUCCESS}; font-size: 16px;")
-            self._conn_label.setText(f"{name} \u2014 Connected")
-        elif connecting_board is not None:
-            name, _ = connecting_board
-            self._conn_dot.setStyleSheet(f"color: {colors.WARNING}; font-size: 16px;")
-            self._conn_label.setText(f"{name} \u2014 Connecting\u2026")
+        if down:
+            self._set_connection_readout(colors.ERROR, _rig_summary(down, len(boards), "down"))
+        elif waiting:
+            self._set_connection_readout(
+                colors.WARNING, _rig_summary(waiting, len(boards), "connecting")
+            )
         else:
-            self._conn_dot.setStyleSheet(f"color: {colors.ERROR}; font-size: 16px;")
-            self._conn_label.setText("No board")
+            self._set_connection_readout(colors.SUCCESS, _rig_summary(up, len(boards), "connected"))
+
+    def _set_connection_readout(self, colour: str, text: str) -> None:
+        """Paint the status bar's dot and write its line."""
+        self._conn_dot.setStyleSheet(f"color: {colour}; font-size: 16px;")
+        self._conn_label.setText(text)
 
     def update_status_stats(self, node_count: int, connection_count: int) -> None:
         """Update the node/connection count in the status bar."""
