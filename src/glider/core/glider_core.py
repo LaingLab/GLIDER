@@ -24,6 +24,7 @@ from glider.core.experiment_session import (
 )
 from glider.core.flow_engine import FlowEngine
 from glider.core.hardware_manager import HardwareManager
+from glider.core.live_signals import LiveSignalBus
 from glider.vision.audio_recorder import AudioRecorder, mux_audio_video
 from glider.vision.calibration import CameraCalibration
 from glider.vision.camera_manager import CameraManager
@@ -55,6 +56,12 @@ class GliderCore:
         self._session: ExperimentSession | None = None
         self._hardware_manager = HardwareManager()
         self._flow_engine = FlowEngine(self._hardware_manager)
+        # Carries per-frame vision results from whichever component is running
+        # inference to the nodes that react to them. Vision runs on a worker
+        # thread and the flow on the asyncio loop, so they cannot call each
+        # other directly; this is the hop between them.
+        self._live_signals = LiveSignalBus()
+        self._flow_engine.set_live_signals(self._live_signals)
         self._plugin_manager: PluginManager | None = None
         self._data_recorder = DataRecorder(self._hardware_manager)
         # Event logger captures per-edge / per-write device events, complementary
@@ -173,6 +180,11 @@ class GliderCore:
         index instead of an uninitialised one.
         """
         return self._plugin_manager
+
+    @property
+    def live_signals(self) -> LiveSignalBus:
+        """Bus carrying live vision results to nodes in the running flow."""
+        return self._live_signals
 
     @property
     def data_recorder(self) -> DataRecorder:
@@ -493,6 +505,13 @@ class GliderCore:
             register_zone_nodes(self._flow_engine)
         except Exception as e:
             logger.error(f"Failed to register zone nodes: {e}")
+
+        try:
+            from glider.nodes.vision.behavior_nodes import register_behavior_nodes
+
+            register_behavior_nodes(self._flow_engine)
+        except Exception as e:
+            logger.error(f"Failed to register behavior nodes: {e}")
 
         try:
             from glider.nodes.interface.audio_nodes import register_audio_nodes

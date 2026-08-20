@@ -45,6 +45,9 @@ class FlowEngine:
             hardware_manager: HardwareManager instance for device access
         """
         self._hardware_manager = hardware_manager
+        # Injected into nodes that ask for it, the same way hardware_manager
+        # is. Set by GliderCore; left None for standalone engines and tests.
+        self._live_signals: Any = None
         self._session = None  # ryvencore Session
         self._flow = None  # Current flow
         self._state = FlowState.STOPPED
@@ -120,6 +123,18 @@ class FlowEngine:
         """Return and clear the out-of-range-at-load warnings (D11)."""
         warnings, self._load_warnings = self._load_warnings, []
         return warnings
+
+    def set_live_signals(self, bus: Any) -> None:
+        """Set the bus that carries live vision results to nodes.
+
+        Applied to nodes created from now on, and to any already in the flow,
+        so the order of construction between core and flow does not decide
+        whether a node can hear anything.
+        """
+        self._live_signals = bus
+        for node in self._nodes.values():
+            if hasattr(node, "set_live_signals"):
+                node.set_live_signals(bus)
 
     def get_function_runner(self, start_node_id: str):
         """Return the shared FlowFunctionRunner for a function (create if needed).
@@ -307,6 +322,12 @@ class FlowEngine:
         # ramp-down needs to drive a motor PWM while bound to the encoder).
         if self._hardware_manager and hasattr(node, "set_hardware_manager"):
             node.set_hardware_manager(self._hardware_manager)
+
+        # Same idea for live vision results: a node that reacts to them says so
+        # by exposing set_live_signals, and gets the bus without knowing where
+        # it came from.
+        if self._live_signals is not None and hasattr(node, "set_live_signals"):
+            node.set_live_signals(self._live_signals)
 
         # Bind to device if specified
         if device_id and not self._hardware_manager:

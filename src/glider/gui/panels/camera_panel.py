@@ -327,6 +327,10 @@ class CameraPanel(QWidget):
         # them.
         self._data_recorder: Any | None = None
         self._event_logger: Any | None = None
+        # Carries live classifications to nodes in the flow. Optional for the
+        # same reason as the two above: standalone panels and unit tests build
+        # a CameraPanel without a core.
+        self._live_signals: Any | None = None
         self._calibration: CameraCalibration | None = None
         self._zone_config: ZoneConfiguration | None = None
         self._preview_active = False
@@ -1138,6 +1142,14 @@ class CameraPanel(QWidget):
         """
         self._event_logger = event_logger
 
+    def set_live_signals(self, bus: Any) -> None:
+        """
+        Set the live signal bus. When set, every classified frame from live
+        behavior inference is published to it, so Behavior Input nodes in the
+        running flow can trigger on the animal's behavior.
+        """
+        self._live_signals = bus
+
     def _dispatch_frame_tick(self, frame_no: int, frame_ts: float) -> None:
         """
         Fire the per-frame side effects on the data_recorder and event_logger.
@@ -1605,9 +1617,36 @@ class CameraPanel(QWidget):
         QMessageBox.warning(self, "Live Behavior", message)
 
     def _on_behavior_result(self, label: str, keypoints: Any) -> None:
-        """Push a classified frame's label + pose overlay onto the preview."""
+        """Push a classified frame's label + pose overlay onto the preview.
+
+        Also publishes the classification so nodes in the running flow can act
+        on it. Until this existed the label was drawn and then discarded, which
+        is why behavior could be displayed but never trigger anything.
+        """
         self._preview.set_behavior_label(label)
         self._preview.set_pose_overlay(keypoints)
+        self._publish_behavior(label, keypoints)
+
+    def _publish_behavior(self, label: str, keypoints: Any) -> None:
+        """Hand one classification to the live signal bus, if one is attached."""
+        bus = self._live_signals
+        if bus is None:
+            return
+        from glider.core.live_signals import BehaviorEvent
+
+        try:
+            bus.publish_behavior(
+                BehaviorEvent(
+                    behavior=label,
+                    frame_index=self._frame_count,
+                    timestamp=time.time(),
+                    keypoints=keypoints,
+                )
+            )
+        except Exception:
+            # A failing subscriber must not take the preview down with it; the
+            # bus already logs per-subscriber failures.
+            logger.exception("Failed to publish behavior event")
 
     def stop_live_behavior(self) -> None:
         """Stop live inference: join the worker thread and clear overlays.
