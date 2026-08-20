@@ -54,7 +54,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TypeVar
 
-from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QModelIndex, QObject, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QFrame,
@@ -65,6 +65,8 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QMenuBar,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
@@ -290,6 +292,34 @@ def _collect(menu: QMenu, category: str, into: list[Command]) -> None:
 # ----------------------------------------------------------------- the overlay
 
 
+class _WholeRow(QStyledItemDelegate):
+    """Hand a row widget the item's whole rectangle, not the item's text box.
+
+    ``QListWidget.setItemWidget`` does not position the widget itself: it
+    installs it as a persistent editor and lets the delegate place it, and
+    :meth:`QStyledItemDelegate.updateEditorGeometry` places an editor in
+    ``SE_ItemViewItemText`` -- the sub-rectangle a *painted* item would put its
+    string in. With no stylesheet that is the whole item and nobody notices.
+    Under ``desktop.qss`` it is the item minus the ``QListView::item`` padding
+    of 6 px each way, so every row was handed 12 px less height than its own
+    size hint had reserved, and the row's 10/6 padding then had nothing left to
+    give its labels: descenders and whole lines were cut in the running app.
+
+    The item rectangle is what the size hint is measured against, so it is what
+    the widget has to be given. Overriding this rather than zeroing the padding
+    in ``desktop.qss`` keeps the fix true for a palette shown under any
+    stylesheet, including none.
+    """
+
+    def updateEditorGeometry(  # noqa: N802 - Qt override
+        self,
+        editor: QWidget,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        editor.setGeometry(option.rect)
+
+
 class CommandPalette(QFrame):
     """A centred, filterable list of every action, over its parent.
 
@@ -357,6 +387,7 @@ class CommandPalette(QFrame):
         self._list.setObjectName("commandPaletteList")
         self._list.setFrameShape(QFrame.Shape.NoFrame)
         self._list.setUniformItemSizes(False)
+        self._list.setItemDelegate(_WholeRow(self._list))
         self._list.setMaximumHeight(LIST_HEIGHT)
         self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._list.itemClicked.connect(self._on_item_clicked)
@@ -456,6 +487,14 @@ class CommandPalette(QFrame):
                 # app has already said it cannot do.
                 item.setFlags(Qt.ItemFlag.NoItemFlags)
             widget = self._build_row(command)
+            # Measured *after* the stylesheet has reached it. Qt polishes a
+            # widget lazily, and a hint read before that is a hint for a font
+            # nobody will see -- `desktop.qss` puts the command name at 13 px
+            # where the global rule says 12. Same class of mistake as reading
+            # isDefault() before show(): a value taken before the widget is in
+            # the state the user gets. ensurePolished() polishes the labels
+            # inside the row too, and activates its layout.
+            widget.ensurePolished()
             item.setSizeHint(widget.sizeHint())
             self._list.addItem(item)
             self._list.setItemWidget(item, widget)

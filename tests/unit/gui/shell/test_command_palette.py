@@ -415,6 +415,40 @@ def test_a_disabled_row_is_actually_painted_grey(qtbot):
     del host
 
 
+def test_every_row_is_given_the_height_its_styled_text_needs(qtbot):
+    """Under the **real** stylesheet, and asserted on metrics rather than on
+    pixels: this machine renders no fonts offscreen, so "does it look cut?" is
+    a question a screenshot here cannot answer.
+
+    Two claims, and the bug needed both to be false. The *hint* has to be the
+    styled row's, not an unpolished widget's -- ``desktop.qss`` puts the command
+    name at 13 px where the global rule says 12. And the row has to actually
+    *get* that height: ``setItemWidget`` positions the widget through the
+    delegate, whose default is the item's **text** sub-rectangle, which under
+    ``QListView::item { padding: 6px }`` is 12 px shorter than the hint. The row
+    was handed 13 px for a 25 px layout, and its labels were what gave way.
+    """
+    host, palette = _shown(qtbot, themed=True)
+    _settle(qtbot, host)
+    rows = palette.list_widget()
+
+    assert rows.count() > 0, "an empty list would make every claim below vacuous"
+    for index in range(rows.count()):
+        item = rows.item(index)
+        row = rows.itemWidget(item)
+        row.ensurePolished()
+        margins = row.layout().contentsMargins()
+        labels = [label for label in row.findChildren(QLabel) if label.isVisible()]
+        needed = max(label.fontMetrics().height() for label in labels)
+        needed += margins.top() + margins.bottom()
+
+        assert item.sizeHint().height() >= needed
+        assert row.height() >= needed
+        for label in labels:
+            assert label.height() >= label.fontMetrics().height()
+    del host
+
+
 def test_nothing_in_the_palette_sets_its_own_stylesheet(palette):
     """A widget-level stylesheet out-prioritises the application stylesheet and
     silently blocks all future theming. That trap has cost this project once."""
