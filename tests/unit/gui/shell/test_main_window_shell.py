@@ -311,6 +311,56 @@ def test_strip_shows_the_experiment_name_and_dirty_state(qtbot, main_window_fact
     assert not strip.dirty_label().isVisible()
 
 
+# The window title is set once and never updated, so the strip's marker is the
+# only unsaved-work indicator in the shell. These drive real edits -- a node
+# dropped on the canvas, a node dragged -- rather than calling the refresh.
+
+
+def _clean(window) -> None:
+    """The state a just-saved experiment is in."""
+    window._core.session._mark_clean()
+    window._refresh_strip_experiment()
+    assert not window._builder_view.strip.dirty_label().isVisible()
+
+
+def test_dropping_a_node_raises_the_dirty_marker(qtbot, main_window_factory):
+    window = _builder(main_window_factory)
+    _clean(window)
+
+    # What the canvas emits when a node is dropped on it.
+    window._graph_view.node_created.emit("DigitalWrite", 100.0, 100.0)
+
+    assert window._core.session.is_dirty
+    assert window._builder_view.strip.dirty_label().isVisible()
+
+
+def test_moving_a_node_raises_the_dirty_marker(qtbot, main_window_factory):
+    """A drag marks the session dirty and pushes nothing on the undo stack, so
+    a marker wired to undo/redo alone would stay silent through it."""
+    window = _builder(main_window_factory)
+    window._graph_view.node_created.emit("DigitalWrite", 100.0, 100.0)
+    node_id = next(iter(window._graph_view.nodes))
+    _clean(window)
+
+    window._graph_view.node_moved.emit(node_id, 220.0, 140.0)
+
+    assert window._core.session.is_dirty
+    assert window._builder_view.strip.dirty_label().isVisible()
+
+
+def test_a_new_session_starts_the_marker_watching_again(qtbot, main_window_factory):
+    """``new_session`` replaces the session object. A hook registered on the
+    old one would go quiet for the rest of the run."""
+    window = _builder(main_window_factory)
+    window._core.session._dirty = False
+    window._on_new()
+    _clean(window)
+
+    window._graph_view.node_created.emit("DigitalWrite", 10.0, 10.0)
+
+    assert window._builder_view.strip.dirty_label().isVisible()
+
+
 def test_strip_run_state_follows_the_session(qtbot, main_window_factory):
     from glider.core.experiment_session import SessionState
 

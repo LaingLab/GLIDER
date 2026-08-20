@@ -65,7 +65,22 @@ def main_window_factory(qtbot, tmp_path):
         w = MainWindow(core, view_manager=vm, settings=settings)
         if not desktop_mode:
             w.switch_to_runner()
-        qtbot.addWidget(w)
+
+        def _forget_unsaved_work(_widget) -> None:
+            """Let a test end while the session is dirty.
+
+            ``MainWindow.closeEvent`` asks ``_check_save``, which puts up a
+            *modal* "Save changes?" box, and pytest-qt closes every registered
+            widget from a teardown hook that runs before any fixture finalizer
+            -- so nothing a fixture or a test body does afterwards can get in
+            front of it. A test that leaves unsaved work behind (a graph edit
+            is one) would otherwise hang the whole run instead of ending, and
+            it would hang hardest on the run where it *failed*.
+            """
+            if getattr(core, "session", None) is not None:
+                core.session._mark_clean()
+
+        qtbot.addWidget(w, before_close_func=_forget_unsaved_work)
         return w
 
     yield _make

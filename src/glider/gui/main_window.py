@@ -229,6 +229,7 @@ class MainWindow(QMainWindow):
     _core_state_changed = pyqtSignal(object)
     _core_error_occurred = pyqtSignal(str, object)
     _hardware_connection_changed = pyqtSignal(str, object)
+    _session_dirtied = pyqtSignal()
 
     def __init__(
         self,
@@ -295,6 +296,10 @@ class MainWindow(QMainWindow):
 
         # Toolbar status (initialised here so _on_core_state_change can test)
         self._toolbar_status: QLabel | None = None
+
+        # The session whose dirty state the strip is currently following. Set
+        # by _watch_session, which re-registers whenever the object is replaced.
+        self._watched_session = None
 
         # Status bar widgets
         self._conn_dot: QLabel | None = None
@@ -1586,6 +1591,24 @@ class MainWindow(QMainWindow):
             lambda board_id, state: self._hardware_connection_changed.emit(board_id, state)
         )
 
+        # The unsaved-work marker. ``ExperimentSession._mark_dirty`` is the one
+        # place that knows work has become unsaved -- every node, connection,
+        # position and metadata change goes through it -- and until now it
+        # reached nothing in the GUI, so the strip read "Untitled Experiment"
+        # with no marker after a graph had been built. The window title is set
+        # once and never updated, which made the strip the only indicator there
+        # was, and it was silent for the commonest way of creating unsaved work.
+        #
+        # Wired to the session rather than to ``undo_redo_changed``, which fires
+        # only for the four undoable graph edits: dragging a node marks the
+        # session dirty and pushes nothing, so a marker hung off the undo stack
+        # would stay silent through it. Marshalled through a signal for the same
+        # reason as the two above -- ``_mark_dirty`` is called from callbacks
+        # this window does not own.
+        self._session_dirtied.connect(self._refresh_strip_experiment)
+        self._core.on_session_change(self._watch_session)
+        self._watch_session(self._core.session)
+
         # _runner_device_controls is built in both operator views (shared).
         self.session_changed.connect(self._runner_device_controls.refresh)
         self.session_changed.connect(self._surface_load_warnings)
@@ -1604,6 +1627,21 @@ class MainWindow(QMainWindow):
         # Runner-only Setup page (runner mode).
         if self._runner_setup_page is not None:
             self.session_changed.connect(self._runner_setup_page.refresh)
+
+    def _watch_session(self, session) -> None:
+        """Follow *session*'s dirty state, whichever session that now is.
+
+        ``new_session`` and ``load_session`` build a **new** ``ExperimentSession``
+        object, so a hook registered once at startup would go quiet the moment
+        the user pressed File -> New. Re-registering per session is what keeps
+        the marker honest for the rest of the run; the identity check is because
+        not every session-change notification replaces the object.
+        """
+        if session is None or session is self._watched_session:
+            return
+        self._watched_session = session
+        session.on_change(self._session_dirtied.emit)
+        self._refresh_strip_experiment()
 
     @pyqtSlot(object)
     def _on_core_state_change(self, state) -> None:
