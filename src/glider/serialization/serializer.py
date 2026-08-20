@@ -304,13 +304,11 @@ class ExperimentSerializer:
                         float(n.position.get("y", 0.0)),
                     ),
                     state=state,
-                    # KNOWN GAP: the .glider schema does not carry device
-                    # bindings (NodeSchema has no device_id and no node writes
-                    # one into its state), so this is None for every file that
-                    # exists today. Hardware-node device bindings are still
-                    # lost across the schema save/load path — follow-up work,
-                    # out of scope for this task.
-                    device_id=state.get("device_id"),
+                    # Schema 1.2.0+ carries the binding on the node itself.
+                    # Files written before that have no device_id, so their
+                    # hardware nodes still load unbound — there is nothing
+                    # recorded to restore.
+                    device_id=n.device_id,
                     visible_in_runner=bool(props.get("visible_in_runner", False)),
                 )
             )
@@ -365,7 +363,7 @@ class ExperimentSerializer:
         # Build flow config
         flow = FlowConfigSchema()
         if flow_engine:
-            flow = self._extract_flow_config(flow_engine)
+            flow = self._extract_flow_config(flow_engine, hardware_manager)
 
         # Build dashboard config
         dashboard = DashboardConfigSchema.from_dict(session.dashboard.to_dict())
@@ -413,7 +411,9 @@ class ExperimentSerializer:
 
         return HardwareConfigSchema(boards=boards, devices=devices)
 
-    def _extract_flow_config(self, flow_engine: "FlowEngine") -> FlowConfigSchema:
+    def _extract_flow_config(
+        self, flow_engine: "FlowEngine", hardware_manager: Optional["HardwareManager"] = None
+    ) -> FlowConfigSchema:
         """Extract flow configuration from engine.
 
         Node ``type`` is the short registered name (e.g. ``"DigitalWrite"``) —
@@ -432,6 +432,15 @@ class ExperimentSerializer:
         cls_to_name: dict[type, str] = {
             cls: name for name, cls in flow_engine._node_registry.items()  # noqa: SLF001
         }
+
+        # Reverse map for node->device bindings: object identity -> the key the
+        # device is registered (and saved) under. Resolved from the manager
+        # rather than read off ``device.id``, so the id written on a node is
+        # always the same string written as that device's own ``id`` in this
+        # file -- which is what ``get_device`` needs on load.
+        device_keys: dict[int, str] = {}
+        if hardware_manager is not None:
+            device_keys = {id(dev): dev_id for dev_id, dev in hardware_manager.devices.items()}
 
         # Extract nodes
         for node_id, node in flow_engine.nodes.items():
@@ -475,6 +484,7 @@ class ExperimentSerializer:
                 properties=self._extract_node_properties(node),
                 inputs=inputs,
                 outputs=outputs,
+                device_id=self._bound_device_key(node, device_keys),
             )
             nodes.append(node_schema)
 
@@ -495,6 +505,27 @@ class ExperimentSerializer:
             connections.append(conn_schema)
 
         return FlowConfigSchema(nodes=nodes, connections=connections)
+
+    @staticmethod
+    def _bound_device_key(node: "GliderNode", device_keys: dict[int, str]) -> str | None:
+        """The registry key of the device bound to ``node``, if any.
+
+        A device that is bound but no longer registered is dropped with a
+        warning rather than written: its id would not appear in this file's
+        device list either, so persisting it would only produce a binding that
+        dangles on load.
+        """
+        device = getattr(node, "device", None)
+        if device is None:
+            return None
+        key = device_keys.get(id(device))
+        if key is None:
+            logger.warning(
+                "Node %s is bound to a device that is not registered with the "
+                "hardware manager; its binding will not be saved",
+                getattr(node, "_glider_id", "?"),
+            )
+        return key
 
     def _extract_node_properties(self, node: "GliderNode") -> dict[str, Any]:
         """Extract serializable properties from a node.
@@ -644,6 +675,7 @@ class ExperimentSerializer:
                     node_type=node_type,
                     position=position_tuple,
                     state=state,
+                    device_id=node_schema.device_id,
                 )
             except Exception as e:
                 logger.warning(f"Failed to create node {node_schema.id} ({node_type}): {e}")

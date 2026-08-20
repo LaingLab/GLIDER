@@ -309,6 +309,16 @@ class FlowEngine:
             node.set_hardware_manager(self._hardware_manager)
 
         # Bind to device if specified
+        if device_id and not self._hardware_manager:
+            # Silent before: a node with a saved binding simply came back
+            # unbound, with nothing in the log to say the engine had no
+            # hardware manager to resolve it against.
+            logger.warning(
+                "Node %s names device '%s' but this flow engine has no hardware "
+                "manager; the node will load unbound",
+                node_id,
+                device_id,
+            )
         if device_id and self._hardware_manager:
             device = self._hardware_manager.get_device(device_id)
             if device and hasattr(node, "bind_device"):

@@ -1222,13 +1222,22 @@ class NodeEditorController(QObject):
                 session._mark_dirty()
                 logger.info(f"Node {node_id} device changed to: {device_id}")
 
-                if device_id and hasattr(self._core, "flow_engine") and self._core.flow_engine:
+                # Keep the runtime node in step in BOTH directions. The save
+                # path reads the runtime node's binding, so leaving a stale one
+                # after the selection is cleared writes the removed device
+                # straight back into the file on the next save.
+                runtime_node = None
+                if hasattr(self._core, "flow_engine") and self._core.flow_engine:
                     runtime_node = self._core.flow_engine.get_node(node_id)
-                    if runtime_node and hasattr(runtime_node, "bind_device"):
+                if runtime_node is not None:
+                    if device_id:
                         device = self._hardware_manager.get_device(device_id)
-                        if device:
+                        if device and hasattr(runtime_node, "bind_device"):
                             runtime_node.bind_device(device)
                             logger.info(f"Bound device '{device_id}' to runtime node {node_id}")
+                    elif hasattr(runtime_node, "unbind_device"):
+                        runtime_node.unbind_device()
+                        logger.info(f"Unbound device from runtime node {node_id}")
 
                 self._update_properties_panel(node_id)
 
