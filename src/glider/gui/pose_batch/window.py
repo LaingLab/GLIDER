@@ -56,16 +56,9 @@ from glider.gui.widgets.tool_ui import (
 from glider.vision.calibration import CameraCalibration
 from glider.vision.calibration_set import CalibrationSet, CalibrationSetError
 from glider.vision.pose import batch as batch_core
+from glider.vision.pose.spec import read_pose_model_meta
 
 logger = logging.getLogger(__name__)
-
-# Reading a model's own keypoint names landed on the pose-kpt-names branch.
-# TEMPORARY: delete this seam (and the None checks below) once that merges to
-# main — the tool degrades to manual entry without it, it does not break.
-try:
-    from glider.vision.pose.model_meta import read_pose_model_meta
-except ImportError:  # pragma: no cover - depends on branch state
-    read_pose_model_meta = None
 
 _SETTINGS_PREFIX = "pose_batch/keypoints"
 _INVALID_STYLE = f"border: 1px solid {colors.ERROR};"
@@ -143,9 +136,6 @@ class _MetaWorker(QObject):
         self._model_path = model_path
 
     def run(self) -> None:
-        if read_pose_model_meta is None:
-            self.done.emit(None)
-            return
         try:
             self.done.emit(read_pose_model_meta(self._model_path))
         except Exception:  # never block the user on a metadata read

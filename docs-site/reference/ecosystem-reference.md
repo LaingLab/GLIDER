@@ -281,7 +281,7 @@ It supports built-in Arduino/Telemetrix, Raspberry Pi GPIO, BLE, serial, and sel
 
 ### Does GLIDER train pose models?
 
-GLIDER uses YOLO pose models for inference and consumes pose data in its behavior workflow. It supports model files trained externally, including workflows based on Ultralytics; DeepLabCut-format pose data is supported for interchange. The repository's user-facing behavior workflow trains behavior classifiers, not a general-purpose pose-estimation model trainer.
+No. GLIDER runs pose models trained elsewhere; it does not train them. It runs Ultralytics YOLO pose weights (`.pt`) directly, and DeepLabCut single-animal and SLEAP single-instance models after a one-time ONNX export performed in your own DeepLabCut or SLEAP environment (see [Pose Models](../camera-behavior/pose-models.md)). DeepLabCut-format CSVs are also read and written for interchange. Multi-animal architectures — SLEAP top-down and bottom-up included — are not supported: GLIDER's pose container is single-animal throughout. The repository's user-facing behavior workflow trains behavior classifiers, not a general-purpose pose-estimation model trainer.
 
 ### What is stored for reproducibility?
 

@@ -101,6 +101,7 @@ nav:
       - camera-behavior/index.md
       - Camera & Recording: camera-behavior/camera.md
       - Tracking: camera-behavior/tracking.md
+      - Pose Models: camera-behavior/pose-models.md
       - Behavior Analysis: camera-behavior/behavior.md
   - Runner Mode:
       - runner/index.md

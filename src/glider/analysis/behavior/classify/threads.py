@@ -33,7 +33,6 @@ from glider.analysis.behavior.classify.overlay import (
     draw_label_badge,
     draw_skeleton,
 )
-from glider.analysis.behavior.classify.pose_extract import extract_keypoints
 from glider.analysis.behavior.features import FeatureSpec
 from glider.analysis.behavior.model import BehaviorModel
 
@@ -211,21 +210,30 @@ class PoseTracker(threading.Thread):
         self.error: str | None = None
 
     def run(self) -> None:
-        try:
-            from ultralytics import YOLO
-        except ImportError:
-            self.error = "ultralytics isn't installed; install with `pip install ultralytics`"
-            self._propagate_eos()
-            return
+        from glider.vision.pose.backend import load_pose_backend
 
         try:
-            model = YOLO(self.yolo_model_path)
+            backend = load_pose_backend(
+                self.yolo_model_path,
+                self.keypoint_names,
+                self.conf_threshold,
+                self.device,
+            )
+        except ImportError as e:
+            # ultralytics / onnxruntime missing: the message already names the
+            # install command, so surface it rather than a generic wrapper.
+            self.error = str(e)
+            self._propagate_eos()
+            return
         except Exception as e:
-            self.error = f"failed to load YOLO model {self.yolo_model_path}: {e}"
+            self.error = f"failed to load pose model {self.yolo_model_path}: {e}"
             self._propagate_eos()
             return
 
-        k = len(self.keypoint_names)
+        # DeepLabCut and SLEAP carry their own names in training order, so the
+        # backend's list wins over whatever was passed in.
+        self.keypoint_names = list(backend.keypoint_names)
+
         if self.undetected_dir is not None:
             self.undetected_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -239,22 +247,15 @@ class PoseTracker(threading.Thread):
                     return
                 frame_idx, frame_bgr = item
 
-                # YOLO model.predict on a single frame. verbose=False
-                # silences per-frame progress chatter that floods the
-                # terminal at 30 fps.
-                kwargs = {"conf": self.conf_threshold, "verbose": False}
-                if self.device is not None:
-                    kwargs["device"] = self.device
+                # One frame through the pose backend. For YOLO this is the same
+                # predict(conf=, verbose=False[, device=]) call the tracker made
+                # before the backend seam existed.
                 try:
-                    results = model.predict(frame_bgr, **kwargs)
+                    keypoints, confidences = backend.predict(frame_bgr)
                 except Exception as e:  # noqa: BLE001
-                    self.error = f"YOLO predict failed on frame {frame_idx}: {e}"
+                    self.error = f"pose inference failed on frame {frame_idx}: {e}"
                     self._propagate_eos()
                     return
-
-                keypoints, confidences = extract_keypoints(
-                    results[0] if results else None, self.conf_threshold, k
-                )
 
                 # No confident mouse this frame → optionally save it for
                 # re-labeling (all keypoints came back NaN).

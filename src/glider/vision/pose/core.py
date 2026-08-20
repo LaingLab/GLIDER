@@ -138,10 +138,104 @@ def _video_fps(video_path: str | Path) -> float:
     return fps
 
 
+def _infer_video_backend(
+    spec,
+    video_path: Path,
+    *,
+    conf: float,
+    fps: float | None,
+    source: str | None,
+    progress: bool,
+    progress_cb: Callable[[int, int], None] | None,
+    cancel_cb: Callable[[], bool] | None,
+) -> PoseData:
+    """Frame-by-frame inference for DeepLabCut / SLEAP ONNX models.
+
+    Ultralytics streams a whole video itself; these backends take one frame at
+    a time, so decoding happens here with OpenCV. Progress and cancellation
+    semantics match the ultralytics path exactly: ``cancel_cb`` is polled
+    before each frame is decoded, and ``progress_cb`` fires once per frame with
+    a total of ``0`` when the container reports no frame count.
+    """
+    import cv2
+
+    from glider.vision.pose.backend import load_pose_backend
+    from glider.vision.video_source import video_resolution
+
+    backend = load_pose_backend(spec)
+    keypoint_names = list(backend.keypoint_names)
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise FileNotFoundError(f"could not open video: {video_path}")
+
+    if fps is None:
+        fps = float(cap.get(cv2.CAP_PROP_FPS))
+        if fps <= 0 or not np.isfinite(fps):
+            cap.release()
+            raise ValueError(f"unable to read FPS from {video_path}")
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+
+    bar = None
+    if progress:
+        try:
+            from tqdm import tqdm
+
+            bar = tqdm(total=total_frames or None, desc=f"{spec.kind.upper()} inference")
+        except Exception:
+            bar = None
+
+    xy_rows: list[np.ndarray] = []
+    conf_rows: list[np.ndarray] = []
+    try:
+        while True:
+            if cancel_cb is not None and cancel_cb():
+                raise PoseCancelledError(f"inference cancelled after {len(xy_rows)} frames")
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                break
+            kp_xy, kp_conf = backend.predict(frame)
+            # Same masking rule as the YOLO path: below-threshold keypoints are
+            # NaN so downstream feature maths never uses them.
+            kp_xy = np.asarray(kp_xy, dtype=float).copy()
+            kp_xy[np.asarray(kp_conf, dtype=float) < conf] = np.nan
+            xy_rows.append(kp_xy)
+            conf_rows.append(np.asarray(kp_conf, dtype=float))
+            if bar is not None:
+                bar.update(1)
+            if progress_cb is not None:
+                progress_cb(len(xy_rows), total_frames)
+    finally:
+        cap.release()
+        if bar is not None:
+            bar.close()
+        backend.close()
+
+    n_kpts = len(keypoint_names)
+    xy_arr = np.stack(xy_rows, axis=0) if xy_rows else np.zeros((0, n_kpts, 2))
+    conf_arr = np.stack(conf_rows, axis=0) if conf_rows else np.zeros((0, n_kpts))
+
+    return PoseData(
+        xy=xy_arr,
+        confidence=conf_arr,
+        keypoint_names=keypoint_names,
+        fps=fps,
+        source=source or spec.source_label,
+        metadata={
+            "model_path": str(spec.model_path),
+            "video_path": str(video_path),
+            "conf_threshold": conf,
+            "device": "cpu",
+            "backend": spec.kind,
+            "resolution": video_resolution(video_path),
+        },
+    )
+
+
 def infer_video(
     model_path: str | Path,
     video_path: str | Path,
-    keypoint_names: Iterable[str],
+    keypoint_names: Iterable[str] | None = None,
     *,
     conf: float = 0.25,
     fps: float | None = None,
@@ -214,6 +308,27 @@ def infer_video(
     For multi-detection frames, the highest box-confidence detection is kept
     (single-animal v1).
     """
+    from glider.vision.pose.spec import PoseModelError, identify_pose_model
+
+    model_path = Path(model_path)
+    video_path = Path(video_path)
+
+    # DeepLabCut / SLEAP take a different route: they run one frame at a time
+    # through onnxruntime and carry their own keypoint names, so neither the
+    # ultralytics streaming loop nor the caller's names apply.
+    spec = identify_pose_model(model_path)
+    if spec.kind != "yolo":
+        return _infer_video_backend(
+            spec,
+            video_path,
+            conf=conf,
+            fps=fps,
+            source=source,
+            progress=progress,
+            progress_cb=progress_cb,
+            cancel_cb=cancel_cb,
+        )
+
     try:
         from ultralytics import YOLO
     except ImportError as e:
@@ -221,8 +336,11 @@ def infer_video(
             "Ultralytics is required for infer_video(). " "Install with: pip install glider[vision]"
         ) from e
 
-    model_path = Path(model_path)
-    video_path = Path(video_path)
+    if not keypoint_names:
+        raise PoseModelError(
+            f"{model_path.name} is a YOLO checkpoint, which does not record "
+            "body-part names. Pass keypoint_names in the model's training order."
+        )
     keypoint_names = list(keypoint_names)
     n_kpts = len(keypoint_names)
 
