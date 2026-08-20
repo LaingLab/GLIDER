@@ -1,7 +1,7 @@
 """Unit tests for the pure-logic live behavior classifier.
 
 ``LiveBehaviorClassifier`` composes the shared streaming cores
-(``StreamingFeatureExtractor`` + ``extract_keypoints``), the
+(``StreamingFeatureExtractor`` + a ``PoseBackend``), the
 ``SlidingFeatureBuffer`` and ``BehaviorModel.predict_one`` into a single
 ``classify_frame(bgr) -> LiveResult`` call, with construction-time guards
 against models the live path can't serve. These tests pin the guards and
@@ -22,6 +22,7 @@ from glider.gui.panels.live_behavior import (
     UnsupportedModelError,
     model_keypoint_count,
 )
+from glider.vision.pose.backend import UltralyticsBackend
 
 # ---------------------------------------------------------------------------
 # ultralytics doubles
@@ -83,6 +84,16 @@ def _model_k(model) -> int:
     return model_keypoint_count(model)
 
 
+def _backend(yolo, names):
+    """Wrap a YOLO double in the pass-through backend the classifier now takes.
+
+    UltralyticsBackend has its own tests proving it is a faithful pass-through
+    over ``extract_keypoints``, so routing these through it keeps this file's
+    guarantees about the classifier itself unchanged.
+    """
+    return UltralyticsBackend(yolo, names)
+
+
 # ---------------------------------------------------------------------------
 # model_keypoint_count
 # ---------------------------------------------------------------------------
@@ -111,7 +122,7 @@ def test_model_keypoint_count_dedups_stats():
 def test_mismatched_keypoint_count_raises(tiny_behavior_model):
     yolo = FakeYolo(_distinct_kps(_model_k(tiny_behavior_model)))
     with pytest.raises(KeypointMismatchError):
-        LiveBehaviorClassifier(tiny_behavior_model, yolo, ["a", "b"])
+        LiveBehaviorClassifier(tiny_behavior_model, _backend(yolo, ["a", "b"]))
 
 
 def test_unstreamable_features_raise(tiny_behavior_model):
@@ -121,7 +132,7 @@ def test_unstreamable_features_raise(tiny_behavior_model):
     k = _model_k(tiny_behavior_model)
     yolo = FakeYolo(_distinct_kps(k))
     with pytest.raises(UnsupportedModelError):
-        LiveBehaviorClassifier(tiny_behavior_model, yolo, [f"k{i}" for i in range(k)])
+        LiveBehaviorClassifier(tiny_behavior_model, _backend(yolo, [f"k{i}" for i in range(k)]))
 
 
 def test_sequence_model_rejected(tiny_behavior_model):
@@ -135,7 +146,7 @@ def test_sequence_model_rejected(tiny_behavior_model):
     seq.feature_names = []
     yolo = FakeYolo(_distinct_kps(4))
     with pytest.raises(UnsupportedModelError):
-        LiveBehaviorClassifier(seq, yolo, ["k0", "k1", "k2", "k3"])
+        LiveBehaviorClassifier(seq, _backend(yolo, ["k0", "k1", "k2", "k3"]))
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +158,7 @@ def test_label_emitted_after_warmup(tiny_behavior_model):
     model = tiny_behavior_model
     k = _model_k(model)
     yolo = FakeYolo(_distinct_kps(k))
-    clf = LiveBehaviorClassifier(model, yolo, [f"k{i}" for i in range(k)])
+    clf = LiveBehaviorClassifier(model, _backend(yolo, [f"k{i}" for i in range(k)]))
 
     labels = []
     for _ in range(clf.window + clf.warmup + 4):
@@ -163,7 +174,7 @@ def test_no_detection_empty_keypoints(tiny_behavior_model):
     model = tiny_behavior_model
     k = _model_k(model)
     yolo = FakeYolo(None)
-    clf = LiveBehaviorClassifier(model, yolo, [f"k{i}" for i in range(k)])
+    clf = LiveBehaviorClassifier(model, _backend(yolo, [f"k{i}" for i in range(k)]))
 
     result = clf.classify_frame(np.zeros((8, 8, 3), dtype=np.uint8))
     assert result.label == ""
@@ -175,7 +186,7 @@ def test_reset_rearms_warmup(tiny_behavior_model):
     model = tiny_behavior_model
     k = _model_k(model)
     yolo = FakeYolo(_distinct_kps(k))
-    clf = LiveBehaviorClassifier(model, yolo, [f"k{i}" for i in range(k)])
+    clf = LiveBehaviorClassifier(model, _backend(yolo, [f"k{i}" for i in range(k)]))
 
     # Fill up so a label can fire.
     for _ in range(clf.window + clf.warmup + 4):
@@ -198,6 +209,36 @@ class _Driver(QObject):
     frame = pyqtSignal(object)
 
 
+def test_classifier_takes_its_names_from_the_backend(tiny_behavior_model):
+    """The backend that decoded the keypoints is the single source of names.
+
+    For DeepLabCut/SLEAP the names come from the model's own config, so passing
+    them separately would let two sources of truth disagree.
+    """
+    k = model_keypoint_count(tiny_behavior_model)
+    names = [f"k{i}" for i in range(k)]
+    backend = UltralyticsBackend(FakeYolo(_distinct_kps(k)), names)
+
+    clf = LiveBehaviorClassifier(tiny_behavior_model, backend)
+
+    assert clf.keypoint_names == names
+    result = clf.classify_frame(np.zeros((8, 8, 3), np.uint8))
+    assert result.keypoints.shape == (k, 2)
+
+
+def test_backend_reporting_a_different_native_arity_is_rejected(tiny_behavior_model):
+    """A pose net whose head disagrees with the behaviour model must not run."""
+    k = model_keypoint_count(tiny_behavior_model)
+    names = [f"k{i}" for i in range(k)]
+
+    class _WrongArity(UltralyticsBackend):
+        native_keypoint_count = k + 1
+
+    backend = _WrongArity(FakeYolo(_distinct_kps(k)), names)
+    with pytest.raises(KeypointMismatchError, match="keypoints"):
+        LiveBehaviorClassifier(tiny_behavior_model, backend)
+
+
 def _make_frame_data():
     """A ``FrameData`` carrying a throwaway BGR frame (imported lazily: heavy Qt)."""
     from glider.gui.panels.camera_panel import FrameData
@@ -211,7 +252,11 @@ def test_worker_initialize_ready_then_classifies(qtbot, tiny_behavior_model, tmp
     pkl = tmp_path / "m.pkl"
     tiny_behavior_model.save(pkl)
     k = model_keypoint_count(tiny_behavior_model)
-    monkeypatch.setattr(lb, "_load_yolo", lambda path: FakeYolo(_distinct_kps(k)))
+    monkeypatch.setattr(
+        lb,
+        "_load_backend",
+        lambda path, names, conf=0.25: _backend(FakeYolo(_distinct_kps(k)), names),
+    )
 
     worker = lb.BehaviorInferenceWorker()
     thread = QThread()
@@ -245,7 +290,11 @@ def test_worker_bad_model_emits_load_failed(qtbot, tmp_path, monkeypatch):
     from glider.gui.panels import live_behavior as lb
 
     # Isolate the failure to the (missing) behavior pkl: YOLO load succeeds.
-    monkeypatch.setattr(lb, "_load_yolo", lambda path: FakeYolo(_distinct_kps(4)))
+    monkeypatch.setattr(
+        lb,
+        "_load_backend",
+        lambda path, names, conf=0.25: _backend(FakeYolo(_distinct_kps(4)), names),
+    )
 
     worker = lb.BehaviorInferenceWorker()
     thread = QThread()
