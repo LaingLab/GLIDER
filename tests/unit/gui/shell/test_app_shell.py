@@ -30,7 +30,7 @@ from PyQt6.QtCore import QSettings
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QLabel, QWidget
 
-from glider.gui.shell.app_shell import AppShell
+from glider.gui.shell.app_shell import MIN_CENTRE_WIDTH, AppShell
 from glider.gui.shell.side_panel import DEFAULT_WIDTH, MIN_EXPANDED_WIDTH, RAIL_WIDTH
 
 #: (key, label, icon) for each side, matching what the Builder will carry.
@@ -365,6 +365,30 @@ def test_a_geometry_hanging_off_the_corner_is_not_on_a_screen(qtbot, settings):
     shell.restore_layout(settings)
 
     qtbot.waitUntil(lambda: available.contains(shell.geometry()))
+
+
+def test_a_geometry_saved_left_of_the_screen_comes_back_onto_it(qtbot, settings):
+    """The reported symptom, from the one direction that hides most.
+
+    A window at a negative x still overlaps its screen by plenty, so it passes
+    :func:`_on_a_screen` and reaches the clamp rather than the rescue path --
+    and what it costs is the *left* edge, where the Builder keeps its first
+    panel tab and the start of every label under it. Off the right or the
+    bottom the user at least still has the controls; off the left they have
+    neither the tab nor the words.
+    """
+    available = QGuiApplication.primaryScreen().availableGeometry()
+    width = max(available.width() // 2, MIN_CENTRE_WIDTH)
+    settings.setValue(
+        "shell/geometry",
+        f"{available.x() - width // 2},{available.y() + 20},{width},{available.height() // 2}",
+    )
+
+    shell = _shown(qtbot, width=width)
+    shell.restore_layout(settings)
+
+    qtbot.waitUntil(lambda: available.contains(shell.geometry()))
+    assert shell.geometry().x() >= available.x()
 
 
 def test_centring_a_window_larger_than_the_screen_shrinks_it_to_fit(qtbot, settings):
