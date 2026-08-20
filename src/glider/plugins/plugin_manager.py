@@ -105,6 +105,22 @@ def _registry_for(kind: str) -> dict[str, type] | None:
     return None
 
 
+# Which plugin contributed which component, as {(kind, name): plugin}.
+# The registries themselves are flat name->class maps shared with the built-ins,
+# so without this there is no way to ask "what did plugins add?" -- which the
+# node library needs in order to offer plugin nodes without hardcoding them.
+_PLUGIN_COMPONENTS: dict[tuple[str, str], str] = {}
+
+
+def plugin_components(kind: str) -> dict[str, str]:
+    """Components of ``kind`` that plugins registered, as {name: plugin}.
+
+    ``kind`` is one of "driver", "device", "node". Empty before any plugin has
+    loaded, which is the normal state of a stock install.
+    """
+    return {name: plugin for (k, name), plugin in _PLUGIN_COMPONENTS.items() if k == kind}
+
+
 def _register_component(kind: str, name: str, component: type, plugin: str) -> None:
     """Register one component, tolerating the same thing arriving twice.
 
@@ -131,6 +147,7 @@ def _register_component(kind: str, name: str, component: type, plugin: str) -> N
     existing = registry.get(name)
     if existing is component:
         logger.debug("Plugin %s: %s %r already registered", plugin, kind, name)
+        _PLUGIN_COMPONENTS[(kind, name)] = plugin
         return
     if existing is not None:
         logger.warning(
@@ -143,6 +160,7 @@ def _register_component(kind: str, name: str, component: type, plugin: str) -> N
         return
 
     registry[name] = component
+    _PLUGIN_COMPONENTS[(kind, name)] = plugin
     logger.debug("Plugin %s: registered %s %r", plugin, kind, name)
 
 
