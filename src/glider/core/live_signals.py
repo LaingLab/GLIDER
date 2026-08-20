@@ -59,6 +59,7 @@ class LiveSignalBus:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._behavior_subs: list[Callable[[BehaviorEvent], None]] = []
+        self._behaviors: list[str] = []
 
     # -- behavior ---------------------------------------------------------
     def subscribe_behavior(self, callback: Callable[[BehaviorEvent], None]) -> None:
@@ -78,6 +79,23 @@ class LiveSignalBus:
                 logger.debug(
                     "live bus: behavior subscriber removed (%d left)", len(self._behavior_subs)
                 )
+
+    @property
+    def behaviors(self) -> list[str]:
+        """The loaded model's ordered class vocabulary, or empty if none.
+
+        The bus is already the boundary between vision and the flow, and the
+        label vocabulary is the one piece of vision metadata the flow *editor*
+        needs: a Behavior Input node has to offer the behaviors the model can
+        actually emit. Routing it here keeps the properties panel from reaching
+        into the camera panel to find a worker thread's attribute.
+        """
+        return list(self._behaviors)
+
+    def set_behaviors(self, names: list[str] | None) -> None:
+        """Publish the vocabulary of whatever model is now loaded."""
+        self._behaviors = [str(n) for n in (names or [])]
+        logger.debug("LiveSignalBus: behavior vocabulary set to %s", self._behaviors)
 
     def publish_behavior(self, event: BehaviorEvent) -> int:
         """Deliver *event* to every subscriber. Returns how many were called.

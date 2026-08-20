@@ -1602,6 +1602,11 @@ class CameraPanel(QWidget):
         if worker is None:
             return
         self._preview.set_behavior_vocab(worker.classes)
+        # Also hand the vocabulary to the flow side, so a Behavior Input node's
+        # properties can offer the behaviors this model actually emits instead
+        # of a free-text box where a typo means "never fires".
+        if self._live_signals is not None:
+            self._live_signals.set_behaviors(worker.classes)
         self._behavior_running = True
         self._live_behavior_btn.setText("Stop")
         self._live_behavior_btn.setEnabled(True)

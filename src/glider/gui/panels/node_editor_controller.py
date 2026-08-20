@@ -58,7 +58,7 @@ def node_category_for_type(node_type: str) -> str:
             "StartFunction",
             "EndFunction",
         },
-        "interface": {"Loop", "WaitForInput", "ZoneInput"},
+        "interface": {"Loop", "WaitForInput", "ZoneInput", "BehaviorInput"},
         "hardware": {"Output", "Input", "MotorGovernor", "Maimu"},
     }
 
@@ -161,6 +161,8 @@ class NodeEditorController(QObject):
             "EndFunction": ([">exec"], []),
             "FunctionCall": ([">exec"], [">next"]),
             "ZoneInput": ([], ["Occupied", "Object Count", ">On Enter", ">On Exit"]),
+            "BehaviorInput": ([], ["Active", "Behavior", ">On Enter", ">On Exit"]),
+            "Maimu": ([">exec"], [">exec"]),
         }
 
         inputs, outputs = port_configs.get(nt, ([">in"], [">out"]))
@@ -584,6 +586,53 @@ class NodeEditorController(QObject):
                 note.setProperty("textRole", "muted")
                 note.setWordWrap(True)
                 props_layout.addRow(note)
+
+        elif node_type == "BehaviorInput":
+            self._add_section_header(props_layout, "BEHAVIOR")
+            saved_state = (node_config.state if node_config else None) or {}
+
+            # Editable so a graph can be authored before any model is loaded,
+            # but populated from the loaded model's vocabulary when there is
+            # one -- a mistyped label silently never fires, which is the worst
+            # failure mode available to a closed-loop stimulus.
+            behavior_combo = QComboBox()
+            behavior_combo.setEditable(True)
+            known = self._known_behaviors()
+            if known:
+                behavior_combo.addItems(known)
+            behavior_combo.lineEdit().setPlaceholderText(
+                "behavior label" if known else "start live behavior to list the model's labels"
+            )
+            saved_behavior = saved_state.get("target_behavior", "")
+            behavior_combo.setCurrentText(saved_behavior)
+            behavior_combo.currentTextChanged.connect(
+                lambda txt, nid=node_id: self._on_node_property_changed(
+                    nid, "target_behavior", txt.strip()
+                )
+            )
+            props_layout.addRow("Behavior:", behavior_combo)
+
+            frames_spin = QSpinBox()
+            frames_spin.setRange(1, 300)
+            frames_spin.setSuffix(" frames")
+            frames_spin.setValue(int(saved_state.get("min_frames", 5)))
+            frames_spin.setToolTip(
+                "Consecutive frames carrying the behavior before it counts as "
+                "entered, and the same number without it before it counts as left."
+            )
+            frames_spin.valueChanged.connect(
+                lambda val, nid=node_id: self._on_node_property_changed(nid, "min_frames", val)
+            )
+            props_layout.addRow("Confirm over:", frames_spin)
+
+            note = QLabel(
+                "Per-frame classification is noisy, so a single stray frame must "
+                "not fire hardware. The confirmation delays the trigger: at 30 fps, "
+                "5 frames is about 167 ms on top of inference."
+            )
+            note.setProperty("textRole", "muted")
+            note.setWordWrap(True)
+            props_layout.addRow(note)
 
         elif node_type == "Delay":
             self._add_section_header(props_layout, "CONFIGURATION")
@@ -1312,6 +1361,20 @@ class NodeEditorController(QObject):
                         logger.info(f"Unbound device from runtime node {node_id}")
 
                 self._update_properties_panel(node_id)
+
+    def _known_behaviors(self) -> list[str]:
+        """Labels the currently loaded behavior model can emit, if any.
+
+        Empty before a model is loaded, which is a normal authoring state and
+        not an error: the combo stays editable so the graph can still be built.
+        """
+        core = getattr(self, "_core", None)
+        bus = getattr(core, "live_signals", None) if core is not None else None
+        try:
+            return list(bus.behaviors) if bus is not None else []
+        except Exception:  # noqa: BLE001 - a missing vocabulary must not break the panel
+            logger.debug("Could not read the behavior vocabulary", exc_info=True)
+            return []
 
     def _on_node_property_changed(self, node_id: str, prop_name: str, value) -> None:
         """Handle property change for a node."""
