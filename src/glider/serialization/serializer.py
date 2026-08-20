@@ -57,6 +57,31 @@ def _schema_device_pins(device: DeviceConfigSchema) -> dict[str, int]:
     return {}
 
 
+def is_schema_format(data: dict[str, Any]) -> bool:
+    """True if ``data`` was written by :class:`ExperimentSerializer`.
+
+    GLIDER has historically had two ``.glider`` writers with incompatible
+    shapes: ``ExperimentSession`` (every file in ``examples/``, and everything
+    File > Save has ever produced) and this module. The session format is now
+    the one the app reads and writes; this predicate exists so files written by
+    the old ``save_experiment`` still open.
+
+    Discriminates on field *names* rather than on ``schema_version``: a
+    serializer node has ``type`` where a session node has ``node_type``, and a
+    serializer board has ``type`` where a session board has ``driver_type``.
+    That keeps working if a version marker is ever added to the session format.
+    A file with neither nodes nor boards is indistinguishable and reads as the
+    session format, which parses it correctly either way.
+    """
+    for node in (data.get("flow") or {}).get("nodes") or []:
+        if isinstance(node, dict):
+            return "node_type" not in node and "type" in node
+    for board in (data.get("hardware") or {}).get("boards") or []:
+        if isinstance(board, dict):
+            return "driver_type" not in board and "type" in board
+    return False
+
+
 class ExperimentSerializer:
     """
     Serializer for GLIDER experiment files.

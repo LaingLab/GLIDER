@@ -13,7 +13,11 @@ from glider.serialization.schema import (
     NodeSchema,
     SchemaValidationError,
 )
-from glider.serialization.serializer import ExperimentSerializer, get_serializer
+from glider.serialization.serializer import (
+    ExperimentSerializer,
+    get_serializer,
+    is_schema_format,
+)
 
 __all__ = [
     "ExperimentSchema",
@@ -24,4 +28,5 @@ __all__ = [
     "SchemaValidationError",
     "ExperimentSerializer",
     "get_serializer",
+    "is_schema_format",
 ]
