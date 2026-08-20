@@ -26,11 +26,17 @@ import logging
 
 import pytest
 from PyQt6 import sip
-from PyQt6.QtCore import QSettings
+from PyQt6.QtCore import QRect, QSettings
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QLabel, QWidget
 
-from glider.gui.shell.app_shell import MIN_CENTRE_WIDTH, AppShell
+from glider.gui.shell.app_shell import (
+    MIN_CENTRE_WIDTH,
+    MIN_SHELL_HEIGHT,
+    MIN_SHELL_WIDTH,
+    AppShell,
+    fit_window_to_screen,
+)
 from glider.gui.shell.side_panel import DEFAULT_WIDTH, MIN_EXPANDED_WIDTH, RAIL_WIDTH
 
 #: (key, label, icon) for each side, matching what the Builder will carry.
@@ -500,3 +506,115 @@ def test_the_run_pill_can_carry_an_elapsed_clock(shell):
 
     assert shell.strip.pill().text() == "Recording 04:12"
     assert shell.strip.run_state() == "recording"
+
+
+# ------------------------------------------------ the size a window opens at
+#
+# Every geometry test above is about a *restored* window, and none of them runs
+# on a machine that has never saved one -- which is every machine on its first
+# launch, and was the whole of the reported bug. The configured 1400x900 was
+# applied unclamped, so on a narrower display the OS centred a window wider
+# than the screen and the left panel went off the side.
+#
+# ``fit_window_to_screen`` takes its screen as an argument precisely so these
+# tests do not depend on the display the suite happens to run on.
+
+#: What ``config.ui`` ships: the window's opening size, and the size below
+#: which it may not be dragged.
+_DEFAULT_SIZE = (1400, 900)
+_CONFIG_MIN = (1024, 768)
+
+
+def _bare_window(qtbot) -> QWidget:
+    """A top level with no layout: this is about the frame, not its contents."""
+    window = QWidget()
+    qtbot.addWidget(window)
+    return window
+
+
+def test_a_window_wider_than_its_screen_opens_inside_it(qtbot):
+    """The reported bug: 1400 px of window on a 1280 px display."""
+    available = QRect(0, 0, 1280, 800)
+    window = _bare_window(qtbot)
+
+    fit_window_to_screen(window, size=_DEFAULT_SIZE, minimum=_CONFIG_MIN, available=available)
+
+    assert available.contains(window.geometry())
+    assert window.width() == 1280
+    assert window.height() == 800
+
+
+def test_a_screen_larger_than_the_default_leaves_the_window_alone(qtbot):
+    """Clamping is a rescue, not a policy: a big display gets 1400x900."""
+    available = QRect(0, 0, 1920, 1080)
+    window = _bare_window(qtbot)
+
+    fit_window_to_screen(window, size=_DEFAULT_SIZE, minimum=_CONFIG_MIN, available=available)
+
+    assert (window.width(), window.height()) == _DEFAULT_SIZE
+    assert (window.minimumWidth(), window.minimumHeight()) == _CONFIG_MIN
+    assert available.contains(window.geometry())
+
+
+def test_a_screen_smaller_than_the_configured_minimum_lowers_the_minimum(qtbot):
+    """The harder half. ``setMinimumSize(1024, 768)`` on an 800x600 display
+    makes a window the user *cannot* shrink to fit, whatever the initial size
+    is set to -- so the minimum has to come down with it."""
+    available = QRect(0, 0, 800, 600)
+    window = _bare_window(qtbot)
+
+    fit_window_to_screen(window, size=_DEFAULT_SIZE, minimum=_CONFIG_MIN, available=available)
+
+    assert window.minimumWidth() == 800
+    assert window.minimumHeight() == 600
+    assert available.contains(window.geometry())
+
+
+def test_the_minimum_never_falls_below_what_the_builder_needs(qtbot):
+    """A screen smaller than the frame does not make the frame smaller.
+
+    Below :data:`MIN_SHELL_WIDTH` there is nowhere to put two panels and a
+    content surface, and a window floored there would be honestly sized and
+    useless. The floor wins; what is left is a window bigger than its screen,
+    which the user can at least still move.
+    """
+    available = QRect(0, 0, 400, 300)
+    window = _bare_window(qtbot)
+
+    fit_window_to_screen(window, size=_DEFAULT_SIZE, minimum=_CONFIG_MIN, available=available)
+
+    assert window.minimumWidth() == MIN_SHELL_WIDTH
+    assert window.minimumHeight() == MIN_SHELL_HEIGHT
+    assert window.geometry().topLeft() == available.topLeft()
+
+
+def test_the_window_is_placed_inside_the_available_area_not_only_sized(qtbot):
+    """``availableGeometry`` is not the screen: a taskbar moves its origin, and
+    a second monitor moves it further. Sizing to fit and then leaving the
+    window wherever the OS put it re-creates the same clipped left edge."""
+    available = QRect(1920, 48, 1280, 752)
+    window = _bare_window(qtbot)
+
+    fit_window_to_screen(window, size=_DEFAULT_SIZE, minimum=_CONFIG_MIN, available=available)
+
+    assert available.contains(window.geometry())
+
+
+def test_a_window_with_no_screen_to_measure_still_gets_its_configured_size(qtbot):
+    """A headless run has no screen; it must not have no window either."""
+    window = _bare_window(qtbot)
+
+    fit_window_to_screen(window, size=_DEFAULT_SIZE, minimum=_CONFIG_MIN, available=QRect())
+
+    assert (window.width(), window.height()) == _DEFAULT_SIZE
+    assert (window.minimumWidth(), window.minimumHeight()) == _CONFIG_MIN
+
+
+def test_the_screen_measured_is_the_primary_one_by_default(qtbot):
+    """The window is not shown yet, so there is no screen it is *on*."""
+    available = QGuiApplication.primaryScreen().availableGeometry()
+    window = _bare_window(qtbot)
+
+    fit_window_to_screen(window, size=_DEFAULT_SIZE, minimum=_CONFIG_MIN)
+
+    assert available.contains(window.geometry())

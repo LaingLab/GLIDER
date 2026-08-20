@@ -51,6 +51,7 @@ from glider.gui.shell import (
     Command,
     CommandPalette,
     commands_from_menus,
+    fit_window_to_screen,
     menu_actions,
 )
 from glider.gui.styles import colors
@@ -441,8 +442,19 @@ class MainWindow(QMainWindow):
                 self.setGeometry(screen.geometry())
             self.show()
         else:
-            self.setMinimumSize(config.ui.min_window_width, config.ui.min_window_height)
-            self.resize(config.ui.default_window_width, config.ui.default_window_height)
+            # Both configured sizes are clamped to the screen, and the window is
+            # placed as well as sized. The configured 1400x900 on a narrower
+            # display is a window the OS centres off the left edge, taking the
+            # Builder's first panel tab with it; the configured 1024x768
+            # minimum on a smaller display is a window that cannot be dragged
+            # back. Nothing else clamps this: AppShell.restore_layout only ever
+            # runs once a close has saved a geometry, so a fresh machine has
+            # only this.
+            fit_window_to_screen(
+                self,
+                size=(config.ui.default_window_width, config.ui.default_window_height),
+                minimum=(config.ui.min_window_width, config.ui.min_window_height),
+            )
 
     def _setup_ui(self) -> None:
         """Set up the main UI components."""

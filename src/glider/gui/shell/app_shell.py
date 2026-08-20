@@ -57,7 +57,7 @@ from __future__ import annotations
 
 import logging
 
-from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtCore import QRect, QSettings, Qt
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QFrame,
@@ -72,9 +72,20 @@ from glider.gui.shell.side_panel import (
     RAIL_WIDTH,
     SidePanel,
 )
-from glider.gui.shell.status_strip import StatusStrip
+from glider.gui.shell.status_strip import STRIP_HEIGHT, StatusStrip
 
-__all__ = ["MIN_CENTRE_WIDTH", "MIN_ON_SCREEN", "NAME_CAP", "SETTINGS_PREFIX", "AppShell"]
+__all__ = [
+    "MIN_CENTRE_HEIGHT",
+    "MIN_CENTRE_WIDTH",
+    "MIN_ON_SCREEN",
+    "MIN_SHELL_HEIGHT",
+    "MIN_SHELL_WIDTH",
+    "NAME_CAP",
+    "SETTINGS_PREFIX",
+    "AppShell",
+    "fit_window_to_screen",
+    "primary_available_geometry",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +96,22 @@ SETTINGS_PREFIX = "shell"
 #: Below this the centre stops being a work surface and the panels should give
 #: way instead.
 MIN_CENTRE_WIDTH = 240
+
+#: The shortest a content surface is worth showing at. Not imposed on the
+#: centre -- the splitter is horizontal, so nothing here squeezes it
+#: vertically -- but it is half of the window floor below, and it is the same
+#: number the Builder gives its node graph, so the floor does not claim the
+#: frame fits in less room than the thing it exists to hold.
+MIN_CENTRE_HEIGHT = 300
+
+#: The smallest window the Builder is worth showing in: both panels at their
+#: own minimum width either side of a usable centre, and the strip above it.
+#: This is a *floor under the clamping* in :func:`fit_window_to_screen`, not a
+#: size anything is set to -- the splitter handles and whatever the centre
+#: itself demands are a few more pixels on top, and Qt takes the larger of this
+#: and the layout's own minimum anyway.
+MIN_SHELL_WIDTH = MIN_EXPANDED_WIDTH * 2 + MIN_CENTRE_WIDTH
+MIN_SHELL_HEIGHT = STRIP_HEIGHT + MIN_CENTRE_HEIGHT
 
 #: The widest an experiment name may *demand* of the window, in pixels. The
 #: label still holds the whole name; this caps what it forces on everything
@@ -398,23 +425,108 @@ class AppShell(QWidget):
         which is the same class of unreachable window this method exists to
         avoid.
         """
-        screen = QGuiApplication.primaryScreen()
-        if screen is None:  # pragma: no cover - a headless run with no screen
+        available = primary_available_geometry()
+        if available is None:  # pragma: no cover - a headless run with no screen
             return
-        available = screen.availableGeometry()
         size = window.size()
-        width = min(size.width(), available.width())
-        height = min(size.height(), available.height())
-        # setGeometry rather than move(): move() positions the window *frame*,
-        # so the client rectangle lands a title bar's worth off wherever it was
-        # aimed -- which is the difference between "just fits" and "hangs over
-        # the edge" for a window already the size of the screen.
-        window.setGeometry(
-            available.x() + (available.width() - width) // 2,
-            available.y() + (available.height() - height) // 2,
-            width,
-            height,
-        )
+        window.setGeometry(*_centred_in(available, size.width(), size.height()))
+
+
+# ------------------------------------------------------------ opening a window
+
+
+def primary_available_geometry() -> QRect | None:
+    """The primary screen's usable area, or ``None`` if there is no screen.
+
+    ``availableGeometry`` and not ``geometry``: the taskbar is the difference,
+    and a window sized to the full screen height loses its title bar behind it
+    -- which is the same unreachable window every clamp in this module exists
+    to avoid.
+
+    A function, rather than the two lines inline, so a test can substitute a
+    screen. Nothing else here can be told which display to measure, and a test
+    that measures the developer's own display asserts nothing.
+    """
+    screen = QGuiApplication.primaryScreen()
+    return None if screen is None else screen.availableGeometry()
+
+
+def fit_window_to_screen(
+    window: QWidget,
+    *,
+    size: tuple[int, int],
+    minimum: tuple[int, int],
+    available: QRect | None = None,
+) -> None:
+    """Open *window* at *size*, floored at *minimum*, inside the screen.
+
+    This is the **first launch** path. :meth:`AppShell.restore_layout` clamps a
+    saved geometry carefully, but there is no saved geometry until a close has
+    written one, so on a fresh machine nothing else runs: the configured size
+    was applied raw, the OS centred a window wider than the display, the left
+    edge landed at a negative x and the Builder's first panel tab went off the
+    side of the screen.
+
+    Both numbers are clamped, and the *minimum* is the one that matters. A
+    ``setMinimumSize(1024, 768)`` on an 800 px display is a window the user
+    cannot shrink to fit however the initial size is chosen -- the initial size
+    alone would be a fix that lasts until the first resize. The minimum is not
+    lowered past :data:`MIN_SHELL_WIDTH` x :data:`MIN_SHELL_HEIGHT` though: a
+    screen smaller than the frame does not make the frame smaller, and a window
+    floored below that has no room for two panels and a content surface.
+
+    Args:
+        window: The top level to size and place.
+        size: ``(width, height)`` it should open at, screen permitting.
+        minimum: ``(width, height)`` it should not be shrinkable below, screen
+            permitting.
+        available: The usable screen area, for tests. Defaults to the primary
+            screen's -- which is the screen the window will appear on, since
+            before it is shown there is no screen it is *on* to ask about. A
+            user who later drags it to a smaller monitor is a different
+            problem, and Qt handles that one.
+    """
+    width, height = size
+    min_width, min_height = minimum
+    if available is None:
+        available = primary_available_geometry()
+    if available is None or available.isEmpty():
+        # A headless run, or a screen Qt could not measure. There is nothing to
+        # clamp against, and a window is still better than no window.
+        window.setMinimumSize(min_width, min_height)
+        window.resize(width, height)
+        return
+
+    min_width = max(min(min_width, available.width()), min(MIN_SHELL_WIDTH, min_width))
+    min_height = max(min(min_height, available.height()), min(MIN_SHELL_HEIGHT, min_height))
+    window.setMinimumSize(min_width, min_height)
+
+    x, y, width, height = _centred_in(available, max(width, min_width), max(height, min_height))
+    # A floor above the screen still wins -- Qt would enforce it anyway, and a
+    # window that says one size and is another is worse than an oversized one.
+    # The corner stays put, so what hangs over is the far edge.
+    window.setGeometry(x, y, max(width, min_width), max(height, min_height))
+
+
+def _centred_in(available: QRect, width: int, height: int) -> tuple[int, int, int, int]:
+    """A ``width`` x ``height`` rectangle, shrunk to fit and centred on *available*.
+
+    Returned as four numbers for ``setGeometry`` rather than applied, because
+    both callers want to say something about the result first.
+
+    ``setGeometry`` and not ``move``: ``move`` positions the window *frame*, so
+    the client rectangle lands a title bar's worth off wherever it was aimed --
+    the difference between "just fits" and "hangs over the edge" for a window
+    already the size of the screen.
+    """
+    width = min(width, available.width())
+    height = min(height, available.height())
+    return (
+        available.x() + (available.width() - width) // 2,
+        available.y() + (available.height() - height) // 2,
+        width,
+        height,
+    )
 
 
 # --------------------------------------------------------------- value parsing

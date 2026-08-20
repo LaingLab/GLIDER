@@ -7,7 +7,11 @@ constructing a window.
 
 from __future__ import annotations
 
-from glider.gui.shell.app_shell import AppShell
+from glider.gui.shell.app_shell import (
+    AppShell,
+    fit_window_to_screen,
+    primary_available_geometry,
+)
 from glider.gui.shell.command_palette import (
     Command,
     CommandPalette,
@@ -29,5 +33,7 @@ __all__ = [
     "StatusStrip",
     "commands_from_menu_bar",
     "commands_from_menus",
+    "fit_window_to_screen",
     "menu_actions",
+    "primary_available_geometry",
 ]
