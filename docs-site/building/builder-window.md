@@ -243,11 +243,20 @@ do not say the same thing:
   (`State: RUNNING`), and the short messages GLIDER shows when you save a file,
   resize the window or add a device.
 
+They say different *amounts* about the same rig, and they never disagree about
+it. The strip has room for every board; the status bar has one line, so it
+reports the **worst** board rather than the first healthy one — a rig with one
+board up and one in error reads red at the bottom, naming the board that is
+down, and never `Connected`. A single board is named; several are counted
+(`2 of 3 boards down`).
+
 ## The Analysis panel
 
 One panel is not a tab. When a video tracking run finishes and you choose **Open
 in Analysis panel**, the **Analysis** panel opens as a separate dockable panel on
 the right of the window, alongside the Builder rather than inside it. You can
 move it, float it or close it like any dockable panel; closing it does not
-disturb the two side panels. See
+disturb the two side panels. Switching to the operator view with ++f11++ puts it
+away with the rest of the Builder and brings it back when you return — unless
+you closed it yourself, in which case it stays closed. See
 [Behavior Analysis](../camera-behavior/behavior.md).
