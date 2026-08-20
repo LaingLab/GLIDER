@@ -1181,12 +1181,17 @@ QFrame#statusStrip {
     border-bottom: 1px solid #1e2530;               /* BORDER */
 }
 
-QFrame#statusStripToggles,
 QFrame#statusStripDevices {
     background-color: transparent;
 }
 
-/* -- panel toggles -- */
+/* -- panel toggles --
+ *
+ * One at each end of the strip, each beside the panel it controls. The glyph
+ * is a style-drawn arrow rather than a character, so `color` below is what
+ * tints it -- including the accent it takes while its panel is open, which is
+ * the half of "expanded or collapsed?" the fill cannot carry on its own.
+ */
 
 QToolButton#statusStripToggle {
     background-color: #111820;                      /* SURFACE_1 */
@@ -1197,7 +1202,6 @@ QToolButton#statusStripToggle {
     min-height: 22px;
     max-height: 22px;
     color: #718096;                                 /* TEXT_MUTED */
-    font-size: 11px;
 }
 
 QToolButton#statusStripToggle:hover {

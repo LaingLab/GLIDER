@@ -8,11 +8,11 @@ run has to be visible to whoever walks past the rig, not to whoever thinks to
 open the Hardware panel. That is also why the device dots live here rather than
 being left to that panel: the panel can be collapsed, and this cannot.
 
-Left to right, in 40 fixed pixels: the two panel toggles, the experiment name
-with its dirty marker, the run-state pill, a spacer, one dot per device, and the
-``Ctrl K`` hint.
+Left to right, in 40 fixed pixels: the left panel's toggle, the experiment name
+with its dirty marker, the run-state pill, a spacer, one dot per device, the
+``Ctrl K`` hint, and the right panel's toggle.
 
-Four decisions carry meaning rather than convenience:
+Five decisions carry meaning rather than convenience:
 
 * **A device carries its name, not just a dot.** The dot is 8 px. Anyone who has
   to act on a red one at 3 a.m. needs to know *which* board, and a colour alone
@@ -36,6 +36,17 @@ Four decisions carry meaning rather than convenience:
   them. :meth:`StatusStrip.set_left_expanded` therefore sets the button without
   re-emitting, or echoing a panel's state back would ping-pong with the click
   that caused it.
+
+* **Each toggle sits at the edge of the panel it controls**, and draws an arrow
+  rather than a character. Both used to be bunched at the far left, which put
+  the right panel's button the width of a monitor away from the right panel.
+  The glyph was ``▌``/``▐``, half-block characters that are absent from many
+  fonts and read as a rendering artefact where they are present; the arrow is
+  drawn by the style, so it depends on no font and takes its colour from the
+  same ``desktop.qss`` rule as the button around it -- including the accent it
+  turns while the panel is open. It points *outward* when the panel is open
+  (press to push it away) and *inward* when it is collapsed (press to bring it
+  back), so the state is legible from the glyph and not only from the fill.
 
 **No colour is set from Python here.** Every part carries an ``objectName`` --
 and, where it varies, a dynamic ``state`` property -- and ``desktop.qss`` owns
@@ -102,6 +113,64 @@ _UNNAMED = "Untitled"
 _DIRTY_MARK = "— edited"
 
 
+class _PanelToggle(QToolButton):
+    """One panel's toggle: an arrow that turns with the panel it reflects.
+
+    Args:
+        side: ``"left"`` or ``"right"``. Published as a ``side`` property for
+            the stylesheet, said in :meth:`accessibleName` for anyone not
+            reading the strip's geometry, and what decides which way "outward"
+            is.
+        parent: Standard Qt parent.
+
+    Checked means the panel is open, as before. What is new is that the arrow
+    turns with it: outward while open, inward while collapsed.
+
+    The turn hangs off two Qt virtuals rather than off the ``toggled`` signal,
+    because neither route alone sees both ways the state moves:
+
+    * ``toggled`` is out, because :meth:`StatusStrip.set_left_expanded` sets the
+      button with its signals blocked -- it would miss the path the owner uses
+      to echo a panel back, which is most of them.
+    * :meth:`checkStateSet` catches every programmatic ``setChecked``, blocked
+      signals included -- but *not* a click: ``QAbstractButtonPrivate::click``
+      raises ``blockRefresh`` around the state change, and ``setChecked`` skips
+      ``checkStateSet`` while it is up.
+    * :meth:`nextCheckState` is what a click (and the space bar) goes through
+      instead.
+
+    Both, therefore. A button that turned only when something echoed back would
+    point the wrong way on any strip whose signal nobody has connected yet.
+    """
+
+    def __init__(self, side: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._side = "right" if side == "right" else "left"
+        self.setObjectName("statusStripToggle")
+        self.setProperty("side", self._side)
+        self.setAccessibleName(f"{self._side.capitalize()} panel")
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setChecked(True)
+        self._turn_arrow()
+
+    def checkStateSet(self) -> None:  # noqa: N802 - Qt override
+        super().checkStateSet()
+        self._turn_arrow()
+
+    def nextCheckState(self) -> None:  # noqa: N802 - Qt override
+        super().nextCheckState()
+        self._turn_arrow()
+
+    def _turn_arrow(self) -> None:
+        # Open: press to push the panel back to its own edge, so point there.
+        # Collapsed: press to bring it out, so point into the window.
+        towards_its_own_edge = self.isChecked()
+        on_the_left = self._side == "left"
+        points_left = towards_its_own_edge == on_the_left
+        self.setArrowType(Qt.ArrowType.LeftArrow if points_left else Qt.ArrowType.RightArrow)
+
+
 def _as_device(device: Sequence[str]) -> tuple[str, str, str]:
     """``(name, state)`` or ``(name, state, detail)`` as a full triple.
 
@@ -151,17 +220,8 @@ class StatusStrip(QFrame):
         outer.setContentsMargins(12, 0, 12, 0)
         outer.setSpacing(12)
 
-        toggles = QFrame(self)
-        toggles.setObjectName("statusStripToggles")
-        toggles.setFrameShape(QFrame.Shape.NoFrame)
-        toggle_layout = QHBoxLayout(toggles)
-        toggle_layout.setContentsMargins(0, 0, 0, 0)
-        toggle_layout.setSpacing(4)
-        self._left_toggle = self._build_toggle("left", "▌", self.left_toggled)
-        self._right_toggle = self._build_toggle("right", "▐", self.right_toggled)
-        toggle_layout.addWidget(self._left_toggle)
-        toggle_layout.addWidget(self._right_toggle)
-        outer.addWidget(toggles)
+        self._left_toggle = self._build_toggle("left", self.left_toggled)
+        outer.addWidget(self._left_toggle)
 
         self._name = QLabel(_UNNAMED, self)
         self._name.setObjectName("statusStripExperiment")
@@ -195,17 +255,16 @@ class StatusStrip(QFrame):
         self._palette_hint.clicked.connect(lambda _checked=False: self.palette_requested.emit())
         outer.addWidget(self._palette_hint)
 
+        # Last, so it lands on the right edge: a control belongs beside the
+        # thing it controls, and the right panel is the far side of the window.
+        self._right_toggle = self._build_toggle("right", self.right_toggled)
+        outer.addWidget(self._right_toggle)
+
     # ----------------------------------------------------------------- build
 
-    def _build_toggle(self, side: str, glyph: str, signal) -> QToolButton:
-        button = QToolButton(self)
-        button.setObjectName("statusStripToggle")
-        button.setProperty("side", side)
-        button.setText(glyph)
-        button.setCheckable(True)
-        button.setChecked(True)
+    def _build_toggle(self, side: str, signal) -> _PanelToggle:
+        button = _PanelToggle(side, self)
         button.setToolTip(f"Show or hide the {side} panel")
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.clicked.connect(lambda _checked=False: signal.emit())
         return button
 

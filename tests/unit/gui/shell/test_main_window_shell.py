@@ -18,9 +18,10 @@ keeps only a weak reference, and a dropped top level takes its children with it
 from __future__ import annotations
 
 import pytest
+from PyQt6.QtCore import QRect
 from PyQt6.QtWidgets import QDockWidget, QWidget
 
-from glider.gui.shell import AppShell, SidePanel
+from glider.gui.shell import AppShell, SidePanel, app_shell
 from glider.gui.styles import colors
 from glider.hal.base_board import BoardConnectionState
 
@@ -70,6 +71,29 @@ class _FakeBoard:
     async def disconnect(self) -> None:
         """Reached by the core's shutdown when a test leaves a board behind."""
         self.state = BoardConnectionState.DISCONNECTED
+
+
+# ------------------------------------------------------------- opening size
+#
+# The first launch on a machine is the one path no saved geometry can rescue:
+# ``AppShell.restore_layout`` clamps what it reads back, but there is nothing
+# to read until a close has written one, so a fresh install got the configured
+# 1400x900 applied raw. On a narrower display the OS centres that, the left
+# edge lands at a negative x, and the Builder's first panel tab goes off the
+# side of the screen.
+
+
+def test_a_first_launch_window_fits_the_screen(qtbot, main_window_factory, monkeypatch):
+    """End to end, with nothing saved: the window opens inside the screen."""
+    available = QRect(0, 48, 1280, 752)
+    monkeypatch.setattr(app_shell, "primary_available_geometry", lambda: available)
+
+    window = main_window_factory(desktop_mode=True)  # a throwaway, empty QSettings
+
+    assert window._settings.value("shell/geometry") is None
+    assert available.contains(window.geometry())
+    assert window.minimumWidth() <= available.width()
+    assert window.minimumHeight() <= available.height()
 
 
 # ------------------------------------------------------------------ the frame
