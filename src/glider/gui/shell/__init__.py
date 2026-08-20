@@ -8,6 +8,11 @@ constructing a window.
 from __future__ import annotations
 
 from glider.gui.shell.app_shell import AppShell
+from glider.gui.shell.command_palette import (
+    Command,
+    CommandPalette,
+    commands_from_menu_bar,
+)
 from glider.gui.shell.side_panel import DEFAULT_WIDTH, RAIL_WIDTH, SidePanel
 from glider.gui.shell.status_strip import STRIP_HEIGHT, StatusStrip
 
@@ -16,6 +21,9 @@ __all__ = [
     "RAIL_WIDTH",
     "STRIP_HEIGHT",
     "AppShell",
+    "Command",
+    "CommandPalette",
     "SidePanel",
     "StatusStrip",
+    "commands_from_menu_bar",
 ]

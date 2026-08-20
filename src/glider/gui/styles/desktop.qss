@@ -1355,3 +1355,102 @@ QToolButton#statusStripPaletteHint:hover {
     background-color: #151c25;                      /* SURFACE_2 */
     color: #c0c8d4;                                 /* TEXT_SECONDARY */
 }
+
+/* === Builder shell: the command palette ===
+ *
+ * `Ctrl+K` puts this over the window. After Task 6 removes four menus it is
+ * the Builder's primary navigation, read by someone who has never seen it, so
+ * two rules here carry meaning rather than decoration:
+ *
+ *   - `[state="disabled"]` greys a row; it does not hide it. The palette has to
+ *     answer "can I do this yet?" as well as "where is it?", and a row that
+ *     vanishes when unavailable answers neither.
+ *   - The category and the shortcut are dimmer than the command name, so the
+ *     eye lands on the name first and the two supporting facts stay legible
+ *     rather than competing with it.
+ *
+ * `command_palette.py` sets nothing but `objectName` and the `state` property;
+ * every colour is here. Property selectors resolve at polish time, so the row
+ * builder re-polishes after tagging -- without that the disabled rule never
+ * fires and every row looks available.
+ *
+ * Hex values are the tokens from glider/gui/styles/colors.py, named in the
+ * comments -- QSS cannot import them.
+ */
+
+/* The scrim. Dark enough to push the Builder back, translucent enough that the
+ * user can still see what they are about to act on. */
+QFrame#commandPalette {
+    background-color: rgba(10, 14, 19, 0.72);       /* CANVAS at 72% */
+}
+
+QFrame#commandPaletteCard {
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 8px;
+}
+
+QLineEdit#commandPaletteSearch {
+    background-color: transparent;
+    border: none;
+    border-bottom: 1px solid #1e2530;               /* BORDER */
+    border-radius: 0;
+    padding: 10px 12px;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    font-size: 14px;
+}
+
+QListWidget#commandPaletteList {
+    background-color: transparent;
+    border: none;
+    outline: none;
+    padding: 4px;
+}
+
+QListWidget#commandPaletteList::item {
+    border-radius: 4px;
+}
+
+QListWidget#commandPaletteList::item:selected {
+    background-color: #151c25;                      /* SURFACE_2 */
+}
+
+QFrame#commandPaletteRow {
+    background-color: transparent;
+}
+
+QLabel#commandPaletteRowText {
+    background-color: transparent;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    font-size: 13px;
+}
+
+QLabel#commandPaletteRowCategory {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 11px;
+}
+
+QLabel#commandPaletteRowShortcut {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 11px;
+}
+
+/* Greyed, never hidden: "not available yet" is a different statement from
+ * "this app cannot do that", and only one of them is true. */
+QFrame#commandPaletteRow[state="disabled"] QLabel#commandPaletteRowText,
+QFrame#commandPaletteRow[state="disabled"] QLabel#commandPaletteRowCategory,
+QFrame#commandPaletteRow[state="disabled"] QLabel#commandPaletteRowShortcut {
+    color: #475569;                                 /* TEXT_DISABLED */
+}
+
+/* Shown instead of the list, never beside it. A blank box is indistinguishable
+ * from a broken one, and the runner window reaches this state honestly: it has
+ * no menu bar to source commands from. */
+QLabel#commandPaletteEmpty {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 13px;
+    padding: 24px 12px;
+}

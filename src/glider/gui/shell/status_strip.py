@@ -39,10 +39,10 @@ and, where it varies, a dynamic ``state`` property -- and ``desktop.qss`` owns
 the rest. A widget-level ``setStyleSheet`` out-prioritises the application
 stylesheet, so one stray call would make that widget the single thing in the
 shell the theme cannot reach. Qt resolves property selectors at polish time
-rather than when the property is set, so :func:`_restyle` re-polishes anything
-whose ``state`` changed; without it the pill keeps the colour it opened with
-while reporting the right property. This is the pattern ``plugin_card.py``
-established and ``side_panel.py`` follows.
+rather than when the property is set, so
+:func:`glider.gui.styles.restyle` re-polishes anything whose ``state``
+changed; without it the pill keeps the colour it opened with while reporting
+the right property.
 """
 
 from __future__ import annotations
@@ -58,6 +58,8 @@ from PyQt6.QtWidgets import (
     QToolButton,
     QWidget,
 )
+
+from glider.gui.styles import restyle
 
 __all__ = [
     "DEVICE_STATES",
@@ -95,23 +97,6 @@ _UNNAMED = "Untitled"
 #: stylesheet can grey it without greying the name and so a caller reading the
 #: name back gets the name.
 _DIRTY_MARK = "— edited"
-
-
-def _restyle(widget: QWidget) -> None:
-    """Make Qt re-evaluate *widget* after a dynamic property changed.
-
-    Qt resolves ``[state="..."]`` selectors at polish time, not when the
-    property is set, so a rule applied later never takes effect without this.
-
-    (The third copy of this helper in the GUI, after ``plugin_card.py`` and
-    ``side_panel.py``. Kept local rather than imported across modules so no
-    widget depends on another widget's private name; worth consolidating into
-    the styles package once something needs a fourth.)
-    """
-    style = widget.style()
-    if style is not None:
-        style.unpolish(widget)
-        style.polish(widget)
 
 
 class StatusStrip(QFrame):
@@ -268,7 +253,7 @@ class StatusStrip(QFrame):
         text = RUN_STATE_TEXT[state]
         self._pill.setText(f"{text} {self._run_detail}" if self._run_detail else text)
         self._pill.setProperty("state", state)
-        _restyle(self._pill)
+        restyle(self._pill)
 
     def pill(self) -> QLabel:
         """The run-state pill."""
@@ -341,7 +326,7 @@ class StatusStrip(QFrame):
             return
         for widget in (chip, dot):
             widget.setProperty("state", state)
-            _restyle(widget)
+            restyle(widget)
 
     def device_names(self) -> list[str]:
         """The device names as rendered, in order."""

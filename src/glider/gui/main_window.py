@@ -45,7 +45,7 @@ from glider.gui.panels.device_control_panel import DeviceControlPanel
 from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController, node_category_for_type
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
-from glider.gui.shell import AppShell
+from glider.gui.shell import AppShell, CommandPalette, commands_from_menu_bar
 from glider.gui.styles import colors
 from glider.gui.view_manager import ViewManager, ViewMode
 from glider.hal.base_board import BoardConnectionState
@@ -225,6 +225,13 @@ class MainWindow(QMainWindow):
         # follow a panel collapsed by any other route.
         self._left_panel_action: QAction | None = None
         self._right_panel_action: QAction | None = None
+        # Ctrl+K. Held so the binding is findable from the window rather than
+        # only from Qt's shortcut map; see _install_palette_shortcut.
+        self._palette_action: QAction | None = None
+        # The command palette, built on first Ctrl+K rather than at startup:
+        # it reads the menu bar when it opens, so there is nothing for it to do
+        # before then.
+        self._command_palette: CommandPalette | None = None
 
         # Toolbar status (initialised here so _on_core_state_change can test)
         self._toolbar_status: QLabel | None = None
@@ -367,6 +374,27 @@ class MainWindow(QMainWindow):
             self._stack.setCurrentIndex(0)
             self._populate_builder_panels()
 
+        self._install_palette_shortcut()
+
+    def _install_palette_shortcut(self) -> None:
+        """Bind ``Ctrl+K`` to the command palette, window-wide.
+
+        The action is added to the *window* and never to a menu, so it does not
+        list itself: "Command Palette" appearing inside the command palette
+        would be the one entry that cannot teach anybody anything.
+
+        ``Ctrl+K`` was checked against every menu action before it was taken,
+        and ``test_ctrl_k_is_not_already_taken`` keeps checking, so the day
+        somebody wants it for something else the collision is a test failure
+        rather than a shortcut that silently stopped working.
+        """
+        action = QAction("Command Palette", self)
+        action.setShortcut(QKeySequence("Ctrl+K"))
+        action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        action.triggered.connect(self._on_palette_requested)
+        self.addAction(action)
+        self._palette_action = action
+
     def _create_builder_view(self) -> None:
         """Build the Builder frame: the shell, with the graph as its centre.
 
@@ -398,13 +426,24 @@ class MainWindow(QMainWindow):
         self._builder_view.strip.palette_requested.connect(self._on_palette_requested)
 
     def _on_palette_requested(self) -> None:
-        """The strip's ``Ctrl K`` hint was pressed.
+        """Open the command palette, from ``Ctrl+K`` or the strip's hint.
 
-        The palette itself is a later task. Until it exists the hint says so
-        rather than doing nothing at all, because a control that teaches a
-        shortcut and then silently ignores it teaches the wrong thing.
+        Built on first use and kept, so its position and the overlay it owns
+        survive being closed. It is parented to the window rather than to the
+        Builder frame: ``Ctrl+K`` should work from whichever page the stack is
+        showing, and a palette parented to a hidden page would be hidden too.
         """
-        self._show_status_message("The command palette is not available yet", 3000)
+        if self._command_palette is None:
+            self._command_palette = CommandPalette(self)
+            # The source is re-read on every open, so "Undo" is greyed exactly
+            # when the Edit menu would grey it. A list captured once here would
+            # be a second description of the actions, and would drift.
+            self._command_palette.set_command_source(lambda: commands_from_menu_bar(self.menuBar()))
+        self._command_palette.open()
+
+    def command_palette(self) -> "CommandPalette | None":
+        """The command palette, or ``None`` if nothing has opened one yet."""
+        return self._command_palette
 
     def _create_runner_view(self) -> None:
         """Build the operator (non-Builder) view for the detected mode.

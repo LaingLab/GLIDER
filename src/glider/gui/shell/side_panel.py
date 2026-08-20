@@ -28,9 +28,9 @@ and, where it varies, a dynamic ``state`` property -- and ``desktop.qss`` owns
 the rest. A widget-level ``setStyleSheet`` out-prioritises the application
 stylesheet, so one stray call would make that widget the single thing in the
 shell the theme cannot reach. Qt resolves property selectors at polish time
-rather than when the property is set, so :func:`_restyle` re-polishes anything
-whose ``state`` changed; without it the ``[state="collapsed"]`` rules would
-never fire. This is the pattern ``widgets/plugin_card.py`` established.
+rather than when the property is set, so
+:func:`glider.gui.styles.restyle` re-polishes anything whose ``state``
+changed; without it the ``[state="collapsed"]`` rules would never fire.
 """
 
 from __future__ import annotations
@@ -47,6 +47,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.styles import restyle
+
 __all__ = ["DEFAULT_WIDTH", "MIN_EXPANDED_WIDTH", "RAIL_WIDTH", "SidePanel"]
 
 #: Width of the collapsed rail, in pixels. Sized to a 30 px hit target plus its
@@ -62,18 +64,6 @@ MIN_EXPANDED_WIDTH = 160
 
 #: Side of a rail button, in pixels.
 _RAIL_BUTTON = 30
-
-
-def _restyle(widget: QWidget) -> None:
-    """Make Qt re-evaluate *widget* after a dynamic property changed.
-
-    Qt resolves ``[state="..."]`` selectors at polish time, not when the
-    property is set, so a rule applied later never takes effect without this.
-    """
-    style = widget.style()
-    if style is not None:
-        style.unpolish(widget)
-        style.polish(widget)
 
 
 class SidePanel(QFrame):
@@ -300,7 +290,7 @@ class SidePanel(QFrame):
         self._body.setVisible(expanded)
         self._rail.setVisible(not expanded)
         self.setProperty("state", "expanded" if expanded else "collapsed")
-        _restyle(self)
+        restyle(self)
 
         if expanded:
             self.setMaximumWidth(QWIDGETSIZE_MAX)
