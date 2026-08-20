@@ -74,7 +74,7 @@ from glider.gui.shell.side_panel import (
 )
 from glider.gui.shell.status_strip import StatusStrip
 
-__all__ = ["MIN_CENTRE_WIDTH", "NAME_CAP", "SETTINGS_PREFIX", "AppShell"]
+__all__ = ["MIN_CENTRE_WIDTH", "MIN_ON_SCREEN", "NAME_CAP", "SETTINGS_PREFIX", "AppShell"]
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,12 @@ MIN_CENTRE_WIDTH = 240
 #: else. Roughly 40 characters at the shipped font -- long enough to read a
 #: real protocol name, short enough that a laptop can still show the Builder.
 NAME_CAP = 280
+
+#: How much of a restored window has to be on a screen, in pixels each way,
+#: before the saved geometry is used rather than thrown away. Enough to see and
+#: to grab: a window whose only pixel on screen is one corner cannot be dragged
+#: back, and every control that would fix it is past the edge.
+MIN_ON_SCREEN = 120
 
 #: Splitter indices. Named because the centre is replaced by index.
 _LEFT, _CENTRE, _RIGHT = 0, 1, 2
@@ -367,24 +373,47 @@ class AppShell(QWidget):
         if not _on_a_screen(rect):
             # Real on a rig whose second monitor is not always plugged in.
             logger.warning(
-                "Saved window geometry %s is off every available screen; centring instead",
+                "Saved window geometry %s is not usably on any available screen; centring instead",
                 rect,
             )
             self._centre_window(window)
             return
-        window.setGeometry(*rect)
+        clamped = _clamp_to_screen(rect)
+        if clamped != rect:
+            # Not a rejection: the position the user left the window at is still
+            # honoured as far as it can be. A rectangle can parse, have area and
+            # overlap a screen while still being bigger than one, and save_layout
+            # writes back whatever is applied -- so a size nobody could have
+            # meant would otherwise persist across every restart from here on.
+            logger.warning("Saved window geometry %s does not fit; using %s", rect, clamped)
+        window.setGeometry(*clamped)
 
     @staticmethod
     def _centre_window(window: QWidget) -> None:
-        """Put *window* in the middle of the primary screen, at its own size."""
+        """Put *window* in the middle of the primary screen, sized to fit it.
+
+        This is the rescue path, so it may not need rescuing itself. The
+        configured default size is 1400x900; centred *at its own size* on a
+        1024x768 lab PC that lands at y = -66, with the title bar off the top --
+        which is the same class of unreachable window this method exists to
+        avoid.
+        """
         screen = QGuiApplication.primaryScreen()
         if screen is None:  # pragma: no cover - a headless run with no screen
             return
         available = screen.availableGeometry()
         size = window.size()
-        window.move(
-            available.x() + (available.width() - size.width()) // 2,
-            available.y() + (available.height() - size.height()) // 2,
+        width = min(size.width(), available.width())
+        height = min(size.height(), available.height())
+        # setGeometry rather than move(): move() positions the window *frame*,
+        # so the client rectangle lands a title bar's worth off wherever it was
+        # aimed -- which is the difference between "just fits" and "hangs over
+        # the edge" for a window already the size of the screen.
+        window.setGeometry(
+            available.x() + (available.width() - width) // 2,
+            available.y() + (available.height() - height) // 2,
+            width,
+            height,
         )
 
 
@@ -429,6 +458,10 @@ def _as_rect(raw: object) -> tuple[int, int, int, int] | None:
 
     A rectangle with no area is treated as malformed rather than obeyed: a
     zero-width window is indistinguishable from a missing one to the user.
+
+    Magnitude is deliberately **not** judged here -- this function has no screen
+    to judge it against, and "too big" is a property of the rig, not of the
+    string. :func:`_clamp_to_screen` does that where the screens are known.
     """
     parts = str(raw).split(",")
     if len(parts) != 4:
@@ -442,16 +475,46 @@ def _as_rect(raw: object) -> tuple[int, int, int, int] | None:
     return x, y, width, height
 
 
-def _on_a_screen(rect: tuple[int, int, int, int]) -> bool:
-    """Whether *rect* overlaps any screen currently attached."""
+def _overlap(rect: tuple[int, int, int, int], screen) -> tuple[int, int]:
+    """How much of *rect* is on *screen*, as ``(width, height)``."""
     x, y, width, height = rect
+    available = screen.availableGeometry()
+    across = min(x + width, available.x() + available.width()) - max(x, available.x())
+    down = min(y + height, available.y() + available.height()) - max(y, available.y())
+    return max(across, 0), max(down, 0)
+
+
+def _on_a_screen(rect: tuple[int, int, int, int]) -> bool:
+    """Whether enough of *rect* is on a screen to be worth restoring.
+
+    Not "overlaps at all": a window at the bottom-right corner of an 800x800
+    screen overlaps it by one pixel, and restoring that puts the title bar --
+    and everything the user could grab to fix it -- past the edge. What has to
+    be on screen is :data:`MIN_ON_SCREEN` in both directions, or the whole
+    window where it is smaller than that.
+    """
     for screen in QGuiApplication.screens():
-        available = screen.availableGeometry()
-        if (
-            x < available.x() + available.width()
-            and x + width > available.x()
-            and y < available.y() + available.height()
-            and y + height > available.y()
-        ):
+        across, down = _overlap(rect, screen)
+        if across >= min(MIN_ON_SCREEN, rect[2]) and down >= min(MIN_ON_SCREEN, rect[3]):
             return True
     return False
+
+
+def _clamp_to_screen(rect: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """*rect*, shrunk and moved as little as possible to fit one screen.
+
+    The screen chosen is the one *rect* already overlaps most, so a window
+    restored onto a second monitor stays there rather than being dragged back
+    to the primary one to be made to fit.
+    """
+    screens = QGuiApplication.screens()
+    if not screens:  # pragma: no cover - a headless run with no screen
+        return rect
+    screen = max(screens, key=lambda s: _overlap(rect, s)[0] * _overlap(rect, s)[1])
+    available = screen.availableGeometry()
+    x, y, width, height = rect
+    width = min(width, available.width())
+    height = min(height, available.height())
+    x = min(max(x, available.x()), available.x() + available.width() - width)
+    y = min(max(y, available.y()), available.y() + available.height() - height)
+    return x, y, width, height

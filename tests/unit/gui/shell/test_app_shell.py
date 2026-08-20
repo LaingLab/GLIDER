@@ -311,16 +311,78 @@ def test_a_saved_tab_that_no_longer_exists_falls_back_to_the_first(qtbot, shell,
 def test_geometry_entirely_off_screen_is_ignored_and_the_window_centred(qtbot, settings):
     """Real on a rig whose second monitor is not always plugged in."""
     settings.setValue("shell/geometry", "9000,9000,600,400")
+    available = QGuiApplication.primaryScreen().availableGeometry()
 
-    shell = _shown(qtbot)
+    # Small enough to fit the screen as it is, so this test is about *position*
+    # and the one below is about size.
+    shell = _shown(qtbot, width=min(600, available.width()))
     size_before = shell.size()
     shell.restore_layout(settings)
 
-    available = QGuiApplication.primaryScreen().availableGeometry()
     qtbot.waitUntil(lambda: available.intersects(shell.geometry()))
     assert shell.size() == size_before
     assert abs(shell.geometry().center().x() - available.center().x()) <= 2
     assert abs(shell.geometry().center().y() - available.center().y()) <= 2
+
+
+# -- three ways a saved geometry can be well-formed and still unusable --------
+#
+# The type checks above are only half of it. A rectangle can parse, have area
+# and touch a screen while still leaving the window unreachable, and the last of
+# these is the *fallback path* -- the one that runs when everything else has
+# already been rejected.
+
+
+def test_an_absurd_saved_size_is_clamped_to_the_screen(qtbot, settings):
+    """A rectangle with area is not the same as a rectangle with a usable size.
+
+    ``0,0,99999999,99999999`` parses, has area and overlaps every screen, and
+    gives a 16 777 215 px window with nothing on it reachable -- which
+    ``save_layout`` then writes back on close, so it survives restarts.
+    """
+    settings.setValue("shell/geometry", "0,0,99999999,99999999")
+    available = QGuiApplication.primaryScreen().availableGeometry()
+
+    shell = _shown(qtbot)
+    shell.restore_layout(settings)
+
+    qtbot.waitUntil(lambda: available.contains(shell.geometry()))
+    assert shell.width() <= available.width()
+    assert shell.height() <= available.height()
+
+
+def test_a_geometry_hanging_off_the_corner_is_not_on_a_screen(qtbot, settings):
+    """One pixel of overlap is not "on a screen".
+
+    Bottom-right corner of the screen, 1400x900: a single pixel intersects, so
+    the overlap test passed and the window was restored with its title bar --
+    and everything else -- past the edge.
+    """
+    available = QGuiApplication.primaryScreen().availableGeometry()
+    settings.setValue("shell/geometry", f"{available.right()},{available.bottom()},1400,900")
+
+    shell = _shown(qtbot, width=min(600, available.width()))
+    shell.restore_layout(settings)
+
+    qtbot.waitUntil(lambda: available.contains(shell.geometry()))
+
+
+def test_centring_a_window_larger_than_the_screen_shrinks_it_to_fit(qtbot, settings):
+    """The fallback has to land somewhere usable, or rejecting is pointless.
+
+    1400x900 is the configured default size. Centred on a 1024x768 lab PC that
+    puts the title bar at y = -66, so the one path that exists to rescue a bad
+    geometry produced another one.
+    """
+    settings.setValue("shell/geometry", "not-a-rectangle")  # forces the fallback
+    available = QGuiApplication.primaryScreen().availableGeometry()
+
+    shell = _shown(qtbot, width=available.width() + 400)
+    shell.restore_layout(settings)
+
+    qtbot.waitUntil(lambda: available.contains(shell.geometry()))
+    assert shell.geometry().x() >= available.x()
+    assert shell.geometry().y() >= available.y()
 
 
 def test_malformed_values_fall_back_to_defaults_and_log(qtbot, settings, caplog):
