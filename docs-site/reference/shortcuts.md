@@ -36,11 +36,14 @@ convention: **++ctrl++ on Windows/Linux, ++cmd++ on macOS**.
 
 | Action | Shortcut |
 |---|---|
+| Command palette | ++ctrl+k++ |
 | Switch Builder ↔ Dashboard (the 2×2 operator view; the menu item is labelled **Switch to Runner View**) | ++f11++ |
 | Help | ++f1++ |
 
 !!! tip "Discover the rest"
-    Any command that has a shortcut shows it next to its entry in the menus
-    (**File**, **Edit**, **Experiment**, **View**, **Hardware**, **Run**,
-    **Tools**, **Help**). Browsing the menus is the quickest way to learn what's
+    Press ++ctrl+k++ to open the [command
+    palette](../building/builder-window.md#command-palette). It lists every
+    command GLIDER has — including the ones in the **Experiment**, **Hardware**,
+    **Run** and **Tools** menus, which are not on the menu bar — with each
+    command's shortcut beside it. It is the quickest way to learn what's
     available.
