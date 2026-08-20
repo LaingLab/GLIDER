@@ -16,6 +16,10 @@ Four decisions carry meaning rather than convenience:
   repeatedly by two such descriptions drifting apart. :func:`commands_from_menu_bar`
   walks the real menu bar, and :meth:`CommandPalette.open` walks it again on
   every open so that "Undo" is greyed exactly when the Edit menu would grey it.
+  Since Task 6 the window sources from :func:`commands_from_menus` instead, for
+  the same reason one level along: half its menus are no longer on the bar, and
+  walking the bar would drop exactly the actions the palette was built to
+  rehouse -- silently, since they would still exist and still work.
 
 * **A disabled command is greyed, never hidden.** The palette has to answer
   "can I do this yet?" as well as "where is it?". A command that disappears
@@ -59,6 +63,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMenuBar,
     QVBoxLayout,
     QWidget,
@@ -74,6 +79,7 @@ __all__ = [
     "Command",
     "CommandPalette",
     "commands_from_menu_bar",
+    "commands_from_menus",
     "match_positions",
     "rank",
 ]
@@ -190,34 +196,53 @@ def _strip_mnemonic(text: str) -> str:
     return text.replace("&&", "\x00").replace("&", "").replace("\x00", "&").strip()
 
 
-def commands_from_menu_bar(menu_bar: QMenuBar | None) -> list[Command]:
-    """Every actionable item in *menu_bar*, in menu order.
+def commands_from_menus(menus: Iterable[QMenu | None]) -> list[Command]:
+    """Every actionable item in *menus*, in the order given.
 
-    Separators and menu titles are skipped; submenus are walked, and their
-    contents keep the *top-level* menu's name as their category -- a user
-    looking for where something lived remembers "it was under Tools", not the
-    submenu it was nested in.
+    The general form, and after Task 6 the one the window uses. **A menu does
+    not have to be on the menu bar to be a source here** -- which is the whole
+    point: Experiment, Hardware, Run and Tools are built, owned by the window
+    and populated exactly as before, and simply never added to the bar. Walking
+    the bar would lose them, and lose them silently: the actions would still
+    exist and still work, and nothing would be able to reach them.
 
-    ``None`` yields an empty list rather than raising. A window with no menu bar
-    is a real state (the Pi runner has none), and the palette shows its named
-    empty state for it.
+    Each command's category is its menu's own title. Separators are skipped;
+    submenus are walked, and their contents keep the *top-level* menu's name --
+    a user looking for where something lived remembers "it was under Tools", not
+    the submenu it was nested in.
+
+    ``None`` entries are skipped rather than raising, so a caller may pass the
+    result of a lookup that found nothing.
 
     Shortcuts are rendered as portable text (``"Ctrl+N"``) rather than native
     text, so the string a test compares is the same on all three platforms CI
     runs.
     """
-    if menu_bar is None:
-        return []
     commands: list[Command] = []
-    for action in menu_bar.actions():
-        menu = action.menu()
+    for menu in menus:
         if menu is None:
             continue
-        _collect(menu, _strip_mnemonic(action.text()), commands)
+        _collect(menu, _strip_mnemonic(menu.title()), commands)
     return commands
 
 
-def _collect(menu, category: str, into: list[Command]) -> None:
+def commands_from_menu_bar(menu_bar: QMenuBar | None) -> list[Command]:
+    """Every actionable item in *menu_bar*, in menu order.
+
+    The narrow case of :func:`commands_from_menus`: the menus a bar happens to
+    be showing. Since Task 6 that is four of the window's eight, so a window
+    with a slimmed bar should source from :func:`commands_from_menus` instead.
+
+    ``None`` yields an empty list rather than raising. A window with no menu bar
+    is a real state (the Pi runner has none), and the palette shows its named
+    empty state for it.
+    """
+    if menu_bar is None:
+        return []
+    return commands_from_menus(action.menu() for action in menu_bar.actions())
+
+
+def _collect(menu: QMenu, category: str, into: list[Command]) -> None:
     for action in menu.actions():
         if action.isSeparator():
             continue

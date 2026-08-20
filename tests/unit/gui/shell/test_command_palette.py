@@ -183,13 +183,19 @@ def test_separators_do_not_become_commands(qtbot):
 def test_ctrl_k_is_not_already_taken(qtbot, main_window_factory):
     """The palette's own key must not shadow something a user already relies
     on. Asserted against the real window rather than a grep, so it stays true
-    as the menus change."""
+    as the menus change.
+
+    Sourced from ``window.commands()`` rather than the menu bar, and that is the
+    whole point of the check: since Task 6 the bar shows four of the window's
+    eight menus, so asking the bar would quietly stop looking at Experiment,
+    Hardware, Run and Tools -- sixteen actions, and exactly where a new shortcut
+    is most likely to be added. It would keep passing while covering half of
+    what it claims to.
+    """
     window = main_window_factory(desktop_mode=True)
     window.show()
 
-    taken = {
-        c.text for c in commands_from_menu_bar(window.menuBar()) if c.shortcut.lower() == "ctrl+k"
-    }
+    taken = {c.text for c in window.commands() if c.shortcut.lower() == "ctrl+k"}
 
     assert taken == set()
     del window
@@ -458,9 +464,14 @@ def test_ctrl_k_opens_the_palette_from_the_main_window(qtbot, main_window_factor
     del window
 
 
-def test_the_window_palette_is_full_of_the_menu_bar(qtbot, main_window_factory):
+def test_the_window_palette_is_full_of_the_windows_commands(qtbot, main_window_factory):
     """The real corpus, and not the palette's own key: an entry that opens the
-    thing you are already looking at is the one row that teaches nothing."""
+    thing you are already looking at is the one row that teaches nothing.
+
+    "Add Subject..." is the sample on purpose: it is on the Experiment menu,
+    which since Task 6 is not on the menu bar at all. Finding it here is the
+    palette proving it sources from the window's menus rather than the bar.
+    """
     window = _active_builder(qtbot, main_window_factory)
 
     palette = _press_ctrl_k(qtbot, window)

@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QSizePolicy,
     QStackedWidget,
@@ -45,7 +46,7 @@ from glider.gui.panels.device_control_panel import DeviceControlPanel
 from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController, node_category_for_type
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
-from glider.gui.shell import AppShell, CommandPalette, commands_from_menu_bar
+from glider.gui.shell import AppShell, Command, CommandPalette, commands_from_menus
 from glider.gui.styles import colors
 from glider.gui.view_manager import ViewManager, ViewMode
 from glider.hal.base_board import BoardConnectionState
@@ -61,6 +62,34 @@ logger = logging.getLogger(__name__)
 # separate from ``first_run/tour_complete``: one shared flag would mean sitting
 # through the walkthrough silences the setup form nobody has seen yet.
 LAB_SETUP_COMPLETE_KEY = "first_run/setup_complete"
+
+# The menus that appear on the menu bar, in bar order.
+#
+# The bar stays, and stays this short, for two reasons written out in spec §9.
+# On Windows and Linux an application with no File -> Save reads as unfinished
+# rather than clean. And a menu bar is free inventory for a first-time user --
+# which counts for more here than in an app with a trained userbase, because
+# GLIDER has no existing users and so for the foreseeable future *every* user is
+# a first-time one. Same reason the palette greys a disabled command instead of
+# hiding it, and a collapsed panel leaves its icon rail behind.
+MENU_BAR_TITLES = ("File", "Edit", "View", "Help")
+
+# The menus that came off the bar. Every one of them is still built, still
+# populated and still owned by the window; they are simply not added to the bar,
+# and they reach the user through the command palette (and, where one already
+# owned the handler, through a panel).
+#
+# The distinction that matters is *shown* versus *built*. ``_setup_menu`` builds
+# all eight into ``_menus``; the bar shows four of them; ``commands()`` reads all
+# eight. One list, two consumers -- rather than a bar and a separate registry
+# that would drift, which is the failure this project has hit before.
+RELOCATED_MENU_TITLES = ("Experiment", "Hardware", "Run", "Tools")
+
+
+def _plain_title(title: str) -> str:
+    """``"E&xperiment"`` as the user reads it. A doubled ``&&`` survives."""
+    return title.replace("&&", "\x00").replace("&", "").replace("\x00", "&").strip()
+
 
 # How a board's connection state is painted on the status strip.
 #
@@ -228,8 +257,11 @@ class MainWindow(QMainWindow):
         # Ctrl+K. Held so the binding is findable from the window rather than
         # only from Qt's shortcut map; see _install_palette_shortcut.
         self._palette_action: QAction | None = None
+        # Every menu the window builds, in menu order -- the four on the bar and
+        # the four that are not. _setup_menu fills it; commands() reads it.
+        self._menus: list[QMenu] = []
         # The command palette, built on first Ctrl+K rather than at startup:
-        # it reads the menu bar when it opens, so there is nothing for it to do
+        # it reads the menus when it opens, so there is nothing for it to do
         # before then.
         self._command_palette: CommandPalette | None = None
 
@@ -438,12 +470,33 @@ class MainWindow(QMainWindow):
             # The source is re-read on every open, so "Undo" is greyed exactly
             # when the Edit menu would grey it. A list captured once here would
             # be a second description of the actions, and would drift.
-            self._command_palette.set_command_source(lambda: commands_from_menu_bar(self.menuBar()))
+            self._command_palette.set_command_source(self.commands)
         self._command_palette.open()
 
     def command_palette(self) -> "CommandPalette | None":
         """The command palette, or ``None`` if nothing has opened one yet."""
         return self._command_palette
+
+    def menus(self) -> list[QMenu]:
+        """Every menu the window builds, in menu order.
+
+        Both the four on the menu bar and the four :data:`RELOCATED_MENU_TITLES`
+        that are not. The bar is a *view* of the first four of these; this is the
+        list itself. Empty in runner mode, which builds no menus at all.
+        """
+        return list(getattr(self, "_menus", []))
+
+    def commands(self) -> list[Command]:
+        """Every action the window offers, read live, in menu order.
+
+        What the palette opens onto, and the definition of "reachable" for this
+        window: an action in here can be found and run by someone who has never
+        seen GLIDER; an action that is not is an object nothing can invoke.
+
+        Read from the menus on every call rather than cached, because the answer
+        includes ``isEnabled()`` and that changes constantly.
+        """
+        return commands_from_menus(self.menus())
 
     def _create_runner_view(self) -> None:
         """Build the operator (non-Builder) view for the detected mode.
@@ -923,8 +976,56 @@ class MainWindow(QMainWindow):
 
     # --- Menu / Toolbar / Status bar ---
 
+    def _menu(self, title: str) -> QMenu:
+        """Build one menu, register it, and put it on the bar if it belongs there.
+
+        The single place the bar/registry split is made. A menu whose title is in
+        :data:`MENU_BAR_TITLES` is added to the bar; every menu, either way, is
+        appended to ``_menus`` in the order it was built -- which is why the
+        unfiltered palette still reads File, Edit, Experiment, … and not some
+        order that fell out of how the bar was assembled.
+
+        Parented to the window, so a menu that never reaches the bar is still
+        owned by something and its actions outlive this call.
+        """
+        menu = QMenu(title, self)
+        self._menus.append(menu)
+        if _plain_title(title) in MENU_BAR_TITLES:
+            self.menuBar().addMenu(menu)
+        return menu
+
+    def _adopt_relocated_shortcuts(self) -> None:
+        """Make the shortcuts of off-the-bar menus fire again.
+
+        Qt dispatches a ``QAction``'s shortcut through the widgets the action is
+        associated with, and a ``QMenu`` that is never shown is not one of them.
+        An action whose only home is a menu off the bar therefore has a shortcut
+        that silently stops working -- F5 would no longer start a run, and
+        nothing would raise. Adding those actions to the *window* restores the
+        dispatch in the same ``WindowShortcut`` context the menu bar gave them,
+        which is exactly how ``Ctrl+K`` already works.
+
+        Only actions off the bar are adopted: adopting one that is also in a bar
+        menu would give Qt two associations for one shortcut.
+        """
+        on_the_bar = {
+            id(action.menu()) for action in self.menuBar().actions() if action.menu() is not None
+        }
+        for menu in self._menus:
+            if id(menu) in on_the_bar:
+                continue
+            self.addActions([action for action in menu.actions() if not action.isSeparator()])
+
     def _setup_menu(self) -> None:
-        """Set up the menu bar."""
+        """Build every menu, and show the four that belong on the bar.
+
+        Experiment, Hardware, Run and Tools are built here exactly as before and
+        then not added to the bar. They are not dead: :meth:`commands` reads
+        ``_menus`` rather than the bar, so the palette lists them; two of the
+        Hardware actions are also buttons on the Hardware panel that owns their
+        handler; and :meth:`_adopt_relocated_shortcuts` keeps their keys alive.
+        """
+        self._menus = []
         if self._view_manager.is_runner_mode:
             return
 
@@ -938,7 +1039,7 @@ class MainWindow(QMainWindow):
         menubar.setCornerWidget(branding, Qt.Corner.TopLeftCorner)
 
         # File menu
-        file_menu = menubar.addMenu("&File")
+        file_menu = self._menu("&File")
 
         new_action = QAction("&New", self)
         new_action.setShortcut(QKeySequence.StandardKey.New)
@@ -970,7 +1071,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(exit_action)
 
         # Edit menu
-        edit_menu = menubar.addMenu("&Edit")
+        edit_menu = self._menu("&Edit")
 
         self._undo_action = QAction("&Undo", self)
         self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
@@ -985,7 +1086,7 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self._redo_action)
 
         # Experiment menu
-        experiment_menu = menubar.addMenu("E&xperiment")
+        experiment_menu = self._menu("E&xperiment")
 
         experiment_settings_action = QAction("Experiment &Settings...", self)
         experiment_settings_action.triggered.connect(self._on_open_experiment_dialog)
@@ -1005,7 +1106,7 @@ class MainWindow(QMainWindow):
         experiment_menu.addAction(lab_setup_action)
 
         # View menu
-        view_menu = menubar.addMenu("&View")
+        view_menu = self._menu("&View")
 
         switch_view_action = QAction("Switch to &Runner View", self)
         switch_view_action.setShortcut(QKeySequence("F11"))
@@ -1059,7 +1160,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction(default_view_action)
 
         # Hardware menu
-        hardware_menu = menubar.addMenu("&Hardware")
+        hardware_menu = self._menu("&Hardware")
 
         add_board_action = QAction("Add &Board...", self)
         add_board_action.triggered.connect(
@@ -1088,7 +1189,7 @@ class MainWindow(QMainWindow):
         hardware_menu.addAction(disconnect_action)
 
         # Run menu
-        run_menu = menubar.addMenu("&Run")
+        run_menu = self._menu("&Run")
 
         start_action = QAction("&Start", self)
         start_action.setShortcut(QKeySequence("F5"))
@@ -1108,7 +1209,7 @@ class MainWindow(QMainWindow):
         run_menu.addAction(emergency_action)
 
         # Tools menu
-        tools_menu = menubar.addMenu("&Tools")
+        tools_menu = self._menu("&Tools")
 
         behavior_action = QAction("&Behavior Analysis…", self)
         behavior_action.triggered.connect(self._open_behavior_analysis)
@@ -1173,7 +1274,7 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(plugins_action)
 
         # Help menu
-        help_menu = menubar.addMenu("&Help")
+        help_menu = self._menu("&Help")
 
         help_action = QAction("&GLIDER Help", self)
         help_action.setShortcut(QKeySequence("F1"))
@@ -1197,6 +1298,9 @@ class MainWindow(QMainWindow):
         about_action = QAction("&About GLIDER", self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
+
+        # Last, because it reads the menus once they are populated.
+        self._adopt_relocated_shortcuts()
 
     def _open_behavior_analysis(self) -> None:
         """Open (or re-surface) the Behavior Analysis window.
