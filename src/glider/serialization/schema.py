@@ -20,7 +20,12 @@ logger = logging.getLogger(__name__)
 # predate it ignore the key, and ``ExperimentSerializer._validate_schema``
 # only rejects a *major* version ahead of its own — so 1.0.0 installs still
 # open 1.1.0 files, just without the CV settings.
-SCHEMA_VERSION = "1.1.0"
+#
+# 1.2.0 adds the optional ``device_id`` on a node, recording which device a
+# hardware node is bound to. Additive on the same terms: ``NodeSchema.from_dict``
+# ignores keys it does not know, so older readers open 1.2.0 files exactly as
+# they do today — with every hardware node unbound.
+SCHEMA_VERSION = "1.2.0"
 
 
 class SchemaValidationError(Exception):
@@ -72,10 +77,14 @@ class NodeSchema:
     properties: dict[str, Any] = field(default_factory=dict)
     inputs: list[PortSchema] = field(default_factory=list)
     outputs: list[PortSchema] = field(default_factory=list)
+    # The device this node is bound to, as its key in HardwareManager.devices
+    # (the same string written as a device's ``id``). None for nodes that are
+    # not hardware nodes, or that the user has not bound yet.
+    device_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return {
+        data: dict[str, Any] = {
             "id": self.id,
             "type": self.type,
             "title": self.title,
@@ -88,6 +97,11 @@ class NodeSchema:
                 {"name": p.name, "type": p.type, "data_type": p.data_type} for p in self.outputs
             ],
         }
+        # Omitted rather than written as null when there is no binding, so
+        # files for graphs with no hardware nodes are unchanged by 1.2.0.
+        if self.device_id:
+            data["device_id"] = self.device_id
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], path: str = "node") -> "NodeSchema":
@@ -120,6 +134,7 @@ class NodeSchema:
             properties=data.get("properties", {}),
             inputs=inputs,
             outputs=outputs,
+            device_id=data.get("device_id"),
         )
 
 

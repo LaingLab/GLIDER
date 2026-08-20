@@ -44,8 +44,8 @@ from glider.nodes.vision.zone_nodes import register_zone_nodes
 from glider.serialization.serializer import ExperimentSerializer
 
 
-def _make_engine_with_all_nodes() -> FlowEngine:
-    engine = FlowEngine()
+def _make_engine_with_all_nodes(hardware_manager=None) -> FlowEngine:
+    engine = FlowEngine(hardware_manager)
     register_experiment_nodes(engine)
     register_control_nodes(engine)
     register_logic_nodes(engine)
@@ -463,6 +463,110 @@ def test_zero_pin_devices_round_trip(
         assert device.pins == {}, f"{device_id} grew phantom pins: {device.pins}"
     assert fresh_hm.devices["ble1"]._config.settings["address"] == "AA:BB:CC:DD:EE:01"
     assert fresh_hm.devices["ble2"]._config.settings["address"] == "AA:BB:CC:DD:EE:02"
+
+
+def _bound_setup(serializer_, tmp_path_):
+    """A saved file with one hardware node bound to one device."""
+    hm = HardwareManager()
+    HardwareManager.register_driver("mock", MockBoard)
+    hm.add_board(board_id="board1", driver_type="mock", port=None)
+    hm.add_device_multi_pin("led1", "DigitalOutput", "board1", pins={"output": 5}, name="LED")
+
+    engine = _make_engine_with_all_nodes(hm)
+    node = engine.create_node(
+        node_id="out1", node_type="Output", position=(10.0, 20.0), device_id="led1"
+    )
+    assert node.device is not None, "precondition: create_node should have bound the device"
+
+    out = tmp_path_ / "bound.glider"
+    serializer_.save(out, session=ExperimentSession(), flow_engine=engine, hardware_manager=hm)
+    return out
+
+
+def _reload(serializer_, path):
+    hm = HardwareManager()
+    HardwareManager.register_driver("mock", MockBoard)
+    engine = _make_engine_with_all_nodes(hm)
+    session = ExperimentSession()
+    serializer_.apply_to_session(
+        serializer_.load(path), session=session, flow_engine=engine, hardware_manager=hm
+    )
+    return session, engine
+
+
+def test_node_device_binding_survives_the_runtime_round_trip(
+    tmp_path: Path, serializer: ExperimentSerializer
+):
+    """A hardware node bound to a device must still be bound after reload --
+    otherwise every Output/Input/DeviceAction node silently comes back unbound
+    and the experiment does nothing until each is re-picked by hand."""
+    path = _bound_setup(serializer, tmp_path)
+
+    _session, engine = _reload(serializer, path)
+
+    node = engine.get_node("out1")
+    assert node is not None, "node lost on round-trip"
+    assert node.device is not None, "node came back unbound"
+    assert node.device.name == "LED"
+
+
+def test_node_device_binding_survives_into_the_session_model(
+    tmp_path: Path, serializer: ExperimentSerializer
+):
+    """The session model is what the properties panel reads and what File >
+    Save As re-serializes, so the binding has to land there too."""
+    path = _bound_setup(serializer, tmp_path)
+
+    session, _engine = _reload(serializer, path)
+
+    node_config = session.get_node("out1")
+    assert node_config is not None
+    assert node_config.device_id == "led1"
+
+
+def test_binding_survives_a_second_save(tmp_path: Path, serializer: ExperimentSerializer):
+    """Save -> load -> save must not quietly drop the binding on the way out."""
+    session, engine = _reload(serializer, _bound_setup(serializer, tmp_path))
+    hm = engine._hardware_manager
+
+    again = tmp_path / "again.glider"
+    serializer.save(again, session=session, flow_engine=engine, hardware_manager=hm)
+
+    _session2, engine2 = _reload(serializer, again)
+    assert engine2.get_node("out1").device is not None
+
+
+def test_unbound_node_saves_no_device_id(tmp_path: Path, serializer: ExperimentSerializer):
+    """Nodes with no device must not gain a phantom binding."""
+    hm = HardwareManager()
+    HardwareManager.register_driver("mock", MockBoard)
+    hm.add_board(board_id="board1", driver_type="mock", port=None)
+    engine = _make_engine_with_all_nodes(hm)
+    engine.create_node(node_id="delay1", node_type="Delay", position=(0.0, 0.0))
+
+    out = tmp_path / "unbound.glider"
+    serializer.save(out, session=ExperimentSession(), flow_engine=engine, hardware_manager=hm)
+
+    data = json.loads(out.read_text())
+    node = next(n for n in data["flow"]["nodes"] if n["id"] == "delay1")
+    assert node.get("device_id") is None
+
+
+def test_binding_to_a_device_missing_from_the_file_is_survivable(
+    tmp_path: Path, serializer: ExperimentSerializer
+):
+    """A file naming a device that no longer exists must load the node unbound,
+    not fail the whole load."""
+    path = _bound_setup(serializer, tmp_path)
+    data = json.loads(path.read_text())
+    data["hardware"]["devices"] = []
+    path.write_text(json.dumps(data))
+
+    _session, engine = _reload(serializer, path)
+
+    node = engine.get_node("out1")
+    assert node is not None, "the whole load failed over one dangling binding"
+    assert node.device is None
 
 
 def test_single_pin_device_dict_stays_old_version_readable(
