@@ -807,6 +807,8 @@ class MainWindow(QMainWindow):
         # tracking CSV's `frame` column for one-key joins to the MP4.
         camera_panel.set_data_recorder(self._core.data_recorder)
         camera_panel.set_event_logger(self._core.event_logger)
+        # Lets Behavior Input nodes in the flow react to live classification.
+        camera_panel.set_live_signals(self._core.live_signals)
         camera_panel.set_calibration(self._core.calibration)
         camera_panel._preview.set_calibration(self._core.calibration)
         camera_panel.set_zone_configuration(self._zone_config)
