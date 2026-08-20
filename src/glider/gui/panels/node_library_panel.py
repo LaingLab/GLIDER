@@ -173,6 +173,14 @@ class NodeLibraryPanel(QWidget):
                 ("Input", "Input", "Read from a device (digital or analog)"),
                 ("Maimu", "Maimu", "Drive a Maimu BLE stimulator: on, off, or a timed pulse"),
             ],
+            "Behavior": [
+                (
+                    "BehaviorInput",
+                    "Behavior Input",
+                    "Trigger on live behavior classification - fires On Enter / On "
+                    "Exit as the animal starts and stops a behavior",
+                ),
+            ],
             "Audio": [
                 ("AudioPlayback", "Audio Playback", "Play an audio file (WAV/MP3)"),
             ],
@@ -186,6 +194,7 @@ class NodeLibraryPanel(QWidget):
             "Functions": colors.LIB_FUNCTIONS,
             "Control": colors.LIB_CONTROL,
             "I/O": colors.LIB_IO,
+            "Behavior": colors.LIB_BEHAVIOR,
             "Audio": colors.LIB_AUDIO,
             "Video": colors.LIB_VIDEO,
             "default": colors.BORDER,
