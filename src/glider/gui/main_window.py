@@ -46,7 +46,13 @@ from glider.gui.panels.device_control_panel import DeviceControlPanel
 from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController, node_category_for_type
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
-from glider.gui.shell import AppShell, Command, CommandPalette, commands_from_menus
+from glider.gui.shell import (
+    AppShell,
+    Command,
+    CommandPalette,
+    commands_from_menus,
+    menu_actions,
+)
 from glider.gui.styles import colors
 from glider.gui.view_manager import ViewManager, ViewMode
 from glider.hal.base_board import BoardConnectionState
@@ -1073,6 +1079,12 @@ class MainWindow(QMainWindow):
 
         Only actions off the bar are adopted: adopting one that is also in a bar
         menu would give Qt two associations for one shortcut.
+
+        The traversal is :func:`~glider.gui.shell.menu_actions`, the same one
+        the palette lists from. It has to be: the palette walks submenus, and
+        this used to read one flat level, so an action inside a submenu of an
+        off-the-bar menu would have been listed by the palette carrying a
+        shortcut that silently did nothing.
         """
         on_the_bar = {
             id(action.menu()) for action in self.menuBar().actions() if action.menu() is not None
@@ -1080,7 +1092,7 @@ class MainWindow(QMainWindow):
         for menu in self._menus:
             if id(menu) in on_the_bar:
                 continue
-            self.addActions([action for action in menu.actions() if not action.isSeparator()])
+            self.addActions(menu_actions(menu))
 
     def _setup_menu(self) -> None:
         """Build every menu, and show the four that belong on the bar.

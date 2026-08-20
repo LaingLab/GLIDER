@@ -13,6 +13,7 @@ from glider.gui.shell.command_palette import (
     CommandPalette,
     commands_from_menu_bar,
     commands_from_menus,
+    menu_actions,
 )
 from glider.gui.shell.side_panel import DEFAULT_WIDTH, RAIL_WIDTH, SidePanel
 from glider.gui.shell.status_strip import STRIP_HEIGHT, StatusStrip
@@ -28,4 +29,5 @@ __all__ = [
     "StatusStrip",
     "commands_from_menu_bar",
     "commands_from_menus",
+    "menu_actions",
 ]

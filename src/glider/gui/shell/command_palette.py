@@ -81,6 +81,7 @@ __all__ = [
     "commands_from_menu_bar",
     "commands_from_menus",
     "match_positions",
+    "menu_actions",
     "rank",
 ]
 
@@ -242,14 +243,36 @@ def commands_from_menu_bar(menu_bar: QMenuBar | None) -> list[Command]:
     return commands_from_menus(action.menu() for action in menu_bar.actions())
 
 
-def _collect(menu: QMenu, category: str, into: list[Command]) -> None:
+def menu_actions(menu: QMenu | None) -> list[QAction]:
+    """Every actionable ``QAction`` in *menu*, submenus included, in menu order.
+
+    The single answer to "what are the actions of a menu". Two consumers ask it
+    -- the palette, which lists them, and ``MainWindow._adopt_relocated_shortcuts``,
+    which keeps the shortcuts of off-the-bar menus firing -- and they must not
+    answer it differently. When the adoption read one flat level while the
+    palette walked submenus, an action one level down inside an off-the-bar menu
+    would have been *listed with a shortcut that did nothing*: the exact silent
+    failure the adoption exists to prevent, one level lower than it looked.
+
+    Separators and submenu placeholders are skipped; what comes back is only the
+    actions a user can actually invoke.
+    """
+    found: list[QAction] = []
+    if menu is None:
+        return found
     for action in menu.actions():
         if action.isSeparator():
             continue
         submenu = action.menu()
         if submenu is not None:
-            _collect(submenu, category, into)
+            found.extend(menu_actions(submenu))
             continue
+        found.append(action)
+    return found
+
+
+def _collect(menu: QMenu, category: str, into: list[Command]) -> None:
+    for action in menu_actions(menu):
         text = _strip_mnemonic(action.text())
         if not text:
             continue

@@ -282,6 +282,43 @@ def test_every_relocated_shortcut_is_associated_with_the_window(qtbot, main_wind
     del window
 
 
+def test_an_action_in_a_submenu_off_the_bar_is_adopted_too(qtbot, main_window_factory):
+    """The palette and the adoption must mean the same thing by "the actions of
+    a menu". The palette walks submenus; the adoption read one flat level, so an
+    action one level down would be *listed* with a shortcut that did nothing --
+    the exact silent failure the adoption exists to prevent.
+    """
+    window = _builder(qtbot, main_window_factory)
+    tools = _menu(window, "Tools")
+    assert tools is not None
+    submenu = tools.addMenu("&Diagnostics")
+    buried = QAction("&Ping Board", window)
+    buried.setShortcut("Ctrl+Alt+P")
+    submenu.addAction(buried)
+
+    window._adopt_relocated_shortcuts()
+
+    assert buried in window.actions()
+    assert "Ping Board" in [command.text for command in window.commands()]
+    del window
+
+
+def test_an_action_in_a_submenu_on_the_bar_is_left_alone(qtbot, main_window_factory):
+    """Two associations for one shortcut is Qt's ambiguous-shortcut warning, and
+    the action already dispatches through the bar."""
+    window = _builder(qtbot, main_window_factory)
+    file_menu = _menu(window, "File")
+    submenu = file_menu.addMenu("&Recent")
+    buried = QAction("&Yesterday", window)
+    buried.setShortcut("Ctrl+Alt+Y")
+    submenu.addAction(buried)
+
+    window._adopt_relocated_shortcuts()
+
+    assert buried not in window.actions()
+    del window
+
+
 def test_f5_still_starts_a_run_from_the_keyboard(qtbot, main_window_factory):
     """The structural claim above, pressed.
 
