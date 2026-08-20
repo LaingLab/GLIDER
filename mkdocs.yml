@@ -91,14 +91,17 @@ nav:
       - How GLIDER Works: getting-started/concepts.md
   - Building Experiments:
       - building/index.md
+      - The Builder Window: building/builder-window.md
       - The Node Graph: building/node-graph.md
       - Devices & Hardware: building/devices.md
+      - Subjects & Lab Vocabulary: building/subjects.md
       - Functions: building/functions.md
       - Custom Devices & Plugins: building/plugins.md
   - Camera & Behavior:
       - camera-behavior/index.md
       - Camera & Recording: camera-behavior/camera.md
       - Tracking: camera-behavior/tracking.md
+      - Pose Models: camera-behavior/pose-models.md
       - Behavior Analysis: camera-behavior/behavior.md
   - Runner Mode:
       - runner/index.md

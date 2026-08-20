@@ -7,6 +7,7 @@ never changes, a column missing entirely, or thirty columns nobody asked for.
 
 import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -429,22 +430,19 @@ def test_a_schema_with_no_registers_derives_nothing():
 @pytest.mark.parametrize(
     "entry, fragment",
     [
-        ({"address": 32, "type": "S16", "access": "Event"}, "'S16'"),
-        ({"address": 32, "type": "Float", "access": "Event"}, "'Float'"),
         ({"address": 32, "type": "U8", "access": "Event", "length": 4}, "4 elements"),
+        ({"address": 32, "type": "Uint16", "access": "Event"}, "'Uint16'"),
+        ({"address": 32, "access": "Event"}, "None"),
     ],
-    ids=["signed", "float", "array"],
+    ids=["array", "misspelled-type", "no-type"],
 )
 def test_recording_a_register_the_cache_cannot_decode_is_refused(entry, fragment):
-    """``RegisterCache`` reads every payload as one unsigned little-endian
-    integer, so an S16 of -1 is recorded as 65535, a Float of 1.5 as
-    1069547520, and a four-element array as one implausible number.
+    """What is left of the gate after signed and float were taught to decode.
 
-    Refused rather than warned because every one of those files opens cleanly,
-    plots, and is wrong: nothing downstream can tell 65535 from a reading. And
-    ``HarpDevice`` packs *writes* by the declared type, so a signed register
-    written as -1 and read back through the record returns a different number
-    than it was given, inside one program.
+    An array register's whole payload would still collapse into one number,
+    and a type the cache has never heard of has no decoding at all -- both
+    produce a CSV that opens cleanly, plots, and is wrong, which is why this
+    refuses rather than warns.
     """
     schema = {"registers": {"Reg": entry}}
     with pytest.raises(ValueError, match="Reg") as excinfo:
@@ -452,16 +450,230 @@ def test_recording_a_register_the_cache_cannot_decode_is_refused(entry, fragment
     assert fragment in str(excinfo.value)
 
 
-@pytest.mark.parametrize("declared", ["U8", "U16", "U32", "U64"])
-def test_every_unsigned_width_may_be_recorded(declared):
-    """The gate is exactly what the cache can decode, not a narrower guess."""
+@pytest.mark.parametrize(
+    "declared", ["U8", "U16", "U32", "U64", "S8", "S16", "S32", "S64", "Float"]
+)
+def test_every_scalar_payload_type_may_be_recorded(declared):
+    """The gate is exactly what the cache can decode, not a narrower guess.
+
+    ``RegisterCache`` now decodes by declared type -- unsigned, signed and
+    float alike -- so every scalar type is recordable and the gate must not
+    lag behind it.
+    """
     schema = {"registers": {"Reg": {"address": 32, "type": declared, "access": "Event"}}}
     assert derive(schema, {"record": [{"register": "Reg", "as": "r"}]}).recorded == {32: "r"}
 
 
-def test_a_signed_register_is_still_usable_as_an_action():
-    """Only the recorded side is gated. Writes go out with the correct width
-    and signedness already, so refusing the action too would take away
-    something that works."""
-    schema = {"registers": {"Offset": {"address": 32, "type": "S16", "access": "Write"}}}
-    assert derive(schema, None).actions == {"Offset": 32}
+@pytest.mark.parametrize("declared", ["U16", "S16", "Float"])
+def test_the_declared_type_of_every_recorded_register_is_carried(declared):
+    """The cache cannot decode by type unless somebody hands it the type, and
+    ``derive`` is the only place that has read the schema."""
+    schema = {"registers": {"Reg": {"address": 32, "type": declared, "access": "Event"}}}
+    result = derive(schema, {"record": [{"register": "Reg", "as": "r"}]})
+
+    assert result.recorded_types == {32: declared}
+
+
+def test_only_recorded_registers_carry_a_type():
+    """Actions do not go through the cache, so a type for one would be noise
+    -- and ``RegisterCache`` refuses a type for an address it was not given."""
+    schema = {
+        "registers": {
+            "Lick": {"address": 32, "type": "U8", "access": "Event"},
+            "Offset": {"address": 33, "type": "S16", "access": "Write"},
+        }
+    }
+    result = derive(schema, {"record": [{"register": "Lick", "as": "lick"}]})
+
+    assert set(result.recorded_types) == set(result.recorded)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"address": 32, "type": "S16", "access": "Write"},
+        {"address": 32, "type": "U8", "access": "Write", "length": 8},
+        {"address": 32, "access": "Write"},
+    ],
+    ids=["signed", "array", "no-type"],
+)
+def test_a_register_the_record_refuses_is_still_usable_as_an_action(entry):
+    """Only the recorded side is gated, and the cases have to be the ones the
+    gate actually refuses *now*.
+
+    This test used to name a signed register, because signed was refused. It
+    is not any more, so a gate wrongly applied to the action side would have
+    passed this unchanged and taken away nothing visible -- the mutation sweep
+    caught exactly that. The list is now what ``_check_recordable`` still
+    refuses: an array register, and one whose schema declares no type. Both are
+    unrecordable and both are ordinary things to have on the control surface.
+    """
+    assert derive({"registers": {"Reg": entry}}, None).actions == {"Reg": 32}
+
+
+# --- profiles a lab wrote itself -----------------------------------------
+#
+# The whole point of the directory: a second Harp device in a lab needs a
+# profile, and before this every way of adding one meant editing a file inside
+# an installed package, which the next upgrade overwrites.
+
+
+def test_a_profile_in_the_user_directory_loads(user_profiles):
+    _write_profile(user_profiles / "ourrig.json", name="OurRig")
+
+    assert load_profile("ourrig")["name"] == "OurRig"
+
+
+def test_a_user_profile_derives_like_a_shipped_one(user_profiles):
+    _write_profile(user_profiles / "ourrig.json", name="OurRig")
+
+    assert derive(SCHEMA, load_profile("ourrig")).recorded == {32: "lick"}
+
+
+def test_available_profiles_enumerates_both_directories(user_profiles):
+    _write_profile(user_profiles / "ourrig.json", name="OurRig")
+
+    available = derivation.available_profiles()
+
+    assert "licketysplit" in available and "ourrig" in available
+    assert available["ourrig"] == user_profiles / "ourrig.json"
+
+
+def test_a_user_profile_overrides_a_shipped_one_of_the_same_name(user_profiles):
+    """The reason precedence goes this way: it is how a lab fixes a shipped
+    profile that does not match the firmware it actually has. Anything else
+    leaves them editing files inside an installed package again."""
+    _write_profile(user_profiles / "licketysplit.json", name="OurLicketySplit")
+
+    assert load_profile("licketysplit")["name"] == "OurLicketySplit"
+    assert derivation.available_profiles()["licketysplit"].parent == user_profiles
+
+
+def test_shadowing_a_shipped_profile_says_so(user_profiles, caplog):
+    """Silent shadowing is the failure this precedence buys, so it is not
+    silent: a stale copy that survives an upgrade has to be visible somewhere
+    other than the dropdown a person configured months ago."""
+    _write_profile(user_profiles / "licketysplit.json", name="OurLicketySplit")
+
+    with caplog.at_level(logging.WARNING):
+        load_profile("licketysplit")
+
+    assert "licketysplit" in caplog.text
+    assert str(user_profiles) in caplog.text
+
+
+def test_a_shipped_profile_still_loads_when_the_user_directory_is_empty():
+    assert load_profile("licketysplit")["name"] == "LicketySplit"
+
+
+def test_a_missing_user_directory_is_not_an_error(monkeypatch, tmp_path):
+    """The common case on a fresh install: nobody has ever written one."""
+    monkeypatch.setattr(derivation, "user_profile_dir", lambda: tmp_path / "nope")
+
+    assert load_profile("licketysplit")["name"] == "LicketySplit"
+    assert "licketysplit" in derivation.available_profiles()
+
+
+def test_an_unknown_profile_lists_the_user_profiles_too(user_profiles):
+    _write_profile(user_profiles / "ourrig.json", name="OurRig")
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_profile("nosuchdevice")
+
+    assert "ourrig" in str(excinfo.value) and "licketysplit" in str(excinfo.value)
+
+
+def test_an_unknown_profile_says_where_a_user_profile_would_go(user_profiles):
+    """The one error here a person can actually act on."""
+    with pytest.raises(FileNotFoundError) as excinfo:
+        load_profile("nosuchdevice")
+
+    assert str(user_profiles) in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "text", ["{not json at all}", "[1, 2, 3]", '"a string"'], ids=["broken", "list", "scalar"]
+)
+def test_a_malformed_user_profile_names_the_file(user_profiles, text):
+    """A user file is data, and the user can fix it -- but only if the message
+    says which file. The shipped profile's name would identify it; a file in a
+    directory the user owns needs its path."""
+    path = user_profiles / "ourrig.json"
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError) as excinfo:
+        load_profile("ourrig")
+
+    assert str(path) in str(excinfo.value)
+
+
+def test_a_user_profile_from_another_format_version_is_refused_by_path(user_profiles):
+    """A user file is data, not an escape hatch: the same version gate applies,
+    and it names the file so the fix is obvious."""
+    path = user_profiles / "ourrig.json"
+    _write_profile(path, name="OurRig", schema_version="2.0")
+
+    with pytest.raises(ValueError, match="schema_version") as excinfo:
+        load_profile("ourrig")
+
+    assert str(path) in str(excinfo.value)
+
+
+def test_a_user_profile_may_not_record_an_array_register(user_profiles):
+    """Nor does it bypass the recordable gate."""
+    schema = {"registers": {"Bulk": {"address": 32, "type": "U8", "access": "Event", "length": 8}}}
+    _write_profile(user_profiles / "ourrig.json", name="OurRig", register="Bulk", column="bulk")
+
+    with pytest.raises(ValueError, match="8 elements"):
+        derive(schema, load_profile("ourrig"))
+
+
+@pytest.mark.parametrize("name", ["../secrets", "a/b", "..", "", "a.b"])
+def test_a_user_profile_cannot_be_reached_by_path_either(name, user_profiles):
+    """The name still comes from a device setting. A user *directory* is not a
+    licence to name a file anywhere on disk."""
+    with pytest.raises(ValueError):
+        load_profile(name)
+
+
+def test_the_user_directory_sits_under_gliders_own_config_root(monkeypatch):
+    """Resolved from GLIDER's config rather than hardcoded, so a lab that moved
+    ``~/.glider`` does not find its profiles in a directory it abandoned.
+
+    Resolved *lazily*, at the call: ``glider_harp`` importing ``glider`` at
+    module scope is exactly what ``test_packaging`` forbids.
+    """
+    import glider.core.config
+
+    moved = glider.core.config.GliderConfig()
+    moved.paths.user_config_dir = Path("/somewhere/else")
+    monkeypatch.setattr(glider.core.config, "get_config", lambda: moved)
+
+    assert derivation._glider_config_dir() == Path("/somewhere/else")
+
+
+def test_the_user_directory_falls_back_to_the_conventional_home(monkeypatch):
+    """GLIDER unimportable is not a reason to have no user profiles: the
+    fallback is the same path its default config would have produced."""
+
+    def explode():
+        raise ImportError("no glider here")
+
+    monkeypatch.setattr(derivation, "_load_glider_config_dir", explode)
+
+    assert derivation._glider_config_dir() == Path.home() / ".glider"
+
+
+def _write_profile(path, *, name, schema_version="1.0", register="LickState", column="lick"):
+    """A minimal valid profile for ``SCHEMA``, written where the test wants it."""
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": schema_version,
+                "name": name,
+                "who_am_i": 1400,
+                "record": [{"register": register, "as": column}],
+            }
+        ),
+        encoding="utf-8",
+    )

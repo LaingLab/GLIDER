@@ -70,10 +70,59 @@ device's registers and which of them should be recorded. Core registers
 (`WhoAmI`, hardware and firmware versions, `TimestampSecond`, `OperationControl`,
 `ClockConfig`) are never recorded as data columns.
 
-Registers whose values are signed, floating-point, or arrays are **not** decoded
-correctly yet; the shipped profile does not use them. A profile relying on those
-types will record wrong numbers rather than failing, so check the register types
-before adding one.
+### Adding your own profile
+
+Put it in `~/.glider/harp_profiles/`, as `<name>.json`. It appears in the
+**Recording profile** dropdown when you add a Harp device, alongside the shipped
+ones, and it survives upgrades of this package.
+
+```json
+{
+  "schema_version": "1.0",
+  "name": "My Behaviour Board",
+  "who_am_i": 1216,
+  "record": [
+    { "register": "DigitalInputState", "as": "poke" },
+    { "register": "AnalogData", "as": "analog" }
+  ]
+}
+```
+
+`register` names a register in the board's own `device.yml`; `as` is the base
+name of the three columns it contributes. `who_am_i` is checked against the
+schema, so a profile written for one board cannot be pointed at another.
+
+A profile of your own with the same name as a shipped one **replaces** it —
+that is how you correct a shipped profile that does not match your firmware.
+The dropdown marks it as yours so the substitution is never a mystery, and the
+log says so when it is loaded.
+
+### Which register types can be recorded
+
+| Payload type | Recorded | Written |
+|---|---|---|
+| `U8` `U16` `U32` `U64` | yes | yes |
+| `S8` `S16` `S32` `S64` | yes, decoded signed | yes, packed signed |
+| `Float` | yes, IEEE-754 single | no — refused, not coerced |
+| Arrays (`length` > 1) | no — refused | untested; see below |
+
+A profile naming a register that cannot be recorded is **refused when the
+device initializes**, with a message naming the register and its type. It does
+not record a wrong number: the only failure mode is a device that will not
+start until the profile is corrected.
+
+Arrays are refused because how several values should appear in one CSV cell is
+undecided, not merely unimplemented — one column per element, a delimited
+string, and the first element only are all defensible and mean different
+things. If you need one, say which.
+
+Writes have always used the register's declared width and signedness, so a
+signed register has always been usable as an action even when it could not be
+recorded. Writing a `Float` register is refused outright rather than pushed
+through a lossy integer conversion that would look like it worked. Writing an
+**array** register is the one gap that is not a refusal: the write is packed to
+a single element's width, which is not what an array register expects. Do not
+drive an array register from a `DeviceAction` node.
 
 ## Status and limitations
 
@@ -88,7 +137,9 @@ Treat a first run as a bring-up exercise, not a deployment.
 
 Known gaps beyond that:
 
-- Signed, float and array register types, as above.
+- Array registers cannot be recorded and `Float` registers cannot be written —
+  both refusals, not wrong numbers. Writing an array register is neither: it
+  packs one element's width and does not complain. See the table above.
 - Devices boot in Standby and emit no events until set Active; the driver does
   this and reads the register back to confirm, but only that path is tested.
 

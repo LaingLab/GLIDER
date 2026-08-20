@@ -764,3 +764,10 @@ QWidget[deviceCard="true"] { background-color: #0f1419; border: 2px solid #1e253
 
 /* Status indicator (dynamic property version) */
 QLabel[statusIndicator="true"] { color: #e2e8f0; padding: 4px 12px; border-radius: 4px; font-weight: bold; margin: 2px; }
+
+/* Drag-and-drop target: the camera panel accepts pose models, behavior
+   models and videos, routed by type. The accent border is the only
+   feedback that a drop will land somewhere. */
+CameraPanel[dropActive="true"] {
+    border: 2px dashed #38bdf8;
+}

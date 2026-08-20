@@ -13,6 +13,7 @@ import queue
 import threading
 
 import numpy as np
+import pytest
 
 from glider.analysis.behavior.classify.threads import (
     END_OF_STREAM,
@@ -327,3 +328,111 @@ def test_a_failed_save_does_not_kill_the_run(tmp_path):
     finally:
         out.parent.chmod(0o700)
     # No exception escaped; whether the write succeeded is OS-dependent.
+
+
+# --------------------------------------------------------------------------
+# PoseTracker.run() loads through the pose-backend seam
+# --------------------------------------------------------------------------
+
+
+class _StubBackend:
+    """A PoseBackend double recording what it was asked to predict."""
+
+    def __init__(self, names, kps, confs):
+        self.keypoint_names = list(names)
+        self.native_keypoint_count = len(names)
+        self._kps = kps
+        self._confs = confs
+        self.frames = []
+
+    def predict(self, bgr):
+        self.frames.append(bgr)
+        return self._kps, self._confs
+
+    def close(self):
+        pass
+
+
+def _run_tracker(monkeypatch, backend, *, names=("a", "b"), device=None, frames=1):
+    """Drive PoseTracker.run() synchronously over `frames` frames, then EOS."""
+    from glider.analysis.behavior.classify import threads as th
+    from glider.vision.pose import backend as backend_mod
+
+    seen = {}
+
+    def _fake_load(path, keypoint_names=None, conf_threshold=0.25, dev=None):
+        seen["path"] = path
+        seen["names"] = keypoint_names
+        seen["conf"] = conf_threshold
+        seen["device"] = dev
+        return backend
+
+    monkeypatch.setattr(backend_mod, "load_pose_backend", _fake_load)
+
+    raw, tracked, display = queue.Queue(), queue.Queue(), queue.Queue()
+    for i in range(frames):
+        raw.put((i, np.zeros((6, 8, 3), dtype=np.uint8)))
+    raw.put(th.END_OF_STREAM)
+
+    tracker = th.PoseTracker(
+        raw,
+        tracked,
+        display,
+        threading.Event(),
+        "model.pt",
+        list(names),
+        conf_threshold=0.4,
+        device=device,
+    )
+    tracker.run()
+    return tracker, tracked, display, seen
+
+
+def test_pose_tracker_run_uses_the_backend_seam(monkeypatch):
+    kps = np.array([[1.0, 2.0], [3.0, 4.0]])
+    confs = np.array([0.9, 0.8])
+    backend = _StubBackend(["a", "b"], kps, confs)
+
+    tracker, tracked, display, seen = _run_tracker(monkeypatch, backend)
+
+    assert seen["path"] == "model.pt"
+    assert seen["conf"] == pytest.approx(0.4)
+    assert len(backend.frames) == 1
+
+    frame_idx, _, out_kps, out_confs = tracked.get_nowait()
+    assert frame_idx == 0
+    assert out_kps == pytest.approx(kps)
+    assert out_confs == pytest.approx(confs)
+    # Both queues get the same payload, then the end-of-stream sentinel.
+    assert display.get_nowait()[0] == 0
+    assert tracked.get_nowait() is END_OF_STREAM
+
+
+def test_pose_tracker_run_forwards_the_device(monkeypatch):
+    backend = _StubBackend(["a", "b"], np.zeros((2, 2)), np.zeros(2))
+    _, _, _, seen = _run_tracker(monkeypatch, backend, device="cuda:1")
+    assert seen["device"] == "cuda:1"
+
+
+def test_pose_tracker_run_adopts_the_backends_names(monkeypatch):
+    """DLC/SLEAP carry their own names; the tracker must take them over."""
+    backend = _StubBackend(["snout", "tailbase"], np.zeros((2, 2)), np.zeros(2))
+    tracker, _, _, _ = _run_tracker(monkeypatch, backend, names=("wrong", "names"))
+    assert tracker.keypoint_names == ["snout", "tailbase"]
+
+
+def test_pose_tracker_run_reports_a_load_failure(monkeypatch):
+    from glider.analysis.behavior.classify import threads as th
+    from glider.vision.pose import backend as backend_mod
+
+    def _boom(*a, **kw):
+        raise RuntimeError("no such model")
+
+    monkeypatch.setattr(backend_mod, "load_pose_backend", _boom)
+
+    raw, tracked, display = queue.Queue(), queue.Queue(), queue.Queue()
+    tracker = th.PoseTracker(raw, tracked, display, threading.Event(), "missing.pt", ["a", "b"])
+    tracker.run()
+
+    assert "failed to load pose model" in tracker.error
+    assert tracked.get_nowait() is END_OF_STREAM

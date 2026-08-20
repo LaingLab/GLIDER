@@ -312,21 +312,76 @@ READER_MUTANTS: list[tuple[str, str, str]] = [
     ),
     (
         "payload read big-endian",
-        'int.from_bytes(frame.payload, "little")',
-        'int.from_bytes(frame.payload, "big")',
+        '    return int.from_bytes(payload, "little", signed=declared in _SIGNED_TYPES)',
+        '    return int.from_bytes(payload, "big", signed=declared in _SIGNED_TYPES)',
     ),
     (
         "only the first payload byte is read",
-        'value = int.from_bytes(frame.payload, "little") if frame.payload else None',
-        "value = frame.payload[0] if frame.payload else None",
+        '    return int.from_bytes(payload, "little", signed=declared in _SIGNED_TYPES)',
+        "    return payload[0]",
     ),
     (
         # The documented rule is that an unknown value is reported as unknown,
         # not carried forward. Zero is a real lick level, so this mutant writes
         # a reading the device never sent.
         "an empty payload reports 0 instead of no value",
-        'value = int.from_bytes(frame.payload, "little") if frame.payload else None',
-        'value = int.from_bytes(frame.payload, "little")',
+        "    if not payload:\n        return None",
+        "    if False:\n        return None",
+    ),
+    # --- decoding by the register's declared type ---
+    (
+        # The asymmetry the recordable gate existed to prevent: HarpDevice
+        # packs -1 into an S16 as ff ff, and reading it back unsigned gives
+        # 65535 -- a different number, inside one program, in a CSV that opens
+        # cleanly.
+        "signed registers are decoded as unsigned",
+        "signed=declared in _SIGNED_TYPES",
+        "signed=False",
+    ),
+    (
+        # The other direction: 255 in a U8 is 255, not -1.
+        "every register is decoded as signed",
+        "signed=declared in _SIGNED_TYPES",
+        "signed=True",
+    ),
+    (
+        "only one signed width is recognised, so the others decode unsigned",
+        '_SIGNED_TYPES = frozenset({"S8", "S16", "S32", "S64"})',
+        '_SIGNED_TYPES = frozenset({"S8"})',
+    ),
+    (
+        # A Float of 1.5 read as an integer is 1069547520.
+        "a Float register is decoded as an integer",
+        "    if declared == _FLOAT_TYPE:",
+        "    if False:",
+    ),
+    (
+        # A Float whose payload is not four bytes is a schema that disagrees
+        # with the hardware. Unpacked anyway it raises struct.error, out of a
+        # thread, and takes the rest of that read's frames with it.
+        "a Float payload of the wrong width is unpacked anyway",
+        "        if len(payload) != _FLOAT.size:\n            return None",
+        "        if False:\n            return None",
+    ),
+    (
+        # The map is the only thing that makes any of the above reachable:
+        # dropped, every register decodes as it did before types existed.
+        "the type map is discarded, so every register decodes unsigned",
+        "            address: types.get(address) for address in self._names",
+        "            address: None for address in self._names",
+    ),
+    (
+        "a type the cache cannot decode is accepted and silently read unsigned",
+        "        if unknown := sorted({str(t) for t in types.values()} - DECODABLE_TYPES):",
+        "        if False:",
+    ),
+    (
+        # ``recorded`` and ``recorded_types`` are filled together by derive, so
+        # an address in one and not the other means they have drifted -- and
+        # the register the caller meant to type is decoded as something else.
+        "a type for an address that is not recorded is accepted",
+        "        if strays := sorted(set(types) - set(self._names)):",
+        "        if False:",
     ),
     (
         "an empty payload leaves the previous state standing",
@@ -1369,8 +1424,19 @@ DERIVATION_MUTANTS: list[tuple[str, str, str]] = [
     ),
     (
         "load_profile does not gate the version, only derive",
-        "    _check_schema_version(loaded)\n    return loaded",
+        "    try:\n"
+        "        _check_schema_version(loaded)\n"
+        "    except ValueError as exc:\n"
+        '        raise ValueError(f"{exc} (in {path})") from None\n'
         "    return loaded",
+        "    return loaded",
+    ),
+    (
+        # A user profile is a file the reader of the message can open and fix,
+        # which they cannot do if the message does not say which file it is.
+        "a malformed profile does not say which file is malformed",
+        '        raise ValueError(f"Profile file {path} is not valid JSON: {exc}") from exc',
+        '        raise ValueError("A profile is not valid JSON") from exc',
     ),
     # --- WhoAmI, which is the only thing that does not overlap across boards ---
     (
@@ -1434,7 +1500,8 @@ DERIVATION_MUTANTS: list[tuple[str, str, str]] = [
         # The other half: narrowing the gate past what the cache can decode
         # would refuse registers that record perfectly well.
         "the gate is narrower than what the cache can decode",
-        '_RECORDABLE_TYPES = frozenset({"U8", "U16", "U32", "U64"})',
+        '_RECORDABLE_TYPES = frozenset({"U8", "U16", "U32", "U64", "S8", "S16", "S32",'
+        ' "S64", "Float"})',
         '_RECORDABLE_TYPES = frozenset({"U8"})',
     ),
     (
@@ -1454,9 +1521,55 @@ DERIVATION_MUTANTS: list[tuple[str, str, str]] = [
         "    if False:",
     ),
     (
-        "a missing profile yields an empty one instead of raising",
-        "        raise FileNotFoundError(",
-        "        return {}\n        raise FileNotFoundError(",
+        "a missing profile yields a path that was never there instead of raising",
+        "    raise FileNotFoundError(",
+        "    return shipped\n    raise FileNotFoundError(",
+    ),
+    # --- profiles a lab wrote itself, beside the ones we ship ---
+    (
+        # The whole feature: without it a second Harp device needs a file
+        # edited inside an installed package, which the next upgrade wipes.
+        "the user profile directory is not read at all",
+        "    if user.is_file():",
+        "    if False:",
+    ),
+    (
+        # Precedence the other way round. A lab that copied a shipped profile
+        # to correct it for its own firmware would silently keep getting the
+        # shipped one, and nothing would say so.
+        "a shipped profile wins over the user's own copy",
+        "        return user\n    if shipped.is_file():",
+        "        return shipped\n    if shipped.is_file():",
+    ),
+    (
+        "available_profiles ranks the shipped directory last, contradicting load_profile",
+        "    for directory in (PROFILE_DIR, user_profile_dir()):",
+        "    for directory in (user_profile_dir(), PROFILE_DIR):",
+    ),
+    (
+        # Overriding is the feature; overriding *silently* is the failure it
+        # buys. A stale local copy outliving a shipped fix has to be visible
+        # somewhere other than a dropdown somebody read months ago.
+        "shadowing a shipped profile happens without a word",
+        "        if shipped.is_file():\n            # Not a warning about a mistake",
+        "        if False:\n            # Not a warning about a mistake",
+    ),
+    (
+        # Reached from HarpDevice's class body, so an OSError escaping does not
+        # misconfigure one device -- it stops the plugin importing at all.
+        "an unreadable profile directory takes the whole plugin down",
+        "    except OSError:\n"
+        '        logger.warning("Harp profiles: could not read %s", directory, exc_info=True)\n'
+        "        return []",
+        "    except ValueError:\n        return []",
+    ),
+    (
+        # Without it RegisterCache has no type for anything and decodes every
+        # payload unsigned, which is exactly the behaviour the widened gate
+        # stopped being safe.
+        "the declared type of a recorded register is never carried",
+        '        result.recorded_types[address] = str(by_name[register].get("type"))',
+        "        pass",
     ),
 ]
 
@@ -2099,6 +2212,22 @@ DEVICE_MUTANTS: list[tuple[str, str, str]] = [
         '            return int(value).to_bytes(dtype.itemsize, "little",'
         ' signed=name.startswith("S"))',
         '            return int(value).to_bytes(1, "little", signed=name.startswith("S"))',
+    ),
+    (
+        # The dropdown is the only screen on which anybody sees that a profile
+        # exists. Enumerating only the package makes a profile a lab wrote
+        # unreachable without hand-editing the saved experiment.
+        "the dropdown offers only the profiles shipped in the package",
+        "    for name, path in available_profiles().items():",
+        '    for name, path in {p.stem: p for p in PROFILE_DIR.glob("*.json")}.items():',
+    ),
+    (
+        # A register nothing records is answered by a round trip rather than by
+        # the cache. Decoding the two differently makes one register report -1
+        # or 65535 depending on whether a profile happens to name it.
+        "a wire read ignores the register's declared signedness",
+        "        return decode_payload(frame.payload, payload_type)",
+        '        return int.from_bytes(frame.payload, "little") if frame.payload else None',
     ),
 ]
 

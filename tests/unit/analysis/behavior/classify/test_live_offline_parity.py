@@ -146,6 +146,7 @@ def _assert_rows_equal(live_rows, offline_rows):
 
 def test_live_matches_offline_windowed_rows(tiny_behavior_model):
     from glider.gui.panels.live_behavior import LiveBehaviorClassifier, model_keypoint_count
+    from glider.vision.pose.backend import UltralyticsBackend
 
     model = tiny_behavior_model
     k = model_keypoint_count(model)
@@ -154,7 +155,7 @@ def test_live_matches_offline_windowed_rows(tiny_behavior_model):
 
     offline = _offline_rows(model, names, stream)
 
-    clf = LiveBehaviorClassifier(model, _SeqYolo(stream, k), names)
+    clf = LiveBehaviorClassifier(model, UltralyticsBackend(_SeqYolo(stream, k), names))
     bgr = np.zeros((8, 8, 3), dtype=np.uint8)
     live = []
     for _ in stream:
@@ -177,6 +178,7 @@ def test_decimated_intake_diverges_from_offline(tiny_behavior_model):
     the rolling window, so the windowed features no longer match offline — the
     exact corruption the CameraPanel fan-out fix prevents."""
     from glider.gui.panels.live_behavior import LiveBehaviorClassifier, model_keypoint_count
+    from glider.vision.pose.backend import UltralyticsBackend
 
     model = tiny_behavior_model
     k = model_keypoint_count(model)
@@ -187,7 +189,7 @@ def test_decimated_intake_diverges_from_offline(tiny_behavior_model):
 
     # Only every 3rd frame reaches the classifier — the decimated intake.
     decimated = stream[::3]
-    clf = LiveBehaviorClassifier(model, _SeqYolo(decimated, k), names)
+    clf = LiveBehaviorClassifier(model, UltralyticsBackend(_SeqYolo(decimated, k), names))
     bgr = np.zeros((8, 8, 3), dtype=np.uint8)
     for _ in decimated:
         clf.classify_frame(bgr)

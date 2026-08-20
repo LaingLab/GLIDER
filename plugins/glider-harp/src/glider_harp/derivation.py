@@ -22,6 +22,13 @@ Three rules, and the third is the one that matters:
   the record is always a deliberate act, so an unrecognised device is silent
   until somebody writes a profile for it.
 
+Profiles come from two places, and the second is the point of the first
+being data at all: the ones shipped in this package, and the ones a lab writes
+into ``~/.glider/harp_profiles``. A second Harp device in a lab needs a
+profile, and before that directory existed the only way to add one was to edit
+a file inside an installed package, which the next upgrade overwrites. See
+``available_profiles`` for the precedence between them.
+
 This module also owns the invariant that column names are well formed, and it
 owns it because it is the first point where those names stop being Python
 literals and start being JSON a user can edit. ``RegisterCache.__init__``
@@ -50,6 +57,10 @@ CORE_REGISTERS = frozenset({0, 1, 2, 6, 7, 8, 10, 14})
 
 PROFILE_DIR = Path(__file__).parent / "profiles"
 
+# Where a lab keeps profiles of its own. Only the leaf is fixed here; the root
+# is resolved at the call, by ``user_profile_dir``.
+USER_PROFILE_SUBDIR = "harp_profiles"
+
 # Access modes that make a register something the flow graph can invoke.
 # ``Event`` is the device talking to us and is not among them.
 _ACTION_ACCESS = frozenset({"Read", "Write"})
@@ -71,14 +82,15 @@ _RECORD_KEYS = frozenset({"register", "as", "mode"})
 # profile that omits the field is assumed to be of this major version.
 _PROFILE_MAJOR_VERSION = 1
 
-# A profile name selects a file inside the package, so it is a name and not a
-# path: anything else lets a device setting read a file we never shipped.
+# A profile name selects a file inside one of two known directories, so it is
+# a name and not a path: anything else lets a device setting read a file we
+# never shipped and the user never wrote.
 _PROFILE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # Payload types a recorded register may have. Not a policy: it is exactly what
-# ``RegisterCache`` can decode, which reads a payload as one unsigned
-# little-endian integer. See ``_check_recordable``.
-_RECORDABLE_TYPES = frozenset({"U8", "U16", "U32", "U64"})
+# ``RegisterCache`` can decode, which is every *scalar* Harp payload type,
+# each read as its declared type. See ``_check_recordable``.
+_RECORDABLE_TYPES = frozenset({"U8", "U16", "U32", "U64", "S8", "S16", "S32", "S64", "Float"})
 
 
 @dataclass
@@ -89,6 +101,15 @@ class Derived:
     ``lick``, not ``lick_state``. ``RegisterCache`` expands each into the three
     columns a register contributes, so this side never spells a column name in
     full and the two cannot drift apart.
+
+    ``recorded_types`` maps the same addresses to the payload type the schema
+    declares for each -- ``"S16"``, ``"Float"``. It is here because this is the
+    only place that has read the schema, and ``RegisterCache`` cannot decode a
+    payload by its type without being told what that type is. Kept beside
+    ``recorded`` rather than folded into it so the values of ``recorded`` stay
+    the column base names every other caller reads them as; the two are filled
+    on the same line and ``RegisterCache`` refuses a type for an address it was
+    not given, which is what stops them drifting.
 
     ``actions`` maps a register name to its address, keyed by name because that
     is what a person picks in the node editor.
@@ -110,40 +131,154 @@ class Derived:
     """
 
     recorded: dict[int, str] = field(default_factory=dict)
+    recorded_types: dict[int, str] = field(default_factory=dict)
     actions: dict[str, int] = field(default_factory=dict)
     access: dict[str, frozenset[str]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
+def _load_glider_config_dir() -> Path:
+    """GLIDER's user configuration root, asked of GLIDER itself.
+
+    Imported **inside the call**, and that is not a style choice: importing
+    ``glider.core.config`` at module scope executes ``glider/__init__``, which
+    pulls in the whole core engine. ``glider_harp`` importing no ``glider`` at
+    all is a property the packaging suite pins, because it is what keeps this
+    package's plugin tables lazy; a convenience import here would erase it
+    silently. By the time anything calls this, ``glider.core.config`` is
+    already in ``sys.modules`` and the import is a dict lookup.
+    """
+    from glider.core.config import get_config
+
+    return Path(get_config().paths.user_config_dir)
+
+
+def _glider_config_dir() -> Path:
+    """The configuration root, or the conventional one if GLIDER cannot say.
+
+    Every failure falls back rather than propagating -- broadly, and on
+    purpose. This is reached from ``HarpDevice``'s class body, where the
+    exception would not misconfigure a device but stop the plugin importing at
+    all; and the fallback is not a guess, it is the same path GLIDER's own
+    default config would have produced.
+    """
+    try:
+        return _load_glider_config_dir()
+    except Exception:
+        logger.debug("Harp profiles: GLIDER config unavailable, using ~/.glider", exc_info=True)
+        return Path.home() / ".glider"
+
+
+def user_profile_dir() -> Path:
+    """Where a lab's own profiles live: ``~/.glider/harp_profiles``.
+
+    Resolved at the call rather than at import, so it follows a relocated
+    ``user_config_dir`` and costs no ``glider`` import to anyone who never asks.
+    """
+    return _glider_config_dir() / USER_PROFILE_SUBDIR
+
+
+def available_profiles() -> dict[str, Path]:
+    """Every profile name a device may be configured with, and the file it loads.
+
+    Both directories, name-sorted, **user last** -- so a user profile with the
+    same stem as a shipped one is the file that comes back. That precedence is
+    what lets a lab correct a shipped profile that does not match the firmware
+    it actually has, which is otherwise only fixable by editing a file inside
+    an installed package that the next upgrade overwrites.
+
+    It is also the one way this feature can go quietly wrong: a stale local
+    copy silently outliving the shipped fix. So the shadowing is never only
+    implied -- ``load_profile`` logs it, and the hardware panel's dropdown
+    labels it.
+    """
+    found: dict[str, Path] = {}
+    for directory in (PROFILE_DIR, user_profile_dir()):
+        for path in _profile_files(directory):
+            found[path.stem] = path
+    return dict(sorted(found.items()))
+
+
+def _profile_files(directory: Path) -> list[Path]:
+    """The ``*.json`` files in one profile directory, or none.
+
+    A missing directory is the ordinary case -- nobody has written a profile
+    yet -- and an unreadable one must not be worse than a missing one: this
+    runs while ``HarpDevice``'s class body is executing, so an ``OSError``
+    escaping here takes the whole plugin down rather than one device.
+    """
+    try:
+        return sorted(directory.glob("*.json"))
+    except OSError:
+        logger.warning("Harp profiles: could not read %s", directory, exc_info=True)
+        return []
+
+
 def load_profile(name: str) -> dict[str, Any]:
-    """Load a profile shipped inside the package.
+    """Load a profile by name, from the user's directory or the package.
 
     A profile is ``{"schema_version", "name", "who_am_i", "record"}``, where
     each ``record`` entry is ``{"register", "as", "mode"}``. ``mode`` is
     reserved and read by nothing today; see ``_RECORD_KEYS``.
+
+    A user profile is *data*, not an escape hatch: it goes through the same
+    version gate as a shipped one, and ``derive`` applies the same rules to
+    what it asks for. What differs is the reporting -- every failure here names
+    the file, because unlike a shipped profile it is a file the person reading
+    the message can open and fix.
     """
     if not _PROFILE_NAME.match(name):
         raise ValueError(f"Profile name {name!r} is not a plain profile name")
-    path = PROFILE_DIR / f"{name}.json"
-    if not path.is_file():
-        available = sorted(p.stem for p in PROFILE_DIR.glob("*.json"))
-        raise FileNotFoundError(
-            f"No shipped profile named {name!r}"
-            + (f"; available: {', '.join(available)}" if available else "")
-        )
-    loaded = json.loads(path.read_text(encoding="utf-8"))
+    path = _resolve_profile(name)
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Profile file {path} is not valid JSON: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"Profile file {path} could not be read: {exc}") from exc
     if not isinstance(loaded, dict):
-        raise ValueError(f"Profile {name!r} is not a JSON object")
-    _check_schema_version(loaded)
+        raise ValueError(f"Profile file {path} does not contain a JSON object")
+    try:
+        _check_schema_version(loaded)
+    except ValueError as exc:
+        raise ValueError(f"{exc} (in {path})") from None
     return loaded
+
+
+def _resolve_profile(name: str) -> Path:
+    """Which file a profile name loads. User directory first; see ``available_profiles``."""
+    user = user_profile_dir() / f"{name}.json"
+    shipped = PROFILE_DIR / f"{name}.json"
+    if user.is_file():
+        if shipped.is_file():
+            # Not a warning about a mistake -- overriding is the feature. It is
+            # a warning because the override is invisible everywhere else once
+            # the device is configured, and a local copy that quietly survives
+            # an upgrade of the shipped one is the failure this precedence buys.
+            logger.warning(
+                "Harp profile %r is being read from %s, which overrides the profile "
+                "shipped with glider-harp",
+                name,
+                user,
+            )
+        return user
+    if shipped.is_file():
+        return shipped
+    available = sorted(available_profiles())
+    raise FileNotFoundError(
+        f"No profile named {name!r}"
+        + (f"; available: {', '.join(available)}" if available else "")
+        + f". Add one of your own as {user_profile_dir() / f'{name}.json'}"
+    )
 
 
 def _check_schema_version(profile: Mapping[str, Any]) -> None:
     """Refuse a profile written to a format this GLIDER does not know.
 
     Checked here *and* from ``derive``, so the gate holds however the profile
-    arrived -- ``load_profile`` is only the shipped-profile path, and Task 11
-    will read user-supplied files of its own.
+    arrived: ``load_profile`` reads both the shipped and the user directory,
+    but a caller may equally hand ``derive`` a profile it built or parsed
+    itself, and gating in one place would leave the other open.
     """
     declared = profile.get("schema_version")
     if declared is None:
@@ -268,6 +403,10 @@ def derive(schema: Mapping[str, Any], profile: Mapping[str, Any] | None) -> Deri
 
         claimed[column] = register
         result.recorded[address] = column
+        # Filled on the same pass as the name, so the cache is never handed a
+        # column whose type nobody looked up. ``_check_recordable`` has already
+        # refused anything the cache cannot decode, so this is a known type.
+        result.recorded_types[address] = str(by_name[register].get("type"))
 
     return result
 
@@ -275,24 +414,30 @@ def derive(schema: Mapping[str, Any], profile: Mapping[str, Any] | None) -> Deri
 def _check_recordable(name: str, meta: Any) -> None:
     """Refuse a register whose payload the record would decode wrongly.
 
-    ``RegisterCache`` reads every payload as one unsigned little-endian
-    integer -- which is what the digital-input and counter registers this is
-    built for send, and is wrong for everything else in a way the CSV cannot
-    show. An ``S16`` of -1 is recorded as 65535. A ``Float`` of 1.5 is
-    recorded as 1069547520. An array register's whole payload collapses into
-    one implausible number. And because ``HarpDevice`` *packs* writes by the
-    declared type, a signed register written as -1 and read back through the
-    record returns a different number than it was given, inside one program.
+    The gate is exactly the set ``RegisterCache`` can decode, and it moves only
+    when the cache does. It used to be the four unsigned widths, because the
+    cache read every payload as one unsigned little-endian integer; the cache
+    now decodes by the register's declared type, so every *scalar* type passes
+    and the two halves stayed together, as this docstring said they had to.
 
-    This is the gate rather than a warning because every one of those files
-    opens cleanly, plots, and is wrong: there is nothing downstream that can
-    tell 65535 from a real reading. Widening the record to another type means
-    teaching the cache to decode it, and the two have to happen together --
-    so the refusal names the type, and stays until they do.
+    What still fails, and why each is a refusal rather than a warning -- every
+    one of them writes a file that opens cleanly, plots, and is wrong, and
+    nothing downstream can tell a bad number from a real reading:
 
-    Only the *recorded* side is gated. Writes already go out with the correct
-    width and signedness, so a signed or float register remains perfectly
-    usable as an action; it just cannot become a column yet.
+    * **Array registers** (``length`` above 1). Not a decoding gap but a
+      design question nobody has answered: one CSV cell cannot hold eight
+      values, and inventing a serialization for them -- one column per
+      element, a delimited string, the first element only -- is a decision
+      about what the record *means*, not an implementation detail. Until
+      somebody makes it, the whole payload would collapse into one implausible
+      number.
+    * **A type the cache has never heard of**, including a register whose
+      schema declares none. ``Uint16`` for ``U16`` is a plausible hand-edit,
+      and there is no decoding at all behind it.
+
+    Only the *recorded* side is gated, and always was. Writes go out with the
+    register's declared width and signedness (``HarpDevice._pack``), so a
+    signed register has always been usable as an action.
     """
     if not isinstance(meta, Mapping):
         return
@@ -300,15 +445,15 @@ def _check_recordable(name: str, meta: Any) -> None:
     if declared not in _RECORDABLE_TYPES:
         raise ValueError(
             f"Profile records register {name!r}, whose type is {declared!r}; only "
-            f"{', '.join(sorted(_RECORDABLE_TYPES))} can be recorded today, because the "
-            "register cache reads every payload as one unsigned little-endian integer"
+            f"{', '.join(sorted(_RECORDABLE_TYPES))} can be recorded, because those are "
+            "the payload types the register cache knows how to decode"
         )
     length = meta.get("length", 1)
     if isinstance(length, int) and not isinstance(length, bool) and length > 1:
         raise ValueError(
             f"Profile records register {name!r}, which has {length} elements; the register "
-            "cache reads the whole payload as one integer, so an array register would be "
-            "recorded as a single meaningless number"
+            "cache reads the whole payload as one value, and how an array should appear in "
+            "a CSV is not yet decided, so it would be recorded as a single meaningless number"
         )
 
 

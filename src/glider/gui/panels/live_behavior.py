@@ -6,7 +6,8 @@ frame into a :class:`LiveResult` (``label`` + decoded ``keypoints``). It
 reuses the exact shared streaming cores the offline/threaded pipeline uses
 so live predictions are bit-for-bit identical to offline ones:
 
-* :func:`extract_keypoints` — YOLO ``Results`` → ``(K, 2)`` keypoints.
+* :class:`~glider.vision.pose.backend.PoseBackend` — one BGR frame → ``(K, 2)``
+  keypoints, whether the pose net is YOLO, DeepLabCut or SLEAP.
 * :class:`StreamingFeatureExtractor` — centered per-frame kinematics.
 * :class:`SlidingFeatureBuffer` — rolling-stat window → the model's row.
 * :meth:`BehaviorModel.predict_one` — one label per full window.
@@ -31,12 +32,12 @@ from glider.analysis.behavior.classify.buffer import SlidingFeatureBuffer
 from glider.analysis.behavior.classify.features_stream import (
     StreamingFeatureExtractor,
     derive_stream_columns,
+    expected_keypoint_order,
 )
 from glider.analysis.behavior.classify.pipeline import (
     _load_behavior_model,
     _unstreamable_feature_families,
 )
-from glider.analysis.behavior.classify.pose_extract import extract_keypoints
 from glider.analysis.behavior.sequence import SequenceModel
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ class LiveBehaviorClassifier:
         Per-keypoint confidence gate passed through to YOLO + keypoint decode.
     """
 
-    def __init__(self, model, yolo, keypoint_names, conf_threshold: float = 0.25):
+    def __init__(self, model, backend, conf_threshold: float = 0.25):
         if isinstance(model, SequenceModel):
             raise UnsupportedModelError(
                 "CNN sequence models aren't supported by the live tabular "
@@ -101,31 +102,48 @@ class LiveBehaviorClassifier:
                 "--freq-features) model for live inference."
             )
 
+        # The backend owns the names: for DeepLabCut and SLEAP they come from
+        # the model's own config, so accepting them separately would let two
+        # sources of truth disagree about the order that matters.
+        names = list(backend.keypoint_names)
+
         model_k = model_keypoint_count(model)
-        entered_k = len(keypoint_names)
+        entered_k = len(names)
         if entered_k != model_k:
             raise KeypointMismatchError(
                 f"entered {entered_k} keypoint names but the model expects "
                 f"{model_k} (distinct speed_* features)."
             )
 
-        kpt_shape = getattr(getattr(yolo, "model", None), "kpt_shape", None)
-        if kpt_shape is not None:
-            yolo_k = kpt_shape[0]
-            if yolo_k != model_k:
+        native_k = getattr(backend, "native_keypoint_count", None)
+        if native_k is not None:
+            if native_k != model_k:
                 raise KeypointMismatchError(
-                    f"YOLO head has {yolo_k} keypoints but the model expects " f"{model_k}."
+                    f"the pose model emits {native_k} keypoints but the "
+                    f"behavior model expects {model_k}."
                 )
         else:
             warnings.warn(
-                "could not read the YOLO head's kpt_shape; proceeding on the "
-                "entered-vs-model keypoint-count check only.",
+                "could not read the pose model's keypoint count; proceeding on "
+                "the entered-vs-model keypoint-count check only.",
                 stacklevel=2,
             )
 
+        # Names agreeing in *count* is not enough. With FeatureSpec.auto_angles
+        # the angle columns are named after the keypoints at given indices, so a
+        # re-ordering yields columns that never appear: they arrive as NaN,
+        # every prediction comes back blank, and nothing raises.
+        expected = expected_keypoint_order(model)
+        if expected and names != expected:
+            raise KeypointMismatchError(
+                "keypoint names are in a different order than the behavior "
+                f"model was trained on.\n  model:    {expected}\n"
+                f"  provided: {names}"
+            )
+
         self._model = model
-        self.yolo = yolo
-        self.keypoint_names = list(keypoint_names)
+        self.backend = backend
+        self.keypoint_names = names
         self.conf_threshold = float(conf_threshold)
 
         per_frame, spectral = derive_stream_columns(model)
@@ -137,12 +155,7 @@ class LiveBehaviorClassifier:
 
     def classify_frame(self, bgr) -> LiveResult:
         """Classify one BGR frame; never resets on NaN / no-detection."""
-        results = self.yolo.predict(bgr, conf=self.conf_threshold, verbose=False)
-        kps, _ = extract_keypoints(
-            results[0] if results else None,
-            self.conf_threshold,
-            len(self.keypoint_names),
-        )
+        kps, _ = self.backend.predict(bgr)
         row = self._ext.push(kps)
         if row is not None:
             self._buf.push_features(row)
@@ -158,16 +171,21 @@ class LiveBehaviorClassifier:
         self._buf.clear()
 
 
-def _load_yolo(path):
-    """Load an ultralytics YOLO pose net from ``path``.
+def _load_backend(model_path, keypoint_names, conf_threshold: float = 0.25):
+    """Build a pose backend for ``model_path``.
 
-    Isolated as a module-level function (with a lazy ``ultralytics`` import so
-    importing this module never requires torch) so tests can monkeypatch it
+    Isolated as a module-level function (with the heavy imports deferred inside
+    :func:`~glider.vision.pose.backend.load_pose_backend`, so importing this
+    module never requires torch or onnxruntime) so tests can monkeypatch it
     with a lightweight double.
-    """
-    from ultralytics import YOLO
 
-    return YOLO(path)
+    Accepts anything :func:`identify_pose_model` understands: a YOLO ``.pt``, or
+    a DeepLabCut/SLEAP exported-model folder. ``keypoint_names`` is used only
+    for the YOLO case; the other formats carry their own.
+    """
+    from glider.vision.pose.backend import load_pose_backend
+
+    return load_pose_backend(model_path, keypoint_names, conf_threshold)
 
 
 class BehaviorInferenceWorker(QObject):
@@ -192,19 +210,22 @@ class BehaviorInferenceWorker(QObject):
         # stable label colors) once :meth:`initialize` succeeds.
         self.classes: list[str] = []
 
-    def initialize(self, behavior_pkl: str, yolo_pt: str, keypoint_names: list[str]) -> None:
+    def initialize(self, behavior_pkl: str, pose_model: str, keypoint_names: list[str]) -> None:
         """Load the models + build the classifier (runs on the worker thread).
+
+        ``pose_model`` is a YOLO ``.pt`` or a DeepLabCut/SLEAP exported-model
+        folder; ``keypoint_names`` applies to the YOLO case only, since the
+        other formats carry their own names in training order.
 
         Emits :attr:`ready` on success or :attr:`load_failed` (with the error
         message) on ANY failure — unsupported/mismatched models, missing files,
-        or a missing ``ultralytics``/torch install. Never raises out of the slot.
+        or a missing ``ultralytics``/``onnxruntime`` install. Never raises out
+        of the slot.
         """
         try:
-            yolo = _load_yolo(yolo_pt)
+            backend = _load_backend(pose_model, keypoint_names, self._conf_threshold)
             model = _load_behavior_model(behavior_pkl)
-            self._classifier = LiveBehaviorClassifier(
-                model, yolo, keypoint_names, self._conf_threshold
-            )
+            self._classifier = LiveBehaviorClassifier(model, backend, self._conf_threshold)
             self.classes = list(model.classes)
         except Exception as exc:  # noqa: BLE001 - report every failure to the UI
             self._classifier = None

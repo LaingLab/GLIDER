@@ -8,14 +8,28 @@ event loop touches only the cache.
 """
 
 import logging
+import struct
 import threading
 import time
 from collections import Counter
+from collections.abc import Mapping
 from typing import Any
 
 from glider_harp.frames import FrameError, FrameSplitter, HarpFrame, decode
 
 logger = logging.getLogger(__name__)
+
+# Payload types this module can turn into a number, and the two facts that
+# decide how. Spelled as the names a ``device.yml`` uses, which is what
+# ``derivation`` carries across -- a register's declared type is the only thing
+# the cache needs from a schema, so that is the whole of the coupling.
+_SIGNED_TYPES = frozenset({"S8", "S16", "S32", "S64"})
+_UNSIGNED_TYPES = frozenset({"U8", "U16", "U32", "U64"})
+_FLOAT_TYPE = "Float"
+DECODABLE_TYPES = _UNSIGNED_TYPES | _SIGNED_TYPES | {_FLOAT_TYPE}
+
+# Harp's ``Float`` is one IEEE-754 single, little-endian.
+_FLOAT = struct.Struct("<f")
 
 # Read=1 and Write=2 are host-initiated traffic: a Read is our own request and
 # a Write is our own command echoed back. Only Event=3 is the device reporting
@@ -35,6 +49,38 @@ _MS_PER_SECOND = 1000.0
 # 0.5 s default sits well above the floor.
 _MIN_READ_TIMEOUT_S = 0.05
 _MAX_READ_TIMEOUT_S = 0.5
+
+
+def decode_payload(payload: bytes, declared: str | None) -> int | float | None:
+    """One event's payload, read as the type the schema declares for it.
+
+    The single spelling of "what does a Harp payload mean", shared by
+    ``RegisterCache`` and by ``HarpDevice``'s wire reads -- a signed register
+    read over the wire and the same register read out of the record must not
+    disagree about its sign.
+
+    ``declared`` of ``None`` means "unsigned, width unchecked", which is what
+    this did for every register before types reached it. It stays the default
+    so a caller with no schema to hand keeps the old behaviour rather than
+    getting a new failure.
+
+    Two payloads decode to ``None``, and they mean the same thing -- *the event
+    happened, this part of it is unknown*, which is exactly what the cache's
+    ``state`` column is documented to report:
+
+    * an **empty** payload, which carries no value at all;
+    * a **``Float`` whose payload is not four bytes**, which is a schema that
+      disagrees with the hardware. Reported unknown rather than invented from
+      whatever bytes arrived, or raised: a blank column is a visible gap, and
+      raising here would cost the rest of the frames in that same read.
+    """
+    if not payload:
+        return None
+    if declared == _FLOAT_TYPE:
+        if len(payload) != _FLOAT.size:
+            return None
+        return _FLOAT.unpack(payload)[0]
+    return int.from_bytes(payload, "little", signed=declared in _SIGNED_TYPES)
 
 
 def _columns_for(name: str) -> tuple[str, str, str]:
@@ -100,10 +146,12 @@ class RegisterCache:
     to satisfy the checksum while ``FrameSplitter`` hunts through noise decodes
     as a perfectly valid empty-payload event, roughly once in 256 tried offsets.
 
-    Payloads are read as little-endian unsigned integers, which is what the
-    digital-input and counter registers this is built for send. Signed and
-    floating-point payload types would need decoding per ``payload_type``; add
-    that when a device needs it rather than guessing now.
+    Payloads are read as the type the schema declares for each register --
+    unsigned and signed integers of any width, and ``Float`` -- which is why
+    the cache is built with a type map beside its name map. See
+    ``decode_payload``. Arrays are not decoded: ``derivation`` refuses to
+    record one, because how several values should appear in one CSV cell is
+    undecided rather than merely unimplemented.
 
     Reading comes in two forms, and which one a caller wants depends on whether
     it owns the record. ``snapshot`` consumes the counters and belongs to
@@ -125,14 +173,36 @@ class RegisterCache:
     Every read returns a fresh dict, so a caller may hold rows and batch them.
     """
 
-    def __init__(self, registers: dict[int, str]) -> None:
+    def __init__(self, registers: dict[int, str], types: Mapping[int, str] | None = None) -> None:
         """``registers`` maps a register address to the base name of its columns.
 
-        The names are checked here rather than at the first read, because every
-        way they can be wrong produces a CSV that is malformed but not
-        obviously so, and by then a trial is running.
+        ``types`` maps the same addresses to the payload type the schema
+        declares -- ``derivation.Derived.recorded_types``. Optional, and an
+        address it omits is decoded as unsigned, which is what every register
+        got before types reached here; that default is what lets a caller with
+        no schema (``_columns_for_recorded``, which only wants column names)
+        build one at all.
+
+        Everything is checked here rather than at the first read, because every
+        way it can be wrong produces a CSV that is malformed but not obviously
+        so, and by then a trial is running. A type for an address that is not
+        recorded is checked for the same reason it looks harmless: the two maps
+        are filled together by ``derive``, so an address in one and not the
+        other means they have drifted, and the register the caller thought it
+        was typing is being decoded as something else.
         """
         self._names = dict(registers)
+        types = dict(types or {})
+        if strays := sorted(set(types) - set(self._names)):
+            raise ValueError(
+                "Register types name addresses that are not recorded: "
+                + ", ".join(str(address) for address in strays)
+            )
+        if unknown := sorted({str(t) for t in types.values()} - DECODABLE_TYPES):
+            raise ValueError(f"Register types the cache cannot decode: {', '.join(unknown)}")
+        self._types: dict[int, str | None] = {
+            address: types.get(address) for address in self._names
+        }
 
         if not self._names:
             # An empty columns() is falsy to DataRecorder, which then treats
@@ -177,7 +247,7 @@ class RegisterCache:
         if register is None:
             return
 
-        value = int.from_bytes(frame.payload, "little") if frame.payload else None
+        value = decode_payload(frame.payload, self._types[frame.address])
         last_ms = None if frame.timestamp is None else frame.timestamp * _MS_PER_SECOND
         with self._lock:
             register.state = value
@@ -505,10 +575,12 @@ class HarpReader:
           package -- the splitter, the decoder, or the cache -- not a fault on
           the wire. It is data-dependent, so the next read may well be fine:
           the rest of that one read is skipped, ``processing_errors`` counts
-          it, and the thread carries on. (Not reachable today. It becomes
-          reachable the moment payload decoding grows types of its own, where
-          a ``struct.error`` on one malformed register would otherwise take
-          the whole recording with it.)
+          it, and the thread carries on. (Not reachable today, and payload
+          decoding growing types of its own did not make it so:
+          ``decode_payload`` answers a ``Float`` whose payload is the wrong
+          width with ``None`` rather than a ``struct.error``, precisely
+          because one misdeclared register must not cost the rest of the
+          frames in the same read.)
         """
         while not self._stop_event.is_set():
             try:
