@@ -12,7 +12,7 @@ from glider_maimu import DEVICE_TYPES, NODE_TYPES
 
 
 @pytest.fixture(autouse=True)
-def registered_plugin(monkeypatch):
+def registered_plugin(request, monkeypatch):
     """Register the plugin's device and node, and unregister afterwards.
 
     Autouse and unconditional: every test here reaches the plugin through a
@@ -20,6 +20,11 @@ def registered_plugin(monkeypatch):
     and a leaked registration would let a later test pass for the wrong reason.
     monkeypatch.setitem restores the previous state either way.
     """
+    if "real_registration" in request.keywords:
+        # test_packaging exercises the installed entry points instead, and a
+        # hand-registered "Maimu" would mask exactly what it is checking.
+        return
+
     from glider.core.flow_engine import FlowEngine
     from glider.hal.base_device import DEVICE_REGISTRY
     from glider.plugins import plugin_manager as pm

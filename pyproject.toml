@@ -197,6 +197,7 @@ testpaths = ["tests/unit", "tests/integration", "plugins/glider-harp/tests"]
 addopts = "--import-mode=importlib"
 markers = [
     "slow: marks tests as slow (deselect with -m 'not slow')",
+    "real_registration: exercises a plugin's installed entry points rather than hand-registering it",
     "hardware: marks tests requiring real hardware (deselect with -m 'not hardware')",
     # Decode parity against real DeepLabCut/SLEAP output. Cannot run in CI: it
     # needs real model weights plus the reference CSV those tools produced, so
