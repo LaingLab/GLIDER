@@ -7,7 +7,15 @@ enum, device_ref.
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QLineEdit, QSpinBox
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QLineEdit,
+    QSpinBox,
+    QWidget,
+)
 
 
 def build_schema_widgets(
@@ -17,6 +25,7 @@ def build_schema_widgets(
     *,
     values: dict | None = None,
     devices: dict | None = None,
+    run_async=None,
 ) -> None:
     """Render a SETTINGS_SCHEMA field list into ``layout`` and record widgets.
 
@@ -80,6 +89,17 @@ def build_schema_widgets(
                 widget.addItem(str(label), value)
             idx = widget.findData(default)
             widget.setCurrentIndex(idx if idx >= 0 else 0)
+        elif ftype == "ble_address":
+            # The widget added to the layout is a container (combo + Scan), but
+            # the value lives on the combo, so that is what gets stored.
+            container, widget = build_ble_address_widget(run_async, layout.parentWidget())
+            if default:
+                widget.setCurrentText(str(default))
+            if field.get("help"):
+                container.setToolTip(str(field["help"]))
+            out[key] = (widget, ftype)
+            layout.addRow(f"{field.get('label', key)}:", container)
+            continue
         elif ftype == "device_ref":
             widget = QComboBox()
             widget.addItem("-- None --", None)
@@ -103,6 +123,73 @@ def build_schema_widgets(
         layout.addRow(f"{field.get('label', key)}:", widget)
 
 
+def build_ble_address_widget(run_async=None, parent=None):
+    """An editable BLE address combo, with a Scan button when it can scan.
+
+    Returns ``(container, combo)``: add the container to a layout, read the
+    value back from the combo with ``read_schema_widget(combo, "ble_address")``.
+
+    Scanning is asynchronous, so the caller supplies ``run_async``. Without one
+    -- a form with no event loop to hand, such as a headless test -- the combo
+    is still returned and still editable; only the button is omitted. That
+    degradation is deliberate: an address can always be typed.
+    """
+    from PyQt6.QtWidgets import QHBoxLayout, QMessageBox, QPushButton
+
+    combo = QComboBox()
+    combo.setEditable(True)
+    combo.setMinimumWidth(240)
+    combo.lineEdit().setPlaceholderText("BLE address (or Scan)")
+
+    container = QWidget(parent)
+    row = QHBoxLayout(container)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.addWidget(combo)
+
+    if run_async is None:
+        return container, combo
+
+    scan_btn = QPushButton("Scan")
+    scan_btn.setToolTip("Discover nearby BLE peripherals (~5s)")
+
+    def do_scan(_=False):
+        scan_btn.setEnabled(False)
+        scan_btn.setText("Scanning\u2026")
+
+        async def _scan():
+            try:
+                # Scanning discovers peripherals via the host BLE adapter -- it
+                # does not depend on which board is selected, so scan directly
+                # via the BLE board's (static) scanner.
+                from glider.hal.boards.ble_board import BLEBoard
+
+                results = await BLEBoard.scan(timeout=8.0)
+                combo.clear()
+                if not results:
+                    combo.addItem("(no devices found)", None)
+                for name, address in results:
+                    # Show the advertised name; fall back to the address for
+                    # unnamed peripherals so they stay distinguishable. The
+                    # address is the item data (and tooltip) and is what gets
+                    # saved.
+                    label = name if name and name != "(unknown)" else address
+                    combo.addItem(label, address)
+                    combo.setItemData(combo.count() - 1, address, Qt.ItemDataRole.ToolTipRole)
+            except ImportError:
+                QMessageBox.critical(parent, "Scan failed", "bleak is not installed.")
+            except Exception as e:  # noqa: BLE001 - surfaced to the user
+                QMessageBox.critical(parent, "Scan failed", str(e))
+            finally:
+                scan_btn.setEnabled(True)
+                scan_btn.setText("Scan")
+
+        run_async(_scan())
+
+    scan_btn.clicked.connect(do_scan)
+    row.addWidget(scan_btn)
+    return container, combo
+
+
 def read_schema_widget(widget, ftype: str):
     """Read the current value from a widget produced by :func:`build_schema_widgets`.
 
@@ -118,6 +205,15 @@ def read_schema_widget(widget, ftype: str):
         return widget.value()
     if ftype == "bool":
         return widget.isChecked()
+    if ftype == "ble_address":
+        # An item picked from a scan carries the address as its data; anything
+        # typed by hand is the text, minus a trailing " (name)" if a scan label
+        # was pasted in.
+        address = widget.currentData()
+        if not address:
+            raw = widget.currentText().strip()
+            address = raw.split(" (")[0].strip() if raw else ""
+        return address
     if ftype in ("enum", "device_ref"):
         return widget.currentData()
     return widget.text().strip()

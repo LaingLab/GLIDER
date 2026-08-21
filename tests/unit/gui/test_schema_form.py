@@ -84,3 +84,111 @@ def test_enum_default_not_in_choices_falls_back_to_first(qtbot):
     build_schema_widgets(layout, schema, out)
     widget, ftype = out["mode"]
     assert read_schema_widget(widget, ftype) == "full"
+
+
+# --- the ble_address field type -----------------------------------------------
+
+
+def _ble_form(qtbot, run_async=None, default=""):
+    """Render a one-field schema containing a BLE address."""
+    from PyQt6.QtWidgets import QFormLayout, QWidget
+
+    from glider.gui.widgets.schema_form import build_schema_widgets
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    layout = QFormLayout(host)
+    out: dict = {}
+    build_schema_widgets(
+        layout,
+        [{"key": "address", "label": "Address", "type": "ble_address", "default": default}],
+        out,
+        run_async=run_async,
+    )
+    return host, out
+
+
+def test_a_ble_address_field_offers_scan_when_it_can_scan(qtbot):
+    """A plugin BLE device gets the same Scan button the built-ins have,
+    without the hardware panel special-casing it by name."""
+    from PyQt6.QtWidgets import QPushButton
+
+    host, out = _ble_form(qtbot, run_async=lambda coro: coro.close())
+
+    assert "address" in out
+    assert [b.text() for b in host.findChildren(QPushButton)] == ["Scan"]
+
+
+def test_it_degrades_to_a_typeable_field_without_a_runner(qtbot):
+    """Scanning is async. A form with no loop to hand still has to render --
+    an address can always be typed."""
+    from PyQt6.QtWidgets import QPushButton
+
+    host, out = _ble_form(qtbot, run_async=None)
+
+    assert host.findChildren(QPushButton) == []
+    widget, ftype = out["address"]
+    assert widget.isEditable()
+    assert ftype == "ble_address"
+
+
+def test_clicking_scan_runs_the_scan_coroutine(qtbot):
+    from PyQt6.QtWidgets import QPushButton
+
+    started = []
+
+    def _runner(coro):
+        started.append(coro)
+        coro.close()  # don't actually touch the BLE stack in a test
+
+    host, _out = _ble_form(qtbot, run_async=_runner)
+    host.findChildren(QPushButton)[0].click()
+
+    assert started, "the Scan button did not run anything"
+
+
+def test_a_typed_address_reads_back(qtbot):
+    from glider.gui.widgets.schema_form import read_schema_widget
+
+    _host, out = _ble_form(qtbot)
+    widget, ftype = out["address"]
+    widget.setCurrentText("AA:BB:CC:DD:EE:FF")
+
+    assert read_schema_widget(widget, ftype) == "AA:BB:CC:DD:EE:FF"
+
+
+def test_a_scanned_entry_reads_back_its_address_not_its_label(qtbot):
+    """A scan lists peripherals by advertised name; the address is item data."""
+    from glider.gui.widgets.schema_form import read_schema_widget
+
+    _host, out = _ble_form(qtbot)
+    widget, ftype = out["address"]
+    widget.addItem("Maimu-01", "11:22:33:44:55:66")
+    widget.setCurrentIndex(widget.count() - 1)
+
+    assert read_schema_widget(widget, ftype) == "11:22:33:44:55:66"
+
+
+def test_a_pasted_scan_label_is_stripped(qtbot):
+    from glider.gui.widgets.schema_form import read_schema_widget
+
+    _host, out = _ble_form(qtbot)
+    widget, ftype = out["address"]
+    widget.setCurrentText("AA:BB:CC:DD:EE:FF (Maimu-01)")
+
+    assert read_schema_widget(widget, ftype) == "AA:BB:CC:DD:EE:FF"
+
+
+def test_a_saved_address_is_shown(qtbot):
+    _host, out = _ble_form(qtbot, default="AA:BB:CC:DD:EE:FF")
+
+    assert out["address"][0].currentText() == "AA:BB:CC:DD:EE:FF"
+
+
+def test_an_empty_field_reads_back_empty(qtbot):
+    from glider.gui.widgets.schema_form import read_schema_widget
+
+    _host, out = _ble_form(qtbot)
+    widget, ftype = out["address"]
+
+    assert read_schema_widget(widget, ftype) == ""
