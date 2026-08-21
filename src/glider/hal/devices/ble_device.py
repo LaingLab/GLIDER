@@ -237,13 +237,19 @@ class BLEDevice(BaseDevice):
             return self._address
         if self._resolved_address:
             return self._resolved_address
+        return await self._find_by_name()
+
+    async def _find_by_name(self) -> str:
+        """Scan for ``name`` and return the address it is advertising *now*."""
         from bleak import BleakScanner
 
         dev = await BleakScanner.find_device_by_name(self._adv_name, timeout=RESOLVE_SCAN_S)
         if dev is None:
             raise RuntimeError(
                 f"BLE: no peripheral advertising name {self._adv_name!r} found "
-                f"within {RESOLVE_SCAN_S:.0f}s"
+                f"within {RESOLVE_SCAN_S:.0f}s. It may be connected to something "
+                f"else -- a peripheral with a central attached usually stops "
+                f"advertising -- or out of range."
             )
         self._resolved_address = dev.address
         logger.info("BLE: resolved name %r -> %s", self._adv_name, dev.address)
@@ -260,8 +266,40 @@ class BLEDevice(BaseDevice):
                 "bleak not installed. Run: pip install bleak (or reinstall GLIDER)."
             ) from e
         address = await self._resolve_address()
-        client = BleakClient(address)
-        await client.connect()
+        try:
+            client = BleakClient(address)
+            await client.connect()
+        except Exception as exc:
+            # A stored address goes stale. Many peripherals advertise a
+            # *resolvable private address* that rotates every few minutes, so
+            # the address the Scan button captured may name nothing by the time
+            # anyone presses Connect -- bleak reports that as plainly "was not
+            # found", which reads like the device is off.
+            #
+            # An advertised name does not rotate, so when one is configured it
+            # is worth a rescan before giving up. The Scan button fills the
+            # address and the operator often fills the name too, which makes
+            # this the common case rather than an exotic one.
+            if not self._adv_name:
+                raise
+            logger.info(
+                "BLE %s: no answer at %s (%s); re-resolving by name %r",
+                self._name,
+                address,
+                exc,
+                self._adv_name,
+            )
+            self._resolved_address = None
+            fresh = await self._find_by_name()
+            if fresh == address:
+                # The name resolved to the address that just failed, so this is
+                # not a rotation. Report the original failure rather than a
+                # second identical one.
+                raise
+            client = BleakClient(fresh)
+            await client.connect()
+            address = fresh
+
         self._client = client
         logger.info("BLE: connected to %s", address)
 

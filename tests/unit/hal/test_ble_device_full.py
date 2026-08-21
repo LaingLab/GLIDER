@@ -366,3 +366,124 @@ def test_exported_from_devices_package():
     from glider.hal import devices
 
     assert devices.BLEDevice is BLEDevice
+
+
+# --- a stored address goes stale ----------------------------------------------
+
+
+class _RotatingBleak:
+    """A peripheral that has moved to a new address since it was scanned.
+
+    Many BLE devices advertise a resolvable private address that rotates every
+    few minutes, so the address the Scan button captured names nothing by the
+    time anyone presses Connect.
+    """
+
+    def __init__(self, old_address, new_address, name="maimu_ezurio"):
+        self.old_address = old_address
+        self.new_address = new_address
+        self.name = name
+        self.attempts: list[str] = []
+        self.scans = 0
+
+    def client_for(self, address, *a, **k):
+        self.attempts.append(address)
+        client = _FakeClient(address)
+        if address == self.old_address:
+            original_connect = client.connect
+
+            async def _refuse():
+                raise RuntimeError(f"Device with address {address} was not found.")
+
+            client.connect = _refuse
+            del original_connect
+        return client
+
+    async def find_device_by_name(self, name, timeout=8.0):
+        self.scans += 1
+        if name != self.name:
+            return None
+        from unittest.mock import MagicMock
+
+        found = MagicMock()
+        found.address = self.new_address
+        return found
+
+
+@pytest.fixture
+def rotating_bleak(monkeypatch):
+    from unittest.mock import MagicMock
+
+    peripheral = _RotatingBleak("AA:OLD", "BB:NEW")
+    module = MagicMock(name="bleak")
+    module.BleakClient = peripheral.client_for
+    module.BleakScanner.find_device_by_name = peripheral.find_device_by_name
+    monkeypatch.setitem(sys.modules, "bleak", module)
+    return peripheral
+
+
+async def test_a_stale_address_is_re_resolved_by_name(rotating_bleak):
+    """The scanned address no longer exists; the name still does."""
+    device = _make_device(
+        settings={"address": "AA:OLD", "name": "maimu_ezurio", "write_char_uuid": "c"}
+    )
+
+    await device.initialize()
+
+    assert rotating_bleak.attempts == ["AA:OLD", "BB:NEW"]
+    assert rotating_bleak.scans == 1
+    assert device.is_initialized
+
+
+async def test_without_a_name_the_original_failure_is_reported(rotating_bleak):
+    """Nothing to re-resolve against, so the error must not be dressed up."""
+    device = _make_device(settings={"address": "AA:OLD", "write_char_uuid": "c"})
+
+    with pytest.raises(RuntimeError, match="was not found"):
+        await device.initialize()
+
+    assert rotating_bleak.scans == 0
+
+
+async def test_a_name_resolving_to_the_same_dead_address_is_not_retried(monkeypatch):
+    """If the name points at the address that just failed, this is not a
+    rotation -- retrying it would only produce the same error twice."""
+    from unittest.mock import MagicMock
+
+    attempts: list[str] = []
+
+    def _client(address, *a, **k):
+        attempts.append(address)
+        client = _FakeClient(address)
+
+        async def _refuse():
+            raise RuntimeError("Device with address AA:OLD was not found.")
+
+        client.connect = _refuse
+        return client
+
+    async def _find(name, timeout=8.0):
+        found = MagicMock()
+        found.address = "AA:OLD"
+        return found
+
+    module = MagicMock(name="bleak")
+    module.BleakClient = _client
+    module.BleakScanner.find_device_by_name = _find
+    monkeypatch.setitem(sys.modules, "bleak", module)
+
+    device = _make_device(settings={"address": "AA:OLD", "name": "n", "write_char_uuid": "c"})
+
+    with pytest.raises(RuntimeError, match="was not found"):
+        await device.initialize()
+
+    assert attempts == ["AA:OLD"], "the dead address was tried twice"
+
+
+async def test_a_name_that_resolves_to_nothing_says_why(rotating_bleak):
+    """'not found' is the single most common BLE symptom and has two ordinary
+    causes; the message should name them."""
+    device = _make_device(settings={"address": "AA:OLD", "name": "not-advertising"})
+
+    with pytest.raises(RuntimeError, match="connected to something else"):
+        await device.initialize()
