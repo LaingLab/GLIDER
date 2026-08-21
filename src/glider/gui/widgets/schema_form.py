@@ -167,14 +167,16 @@ def build_ble_address_widget(run_async=None, parent=None):
                 combo.clear()
                 if not results:
                     combo.addItem("(no devices found)", None)
-                for name, address in results:
-                    # Show the advertised name; fall back to the address for
-                    # unnamed peripherals so they stay distinguishable. The
-                    # address is the item data (and tooltip) and is what gets
-                    # saved.
-                    label = name if name and name != "(unknown)" else address
-                    combo.addItem(label, address)
-                    combo.setItemData(combo.count() - 1, address, Qt.ItemDataRole.ToolTipRole)
+                for peripheral in results:
+                    # An unnamed peripheral shows as its address and signal
+                    # strength, with its advertised services in the tooltip --
+                    # which is how you tell which bare MAC is the stimulator
+                    # when its name did not survive the scan response.
+                    combo.addItem(peripheral.label, peripheral.address)
+                    detail = peripheral.address
+                    if peripheral.service_uuids:
+                        detail += chr(10) + "services: " + ", ".join(peripheral.service_uuids)
+                    combo.setItemData(combo.count() - 1, detail, Qt.ItemDataRole.ToolTipRole)
             except ImportError:
                 QMessageBox.critical(parent, "Scan failed", "bleak is not installed.")
             except Exception as e:  # noqa: BLE001 - surfaced to the user

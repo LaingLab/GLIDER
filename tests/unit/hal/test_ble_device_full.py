@@ -487,3 +487,109 @@ async def test_a_name_that_resolves_to_nothing_says_why(rotating_bleak):
 
     with pytest.raises(RuntimeError, match="connected to something else"):
         await device.initialize()
+
+
+async def test_a_nameless_peripheral_is_found_by_its_service(monkeypatch):
+    """The case from the bench: the address rotated, the name never made it
+    into the advertisement, and a phone app saw the device the whole time.
+    The service UUID is the one identifier that survives both."""
+    from unittest.mock import MagicMock
+
+    from glider.hal.boards.ble_board import DiscoveredPeripheral
+
+    service = "12345678-1234-5678-1234-56789abcdef0"
+    attempts: list[str] = []
+
+    def _client(address, *a, **k):
+        attempts.append(address)
+        client = _FakeClient(address)
+        if address == "AA:STALE":
+
+            async def _refuse():
+                raise RuntimeError("Device with address AA:STALE was not found.")
+
+            client.connect = _refuse
+        return client
+
+    module = MagicMock(name="bleak")
+    module.BleakClient = _client
+    monkeypatch.setitem(sys.modules, "bleak", module)
+
+    async def _scan(timeout=8.0):
+        return [
+            DiscoveredPeripheral(address="OTHER", name="lab chair", rssi=-70),
+            DiscoveredPeripheral(address="BB:LIVE", name="", rssi=-40, service_uuids=(service,)),
+        ]
+
+    monkeypatch.setattr("glider.hal.boards.ble_board.BLEBoard.scan", staticmethod(_scan))
+
+    device = _make_device(
+        settings={"address": "AA:STALE", "service_uuid": service, "write_char_uuid": "c"}
+    )
+    await device.initialize()
+
+    assert attempts == ["AA:STALE", "BB:LIVE"]
+    assert device.is_initialized
+
+
+async def test_several_peripherals_advertising_the_service_is_refused(monkeypatch):
+    """Six identical stimulators on a bench is the normal case, and connecting
+    to whichever answered first would be the wrong animal's."""
+    from unittest.mock import MagicMock
+
+    from glider.hal.boards.ble_board import DiscoveredPeripheral
+
+    service = "12345678-1234-5678-1234-56789abcdef0"
+
+    def _client(address, *a, **k):
+        client = _FakeClient(address)
+
+        async def _refuse():
+            raise RuntimeError("Device with address AA:STALE was not found.")
+
+        client.connect = _refuse
+        return client
+
+    module = MagicMock(name="bleak")
+    module.BleakClient = _client
+    monkeypatch.setitem(sys.modules, "bleak", module)
+
+    async def _scan(timeout=8.0):
+        return [
+            DiscoveredPeripheral(address="ONE", service_uuids=(service,)),
+            DiscoveredPeripheral(address="TWO", service_uuids=(service,)),
+        ]
+
+    monkeypatch.setattr("glider.hal.boards.ble_board.BLEBoard.scan", staticmethod(_scan))
+
+    device = _make_device(
+        settings={"address": "AA:STALE", "service_uuid": service, "write_char_uuid": "c"}
+    )
+
+    with pytest.raises(RuntimeError, match="was not found"):
+        await device.initialize()
+
+
+async def test_the_name_is_preferred_over_the_service(rotating_bleak, monkeypatch):
+    """A name identifies *this* unit; a service UUID is shared by every device
+    of the type. When both are configured the specific one has to win."""
+    scanned = []
+
+    async def _scan(timeout=8.0):
+        scanned.append(True)
+        return []
+
+    monkeypatch.setattr("glider.hal.boards.ble_board.BLEBoard.scan", staticmethod(_scan))
+
+    device = _make_device(
+        settings={
+            "address": "AA:OLD",
+            "name": "maimu_ezurio",
+            "service_uuid": "12345678-1234-5678-1234-56789abcdef0",
+            "write_char_uuid": "c",
+        }
+    )
+    await device.initialize()
+
+    assert rotating_bleak.attempts == ["AA:OLD", "BB:NEW"]
+    assert scanned == [], "the service scan ran even though the name resolved"

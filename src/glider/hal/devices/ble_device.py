@@ -239,6 +239,41 @@ class BLEDevice(BaseDevice):
             return self._resolved_address
         return await self._find_by_name()
 
+    async def _find_by_service(self) -> str | None:
+        """Address of a peripheral advertising ``service_uuid``, if exactly one is.
+
+        The identifier of last resort, and the sturdiest available: a service
+        UUID neither rotates the way a private address does nor depends on a
+        scan response surviving the trip -- which is how a Zephyr device ends up
+        nameless on Windows while a phone app sees it fine.
+
+        Returns None rather than guessing when several peripherals advertise the
+        service. With six identical stimulators on a bench that is the normal
+        case, and picking one would connect to the wrong animal's.
+        """
+        if not self._service_uuid:
+            return None
+        from glider.hal.boards.ble_board import BLEBoard
+
+        found = await BLEBoard.scan(timeout=RESOLVE_SCAN_S)
+        matches = [p for p in found if p.advertises(self._service_uuid)]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            logger.warning(
+                "BLE %s: %d peripherals advertise service %s (%s); set an address "
+                "or an advertised name to say which one",
+                self._name,
+                len(matches),
+                self._service_uuid,
+                ", ".join(p.label for p in matches),
+            )
+            return None
+        logger.info(
+            "BLE %s: matched service %s -> %s", self._name, self._service_uuid, matches[0].address
+        )
+        return matches[0].address
+
     async def _find_by_name(self) -> str:
         """Scan for ``name`` and return the address it is advertising *now*."""
         from bleak import BleakScanner
@@ -280,7 +315,7 @@ class BLEDevice(BaseDevice):
             # is worth a rescan before giving up. The Scan button fills the
             # address and the operator often fills the name too, which makes
             # this the common case rather than an exotic one.
-            if not self._adv_name:
+            if not self._adv_name and not self._service_uuid:
                 raise
             logger.info(
                 "BLE %s: no answer at %s (%s); re-resolving by name %r",
@@ -290,8 +325,13 @@ class BLEDevice(BaseDevice):
                 self._adv_name,
             )
             self._resolved_address = None
-            fresh = await self._find_by_name()
-            if fresh == address:
+            # Name first when there is one -- it names *this* unit. The service
+            # UUID is shared by every device of the type, so it can only help
+            # when exactly one is in range.
+            fresh = await self._find_by_name() if self._adv_name else None
+            if fresh is None:
+                fresh = await self._find_by_service()
+            if fresh is None or fresh == address:
                 # The name resolved to the address that just failed, so this is
                 # not a rotation. Report the original failure rather than a
                 # second identical one.

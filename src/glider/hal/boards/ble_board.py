@@ -15,6 +15,7 @@ Cross-platform via bleak: Windows (WinRT), macOS (CoreBluetooth), Linux (BlueZ).
 """
 
 import logging
+from dataclasses import dataclass
 
 from glider.hal.base_board import (
     BaseBoard,
@@ -25,6 +26,31 @@ from glider.hal.base_board import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DiscoveredPeripheral:
+    """One peripheral seen by a scan.
+
+    ``name`` is empty when the peripheral advertised none, which is common and
+    not a defect: a Zephyr device puts its name in the scan response, and
+    Windows drops that often enough that a working device routinely appears
+    nameless.
+    """
+
+    address: str
+    name: str = ""
+    rssi: int | None = None
+    service_uuids: tuple[str, ...] = ()
+
+    @property
+    def label(self) -> str:
+        """What to show a human picking one out of a list."""
+        base = self.name or self.address
+        return f"{base} ({self.rssi} dBm)" if self.rssi is not None else base
+
+    def advertises(self, service_uuid: str) -> bool:
+        return str(service_uuid).strip().lower() in self.service_uuids
 
 
 class BLEBoard(BaseBoard):
@@ -68,17 +94,23 @@ class BLEBoard(BaseBoard):
         logger.info("BLEBoard: adapter released")
 
     @staticmethod
-    async def scan(timeout: float = 8.0) -> list[tuple[str, str]]:
+    async def scan(timeout: float = 8.0) -> list[DiscoveredPeripheral]:
         """Discover nearby BLE peripherals.
-
-        Returns a list of ``(name, address)`` tuples; ``name`` falls back to
-        ``"(unknown)"`` when the peripheral advertises none.
 
         Reads the name from the advertisement data (``local_name``) rather than
         ``device.name``: many peripherals (e.g. Zephyr devices) send their name
         in the SCAN RESPONSE, which an active scan captures into ``local_name``
         even when ``device.name`` comes back empty on Windows. Static so callers
         can scan the host adapter without needing a board instance.
+
+        Keeps the signal strength and the advertised service UUIDs, because a
+        peripheral whose name did not come through is otherwise a bare MAC in a
+        list of bare MACs. The services say *what* it is and the RSSI says which
+        one is on the bench in front of you -- and a device that knows its own
+        service UUID can be matched without a name at all.
+
+        Sorted strongest-first, so the peripheral you are holding is near the
+        top rather than wherever the adapter happened to enumerate it.
         """
         from bleak import BleakScanner
 
@@ -87,8 +119,22 @@ class BLEBoard(BaseBoard):
         results = []
         for dev, adv in discovered.values():
             name = (getattr(adv, "local_name", None) or getattr(dev, "name", None) or "").strip()
-            results.append((name or "(unknown)", dev.address))
-        logger.info("BLEBoard: scan found %d peripheral(s)", len(results))
+            results.append(
+                DiscoveredPeripheral(
+                    name=name,
+                    address=dev.address,
+                    rssi=getattr(adv, "rssi", None),
+                    service_uuids=tuple(
+                        str(u).lower() for u in (getattr(adv, "service_uuids", None) or ())
+                    ),
+                )
+            )
+        results.sort(key=lambda p: (p.rssi if p.rssi is not None else -999), reverse=True)
+        logger.info(
+            "BLEBoard: scan found %d peripheral(s): %s",
+            len(results),
+            ", ".join(p.label for p in results) or "none",
+        )
         return results
 
     # --- pin operations are not applicable to BLE ---
