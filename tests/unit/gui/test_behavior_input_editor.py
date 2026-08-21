@@ -241,20 +241,33 @@ def test_the_published_vocabulary_is_a_copy():
     assert bus.behaviors == ["darting"]
 
 
-def test_loading_a_model_publishes_its_vocabulary_to_the_bus(qtbot):
-    """The link that makes the dropdown non-empty: the camera panel knows the
-    model's classes, and the flow editor needs them."""
+def _ready_panel(classes, bus=None):
+    """A CameraPanel with exactly what ``_on_behavior_ready`` touches.
+
+    Built field by field because CameraPanel.__init__ starts threads and opens
+    cameras. Collected here so a new attribute in _on_behavior_ready is one edit,
+    not one per test -- which is how this drifted three times.
+    """
     from glider.gui.panels.camera_panel import CameraPanel
 
-    panel = CameraPanel.__new__(CameraPanel)  # skip the heavy __init__
-    bus = LiveSignalBus()
+    panel = CameraPanel.__new__(CameraPanel)
     panel._live_signals = bus
-    panel._behavior_worker = SimpleNamespace(classes=["darting", "freezing", "grooming"])
+    panel._behavior_worker = SimpleNamespace(classes=list(classes))
     panel._preview = SimpleNamespace(set_behavior_vocab=lambda names: None)
     panel._behavior_running = False
     panel._live_behavior_btn = SimpleNamespace(setText=lambda t: None, setEnabled=lambda e: None)
-    panel._rehearse_btn = SimpleNamespace(setEnabled=lambda e: None)
+    panel._rehearse_btn = SimpleNamespace(setText=lambda t: None, setEnabled=lambda e: None)
     panel._rehearse_status = SimpleNamespace(setText=lambda t: None)
+    panel._rehearsal_pump = None
+    panel._video_source = SimpleNamespace(is_loaded=False, path=None)
+    return panel
+
+
+def test_loading_a_model_publishes_its_vocabulary_to_the_bus(qtbot):
+    """The link that makes the dropdown non-empty: the camera panel knows the
+    model's classes, and the flow editor needs them."""
+    bus = LiveSignalBus()
+    panel = _ready_panel(["darting", "freezing", "grooming"], bus=bus)
 
     panel._on_behavior_ready()
 
@@ -263,16 +276,7 @@ def test_loading_a_model_publishes_its_vocabulary_to_the_bus(qtbot):
 
 def test_a_panel_with_no_bus_still_goes_live(qtbot):
     """Vision must not depend on a flow being attached."""
-    from glider.gui.panels.camera_panel import CameraPanel
-
-    panel = CameraPanel.__new__(CameraPanel)
-    panel._live_signals = None
-    panel._behavior_worker = SimpleNamespace(classes=["darting"])
-    panel._preview = SimpleNamespace(set_behavior_vocab=lambda names: None)
-    panel._behavior_running = False
-    panel._live_behavior_btn = SimpleNamespace(setText=lambda t: None, setEnabled=lambda e: None)
-    panel._rehearse_btn = SimpleNamespace(setEnabled=lambda e: None)
-    panel._rehearse_status = SimpleNamespace(setText=lambda t: None)
+    panel = _ready_panel(["darting"], bus=None)
 
     panel._on_behavior_ready()
 

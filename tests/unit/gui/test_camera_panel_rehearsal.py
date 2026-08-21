@@ -10,6 +10,7 @@ nothing about the live run it is standing in for.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -174,3 +175,107 @@ async def test_a_recording_drives_real_hardware(qtbot, monkeypatch, tmp_path):
     await engine.stop()
 
     assert written == [b"500,10"], "a recorded freeze did not reach the stimulator"
+
+
+# --- which video does it play? ------------------------------------------------
+
+
+def _panel_with_source(loaded_path=None):
+    panel = CameraPanel.__new__(CameraPanel)
+    panel._rehearsal_pump = None
+    panel._behavior_running = True
+    panel._video_source = SimpleNamespace(
+        is_loaded=loaded_path is not None,
+        path=loaded_path,
+    )
+    panel._rehearse_btn = SimpleNamespace(_text="", setText=lambda t: None)
+    return panel
+
+
+def test_it_plays_the_video_already_loaded_in_the_panel(qtbot):
+    """Prompting for a second file let a rehearsal run against a different
+    video than the one on screen -- the one the zones were drawn over."""
+    panel = _panel_with_source("/clips/session12.mp4")
+
+    assert panel._rehearsal_video() == "/clips/session12.mp4"
+
+
+def test_it_prompts_only_when_nothing_is_loaded(qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QFileDialog
+
+    asked = []
+
+    def _ask(*args, **kwargs):
+        asked.append(True)
+        return ("", "")
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", staticmethod(_ask))
+    panel = _panel_with_source(None)
+
+    assert panel._rehearsal_video() is None
+    assert asked, "it should have asked for a file when none was loaded"
+
+
+def test_a_chosen_file_is_loaded_into_the_panel_too(qtbot, monkeypatch):
+    """So the scrub bar, zone drawing and preview all refer to what is playing,
+    rather than the pump quietly running something the panel knows nothing of."""
+    from PyQt6.QtWidgets import QFileDialog
+
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: ("/clips/new.mp4", ""))
+    )
+    panel = _panel_with_source(None)
+    applied = []
+    panel._apply_video = lambda p: (applied.append(Path(p)), True)[1]
+
+    assert panel._rehearsal_video() == "/clips/new.mp4"
+    # Compared as paths: Path() normalises separators, and the point is that the
+    # panel was told about the same file, not how the OS spells it.
+    assert applied == [Path("/clips/new.mp4")]
+
+
+def test_a_file_that_will_not_load_is_not_rehearsed(qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QFileDialog
+
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: ("/clips/broken.mp4", ""))
+    )
+    panel = _panel_with_source(None)
+    panel._apply_video = lambda p: False
+
+    assert panel._rehearsal_video() is None
+
+
+def test_the_button_names_the_video_it_would_play(qtbot):
+    """A button reading 'Rehearse from video...' next to a loaded clip is a
+    question; one reading 'Rehearse session12.mp4' is an answer."""
+    panel = _panel_with_source("/clips/session12.mp4")
+    labels = []
+    panel._rehearse_btn = SimpleNamespace(setText=labels.append)
+
+    panel._update_rehearse_label()
+
+    assert labels == ["Rehearse session12.mp4"]
+
+
+def test_the_button_asks_when_nothing_is_loaded(qtbot):
+    panel = _panel_with_source(None)
+    labels = []
+    panel._rehearse_btn = SimpleNamespace(setText=labels.append)
+
+    panel._update_rehearse_label()
+
+    assert labels == ["Rehearse from video…"]
+
+
+def test_the_label_is_left_alone_while_a_rehearsal_runs(qtbot):
+    """It reads 'Stop rehearsal' then, and relabelling it mid-run would take
+    away the only way to stop hardware that is being driven."""
+    panel = _panel_with_source("/clips/session12.mp4")
+    panel._rehearsal_pump = SimpleNamespace(is_running=True)
+    labels = []
+    panel._rehearse_btn = SimpleNamespace(setText=labels.append)
+
+    panel._update_rehearse_label()
+
+    assert labels == []
