@@ -253,6 +253,8 @@ def test_loading_a_model_publishes_its_vocabulary_to_the_bus(qtbot):
     panel._preview = SimpleNamespace(set_behavior_vocab=lambda names: None)
     panel._behavior_running = False
     panel._live_behavior_btn = SimpleNamespace(setText=lambda t: None, setEnabled=lambda e: None)
+    panel._rehearse_btn = SimpleNamespace(setEnabled=lambda e: None)
+    panel._rehearse_status = SimpleNamespace(setText=lambda t: None)
 
     panel._on_behavior_ready()
 
@@ -269,6 +271,8 @@ def test_a_panel_with_no_bus_still_goes_live(qtbot):
     panel._preview = SimpleNamespace(set_behavior_vocab=lambda names: None)
     panel._behavior_running = False
     panel._live_behavior_btn = SimpleNamespace(setText=lambda t: None, setEnabled=lambda e: None)
+    panel._rehearse_btn = SimpleNamespace(setEnabled=lambda e: None)
+    panel._rehearse_status = SimpleNamespace(setText=lambda t: None)
 
     panel._on_behavior_ready()
 

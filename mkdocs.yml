@@ -103,6 +103,7 @@ nav:
       - Tracking: camera-behavior/tracking.md
       - Pose Models: camera-behavior/pose-models.md
       - Behavior Analysis: camera-behavior/behavior.md
+      - Closed-loop Rehearsal: camera-behavior/rehearsal.md
   - Runner Mode:
       - runner/index.md
       - The Runner Screen: runner/runner.md
