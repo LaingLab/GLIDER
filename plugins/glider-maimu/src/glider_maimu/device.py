@@ -67,7 +67,10 @@ class MaimuDevice(BLEDevice):
         {
             "key": "address",
             "label": "Address / UUID",
-            "type": "str",
+            # Renders as an editable combo with a Scan button. As a plugin this
+            # is the only route to Scan: the hardware panel special-cases the
+            # built-in BLE devices by name, which no plugin can be.
+            "type": "ble_address",
             "default": "",
             "help": "MAC (Windows/Linux) or UUID (macOS). Leave blank and set Name for portability.",
         },

@@ -218,7 +218,7 @@ target-version = "py311"
 # defaults must be repeated here. Dropping "." reclassifies the top-level
 # packaging/ directory as third-party and breaks the import order in
 # src/glider/updater.py, which imports the real `packaging` distribution.
-src = [".", "src", "plugins/glider-harp/src"]
+src = [".", "src", "plugins/glider-harp/src", "plugins/glider-maimu/src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]

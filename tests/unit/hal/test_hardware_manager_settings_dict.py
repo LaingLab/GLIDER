@@ -26,17 +26,17 @@ def test_settings_dict_carries_a_name_setting():
     manager = _manager_with_board()
     manager.add_device_multi_pin(
         "stim_1",
-        "Maimu",
+        "BLE",
         "b1",
         pins={},
         name="Left stimulator",
-        settings={"name": "Maimu-01", "address": ""},
+        settings={"name": "Peripheral-01", "address": ""},
     )
 
     device = manager.get_device("stim_1")
     assert device.name == "Left stimulator"  # display name
-    assert device._config.settings["name"] == "Maimu-01"  # advertised name
-    assert device._adv_name == "Maimu-01"
+    assert device._config.settings["name"] == "Peripheral-01"  # advertised name
+    assert device._adv_name == "Peripheral-01"
 
 
 def test_splatting_a_name_setting_still_raises():
@@ -44,7 +44,7 @@ def test_splatting_a_name_setting_still_raises():
     manager = _manager_with_board()
     with pytest.raises(TypeError, match="name"):
         manager.add_device_multi_pin(
-            "stim_1", "Maimu", "b1", pins={}, name="Left stimulator", **{"name": "Maimu-01"}
+            "stim_1", "BLE", "b1", pins={}, name="Left stimulator", **{"name": "Peripheral-01"}
         )
 
 

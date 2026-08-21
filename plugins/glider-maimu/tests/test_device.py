@@ -12,7 +12,7 @@ import sys
 import pytest
 
 from glider.hal.base_device import DeviceConfig
-from glider.hal.devices.maimu import (
+from glider_maimu.device import (
     DEFAULT_SERVICE_UUID,
     DEFAULT_WRITE_CHAR_UUID,
     MaimuDevice,
@@ -292,7 +292,7 @@ async def test_shutdown_disconnects_even_when_off_fails(fake_bleak):
 
 async def test_shutdown_disconnects_even_when_off_hangs(fake_bleak, monkeypatch):
     """A wedged write must not eat the emergency-stop budget."""
-    import glider.hal.devices.maimu as maimu_module
+    import glider_maimu.device as maimu_module
 
     monkeypatch.setattr(maimu_module, "OFF_ON_SHUTDOWN_S", 0.05)
     _module, created = fake_bleak

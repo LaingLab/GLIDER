@@ -85,6 +85,15 @@ class _NodeItem:
 
 
 def _ports(node_type):
+    # Ports for a type outside the hand-written table are read off its
+    # NodeDefinition, so the registry has to be populated to find it.
+    from glider.core.flow_engine import FlowEngine
+    from glider.nodes.hardware import register_hardware_nodes
+    from glider.nodes.vision import register_behavior_nodes
+
+    register_hardware_nodes(FlowEngine)
+    register_behavior_nodes(FlowEngine)
+
     ctrl = NodeEditorController.__new__(NodeEditorController)
     item = _NodeItem()
     ctrl.setup_node_ports(item, node_type)
@@ -104,10 +113,25 @@ def test_behavior_input_draws_its_real_ports(qtbot):
     assert item.outputs[0][1] == PortType.DATA
 
 
-def test_maimu_draws_exec_ports_not_the_generic_fallback(qtbot):
-    item = _ports("Maimu")
-    assert item.inputs == [("exec", PortType.EXEC)]
-    assert item.outputs == [("exec", PortType.EXEC)]
+def test_a_type_outside_the_table_draws_its_declared_ports(qtbot):
+    """Device Action is registered and absent from the hand-written port table.
+    The old generic fallback gave it one input and one output; it declares
+    three and two, so wiring drawn on the canvas addressed the wrong ports."""
+    item = _ports("DeviceAction")
+
+    assert [name for name, _ in item.inputs] == ["exec", "arg1", "arg2"]
+    assert [name for name, _ in item.outputs] == ["exec", "result"]
+    assert item.inputs[0][1] == PortType.EXEC
+    assert item.inputs[1][1] == PortType.DATA
+    assert item.outputs[1][1] == PortType.DATA
+
+
+def test_an_unregistered_type_still_gets_something_wireable(qtbot):
+    """A file naming a node this install does not have must still draw."""
+    item = _ports("NotARealNodeType")
+
+    assert item.inputs == [("in", PortType.EXEC)]
+    assert item.outputs == [("out", PortType.EXEC)]
 
 
 # --- properties ---------------------------------------------------------------

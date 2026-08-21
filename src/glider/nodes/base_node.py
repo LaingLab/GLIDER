@@ -388,6 +388,11 @@ class ExecNode(GliderNode):
 class HardwareNode(ExecNode):
     """Base class for hardware interaction nodes."""
 
+    # Tells the properties panel to offer a device selector. Declared here
+    # rather than hardcoded as a list of node type names in the editor, so a
+    # node type core has never heard of can still be bound to a device.
+    REQUIRES_DEVICE = True
+
     definition = NodeDefinition(
         name="HardwareNode",
         category=NodeCategory.HARDWARE,

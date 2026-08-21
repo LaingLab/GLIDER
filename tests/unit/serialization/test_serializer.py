@@ -581,11 +581,11 @@ def test_device_with_a_name_setting_round_trips(
     hardware_manager_with_mock.add_board(board_id="board1", driver_type="mock", port=None)
     hardware_manager_with_mock.add_device_multi_pin(
         device_id="stim1",
-        device_type="Maimu",
+        device_type="BLE",
         board_id="board1",
         pins={},
         name="Left stimulator",
-        settings={"name": "Maimu-01", "address": ""},
+        settings={"name": "Peripheral-01", "address": ""},
     )
 
     out = tmp_path / "maimu.glider"
@@ -609,7 +609,7 @@ def test_device_with_a_name_setting_round_trips(
     device = fresh_hm.devices.get("stim1")
     assert device is not None, f"stim1 lost on round-trip: {list(fresh_hm.devices)}"
     assert device.name == "Left stimulator"
-    assert device._config.settings["name"] == "Maimu-01"
+    assert device._config.settings["name"] == "Peripheral-01"
 
 
 def test_single_pin_device_dict_stays_old_version_readable(

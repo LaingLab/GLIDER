@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from glider.nodes.hardware.maimu_nodes import MaimuNode
+from glider_maimu.node import MaimuNode
 
 
 class _RecordingDevice:
