@@ -121,6 +121,15 @@ class DeviceControlPanel(QWidget):
         digital_layout.addWidget(self._toggle_btn)
         self._control_group_layout.addWidget(self._digital_widget)
 
+        # Actions declared by the device itself. Everything above is a control
+        # for one hardcoded device type; this is the one that works for a device
+        # type core has never heard of, which is every plugin device.
+        self._actions_widget = QWidget()
+        self._actions_layout = QHBoxLayout(self._actions_widget)
+        self._actions_layout.setContentsMargins(0, 0, 0, 0)
+        self._actions_layout.setSpacing(4)
+        self._control_group_layout.addWidget(self._actions_widget)
+
         # PWM control row
         self._pwm_widget = QWidget()
         pwm_layout = QHBoxLayout(self._pwm_widget)
@@ -267,9 +276,13 @@ class DeviceControlPanel(QWidget):
         is_pwm_output = device_type == "PWMOutput"
         is_output = is_digital_output or is_pwm_output
 
-        self._control_group.setVisible(is_output)
+        # A device with no bespoke control still has its declared actions.
+        has_actions = self._build_action_buttons(device) if not is_output else False
+
+        self._control_group.setVisible(is_output or has_actions)
         self._digital_widget.setVisible(is_digital_output)
         self._pwm_widget.setVisible(is_pwm_output)
+        self._actions_widget.setVisible(has_actions)
         if is_pwm_output:
             # Range from the device's declared spec, not a hardcoded 0-255, so a
             # higher-resolution PWM board (12-bit -> 0-4095) is controllable here.
@@ -281,6 +294,91 @@ class DeviceControlPanel(QWidget):
             self._pwm_spinbox.blockSignals(True)
             self._pwm_spinbox.setValue(current_value)
             self._pwm_spinbox.blockSignals(False)
+
+    def _clear_action_buttons(self) -> None:
+        while self._actions_layout.count():
+            item = self._actions_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                # setParent(None) first: deleteLater only *queues* destruction,
+                # so without this the previous device's buttons remain children
+                # -- and remain clickable -- until the event loop turns.
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def _build_action_buttons(self, device) -> bool:
+        """One button per no-argument action the device declares.
+
+        This is how a Maimu gets its ``on`` and ``off`` -- which is how you tell
+        which of six stimulators on the bench is the one you just added -- and
+        how any plugin device gets manual control without core knowing its type.
+
+        Actions that take arguments are shown disabled rather than hidden. A
+        ``pulse(period, duration)`` needs two numbers this row has nowhere to
+        put, and silently omitting it would read as the device not having it;
+        the tooltip says where to drive it from instead.
+
+        Returns whether any button was built. Never raises: a device with an
+        awkward ``actions`` property must not take the panel down mid-session.
+        """
+        import inspect
+
+        self._clear_action_buttons()
+        try:
+            actions = dict(getattr(device, "actions", {}) or {})
+        except Exception:
+            logger.warning("Could not read actions from %s", device, exc_info=True)
+            return False
+
+        built = False
+        for name, func in actions.items():
+            needs_args = False
+            try:
+                parameters = list(inspect.signature(func).parameters.values())
+                needs_args = any(
+                    param.default is inspect.Parameter.empty
+                    and param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+                    for param in parameters
+                )
+            except (TypeError, ValueError):
+                # Unintrospectable callable: offer it and let it report its own
+                # error, which is better than hiding a working action.
+                needs_args = False
+
+            button = QPushButton(name)
+            button.setMinimumHeight(32)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            if needs_args:
+                button.setEnabled(False)
+                button.setToolTip(
+                    f"{name} takes arguments; drive it from a Device Action node "
+                    "or a node for this device."
+                )
+            else:
+                button.setToolTip(f"Run {name} on this device")
+                button.clicked.connect(
+                    lambda _checked=False, action=name: self._run_device_action(action)
+                )
+            self._actions_layout.addWidget(button)
+            built = True
+
+        return built
+
+    def _run_device_action(self, action: str) -> None:
+        """Run one no-argument action on the selected device."""
+        device = self._get_selected_device()
+        if device is None:
+            return
+
+        async def _run():
+            try:
+                await device.execute_action(action)
+                self._device_status_label.setText(f"Status: ran {action!r}")
+            except Exception as exc:  # noqa: BLE001 - surfaced to the user
+                logger.exception("Device action %s failed", action)
+                self._device_status_label.setText(f"Status: {action!r} failed - {exc}")
+
+        self._run_async(_run())
 
     def _get_selected_device(self):
         """Get the currently selected device."""
