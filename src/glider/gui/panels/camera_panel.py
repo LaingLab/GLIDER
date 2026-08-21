@@ -306,6 +306,8 @@ class CameraPanel(QWidget):
     # into the BehaviorInferenceWorker's thread via automatic QueuedConnections.
     _behavior_init_requested = pyqtSignal(str, str, list)  # pkl, pt, keypoint names
     _behavior_frame_requested = pyqtSignal(object)  # FrameData -> worker.process_frame
+    # PumpStats from the rehearsal pump's thread -> the GUI thread.
+    _rehearsal_finished = pyqtSignal(object)
 
     def __init__(
         self,
@@ -345,6 +347,7 @@ class CameraPanel(QWidget):
         self._behavior_thread: QThread | None = None
         self._behavior_worker: Any | None = None
         self._behavior_running = False
+        self._rehearsal_pump: Any | None = None
 
         # Video-file source state (offline tracking)
         from glider.vision.video_source import VideoFileSource
@@ -598,6 +601,44 @@ class CameraPanel(QWidget):
         self._live_behavior_btn.clicked.connect(self._toggle_live_behavior)
         behavior_layout.addWidget(self._live_behavior_btn)
 
+        # --- rehearsal: drive the live path from a recording ------------------
+        rehearsal_line = QFrame()
+        rehearsal_line.setFrameShape(QFrame.Shape.HLine)
+        rehearsal_line.setProperty("textRole", "muted")
+        behavior_layout.addWidget(rehearsal_line)
+
+        rehearsal_row = QHBoxLayout()
+        self._rehearse_btn = QPushButton("Rehearse from video\u2026")
+        self._rehearse_btn.setEnabled(False)
+        self._rehearse_btn.setToolTip(
+            "Play a recording through the live path instead of the camera.\n"
+            "Classification, node triggers and hardware all run for real."
+        )
+        self._rehearse_btn.clicked.connect(self._toggle_rehearsal)
+        rehearsal_row.addWidget(self._rehearse_btn, 1)
+
+        self._rehearse_speed = QComboBox()
+        # Feature values do not depend on playback rate -- compute_features uses
+        # unit frame spacing -- so both modes classify identically. They answer
+        # different questions, which is why both exist.
+        self._rehearse_speed.addItem("Real time", 1.0)
+        self._rehearse_speed.addItem("As fast as possible", 0.0)
+        self._rehearse_speed.setToolTip(
+            "Real time answers 'does inference keep up, and what is the "
+            "latency?'.\nAs fast as possible answers 'is this wired up?' "
+            "sooner.\nBoth classify the recording identically."
+        )
+        rehearsal_row.addWidget(self._rehearse_speed)
+        behavior_layout.addLayout(rehearsal_row)
+
+        self._rehearse_status = QLabel(
+            "Start live behavior first \u2014 a rehearsal with no classifier "
+            "running does nothing."
+        )
+        self._rehearse_status.setProperty("textRole", "muted")
+        self._rehearse_status.setWordWrap(True)
+        behavior_layout.addWidget(self._rehearse_status)
+
         layout.addWidget(behavior_group)
 
         # Set up scroll area
@@ -615,6 +656,7 @@ class CameraPanel(QWidget):
 
         # Connect thread-safe signals for UI updates (main thread)
         self._frame_received.connect(self._handle_frame_input)
+        self._rehearsal_finished.connect(self._on_rehearsal_finished_main)
         self._multi_frame_received.connect(self._handle_multi_frame_input)
 
         # Connect CV worker signals
@@ -645,6 +687,88 @@ class CameraPanel(QWidget):
         # FPS field, which is otherwise idle when there is no live camera).
         self._run_fps = FpsMeter()
         self._run_frames_done = 0
+
+    # --- rehearsal from a recording ---------------------------------------
+
+    def _toggle_rehearsal(self) -> None:
+        if self._rehearsal_pump is not None and self._rehearsal_pump.is_running:
+            self._stop_rehearsal()
+        else:
+            self._start_rehearsal()
+
+    def _start_rehearsal(self) -> None:
+        """Play a recording through the live path, hardware and all."""
+        from PyQt6.QtWidgets import QFileDialog
+
+        from glider.vision.video_pump import VideoPump
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Rehearse from video", "", "Videos (*.mp4 *.avi *.mov *.mkv);;All Files (*)"
+        )
+        if not path:
+            return
+
+        speed = self._rehearse_speed.currentData()
+        self._rehearsal_pump = VideoPump(
+            path,
+            self._on_rehearsal_frame,
+            speed=speed,
+            on_finished=self._on_rehearsal_finished,
+        )
+        if not self._rehearsal_pump.start():
+            self._rehearsal_pump = None
+            self._rehearse_status.setText(f"Could not open {Path(path).name}.")
+            return
+
+        self._rehearse_btn.setText("Stop rehearsal")
+        self._rehearse_speed.setEnabled(False)
+        self._rehearse_status.setText(
+            f"Rehearsing {Path(path).name} \u2014 hardware is being driven for real."
+        )
+        logger.info("Rehearsal started from %s", path)
+
+    def _stop_rehearsal(self) -> None:
+        pump = self._rehearsal_pump
+        if pump is not None:
+            pump.stop()
+        self._rehearsal_pump = None
+        self._rehearse_btn.setText("Rehearse from video\u2026")
+        self._rehearse_speed.setEnabled(True)
+        logger.info("Rehearsal stopped")
+
+    def _on_rehearsal_frame(self, frame: np.ndarray, timestamp: float) -> None:
+        """Hand a recorded frame to the live path.
+
+        Called from the pump's thread, exactly as ``_on_frame`` is called from
+        the camera's capture thread, and doing the same thing: copy, then emit
+        so the work happens on the GUI thread. Emitting ``_frame_received``
+        rather than calling ``_on_frame`` deliberately skips its
+        ``_preview_active`` guard -- a rehearsal does not need a camera open,
+        and requiring one would mean it could not run on a machine that has
+        none.
+        """
+        self._frame_received.emit(FrameData(frame=frame.copy(), timestamp=timestamp))
+
+    def _on_rehearsal_finished(self, stats: Any) -> None:
+        """Report how it went. Called from the pump's thread."""
+        self._rehearsal_finished.emit(stats)
+
+    def _on_rehearsal_finished_main(self, stats: Any) -> None:
+        self._rehearse_btn.setText("Rehearse from video\u2026")
+        self._rehearse_speed.setEnabled(True)
+        self._rehearsal_pump = None
+
+        lag_ms = stats.max_lag_s * 1000
+        summary = f"Rehearsal finished: {stats.frames_delivered} frames"
+        if stats.max_lag_s > 0:
+            # The number that says whether the rig will hold up live: a run
+            # that ended a second behind will miss stimulus timing on an animal
+            # by the same margin.
+            summary += f", worst lag {lag_ms:.0f} ms \u2014 inference did not keep up"
+        elif self._rehearse_speed.currentData():
+            summary += ", kept up with real time"
+        self._rehearse_status.setText(summary)
+        logger.info("%s", summary)
 
     def _handle_frame_input(self, frame_data: FrameData) -> None:
         """Decide whether to process frame with CV or update UI immediately."""
@@ -1602,6 +1726,8 @@ class CameraPanel(QWidget):
         if worker is None:
             return
         self._preview.set_behavior_vocab(worker.classes)
+        self._rehearse_btn.setEnabled(True)
+        self._rehearse_status.setText("Ready to rehearse from a recording.")
         # Also hand the vocabulary to the flow side, so a Behavior Input node's
         # properties can offer the behaviors this model actually emits instead
         # of a free-text box where a typo means "never fires".
@@ -1711,6 +1837,9 @@ class CameraPanel(QWidget):
         # Tear down any in-flight tracking run and release the scrub video source.
         self._teardown_run_thread()
         self.stop_live_behavior()
+        if self._rehearsal_pump is not None:
+            self._rehearsal_pump.stop()
+            self._rehearsal_pump = None
         self._video_source.release()
 
         if self._preview_active:

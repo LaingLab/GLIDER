@@ -161,6 +161,11 @@ def _register_component(kind: str, name: str, component: type, plugin: str) -> N
 
     registry[name] = component
     _PLUGIN_COMPONENTS[(kind, name)] = plugin
+    # The name matters and is not always the one the author expected: an entry
+    # point naming a class registers under the *entry point's* name, so
+    # `maimu = "...:MaimuDevice"` yields a device type called "maimu". Saying so
+    # here is what turns that into a one-line diagnosis instead of a hunt.
+    logger.info("Plugin %s registered %s %r", plugin, kind, name)
     logger.debug("Plugin %s: registered %s %r", plugin, kind, name)
 
 

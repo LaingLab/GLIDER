@@ -65,12 +65,15 @@ def registered_plugin_node(monkeypatch):
 # --- provenance ---------------------------------------------------------------
 
 
-def test_a_stock_install_has_no_plugin_nodes():
-    assert pm.plugin_components("node") == {}
+def test_an_unregistered_node_is_not_reported():
+    """Asserted about this node, not about the registry being empty: a machine
+    with glider-maimu or glider-harp installed has real plugin components in
+    there, and CI installs both."""
+    assert PLUGIN_NODE_TYPE not in pm.plugin_components("node")
 
 
 def test_a_registered_node_is_attributed_to_its_plugin(registered_plugin_node):
-    assert pm.plugin_components("node") == {PLUGIN_NODE_TYPE: "glider-acme"}
+    assert pm.plugin_components("node").get(PLUGIN_NODE_TYPE) == "glider-acme"
 
 
 def test_provenance_is_per_kind(registered_plugin_node, monkeypatch):
@@ -127,9 +130,13 @@ def test_the_section_refreshes_when_a_plugin_loads(qtbot, monkeypatch):
     assert PLUGIN_NODE_TYPE in _buttons(panel)
 
 
-def test_an_empty_section_says_so(qtbot):
+def test_an_empty_section_says_so(qtbot, monkeypatch):
+    """With no plugin nodes the section explains itself rather than sitting
+    blank. Forced empty, because a developer machine (and CI) has real plugins
+    installed."""
     from PyQt6.QtWidgets import QLabel
 
+    monkeypatch.setattr(pm, "_PLUGIN_COMPONENTS", {})
     panel = _library(qtbot)
 
     labels = [lb.text() for lb in panel.findChildren(QLabel)]
