@@ -1331,6 +1331,13 @@ class NodeEditorController(QObject):
             )
             props_layout.addRow("Monitor:", monitor_combo)
 
+        else:
+            # Anything without a hardcoded branch renders its own declared
+            # schema, if it has one. This is the only route a plugin node has
+            # to a properties form -- core cannot have a branch for a node type
+            # it has never heard of.
+            self._render_node_schema(node_id, node_type, node_config, props_layout)
+
         self._properties_dock.setWidget(props_widget)
 
     def _on_node_device_changed(self, node_id: str, device_id: str) -> None:
@@ -1361,6 +1368,51 @@ class NodeEditorController(QObject):
                         logger.info(f"Unbound device from runtime node {node_id}")
 
                 self._update_properties_panel(node_id)
+
+    def _render_node_schema(self, node_id, node_type, node_config, props_layout) -> None:
+        """Render a node class's ``PROPERTIES_SCHEMA`` into the panel.
+
+        Mirrors what device classes already get from ``SETTINGS_SCHEMA``: the
+        node declares its fields as data and the panel builds the widgets, so a
+        node type core has never heard of can still be configured. Values live
+        in the node's state, which is what ``get_state``/``set_state`` persist
+        and what the flow engine applies at load.
+
+        Silent when the node declares nothing -- plenty of nodes have no
+        properties, and an empty section header would be noise.
+        """
+        from glider.core.flow_engine import FlowEngine
+        from glider.gui.widgets.schema_form import build_schema_widgets, read_schema_widget
+
+        node_class = FlowEngine.get_node_class(node_type)
+        schema = getattr(node_class, "PROPERTIES_SCHEMA", None) if node_class else None
+        if not schema:
+            return
+
+        self._add_section_header(props_layout, "PROPERTIES")
+        state = (node_config.state if node_config else None) or {}
+        widgets: dict[str, tuple] = {}
+        build_schema_widgets(props_layout, schema, widgets, values=state)
+
+        for key, (widget, ftype) in widgets.items():
+            self._connect_schema_widget(node_id, key, widget, ftype, read_schema_widget)
+
+    def _connect_schema_widget(self, node_id, key, widget, ftype, read) -> None:
+        """Persist a schema-rendered widget's value into the node's state.
+
+        Every widget kind exposes a different change signal, so this connects
+        whichever one it has rather than asking the schema to declare it.
+        """
+
+        def _save(*_args):
+            self._on_node_property_changed(node_id, key, read(widget, ftype))
+
+        for signal_name in ("currentIndexChanged", "valueChanged", "textChanged", "toggled"):
+            signal = getattr(widget, signal_name, None)
+            if signal is not None:
+                signal.connect(_save)
+                return
+        logger.debug("No change signal found for schema widget %r (%s)", key, ftype)
 
     def _known_behaviors(self) -> list[str]:
         """Labels the currently loaded behavior model can emit, if any.

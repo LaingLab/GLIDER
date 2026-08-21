@@ -242,6 +242,23 @@ class NodeLibraryPanel(QWidget):
             add_new_callback=None,
         )
 
+        # Plugin nodes: whatever plugins registered, discovered rather than
+        # listed. A node type core has never heard of has no other way onto the
+        # canvas -- the static categories above and the canvas context menu are
+        # both hardcoded.
+        self._plugin_nodes_container = QWidget()
+        self._plugin_nodes_layout = QVBoxLayout(self._plugin_nodes_container)
+        self._plugin_nodes_layout.setContentsMargins(0, 0, 0, 0)
+        self._plugin_nodes_layout.setSpacing(2)
+        self._setup_custom_category(
+            self._plugin_nodes_container,
+            self._plugin_nodes_layout,
+            "Plugins",
+            colors.LIB_PLUGINS,
+            layout,
+            add_new_callback=None,
+        )
+
         # Zones section
         self._zones_container = QWidget()
         self._zones_layout = QVBoxLayout(self._zones_container)
@@ -255,6 +272,8 @@ class NodeLibraryPanel(QWidget):
             layout,
             add_new_callback=None,
         )
+
+        self.refresh_plugin_nodes()
 
         layout.addStretch()
         scroll_area.setWidget(container)
@@ -298,6 +317,39 @@ class NodeLibraryPanel(QWidget):
             placeholder.setWordWrap(True)
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self._flow_functions_layout.addWidget(placeholder)
+
+    def refresh_plugin_nodes(self) -> None:
+        """Rebuild the Plugins section from whatever nodes plugins registered.
+
+        Called again after plugins load or reload, since a plugin installed
+        from the Plugins window takes effect without a restart.
+        """
+        while self._plugin_nodes_layout.count():
+            item = self._plugin_nodes_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        from glider.core.flow_engine import FlowEngine
+        from glider.plugins.plugin_manager import plugin_components
+
+        entries = plugin_components("node")
+        for node_type in sorted(entries):
+            node_class = FlowEngine.get_node_class(node_type)
+            definition = getattr(node_class, "definition", None)
+            label = getattr(definition, "name", None) or node_type
+            description = getattr(definition, "description", "") or ""
+            btn = DraggableNodeButton(node_type, label, "Plugins")
+            btn.setToolTip(f"{description}\n\nFrom plugin: {entries[node_type]}".strip())
+            btn.clicked.connect(lambda checked, nt=node_type: self._add_node_to_center(nt))
+            self._apply_node_btn_style(btn, colors.LIB_PLUGINS)
+            self._plugin_nodes_layout.addWidget(btn)
+
+        if not entries:
+            placeholder = QLabel("No plugin nodes installed")
+            placeholder.setProperty("textRole", "muted")
+            placeholder.setWordWrap(True)
+            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._plugin_nodes_layout.addWidget(placeholder)
 
     def refresh_zones(self, zone_config=None) -> None:
         """Refresh the zones in the node library."""
