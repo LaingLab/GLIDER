@@ -396,71 +396,23 @@ class HardwarePanel(QWidget):
     def _build_ble_address_row(self, layout, out: dict, dialog) -> None:
         """Add an editable BLE address combo with a Scan button to ``layout``.
 
-        Shared by every BLE-transport device in the Add Device dialog -- the
-        generic BLEWrite and the Maimu both need exactly this widget. The chosen
-        address lands in ``out["address"]``; read it back with
-        :meth:`_read_ble_address`.
+        Shared by every BLE-transport device in the Add Device dialog. The
+        widget itself lives in :mod:`glider.gui.widgets.schema_form`, so the
+        hand-built rows here and the schema-rendered form a plugin device gets
+        are the same widget rather than two that drift apart.
         """
-        addr_combo = QComboBox()
-        addr_combo.setEditable(True)
-        addr_combo.setMinimumWidth(240)
-        addr_combo.lineEdit().setPlaceholderText("BLE address (or Scan)")
-        out["address"] = addr_combo
+        from glider.gui.widgets.schema_form import build_ble_address_widget
 
-        scan_btn = QPushButton("Scan")
-        scan_btn.setToolTip("Discover nearby BLE peripherals (~5s)")
-
-        def do_scan(_=False, combo=addr_combo, btn=scan_btn):
-            btn.setEnabled(False)
-            btn.setText("Scanning…")
-
-            async def _scan():
-                try:
-                    # Scanning discovers peripherals via the host BLE adapter --
-                    # it does not depend on which board is selected, so scan
-                    # directly via the BLE board's (static) scanner.
-                    from glider.hal.boards.ble_board import BLEBoard
-
-                    results = await BLEBoard.scan(timeout=8.0)
-                    combo.clear()
-                    if not results:
-                        combo.addItem("(no devices found)", None)
-                    for nm, addr in results:
-                        # Show the advertised name; fall back to the address for
-                        # unnamed peripherals so they stay distinguishable. The
-                        # address is kept as the item data (and tooltip) and is
-                        # what gets saved.
-                        label = nm if nm and nm != "(unknown)" else addr
-                        combo.addItem(label, addr)
-                        combo.setItemData(combo.count() - 1, addr, Qt.ItemDataRole.ToolTipRole)
-                except ImportError:
-                    QMessageBox.critical(dialog, "Scan failed", "bleak is not installed.")
-                except Exception as e:  # noqa: BLE001 - surfaced to user
-                    QMessageBox.critical(dialog, "Scan failed", str(e))
-                finally:
-                    btn.setEnabled(True)
-                    btn.setText("Scan")
-
-            self._run_async(_scan())
-
-        scan_btn.clicked.connect(do_scan)
-
-        addr_row = QHBoxLayout()
-        addr_row.addWidget(addr_combo)
-        addr_row.addWidget(scan_btn)
-        addr_container = QWidget()
-        addr_container.setLayout(addr_row)
-        layout.addRow("Address:", addr_container)
+        container, combo = build_ble_address_widget(self._run_async, dialog)
+        out["address"] = combo
+        layout.addRow("Address:", container)
 
     @staticmethod
     def _read_ble_address(out: dict) -> str:
         """Read the address chosen in a row built by _build_ble_address_row."""
-        addr = out["address"].currentData()
-        if not addr:
-            # Manually typed, or "addr (name)" picked without data.
-            raw = out["address"].currentText().strip()
-            addr = raw.split(" (")[0].strip() if raw else ""
-        return addr
+        from glider.gui.widgets.schema_form import read_schema_widget
+
+        return read_schema_widget(out["address"], "ble_address")
 
     def _build_schema_widgets(self, layout, schema, out: dict) -> None:
         """Render a device SETTINGS_SCHEMA into a form layout.
@@ -469,7 +421,7 @@ class HardwarePanel(QWidget):
         """
         from glider.gui.widgets.schema_form import build_schema_widgets
 
-        build_schema_widgets(layout, schema, out)
+        build_schema_widgets(layout, schema, out, run_async=self._run_async)
 
     @staticmethod
     def _read_schema_widget(widget, ftype: str):
