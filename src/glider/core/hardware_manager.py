@@ -187,6 +187,10 @@ class HardwareManager:
                 logger.error(f"Connection callback failed: {e}")
 
     async def create_board(self, config: "BoardConfig") -> BaseBoard:
+        """Async wrapper kept for callers that already await it."""
+        return self.build_board(config)
+
+    def build_board(self, config: "BoardConfig") -> BaseBoard:
         """
         Create a board instance from configuration.
 
@@ -303,6 +307,10 @@ class HardwareManager:
         logger.info(f"Removed board: {board_id}")
 
     async def create_device(self, config: "DeviceConfig") -> BaseDevice:
+        """Async wrapper kept for callers that already await it."""
+        return self.build_device(config)
+
+    def build_device(self, config: "DeviceConfig") -> BaseDevice:
         """
         Create a device instance from configuration.
 
