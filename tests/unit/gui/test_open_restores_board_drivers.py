@@ -75,12 +75,13 @@ def test_auto_reconnect_survives(core):
 
 
 def test_a_ble_device_lands_on_its_bluetooth_board(core):
-    """The regression that matters: a Maimu reopened from a saved experiment."""
+    """The regression that matters: any BLE peripheral -- a stimulator, a
+    sensor -- reopened from a saved experiment."""
     _with_board(core, "bluetooth")
     core.session.add_device(
         DeviceConfig(
             id="stim1",
-            device_type="Maimu",
+            device_type="BLE",
             name="Stimulator",
             board_id="b1",
             pins={},

@@ -149,7 +149,7 @@ class HardwarePanel(QWidget):
                         cfg = getattr(device, "_config", None)
                         settings = getattr(cfg, "settings", {}) if cfg else {}
                         pin_str = settings.get("port", "") or "no port"
-                    elif device_type in ("BLE", "Maimu"):
+                    elif device_type == "BLE":
                         cfg = getattr(device, "_config", None)
                         settings = getattr(cfg, "settings", {}) if cfg else {}
                         pin_str = settings.get("address") or settings.get("name") or "no address"
@@ -454,7 +454,6 @@ class HardwarePanel(QWidget):
             "Serial / UART Device": ("GenericSerial", []),
             "BLE Device (write characteristic)": ("BLEWrite", []),
             "BLE Device (read / notify / write)": ("BLE", []),
-            "Maimu (BLE stimulator)": ("Maimu", []),
         }
 
         # Surface plugin-registered device types (anything in DEVICE_REGISTRY
@@ -518,16 +517,13 @@ class HardwarePanel(QWidget):
             is_ads1115 = device_type == "ADS1115"
             is_generic_i2c = device_type == "GenericI2C"
             is_ble = device_type == "BLEWrite"
-            is_maimu = device_type == "Maimu"
             is_stepper = device_type == "StepperA4988"
             is_hx711 = device_type == "HX711"
 
             # Plugin devices may declare a SETTINGS_SCHEMA for an auto-rendered form.
             device_class = DEVICE_REGISTRY.get(device_type)
             schema = getattr(device_class, "SETTINGS_SCHEMA", None) if device_class else None
-            is_schema = schema and not (
-                is_ads1115 or is_generic_i2c or is_ble or is_maimu or is_stepper
-            )
+            is_schema = schema and not (is_ads1115 or is_generic_i2c or is_ble or is_stepper)
 
             if is_schema:
                 self._build_schema_widgets(pin_layout, schema, schema_widgets)
@@ -556,43 +552,6 @@ class HardwarePanel(QWidget):
                 note = QLabel(
                     "Send commands from the flow with a Device Action node: "
                     "action 'write', arg1 = 'on' / 'off' / '20,10'."
-                )
-                note.setProperty("textRole", "muted")
-                note.setWordWrap(True)
-                pin_layout.addRow(note)
-            elif is_maimu:
-                from glider.hal.devices.maimu import (
-                    DEFAULT_SERVICE_UUID,
-                    DEFAULT_WRITE_CHAR_UUID,
-                )
-
-                self._build_ble_address_row(pin_layout, ble_settings, dialog)
-
-                name_ble_edit = QLineEdit()
-                name_ble_edit.setPlaceholderText("advertised name (optional)")
-                name_ble_edit.setToolTip(
-                    "Set this instead of an address and the unit is found by name "
-                    "at connect time, so the same file opens on Windows and macOS."
-                )
-                ble_settings["name"] = name_ble_edit
-                pin_layout.addRow("Advertised name:", name_ble_edit)
-
-                # Pre-filled: the Maimu's GATT layout is known. Editable so a
-                # firmware revision that moves it needs a config change, not a
-                # code change.
-                char_edit = QLineEdit(DEFAULT_WRITE_CHAR_UUID)
-                char_edit.setToolTip("Advanced: the writable command characteristic.")
-                ble_settings["write_char_uuid"] = char_edit
-                pin_layout.addRow("Characteristic:", char_edit)
-
-                svc_edit = QLineEdit(DEFAULT_SERVICE_UUID)
-                svc_edit.setToolTip("Advanced: reference only.")
-                ble_settings["service_uuid"] = svc_edit
-                pin_layout.addRow("Service:", svc_edit)
-
-                note = QLabel(
-                    "Drive it from the flow with a Maimu node: pick On, Off or "
-                    "Pulse, and set the period and duration in its properties."
                 )
                 note.setProperty("textRole", "muted")
                 note.setWordWrap(True)
@@ -818,11 +777,6 @@ class HardwarePanel(QWidget):
                 if svc:
                     settings["service_uuid"] = svc
                 settings["write_response"] = ble_settings["write_response"].isChecked()
-            elif device_type == "Maimu" and ble_settings:
-                settings["address"] = self._read_ble_address(ble_settings)
-                settings["name"] = ble_settings["name"].text().strip()
-                settings["write_char_uuid"] = ble_settings["write_char_uuid"].text().strip()
-                settings["service_uuid"] = ble_settings["service_uuid"].text().strip()
             elif device_type == "StepperA4988" and stepper_settings:
                 settings["steps_per_rev"] = stepper_settings["steps_per_rev"].value()
                 settings["steptype"] = stepper_settings["steptype"].currentText()

@@ -21,7 +21,6 @@ from glider.hal.base_device import (
 )
 from glider.hal.devices.ble_device import BLEDevice
 from glider.hal.devices.hx711 import HX711Device
-from glider.hal.devices.maimu import MaimuDevice
 from glider.hal.devices.serial_device import GenericSerialDevice
 from glider.hal.devices.spi_device import GenericSPIDevice
 from glider.hal.devices.stepper_a4988 import StepperA4988Device
@@ -33,7 +32,6 @@ DEVICE_REGISTRY["StepperA4988"] = StepperA4988Device
 DEVICE_REGISTRY["HX711"] = HX711Device
 DEVICE_REGISTRY["GenericSerial"] = GenericSerialDevice
 DEVICE_REGISTRY["BLE"] = BLEDevice
-DEVICE_REGISTRY["Maimu"] = MaimuDevice
 DEVICE_REGISTRY["GenericSPI"] = GenericSPIDevice
 
 __all__ = [
@@ -51,7 +49,6 @@ __all__ = [
     "HX711Device",
     "GenericSerialDevice",
     "BLEDevice",
-    "MaimuDevice",
     "GenericSPIDevice",
     "DEVICE_REGISTRY",
     "create_device_from_dict",

@@ -27,7 +27,12 @@ how to add and bind them, see [Devices & Hardware](../building/devices.md).
 | **ADS1115** | A 4-channel, 16-bit I²C analog-to-digital converter | High-resolution analog inputs |
 | **GenericI2C** | Register-level read/write to any I²C device | Custom or uncommon I²C sensors |
 | **BLEWrite** | Writes to a Bluetooth LE characteristic | Wireless actuators / custom BLE peripherals |
-| **Maimu** | A Maimu BLE stimulator, protocol built in | Wireless stimulation — on, off, or a timed pulse train |
+
+!!! tip "Maimu stimulators come from a plugin"
+    The **Maimu** device and node ship in `glider-maimu`, installable from
+    **Tools → Plugins…**. It bakes in the stimulator's UUIDs and command
+    protocol, so adding one is **Add Device → Maimu → Scan** rather than
+    pasting UUIDs into a generic BLE device.
 
 !!! note "I²C is Linux/Pi at runtime"
     I²C devices (**ADS1115**, **GenericI2C**) need the `i2c` extra and run on

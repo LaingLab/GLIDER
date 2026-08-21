@@ -44,6 +44,46 @@ class MaimuNode(HardwareNode):
     after this one to hold the flow for the duration.
     """
 
+    # Rendered by the properties panel via schema_form. The hardcoded
+    # Mode/Period/Duration widgets this replaces could grey out period and
+    # duration outside Pulse mode; a declared schema has no notion of one field
+    # depending on another, so that cue is carried in the help text instead.
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "mode",
+            "label": "Mode",
+            "type": "enum",
+            "default": MODE_PULSE,
+            "choices": [["on", "On"], ["off", "Off"], ["pulse", "Pulse"]],
+            "help": "On and Off latch; Pulse runs a train and stops on its own.",
+        },
+        {
+            "key": "period_ms",
+            "label": "Period (ms)",
+            "type": "int",
+            "default": DEFAULT_PERIOD_MS,
+            "min": 1,
+            "max": 3_600_000,
+            "help": (
+                "Pulse mode only. On/off toggle period in milliseconds -- a "
+                "period, not a frequency. 500 ms toggles about once a second."
+            ),
+        },
+        {
+            "key": "duration_s",
+            "label": "Duration (s)",
+            "type": "int",
+            "default": DEFAULT_DURATION_S,
+            "min": 1,
+            "max": 86_400,
+            "help": (
+                "Pulse mode only. How long the train runs. The stimulator "
+                "times this itself, so the flow continues immediately -- add a "
+                "Delay node to hold it."
+            ),
+        },
+    ]
+
     definition = NodeDefinition(
         name="Maimu",
         category=NodeCategory.HARDWARE,

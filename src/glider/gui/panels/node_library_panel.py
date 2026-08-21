@@ -171,7 +171,6 @@ class NodeLibraryPanel(QWidget):
             "I/O": [
                 ("Output", "Output", "Write to a device (digital or PWM)"),
                 ("Input", "Input", "Read from a device (digital or analog)"),
-                ("Maimu", "Maimu", "Drive a Maimu BLE stimulator: on, off, or a timed pulse"),
             ],
             "Behavior": [
                 (

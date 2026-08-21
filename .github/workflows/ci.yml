@@ -124,7 +124,9 @@ jobs:
       # edge, and it registers the entry points that
       # tests/test_packaging.py's PluginManager test exercises.
       - name: Install in-repo plugins (brings in harp-protocol)
-        run: uv pip install -e ./plugins/glider-harp
+        run: |
+          uv pip install -e ./plugins/glider-harp
+          uv pip install -e ./plugins/glider-maimu
 
       - name: Run tests with coverage
         # Force bash on all platforms: the default Windows shell is PowerShell,
@@ -146,9 +148,11 @@ jobs:
         # than relying on `testpaths` so the invocation stays readable, and
         # they match what `testpaths` in pyproject.toml lists.
         run: |
-          uv run --no-sync pytest tests/ plugins/glider-harp/tests/ -v -m "not slow" \
+          uv run --no-sync pytest tests/ plugins/glider-harp/tests/ \
+            plugins/glider-maimu/tests/ -v -m "not slow" \
             --cov=glider \
             --cov=glider_harp \
+            --cov=glider_maimu \
             --cov-report=xml \
             --cov-report=term
 

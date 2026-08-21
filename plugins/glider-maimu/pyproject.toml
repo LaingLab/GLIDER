@@ -1,0 +1,68 @@
+[build-system]
+# setuptools>=77 for the PEP 639 `license = "MIT"` string form, matching
+# glider-harp; the trove classifier it replaces emits a deprecation warning on
+# every build.
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glider-maimu"
+version = "0.1.0"
+description = "Maimu BLE stimulator support for GLIDER"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11,<3.14"
+authors = [
+    {name = "LaingLab"}
+]
+keywords = ["maimu", "glider", "bluetooth", "ble", "stimulation", "optogenetics"]
+classifiers = [
+    # Alpha: the protocol is exercised entirely against a fake bleak client.
+    # Nothing here has been run against a physical stimulator. Promote once one
+    # has driven a real experiment end to end.
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    # bleak only. The BLE transport, the board driver and the base device class
+    # all come from GLIDER itself, which is the host application rather than a
+    # dependency: this package is only ever loaded by a running GLIDER, and
+    # depending on it would make the two versions fight at install time.
+    "bleak>=0.21",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+# Both groups are declared for discovery parity. PluginManager keys the plugin
+# registry by entry point *name* across all groups and keeps the first it sees,
+# so only one of these two `maimu` names is loaded as a plugin -- but the
+# module-level DEVICE_TYPES/NODE_TYPES tables in __init__ register both
+# components regardless of which entry point won.
+[project.entry-points."glider.device"]
+maimu = "glider_maimu.device:MaimuDevice"
+
+[project.entry-points."glider.node"]
+maimu_node = "glider_maimu.node:MaimuNode"
+
+[project.urls]
+Homepage = "https://github.com/LaingLab/glider"
+Repository = "https://github.com/LaingLab/glider"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
