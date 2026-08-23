@@ -696,15 +696,47 @@ class CameraPanel(QWidget):
         else:
             self._start_rehearsal()
 
-    def _start_rehearsal(self) -> None:
-        """Play a recording through the live path, hardware and all."""
+    def _rehearsal_video(self) -> str | None:
+        """The video a rehearsal would play: the loaded one, or one chosen now.
+
+        Prefers whatever the panel already has open. Prompting unconditionally
+        let a rehearsal run against a *different* video than the one on screen
+        -- the one the zones were drawn over and the one being scrubbed -- which
+        is wrong in a way nothing on screen would show.
+        """
+        if self._video_source.is_loaded and self._video_source.path:
+            return str(self._video_source.path)
+
         from PyQt6.QtWidgets import QFileDialog
 
+        from glider.vision.pose.batch import VIDEO_FILTER
+
+        path, _ = QFileDialog.getOpenFileName(self, "Rehearse from video", "", VIDEO_FILTER)
+        if not path:
+            return None
+        # Load it properly rather than only handing it to the pump, so the scrub
+        # bar, zone drawing and the preview all refer to what is being played.
+        if not self._apply_video(Path(path)):
+            return None
+        return path
+
+    def _update_rehearse_label(self) -> None:
+        """Say which video the button would play, so it is not a surprise."""
+        if getattr(self, "_rehearse_btn", None) is None:
+            return
+        if self._rehearsal_pump is not None and self._rehearsal_pump.is_running:
+            return
+        if self._video_source.is_loaded and self._video_source.path:
+            name = Path(self._video_source.path).name
+            self._rehearse_btn.setText(f"Rehearse {name}")
+        else:
+            self._rehearse_btn.setText("Rehearse from video\u2026")
+
+    def _start_rehearsal(self) -> None:
+        """Play a recording through the live path, hardware and all."""
         from glider.vision.video_pump import VideoPump
 
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Rehearse from video", "", "Videos (*.mp4 *.avi *.mov *.mkv);;All Files (*)"
-        )
+        path = self._rehearsal_video()
         if not path:
             return
 
@@ -732,8 +764,8 @@ class CameraPanel(QWidget):
         if pump is not None:
             pump.stop()
         self._rehearsal_pump = None
-        self._rehearse_btn.setText("Rehearse from video\u2026")
         self._rehearse_speed.setEnabled(True)
+        self._update_rehearse_label()
         logger.info("Rehearsal stopped")
 
     def _on_rehearsal_frame(self, frame: np.ndarray, timestamp: float) -> None:
@@ -754,9 +786,9 @@ class CameraPanel(QWidget):
         self._rehearsal_finished.emit(stats)
 
     def _on_rehearsal_finished_main(self, stats: Any) -> None:
-        self._rehearse_btn.setText("Rehearse from video\u2026")
         self._rehearse_speed.setEnabled(True)
         self._rehearsal_pump = None
+        self._update_rehearse_label()
 
         lag_ms = stats.max_lag_s * 1000
         summary = f"Rehearsal finished: {stats.frames_delivered} frames"
@@ -1376,6 +1408,7 @@ class CameraPanel(QWidget):
         self._draw_zones_btn.setEnabled(True)
         self._run_btn.setEnabled(True)
         self._on_seek(0)
+        self._update_rehearse_label()
         return True
 
     def _on_seek(self, n: int) -> None:
@@ -1727,6 +1760,7 @@ class CameraPanel(QWidget):
             return
         self._preview.set_behavior_vocab(worker.classes)
         self._rehearse_btn.setEnabled(True)
+        self._update_rehearse_label()
         self._rehearse_status.setText("Ready to rehearse from a recording.")
         # Also hand the vocabulary to the flow side, so a Behavior Input node's
         # properties can offer the behaviors this model actually emits instead
