@@ -12,6 +12,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFormLayout,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -28,6 +29,7 @@ from PyQt6.QtWidgets import (
 
 from glider.core.device_drive import set_digital, set_pwm, toggle_digital
 from glider.gui.device_status import link_is_usable, link_status_text
+from glider.gui.widgets.schema_form import build_schema_widgets, read_schema_widget
 
 if TYPE_CHECKING:
     from glider.core.hardware_manager import HardwareManager
@@ -61,6 +63,11 @@ class DeviceControlPanel(QWidget):
         self._pwm_debounce_timer = None
         self._pending_pwm_value = 0
         self._pending_pwm_device = None
+
+        # action name -> {field key: (widget, ftype)} for the currently
+        # selected device. Cleared with the buttons; a stale widget from the
+        # previous device would be read on the next press.
+        self._action_arg_widgets: dict[str, dict[str, tuple]] = {}
 
         self._setup_ui()
         self.analog_value_received.connect(self._on_analog_value_received)
@@ -130,6 +137,13 @@ class DeviceControlPanel(QWidget):
         self._actions_layout.setContentsMargins(0, 0, 0, 0)
         self._actions_layout.setSpacing(4)
         self._control_group_layout.addWidget(self._actions_widget)
+
+        # Argument fields for the actions that declare them. A row of buttons
+        # has nowhere to put a period and a duration; this is where they go.
+        self._action_args_widget = QWidget()
+        self._action_args_layout = QFormLayout(self._action_args_widget)
+        self._action_args_layout.setContentsMargins(0, 4, 0, 0)
+        self._control_group_layout.addWidget(self._action_args_widget)
 
         # PWM control row
         self._pwm_widget = QWidget()
@@ -247,12 +261,14 @@ class DeviceControlPanel(QWidget):
         if device_id is None:
             self._device_status_label.setText("Status: No device selected")
             self._input_group.setEnabled(False)
+            self._clear_action_buttons()
             return
 
         device = self._hardware_manager.get_device(device_id)
         if device is None:
             self._device_status_label.setText("Status: Device not found")
             self._input_group.setEnabled(False)
+            self._clear_action_buttons()
             return
 
         device_type = getattr(device, "device_type", "unknown")
@@ -288,33 +304,40 @@ class DeviceControlPanel(QWidget):
             self._pwm_spinbox.blockSignals(False)
 
     def _clear_action_buttons(self) -> None:
-        while self._actions_layout.count():
-            item = self._actions_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                # setParent(None) first: deleteLater only *queues* destruction,
-                # so without this the previous device's buttons remain children
-                # -- and remain clickable -- until the event loop turns.
-                widget.setParent(None)
-                widget.deleteLater()
+        self._action_arg_widgets.clear()
+        for layout in (self._actions_layout, self._action_args_layout):
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    # setParent(None) first: deleteLater only *queues*
+                    # destruction, so without this the previous device's
+                    # buttons remain children -- and remain clickable -- until
+                    # the event loop turns.
+                    widget.setParent(None)
+                    widget.deleteLater()
 
     def _build_action_buttons(self, device) -> bool:
-        """One button per no-argument action the device declares.
+        """One button per action the device declares, plus any argument fields.
 
-        This is how a Maimu gets its ``on`` and ``off`` -- which is how you tell
-        which of six stimulators on the bench is the one you just added -- and
-        how any plugin device gets manual control without core knowing its type.
+        This is how a Maimu gets its ``on`` and ``off`` -- which is how you
+        tell which of six stimulators on the bench is the one you just added --
+        and how any plugin device gets manual control without core knowing its
+        type.
 
-        Actions that take arguments are shown disabled rather than hidden. A
-        ``pulse(period, duration)`` needs two numbers this row has nowhere to
-        put, and silently omitting it would read as the device not having it;
-        the tooltip says where to drive it from instead.
+        An action that takes arguments is pressable when the device declares
+        them in ``ACTION_ARGS_SCHEMA``: the fields render beneath the button
+        row and the values are passed positionally in the declared order. An
+        action that takes arguments and declares none stays disabled, because
+        the panel genuinely has nothing to send; the tooltip says where to
+        drive it from instead.
+
+        Buttons are dead while the link is down. Offering a press that is
+        certain to fail is worse than greying it.
 
         Returns whether any button was built. Never raises: a device with an
         awkward ``actions`` property must not take the panel down mid-session.
         """
-        import inspect
-
         self._clear_action_buttons()
         try:
             actions = dict(getattr(device, "actions", {}) or {})
@@ -322,57 +345,104 @@ class DeviceControlPanel(QWidget):
             logger.warning("Could not read actions from %s", device, exc_info=True)
             return False
 
+        usable = link_is_usable(getattr(device, "link_state", None))
         built = False
-        for name, func in actions.items():
-            needs_args = False
-            try:
-                parameters = list(inspect.signature(func).parameters.values())
-                needs_args = any(
-                    param.default is inspect.Parameter.empty
-                    and param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
-                    for param in parameters
-                )
-            except (TypeError, ValueError):
-                # Unintrospectable callable: offer it and let it report its own
-                # error, which is better than hiding a working action.
-                needs_args = False
+        for name in actions:
+            needs_args = self._needs_args(device, name)
+            schema = self._args_schema(device, name) if needs_args else []
 
             button = QPushButton(name)
             button.setMinimumHeight(32)
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            if needs_args:
+
+            if needs_args and not schema:
                 button.setEnabled(False)
                 button.setToolTip(
-                    f"{name} takes arguments; drive it from a Device Action node "
-                    "or a node for this device."
+                    f"{name} takes arguments this device does not declare; "
+                    "drive it from a Device Action node or a node for this device."
                 )
-            elif not link_is_usable(getattr(device, "link_state", None)):
-                # The link is down or coming back. A press now is certain to
-                # fail, and a grey button says so before it is pressed.
+            elif not usable:
+                state_word = link_status_text(getattr(device, "link_state", None)).lower()
                 button.setEnabled(False)
-                button.setToolTip(
-                    f"{name} is unavailable while the device is "
-                    f"{link_status_text(getattr(device, 'link_state', None)).lower()}"
-                )
+                button.setToolTip(f"{name} is unavailable while the device is {state_word}")
             else:
                 button.setToolTip(f"Run {name} on this device")
                 button.clicked.connect(
                     lambda _checked=False, action=name: self._run_device_action(action)
                 )
+
+            if schema:
+                fields: dict[str, tuple] = {}
+                build_schema_widgets(self._action_args_layout, schema, fields)
+                for widget, _ftype in fields.values():
+                    widget.setEnabled(button.isEnabled())
+                self._action_arg_widgets[name] = fields
+
             self._actions_layout.addWidget(button)
             built = True
 
+        self._action_args_widget.setVisible(bool(self._action_arg_widgets))
         return built
 
+    @staticmethod
+    def _needs_args(device, action: str) -> bool:
+        """Whether ``action`` cannot be called with no arguments.
+
+        Asks the device, which is the thing that knows. Falls back to
+        signature introspection for a device predating ``action_needs_args``
+        (a plugin pinned to an older core), so an unknown device is never
+        offered a press that would raise TypeError.
+        """
+        asker = getattr(device, "action_needs_args", None)
+        if callable(asker):
+            try:
+                return bool(asker(action))
+            except Exception:
+                logger.debug("action_needs_args failed for %s", action, exc_info=True)
+        import inspect
+
+        try:
+            func = device.actions[action]
+            parameters = inspect.signature(func).parameters.values()
+        except (KeyError, TypeError, ValueError):
+            return False
+        return any(
+            param.default is inspect.Parameter.empty
+            and param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+            for param in parameters
+        )
+
+    @staticmethod
+    def _args_schema(device, action: str) -> list[dict]:
+        """The device's declared argument fields for ``action`` (empty if none)."""
+        asker = getattr(device, "action_args_schema", None)
+        if not callable(asker):
+            return []
+        try:
+            return list(asker(action) or [])
+        except Exception:
+            logger.debug("action_args_schema failed for %s", action, exc_info=True)
+            return []
+
+    def _action_args(self, action: str) -> list:
+        """Current values of ``action``'s argument fields, in declared order.
+
+        Order is the schema's, because they are passed positionally: swapped,
+        a pulse would run a 10 ms train for 500 seconds.
+        """
+        fields = self._action_arg_widgets.get(action, {})
+        return [read_schema_widget(widget, ftype) for widget, ftype in fields.values()]
+
     def _run_device_action(self, action: str) -> None:
-        """Run one no-argument action on the selected device."""
+        """Run one action on the selected device, with any declared arguments."""
         device = self._get_selected_device()
         if device is None:
             return
+        args = self._action_args(action)
 
         async def _run():
             try:
-                await device.execute_action(action)
+                await device.execute_action(action, *args)
                 self._device_status_label.setText(f"Status: ran {action!r}")
             except Exception as exc:  # noqa: BLE001 - surfaced to the user
                 logger.exception("Device action %s failed", action)
