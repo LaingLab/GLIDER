@@ -342,14 +342,19 @@ class BLEDevice(BaseDevice):
                             # _on_reconnected(), which for a stimulator writes
                             # 'off' over the train the operator just started.
                             #
-                            # ORDERING: this is only safe because _with_retry
-                            # goes through _ensure_ready(), which re-subscribes
-                            # every client it builds. "Connected" alone would not
-                            # do -- a client with no start_notify on it is up but
-                            # deaf, and returning CONNECTED for one would strand a
-                            # notify device exactly the way the missing resubscribe
-                            # used to. If _with_retry ever stops guaranteeing that,
-                            # this early return has to go with it.
+                            # ORDERING: this rests on one invariant -- a client
+                            # sitting in self._client is either subscribed or
+                            # about to be discarded. Three places keep it:
+                            # initialize() and this loop subscribe the client
+                            # they build, _with_retry goes through
+                            # _ensure_ready(), and every path that fails to
+                            # subscribe clears self._client on its way out.
+                            # "Connected" alone would not do -- a client with no
+                            # start_notify on it is up but deaf, and publishing
+                            # CONNECTED for one strands a notify device exactly
+                            # the way the missing resubscribe used to, somewhere
+                            # poll_link cannot reach it. If any of the three
+                            # stops holding, this early return goes with it.
                             #
                             # A link that dies again immediately after this return
                             # is picked up by poll_link()'s backstop, the same as
@@ -371,6 +376,15 @@ class BLEDevice(BaseDevice):
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:  # noqa: BLE001 - retried, then reported
+                    # Drop the client whatever failed, because _ensure_connected
+                    # may well have succeeded and _resubscribe then raised --
+                    # which leaves a connected-but-deaf client sitting in
+                    # self._client. The early-out at the top of the next attempt
+                    # would take one look at is_connected, publish CONNECTED and
+                    # return, and poll_link cannot rescue that: the client
+                    # genuinely is connected. A half-usable client is worse than
+                    # none, so the next attempt has to rebuild from nothing.
+                    self._client = None
                     logger.info(
                         "BLE %s: reconnect attempt %d/%d failed (%s)",
                         self._name,
@@ -694,11 +708,24 @@ class BLEDevice(BaseDevice):
         nothing is re-subscribed, and when it builds a new one the subscription
         moves with it. Caller holds ``self._lock`` -- ``_resubscribe``'s
         documented precondition, which both ``write()`` and ``read()`` satisfy.
+
+        Raises if the subscribe fails, having first cleared ``self._client``:
+        the guarantee this method exists to make is that nothing is ever left
+        connected-but-deaf where another actor will find it and believe it.
         """
         before = self._client
         await self._ensure_connected()
         if self._client is not before:
-            await self._resubscribe()
+            try:
+                await self._resubscribe()
+            except Exception:
+                # The caller still gets the failure, but not while a connected
+                # client with no start_notify on it is left in self._client for
+                # someone else to find and trust. poll_link cannot reach one
+                # (it is connected) and _reconnect_loop's early-out would
+                # publish CONNECTED over it.
+                self._client = None
+                raise
 
     async def _with_retry(self, op: Callable) -> Any:
         """Run a GATT op, reconnecting once and retrying on a dropped link.
@@ -708,8 +735,9 @@ class BLEDevice(BaseDevice):
         (Ported from BLEWriteDevice.write's retry.)
 
         Goes through ``_ensure_ready`` rather than ``_ensure_connected`` on both
-        paths, so any link this leaves behind is subscribed as well as up --
-        which ``_reconnect_loop``'s early-out relies on.
+        paths, so any link this leaves behind is subscribed as well as up, and a
+        subscribe that fails leaves no client at all -- which is the invariant
+        ``_reconnect_loop``'s early-out relies on.
         """
         try:
             await self._ensure_ready()

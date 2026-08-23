@@ -505,3 +505,85 @@ async def test_the_loops_early_out_leaves_a_subscribed_link_not_just_a_live_one(
     device._client.push(b"9")
     assert await device.get_state() == "9"
     await device.shutdown()
+
+
+# --- a subscribe that fails ---------------------------------------------------
+#
+# The early-out above trusts one invariant: a client sitting in _client is
+# either subscribed or about to be discarded. Both paths that can build a
+# client and then fail to subscribe it have to hold that up, or the early-out
+# hands back a connected-but-deaf client and poll_link cannot rescue it --
+# the client genuinely *is* connected, so the backstop sees nothing wrong.
+
+
+async def _boom_notify(char, handler):
+    raise OSError("start_notify rejected")
+
+
+async def test_a_failed_resubscribe_is_rebuilt_not_short_circuited(fake_bleak):
+    """The loop must not hand its own half-usable client to its next attempt.
+
+    Attempt 1 connects and then fails start_notify. Leaving that client in
+    _client makes attempt 2's first act the early-out, which sees is_connected
+    and publishes CONNECTED over a deaf link -- and poll_link cannot rescue
+    that, because the client genuinely is connected. get_state() then returns
+    None for the rest of the session while every readout says Ready.
+    """
+    module, created = fake_bleak
+    device = await _initialized(read_char_uuid="beef", notify=True)
+    build = module.BleakClient
+
+    def _deaf_on_the_first_retry(address, *a, **k):
+        client = build(address, *a, **k)
+        if len(created["clients"]) == 2:  # the client the first attempt builds
+            client.start_notify = _boom_notify
+        return client
+
+    module.BleakClient = _deaf_on_the_first_retry
+
+    created["client"].drop()
+    await _settle(device)
+
+    assert device.link_state is ConnectionState.CONNECTED
+    assert device._client.subscribed, "a deaf client must never be published as CONNECTED"
+    assert len(created["clients"]) == 3, "attempt 2 must rebuild, not short-circuit"
+    device._client.push(b"5")
+    assert await device.get_state() == "5"
+    await device.shutdown()
+
+
+async def test_a_failed_resubscribe_in_a_write_leaves_no_client_behind(fake_bleak):
+    """_ensure_ready propagates the failure, but not a deaf client with it.
+
+    Whatever the caller does with the error, the next actor along -- poll_link,
+    the supervised loop, another write -- must not find a connected client it
+    will believe. Dropping it is what lets the backstop notice at all.
+    """
+    _module, created = fake_bleak
+    device = await _initialized(read_char_uuid="beef", write_char_uuid="cafe", notify=True)
+    original = created["client"]
+
+    async def _drop_mid_write(char, data, response=False):
+        original.drop(notify=False)  # a callback bleak never delivered
+        raise OSError("link dropped mid-write")
+
+    original.write_gatt_char = _drop_mid_write
+
+    build = _module.BleakClient
+
+    def _make_deaf(address, *a, **k):
+        client = build(address, *a, **k)
+        client.start_notify = _boom_notify
+        return client
+
+    _module.BleakClient = _make_deaf
+
+    with pytest.raises(OSError):
+        await device.write("hello")
+
+    assert device._client is None, "a deaf client must not be left for anyone to trust"
+
+    # And because nothing is left connected, the backstop can do its job.
+    await device.poll_link()
+    assert device._reconnect_task is not None
+    await device.shutdown()
