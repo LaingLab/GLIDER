@@ -131,6 +131,7 @@ class BLEDevice(BaseDevice):
         # from the moment bleak imports and knows nothing about whether this
         # peripheral is actually answering.
         self._link = ConnectionState.DISCONNECTED
+        self._reconnect_task: asyncio.Task | None = None
 
     def _apply_setting_caches(self, s: dict[str, Any]) -> None:
         """Set the settings-derived cache attributes (validates value_format first,
@@ -219,6 +220,7 @@ class BLEDevice(BaseDevice):
         if client is not self._client:
             return
         self._set_link(ConnectionState.DISCONNECTED)
+        self._start_reconnect()
 
     async def poll_link(self) -> None:
         """Reconcile against ``client.is_connected``.
@@ -233,6 +235,118 @@ class BLEDevice(BaseDevice):
         live = client is not None and client.is_connected
         if not live and self._link is ConnectionState.CONNECTED:
             self._set_link(ConnectionState.DISCONNECTED)
+            self._start_reconnect()
+
+    # --- reconnect ---
+
+    #: Backoff base, doubling per attempt. Deliberately the same numbers as
+    #: BaseBoard._attempt_reconnect: a peripheral and a board that drop for the
+    #: same reason should not retry on two different rhythms.
+    RECONNECT_BASE_S: float = 5.0
+    RECONNECT_MAX_BACKOFF_S: float = 60.0
+    MAX_RECONNECT_ATTEMPTS: int = 12
+
+    def _backoff_for(self, attempt: int) -> float:
+        """Seconds to wait before ``attempt`` (0-based): 5, 10, 20, 40, 60, 60…"""
+        return min(self.RECONNECT_BASE_S * (2**attempt), self.RECONNECT_MAX_BACKOFF_S)
+
+    async def _on_reconnected(self) -> None:
+        """Hook: the link is back up and any subscription has been restored.
+
+        A no-op for a generic peripheral, which has no state worth asserting
+        on reconnect. Overridden by devices that do -- a stimulator that runs
+        its pattern in firmware came back mid-train, and this is the first
+        chance anyone has had to stop it.
+
+        Called with the device lock RELEASED, because an override will want to
+        write, and ``write()`` takes that lock. Called only on the supervised
+        reconnect path, never on ``_with_retry``'s reconnect-inside-a-write.
+        """
+        return None
+
+    def _start_reconnect(self) -> None:
+        """Begin retrying, unless a retry is already running or we are down.
+
+        Safe to call from a bleak callback: it only schedules.
+        """
+        if not self._initialized:
+            return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return
+        self._set_link(ConnectionState.RECONNECTING)
+        self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    async def _reconnect_loop(self) -> None:
+        """Retry with bounded exponential backoff; give up into ERROR.
+
+        Mirrors BaseBoard._attempt_reconnect, including clearing the task
+        handle in ``finally`` so a later drop can start a fresh one.
+        """
+        try:
+            for attempt in range(self.MAX_RECONNECT_ATTEMPTS):
+                try:
+                    await asyncio.sleep(self._backoff_for(attempt))
+                except asyncio.CancelledError:
+                    return
+                if not self._initialized:
+                    return
+                try:
+                    async with self._lock:
+                        if not self._initialized:
+                            return
+                        self._client = None
+                        await self._ensure_connected()
+                        await self._resubscribe()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 - retried, then reported
+                    logger.info(
+                        "BLE %s: reconnect attempt %d/%d failed (%s)",
+                        self._name,
+                        attempt + 1,
+                        self.MAX_RECONNECT_ATTEMPTS,
+                        e,
+                    )
+                    self._set_link(ConnectionState.RECONNECTING)
+                    continue
+
+                # The link is up. Say so before running the hook: it is true,
+                # and an override that writes needs write() to work.
+                self._set_link(ConnectionState.CONNECTED)
+                try:
+                    await self._on_reconnected()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 - the link is still up
+                    logger.warning(
+                        "BLE %s: post-reconnect hook failed (%s); the link is up "
+                        "but the device may not be in its safe state",
+                        self._name,
+                        e,
+                    )
+                return
+
+            logger.error(
+                "BLE %s: gave up reconnecting after %d attempts",
+                self._name,
+                self.MAX_RECONNECT_ATTEMPTS,
+            )
+            self._set_link(ConnectionState.ERROR)
+        finally:
+            self._reconnect_task = None
+
+    async def _resubscribe(self) -> None:
+        """Restore the notify subscription on a freshly built client.
+
+        ``initialize()`` is the only other place ``start_notify`` is called, so
+        without this a reconnect leaves a notify device permanently silent --
+        ``_latest`` never refreshes again and ``get_state()`` returns None for
+        the rest of the session. Caller holds ``self._lock``.
+        """
+        if not self._notify or not self._read_char or self._client is None:
+            return
+        self._latest = None
+        await self._client.start_notify(self._read_char, self._on_notify)
 
     @property
     def actions(self) -> dict[str, Callable]:
@@ -264,6 +378,20 @@ class BLEDevice(BaseDevice):
         state and drops the cache.
         """
         self._initialized = False
+        # Cancel BEFORE taking the lock: the reconnect loop holds it while it
+        # connects, and an emergency stop must not queue behind a retry. The
+        # _initialized guard above already stops a retry from re-arming a
+        # device that was just stopped; this stops it from running at all.
+        task = self._reconnect_task
+        self._reconnect_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001 - teardown must not raise
+                logger.debug("BLE %s: reconnect task errored on cancel", self._name)
         try:
             async with self._lock:
                 client = self._client
