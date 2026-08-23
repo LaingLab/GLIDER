@@ -745,9 +745,13 @@ class HardwareManager:
         GPIO on it. One device's failure never stops the sweep.
         """
         for device_id, device in list(self._devices.items()):
-            if not device.owns_link:
-                continue
+            # owns_link is inside the try with poll_link: it is a property, and
+            # on a plugin device it is arbitrary code. One raising there used to
+            # abort the whole sweep -- and, unguarded above, the supervisor task
+            # with it, ending link supervision for the session in silence.
             try:
+                if not device.owns_link:
+                    continue
                 await device.poll_link()
             except Exception as e:  # noqa: BLE001 - one bad device, not a sweep
                 logger.debug("Link poll failed for device %s: %s", device_id, e)
@@ -769,7 +773,14 @@ class HardwareManager:
         except RuntimeError:
             logger.debug("Link supervisor not started: no running event loop")
             return
+        from glider.core.async_utils import log_task_exception
+
         self._link_supervisor = asyncio.create_task(self._link_supervisor_loop())
+        # Nothing awaits the supervisor, so without this a crash in it surfaces
+        # only as a "Task exception was never retrieved" warning at GC -- and
+        # the poll backstop is the mechanism that catches the disconnect
+        # callbacks CoreBluetooth and WinRT drop, so its death has to be loud.
+        self._link_supervisor.add_done_callback(log_task_exception)
 
     async def _link_supervisor_loop(self) -> None:
         while True:
@@ -777,7 +788,15 @@ class HardwareManager:
                 await asyncio.sleep(LINK_POLL_INTERVAL_S)
             except asyncio.CancelledError:
                 return
-            await self.poll_device_links()
+            try:
+                await self.poll_device_links()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - one bad sweep, not the supervisor
+                # A sweep that raises must not end supervision for the session:
+                # "GLIDER says connected when it isn't" is reproducible without
+                # this poll, so it has to keep running.
+                logger.exception("Device link poll sweep failed; supervision continues")
 
     async def stop_link_supervisor(self) -> None:
         """Cancel the supervisor and wait for it. Safe when never started."""

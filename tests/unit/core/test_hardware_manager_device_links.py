@@ -6,6 +6,7 @@ already wires the settings hook, so no creation path can register a device
 without it.
 """
 
+import asyncio
 import warnings
 
 from glider.core.hardware_manager import LINK_POLL_INTERVAL_S, HardwareManager
@@ -215,3 +216,80 @@ def test_starting_with_no_running_loop_is_quiet():
         manager.start_link_supervisor()  # must not raise
     assert manager._link_supervisor is None
     assert not any("never awaited" in str(w.message) for w in caught)
+
+
+# --- the supervisor must not be able to die quietly ---------------------------
+#
+# The poll backstop is the mechanism, not a belt: CoreBluetooth and WinRT drop
+# the disconnect callback often enough that "GLIDER says connected when it
+# isn't" is reproducible without it. One plugin device used to be able to end
+# link supervision for the whole session, in silence.
+
+
+class _RudeDevice(_LinkDevice):
+    """owns_link raises -- which a plugin's arbitrary property can."""
+
+    @property
+    def owns_link(self):
+        raise RuntimeError("this plugin's owns_link is broken")
+
+
+async def test_a_raising_owns_link_does_not_stop_the_sweep():
+    rude = _RudeDevice(_FakeBoard(), DeviceConfig(), name="rude")
+    good = _LinkDevice(_FakeBoard(), DeviceConfig(), name="good")
+    manager = HardwareManager()
+    manager._track_device("rude", rude)
+    manager._track_device("good", good)
+
+    await manager.poll_device_links()  # must not raise
+
+    assert good.polls == 1
+
+
+async def test_a_raising_owns_link_does_not_end_supervision(monkeypatch):
+    """The whole point: the supervisor task survives to poll again."""
+    monkeypatch.setattr("glider.core.hardware_manager.LINK_POLL_INTERVAL_S", 0)
+    rude = _RudeDevice(_FakeBoard(), DeviceConfig(), name="rude")
+    manager = HardwareManager()
+    manager._track_device("rude", rude)
+
+    manager.start_link_supervisor()
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+    assert not manager._link_supervisor.done()
+    await manager.stop_link_supervisor()
+
+
+async def test_a_sweep_that_raises_outright_does_not_end_supervision(monkeypatch):
+    """Belt for the sweep itself, not just for one device inside it."""
+    monkeypatch.setattr("glider.core.hardware_manager.LINK_POLL_INTERVAL_S", 0)
+    manager = HardwareManager()
+    sweeps = []
+
+    async def _boom():
+        sweeps.append(1)
+        raise RuntimeError("the sweep itself exploded")
+
+    manager.poll_device_links = _boom
+    manager.start_link_supervisor()
+    for _ in range(40):
+        await asyncio.sleep(0)
+
+    assert len(sweeps) > 1, "the supervisor must keep polling after a failed sweep"
+    assert not manager._link_supervisor.done()
+    await manager.stop_link_supervisor()
+
+
+async def test_the_supervisor_task_reports_its_exceptions():
+    """Nothing awaits the supervisor, so a crash in it needs the done-callback.
+
+    remove_done_callback returns how many it removed, which is the only way to
+    ask a Task what is attached to it.
+    """
+    from glider.core.async_utils import log_task_exception
+
+    manager = HardwareManager()
+    manager.start_link_supervisor()
+    assert manager._link_supervisor.remove_done_callback(log_task_exception) == 1
+    await manager.stop_link_supervisor()

@@ -463,13 +463,29 @@ class BaseBoard(ABC):
             self._reconnect_task = None
 
     def start_reconnect(self) -> None:
-        """Start the automatic reconnection process."""
-        if self._auto_reconnect and self._reconnect_task is None:
-            self._set_state(BoardConnectionState.RECONNECTING)
-            from glider.core.async_utils import log_task_exception
+        """Start the automatic reconnection process. A no-op with no event loop.
 
-            self._reconnect_task = asyncio.create_task(self._attempt_reconnect())
-            self._reconnect_task.add_done_callback(log_task_exception)
+        The loop is checked *before* the state moves and before the coroutine is
+        built, which is the same ordering ``HardwareManager.start_link_supervisor``
+        uses and for the same two reasons. A coroutine constructed for a
+        ``create_task`` that then raises is never awaited and warns at GC; and
+        the state change would have already published RECONNECTING, leaving the
+        board wearing the word with nothing retrying it -- which is what
+        ``TelemetrixBoard.is_connected`` was papering over by catching the
+        RuntimeError one frame too late.
+        """
+        if not self._auto_reconnect or self._reconnect_task is not None:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.debug("Reconnect not started for board %s: no running event loop", self._id)
+            return
+        from glider.core.async_utils import log_task_exception
+
+        self._set_state(BoardConnectionState.RECONNECTING)
+        self._reconnect_task = asyncio.create_task(self._attempt_reconnect())
+        self._reconnect_task.add_done_callback(log_task_exception)
 
     def stop_reconnect(self) -> None:
         """Stop the automatic reconnection process."""
