@@ -107,16 +107,23 @@ async def test_a_drop_moves_the_state(fake_bleak):
     _module, created = fake_bleak
     device = await _initialized()
     created["client"].drop()
-    assert device.link_state is ConnectionState.DISCONNECTED
+    # Task 3: a drop now starts a supervised reconnect immediately, so by the
+    # time drop() returns the link has already moved on past DISCONNECTED.
+    assert device.link_state is ConnectionState.RECONNECTING
+    await device.shutdown()
 
 
-async def test_a_drop_fires_the_listener_once(fake_bleak):
+async def test_a_drop_fires_the_listener_once_per_state(fake_bleak):
     _module, created = fake_bleak
     device = await _initialized()
     seen = []
     device.set_link_state_callback(lambda dev: seen.append(dev.link_state))
     created["client"].drop()
-    assert seen == [ConnectionState.DISCONNECTED]
+    # Task 3: the drop and the reconnect it starts are two real, distinct
+    # transitions, so the callback correctly fires once for each -- what this
+    # guards against is a *repeated* state renotifying (see the test below).
+    assert seen == [ConnectionState.DISCONNECTED, ConnectionState.RECONNECTING]
+    await device.shutdown()
 
 
 async def test_repeating_a_state_does_not_renotify(fake_bleak):
@@ -139,7 +146,10 @@ async def test_poll_catches_a_drop_the_callback_missed(fake_bleak):
     created["client"].drop(notify=False)
     assert device.link_state is ConnectionState.CONNECTED  # nobody has looked yet
     await device.poll_link()
-    assert device.link_state is ConnectionState.DISCONNECTED
+    # Task 3: the poll backstop also starts a supervised reconnect, so the
+    # state the poll leaves behind is RECONNECTING, not a resting DISCONNECTED.
+    assert device.link_state is ConnectionState.RECONNECTING
+    await device.shutdown()
 
 
 async def test_shutdown_reports_disconnected(fake_bleak):
