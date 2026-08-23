@@ -31,6 +31,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from glider.hal.base_board import ConnectionState
 from glider.hal.base_device import BaseDevice, DeviceConfig
 
 if TYPE_CHECKING:
@@ -125,6 +126,11 @@ class BLEDevice(BaseDevice):
         # the notify handler on the event loop, so a plain attribute is safe --
         # no thread lock needed (unlike the serial/HX711 sampler threads).
         self._latest: tuple[Any, float] | None = None
+        # The tracked link. Unlike the BaseDevice default this is stored, not
+        # derived: the board here is the host adapter, which is "connected"
+        # from the moment bleak imports and knows nothing about whether this
+        # peripheral is actually answering.
+        self._link = ConnectionState.DISCONNECTED
 
     def _apply_setting_caches(self, s: dict[str, Any]) -> None:
         """Set the settings-derived cache attributes (validates value_format first,
@@ -184,6 +190,51 @@ class BLEDevice(BaseDevice):
         return self._notify
 
     @property
+    def owns_link(self) -> bool:
+        return True
+
+    @property
+    def link_state(self) -> ConnectionState:
+        return self._link
+
+    def _set_link(self, state: ConnectionState) -> None:
+        """Move the tracked link state, notifying only on a real change.
+
+        The no-change guard is what lets the supervisor poll every two
+        seconds forever without repainting the GUI on every tick.
+        """
+        if state is self._link:
+            return
+        self._link = state
+        logger.info("BLE %s: link -> %s", self._name, state.name.lower())
+        self._notify_link_state()
+
+    def _on_disconnected(self, client: Any) -> None:
+        """bleak's disconnect callback: the peripheral went away.
+
+        Called on the event loop. Ignores a client we have already replaced --
+        an old client's teardown fires this too, and acting on it would report
+        a live link as dead.
+        """
+        if client is not self._client:
+            return
+        self._set_link(ConnectionState.DISCONNECTED)
+
+    async def poll_link(self) -> None:
+        """Reconcile against ``client.is_connected``.
+
+        The backstop for a disconnect callback that never fired, which
+        CoreBluetooth and WinRT both do often enough to be the reported
+        symptom rather than an edge case.
+        """
+        if not self._initialized:
+            return
+        client = self._client
+        live = client is not None and client.is_connected
+        if not live and self._link is ConnectionState.CONNECTED:
+            self._set_link(ConnectionState.DISCONNECTED)
+
+    @property
     def actions(self) -> dict[str, Callable]:
         return {"write": self.write, "read": self.read}
 
@@ -230,6 +281,7 @@ class BLEDevice(BaseDevice):
         finally:
             self._initialized = False
             self._latest = None
+            self._set_link(ConnectionState.DISCONNECTED)
 
     async def _resolve_address(self) -> str:
         """Return a usable address, scanning for the advertised name if needed."""
@@ -302,7 +354,7 @@ class BLEDevice(BaseDevice):
             ) from e
         address = await self._resolve_address()
         try:
-            client = BleakClient(address)
+            client = BleakClient(address, disconnected_callback=self._on_disconnected)
             await client.connect()
         except Exception as exc:
             # A stored address goes stale. Many peripherals advertise a
@@ -336,12 +388,13 @@ class BLEDevice(BaseDevice):
                 # not a rotation. Report the original failure rather than a
                 # second identical one.
                 raise
-            client = BleakClient(fresh)
+            client = BleakClient(fresh, disconnected_callback=self._on_disconnected)
             await client.connect()
             address = fresh
 
         self._client = client
         logger.info("BLE: connected to %s", address)
+        self._set_link(ConnectionState.CONNECTED)
 
     # --- value decoding ---
 
