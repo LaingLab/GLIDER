@@ -1714,13 +1714,9 @@ class MainWindow(QMainWindow):
             self.session_changed.connect(self._runner_setup_page.refresh)
 
         # Backstop for a bleak disconnect callback that never fires (spec §5).
-        # __init__ runs before qasync starts the loop, so this normally raises
-        # and the hardware-connect path below starts it instead. Attempted here
-        # anyway for the case where the window is built inside a running loop.
-        try:
-            self._core.hardware_manager.start_link_supervisor()
-        except RuntimeError:
-            logger.debug("Link supervisor deferred: no running event loop yet")
+        # __init__ runs before qasync starts the loop, so this no-ops here;
+        # the hardware-connect path below starts it for real once there is one.
+        self._core.hardware_manager.start_link_supervisor()
 
     def _watch_session(self, session) -> None:
         """Follow *session*'s dirty state, whichever session that now is.

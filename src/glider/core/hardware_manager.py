@@ -753,8 +753,21 @@ class HardwareManager:
                 logger.debug("Link poll failed for device %s: %s", device_id, e)
 
     def start_link_supervisor(self) -> None:
-        """Begin polling device links on a timer. Idempotent."""
+        """Begin polling device links on a timer. Idempotent.
+
+        A no-op when there is no running event loop: MainWindow builds its
+        signal wiring in __init__, before qasync starts the loop, and the
+        hardware-connect path starts the supervisor again once there is one.
+        The loop is checked before the coroutine is built rather than after,
+        because a coroutine constructed for a create_task that then raises is
+        never awaited and warns at GC.
+        """
         if self._link_supervisor is not None and not self._link_supervisor.done():
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.debug("Link supervisor not started: no running event loop")
             return
         self._link_supervisor = asyncio.create_task(self._link_supervisor_loop())
 

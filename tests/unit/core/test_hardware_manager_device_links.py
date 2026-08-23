@@ -6,6 +6,8 @@ already wires the settings hook, so no creation path can register a device
 without it.
 """
 
+import warnings
+
 from glider.core.hardware_manager import LINK_POLL_INTERVAL_S, HardwareManager
 from glider.hal.base_board import ConnectionState
 from glider.hal.base_device import BaseDevice, DeviceConfig
@@ -197,3 +199,19 @@ async def test_manager_shutdown_stops_the_supervisor():
     manager.start_link_supervisor()
     await manager.shutdown()
     assert manager._link_supervisor is None
+
+
+def test_starting_with_no_running_loop_is_quiet():
+    """MainWindow wires signals in __init__, before qasync starts the loop.
+
+    The supervisor coroutine must not even be constructed when there is no
+    loop to run it on: building it and then discarding it (because
+    create_task raises before it can be awaited) is exactly what leaves an
+    unawaited-coroutine warning behind at garbage collection.
+    """
+    manager = HardwareManager()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        manager.start_link_supervisor()  # must not raise
+    assert manager._link_supervisor is None
+    assert not any("never awaited" in str(w.message) for w in caught)
