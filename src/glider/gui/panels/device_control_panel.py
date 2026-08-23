@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.core.device_drive import set_digital, set_pwm, toggle_digital
+from glider.gui.device_status import link_is_usable, link_status_text
 
 if TYPE_CHECKING:
     from glider.core.hardware_manager import HardwareManager
@@ -255,17 +256,8 @@ class DeviceControlPanel(QWidget):
             return
 
         device_type = getattr(device, "device_type", "unknown")
-        board = getattr(device, "board", None)
-        connected = board.is_connected if board else False
-        initialized = getattr(device, "_initialized", False)
-
-        status = "Connected" if connected else "Disconnected"
-        if connected and initialized:
-            status = "Ready"
-        elif connected and not initialized:
-            status = "Not initialized"
-
-        self._device_status_label.setText(f"Status: {status} | Type: {device_type}")
+        link = getattr(device, "link_state", None)
+        self._device_status_label.setText(f"Status: {link_status_text(link)} | Type: {device_type}")
 
         # Enable/disable input reading based on device type
         is_input_device = device_type in self.READABLE_DEVICE_TYPES
@@ -353,6 +345,14 @@ class DeviceControlPanel(QWidget):
                 button.setToolTip(
                     f"{name} takes arguments; drive it from a Device Action node "
                     "or a node for this device."
+                )
+            elif not link_is_usable(getattr(device, "link_state", None)):
+                # The link is down or coming back. A press now is certain to
+                # fail, and a grey button says so before it is pressed.
+                button.setEnabled(False)
+                button.setToolTip(
+                    f"{name} is unavailable while the device is "
+                    f"{link_status_text(getattr(device, 'link_state', None)).lower()}"
                 )
             else:
                 button.setToolTip(f"Run {name} on this device")

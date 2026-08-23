@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.device_status import link_status_text
 from glider.gui.styles import colors
 
 if TYPE_CHECKING:
@@ -163,15 +164,14 @@ class HardwarePanel(QWidget):
                         pin_str = f"Pin {pin_values[0]}"
                     else:
                         pin_str = ""
+                    # link_state, not _initialized. The old check answered
+                    # "has this been set up", which a peripheral that walked
+                    # out of range never stops answering yes to.
                     device_item = QTreeWidgetItem(
                         [
                             getattr(device, "name", device_id),
                             f"{getattr(device, 'device_type', 'unknown')} ({pin_str})",
-                            (
-                                "Ready"
-                                if getattr(device, "_initialized", False)
-                                else "Not initialized"
-                            ),
+                            link_status_text(getattr(device, "link_state", None)),
                         ]
                     )
                     device_item.setData(0, Qt.ItemDataRole.UserRole, ("device", device_id))
