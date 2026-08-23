@@ -79,3 +79,28 @@ def test_an_awkward_device_does_not_take_the_strip_down():
     }
     chips = _device_chips(devices)
     assert ("Stimulator", "ok", "Maimu · Ready") in chips
+
+
+def test_two_default_named_peripherals_are_told_apart():
+    """A bench of six identical, still-default-named stimulators is the reason
+    peripherals are on the strip at all -- an indistinguishable chip defeats
+    the whole feature. Mirrors test_two_boards_of_the_same_type_are_told_apart
+    in tests/unit/gui/shell/test_main_window_shell.py."""
+    devices = {
+        "d1": _device("Maimu", ConnectionState.CONNECTED),
+        "d2": _device("Maimu", ConnectionState.DISCONNECTED),
+    }
+    names = [name for name, _s, _d in _device_chips(devices)]
+    assert len(set(names)) == len(names)
+
+
+def test_a_uniquely_named_peripheral_keeps_its_plain_name():
+    """Disambiguation is a collision response, not a default -- a rig where
+    every device has already been given a distinct name should still read
+    the operator-chosen name, not a name padded with its id."""
+    devices = {
+        "d1": _device("Left Stim", ConnectionState.CONNECTED),
+        "d2": _device("Right Stim", ConnectionState.CONNECTED),
+    }
+    names = [name for name, _s, _d in _device_chips(devices)]
+    assert names == ["Left Stim", "Right Stim"]

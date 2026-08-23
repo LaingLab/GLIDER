@@ -155,19 +155,41 @@ def _device_chips(devices: dict) -> list[tuple[str, str, str]]:
 
     Never raises. A plugin device with an awkward ``link_state`` is skipped
     rather than allowed to blank the strip for everything beside it.
+
+    Labelled by the device's *name*, not its id -- the reverse of the board
+    chips built in :meth:`MainWindow._refresh_strip_devices`, and deliberately
+    so. A board's name is its *type* ("Arduino Uno"), so the id is strictly
+    more useful there. A device's name is operator-chosen and usually
+    meaningful ("Left Stim"), so the id would be strictly worse -- except
+    when two devices share a name, which is exactly what a bench of six
+    identical, still-default-named stimulators looks like. That is the same
+    "Arduino Uno" x2 problem ``_refresh_strip_devices`` already solved for
+    boards, and it matters more here: peripherals were put on the strip
+    specifically so that an indistinguishable one dropping is still visible.
+    Disambiguated only on collision, by appending the device id, so a rig
+    where every name is already unique keeps the plain, human name.
     """
-    chips: list[tuple[str, str, str]] = []
+    entries: list[tuple[str, str, str, str]] = []
     for device_id, device in devices.items():
         try:
             if not getattr(device, "owns_link", False):
                 continue
             state = device.link_state
-            name = getattr(device, "name", None) or device_id
+            name = str(getattr(device, "name", None) or device_id)
             device_type = getattr(device, "device_type", "") or "device"
             detail = f"{device_type} · {link_status_text(state)}"
-            chips.append((str(name), link_strip_state(state), detail))
+            entries.append((str(device_id), name, link_strip_state(state), detail))
         except Exception:
             logger.warning("Could not read link state from device %s", device_id, exc_info=True)
+
+    name_counts: dict[str, int] = {}
+    for _device_id, name, _state, _detail in entries:
+        name_counts[name] = name_counts.get(name, 0) + 1
+
+    chips: list[tuple[str, str, str]] = []
+    for device_id, name, state, detail in entries:
+        label = f"{name} ({device_id})" if name_counts[name] > 1 else name
+        chips.append((label, state, detail))
     return chips
 
 
@@ -1866,12 +1888,21 @@ class MainWindow(QMainWindow):
 
         if self._core.state != SessionState.RUNNING:
             return
-        self._notify_user(
-            f"{label} disconnected",
-            f"{label} lost its connection during the run. GLIDER is retrying; "
-            "the experiment has not been paused.",
-            level="warning",
-        )
+        if state is BoardConnectionState.ERROR:
+            # ERROR is the bounded reconnect loop's own terminal give-up state
+            # (12 attempts -- see BLEDevice.MAX_RECONNECT_ATTEMPTS), reached
+            # only after retrying is already over, so unlike DISCONNECTED this
+            # is not "hang on" -- it is "go and look at this".
+            body = (
+                f"{label} could not be reconnected and needs attention. "
+                "GLIDER has stopped retrying; the experiment has not been paused."
+            )
+        else:
+            body = (
+                f"{label} lost its connection during the run. GLIDER is retrying; "
+                "the experiment has not been paused."
+            )
+        self._notify_user(f"{label} disconnected", body, level="warning")
 
     def _refresh_hardware_readouts(self) -> None:
         """Both readouts of the same rig, refreshed together.
