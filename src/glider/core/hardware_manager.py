@@ -20,6 +20,12 @@ from glider.hal.pin_manager import PinConflictError, PinManager
 # wait on the I/O retry timer for a *different* device to give up.
 DEVICE_IO_TIMEOUT_S = 2.0
 
+# How often the link supervisor asks each transport device to reconcile its
+# link state. The disconnect callback is the primary signal; this is the
+# backstop for the platforms that lose it, so it only has to be fast enough
+# that a human does not notice the lag.
+LINK_POLL_INTERVAL_S = 2.0
+
 if TYPE_CHECKING:
     from glider.core.experiment_session import BoardConfig, DeviceConfig
 
@@ -67,6 +73,8 @@ class HardwareManager:
         self._pin_managers: dict[str, PinManager] = {}
         self._error_callbacks: list[Callable[[str, Exception], None]] = []
         self._connection_callbacks: list[Callable[[str, BoardConnectionState], None]] = []
+        self._device_connection_callbacks: list[Callable[[str, BoardConnectionState], None]] = []
+        self._link_supervisor: asyncio.Task | None = None
         # Notified with (device_id, device) when a device mutates its own
         # settings at runtime. Attached to every device this manager tracks.
         self._device_settings_callback: Callable[[str, BaseDevice], None] | None = None
@@ -94,14 +102,21 @@ class HardwareManager:
         callback = self._device_settings_callback
         device.set_settings_changed_callback(lambda dev, _id=device_id: callback(_id, dev))
 
+    def _wire_device_link(self, device_id: str, device: "BaseDevice") -> None:
+        """Point a device's link-state hook at our device channel."""
+        device.set_link_state_callback(
+            lambda dev, _id=device_id: self._notify_device_connection_change(_id, dev.link_state)
+        )
+
     def _track_device(self, device_id: str, device: "BaseDevice") -> None:
-        """Register a device and wire its settings-changed hook.
+        """Register a device and wire its settings-changed hook and its link-state hook.
 
         The single place devices enter ``_devices``, so no creation path can
         forget the hook.
         """
         self._devices[device_id] = device
         self._wire_device_settings(device_id, device)
+        self._wire_device_link(device_id, device)
 
     @classmethod
     def register_driver(cls, name: str, driver_class: type[BaseBoard]) -> None:
@@ -170,6 +185,17 @@ class HardwareManager:
         """Register callback for connection state changes."""
         self._connection_callbacks.append(callback)
 
+    def on_device_connection_change(
+        self, callback: Callable[[str, BoardConnectionState], None]
+    ) -> None:
+        """Register a callback for *device* link state changes.
+
+        The peripheral-level sibling of :meth:`on_connection_change`. A BLE
+        board is the host adapter, which is "connected" from the moment bleak
+        imports; only the device knows whether the peripheral is answering.
+        """
+        self._device_connection_callbacks.append(callback)
+
     def _notify_error(self, source: str, error: Exception) -> None:
         """Notify error callbacks."""
         for callback in self._error_callbacks:
@@ -185,6 +211,14 @@ class HardwareManager:
                 callback(board_id, state)
             except Exception as e:
                 logger.error(f"Connection callback failed: {e}")
+
+    def _notify_device_connection_change(self, device_id: str, state: BoardConnectionState) -> None:
+        """Notify device link-state callbacks."""
+        for callback in self._device_connection_callbacks:
+            try:
+                callback(device_id, state)
+            except Exception as e:
+                logger.error(f"Device connection callback failed: {e}")
 
     async def create_board(self, config: "BoardConfig") -> BaseBoard:
         """Async wrapper kept for callers that already await it."""
@@ -701,9 +735,53 @@ class HardwareManager:
         for board_id in list(self._boards.keys()):
             await self.disconnect_board(board_id)
 
+    # --- device link supervision ---
+
+    async def poll_device_links(self) -> None:
+        """Ask every link-owning device to reconcile its state once.
+
+        Skips devices whose ``link_state`` is derived: there is nothing to
+        reconcile, and polling them would be pure overhead on every rig with
+        GPIO on it. One device's failure never stops the sweep.
+        """
+        for device_id, device in list(self._devices.items()):
+            if not device.owns_link:
+                continue
+            try:
+                await device.poll_link()
+            except Exception as e:  # noqa: BLE001 - one bad device, not a sweep
+                logger.debug("Link poll failed for device %s: %s", device_id, e)
+
+    def start_link_supervisor(self) -> None:
+        """Begin polling device links on a timer. Idempotent."""
+        if self._link_supervisor is not None and not self._link_supervisor.done():
+            return
+        self._link_supervisor = asyncio.create_task(self._link_supervisor_loop())
+
+    async def _link_supervisor_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(LINK_POLL_INTERVAL_S)
+            except asyncio.CancelledError:
+                return
+            await self.poll_device_links()
+
+    async def stop_link_supervisor(self) -> None:
+        """Cancel the supervisor and wait for it. Safe when never started."""
+        task = self._link_supervisor
+        self._link_supervisor = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     async def shutdown(self) -> None:
         """Shutdown the hardware manager."""
         logger.info("Shutting down hardware manager")
+        await self.stop_link_supervisor()
         await self.emergency_stop()
         await self.disconnect_all()
         self._boards.clear()
