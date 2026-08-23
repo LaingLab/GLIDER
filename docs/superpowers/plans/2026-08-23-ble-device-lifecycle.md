@@ -468,7 +468,7 @@ async def test_a_drop_fires_the_listener_once(fake_bleak):
     assert seen == [ConnectionState.DISCONNECTED]
 
 
-async def test_repeating_a_state_does_not_re-notify(fake_bleak):
+async def test_repeating_a_state_does_not_renotify(fake_bleak):
     """The 2s poll runs forever; it must not spam the GUI with no news."""
     _module, created = fake_bleak
     device = await _initialized()
