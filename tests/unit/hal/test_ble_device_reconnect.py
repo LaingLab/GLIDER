@@ -95,8 +95,11 @@ def fake_bleak(monkeypatch):
 def instant_backoff(monkeypatch):
     """Collapse the backoff so the suite runs in milliseconds, not minutes.
 
-    The delays are asserted separately in test_backoff_doubles_to_the_cap,
-    which reads them off a recorded sleep log instead of living through them.
+    The 5/10/20/40/60 schedule itself is asserted separately by
+    test_backoff_doubles_to_the_cap, which calls _backoff_for directly --
+    unbound, passing the class in for self -- and reads the computed values
+    off undisturbed RECONNECT_BASE_S/RECONNECT_MAX_BACKOFF_S. It never lives
+    through an actual sleep, so there is no recorded log to read either way.
     """
     monkeypatch.setattr(BLEDevice, "RECONNECT_BASE_S", 0.001)
     monkeypatch.setattr(BLEDevice, "RECONNECT_MAX_BACKOFF_S", 0.001)
@@ -146,10 +149,8 @@ async def test_giving_up_lands_in_error(fake_bleak):
     device = await _initialized()
     created["connect_error"] = OSError("peripheral is gone")
     created["client"].drop()
-    for _ in range(5000):
-        if device.link_state is ConnectionState.ERROR:
-            break
-        await asyncio.sleep(0)
+    task = device._reconnect_task
+    await asyncio.wait_for(task, timeout=5)
     assert device.link_state is ConnectionState.ERROR
     await device.shutdown()
 
@@ -160,10 +161,8 @@ async def test_attempts_are_bounded(fake_bleak):
     created["connect_error"] = OSError("gone")
     before = len(created["clients"])
     created["client"].drop()
-    for _ in range(5000):
-        if device.link_state is ConnectionState.ERROR:
-            break
-        await asyncio.sleep(0)
+    task = device._reconnect_task
+    await asyncio.wait_for(task, timeout=5)
     attempts = len(created["clients"]) - before
     assert attempts == BLEDevice.MAX_RECONNECT_ATTEMPTS
     await device.shutdown()
@@ -183,9 +182,9 @@ async def test_shutdown_during_backoff_cancels_the_task(fake_bleak):
     created["connect_error"] = OSError("gone")
     created["client"].drop()
     await asyncio.sleep(0)
-    await device.shutdown()
     task = device._reconnect_task
-    assert task is None or task.done()
+    await device.shutdown()
+    assert task.done()
     assert device.link_state is ConnectionState.DISCONNECTED
 
 
@@ -212,6 +211,40 @@ async def test_no_reconnect_after_shutdown(fake_bleak):
     assert device.link_state is ConnectionState.DISCONNECTED
 
 
+async def test_poll_link_recovers_a_drop_that_lands_mid_hook(fake_bleak):
+    """A drop that lands while _on_reconnected() is still awaiting must not
+    strand the device.
+
+    _start_reconnect() correctly no-ops while the current loop task is still
+    (briefly) alive, but once that loop returns and its own `finally` clears
+    the task handle, the device is left resting at DISCONNECTED with nothing
+    left to retry it -- poll_link()'s backstop is the only thing that can
+    still notice and re-arm it.
+    """
+    _module, created = fake_bleak
+    device = await _initialized()
+    dropped_once = {"done": False}
+
+    async def _drop_mid_hook():
+        await asyncio.sleep(0)  # yield so the drop below lands mid-await
+        if not dropped_once["done"]:
+            dropped_once["done"] = True
+            created["client"].drop()
+
+    device._on_reconnected = _drop_mid_hook
+    created["client"].drop()
+    task = device._reconnect_task
+    await task  # run the whole loop, including the hook's own drop, to completion
+
+    assert device.link_state is ConnectionState.DISCONNECTED
+    assert device._reconnect_task is None
+
+    await device.poll_link()
+    await _settle(device)
+    assert device.link_state is ConnectionState.CONNECTED
+    await device.shutdown()
+
+
 # --- the subscription --------------------------------------------------------
 
 
@@ -223,6 +256,33 @@ async def test_reconnect_restores_the_notify_subscription(fake_bleak):
     assert device._client.subscribed
     device._client.push(b"7")
     assert await device.get_state() == "7"
+    await device.shutdown()
+
+
+async def test_reconnect_publishes_connected_only_after_resubscribing(fake_bleak):
+    """Success order: re-subscribe, then CONNECTED, then the hook.
+
+    _ensure_connected() publishes a transient CONNECTED of its own the moment
+    the socket is up, before the subscription is restored; the loop must
+    revert that so the CONNECTED a caller ultimately sees is the one where
+    get_state() is already live, not one where _latest is still cleared and
+    nothing is subscribed.
+    """
+    _module, created = fake_bleak
+    device = await _initialized(read_char_uuid="beef", notify=True)
+    seen = []
+    device.set_link_state_callback(
+        lambda dev: seen.append(
+            (dev.link_state, dev._client.subscribed if dev._client is not None else False)
+        )
+    )
+    created["client"].drop()
+    await _settle(device)
+
+    states = [state for state, _subscribed in seen]
+    assert states[-2:] == [ConnectionState.RECONNECTING, ConnectionState.CONNECTED]
+    # The subscription was already live at the moment the final CONNECTED published.
+    assert seen[-1] == (ConnectionState.CONNECTED, True)
     await device.shutdown()
 
 
@@ -277,11 +337,20 @@ async def test_the_hook_does_not_run_on_a_write_retry(fake_bleak):
         original.written.append(bytes(data))
 
     device._client.write_gatt_char = _flaky
-    device._client.is_connected = False  # force _ensure_connected to rebuild
+    # original.is_connected is still True here, so _ensure_connected()'s first,
+    # unconditional call short-circuits and op() runs straight into _flaky,
+    # which raises -- that is what actually drives _with_retry into its
+    # except branch, the reconnect-inside-a-write path this test polices.
+    clients_before = len(created["clients"])
 
     await device.write("hello")
     await asyncio.sleep(0)
+
     assert ran == []
+    # Prove the retry path was actually taken, not skipped: a fresh client was
+    # built and the write that landed went through it, not through _flaky again.
+    assert len(created["clients"]) == clients_before + 1
+    assert device._client is not original
     assert device._client.written == [b"hello"]
     await device.shutdown()
 

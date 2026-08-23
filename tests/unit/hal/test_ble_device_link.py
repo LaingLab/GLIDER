@@ -136,6 +136,7 @@ async def test_repeating_a_state_does_not_renotify(fake_bleak):
     await device.poll_link()
     await device.poll_link()
     assert seen == []
+    await device.shutdown()
 
 
 async def test_poll_catches_a_drop_the_callback_missed(fake_bleak):

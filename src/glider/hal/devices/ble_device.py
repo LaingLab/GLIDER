@@ -233,7 +233,16 @@ class BLEDevice(BaseDevice):
             return
         client = self._client
         live = client is not None and client.is_connected
-        if not live and self._link is ConnectionState.CONNECTED:
+        # CONNECTED is the ordinary case this backstop exists for (a missed
+        # disconnected_callback). DISCONNECTED is also included to close a lost-wakeup:
+        # if the peripheral drops again while _reconnect_loop is mid-await inside
+        # _on_reconnected(), _on_disconnected() sets DISCONNECTED but _start_reconnect()
+        # no-ops because the loop task is still (briefly) alive; the loop then returns
+        # and its `finally` clears the task handle, leaving the device resting at
+        # DISCONNECTED with nothing left to retry it. Re-arming from a resting
+        # DISCONNECTED here closes that gap. ERROR is deliberately excluded: it is the
+        # bounded loop's own terminal give-up state, and this backstop must not undo it.
+        if not live and self._link in (ConnectionState.CONNECTED, ConnectionState.DISCONNECTED):
             self._set_link(ConnectionState.DISCONNECTED)
             self._start_reconnect()
 
@@ -296,6 +305,15 @@ class BLEDevice(BaseDevice):
                             return
                         self._client = None
                         await self._ensure_connected()
+                        # _ensure_connected() publishes CONNECTED itself the moment the
+                        # socket is up, but the required order is subscribe-then-publish:
+                        # revert to RECONNECTING here so the explicit _set_link(CONNECTED)
+                        # below -- after _resubscribe() -- is the transition that actually
+                        # announces the device usable, with any subscription already live.
+                        # No await happens between _ensure_connected() returning and this
+                        # line, so nothing else can observe the transient CONNECTED it
+                        # published.
+                        self._set_link(ConnectionState.RECONNECTING)
                         await self._resubscribe()
                 except asyncio.CancelledError:
                     raise
