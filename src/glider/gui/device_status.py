@@ -9,6 +9,7 @@ main_window) is the same idea for boards; this is its device sibling.
 
 from __future__ import annotations
 
+from glider.gui.styles import colors
 from glider.hal.base_board import ConnectionState
 
 #: What each state is called in a status line.
@@ -47,6 +48,27 @@ def link_strip_state(state: object) -> str:
     mapped is not evidence that anything is healthy.
     """
     return _STRIP.get(state, "unknown")
+
+
+#: The strip's four-colour scale, in CSS.
+_STRIP_COLOR = {
+    "ok": colors.SUCCESS,
+    "warn": colors.WARNING,
+    "error": colors.ERROR,
+    "unknown": colors.TEXT_DISABLED,
+}
+
+
+def link_status_color(state: object) -> str:
+    """The colour ``link_status_text(state)`` should be painted in.
+
+    Routed through :func:`link_strip_state` rather than given its own table, so
+    a card and the status strip two inches away cannot come to disagree about
+    whether a device is healthy. That is the whole failure this module exists
+    to prevent, and a green pill reading "Disconnected" would be a fresh
+    instance of it.
+    """
+    return _STRIP_COLOR[link_strip_state(state)]
 
 
 def link_is_usable(state: object) -> bool:

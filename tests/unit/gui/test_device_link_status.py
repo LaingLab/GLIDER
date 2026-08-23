@@ -10,8 +10,14 @@ from types import SimpleNamespace
 import pytest
 from PyQt6.QtWidgets import QPushButton
 
-from glider.gui.device_status import link_is_usable, link_status_text, link_strip_state
+from glider.gui.device_status import (
+    link_is_usable,
+    link_status_color,
+    link_status_text,
+    link_strip_state,
+)
 from glider.gui.panels.device_control_panel import DeviceControlPanel
+from glider.gui.styles import colors
 from glider.hal.base_board import ConnectionState
 
 pytestmark = pytest.mark.usefixtures("qtbot")
@@ -48,10 +54,27 @@ def test_strip_state(state, expected):
     assert link_strip_state(state) == expected
 
 
+@pytest.mark.parametrize(
+    "state,expected",
+    [
+        (ConnectionState.CONNECTED, colors.SUCCESS),
+        (ConnectionState.CONNECTING, colors.WARNING),
+        (ConnectionState.RECONNECTING, colors.WARNING),
+        (ConnectionState.DISCONNECTED, colors.ERROR),
+        (ConnectionState.ERROR, colors.ERROR),
+    ],
+)
+def test_status_color_tracks_the_state(state, expected):
+    """The word and the colour move together, or a green pill reads
+    "Disconnected"."""
+    assert link_status_color(state) == expected
+
+
 def test_an_unknown_state_is_never_green():
     """A state nobody recognises does not get the benefit of the doubt."""
     assert link_strip_state(object()) == "unknown"
     assert link_status_text(object()) == "Unknown"
+    assert link_status_color(object()) == colors.TEXT_DISABLED
 
 
 @pytest.mark.parametrize(

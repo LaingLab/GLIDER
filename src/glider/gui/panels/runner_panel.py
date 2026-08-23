@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.core.config import get_config
+from glider.gui.device_status import link_status_color, link_status_text
 from glider.gui.runner.readiness import compute_readiness
 from glider.gui.runner.run_timer import format_elapsed
 from glider.gui.styles import colors
@@ -348,7 +349,12 @@ class RunnerPanel(QWidget):
             if device is None:
                 continue
 
-            initialized = getattr(device, "_initialized", False)
+            # link_state, not _initialized -- the same swap the hardware tree
+            # made. "Has this been set up" is a question a peripheral that
+            # walked out of range never stops answering yes to, and this card
+            # repaints on a timer, so it asserted a green Ready continuously
+            # while the status strip showed a red dot for the same device.
+            link = getattr(device, "link_state", None)
             device_type = getattr(device, "device_type", "Unknown")
             is_analog_input = device_type == "AnalogInput"
 
@@ -393,9 +399,9 @@ class RunnerPanel(QWidget):
                 """)
 
             if hasattr(card, "_ready_label"):
-                card._ready_label.setText("Ready" if initialized else "---")
+                card._ready_label.setText(link_status_text(link))
                 card._ready_label.setStyleSheet(
-                    f"font-size: 10px; color: {colors.SUCCESS if initialized else colors.TEXT_DISABLED}; background: transparent; border: none;"
+                    f"font-size: 10px; color: {link_status_color(link)}; background: transparent; border: none;"
                 )
 
     def _create_device_card(self, device_id: str, device) -> QWidget:
@@ -427,13 +433,16 @@ class RunnerPanel(QWidget):
         layout.addLayout(info_layout)
         layout.addStretch()
 
-        initialized = getattr(device, "_initialized", False)
+        link = getattr(device, "link_state", None)
         device_type = getattr(device, "device_type", "Unknown")
 
         is_analog_input = device_type == "AnalogInput"
 
         status_widget = QWidget()
-        status_widget.setFixedSize(80 if is_analog_input else 60, 50)
+        # 80 for both: the link words ("Disconnected", "Reconnecting…") are
+        # longer than the "Ready"/"---" the 60 was sized for, and a status that
+        # paints as "Disconnec" is not one anybody can act on.
+        status_widget.setFixedSize(80, 50)
         status_layout = QVBoxLayout(status_widget)
         status_layout.setContentsMargins(0, 0, 0, 0)
         status_layout.setSpacing(2)
@@ -476,10 +485,10 @@ class RunnerPanel(QWidget):
         """)
         status_layout.addWidget(state_label)
 
-        ready_label = QLabel("Ready" if initialized else "---")
+        ready_label = QLabel(link_status_text(link))
         ready_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ready_label.setStyleSheet(
-            f"font-size: 10px; color: {colors.SUCCESS if initialized else colors.TEXT_DISABLED}; background: transparent; border: none;"
+            f"font-size: 10px; color: {link_status_color(link)}; background: transparent; border: none;"
         )
         status_layout.addWidget(ready_label)
 
