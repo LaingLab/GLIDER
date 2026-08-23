@@ -39,6 +39,19 @@ class BaseDevice(ABC):
     They wrap the BaseBoard methods into semantic actions.
     """
 
+    #: Declares an action's arguments, keyed by action name.
+    #:
+    #: Same field vocabulary as SETTINGS_SCHEMA (key / label / type / default /
+    #: min / max / help), so glider.gui.widgets.schema_form renders it with no
+    #: new widget code. Fields are passed to the action POSITIONALLY in the
+    #: order declared, so each ``key`` must name the real parameter and the
+    #: order must match the signature.
+    #:
+    #: Declaring this is what makes an argument-taking action pressable: both
+    #: control surfaces will otherwise refuse it, one by greying the button and
+    #: one by not offering it at all.
+    ACTION_ARGS_SCHEMA: dict[str, list[dict[str, Any]]] = {}
+
     def __init__(
         self,
         board: "BaseBoard",
@@ -200,6 +213,38 @@ class BaseDevice(ABC):
             {'activate': self.turn_on, 'deactivate': self.turn_off}
         """
         ...
+
+    def action_args_schema(self, action_name: str) -> list[dict[str, Any]]:
+        """The declared argument fields for ``action_name`` (empty if none)."""
+        return list(type(self).ACTION_ARGS_SCHEMA.get(action_name, ()))
+
+    def action_needs_args(self, action_name: str) -> bool:
+        """Whether ``action_name`` cannot be called with no arguments.
+
+        Only *required* positional parameters count. A defaulted one
+        (``fade(level=5)``) is pressable as-is, and ``*args`` is not a
+        requirement -- an action taking it validates its own emptiness and
+        reports a better error than a greyed-out button could.
+
+        An unintrospectable callable is reported as needing nothing: offering
+        it and letting it report its own failure beats hiding a working
+        action.
+        """
+        import inspect
+
+        try:
+            func = self.actions[action_name]
+        except (KeyError, TypeError):
+            return False
+        try:
+            parameters = inspect.signature(func).parameters.values()
+        except (TypeError, ValueError):
+            return False
+        return any(
+            param.default is inspect.Parameter.empty
+            and param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+            for param in parameters
+        )
 
     def state_columns(self) -> list[str] | None:
         """

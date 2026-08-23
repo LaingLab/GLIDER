@@ -102,6 +102,38 @@ class MaimuDevice(BLEDevice):
         },
     ]
 
+    # What the control panels put in front of a pulse button. The bounds are
+    # the same contract _whole_number enforces at call time -- whole numbers,
+    # at least 1 -- because the firmware atoi()s both fields, so a spin box
+    # that offered 0 or a fraction would only produce a legible error later.
+    # The defaults match MaimuNode's, so the number a researcher sees does not
+    # change when they move between the graph and the panel.
+    ACTION_ARGS_SCHEMA = {
+        "pulse": [
+            {
+                "key": "period_ms",
+                "label": "Period (ms)",
+                "type": "int",
+                "default": 500,
+                "min": 1,
+                "max": 3_600_000,
+                "help": (
+                    "On/off toggle period in milliseconds -- a period, not a "
+                    "frequency. 500 ms toggles about once a second."
+                ),
+            },
+            {
+                "key": "duration_s",
+                "label": "Duration (s)",
+                "type": "int",
+                "default": 10,
+                "min": 1,
+                "max": 86_400,
+                "help": "How long the train runs. The firmware stops on its own.",
+            },
+        ],
+    }
+
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         # Fill the UUIDs in before BLEDevice.__init__ reads config.settings into
         # its caches, so a device added (or a file saved) without them still
