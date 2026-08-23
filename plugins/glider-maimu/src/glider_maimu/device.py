@@ -244,6 +244,14 @@ class MaimuDevice(BLEDevice):
         and ``write()`` refuses to run once it is cleared. ``finally`` makes the
         disconnect unconditional, so a peripheral that is already gone still
         tears down cleanly.
+
+        **Both ways of not sending it are reported.** There is no link to write
+        over while a reconnect attempt is in flight (``_client`` is None for the
+        length of it), so quitting or e-stopping right then skips the write
+        entirely rather than failing it -- and a skip that says nothing leaves
+        the operator with no indication a stimulator was left in an unknown
+        state. That is the same news as a failed write, so it gets the same
+        warning.
         """
         try:
             if self._initialized and self._client is not None:
@@ -258,5 +266,15 @@ class MaimuDevice(BLEDevice):
                         self._name,
                         e,
                     )
+            elif self._initialized:
+                # Initialized but no client: mid-reconnect, or the link went
+                # away and has not been rebuilt. A device that was never
+                # initialized is silent here on purpose -- nothing has ever
+                # commanded it, so there is nothing to warn about.
+                logger.warning(
+                    "Maimu %s: no link to send 'off' over at shutdown; "
+                    "the device may still be running",
+                    self._name,
+                )
         finally:
             await super().shutdown()
