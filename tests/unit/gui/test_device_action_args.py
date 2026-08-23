@@ -81,6 +81,84 @@ class _Device:
         )
 
 
+class _DigitalOutput:
+    """A device the panel drives through its own bespoke ON/OFF/Toggle row,
+    not through _build_action_buttons's normal per-action-button path."""
+
+    device_type = "DigitalOutput"
+    name = "LED"
+    _initialized = True
+    owns_link = True
+    link_state = ConnectionState.CONNECTED
+
+    def __init__(self):
+        self.board = SimpleNamespace(is_connected=True)
+
+    async def set(self, value):
+        pass
+
+    @property
+    def actions(self):
+        return {"set": self.set}
+
+
+class _RaisingNeedsArgsDevice:
+    """A device whose own action_needs_args raises -- third-party code is not
+    obligated to be well-behaved, and a raising method must not take the
+    panel down mid-session."""
+
+    device_type = "Awkward"
+    name = "awkward"
+    _initialized = True
+    owns_link = True
+    link_state = ConnectionState.CONNECTED
+
+    def __init__(self):
+        self.board = SimpleNamespace(is_connected=True)
+
+    async def on(self):
+        pass
+
+    async def pulse(self, period_ms, duration_s):
+        pass
+
+    @property
+    def actions(self):
+        return {"on": self.on, "pulse": self.pulse}
+
+    def action_needs_args(self, action):
+        raise RuntimeError("nope")
+
+
+class _RaisingArgsSchemaDevice:
+    """A device whose own action_args_schema raises."""
+
+    device_type = "Awkward"
+    name = "awkward"
+    _initialized = True
+    owns_link = True
+    link_state = ConnectionState.CONNECTED
+
+    def __init__(self):
+        self.board = SimpleNamespace(is_connected=True)
+
+    async def on(self):
+        pass
+
+    async def pulse(self, period_ms, duration_s):
+        pass
+
+    @property
+    def actions(self):
+        return {"on": self.on, "pulse": self.pulse}
+
+    def action_needs_args(self, action):
+        return action == "pulse"
+
+    def action_args_schema(self, action):
+        raise RuntimeError("nope")
+
+
 def _panel(qtbot, device):
     def _runner(coro):
         # These are sync tests, so there is no loop to schedule onto. Run the
@@ -167,8 +245,64 @@ def test_switching_device_clears_the_fields(qtbot):
     assert panel._action_arg_widgets == {}
 
 
+def test_switching_to_an_output_device_clears_the_fields(qtbot):
+    """DigitalOutput/PWMOutput never run _build_action_buttons's normal
+    per-action path -- they get their own ON/OFF/Toggle row instead. The
+    previous device's live argument fields must not survive that switch,
+    editable, underneath it."""
+
+    def _runner(coro):
+        import asyncio
+
+        asyncio.run(coro)
+
+    device = _Device()
+    output = _DigitalOutput()
+    manager = SimpleNamespace(
+        devices={"dev1": device, "dev2": output},
+        get_device=lambda dev_id: {"dev1": device, "dev2": output}.get(dev_id),
+    )
+    panel = DeviceControlPanel(manager, _runner)
+    qtbot.addWidget(panel)
+    panel.refresh_devices()
+    panel._device_combo.setCurrentIndex(1)
+    panel._action_arg_widgets["pulse"]["period_ms"][0].setValue(250)
+    panel._action_arg_widgets["pulse"]["duration_s"][0].setValue(30)
+
+    panel._device_combo.setCurrentIndex(2)  # the DigitalOutput
+
+    assert panel._action_arg_widgets == {}
+    assert panel._action_args_widget.isHidden()
+
+
 def test_a_down_link_disables_it_too(qtbot):
     device = _Device()
     device.link_state = ConnectionState.RECONNECTING
     panel = _panel(qtbot, device)
     assert not _button(panel, "pulse").isEnabled()
+    # A field left editable beside a dead button invites someone to type a
+    # value and wonder why nothing happened.
+    fields = panel._action_arg_widgets["pulse"]
+    assert not fields["period_ms"][0].isEnabled()
+    assert not fields["duration_s"][0].isEnabled()
+
+
+def test_a_raising_action_needs_args_falls_back_to_introspection(qtbot):
+    """A device is third-party code; a raising action_needs_args is its
+    problem, not the panel's -- and the real signature still tells the true
+    story."""
+    panel = _panel(qtbot, _RaisingNeedsArgsDevice())  # must not raise
+    assert _button(panel, "on").isEnabled()
+    pulse = _button(panel, "pulse")
+    assert not pulse.isEnabled()
+    assert "Device Action node" in pulse.toolTip()
+
+
+def test_a_raising_action_args_schema_does_not_break_the_panel(qtbot):
+    """A device is third-party code; a raising action_args_schema is its
+    problem, not the panel's."""
+    panel = _panel(qtbot, _RaisingArgsSchemaDevice())  # must not raise
+    assert _button(panel, "on").isEnabled()
+    pulse = _button(panel, "pulse")
+    assert not pulse.isEnabled()
+    assert "Device Action node" in pulse.toolTip()

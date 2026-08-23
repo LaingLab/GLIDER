@@ -285,7 +285,11 @@ class DeviceControlPanel(QWidget):
         is_output = is_digital_output or is_pwm_output
 
         # A device with no bespoke control still has its declared actions.
-        has_actions = self._build_action_buttons(device) if not is_output else False
+        # is_output is passed in rather than branched around here, so the
+        # clear (and hiding the argument fields) always happens -- switching
+        # to a DigitalOutput/PWMOutput must not leave the previous device's
+        # buttons or fields on screen.
+        has_actions = self._build_action_buttons(device, is_output=is_output)
 
         self._control_group.setVisible(is_output or has_actions)
         self._digital_widget.setVisible(is_digital_output)
@@ -317,7 +321,7 @@ class DeviceControlPanel(QWidget):
                     widget.setParent(None)
                     widget.deleteLater()
 
-    def _build_action_buttons(self, device) -> bool:
+    def _build_action_buttons(self, device, *, is_output: bool = False) -> bool:
         """One button per action the device declares, plus any argument fields.
 
         This is how a Maimu gets its ``on`` and ``off`` -- which is how you
@@ -335,10 +339,19 @@ class DeviceControlPanel(QWidget):
         Buttons are dead while the link is down. Offering a press that is
         certain to fail is worse than greying it.
 
+        Always clears the previous device's buttons and argument fields first,
+        even for a device the panel drives through DigitalOutput/PWMOutput's
+        bespoke controls (``is_output``) -- without this, a device with a
+        declared ``ACTION_ARGS_SCHEMA`` left its live argument fields on
+        screen, editable, under the new device's ON/OFF/Toggle row.
+
         Returns whether any button was built. Never raises: a device with an
         awkward ``actions`` property must not take the panel down mid-session.
         """
         self._clear_action_buttons()
+        if is_output:
+            self._action_args_widget.setVisible(False)
+            return False
         try:
             actions = dict(getattr(device, "actions", {}) or {})
         except Exception:
