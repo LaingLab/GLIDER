@@ -668,6 +668,9 @@ class MainWindow(QMainWindow):
         self._runner_device_controls.action_fire_requested.connect(
             lambda dev_id, action: self._run_async(self._drive_action(dev_id, action))
         )
+        self._runner_device_controls.action_call_requested.connect(
+            lambda dev_id, action, args: self._run_async(self._drive_action(dev_id, action, *args))
+        )
         self._runner_device_controls.read_requested.connect(
             lambda dev_id, action: self._run_async(self._drive_read(dev_id, action))
         )
@@ -790,6 +793,9 @@ class MainWindow(QMainWindow):
         )
         self._runner_device_controls.action_fire_requested.connect(
             lambda dev_id, action: self._run_async(self._drive_action(dev_id, action))
+        )
+        self._runner_device_controls.action_call_requested.connect(
+            lambda dev_id, action, args: self._run_async(self._drive_action(dev_id, action, *args))
         )
         self._runner_device_controls.read_requested.connect(
             lambda dev_id, action: self._run_async(self._drive_read(dev_id, action))

@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -41,6 +42,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.core.graph_functions import build_picker_labels, list_graph_functions
+from glider.gui.widgets.schema_form import build_schema_widgets, read_schema_widget
 from glider.hal.value_spec import KIND_SWITCH, KIND_WHOLE
 
 if TYPE_CHECKING:
@@ -75,6 +77,9 @@ class RunnerDeviceControls(QWidget):
     read_requested = pyqtSignal(str, str)
     # (start_node_id) — run a graph function from its tap button
     function_run_requested = pyqtSignal(str)
+    # (device_id, action_name, [positional args]) -- an action driven with the
+    # values from its declared argument fields.
+    action_call_requested = pyqtSignal(str, str, object)
 
     def __init__(
         self,
@@ -169,6 +174,16 @@ class RunnerDeviceControls(QWidget):
                 controls.append(("slider", action, spec))
             elif action in _SWITCH_REDUNDANT and has_switch:
                 continue
+            elif _needs_args(device, action):
+                # An action with required arguments must never become a plain
+                # fire button: that button called execute_action(action) with
+                # none of them, which is a TypeError every time it is pressed.
+                schema = _args_schema(device, action)
+                if schema:
+                    controls.append(("action_args", action, schema))
+                # No declared schema means there is nothing to send. Omitted
+                # rather than shown disabled: the runner is a touchscreen with
+                # no tooltips, so a dead control explains nothing.
             else:
                 controls.append(("button", action, None))
         return controls
@@ -269,6 +284,7 @@ class RunnerDeviceControls(QWidget):
                 "slider": self._make_slider,
                 "read": self._make_read,
                 "button": self._make_button,
+                "action_args": self._make_action_args,
             }[kind]
             layout.addWidget(builder(dev_id, action, spec))
         return section
@@ -351,6 +367,42 @@ class RunnerDeviceControls(QWidget):
         self._widgets[(dev_id, action)] = {"button": btn}
         return btn
 
+    def _make_action_args(self, dev_id: str, action: str, schema) -> QWidget:
+        """Labelled fields plus a fire button, for an action with arguments.
+
+        Stored under an ``args`` key rather than ``spin``/``slider`` on
+        purpose: those keys drive the optimistic-revert path in
+        on_action_failed, and there is no single committed value to snap an
+        argument form back to.
+        """
+        block = QWidget()
+        layout = QVBoxLayout(block)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(self._labeled(action))
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        fields: dict[str, tuple] = {}
+        build_schema_widgets(form, schema, fields)
+        for widget, _ftype in fields.values():
+            widget.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+        layout.addLayout(form)
+
+        btn = QPushButton(_title(action))
+        btn.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+        btn.clicked.connect(
+            lambda _=False: self.action_call_requested.emit(
+                dev_id,
+                action,
+                [read_schema_widget(w, t) for w, t in fields.values()],
+            )
+        )
+        layout.addWidget(btn)
+
+        self._widgets[(dev_id, action)] = {"args": fields, "button": btn}
+        return block
+
     def _make_read(self, dev_id: str, action: str, spec) -> QWidget:
         block = QWidget()
         row = QHBoxLayout(block)
@@ -424,6 +476,43 @@ class RunnerDeviceControls(QWidget):
                 if widgets.get("slider") is not None:
                     _set_quiet(widgets["slider"], revert_to)
         self.show_status(message, level="error")
+
+
+def _needs_args(device, action: str) -> bool:
+    """Whether ``action`` cannot be called with no arguments.
+
+    Asks the device first; falls back to signature introspection for a plugin
+    device predating ``action_needs_args``, so an unknown device never gets a
+    button that raises TypeError on the first press.
+    """
+    asker = getattr(device, "action_needs_args", None)
+    if callable(asker):
+        try:
+            return bool(asker(action))
+        except Exception:
+            pass
+    import inspect
+
+    try:
+        parameters = inspect.signature(device.actions[action]).parameters.values()
+    except (KeyError, TypeError, ValueError):
+        return False
+    return any(
+        param.default is inspect.Parameter.empty
+        and param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+        for param in parameters
+    )
+
+
+def _args_schema(device, action: str) -> list[dict]:
+    """The device's declared argument fields for ``action`` (empty if none)."""
+    asker = getattr(device, "action_args_schema", None)
+    if not callable(asker):
+        return []
+    try:
+        return list(asker(action) or [])
+    except Exception:
+        return []
 
 
 def _title(action: str) -> str:
