@@ -68,6 +68,13 @@ class DeviceControlPanel(QWidget):
         # selected device. Cleared with the buttons; a stale widget from the
         # previous device would be read on the next press.
         self._action_arg_widgets: dict[str, dict[str, tuple]] = {}
+        # action name -> its button, so the link gating can be re-applied to a
+        # panel that is already open without rebuilding anything.
+        self._action_buttons: dict[str, QPushButton] = {}
+        # Actions this panel can never press whatever the link does: they take
+        # arguments the device declares no schema for. Held apart from the link
+        # gating so a reconnect does not light them up.
+        self._undrivable_actions: set[str] = set()
 
         self._setup_ui()
         self.analog_value_received.connect(self._on_analog_value_received)
@@ -242,6 +249,26 @@ class DeviceControlPanel(QWidget):
             device_type = getattr(device, "device_type", "unknown")
             self._device_combo.addItem(f"{device_name} ({device_type})", device_id)
 
+    def refresh_link_state(self) -> None:
+        """Repaint the status line and re-gate the buttons for the selection.
+
+        The gating used to be evaluated only when a device was *selected*, so a
+        peripheral dropping while this panel was open left every button live
+        over a label still reading "Ready" -- a press that is certain to fail,
+        offered as though it were not.
+
+        Deliberately not ``_on_device_selected``: that rebuilds the argument
+        fields, which would discard the period and duration an operator had
+        already typed into them. Nothing here is rebuilt.
+        """
+        device = self._get_selected_device()
+        if device is None:
+            return
+        device_type = getattr(device, "device_type", "unknown")
+        link = getattr(device, "link_state", None)
+        self._device_status_label.setText(f"Status: {link_status_text(link)} | Type: {device_type}")
+        self._apply_action_link_state(device)
+
     def stop_polling(self):
         """Stop all continuous input reading."""
         self._input_poll_timer.stop()
@@ -309,6 +336,8 @@ class DeviceControlPanel(QWidget):
 
     def _clear_action_buttons(self) -> None:
         self._action_arg_widgets.clear()
+        self._action_buttons.clear()
+        self._undrivable_actions.clear()
         for layout in (self._actions_layout, self._action_args_layout):
             while layout.count():
                 item = layout.takeAt(0)
@@ -358,7 +387,6 @@ class DeviceControlPanel(QWidget):
             logger.warning("Could not read actions from %s", device, exc_info=True)
             return False
 
-        usable = link_is_usable(getattr(device, "link_state", None))
         built = False
         for name in actions:
             needs_args = self._needs_args(device, name)
@@ -367,35 +395,56 @@ class DeviceControlPanel(QWidget):
             button = QPushButton(name)
             button.setMinimumHeight(32)
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            # Connected unconditionally, and availability carried entirely by
+            # setEnabled: a disabled QPushButton emits nothing, and the link can
+            # come back under a panel that is already open.
+            button.clicked.connect(
+                lambda _checked=False, action=name: self._run_device_action(action)
+            )
+            self._action_buttons[name] = button
 
             if needs_args and not schema:
+                self._undrivable_actions.add(name)
                 button.setEnabled(False)
                 button.setToolTip(
                     f"{name} takes arguments this device does not declare; "
                     "drive it from a Device Action node or a node for this device."
                 )
-            elif not usable:
-                state_word = link_status_text(getattr(device, "link_state", None)).lower()
-                button.setEnabled(False)
-                button.setToolTip(f"{name} is unavailable while the device is {state_word}")
-            else:
-                button.setToolTip(f"Run {name} on this device")
-                button.clicked.connect(
-                    lambda _checked=False, action=name: self._run_device_action(action)
-                )
 
             if schema:
                 fields: dict[str, tuple] = {}
                 build_schema_widgets(self._action_args_layout, schema, fields)
-                for widget, _ftype in fields.values():
-                    widget.setEnabled(button.isEnabled())
                 self._action_arg_widgets[name] = fields
 
             self._actions_layout.addWidget(button)
             built = True
 
+        self._apply_action_link_state(device)
         self._action_args_widget.setVisible(bool(self._action_arg_widgets))
         return built
+
+    def _apply_action_link_state(self, device) -> None:
+        """Gate the built buttons (and their fields) on the device's link.
+
+        Shared by the build and by :meth:`refresh_link_state`, so a link that
+        moves under an open panel is gated by exactly the rule that gated it at
+        selection time. Touches enablement and tooltips only -- never the field
+        values, which belong to the operator.
+        """
+        link = getattr(device, "link_state", None)
+        usable = link_is_usable(link)
+        state_word = link_status_text(link).lower()
+        for name, button in self._action_buttons.items():
+            if name in self._undrivable_actions:
+                continue  # dead for a reason no reconnect can fix
+            button.setEnabled(usable)
+            button.setToolTip(
+                f"Run {name} on this device"
+                if usable
+                else f"{name} is unavailable while the device is {state_word}"
+            )
+            for widget, _ftype in self._action_arg_widgets.get(name, {}).values():
+                widget.setEnabled(usable)
 
     @staticmethod
     def _needs_args(device, action: str) -> bool:

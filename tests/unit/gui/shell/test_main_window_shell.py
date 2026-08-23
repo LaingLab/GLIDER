@@ -720,6 +720,62 @@ def test_a_device_link_change_always_refreshes_the_readouts(
     assert refreshed == [state]
 
 
+@pytest.mark.parametrize(
+    "state",
+    [
+        BoardConnectionState.CONNECTED,
+        BoardConnectionState.RECONNECTING,
+        BoardConnectionState.DISCONNECTED,
+        BoardConnectionState.ERROR,
+    ],
+)
+def test_a_device_link_change_repaints_the_tree_and_regates_the_controls(
+    qtbot, main_window_factory, monkeypatch, state
+):
+    """The readouts were the only two surfaces that followed a link change.
+
+    HardwarePanel.refresh_tree runs only from a user action, so the documented
+    "the row moves to Disconnected" was not delivered; and the Device Control
+    panel's greyed-button guard was evaluated only at device-selection time, so
+    a drop while the panel was open left every button live.
+    """
+    window = _builder(main_window_factory)
+
+    trees, controls = [], []
+    for panel in (window._hardware_panel, window._dash_hardware_panel):
+        monkeypatch.setattr(panel, "refresh_link_states", lambda p=panel: trees.append(p))
+    monkeypatch.setattr(
+        window._device_control_panel, "refresh_link_state", lambda: controls.append(state)
+    )
+
+    window._on_device_link_change("stim_1", state)
+
+    assert len(trees) == 2, "both hardware trees follow the link"
+    assert controls == [state]
+
+
+def test_a_device_link_change_does_not_rebuild_anything(qtbot, main_window_factory, monkeypatch):
+    """A rebuild would throw away what the operator typed.
+
+    refresh_tree emits hardware_changed, which fans out to
+    DeviceControlPanel.refresh_devices and clears its combo; refresh_devices
+    then re-runs _on_device_selected, which rebuilds the argument fields. A BLE
+    blip the operator did not cause must not cost them a period and a duration.
+    """
+    window = _builder(main_window_factory)
+
+    rebuilt = []
+    for panel in (window._hardware_panel, window._dash_hardware_panel):
+        monkeypatch.setattr(panel, "refresh_tree", lambda: rebuilt.append("tree"))
+    monkeypatch.setattr(
+        window._device_control_panel, "refresh_devices", lambda: rebuilt.append("combo")
+    )
+
+    window._on_device_link_change("stim_1", BoardConnectionState.DISCONNECTED)
+
+    assert rebuilt == []
+
+
 # ---------------------------------------------------- the two hardware readouts
 #
 # The strip and the status bar describe the same rig. They are allowed to say

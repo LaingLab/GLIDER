@@ -1873,13 +1873,14 @@ class MainWindow(QMainWindow):
     def _on_device_link_change(self, device_id: str, state) -> None:
         """A peripheral's own link moved.
 
-        Repaints both readouts, and says so out loud if it dropped while an
-        experiment was recording. Deliberately does *not* pause the run: a
-        ten-second BLE dropout should not end a two-hour session, and
-        _show_hardware_disconnection_dialog is modal and stays reserved for a
-        board going away.
+        Repaints every surface that describes that link, and says so out loud
+        if it dropped while an experiment was recording. Deliberately does
+        *not* pause the run: a ten-second BLE dropout should not end a two-hour
+        session, and _show_hardware_disconnection_dialog is modal and stays
+        reserved for a board going away.
         """
         self._refresh_hardware_readouts()
+        self._refresh_device_link_widgets()
 
         if state not in (BoardConnectionState.DISCONNECTED, BoardConnectionState.ERROR):
             return
@@ -1909,6 +1910,29 @@ class MainWindow(QMainWindow):
                 "the experiment has not been paused."
             )
         self._notify_user(f"{label} disconnected", body, level="warning")
+
+    def _refresh_device_link_widgets(self) -> None:
+        """The two surfaces that describe one device's link, repainted in place.
+
+        Neither followed a link change on its own. ``HardwarePanel.refresh_tree``
+        runs only from a user action, so the documented behaviour that a dropped
+        peripheral's row "moves to Disconnected" was not delivered; and the
+        Device Control panel's greyed-button guard was evaluated only at
+        device-selection time, so a drop while the panel was open left every
+        button live and the label reading Ready.
+
+        Both are targeted refreshes rather than rebuilds, and that is the point.
+        ``refresh_tree`` emits ``hardware_changed``, which fans out to
+        ``DeviceControlPanel.refresh_devices`` and clears its combo; re-running
+        ``_on_device_selected`` would rebuild the argument fields. Either would
+        throw away values an operator had typed -- over a link blip they did not
+        cause and cannot see.
+        """
+        for panel in (self._hardware_panel, self._dash_hardware_panel):
+            if panel:
+                panel.refresh_link_states()
+        if self._device_control_panel:
+            self._device_control_panel.refresh_link_state()
 
     def _refresh_hardware_readouts(self) -> None:
         """Both readouts of the same rig, refreshed together.

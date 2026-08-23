@@ -306,3 +306,65 @@ def test_a_raising_action_args_schema_does_not_break_the_panel(qtbot):
     pulse = _button(panel, "pulse")
     assert not pulse.isEnabled()
     assert "Device Action node" in pulse.toolTip()
+
+
+# --- a link that moves under an open panel ------------------------------------
+#
+# The gating used to be evaluated only at device-selection time. A drop while
+# the panel was open left every button live over a "Ready" label -- and the
+# obvious repair, re-running _on_device_selected, would rebuild the argument
+# fields and throw away whatever the operator had typed into them.
+
+
+def test_a_link_refresh_keeps_typed_argument_values(qtbot):
+    """A blip the operator did not cause must not eat the numbers they entered."""
+    device = _Device()
+    panel = _panel(qtbot, device)
+    panel._action_arg_widgets["pulse"]["period_ms"][0].setValue(250)
+    panel._action_arg_widgets["pulse"]["duration_s"][0].setValue(30)
+
+    device.link_state = ConnectionState.RECONNECTING
+    panel.refresh_link_state()
+    device.link_state = ConnectionState.CONNECTED
+    panel.refresh_link_state()
+
+    assert panel._action_args("pulse") == [250, 30]
+
+
+def test_a_dropped_link_greys_the_argument_fields_too(qtbot):
+    device = _Device()
+    panel = _panel(qtbot, device)
+    assert panel._action_arg_widgets["pulse"]["period_ms"][0].isEnabled()
+
+    device.link_state = ConnectionState.DISCONNECTED
+    panel.refresh_link_state()
+
+    assert not panel._action_arg_widgets["pulse"]["period_ms"][0].isEnabled()
+    assert not _button(panel, "pulse").isEnabled()
+
+
+def test_an_undeclared_argument_action_stays_dead_after_a_reconnect(qtbot):
+    """fade(level) is not pressable for a reason no link change can fix."""
+    device = _Device()
+    device.link_state = ConnectionState.DISCONNECTED
+    panel = _panel(qtbot, device)
+
+    device.link_state = ConnectionState.CONNECTED
+    panel.refresh_link_state()
+
+    assert _button(panel, "on").isEnabled()
+    assert not _button(panel, "fade").isEnabled()
+
+
+def test_a_button_built_while_down_works_once_the_link_is_back(qtbot):
+    """Enablement carries availability, so the press has to be wired all along."""
+    device = _Device()
+    device.link_state = ConnectionState.DISCONNECTED
+    panel = _panel(qtbot, device)
+    assert not _button(panel, "on").isEnabled()
+
+    device.link_state = ConnectionState.CONNECTED
+    panel.refresh_link_state()
+    _button(panel, "on").click()
+
+    assert device.calls == [("on", ())]

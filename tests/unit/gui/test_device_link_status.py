@@ -149,3 +149,34 @@ def test_action_buttons_are_live_when_the_link_is_up(qtbot):
     panel = _panel(qtbot, _Device(ConnectionState.CONNECTED))
     buttons = panel._actions_widget.findChildren(QPushButton)
     assert buttons and all(b.isEnabled() for b in buttons)
+
+
+def test_the_status_line_follows_a_link_that_moves_under_an_open_panel(qtbot):
+    device = _Device(ConnectionState.CONNECTED)
+    panel = _panel(qtbot, device)
+    assert "Ready" in panel._device_status_label.text()
+
+    device.link_state = ConnectionState.DISCONNECTED
+    panel.refresh_link_state()
+
+    assert "Disconnected" in panel._device_status_label.text()
+    buttons = panel._actions_widget.findChildren(QPushButton)
+    assert buttons and all(not b.isEnabled() for b in buttons)
+
+
+def test_a_link_coming_back_lights_the_buttons_again(qtbot):
+    device = _Device(ConnectionState.DISCONNECTED)
+    panel = _panel(qtbot, device)
+
+    device.link_state = ConnectionState.CONNECTED
+    panel.refresh_link_state()
+
+    buttons = panel._actions_widget.findChildren(QPushButton)
+    assert buttons and all(b.isEnabled() for b in buttons)
+    assert "Ready" in panel._device_status_label.text()
+
+
+def test_refreshing_with_nothing_selected_is_quiet(qtbot):
+    panel = _panel(qtbot, _Device(ConnectionState.CONNECTED))
+    panel._device_combo.setCurrentIndex(0)  # "-- Select Device --"
+    panel.refresh_link_state()  # must not raise

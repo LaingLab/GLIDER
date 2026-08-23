@@ -185,6 +185,29 @@ class HardwarePanel(QWidget):
 
         self.hardware_changed.emit()
 
+    def refresh_link_states(self) -> None:
+        """Rewrite the Status column of the device rows, in place.
+
+        A peripheral's link moves without the hardware map changing at all, and
+        ``refresh_tree`` is the wrong tool for that news: it rebuilds every row
+        (losing the selection and the expansion the operator set) and emits
+        ``hardware_changed``, which fans out to a full rebuild of the Device
+        Control panel -- clearing its combo and, with it, any argument values
+        typed into it. This only changes the word.
+        """
+        tree = self._hardware_tree
+        for board_index in range(tree.topLevelItemCount()):
+            board_item = tree.topLevelItem(board_index)
+            for child_index in range(board_item.childCount()):
+                item = board_item.child(child_index)
+                data = item.data(0, Qt.ItemDataRole.UserRole)
+                if not (isinstance(data, tuple) and data and data[0] == "device"):
+                    continue
+                device = self._hardware_manager.get_device(data[1])
+                if device is None:
+                    continue
+                item.setText(2, link_status_text(getattr(device, "link_state", None)))
+
     def show_board_settings_dialog(self) -> None:
         """Show a dialog to configure board settings (ports, etc.)."""
         dialog = QDialog(self)
