@@ -6,6 +6,7 @@ _ensure_connected only consulted client.is_connected lazily at I/O time, so
 the drop was genuinely unknown to the process until the next write failed.
 """
 
+import asyncio
 import sys
 
 import pytest
@@ -175,3 +176,60 @@ async def test_poll_before_initialize_is_quiet(fake_bleak):
     device = BLEDevice(_FakeBoard(), DeviceConfig(settings={"address": "AA"}), name="ble")
     await device.poll_link()
     assert device.link_state is ConnectionState.DISCONNECTED
+
+
+async def test_poll_rearms_a_device_stranded_at_reconnecting(fake_bleak):
+    """RECONNECTING with nothing behind it is the same stranding, one step earlier.
+
+    _start_reconnect() publishes RECONNECTING *before* create_task, so a
+    create_task that never took -- or, as reproduced here, a loop task that has
+    already gone away -- leaves the device wearing the word with nothing
+    retrying it. Only the poll backstop can still notice, and re-arming from
+    RECONNECTING is strictly safe because _start_reconnect() no-ops while a
+    task really is alive.
+    """
+    _module, created = fake_bleak
+    device = await _initialized()
+    created["client"].drop()
+    assert device.link_state is ConnectionState.RECONNECTING
+
+    # Reproduce the stranding: the retry goes away, the state does not. A task
+    # cancelled before its first step never enters _reconnect_loop's body at
+    # all, so its `finally` never clears the handle either -- which is the
+    # shape a create_task that never took leaves behind.
+    device._reconnect_task.cancel()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    stale = device._reconnect_task
+    assert stale is None or stale.done(), "nothing is retrying this device any more"
+    assert device.link_state is ConnectionState.RECONNECTING
+
+    await device.poll_link()
+
+    task = device._reconnect_task
+    assert task is not None and not task.done(), "the backstop must re-arm the retry"
+    assert device.link_state is ConnectionState.RECONNECTING  # never flickered via DISCONNECTED
+    await device.shutdown()
+
+
+async def test_poll_does_not_renotify_a_device_that_is_already_retrying(fake_bleak):
+    """Re-arming must stay silent: the 2s poll runs forever.
+
+    Moving an already-RECONNECTING device to DISCONNECTED first would leave the
+    readouts a step behind the truth whenever the loop task is alive (in which
+    case _start_reconnect() no-ops and nothing puts the word back), and flicker
+    them on every tick.
+    """
+    _module, created = fake_bleak
+    device = await _initialized()
+    created["client"].drop()
+    seen = []
+    device.set_link_state_callback(lambda dev: seen.append(dev.link_state))
+
+    device._reconnect_task.cancel()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    await device.poll_link()
+
+    assert seen == []
+    await device.shutdown()

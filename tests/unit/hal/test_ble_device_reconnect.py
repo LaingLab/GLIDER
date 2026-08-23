@@ -370,3 +370,138 @@ async def test_a_failing_hook_leaves_the_link_up(fake_bleak):
         await asyncio.sleep(0)
     assert device.link_state is ConnectionState.CONNECTED
     await device.shutdown()
+
+
+# --- the three reconnect actors ----------------------------------------------
+#
+# There are three, not two: bleak's disconnected_callback (_on_disconnected),
+# the supervised _reconnect_loop, and _with_retry's reconnect-inside-a-write.
+# The tests above drive the first two. These drive the third, and the case
+# where it collides with the second -- one blip mid-write arms *both*, and
+# nothing above fires the callback and a write together.
+
+
+async def test_a_write_retry_keeps_the_notify_subscription(fake_bleak):
+    """The in-band repair re-subscribes, like the supervised loop does.
+
+    start_notify binds to one BleakClient, so the client _with_retry builds
+    inside a caller's write is deaf unless someone re-subscribes it -- and
+    nothing notices: _ensure_connected publishes CONNECTED, so poll_link's
+    backstop sees a live client and never fires, no reconnect task ever starts,
+    and get_state() returns None for the rest of the session while the GUI
+    reads Ready.
+    """
+    _module, created = fake_bleak
+    device = await _initialized(read_char_uuid="beef", write_char_uuid="cafe", notify=True)
+    original = created["client"]
+    assert original.subscribed
+
+    async def _flaky(char, data, response=False):
+        raise OSError("link dropped mid-write")
+
+    original.write_gatt_char = _flaky
+
+    await device.write("hello")
+
+    assert device._client is not original  # the retry did rebuild the client
+    assert device._client.subscribed  # ... and the subscription moved with it
+    device._client.push(b"7")
+    assert await device.get_state() == "7"
+    assert device.link_state is ConnectionState.CONNECTED
+    await device.shutdown()
+
+
+async def test_a_live_client_is_not_resubscribed_by_a_retry(fake_bleak):
+    """The happy path must not churn the subscription (or drop _latest).
+
+    _ensure_connected short-circuits when the existing client is still up, so
+    a write over a healthy link has no reason to re-run start_notify -- and
+    _resubscribe clears the cached sample, which would make an unnecessary
+    call visible as a get_state() that briefly returns None.
+    """
+    _module, created = fake_bleak
+    device = await _initialized(read_char_uuid="beef", write_char_uuid="cafe", notify=True)
+    original = created["client"]
+    original.push(b"42")
+    calls = []
+    original.start_notify = lambda char, handler: calls.append(char)
+
+    await device.write("hello")
+
+    assert calls == []
+    assert device._client is original
+    assert await device.get_state() == "42"
+    await device.shutdown()
+
+
+async def test_the_loop_keeps_a_link_a_write_already_repaired(fake_bleak):
+    """One blip mid-write arms both recovery paths; only one may rebuild.
+
+    bleak's callback starts the supervised loop and the in-flight write repairs
+    the link in-band. Without an early-out the loop then discards the working
+    client -- without disconnecting it, so the orphan is still holding the
+    peripheral -- and runs _on_reconnected(), which for a stimulator writes
+    'off' over the train the operator just started. Operator-visible as: press
+    Pulse, GUI says Ready throughout, stimulation stops ~5s in for no stated
+    reason.
+    """
+    _module, created = fake_bleak
+    device = await _initialized(write_char_uuid="cafe")
+    ran = []
+    device._on_reconnected = lambda: _record(ran)
+
+    original = created["client"]
+
+    async def _drop_mid_write(char, data, response=False):
+        # Fires bleak's callback (arming the loop) and fails the write that is
+        # already in flight (arming _with_retry) -- both, from one event.
+        original.drop()
+        raise OSError("link dropped mid-write")
+
+    original.write_gatt_char = _drop_mid_write
+
+    await device.write(500, 10)
+    repaired = device._client
+    assert repaired is not original
+    assert repaired.written == [b"500,10"]
+
+    task = device._reconnect_task
+    assert task is not None, "the disconnect callback should have armed the supervised loop"
+    await asyncio.wait_for(task, timeout=5)
+
+    assert device._client is repaired  # not torn down and rebuilt behind the write
+    assert len(created["clients"]) == 2  # no third client, so no orphan left connected
+    assert repaired.written == [b"500,10"]  # and no 'off' cancelling the train
+    assert ran == []  # the safe-state hook is for a link *this loop* brought back
+    assert device.link_state is ConnectionState.CONNECTED
+    await device.shutdown()
+
+
+async def test_the_loops_early_out_leaves_a_subscribed_link_not_just_a_live_one(fake_bleak):
+    """The ordering dependency between the two fixes, pinned.
+
+    The loop's early-out trusts _with_retry to have re-subscribed. A client
+    that is connected but deaf is exactly as useless as a disconnected one --
+    get_state() returns None forever -- and returning CONNECTED for one would
+    reintroduce the bug through the other door.
+    """
+    _module, created = fake_bleak
+    device = await _initialized(read_char_uuid="beef", write_char_uuid="cafe", notify=True)
+    original = created["client"]
+
+    async def _drop_mid_write(char, data, response=False):
+        original.drop()
+        raise OSError("link dropped mid-write")
+
+    original.write_gatt_char = _drop_mid_write
+
+    await device.write("go")
+    task = device._reconnect_task
+    assert task is not None
+    await asyncio.wait_for(task, timeout=5)
+
+    assert device.link_state is ConnectionState.CONNECTED
+    assert device._client.subscribed
+    device._client.push(b"9")
+    assert await device.get_state() == "9"
+    await device.shutdown()
