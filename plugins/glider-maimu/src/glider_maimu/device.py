@@ -25,6 +25,11 @@ BLE link mid-pulse leaves the device stimulating with nothing connected to stop
 it. So unlike the generic BLE devices, :meth:`MaimuDevice.shutdown` writes
 ``off`` before it disconnects -- which puts emergency stop, End Experiment and
 app quit all on the same path.
+
+The same reasoning covers a *dropped* link: :meth:`MaimuDevice._on_reconnected`
+writes ``off`` when the automatic reconnect succeeds, so a stimulator that came
+back mid-pattern is put in a known state instead of left running one nobody
+asked for.
 """
 
 import asyncio
@@ -172,6 +177,21 @@ class MaimuDevice(BLEDevice):
         return number
 
     # --- lifecycle ---
+
+    async def _on_reconnected(self) -> None:
+        """Come back off.
+
+        The firmware runs a pulse autonomously, so a link that dropped
+        mid-train left the stimulator running with nothing attached to stop
+        it. Whatever it is doing, it has been doing it unsupervised, and this
+        is the first moment anyone can say otherwise -- so the device is put
+        in a known state rather than resumed in an unknown one.
+
+        Same reasoning as :meth:`shutdown`, and the same best-effort
+        treatment: BLEDevice logs a failure here and leaves the link up,
+        because the link genuinely did reconnect.
+        """
+        await self.write("off")
 
     async def shutdown(self) -> None:
         """Stop the stimulator, then disconnect.
