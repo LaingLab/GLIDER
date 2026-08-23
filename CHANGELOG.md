@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BLE peripherals report their own connection state**, separately from the
+  host adapter's. A peripheral that goes out of range, loses power, or is
+  claimed by another central shows **Disconnected** in the Hardware panel and
+  gets its own dot on the status strip, beside the boards. GLIDER reconnects it
+  on its own with bounded backoff — 5, 10, 20, 40 and 60 seconds, up to twelve
+  attempts — before giving up into **Error**. A run is not paused while this
+  happens; a warning notification says so and names whether GLIDER is still
+  retrying or has stopped.
+- **A Maimu writes `off` when a dropped link comes back.** Its firmware runs a
+  pulse train on its own, so a link that died mid-train left it stimulating
+  with nothing attached to stop it; the reconnect now puts it in a known state
+  before anything else touches the device.
+- **Devices can declare an action's arguments** (`ACTION_ARGS_SCHEMA`),
+  rendered as labelled number fields beside the action's button in both the
+  Builder's Device Control panel and the Runner's manual controls. This is
+  what makes Maimu's `pulse` — a period and a duration — pressable from
+  either.
+
+### Fixed
+
+- A BLE device with notifications enabled lost its subscription on the first
+  reconnect and stayed silent for the rest of the session — `get_state()`
+  returning `None` — with nothing logged.
+- The Runner's manual controls called an argument-taking action with no
+  arguments, raising `TypeError` on every press.
+- The Hardware panel and the Device Control panel reported whether a device
+  had ever been initialized, rather than its current link, so a peripheral
+  that walked out of range kept reading "Ready".
+- `plugins/glider-maimu/tests` was missing from `testpaths`, so a bare
+  `pytest` never collected that plugin's suite.
+
+### Added
+
 - **Rehearse a closed loop from a recording.** **Camera → Live behavior → Rehearse from video…** plays a clip through the live path instead of the camera: the classifier runs, the nodes fire, and the hardware is driven for real, on footage where you already know what the animal did. Frames are never skipped — the live feature extractor uses unit frame spacing, so a dropped frame inflates exactly the kinematics the model keys on — so a run that cannot keep up reports its worst lag instead, which is also the number that says whether the rig will hold up live. Real-time and as-fast-as-possible modes classify identically (`compute_features` never reads fps); they differ only in whether they can answer "does inference keep up?".
 - **Maimu moves out of core into an installable plugin, `glider-maimu`.** The device and node are unchanged; what changed is that they are no longer bundled. One lab's stimulator does not belong in every install, and moving it made it the first real consumer of the plugin node extension points — which is the only way to find out whether they are good enough. Two gaps surfaced doing it and are fixed here: a plugin node could not declare its canvas ports (the editor now reads them off the node's own `NodeDefinition` instead of falling back to a generic one-in-one-out, which also fixes every built-in node missing from the hand-written table), and a plugin node could not be bound to a device (a node now declares `REQUIRES_DEVICE`, which `HardwareNode` sets, instead of the editor matching a hardcoded list of type names).
 - **Maimu BLE stimulator** — a `Maimu` device type with the peripheral's GATT layout built in (**Add Device → Maimu → Scan**, no UUIDs to paste), and a **Maimu** node in the library's I/O section offering Mode (On / Off / Pulse) with a period and duration, instead of a Device Action node writing `"500,10"` by hand. Unlike the generic BLE devices, its shutdown writes `off` before disconnecting — the firmware runs a pulse autonomously, so an emergency stop that only dropped the link would leave the device stimulating.

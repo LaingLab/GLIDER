@@ -34,10 +34,48 @@ how to add and bind them, see [Devices & Hardware](../building/devices.md).
     protocol, so adding one is **Add Device → Maimu → Scan** rather than
     pasting UUIDs into a generic BLE device.
 
+!!! tip "Pulsing a Maimu by hand"
+    `pulse` takes a period and a duration, so it renders as two number fields
+    beside its button — in the Builder's Device Control panel and the Runner's
+    manual controls alike. **Period is in milliseconds and is a period, not a
+    frequency**: 500 ms toggles about once a second. Duration is in seconds.
+    Both must be whole numbers of at least 1 — the firmware `atoi`s them, so a
+    fractional or zero value would only fail later. The firmware runs the
+    train and stops on its own, so the button returns as soon as the command
+    lands.
+
 !!! note "I²C is Linux/Pi at runtime"
     I²C devices (**ADS1115**, **GenericI2C**) need the `i2c` extra and run on
     Linux or a Raspberry Pi. They install fine on any OS, but the I²C bus itself
     is only available on Linux/Pi.
+
+## When a BLE link drops
+
+A BLE peripheral that goes out of range, loses power, or is claimed by another
+central is noticed straight away, not at the next write. Its row in the
+[Hardware panel](../building/devices.md) and its own dot on the status strip
+(shown beside the board dots for any peripheral that tracks its own link) both
+move to **Disconnected**, and GLIDER starts retrying on its own: 5 seconds,
+then 10, 20, 40 and 60, up to twelve attempts, before it gives up and shows
+**Error**.
+
+- The Bluetooth **board**'s own dot stays green throughout. That is the host
+  adapter, and it is genuinely fine — it is the peripheral that went away,
+  which is why a peripheral that owns its link gets a dot of its own.
+- A run is not paused by a dropped peripheral. You get a warning notification
+  and the retries continue underneath it; only **Error** — retries exhausted —
+  needs you to go and look.
+- **A Maimu comes back off.** The stimulator runs a pulse train in its own
+  firmware, so a link that died mid-train left it stimulating with nothing
+  attached to stop it. When the reconnect succeeds, GLIDER writes `off` before
+  anything else, so the device returns in a known state instead of resuming a
+  pattern nobody is watching. Re-issue the pulse yourself if you still want it.
+
+!!! tip "Two stimulators with the same name"
+    A strip dot is labelled with the device's name, since that is usually more
+    meaningful than its id. If two devices on the rig share a name — six
+    still-default-named stimulators, say — GLIDER appends the id to tell their
+    dots apart. A uniquely named device keeps its plain name.
 
 ## Value ranges
 
