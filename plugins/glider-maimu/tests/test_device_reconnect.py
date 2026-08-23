@@ -130,21 +130,34 @@ async def test_a_write_retry_does_not_write_off(fake_bleak):
     """The retry path carries the caller's own command; 'off' would cancel it."""
     _module, created = fake_bleak
     device = await _initialized()
-    client = device._client
+    original = device._client
     failing = {"first": True}
-    real_write = client.write_gatt_char
+    calls = {"n": 0}
 
     async def _flaky(char, data, response=False):
+        calls["n"] += 1
         if failing["first"]:
             failing["first"] = False
             raise OSError("link dropped mid-write")
-        await real_write(char, data, response)
+        original.written.append(bytes(data))
 
-    client.write_gatt_char = _flaky
-    client.is_connected = False
+    device._client.write_gatt_char = _flaky
+    # original.is_connected is still True here, so _ensure_connected()'s first,
+    # unconditional call short-circuits and op() runs straight into _flaky,
+    # which raises -- that is what actually drives _with_retry into its
+    # except branch, the reconnect-inside-a-write path this test polices.
+    clients_before = len(created["clients"])
 
     await device.pulse(500, 10)
     await asyncio.sleep(0)
+
+    # Prove the retry path was actually taken, not skipped: _flaky was entered
+    # (and raised) exactly once, and a fresh client was built to carry the
+    # retried write -- so the write that landed did not go through _flaky
+    # again.
+    assert calls["n"] == 1
+    assert len(created["clients"]) == clients_before + 1
+    assert device._client is not original
     assert b"off" not in device._client.written
     assert device._client.written == [b"500,10"]
     await device.shutdown()

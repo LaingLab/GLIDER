@@ -190,6 +190,11 @@ class MaimuDevice(BLEDevice):
         Same reasoning as :meth:`shutdown`, and the same best-effort
         treatment: BLEDevice logs a failure here and leaves the link up,
         because the link genuinely did reconnect.
+
+        This and :meth:`shutdown` are independent safety paths that can both
+        fire for the same event -- a reconnect landing just as a shutdown
+        begins -- so ``off`` may be written twice in a row. That duplication
+        is safety-neutral and deliberate; it is not a bug to collapse.
         """
         await self.write("off")
 
