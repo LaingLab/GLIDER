@@ -37,6 +37,12 @@ class _Device(BaseDevice):
             "pulse": self.pulse,
             "fade": self.fade,
             "write": self.write,
+            # A genuinely signature-less callable, standing in for a
+            # C-extension action a real device might expose. `int` has no
+            # computed signature on this Python -- inspect.signature(int)
+            # raises ValueError -- so it exercises the same
+            # "unintrospectable" branch a foreign SDK call could hit.
+            "mystery": int,
         }
 
     async def on(self):
@@ -103,6 +109,27 @@ def test_varargs_do_not_count_as_required():
 
 def test_an_unknown_action_needs_nothing():
     assert _device().action_needs_args("nonsense") is False
+
+
+def test_an_unintrospectable_action_needs_nothing():
+    """A callable inspect.signature() cannot read is reported as needing none.
+
+    `int` genuinely has no computed signature on this Python --
+    inspect.signature(int) raises ValueError, confirmed directly below --
+    standing in for a C-extension action a real device might wrap. Reporting
+    False here, rather than raising or guessing True, means the action stays
+    offered instead of greyed out; if it actually needs arguments, calling it
+    with none reports a real error, which beats hiding a working action
+    behind an incorrect assumption.
+    """
+    import inspect
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        inspect.signature(int)
+
+    assert _device().action_needs_args("mystery") is False
 
 
 def test_declared_keys_match_the_real_parameters():

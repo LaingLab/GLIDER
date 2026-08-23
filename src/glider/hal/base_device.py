@@ -215,7 +215,14 @@ class BaseDevice(ABC):
         ...
 
     def action_args_schema(self, action_name: str) -> list[dict[str, Any]]:
-        """The declared argument fields for ``action_name`` (empty if none)."""
+        """The declared argument fields for ``action_name`` (empty if none).
+
+        The returned list is a copy, so appending to or reordering it cannot
+        corrupt the class attribute shared by every instance of this device
+        type -- but the field dicts inside it are not copied. Treat each
+        field as read-only; mutating one in place (e.g. ``schema[0]["default"]
+        = ...``) would corrupt the shared declaration for every other caller.
+        """
         return list(type(self).ACTION_ARGS_SCHEMA.get(action_name, ()))
 
     def action_needs_args(self, action_name: str) -> bool:
