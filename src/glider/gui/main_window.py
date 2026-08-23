@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
 
 from glider.core.config import get_config
 from glider.gui.commands import UndoStack
+from glider.gui.device_status import link_status_text, link_strip_state
 from glider.gui.dialogs.calibration_dialog import CalibrationDialog
 from glider.gui.dialogs.camera_settings_dialog import CameraSettingsDialog
 from glider.gui.dialogs.experiment_dialog import ExperimentDialog
@@ -146,6 +147,30 @@ def _board_detail(board: object, state: object) -> str:
     return f"{type_name}, {text}" if type_name else text
 
 
+def _device_chips(devices: dict) -> list[tuple[str, str, str]]:
+    """Strip chips for the devices that hold a link of their own.
+
+    Gated on ``owns_link`` because a pin-based device's state is its board's,
+    and a second dot saying the same thing is noise on a rig with twenty LEDs.
+
+    Never raises. A plugin device with an awkward ``link_state`` is skipped
+    rather than allowed to blank the strip for everything beside it.
+    """
+    chips: list[tuple[str, str, str]] = []
+    for device_id, device in devices.items():
+        try:
+            if not getattr(device, "owns_link", False):
+                continue
+            state = device.link_state
+            name = getattr(device, "name", None) or device_id
+            device_type = getattr(device, "device_type", "") or "device"
+            detail = f"{device_type} · {link_status_text(state)}"
+            chips.append((str(name), link_strip_state(state), detail))
+        except Exception:
+            logger.warning("Could not read link state from device %s", device_id, exc_info=True)
+    return chips
+
+
 def _rig_summary(subset: list[tuple[str, object]], total: int, word: str) -> str:
     """One line for *subset* of a rig of *total* boards.
 
@@ -252,6 +277,10 @@ class MainWindow(QMainWindow):
     _core_state_changed = pyqtSignal(object)
     _core_error_occurred = pyqtSignal(str, object)
     _hardware_connection_changed = pyqtSignal(str, object)
+    # Marshals a device link change onto the Qt thread. Devices fire from a
+    # bleak callback and from a background reconnect task, neither of which is
+    # on this thread's call stack.
+    _device_link_changed = pyqtSignal(str, object)
     _session_dirtied = pyqtSignal()
 
     def __init__(
@@ -1030,6 +1059,11 @@ class MainWindow(QMainWindow):
         on its own. The id is unique by construction and is the same word every
         log line and disconnection dialog uses. The type is not lost: it goes to
         the tooltip, beside the board's own word for its state.
+
+        Peripherals that hold their own link (``owns_link``) get a chip of their
+        own after the boards. A BLE board is the host adapter -- green from the
+        moment bleak imports -- so without this the strip has nothing to say about
+        the thing that actually came and went.
         """
         strip = self._strip()
         if strip is None:
@@ -1041,6 +1075,8 @@ class MainWindow(QMainWindow):
             # An unmapped state keeps its raw text: the strip renders anything
             # it does not recognise neutral, with the real value in the tooltip.
             devices.append((board_id, state or _board_state_text(raw), _board_detail(board, raw)))
+        # Peripherals after boards: the adapter, then what is attached to it.
+        devices.extend(_device_chips(self._core.hardware_manager.devices))
         strip.set_devices(devices)
 
     def _refresh_strip_run_state(self, state_name: str) -> None:
@@ -1629,11 +1665,15 @@ class MainWindow(QMainWindow):
         self._core_state_changed.connect(self._on_core_state_change)
         self._core_error_occurred.connect(self._on_core_error)
         self._hardware_connection_changed.connect(self._on_hardware_connection_change)
+        self._device_link_changed.connect(self._on_device_link_change)
 
         self._core.on_state_change(lambda state: self._core_state_changed.emit(state))
         self._core.on_error(lambda source, error: self._core_error_occurred.emit(source, error))
         self._core.hardware_manager.on_connection_change(
             lambda board_id, state: self._hardware_connection_changed.emit(board_id, state)
+        )
+        self._core.hardware_manager.on_device_connection_change(
+            lambda device_id, state: self._device_link_changed.emit(device_id, state)
         )
 
         # The unsaved-work marker. ``ExperimentSession._mark_dirty`` is the one
@@ -1672,6 +1712,15 @@ class MainWindow(QMainWindow):
         # Runner-only Setup page (runner mode).
         if self._runner_setup_page is not None:
             self.session_changed.connect(self._runner_setup_page.refresh)
+
+        # Backstop for a bleak disconnect callback that never fires (spec §5).
+        # __init__ runs before qasync starts the loop, so this normally raises
+        # and the hardware-connect path below starts it instead. Attempted here
+        # anyway for the case where the window is built inside a running loop.
+        try:
+            self._core.hardware_manager.start_link_supervisor()
+        except RuntimeError:
+            logger.debug("Link supervisor deferred: no running event loop yet")
 
     def _watch_session(self, session) -> None:
         """Follow *session*'s dirty state, whichever session that now is.
@@ -1795,6 +1844,38 @@ class MainWindow(QMainWindow):
         logger.warning(f"Board {board_id} disconnected during experiment! Pausing...")
         self._run_async(self._core.pause())
         self._show_hardware_disconnection_dialog(board_id, state)
+
+    @pyqtSlot(str, object)
+    def _on_device_link_change(self, device_id: str, state) -> None:
+        """A peripheral's own link moved.
+
+        Repaints both readouts, and says so out loud if it dropped while an
+        experiment was recording. Deliberately does *not* pause the run: a
+        ten-second BLE dropout should not end a two-hour session, and
+        _show_hardware_disconnection_dialog is modal and stays reserved for a
+        board going away.
+        """
+        self._refresh_hardware_readouts()
+
+        if state not in (BoardConnectionState.DISCONNECTED, BoardConnectionState.ERROR):
+            return
+
+        device = self._core.hardware_manager.get_device(device_id)
+        label = getattr(device, "name", device_id) if device is not None else device_id
+        logger.warning("Device %s link %s", label, link_status_text(state).lower())
+
+        if not hasattr(self._core, "state"):
+            return
+        from glider.core.glider_core import SessionState
+
+        if self._core.state != SessionState.RUNNING:
+            return
+        self._notify_user(
+            f"{label} disconnected",
+            f"{label} lost its connection during the run. GLIDER is retrying; "
+            "the experiment has not been paused.",
+            level="warning",
+        )
 
     def _refresh_hardware_readouts(self) -> None:
         """Both readouts of the same rig, refreshed together.

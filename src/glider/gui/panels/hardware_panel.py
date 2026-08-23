@@ -1354,6 +1354,9 @@ class HardwarePanel(QWidget):
             # This is delegated back to MainWindow via signal
             results = await self._hardware_manager.connect_all()
             self.refresh_tree()
+            # On the loop by now, so this is the call that actually takes.
+            # Idempotent: a second connect does not start a second sweep.
+            self._hardware_manager.start_link_supervisor()
             failed = [k for k, v in results.items() if not v]
             if failed:
                 QMessageBox.warning(
