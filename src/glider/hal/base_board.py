@@ -72,6 +72,17 @@ class BoardConnectionState(Enum):
     RECONNECTING = auto()
 
 
+#: The same five states, under a name that does not say "Board".
+#:
+#: A BLE peripheral holds a link of its own that its board knows nothing about
+#: (the "board" is the host adapter), so devices need this vocabulary too. It is
+#: an alias rather than a second enum on purpose: the status strip's
+#: DEVICE_STATE_BY_BOARD_STATE mapping and _board_state_text already render
+#: these members, and a parallel enum meaning the same five things would need a
+#: translation table whose only job is to be kept in sync.
+ConnectionState = BoardConnectionState
+
+
 class BaseBoard(ABC):
     """
     Abstract Base Class defining the contract for hardware board drivers.

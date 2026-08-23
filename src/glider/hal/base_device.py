@@ -19,7 +19,7 @@ from glider.hal.value_spec import KIND_SWITCH, KIND_WHOLE, ActionValueSpec, clam
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from glider.hal.base_board import BaseBoard
+    from glider.hal.base_board import BaseBoard, ConnectionState
     from glider.hal.input_behavior import InputBehavior
 
 
@@ -70,6 +70,9 @@ class BaseDevice(ABC):
         # value lives only on the device, the close prompt never appears, and
         # the calibration is lost on exit.
         self._settings_changed_cb: Callable[[BaseDevice], None] | None = None
+        # Fired when this device's own link changes state. HardwareManager
+        # wires it so the GUI can repaint; see set_link_state_callback.
+        self._link_state_cb: Callable[[BaseDevice], None] | None = None
 
     @property
     def id(self) -> str:
@@ -115,6 +118,74 @@ class BaseDevice(ABC):
     def is_enabled(self) -> bool:
         """Whether the device is enabled."""
         return self._enabled
+
+    # --- link state ---
+
+    @property
+    def owns_link(self) -> bool:
+        """Whether this device holds a connection of its own.
+
+        False for a pin-based device: a DigitalOutput has no link separate
+        from its board's, and giving it its own status dot would only
+        duplicate the board's. True for a transport device (BLE, and serial
+        when it adopts this) that opens and owns a socket.
+        """
+        return False
+
+    @property
+    def link_state(self) -> "ConnectionState":
+        """Where this device's own link stands, right now.
+
+        Derived rather than stored, which is what makes the default correct
+        for every device that has no link to track: it is exactly as
+        connected as its board, and DISCONNECTED before setup and after
+        teardown. Transport devices override this with a real tracked state.
+
+        Distinct from ``is_initialized``, which answers "has this been set
+        up" and keeps its existing job of gating ``execute_action``. It was
+        never able to answer "is this reachable", which is what every status
+        readout was asking it.
+        """
+        from glider.hal.base_board import ConnectionState
+
+        if not self._initialized:
+            return ConnectionState.DISCONNECTED
+        return (
+            ConnectionState.CONNECTED if self._board.is_connected else ConnectionState.DISCONNECTED
+        )
+
+    async def poll_link(self) -> None:
+        """Reconcile ``link_state`` against the transport, if that is possible.
+
+        A no-op here: a derived ``link_state`` is already current every time
+        it is read, so there is nothing to reconcile. Transport devices
+        override this to catch a drop their disconnect callback missed, and
+        HardwareManager's supervisor calls it on a timer.
+        """
+        return None
+
+    def set_link_state_callback(self, callback: "Callable[[BaseDevice], None] | None") -> None:
+        """Listen for changes to this device's link state.
+
+        HardwareManager wires this in ``_track_device`` and re-broadcasts on
+        its own device channel. Pass None to clear.
+        """
+        self._link_state_cb = callback
+
+    def _notify_link_state(self) -> None:
+        """Tell the listener the link moved.
+
+        Never raises: this is called from a bleak disconnect callback and
+        from a background reconnect task, where an exception has nowhere to
+        go and would take the transport's state machine with it.
+        """
+        callback = self._link_state_cb
+        if callback is None:
+            return
+        try:
+            callback(self)
+        except Exception:
+            logger.exception("Link-state callback failed for device %s", self._name)
 
     @property
     @abstractmethod
