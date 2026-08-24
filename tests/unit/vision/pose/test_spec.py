@@ -286,3 +286,21 @@ def test_meta_never_raises_when_the_checkpoint_is_unreadable(tmp_path, monkeypat
 
     monkeypatch.setattr("glider.vision.pose.spec._read_yolo_kpt_count", _boom)
     assert read_pose_model_meta(pt) is None
+
+
+def test_a_slp_file_is_named_as_labels_not_a_model(tmp_path):
+    """The natural mistake: .slp is what a SLEAP user works with all day, so
+    it is what they reach for. A generic 'not a pose model' would send someone
+    hunting for a corrupt file rather than telling them they picked the wrong
+    one."""
+    from glider.vision.pose.spec import PoseModelError, identify_pose_model
+
+    labels = tmp_path / "my_project.slp"
+    labels.write_bytes(b"not really a labels file")
+
+    with pytest.raises(PoseModelError) as excinfo:
+        identify_pose_model(labels)
+
+    message = str(excinfo.value)
+    assert "labels file, not a trained model" in message
+    assert "training_config.json" in message, "it must say what to pick instead"
