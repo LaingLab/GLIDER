@@ -1188,9 +1188,16 @@ QFrame#statusStripDevices {
 /* -- panel toggles --
  *
  * One at each end of the strip, each beside the panel it controls. The glyph
- * is a style-drawn arrow rather than a character, so `color` below is what
- * tints it -- including the accent it takes while its panel is open, which is
- * the half of "expanded or collapsed?" the fill cannot carry on its own.
+ * is a small icon that status_strip.py paints itself -- a window with a bar
+ * on the side the panel lives on, filled while open and hollow while
+ * collapsed -- rather than a style-drawn arrow, so "expanded or collapsed?"
+ * is carried by the shape and does not need a colour change of its own.
+ * `color` below is still what tints it: the icon reads it straight off
+ * `self.palette()` at paint time, which is this rule and no other -- Qt does
+ * not fold `:hover`/`:checked` colour overrides into the exposed palette the
+ * way it folds this one, so only the *plain* rule's `color` ever reaches the
+ * icon, and the two pseudo-states below are left to speak through
+ * background and border alone.
  */
 
 QToolButton#statusStripToggle {
@@ -1206,7 +1213,6 @@ QToolButton#statusStripToggle {
 
 QToolButton#statusStripToggle:hover {
     background-color: #151c25;                      /* SURFACE_2 */
-    color: #c0c8d4;                                 /* TEXT_SECONDARY */
 }
 
 /* Checked means "that panel is open". It echoes the panel rather than owning
@@ -1214,7 +1220,6 @@ QToolButton#statusStripToggle:hover {
 QToolButton#statusStripToggle:checked {
     background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
     border-color: rgba(56, 189, 248, 0.40);
-    color: #38bdf8;                                 /* ACCENT */
 }
 
 /* -- experiment name and its dirty marker -- */
