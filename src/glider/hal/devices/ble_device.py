@@ -31,6 +31,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from glider.hal.base_board import ConnectionState
 from glider.hal.base_device import BaseDevice, DeviceConfig
 
 if TYPE_CHECKING:
@@ -125,6 +126,12 @@ class BLEDevice(BaseDevice):
         # the notify handler on the event loop, so a plain attribute is safe --
         # no thread lock needed (unlike the serial/HX711 sampler threads).
         self._latest: tuple[Any, float] | None = None
+        # The tracked link. Unlike the BaseDevice default this is stored, not
+        # derived: the board here is the host adapter, which is "connected"
+        # from the moment bleak imports and knows nothing about whether this
+        # peripheral is actually answering.
+        self._link = ConnectionState.DISCONNECTED
+        self._reconnect_task: asyncio.Task | None = None
 
     def _apply_setting_caches(self, s: dict[str, Any]) -> None:
         """Set the settings-derived cache attributes (validates value_format first,
@@ -184,6 +191,249 @@ class BLEDevice(BaseDevice):
         return self._notify
 
     @property
+    def owns_link(self) -> bool:
+        return True
+
+    @property
+    def link_state(self) -> ConnectionState:
+        return self._link
+
+    def _set_link(self, state: ConnectionState) -> None:
+        """Move the tracked link state, notifying only on a real change.
+
+        The no-change guard is what lets the supervisor poll every two
+        seconds forever without repainting the GUI on every tick.
+        """
+        if state is self._link:
+            return
+        self._link = state
+        logger.info("BLE %s: link -> %s", self._name, state.name.lower())
+        self._notify_link_state()
+
+    def _on_disconnected(self, client: Any) -> None:
+        """bleak's disconnect callback: the peripheral went away.
+
+        Called on the event loop. Ignores a client we have already replaced --
+        an old client's teardown fires this too, and acting on it would report
+        a live link as dead.
+        """
+        if client is not self._client:
+            return
+        self._set_link(ConnectionState.DISCONNECTED)
+        self._start_reconnect()
+
+    async def poll_link(self) -> None:
+        """Reconcile against ``client.is_connected``.
+
+        The backstop for a disconnect callback that never fired, which
+        CoreBluetooth and WinRT both do often enough to be the reported
+        symptom rather than an edge case.
+        """
+        if not self._initialized:
+            return
+        client = self._client
+        live = client is not None and client.is_connected
+        # CONNECTED is the ordinary case this backstop exists for (a missed
+        # disconnected_callback). DISCONNECTED is also included to close a lost-wakeup:
+        # if the peripheral drops again while _reconnect_loop is mid-await inside
+        # _on_reconnected(), _on_disconnected() sets DISCONNECTED but _start_reconnect()
+        # no-ops because the loop task is still (briefly) alive; the loop then returns
+        # and its `finally` clears the task handle, leaving the device resting at
+        # DISCONNECTED with nothing left to retry it. Re-arming from a resting
+        # DISCONNECTED here closes that gap. RECONNECTING is included for the same
+        # reason one step earlier: _start_reconnect() publishes RECONNECTING *before*
+        # create_task, so a create_task that never took -- or a loop task that has
+        # since returned -- leaves the device wearing the word with nothing behind it,
+        # and _start_reconnect() already no-ops while a task really is alive, which
+        # makes re-arming from here strictly safe. ERROR is deliberately excluded: it
+        # is the bounded loop's own terminal give-up state, and this must not undo it.
+        if not live and self._link in (
+            ConnectionState.CONNECTED,
+            ConnectionState.DISCONNECTED,
+            ConnectionState.RECONNECTING,
+        ):
+            # RECONNECTING is re-armed but never re-announced. _start_reconnect()
+            # no-ops while a loop task is alive, so moving a device that is
+            # already retrying to DISCONNECTED first would leave the readouts a
+            # step behind the truth and flicker them on every poll; when the task
+            # is *not* alive (a create_task that never took, or a loop that
+            # returned after a drop landed mid-hook) the call below starts a
+            # fresh one and the state is already the right word for it.
+            if self._link is not ConnectionState.RECONNECTING:
+                self._set_link(ConnectionState.DISCONNECTED)
+            self._start_reconnect()
+
+    # --- reconnect ---
+
+    #: Backoff base, doubling per attempt. Deliberately the same numbers as
+    #: BaseBoard._attempt_reconnect: a peripheral and a board that drop for the
+    #: same reason should not retry on two different rhythms.
+    RECONNECT_BASE_S: float = 5.0
+    RECONNECT_MAX_BACKOFF_S: float = 60.0
+    MAX_RECONNECT_ATTEMPTS: int = 12
+
+    def _backoff_for(self, attempt: int) -> float:
+        """Seconds to wait before ``attempt`` (0-based): 5, 10, 20, 40, 60, 60…"""
+        return min(self.RECONNECT_BASE_S * (2**attempt), self.RECONNECT_MAX_BACKOFF_S)
+
+    async def _on_reconnected(self) -> None:
+        """Hook: the link is back up and any subscription has been restored.
+
+        A no-op for a generic peripheral, which has no state worth asserting
+        on reconnect. Overridden by devices that do -- a stimulator that runs
+        its pattern in firmware came back mid-train, and this is the first
+        chance anyone has had to stop it.
+
+        Called with the device lock RELEASED, because an override will want to
+        write, and ``write()`` takes that lock. Called only when the supervised
+        loop is the actor that brought the link back -- never on ``_with_retry``'s
+        reconnect-inside-a-write, and not when the loop finds that a write's
+        in-band retry already repaired the link while it was in its backoff. In
+        both of those cases the caller's own command is what is on the wire, and
+        an ``off`` here would cancel it.
+        """
+        return None
+
+    def _start_reconnect(self) -> None:
+        """Begin retrying, unless a retry is already running or we are down.
+
+        Safe to call from a bleak callback: it only schedules.
+        """
+        if not self._initialized:
+            return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return
+        from glider.core.async_utils import log_task_exception
+
+        self._set_link(ConnectionState.RECONNECTING)
+        self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+        # Nothing ever awaits this task, so without the done-callback a bug in
+        # the loop surfaces only as a "Task exception was never retrieved"
+        # warning at GC, with no name attached to it. Same treatment as
+        # BaseBoard.start_reconnect.
+        self._reconnect_task.add_done_callback(log_task_exception)
+
+    async def _reconnect_loop(self) -> None:
+        """Retry with bounded exponential backoff; give up into ERROR.
+
+        Mirrors BaseBoard._attempt_reconnect, including clearing the task
+        handle in ``finally`` so a later drop can start a fresh one.
+        """
+        try:
+            for attempt in range(self.MAX_RECONNECT_ATTEMPTS):
+                try:
+                    await asyncio.sleep(self._backoff_for(attempt))
+                except asyncio.CancelledError:
+                    return
+                if not self._initialized:
+                    return
+                try:
+                    async with self._lock:
+                        if not self._initialized:
+                            return
+                        if self._client is not None and self._client.is_connected:
+                            # A caller's own write beat us to it. Both recovery
+                            # paths arm on one drop -- bleak's callback starts
+                            # this loop, and an in-flight write()/read() repairs
+                            # the link in-band via _with_retry -- and rebuilding
+                            # here would drop a *working* client on the floor
+                            # without disconnecting it, leaving an orphan that
+                            # still holds the peripheral, and then run
+                            # _on_reconnected(), which for a stimulator writes
+                            # 'off' over the train the operator just started.
+                            #
+                            # ORDERING: this rests on one invariant -- a client
+                            # sitting in self._client is either subscribed or
+                            # about to be discarded. Three places keep it:
+                            # initialize() and this loop subscribe the client
+                            # they build, _with_retry goes through
+                            # _ensure_ready(), and every path that fails to
+                            # subscribe clears self._client on its way out.
+                            # "Connected" alone would not do -- a client with no
+                            # start_notify on it is up but deaf, and publishing
+                            # CONNECTED for one strands a notify device exactly
+                            # the way the missing resubscribe used to, somewhere
+                            # poll_link cannot reach it. If any of the three
+                            # stops holding, this early return goes with it.
+                            #
+                            # A link that dies again immediately after this return
+                            # is picked up by poll_link()'s backstop, the same as
+                            # one that dies mid-hook.
+                            self._set_link(ConnectionState.CONNECTED)
+                            return
+                        self._client = None
+                        await self._ensure_connected()
+                        # _ensure_connected() publishes CONNECTED itself the moment the
+                        # socket is up, but the required order is subscribe-then-publish:
+                        # revert to RECONNECTING here so the explicit _set_link(CONNECTED)
+                        # below -- after _resubscribe() -- is the transition that actually
+                        # announces the device usable, with any subscription already live.
+                        # No await happens between _ensure_connected() returning and this
+                        # line, so nothing else can observe the transient CONNECTED it
+                        # published.
+                        self._set_link(ConnectionState.RECONNECTING)
+                        await self._resubscribe()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 - retried, then reported
+                    # Drop the client whatever failed, because _ensure_connected
+                    # may well have succeeded and _resubscribe then raised --
+                    # which leaves a connected-but-deaf client sitting in
+                    # self._client. The early-out at the top of the next attempt
+                    # would take one look at is_connected, publish CONNECTED and
+                    # return, and poll_link cannot rescue that: the client
+                    # genuinely is connected. A half-usable client is worse than
+                    # none, so the next attempt has to rebuild from nothing.
+                    self._client = None
+                    logger.info(
+                        "BLE %s: reconnect attempt %d/%d failed (%s)",
+                        self._name,
+                        attempt + 1,
+                        self.MAX_RECONNECT_ATTEMPTS,
+                        e,
+                    )
+                    self._set_link(ConnectionState.RECONNECTING)
+                    continue
+
+                # The link is up. Say so before running the hook: it is true,
+                # and an override that writes needs write() to work.
+                self._set_link(ConnectionState.CONNECTED)
+                try:
+                    await self._on_reconnected()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 - the link is still up
+                    logger.warning(
+                        "BLE %s: post-reconnect hook failed (%s); the link is up "
+                        "but the device may not be in its safe state",
+                        self._name,
+                        e,
+                    )
+                return
+
+            logger.error(
+                "BLE %s: gave up reconnecting after %d attempts",
+                self._name,
+                self.MAX_RECONNECT_ATTEMPTS,
+            )
+            self._set_link(ConnectionState.ERROR)
+        finally:
+            self._reconnect_task = None
+
+    async def _resubscribe(self) -> None:
+        """Restore the notify subscription on a freshly built client.
+
+        ``initialize()`` is the only other place ``start_notify`` is called, so
+        without this a reconnect leaves a notify device permanently silent --
+        ``_latest`` never refreshes again and ``get_state()`` returns None for
+        the rest of the session. Caller holds ``self._lock``.
+        """
+        if not self._notify or not self._read_char or self._client is None:
+            return
+        self._latest = None
+        await self._client.start_notify(self._read_char, self._on_notify)
+
+    @property
     def actions(self) -> dict[str, Callable]:
         return {"write": self.write, "read": self.read}
 
@@ -213,6 +463,20 @@ class BLEDevice(BaseDevice):
         state and drops the cache.
         """
         self._initialized = False
+        # Cancel BEFORE taking the lock: the reconnect loop holds it while it
+        # connects, and an emergency stop must not queue behind a retry. The
+        # _initialized guard above already stops a retry from re-arming a
+        # device that was just stopped; this stops it from running at all.
+        task = self._reconnect_task
+        self._reconnect_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001 - teardown must not raise
+                logger.debug("BLE %s: reconnect task errored on cancel", self._name)
         try:
             async with self._lock:
                 client = self._client
@@ -230,6 +494,7 @@ class BLEDevice(BaseDevice):
         finally:
             self._initialized = False
             self._latest = None
+            self._set_link(ConnectionState.DISCONNECTED)
 
     async def _resolve_address(self) -> str:
         """Return a usable address, scanning for the advertised name if needed."""
@@ -302,7 +567,7 @@ class BLEDevice(BaseDevice):
             ) from e
         address = await self._resolve_address()
         try:
-            client = BleakClient(address)
+            client = BleakClient(address, disconnected_callback=self._on_disconnected)
             await client.connect()
         except Exception as exc:
             # A stored address goes stale. Many peripherals advertise a
@@ -336,12 +601,13 @@ class BLEDevice(BaseDevice):
                 # not a rotation. Report the original failure rather than a
                 # second identical one.
                 raise
-            client = BleakClient(fresh)
+            client = BleakClient(fresh, disconnected_callback=self._on_disconnected)
             await client.connect()
             address = fresh
 
         self._client = client
         logger.info("BLE: connected to %s", address)
+        self._set_link(ConnectionState.CONNECTED)
 
     # --- value decoding ---
 
@@ -422,21 +688,65 @@ class BLEDevice(BaseDevice):
             return False
         return self._write_response
 
+    async def _ensure_ready(self) -> None:
+        """``_ensure_connected``, plus the subscription a *fresh* client needs.
+
+        ``start_notify`` binds to one BleakClient, so every client this device
+        builds has to be subscribed before anyone uses it. ``initialize()`` and
+        ``_reconnect_loop`` each do that for the client they build; this is the
+        same guarantee for the third one -- the client ``_with_retry`` builds
+        in-band, inside a caller's own write()/read().
+
+        Without it a notify device goes permanently silent on the first blip:
+        ``_ensure_connected`` publishes CONNECTED, so ``poll_link``'s backstop
+        sees a live client and never fires, no reconnect task ever starts,
+        ``_latest`` ages past MAX_SAMPLE_AGE_S, and ``get_state()`` returns None
+        for the rest of the session while the GUI reads Ready.
+
+        The identity check is what keeps this cheap and honest: when the
+        existing client is still up ``_ensure_connected`` short-circuits and
+        nothing is re-subscribed, and when it builds a new one the subscription
+        moves with it. Caller holds ``self._lock`` -- ``_resubscribe``'s
+        documented precondition, which both ``write()`` and ``read()`` satisfy.
+
+        Raises if the subscribe fails, having first cleared ``self._client``:
+        the guarantee this method exists to make is that nothing is ever left
+        connected-but-deaf where another actor will find it and believe it.
+        """
+        before = self._client
+        await self._ensure_connected()
+        if self._client is not before:
+            try:
+                await self._resubscribe()
+            except Exception:
+                # The caller still gets the failure, but not while a connected
+                # client with no start_notify on it is left in self._client for
+                # someone else to find and trust. poll_link cannot reach one
+                # (it is connected) and _reconnect_loop's early-out would
+                # publish CONNECTED over it.
+                self._client = None
+                raise
+
     async def _with_retry(self, op: Callable) -> Any:
         """Run a GATT op, reconnecting once and retrying on a dropped link.
 
         Skips the retry if a shutdown ran in between (``_initialized`` is False),
         so a transient failure never re-arms a device that was just stopped.
         (Ported from BLEWriteDevice.write's retry.)
+
+        Goes through ``_ensure_ready`` rather than ``_ensure_connected`` on both
+        paths, so any link this leaves behind is subscribed as well as up, and a
+        subscribe that fails leaves no client at all -- which is the invariant
+        ``_reconnect_loop``'s early-out relies on.
         """
         try:
-            await self._ensure_connected()
+            await self._ensure_ready()
             return await op()
         except Exception:
             if not self._initialized:
                 raise
             self._client = None
-            await self._ensure_connected()
+            await self._ensure_ready()
             return await op()
 
     async def write(self, *args: Any) -> None:

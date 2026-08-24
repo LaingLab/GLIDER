@@ -90,7 +90,10 @@ async def test_a_recording_drives_real_hardware(qtbot, monkeypatch, tmp_path):
     written: list[bytes] = []
 
     class _FakeClient:
-        def __init__(self, address):
+        # *a, **k absorb kwargs the real BleakClient accepts and BLEDevice
+        # passes -- e.g. disconnected_callback -- that this fake has no use
+        # for, so it keeps matching the real constructor's signature.
+        def __init__(self, address, *a, **k):
             self.address = address
             self.is_connected = False
 

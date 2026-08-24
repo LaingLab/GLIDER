@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.device_status import link_status_text
 from glider.gui.styles import colors
 
 if TYPE_CHECKING:
@@ -163,15 +164,14 @@ class HardwarePanel(QWidget):
                         pin_str = f"Pin {pin_values[0]}"
                     else:
                         pin_str = ""
+                    # link_state, not _initialized. The old check answered
+                    # "has this been set up", which a peripheral that walked
+                    # out of range never stops answering yes to.
                     device_item = QTreeWidgetItem(
                         [
                             getattr(device, "name", device_id),
                             f"{getattr(device, 'device_type', 'unknown')} ({pin_str})",
-                            (
-                                "Ready"
-                                if getattr(device, "_initialized", False)
-                                else "Not initialized"
-                            ),
+                            link_status_text(getattr(device, "link_state", None)),
                         ]
                     )
                     device_item.setData(0, Qt.ItemDataRole.UserRole, ("device", device_id))
@@ -184,6 +184,29 @@ class HardwarePanel(QWidget):
         self._hardware_tree.resizeColumnToContents(1)
 
         self.hardware_changed.emit()
+
+    def refresh_link_states(self) -> None:
+        """Rewrite the Status column of the device rows, in place.
+
+        A peripheral's link moves without the hardware map changing at all, and
+        ``refresh_tree`` is the wrong tool for that news: it rebuilds every row
+        (losing the selection and the expansion the operator set) and emits
+        ``hardware_changed``, which fans out to a full rebuild of the Device
+        Control panel -- clearing its combo and, with it, any argument values
+        typed into it. This only changes the word.
+        """
+        tree = self._hardware_tree
+        for board_index in range(tree.topLevelItemCount()):
+            board_item = tree.topLevelItem(board_index)
+            for child_index in range(board_item.childCount()):
+                item = board_item.child(child_index)
+                data = item.data(0, Qt.ItemDataRole.UserRole)
+                if not (isinstance(data, tuple) and data and data[0] == "device"):
+                    continue
+                device = self._hardware_manager.get_device(data[1])
+                if device is None:
+                    continue
+                item.setText(2, link_status_text(getattr(device, "link_state", None)))
 
     def show_board_settings_dialog(self) -> None:
         """Show a dialog to configure board settings (ports, etc.)."""
@@ -1354,6 +1377,9 @@ class HardwarePanel(QWidget):
             # This is delegated back to MainWindow via signal
             results = await self._hardware_manager.connect_all()
             self.refresh_tree()
+            # On the loop by now, so this is the call that actually takes.
+            # Idempotent: a second connect does not start a second sweep.
+            self._hardware_manager.start_link_supervisor()
             failed = [k for k, v in results.items() if not v]
             if failed:
                 QMessageBox.warning(

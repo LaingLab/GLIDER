@@ -25,6 +25,11 @@ BLE link mid-pulse leaves the device stimulating with nothing connected to stop
 it. So unlike the generic BLE devices, :meth:`MaimuDevice.shutdown` writes
 ``off`` before it disconnects -- which puts emergency stop, End Experiment and
 app quit all on the same path.
+
+The same reasoning covers a *dropped* link: :meth:`MaimuDevice._on_reconnected`
+writes ``off`` when the automatic reconnect succeeds, so a stimulator that came
+back mid-pattern is put in a known state instead of left running one nobody
+asked for.
 """
 
 import asyncio
@@ -96,6 +101,38 @@ class MaimuDevice(BLEDevice):
             "help": "Advanced: reference only. Pre-filled for the Maimu.",
         },
     ]
+
+    # What the control panels put in front of a pulse button. The bounds are
+    # the same contract _whole_number enforces at call time -- whole numbers,
+    # at least 1 -- because the firmware atoi()s both fields, so a spin box
+    # that offered 0 or a fraction would only produce a legible error later.
+    # The defaults match MaimuNode's, so the number a researcher sees does not
+    # change when they move between the graph and the panel.
+    ACTION_ARGS_SCHEMA = {
+        "pulse": [
+            {
+                "key": "period_ms",
+                "label": "Period (ms)",
+                "type": "int",
+                "default": 500,
+                "min": 1,
+                "max": 3_600_000,
+                "help": (
+                    "On/off toggle period in milliseconds -- a period, not a "
+                    "frequency. 500 ms toggles about once a second."
+                ),
+            },
+            {
+                "key": "duration_s",
+                "label": "Duration (s)",
+                "type": "int",
+                "default": 10,
+                "min": 1,
+                "max": 86_400,
+                "help": "How long the train runs. The firmware stops on its own.",
+            },
+        ],
+    }
 
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         # Fill the UUIDs in before BLEDevice.__init__ reads config.settings into
@@ -173,6 +210,26 @@ class MaimuDevice(BLEDevice):
 
     # --- lifecycle ---
 
+    async def _on_reconnected(self) -> None:
+        """Come back off.
+
+        The firmware runs a pulse autonomously, so a link that dropped
+        mid-train left the stimulator running with nothing attached to stop
+        it. Whatever it is doing, it has been doing it unsupervised, and this
+        is the first moment anyone can say otherwise -- so the device is put
+        in a known state rather than resumed in an unknown one.
+
+        Same reasoning as :meth:`shutdown`, and the same best-effort
+        treatment: BLEDevice logs a failure here and leaves the link up,
+        because the link genuinely did reconnect.
+
+        This and :meth:`shutdown` are independent safety paths that can both
+        fire for the same event -- a reconnect landing just as a shutdown
+        begins -- so ``off`` may be written twice in a row. That duplication
+        is safety-neutral and deliberate; it is not a bug to collapse.
+        """
+        await self.write("off")
+
     async def shutdown(self) -> None:
         """Stop the stimulator, then disconnect.
 
@@ -187,6 +244,14 @@ class MaimuDevice(BLEDevice):
         and ``write()`` refuses to run once it is cleared. ``finally`` makes the
         disconnect unconditional, so a peripheral that is already gone still
         tears down cleanly.
+
+        **Both ways of not sending it are reported.** There is no link to write
+        over while a reconnect attempt is in flight (``_client`` is None for the
+        length of it), so quitting or e-stopping right then skips the write
+        entirely rather than failing it -- and a skip that says nothing leaves
+        the operator with no indication a stimulator was left in an unknown
+        state. That is the same news as a failed write, so it gets the same
+        warning.
         """
         try:
             if self._initialized and self._client is not None:
@@ -201,5 +266,15 @@ class MaimuDevice(BLEDevice):
                         self._name,
                         e,
                     )
+            elif self._initialized:
+                # Initialized but no client: mid-reconnect, or the link went
+                # away and has not been rebuilt. A device that was never
+                # initialized is silent here on purpose -- nothing has ever
+                # commanded it, so there is nothing to warn about.
+                logger.warning(
+                    "Maimu %s: no link to send 'off' over at shutdown; "
+                    "the device may still be running",
+                    self._name,
+                )
         finally:
             await super().shutdown()

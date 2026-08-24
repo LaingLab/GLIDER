@@ -17,6 +17,7 @@ import pytest
 from PyQt6.QtWidgets import QPushButton
 
 from glider.gui.panels.device_control_panel import DeviceControlPanel
+from glider.hal.base_board import ConnectionState
 
 pytestmark = pytest.mark.usefixtures("qtbot")
 
@@ -27,6 +28,8 @@ class _Device:
     device_type = "Maimu"
     name = "Stimulator"
     _initialized = True
+    link_state = ConnectionState.CONNECTED
+    owns_link = True
 
     def __init__(self):
         self.calls: list[str] = []

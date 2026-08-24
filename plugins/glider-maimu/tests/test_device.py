@@ -310,3 +310,34 @@ async def test_shutdown_before_initialize_is_safe():
     device = _make_device({"address": "x"})
     await device.shutdown()  # must not raise, and must not try to write
     assert not device.is_initialized
+
+
+async def test_a_shutdown_with_no_link_says_so(fake_bleak, caplog):
+    """Mid-reconnect there is no client to write 'off' over.
+
+    The warning already existed for a write that *failed*; a write that never
+    happened is the same news to the operator -- a stimulator left in an
+    unknown state -- and used to be reported as nothing at all.
+    """
+    import logging
+
+    device = await _initialized()
+    device._client = None  # what a reconnect attempt in flight looks like
+
+    with caplog.at_level(logging.WARNING, logger="glider_maimu.device"):
+        await device.shutdown()
+
+    assert any("may still be running" in r.message for r in caplog.records)
+    assert not device.is_initialized
+
+
+async def test_a_shutdown_before_initialize_says_nothing(caplog):
+    """A device nothing has ever commanded is not news."""
+    import logging
+
+    device = _make_device({"address": "x"})
+
+    with caplog.at_level(logging.WARNING, logger="glider_maimu.device"):
+        await device.shutdown()
+
+    assert caplog.records == []

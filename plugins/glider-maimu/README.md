@@ -55,6 +55,11 @@ selecting an action that fails at runtime.
 `pulse` rejects zero, negative and fractional values rather than writing a
 command the firmware would `atoi` into something else.
 
+`period_ms` and `duration_s` are declared in `ACTION_ARGS_SCHEMA`, which is
+what lets `pulse` render as two number fields beside its button — in the
+Builder's Device Control panel and the Runner's manual controls alike —
+instead of needing a Device Action node with hand-typed arguments.
+
 ## The node
 
 One `exec` in, one `exec` out, with **Mode** (On / Off / Pulse), **Period** and
@@ -86,6 +91,13 @@ would leave the device stimulating with nothing connected to stop it. The device
 therefore writes `off` before it disconnects, bounded so it cannot eat GLIDER's
 emergency-stop budget. Emergency stop, End Experiment and app quit all stop the
 device through that one path.
+
+The same reasoning covers a link that drops on its own — out of range, out of
+power, claimed by another central. GLIDER reconnects it with bounded backoff
+(5, 10, 20, 40 and 60 seconds, up to twelve attempts) and, the moment it is
+back, writes `off` before anything else touches the device. A stimulator that
+reconnected mid-pattern comes back in a known state instead of resuming one
+nobody is watching — re-issue the pulse yourself if you still want it.
 
 ## Development
 

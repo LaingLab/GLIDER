@@ -604,6 +604,178 @@ def test_a_board_dropping_reaches_the_strip(qtbot, main_window_factory):
     assert window._builder_view.strip.device_dots()[0].property("state") == "warn"
 
 
+# ---------------------------------------------------------- peripheral link drops
+#
+# _on_device_link_change is the device-channel sibling of
+# _on_hardware_connection_change above, and the three things that make it safe
+# are only guaranteed by reading the code, not by anything CI would catch: it
+# must fire only while an experiment is RUNNING, it must never pause the run
+# (a ten-second BLE dropout should not end a two-hour session), and it must
+# never reach for _show_hardware_disconnection_dialog, the modal reserved for
+# a board going away. Each is pinned separately below.
+
+
+def test_a_device_drop_during_a_run_notifies_without_pausing_or_the_dialog(
+    qtbot, main_window_factory, monkeypatch
+):
+    """The one case where the operator must actually be told."""
+    from glider.core.experiment_session import SessionState
+
+    window = _builder(main_window_factory)
+    window._core.session.state = SessionState.RUNNING
+
+    notified = []
+    dialog_calls = []
+    run_async_calls = []
+    monkeypatch.setattr(window, "_notify_user", lambda *a, **kw: notified.append((a, kw)))
+    monkeypatch.setattr(
+        window,
+        "_show_hardware_disconnection_dialog",
+        lambda *a, **kw: dialog_calls.append((a, kw)),
+    )
+    monkeypatch.setattr(window, "_run_async", lambda coro: run_async_calls.append(coro))
+
+    window._on_device_link_change("stim_1", BoardConnectionState.DISCONNECTED)
+
+    assert notified  # the operator is told
+    assert dialog_calls == []  # never the modal reserved for a board going away
+    assert run_async_calls == []  # never paused -- a BLE dropout is not a reason to stop
+
+
+def test_error_and_disconnected_get_different_wording(qtbot, main_window_factory, monkeypatch):
+    """ERROR is the reconnect loop's own terminal give-up state (12 attempts --
+    see BLEDevice.MAX_RECONNECT_ATTEMPTS): retrying is over by the time it
+    fires, so it must not tell the operator to sit tight the way a fresh
+    DISCONNECTED does."""
+    from glider.core.experiment_session import SessionState
+
+    window = _builder(main_window_factory)
+    window._core.session.state = SessionState.RUNNING
+
+    bodies = []
+    monkeypatch.setattr(window, "_notify_user", lambda title, message, **kw: bodies.append(message))
+
+    window._on_device_link_change("stim_1", BoardConnectionState.DISCONNECTED)
+    window._on_device_link_change("stim_1", BoardConnectionState.ERROR)
+
+    disconnected_body, error_body = bodies
+    assert "retrying" in disconnected_body.lower()
+    assert "stopped retrying" in error_body.lower()
+    assert "is retrying" not in error_body.lower()
+
+
+def test_a_device_drop_when_not_running_notifies_nobody(qtbot, main_window_factory, monkeypatch):
+    """A device that never held a link during an idle rig is not news."""
+    window = _builder(main_window_factory)  # session defaults to IDLE
+
+    notified = []
+    monkeypatch.setattr(window, "_notify_user", lambda *a, **kw: notified.append((a, kw)))
+
+    window._on_device_link_change("stim_1", BoardConnectionState.DISCONNECTED)
+
+    assert notified == []
+
+
+@pytest.mark.parametrize(
+    "state", [BoardConnectionState.CONNECTED, BoardConnectionState.RECONNECTING]
+)
+def test_a_non_drop_transition_notifies_nobody_even_while_running(
+    qtbot, main_window_factory, monkeypatch, state
+):
+    """Connecting or retrying is not a drop, RUNNING or not."""
+    from glider.core.experiment_session import SessionState
+
+    window = _builder(main_window_factory)
+    window._core.session.state = SessionState.RUNNING
+
+    notified = []
+    monkeypatch.setattr(window, "_notify_user", lambda *a, **kw: notified.append((a, kw)))
+
+    window._on_device_link_change("stim_1", state)
+
+    assert notified == []
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        BoardConnectionState.CONNECTED,
+        BoardConnectionState.CONNECTING,
+        BoardConnectionState.RECONNECTING,
+        BoardConnectionState.DISCONNECTED,
+        BoardConnectionState.ERROR,
+    ],
+)
+def test_a_device_link_change_always_refreshes_the_readouts(
+    qtbot, main_window_factory, monkeypatch, state
+):
+    """Both readouts follow every transition, not just the ones that notify."""
+    window = _builder(main_window_factory)
+
+    refreshed = []
+    monkeypatch.setattr(window, "_refresh_hardware_readouts", lambda: refreshed.append(state))
+
+    window._on_device_link_change("stim_1", state)
+
+    assert refreshed == [state]
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        BoardConnectionState.CONNECTED,
+        BoardConnectionState.RECONNECTING,
+        BoardConnectionState.DISCONNECTED,
+        BoardConnectionState.ERROR,
+    ],
+)
+def test_a_device_link_change_repaints_the_tree_and_regates_the_controls(
+    qtbot, main_window_factory, monkeypatch, state
+):
+    """The readouts were the only two surfaces that followed a link change.
+
+    HardwarePanel.refresh_tree runs only from a user action, so the documented
+    "the row moves to Disconnected" was not delivered; and the Device Control
+    panel's greyed-button guard was evaluated only at device-selection time, so
+    a drop while the panel was open left every button live.
+    """
+    window = _builder(main_window_factory)
+
+    trees, controls = [], []
+    for panel in (window._hardware_panel, window._dash_hardware_panel):
+        monkeypatch.setattr(panel, "refresh_link_states", lambda p=panel: trees.append(p))
+    monkeypatch.setattr(
+        window._device_control_panel, "refresh_link_state", lambda: controls.append(state)
+    )
+
+    window._on_device_link_change("stim_1", state)
+
+    assert len(trees) == 2, "both hardware trees follow the link"
+    assert controls == [state]
+
+
+def test_a_device_link_change_does_not_rebuild_anything(qtbot, main_window_factory, monkeypatch):
+    """A rebuild would throw away what the operator typed.
+
+    refresh_tree emits hardware_changed, which fans out to
+    DeviceControlPanel.refresh_devices and clears its combo; refresh_devices
+    then re-runs _on_device_selected, which rebuilds the argument fields. A BLE
+    blip the operator did not cause must not cost them a period and a duration.
+    """
+    window = _builder(main_window_factory)
+
+    rebuilt = []
+    for panel in (window._hardware_panel, window._dash_hardware_panel):
+        monkeypatch.setattr(panel, "refresh_tree", lambda: rebuilt.append("tree"))
+    monkeypatch.setattr(
+        window._device_control_panel, "refresh_devices", lambda: rebuilt.append("combo")
+    )
+
+    window._on_device_link_change("stim_1", BoardConnectionState.DISCONNECTED)
+
+    assert rebuilt == []
+
+
 # ---------------------------------------------------- the two hardware readouts
 #
 # The strip and the status bar describe the same rig. They are allowed to say

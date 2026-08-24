@@ -176,7 +176,12 @@ asyncio_mode = "auto"
 # here is what makes a bare `pytest` (and `pytest --collect-only`) see them --
 # without it the plugin's suite is local-only and CI proves nothing about it.
 # Each new plugin needs its own line; there is no glob form for testpaths.
-testpaths = ["tests/unit", "tests/integration", "plugins/glider-harp/tests"]
+testpaths = [
+    "tests/unit",
+    "tests/integration",
+    "plugins/glider-harp/tests",
+    "plugins/glider-maimu/tests",
+]
 # Import test modules by their full path rather than by inserting a rootdir on
 # sys.path. Under the default ("prepend") mode a module's identity is its
 # *basename*, so two test files that share one are the same module and
