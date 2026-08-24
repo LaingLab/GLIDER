@@ -802,6 +802,72 @@ class CameraPanel(QWidget):
         self._rehearse_status.setText(summary)
         logger.info("%s", summary)
 
+    def _convert_sleap_model(self, model_dir: Path) -> bool:
+        """Convert a SLEAP folder to ONNX, showing progress. True if usable.
+
+        Runs the converter as a **subprocess of GLIDER's own interpreter**.
+        TensorFlow takes seconds to import, permanently claims threads, and
+        would sit in the application process for the rest of the session for the
+        sake of a one-time job; a child process gives it back on exit. It is
+        also why this is not simply a function call.
+
+        Blocking is deliberate. The researcher just chose this model and cannot
+        do anything useful until it is ready, and a conversion running silently
+        in the background while the panel claims to be armed would be worse than
+        a wait they can see.
+        """
+        import subprocess
+        import sys
+
+        from PyQt6.QtWidgets import QApplication, QMessageBox
+
+        from glider.vision.pose import convert as convert_module
+
+        answer = QMessageBox.question(
+            self,
+            "Convert SLEAP model?",
+            f"{model_dir.name} is a SLEAP model and needs converting before "
+            "GLIDER can run it.\n\nThis happens once — the result is kept "
+            "beside the model and reused until you retrain.\n\nConvert now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+
+        script = Path(convert_module.__file__)
+        self._pose_model_label.setText(f"Converting {model_dir.name}…")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+        try:
+            completed = subprocess.run(
+                [sys.executable, str(script), str(model_dir)],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+        except subprocess.TimeoutExpired:
+            QMessageBox.warning(
+                self,
+                "Convert SLEAP model",
+                "Conversion took longer than 10 minutes and was stopped.",
+            )
+            return False
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if completed.returncode != 0:
+            # The child writes only the actionable message to stderr, so this is
+            # a sentence about a missing extra or an unreadable checkpoint --
+            # not a TensorFlow traceback.
+            message = (completed.stderr or "").strip() or "Conversion failed."
+            QMessageBox.warning(self, "Convert SLEAP model", message)
+            logger.error("SLEAP conversion failed for %s: %s", model_dir, message)
+            return False
+
+        logger.info("Converted SLEAP model %s", model_dir)
+        return True
+
     def _handle_frame_input(self, frame_data: FrameData) -> None:
         """Decide whether to process frame with CV or update UI immediately."""
         # Fan out EVERY frame to the live-behavior worker (independent of the CV
@@ -1598,7 +1664,15 @@ class CameraPanel(QWidget):
         """
         from PyQt6.QtWidgets import QMessageBox
 
+        from glider.vision.pose.convert import needs_conversion
         from glider.vision.pose.spec import PoseModelError, identify_pose_model
+
+        # A folder SLEAP produced holds a Keras checkpoint, not the ONNX GLIDER
+        # runs. Rather than refusing it with instructions to go and convert it
+        # by hand -- which is what used to happen, and which nobody did --
+        # convert it here. Cheap check: no TensorFlow import, just paths.
+        if needs_conversion(path) and not self._convert_sleap_model(Path(path)):
+            return False
 
         try:
             # Pure path/JSON/YAML work — safe on the UI thread, unlike reading

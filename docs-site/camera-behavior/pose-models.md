@@ -150,3 +150,29 @@ sets. They must match.
 **"keypoint names are in a different order than the behavior model was trained
 on"** — the names are right but the order is not. The message prints both
 orderings.
+
+## SLEAP models
+
+Point GLIDER at the folder SLEAP produced — the one holding `training_config.json`
+and `best_model.h5`. The first time you select it, GLIDER converts the model to
+ONNX and keeps the result beside it; every later run reuses that.
+
+```bash
+pip install 'glider[sleap]'
+```
+
+That installs TensorFlow and tf2onnx. **It does not install SLEAP, and does not
+need to** — a SLEAP model is saved as an ordinary Keras checkpoint, which
+TensorFlow opens on its own. (SLEAP itself is pinned to older Pythons than
+GLIDER runs on, so it could not share the environment anyway. That limit applies
+to *running* SLEAP, not to reading what it wrote.)
+
+!!! note "Single-instance models only"
+    GLIDER runs SLEAP's **single_instance** models. Top-down and bottom-up
+    models are multi-animal architectures with a different inference structure,
+    and selecting one reports which heads it found rather than guessing.
+
+Conversion takes a few seconds to a couple of minutes depending on the model,
+and runs once. If you retrain and drop a new checkpoint into the same folder,
+GLIDER notices the checkpoint changed and reconverts — a stale ONNX would run
+perfectly well while answering with the network you just replaced.

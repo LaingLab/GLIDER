@@ -64,9 +64,26 @@ pose-onnx = [
     # this viable on the Raspberry Pi runner without torch on the hot path.
     # Deliberately NOT the full `deeplabcut` / `sleap` packages: sleap is
     # TensorFlow-pinned and has historically capped out around py3.10, so it
-    # cannot share this environment. Conversion happens in the user's own env
-    # via tools/export_pose_onnx.py.
+    # cannot share this environment. Running SLEAP is out of reach; *converting*
+    # its output is not, and needs only the `sleap` extra below.
     "onnxruntime>=1.17",
+]
+
+sleap = [
+    # Converts a SLEAP model to the ONNX that `pose-onnx` runs, inside GLIDER,
+    # so a researcher can point at the folder SLEAP produced instead of running
+    # sleap-export and tf2onnx by hand.
+    #
+    # This does NOT install sleap, and does not need to. A SLEAP model is saved
+    # as an ordinary Keras checkpoint: tf.keras.models.load_model opens one with
+    # no sleap present, and TensorFlow supports the Pythons GLIDER targets. The
+    # py3.10 ceiling that keeps sleap out of this environment applies to running
+    # it, not to reading what it wrote.
+    #
+    # tensorflow-cpu, not tensorflow: conversion is a one-off graph trace, GPU
+    # buys nothing, and the CPU wheel is a fraction of the size.
+    "tensorflow-cpu>=2.16",
+    "tf2onnx>=1.16",
 ]
 audio = [
     "sounddevice>=0.4.6",
