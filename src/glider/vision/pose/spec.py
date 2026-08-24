@@ -277,6 +277,19 @@ def identify_pose_model(path: str | Path) -> PoseModelSpec:
                 "know its keypoint names, stride, or preprocessing. "
                 + _HELPER_HINT.format(root=path.parent)
             )
+        if path.suffix.lower() == ".slp":
+            # Picking the .slp is the natural mistake: it is the file a SLEAP
+            # user works with all day, it is what the file browser shows, and
+            # "the SLEAP file" is how people refer to it. It holds labels and
+            # video references -- there is no network in it -- so the generic
+            # "not a pose model" would send someone hunting for a corruption
+            # that is not there.
+            raise PoseModelError(
+                f"{path.name} is a SLEAP labels file, not a trained model. "
+                "Select the model folder SLEAP wrote instead -- the one "
+                "containing training_config.json and best_model.h5, usually "
+                "under models/ in your SLEAP project."
+            )
         raise PoseModelError(f"{path.name} is not a pose model (.pt or .onnx expected).")
 
     if path.is_dir():
