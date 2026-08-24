@@ -37,16 +37,19 @@ Five decisions carry meaning rather than convenience:
   re-emitting, or echoing a panel's state back would ping-pong with the click
   that caused it.
 
-* **Each toggle sits at the edge of the panel it controls**, and draws an arrow
-  rather than a character. Both used to be bunched at the far left, which put
-  the right panel's button the width of a monitor away from the right panel.
-  The glyph was ``▌``/``▐``, half-block characters that are absent from many
-  fonts and read as a rendering artefact where they are present; the arrow is
-  drawn by the style, so it depends on no font and takes its colour from the
-  same ``desktop.qss`` rule as the button around it -- including the accent it
-  turns while the panel is open. It points *outward* when the panel is open
-  (press to push it away) and *inward* when it is collapsed (press to bring it
-  back), so the state is legible from the glyph and not only from the fill.
+* **Each toggle sits at the edge of the panel it controls**, and draws a small
+  icon rather than a character. All three used to be bunched at the far left,
+  which put the right panel's button the width of a monitor away from the
+  right panel. The glyph was ``▌``/``▐``, half-block characters that are
+  absent from many fonts and read as a rendering artefact where they are
+  present; an arrow replaced those, and this icon replaces the arrow -- a
+  small rounded window with a bar on the side the panel actually lives on,
+  filled while the panel is open and hollow (an outline and a divider, no
+  fill) while it is collapsed. It is a map of the layout rather than a
+  direction to press, so the state is legible from the shape and not only
+  from the fill, and it still depends on no font: :class:`_PanelToggle`
+  paints it itself, reading its colour from the widget's own palette rather
+  than from anything named in this file.
 
 **No colour is set from Python here.** Every part carries an ``objectName`` --
 and, where it varies, a dynamic ``state`` property -- and ``desktop.qss`` owns
@@ -56,14 +59,18 @@ shell the theme cannot reach. Qt resolves property selectors at polish time
 rather than when the property is set, so
 :func:`glider.gui.styles.restyle` re-polishes anything whose ``state``
 changed; without it the pill keeps the colour it opened with while reporting
-the right property.
+the right property. The toggle's icon keeps the same promise a different way:
+it is painted, not stencilled from a file, and every paint reads
+``self.palette()`` fresh rather than a colour captured once -- the same
+reason the arrow it replaced never needed a colour of its own.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QIcon, QIconEngine, QPainter, QPainterPath, QPalette, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -90,6 +97,13 @@ STRIP_HEIGHT = 40
 #: border radius and get a circle rather than a lozenge.
 _DOT = 8
 
+#: Logical size of a panel toggle's icon. ``desktop.qss`` boxes the button to
+#: 24x22; this leaves a few pixels of margin on every side rather than
+#: claiming the whole button, and is a request to Qt's layout, not a raster --
+#: :class:`_SidebarGlyphEngine` paints fresh at whatever device pixel ratio
+#: actually applies, so nothing here caps how crisp the icon can render.
+_TOGGLE_ICON_SIZE = QSize(16, 14)
+
 #: The run states, and the word the pill shows for each. Four distinct labels on
 #: purpose -- a pill that reads the same in two states is decoration.
 RUN_STATE_TEXT = {
@@ -113,21 +127,143 @@ _UNNAMED = "Untitled"
 _DIRTY_MARK = "— edited"
 
 
+def _fit_aspect(box: QRectF, ratio: float) -> QRectF:
+    """*box*, inset on one axis so its width:height ratio is exactly *ratio*.
+
+    The glyph keeps its own proportions regardless of the box the button
+    hands it -- a slightly wider icon size or a slightly taller one both
+    still draw the same shape, just centred differently within what they
+    were given.
+    """
+    if box.width() / box.height() > ratio:
+        target_width = box.height() * ratio
+        inset = (box.width() - target_width) / 2
+        return box.adjusted(inset, 0, -inset, 0)
+    target_height = box.width() / ratio
+    inset = (box.height() - target_height) / 2
+    return box.adjusted(0, inset, 0, -inset)
+
+
+class _SidebarGlyphEngine(QIconEngine):
+    """Paints the sidebar-toggle glyph: a window with a bar on one side.
+
+    A vector glyph rather than a shipped raster, so it is painted fresh at
+    whatever size and device pixel ratio Qt actually requests -- the strip is
+    only :data:`STRIP_HEIGHT` pixels tall, so this is drawn small, and a
+    fixed-resolution pixmap stretched to a fractional device pixel ratio is
+    exactly the kind of icon that smears.
+
+    Its colour is read from *widget*'s palette at paint time rather than
+    stored on the engine. ``desktop.qss`` sets ``color`` on
+    ``QToolButton#statusStripToggle`` and Qt resolves that into the widget's
+    palette at polish time; reading it live, on every paint, is what lets this
+    icon follow a re-theme the same way the arrow it replaces always did,
+    without this file naming a colour of its own.
+    """
+
+    #: The glyph's own width:height ratio. Independent of the button's actual
+    #: box (24x22 in ``desktop.qss``) -- see :func:`_fit_aspect`.
+    _ASPECT = 8 / 7
+
+    #: Share of the glyph's width given to the bar. A third, not a half, so
+    #: the shape reads as "a panel beside a window" and not a divided
+    #: rectangle, matching the proportions in the reference images.
+    _BAR_FRACTION = 0.34
+
+    #: Corner radius and stroke width, both as a fraction of the glyph's own
+    #: height so they scale with it instead of looking chunkier the smaller
+    #: it is drawn.
+    _RADIUS_FRACTION = 0.22
+    _STROKE_FRACTION = 0.085
+
+    def __init__(self, widget: QWidget, on_the_left: bool, filled: bool) -> None:
+        super().__init__()
+        self._widget = widget
+        self._on_the_left = on_the_left
+        self._filled = filled
+
+    def clone(self) -> _SidebarGlyphEngine:
+        return _SidebarGlyphEngine(self._widget, self._on_the_left, self._filled)
+
+    def pixmap(self, size: QSize, mode: QIcon.Mode, state: QIcon.State) -> QPixmap:
+        # QIconEngine's own default pixmap() is documented to rasterise onto a
+        # transparent buffer by calling paint(), but on this Qt build it hands
+        # back a fully opaque pixmap instead: two engines that genuinely paint
+        # different shapes both come back as one solid block, indistinguishable
+        # from each other despite being built from distinct icons. Overriding
+        # it with exactly what the documentation promises -- transparent
+        # buffer, then paint() -- is what QToolButton's own icon drawing
+        # actually needs to show the shape rather than a blank swatch.
+        pixmap = QPixmap(size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        self.paint(painter, QRect(0, 0, size.width(), size.height()), mode, state)
+        painter.end()
+        return pixmap
+
+    def paint(
+        self, painter: QPainter | None, rect: QRect, mode: QIcon.Mode, state: QIcon.State
+    ) -> None:
+        if painter is None:
+            return
+        color = self._widget.palette().color(QPalette.ColorRole.WindowText)
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        box = _fit_aspect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), self._ASPECT)
+        radius = box.height() * self._RADIUS_FRACTION
+        stroke = max(box.height() * self._STROKE_FRACTION, 1.0)
+
+        pen = QPen(color)
+        pen.setWidthF(stroke)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(box, radius, radius)
+
+        bar_width = box.width() * self._BAR_FRACTION
+        if self._on_the_left:
+            bar = QRectF(box.left(), box.top(), bar_width, box.height())
+            divider_x = bar.right()
+        else:
+            bar = QRectF(box.right() - bar_width, box.top(), bar_width, box.height())
+            divider_x = bar.left()
+
+        # Clip fill and divider to the outer shape, so the bar's own corners
+        # follow the window's curve instead of squaring it off.
+        clip = QPainterPath()
+        clip.addRoundedRect(box, radius, radius)
+        painter.setClipPath(clip)
+
+        if self._filled:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawRect(bar)
+        else:
+            painter.drawLine(QPointF(divider_x, box.top()), QPointF(divider_x, box.bottom()))
+
+        painter.restore()
+
+
 class _PanelToggle(QToolButton):
-    """One panel's toggle: an arrow that turns with the panel it reflects.
+    """One panel's toggle: an icon that reflects the panel beside it.
 
     Args:
         side: ``"left"`` or ``"right"``. Published as a ``side`` property for
             the stylesheet, said in :meth:`accessibleName` for anyone not
-            reading the strip's geometry, and what decides which way "outward"
-            is.
+            reading the strip's geometry, and what decides which edge of the
+            icon the bar sits on.
         parent: Standard Qt parent.
 
-    Checked means the panel is open, as before. What is new is that the arrow
-    turns with it: outward while open, inward while collapsed.
+    Checked means the panel is open, as before. What is new is that the icon
+    is a small map of the window rather than a direction to press: a rounded
+    rectangle with a bar on the side the panel actually lives on, filled
+    while the panel is open and hollow -- an outline and a divider, no fill
+    -- while it is collapsed.
 
-    The turn hangs off two Qt virtuals rather than off the ``toggled`` signal,
-    because neither route alone sees both ways the state moves:
+    The refresh hangs off two Qt virtuals rather than off the ``toggled``
+    signal, because neither route alone sees both ways the state moves:
 
     * ``toggled`` is out, because :meth:`StatusStrip.set_left_expanded` sets the
       button with its signals blocked -- it would miss the path the owner uses
@@ -139,8 +275,9 @@ class _PanelToggle(QToolButton):
     * :meth:`nextCheckState` is what a click (and the space bar) goes through
       instead.
 
-    Both, therefore. A button that turned only when something echoed back would
-    point the wrong way on any strip whose signal nobody has connected yet.
+    Both, therefore. A button that refreshed only when something echoed back
+    would show the wrong icon on any strip whose signal nobody has connected
+    yet.
     """
 
     def __init__(self, side: str, parent: QWidget | None = None) -> None:
@@ -148,9 +285,12 @@ class _PanelToggle(QToolButton):
         self._side = "right" if side == "right" else "left"
         self.setObjectName("statusStripToggle")
         self.setProperty("side", self._side)
-        self.setAccessibleName(f"{self._side.capitalize()} panel")
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setIconSize(_TOGGLE_ICON_SIZE)
+        on_the_left = self._side == "left"
+        self._icon_open = QIcon(_SidebarGlyphEngine(self, on_the_left, filled=True))
+        self._icon_collapsed = QIcon(_SidebarGlyphEngine(self, on_the_left, filled=False))
         self.setChecked(True)
         self._turn_arrow()
 
@@ -163,12 +303,20 @@ class _PanelToggle(QToolButton):
         self._turn_arrow()
 
     def _turn_arrow(self) -> None:
-        # Open: press to push the panel back to its own edge, so point there.
-        # Collapsed: press to bring it out, so point into the window.
-        towards_its_own_edge = self.isChecked()
-        on_the_left = self._side == "left"
-        points_left = towards_its_own_edge == on_the_left
-        self.setArrowType(Qt.ArrowType.LeftArrow if points_left else Qt.ArrowType.RightArrow)
+        """Show the icon for the current checked state, and name it to match.
+
+        Kept as one explicit push, called from both :meth:`checkStateSet` and
+        :meth:`nextCheckState`, for the reason the class docstring gives: Qt
+        already repaints this button on every path that changes its checked
+        state, but only this method also knows which of the two pre-built
+        icons (open, collapsed) that repaint should show, and updates
+        :meth:`accessibleName` to match -- a screen reader needs the same
+        open-or-collapsed fact a sighted user reads off the icon's shape.
+        """
+        expanded = self.isChecked()
+        self.setIcon(self._icon_open if expanded else self._icon_collapsed)
+        state_word = "expanded" if expanded else "collapsed"
+        self.setAccessibleName(f"{self._side.capitalize()} panel, {state_word}")
 
 
 def _as_device(device: Sequence[str]) -> tuple[str, str, str]:

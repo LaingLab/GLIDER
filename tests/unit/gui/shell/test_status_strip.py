@@ -418,14 +418,14 @@ def test_each_toggle_sits_at_the_edge_of_the_panel_it_controls(strip):
     assert all(right[0] >= end for _, end in between)
 
 
-def test_a_toggle_carries_no_text_so_no_font_has_to_have_its_glyph(strip):
+def test_a_toggle_carries_no_text_so_no_font_has_to_have_its_icon(strip):
     """The half-block characters this replaced are not in every font, and where
     they were they read as a rendering artefact rather than as a control. The
-    arrow is drawn by the style, so it needs no glyph and takes its colour from
-    the same ``desktop.qss`` rule as the button around it."""
+    icon is painted by the button itself, so it needs no glyph and takes its
+    colour from the same ``desktop.qss`` rule as the button around it."""
     for toggle in (strip.left_toggle(), strip.right_toggle()):
         assert toggle.text() == ""
-        assert toggle.arrowType() != Qt.ArrowType.NoArrow
+        assert not toggle.icon().isNull()
 
 
 def test_a_toggle_names_the_side_it_controls(strip):
@@ -451,19 +451,59 @@ def test_an_open_panel_and_a_collapsed_one_do_not_draw_the_same_toggle(strip, si
     collapsed = toggle.grab().toImage()
 
     assert opened != collapsed
-    assert toggle.arrowType() != Qt.ArrowType.NoArrow
+    assert not toggle.icon().isNull()
 
 
-def test_the_arrow_turns_when_the_panel_is_toggled_by_a_click(strip, qtbot):
-    """The click path and the told path must agree. A button whose arrow only
-    turns when something echoes back would point the wrong way for any strip
-    whose signal nobody has connected yet."""
+def test_the_icon_changes_when_the_panel_is_toggled_by_a_click(strip, qtbot):
+    """The click path and the told path must agree. A button whose icon only
+    changed when something echoed back would show the wrong panel state for
+    any strip whose signal nobody has connected yet.
+
+    Reads the actual rendered pixels rather than an attribute that was set --
+    two separately-built ``QIcon`` objects can compare unequal by identity
+    while drawing the same picture, so an attribute check alone would not
+    prove the click path drew anything different from the told path."""
     toggle = strip.left_toggle()
-    before = toggle.arrowType()
+    before = toggle.icon().pixmap(toggle.iconSize()).toImage()
 
     qtbot.mouseClick(toggle, Qt.MouseButton.LeftButton)
 
-    assert toggle.arrowType() != before
+    after = toggle.icon().pixmap(toggle.iconSize()).toImage()
+    assert after != before
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_being_told_the_panel_state_also_changes_the_icon(strip, side):
+    """The told path must draw the new state too, not only the click path --
+    :meth:`StatusStrip.set_left_expanded` sets the button with signals
+    blocked, which is exactly the route ``checkStateSet`` exists to catch."""
+    toggle = getattr(strip, f"{side}_toggle")()
+    set_expanded = getattr(strip, f"set_{side}_expanded")
+
+    set_expanded(True)
+    opened = toggle.icon().pixmap(toggle.iconSize()).toImage()
+    set_expanded(False)
+    collapsed = toggle.icon().pixmap(toggle.iconSize()).toImage()
+
+    assert opened != collapsed
+
+
+def test_all_four_toggle_icons_are_visually_distinct(strip):
+    """Side x open-or-collapsed is four combinations, and the icon is the only
+    thing that says which one a button is in -- a bug that painted any two of
+    them alike would leave a state unreadable."""
+    images = {}
+    for side in ("left", "right"):
+        toggle = getattr(strip, f"{side}_toggle")()
+        set_expanded = getattr(strip, f"set_{side}_expanded")
+        for expanded in (True, False):
+            set_expanded(expanded)
+            images[(side, expanded)] = toggle.icon().pixmap(toggle.iconSize()).toImage()
+
+    seen = list(images.items())
+    for i, (key_a, image_a) in enumerate(seen):
+        for key_b, image_b in seen[i + 1 :]:
+            assert image_a != image_b, f"{key_a} and {key_b} drew the same icon"
 
 
 # -------------------------------------------------------- geometry and styling
