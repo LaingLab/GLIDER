@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from glider.vision.pose.convert import (
+from glider_sleap.convert import (
     STAMP_NAME,
     ConversionError,
     convert_sleap_to_onnx,
@@ -156,7 +156,7 @@ def test_a_missing_extra_names_the_install_command(tmp_path, monkeypatch):
         _refuse_import("tensorflow"),
     )
 
-    with pytest.raises(ConversionError, match=r"pip install 'glider\[sleap\]'"):
+    with pytest.raises(ConversionError, match=r"pip install glider-sleap"):
         convert_sleap_to_onnx(_sleap_dir(tmp_path))
 
 
@@ -197,7 +197,7 @@ def test_the_cli_reports_failure_on_stderr_and_exits_nonzero(tmp_path, capsys):
 def test_the_cli_writes_its_result_to_a_file(tmp_path, monkeypatch):
     """TensorFlow logs to stdout without asking, so a caller parsing stdout is
     parsing TensorFlow's mood. The file is not."""
-    from glider.vision.pose import convert as convert_module
+    from glider_sleap import convert as convert_module
 
     out = tmp_path / "result.json"
     fake = convert_module.ConversionResult(

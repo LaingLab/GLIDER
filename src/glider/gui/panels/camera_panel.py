@@ -802,70 +802,58 @@ class CameraPanel(QWidget):
         self._rehearse_status.setText(summary)
         logger.info("%s", summary)
 
-    def _convert_sleap_model(self, model_dir: Path) -> bool:
-        """Convert a SLEAP folder to ONNX, showing progress. True if usable.
+    def _convert_pose_model(self, folder: Path, converter) -> bool:
+        """Run a plugin's converter over *folder*, showing progress. True if usable.
 
-        Runs the converter as a **subprocess of GLIDER's own interpreter**.
-        TensorFlow takes seconds to import, permanently claims threads, and
-        would sit in the application process for the rest of the session for the
-        sake of a one-time job; a child process gives it back on exit. It is
-        also why this is not simply a function call.
+        Blocking on purpose. The researcher just chose this model and cannot do
+        anything useful until it is ready; a conversion running quietly in the
+        background while the panel claimed to be armed would be worse than a
+        wait they can see.
 
-        Blocking is deliberate. The researcher just chose this model and cannot
-        do anything useful until it is ready, and a conversion running silently
-        in the background while the panel claims to be armed would be worse than
-        a wait they can see.
+        The converter belongs to a plugin, so every failure here is third-party
+        code failing. It is reported on screen and the selection is refused --
+        never raised into the panel.
         """
-        import subprocess
-        import sys
-
         from PyQt6.QtWidgets import QApplication, QMessageBox
 
-        from glider.vision.pose import convert as convert_module
+        from glider.vision.pose.converters import converter_label, converter_preflight
+
+        label = converter_label(converter)
+        question = (
+            f"{folder.name} is a {label} model and needs converting before "
+            "GLIDER can run it.\n\nThis happens once \u2014 the result is kept "
+            "beside the model and reused until you retrain."
+        )
+        # A converter that has something costly to disclose says so here, and
+        # it goes above the question rather than after it: the point is to be
+        # read before the person clicks Yes.
+        note = converter_preflight(converter, folder)
+        if note:
+            question = f"{note}\n\n{question}"
 
         answer = QMessageBox.question(
             self,
-            "Convert SLEAP model?",
-            f"{model_dir.name} is a SLEAP model and needs converting before "
-            "GLIDER can run it.\n\nThis happens once — the result is kept "
-            "beside the model and reused until you retrain.\n\nConvert now?",
+            f"Convert {label} model?",
+            f"{question}\n\nConvert now?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return False
 
-        script = Path(convert_module.__file__)
-        self._pose_model_label.setText(f"Converting {model_dir.name}…")
+        self._pose_model_label.setText(f"Converting {folder.name}\u2026")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         QApplication.processEvents()
         try:
-            completed = subprocess.run(
-                [sys.executable, str(script), str(model_dir)],
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
-        except subprocess.TimeoutExpired:
-            QMessageBox.warning(
-                self,
-                "Convert SLEAP model",
-                "Conversion took longer than 10 minutes and was stopped.",
-            )
+            converter.convert(folder)
+        except Exception as exc:  # noqa: BLE001 - a converter is third-party code
+            logger.exception("%s conversion failed for %s", label, folder)
+            QMessageBox.warning(self, f"Convert {label} model", str(exc))
             return False
         finally:
             QApplication.restoreOverrideCursor()
 
-        if completed.returncode != 0:
-            # The child writes only the actionable message to stderr, so this is
-            # a sentence about a missing extra or an unreadable checkpoint --
-            # not a TensorFlow traceback.
-            message = (completed.stderr or "").strip() or "Conversion failed."
-            QMessageBox.warning(self, "Convert SLEAP model", message)
-            logger.error("SLEAP conversion failed for %s: %s", model_dir, message)
-            return False
-
-        logger.info("Converted SLEAP model %s", model_dir)
+        logger.info("Converted %s model %s", label, folder)
         return True
 
     def _handle_frame_input(self, frame_data: FrameData) -> None:
@@ -1664,14 +1652,16 @@ class CameraPanel(QWidget):
         """
         from PyQt6.QtWidgets import QMessageBox
 
-        from glider.vision.pose.convert import needs_conversion
+        from glider.vision.pose.converters import needs_conversion
         from glider.vision.pose.spec import PoseModelError, identify_pose_model
 
-        # A folder SLEAP produced holds a Keras checkpoint, not the ONNX GLIDER
+        # A folder a vendor wrote holds their checkpoint, not the ONNX GLIDER
         # runs. Rather than refusing it with instructions to go and convert it
         # by hand -- which is what used to happen, and which nobody did --
-        # convert it here. Cheap check: no TensorFlow import, just paths.
-        if needs_conversion(path) and not self._convert_sleap_model(Path(path)):
+        # hand it to whichever plugin claims it. Path-only check: no vendor
+        # framework is imported to answer it.
+        converter = needs_conversion(path)
+        if converter is not None and not self._convert_pose_model(Path(path), converter):
             return False
 
         try:

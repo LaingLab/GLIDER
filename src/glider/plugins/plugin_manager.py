@@ -8,7 +8,7 @@ Plugins are Python packages that can provide:
 - UI components
 
 Plugins are discovered from:
-1. Entry points (glider.driver, glider.device, glider.node)
+1. Entry points (glider.driver, glider.device, glider.node, glider.pose)
 2. Plugin directory (~/.glider/plugins)
 """
 
@@ -36,7 +36,7 @@ class PluginInfo:
     description: str = ""
     author: str = ""
     entry_point: str = ""  # e.g., "my_plugin:setup"
-    plugin_type: str = "generic"  # "driver", "device", "node", "generic"
+    plugin_type: str = "generic"  # "driver", "device", "node", "pose", "generic"
     requirements: list[str] = field(default_factory=list)
     enabled: bool = True
     loaded: bool = False
@@ -102,6 +102,10 @@ def _registry_for(kind: str) -> dict[str, type] | None:
         from glider.core.flow_engine import FlowEngine
 
         return FlowEngine._node_registry
+    if kind == "pose":
+        from glider.vision.pose.converters import POSE_CONVERTERS
+
+        return POSE_CONVERTERS
     return None
 
 
@@ -115,8 +119,8 @@ _PLUGIN_COMPONENTS: dict[tuple[str, str], str] = {}
 def plugin_components(kind: str) -> dict[str, str]:
     """Components of ``kind`` that plugins registered, as {name: plugin}.
 
-    ``kind`` is one of "driver", "device", "node". Empty before any plugin has
-    loaded, which is the normal state of a stock install.
+    ``kind`` is one of "driver", "device", "node", "pose". Empty before any
+    plugin has loaded, which is the normal state of a stock install.
     """
     return {name: plugin for (k, name), plugin in _PLUGIN_COMPONENTS.items() if k == kind}
 
@@ -141,7 +145,7 @@ def _register_component(kind: str, name: str, component: type, plugin: str) -> N
     if registry is None:
         raise PluginRegistrationError(
             f"cannot register {name!r}: plugin type {kind!r} maps to no registry "
-            f"(expected one of 'driver', 'device', 'node')"
+            f"(expected one of 'driver', 'device', 'node', 'pose')"
         )
 
     existing = registry.get(name)
@@ -271,7 +275,12 @@ class PluginManager:
                 from importlib_metadata import entry_points
 
             # Look for GLIDER entry point groups
-            for group in ["glider.driver", "glider.device", "glider.node"]:
+            for group in [
+                "glider.driver",
+                "glider.device",
+                "glider.node",
+                "glider.pose",
+            ]:
                 try:
                     # Handle different Python versions
                     eps = entry_points()
@@ -526,6 +535,7 @@ class PluginManager:
             ("BOARD_DRIVERS", "driver"),
             ("DEVICE_TYPES", "device"),
             ("NODE_TYPES", "node"),
+            ("POSE_CONVERTERS", "pose"),
         ):
             table = getattr(module, attr_name, None)
             if not table:

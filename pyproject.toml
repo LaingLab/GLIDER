@@ -62,28 +62,12 @@ pose-onnx = [
     # Runs DeepLabCut/SLEAP models exported to ONNX. CPU-only by design: it
     # covers py3.11-3.13 on Windows/macOS/Linux *and* ARM, which is what makes
     # this viable on the Raspberry Pi runner without torch on the hot path.
-    # Deliberately NOT the full `deeplabcut` / `sleap` packages: sleap is
-    # TensorFlow-pinned and has historically capped out around py3.10, so it
-    # cannot share this environment. Running SLEAP is out of reach; *converting*
-    # its output is not, and needs only the `sleap` extra below.
+    # Deliberately NOT the full `deeplabcut` / `sleap` packages. Turning one
+    # of those into the ONNX this runs is a per-vendor job needing that
+    # vendor's own framework, and it lives in a plugin -- glider-sleap -- so a
+    # lab that tracks with YOLO carries none of it. See
+    # glider.vision.pose.converters.
     "onnxruntime>=1.17",
-]
-
-sleap = [
-    # Converts a SLEAP model to the ONNX that `pose-onnx` runs, inside GLIDER,
-    # so a researcher can point at the folder SLEAP produced instead of running
-    # sleap-export and tf2onnx by hand.
-    #
-    # This does NOT install sleap, and does not need to. A SLEAP model is saved
-    # as an ordinary Keras checkpoint: tf.keras.models.load_model opens one with
-    # no sleap present, and TensorFlow supports the Pythons GLIDER targets. The
-    # py3.10 ceiling that keeps sleap out of this environment applies to running
-    # it, not to reading what it wrote.
-    #
-    # tensorflow-cpu, not tensorflow: conversion is a one-off graph trace, GPU
-    # buys nothing, and the CPU wheel is a fraction of the size.
-    "tensorflow-cpu>=2.16",
-    "tf2onnx>=1.16",
 ]
 audio = [
     "sounddevice>=0.4.6",
@@ -198,6 +182,8 @@ testpaths = [
     "tests/integration",
     "plugins/glider-harp/tests",
     "plugins/glider-maimu/tests",
+    "plugins/glider-sleap/tests",
+    "plugins/glider-dlc/tests",
 ]
 # Import test modules by their full path rather than by inserting a rootdir on
 # sys.path. Under the default ("prepend") mode a module's identity is its
@@ -241,7 +227,14 @@ target-version = "py311"
 # defaults must be repeated here. Dropping "." reclassifies the top-level
 # packaging/ directory as third-party and breaks the import order in
 # src/glider/updater.py, which imports the real `packaging` distribution.
-src = [".", "src", "plugins/glider-harp/src", "plugins/glider-maimu/src"]
+src = [
+    ".",
+    "src",
+    "plugins/glider-harp/src",
+    "plugins/glider-maimu/src",
+    "plugins/glider-sleap/src",
+    "plugins/glider-dlc/src",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
