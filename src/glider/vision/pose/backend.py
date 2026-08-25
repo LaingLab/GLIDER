@@ -157,6 +157,26 @@ class OnnxPoseBackend:
         """Keypoints the model emits, per its own config. Always known here."""
         return len(self.spec.keypoint_names)
 
+    def _expected_source_size(self) -> tuple[int, int] | None:
+        """``(width, height)`` of the source frame this model can take, if fixed.
+
+        None when the graph's spatial dimensions are dynamic (any size works) or
+        cannot be read. The model's own input is post-scaling, so it is divided
+        back out to give a number the operator can compare against a camera
+        resolution.
+        """
+        try:
+            shape = self.session.get_inputs()[0].shape
+        except Exception:
+            return None
+        if not shape or len(shape) != 4:
+            return None
+        h, w = (shape[1], shape[2]) if self.spec.input_layout == "NHWC" else (shape[2], shape[3])
+        if not isinstance(h, int) or not isinstance(w, int):
+            return None  # dynamic dimensions: any frame size is fine
+        scale = float(self.spec.scale) or 1.0
+        return int(round(w / scale)), int(round(h / scale))
+
     def _as_kchw(self, arr: np.ndarray) -> np.ndarray:
         """Drop the batch axis and put channels first.
 
@@ -174,7 +194,28 @@ class OnnxPoseBackend:
     def predict(self, bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         tensor, scale = preprocess_frame(bgr, self.spec)
         input_name = self.session.get_inputs()[0].name
-        outputs = self.session.run(None, {input_name: tensor})
+        try:
+            outputs = self.session.run(None, {input_name: tensor})
+        except Exception as exc:
+            # A SLEAP export commonly fixes its spatial dimensions, so a frame
+            # of any other size is rejected by onnxruntime with a shape dump
+            # nobody can act on. Say what the model wants in the units the
+            # operator controls -- the source frame -- which is the model's own
+            # input divided by the scaling it was trained with.
+            expected = self._expected_source_size()
+            if expected is None:
+                raise
+            want_w, want_h = expected
+            got_h, got_w = bgr.shape[:2]
+            if (got_w, got_h) == (want_w, want_h):
+                raise
+            raise ValueError(
+                f"{Path(self.spec.model_path).name} was exported for "
+                f"{want_w}x{want_h} source frames and this one is {got_w}x{got_h}. "
+                "Its ONNX has fixed spatial dimensions, so it cannot take another "
+                "size: match the camera or video to that resolution, or re-export "
+                "the model with dynamic input dimensions."
+            ) from exc
 
         maps = self._as_kchw(outputs[0])
         k = len(self.keypoint_names)

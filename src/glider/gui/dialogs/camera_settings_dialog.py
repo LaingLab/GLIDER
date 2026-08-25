@@ -940,13 +940,26 @@ class CameraSettingsDialog(QDialog):
             )
 
     def _browse_model(self):
-        """Browse for a YOLO model.
+        """Browse for the selected backend's model.
 
-        Accepts a PyTorch ``.pt`` file or an NCNN export. NCNN models live in a
-        ``*_ncnn_model/`` folder; since ``getOpenFileName`` can't select a
-        folder, the user navigates into it and picks ``model.ncnn.param`` —
-        CVProcessor normalizes that to the containing folder when loading.
+        Accepts a PyTorch ``.pt`` file or an NCNN export for YOLO. NCNN models
+        live in a ``*_ncnn_model/`` folder; since ``getOpenFileName`` can't
+        select a folder, the user navigates into it and picks
+        ``model.ncnn.param`` — CVProcessor normalizes that to the containing
+        folder when loading.
+
+        A pose model is browsed for as a **folder**, because that is the shape
+        SLEAP and DeepLabCut export and the shape ``identify_pose_model`` reads:
+        the sidecar and the ``.onnx`` beside it are read together, and offering
+        a file picker here would invite selecting the ``.onnx`` alone, which
+        drops the keypoint names that come with it.
         """
+        if self._backend_combo.currentData() == DetectionBackend.POSE_MODEL:
+            path = QFileDialog.getExistingDirectory(self, "Select pose model folder", "")
+            if path:
+                self._model_path_edit.setText(path)
+            return
+
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Select YOLO Model",
