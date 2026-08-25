@@ -90,11 +90,20 @@ class UltralyticsBackend:
         self.yolo = None
 
 
-def preprocess_frame(bgr: np.ndarray, spec: PoseModelSpec) -> tuple[np.ndarray, float]:
+def preprocess_frame(
+    bgr: np.ndarray, spec: PoseModelSpec, fit_to: tuple[int, int] | None = None
+) -> tuple[np.ndarray, float]:
     """Turn a BGR frame into the model's input tensor.
 
     Returns the tensor and the scale factor applied, which the caller divides
     out of the decoded coordinates to get back to source-frame pixels.
+
+    ``fit_to`` is the ``(height, width)`` a fixed-input model demands. Given
+    one, the frame is fitted to it -- aspect preserved, remainder padded -- and
+    the returned scale composes that with the spec's own ``input_scaling``, so
+    one division still lands the keypoints back in source pixels. Without one
+    the frame keeps its size and is padded up to ``pad_to_stride``, which is
+    what a dynamic-input model wants.
 
     Padding goes to the bottom and right only, so it never shifts the coordinate
     origin and needs no un-mapping on the way back.
@@ -112,13 +121,42 @@ def preprocess_frame(bgr: np.ndarray, spec: PoseModelSpec) -> tuple[np.ndarray, 
         if img.ndim == 2:
             img = img[:, :, None]
 
-    pad = max(int(spec.pad_to_stride), 1)
-    if pad > 1:
+    if fit_to is not None:
+        # The model's ONNX fixes its spatial dimensions, so the frame is what
+        # has to give. Fit inside, preserving aspect: stretching a 16:9 frame
+        # onto a 1.75:1 input would hand the network a differently-shaped
+        # animal than it was trained on, and keypoint accuracy is exactly what
+        # that costs. The remainder is padded, not cropped -- a crop could put
+        # the animal outside the input entirely.
+        target_h, target_w = fit_to
         h, w = img.shape[:2]
-        pad_h = (-h) % pad
-        pad_w = (-w) % pad
-        if pad_h or pad_w:
-            img = np.pad(img, ((0, pad_h), (0, pad_w), (0, 0)), mode="constant")
+        fit = min(target_w / w, target_h / h)
+        if fit != 1.0:
+            img = cv2.resize(
+                img,
+                (max(1, int(round(w * fit))), max(1, int(round(h * fit)))),
+                interpolation=cv2.INTER_AREA if fit < 1.0 else cv2.INTER_LINEAR,
+            )
+            if img.ndim == 2:
+                img = img[:, :, None]
+            scale *= fit
+        # Pad to exactly the target. Bottom and right only, as below, so the
+        # coordinate origin does not move and one scale factor still undoes it.
+        h, w = img.shape[:2]
+        if (h, w) != (target_h, target_w):
+            img = np.pad(
+                img,
+                ((0, max(0, target_h - h)), (0, max(0, target_w - w)), (0, 0)),
+                mode="constant",
+            )[:target_h, :target_w]
+    else:
+        pad = max(int(spec.pad_to_stride), 1)
+        if pad > 1:
+            h, w = img.shape[:2]
+            pad_h = (-h) % pad
+            pad_w = (-w) % pad
+            if pad_h or pad_w:
+                img = np.pad(img, ((0, pad_h), (0, pad_w), (0, 0)), mode="constant")
 
     # Normalisation runs while the array is still HWC, so the channel slice
     # below indexes the right axis for both colour modes.
@@ -157,13 +195,13 @@ class OnnxPoseBackend:
         """Keypoints the model emits, per its own config. Always known here."""
         return len(self.spec.keypoint_names)
 
-    def _expected_source_size(self) -> tuple[int, int] | None:
-        """``(width, height)`` of the source frame this model can take, if fixed.
+    def _fixed_input_hw(self) -> tuple[int, int] | None:
+        """``(height, width)`` the graph demands, or None when it is dynamic.
 
-        None when the graph's spatial dimensions are dynamic (any size works) or
-        cannot be read. The model's own input is post-scaling, so it is divided
-        back out to give a number the operator can compare against a camera
-        resolution.
+        A SLEAP export commonly fixes its spatial dimensions, so a frame of any
+        other size is rejected outright. Reading the requirement lets
+        preprocess_frame fit the frame to it rather than asking the operator to
+        re-record at the model's resolution.
         """
         try:
             shape = self.session.get_inputs()[0].shape
@@ -173,9 +211,8 @@ class OnnxPoseBackend:
             return None
         h, w = (shape[1], shape[2]) if self.spec.input_layout == "NHWC" else (shape[2], shape[3])
         if not isinstance(h, int) or not isinstance(w, int):
-            return None  # dynamic dimensions: any frame size is fine
-        scale = float(self.spec.scale) or 1.0
-        return int(round(w / scale)), int(round(h / scale))
+            return None  # dynamic dimensions: the frame goes through as it is
+        return h, w
 
     def _as_kchw(self, arr: np.ndarray) -> np.ndarray:
         """Drop the batch axis and put channels first.
@@ -192,7 +229,7 @@ class OnnxPoseBackend:
         return arr
 
     def predict(self, bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        tensor, scale = preprocess_frame(bgr, self.spec)
+        tensor, scale = preprocess_frame(bgr, self.spec, fit_to=self._fixed_input_hw())
         input_name = self.session.get_inputs()[0].name
         try:
             outputs = self.session.run(None, {input_name: tensor})
@@ -202,19 +239,13 @@ class OnnxPoseBackend:
             # nobody can act on. Say what the model wants in the units the
             # operator controls -- the source frame -- which is the model's own
             # input divided by the scaling it was trained with.
-            expected = self._expected_source_size()
-            if expected is None:
-                raise
-            want_w, want_h = expected
-            got_h, got_w = bgr.shape[:2]
-            if (got_w, got_h) == (want_w, want_h):
-                raise
             raise ValueError(
-                f"{Path(self.spec.model_path).name} was exported for "
-                f"{want_w}x{want_h} source frames and this one is {got_w}x{got_h}. "
-                "Its ONNX has fixed spatial dimensions, so it cannot take another "
-                "size: match the camera or video to that resolution, or re-export "
-                "the model with dynamic input dimensions."
+                f"{Path(self.spec.model_path).name} rejected a "
+                f"{tensor.shape[2] if self.spec.input_layout == 'NCHW' else tensor.shape[1]}"
+                f"x{tensor.shape[3] if self.spec.input_layout == 'NCHW' else tensor.shape[2]} "
+                f"input built from a {bgr.shape[1]}x{bgr.shape[0]} frame ({exc}). The frame is "
+                "fitted to whatever spatial size the graph declares, so this is a mismatch the "
+                "model's own metadata did not describe -- check it against its glider_pose.json."
             ) from exc
 
         maps = self._as_kchw(outputs[0])

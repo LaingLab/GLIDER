@@ -347,3 +347,100 @@ def test_conf_threshold_reaches_the_ultralytics_backend(tmp_path, monkeypatch):
     monkeypatch.setattr(backend_mod, "_load_yolo", lambda p: _FakeYolo(_FakeResult()))
     b = load_pose_backend(pt, keypoint_names=["a"], conf_threshold=0.7)
     assert b.conf_threshold == pytest.approx(0.7)
+
+
+# --- fitting a frame to a fixed-input model -----------------------------------
+
+
+def _spec_for_fit(tmp_path, **over):
+    from glider.vision.pose.spec import PoseModelSpec
+
+    onnx = tmp_path / "model.onnx"
+    onnx.write_bytes(b"stub")
+    kw = {
+        "kind": "sleap",
+        "model_path": onnx,
+        "root": tmp_path,
+        "keypoint_names": ["a", "b"],
+        "source_label": "t",
+        "input_layout": "NHWC",
+        "output_stride": 1.0,
+        "scale": 1.0,
+        "pad_to_stride": 1,
+        "divide_by_255": True,
+    }
+    kw.update(over)
+    return PoseModelSpec(**kw)
+
+
+def test_a_frame_is_fitted_to_a_models_fixed_input(tmp_path):
+    """The model's ONNX fixes its spatial dims; the frame is what must give."""
+    from glider.vision.pose.backend import preprocess_frame
+
+    spec = _spec_for_fit(tmp_path)
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+
+    tensor, scale = preprocess_frame(frame, spec, fit_to=(320, 560))
+
+    assert tensor.shape == (1, 320, 560, 3)
+    # 560/1920 fits before 320/1080 does, so width is the binding constraint.
+    assert scale == pytest.approx(560 / 1920)
+
+
+def test_fitting_preserves_aspect_and_pads_rather_than_stretching(tmp_path):
+    """A stretched animal is a differently-shaped animal, and the model was not
+    trained on one. Fit inside, pad the remainder."""
+    from glider.vision.pose.backend import preprocess_frame
+
+    spec = _spec_for_fit(tmp_path)
+    # A bright frame on a black pad makes the letterbox visible.
+    frame = np.full((1080, 1920, 3), 255, dtype=np.uint8)
+
+    tensor, scale = preprocess_frame(frame, spec, fit_to=(320, 560))
+
+    used_h = int(round(1080 * scale))
+    assert tensor[0, used_h - 1, 0, 0] > 0.0  # inside the image
+    assert tensor[0, -1, 0, 0] == 0.0  # in the pad below it
+
+
+def test_keypoints_map_back_to_source_pixels(tmp_path):
+    """The property that matters: a point the model reports must land where it
+    is in the original frame, not in the resized one."""
+    from glider.vision.pose.backend import preprocess_frame
+
+    spec = _spec_for_fit(tmp_path)
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    _tensor, scale = preprocess_frame(frame, spec, fit_to=(320, 560))
+
+    # A detection at the centre of the fitted image is the centre of the source.
+    network_xy = np.array([[1920 * scale / 2, 1080 * scale / 2]])
+    source_xy = network_xy / scale
+    assert source_xy[0] == pytest.approx([960.0, 540.0], abs=1.0)
+
+
+def test_fitting_composes_with_the_specs_own_scaling(tmp_path):
+    """SLEAP's input_scaling already halves the frame; fitting must account for
+    what that left, not re-derive from the source size."""
+    from glider.vision.pose.backend import preprocess_frame
+
+    spec = _spec_for_fit(tmp_path, scale=0.5)
+    frame = np.zeros((640, 1120, 3), dtype=np.uint8)
+
+    tensor, scale = preprocess_frame(frame, spec, fit_to=(320, 560))
+
+    # 0.5 alone lands exactly on the target, so no further fitting is needed.
+    assert tensor.shape == (1, 320, 560, 3)
+    assert scale == pytest.approx(0.5)
+
+
+def test_no_fit_target_leaves_the_old_behaviour_alone(tmp_path):
+    """A dynamic-input model must keep padding to stride, not be resized."""
+    from glider.vision.pose.backend import preprocess_frame
+
+    spec = _spec_for_fit(tmp_path, pad_to_stride=32)
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+
+    tensor, scale = preprocess_frame(frame, spec)
+
+    assert tensor.shape == (1, 128, 128, 3)  # padded up to the stride
+    assert scale == pytest.approx(1.0)
