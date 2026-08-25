@@ -54,7 +54,7 @@ def dlc_folder(tmp_path, monkeypatch):
     return root
 
 
-def test_selecting_a_pose_model_points_tracking_at_the_resolved_onnx(qtbot, dlc_folder):
+def test_selecting_a_pose_model_points_tracking_at_the_folder(qtbot, dlc_folder):
     from glider.vision.cv_processor import DetectionBackend
 
     panel = _make_panel(qtbot)
@@ -62,10 +62,50 @@ def test_selecting_a_pose_model_points_tracking_at_the_resolved_onnx(qtbot, dlc_
 
     settings = panel._cv_processor.settings
     assert settings.backend == DetectionBackend.POSE_MODEL
-    # The resolved model.onnx -- not the folder _pose_model_path keeps for the
-    # (separate) live behaviour classifier.
-    assert settings.model_path == str(dlc_folder / "model.onnx")
+    assert settings.model_path == str(dlc_folder)
     assert settings.keypoint_names == NAMES
+
+
+def test_the_stored_path_is_one_the_loader_can_resolve(qtbot, dlc_folder):
+    """The property the earlier version got wrong, and no test checked.
+
+    CVSettings holds a *string*, and load_pose_backend re-resolves it with
+    identify_pose_model before every load. Storing the resolved model.onnx
+    looked right and round-tripped only for a model with a glider_pose.json
+    beside it -- which a SLEAP conversion does not write, so selecting a real
+    SLEAP folder raised PoseModelError out of a Qt slot and killed the app.
+
+    Asserting the exact string is not enough; what matters is that the loader
+    can take it back.
+    """
+    from glider.vision.pose.spec import identify_pose_model
+
+    panel = _make_panel(qtbot)
+    panel._apply_pose_model(dlc_folder)
+
+    stored = panel._cv_processor.settings.model_path
+    spec = identify_pose_model(stored)  # must not raise
+    assert spec.keypoint_names == NAMES
+
+
+def test_a_backend_that_refuses_to_load_warns_instead_of_crashing(qtbot, dlc_folder, monkeypatch):
+    """A pose backend refuses rather than degrading, which is right -- but that
+    refusal reaching a Qt slot uncaught takes the whole application down."""
+    # camera_panel imports QMessageBox inside the function, so patch it where it
+    # is defined rather than on the panel module, which never binds the name.
+    from PyQt6.QtWidgets import QMessageBox
+
+    panel = _make_panel(qtbot)
+    monkeypatch.setattr(
+        panel._cv_processor,
+        "update_settings",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("no execution provider")),
+    )
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **_k: warned.append(args[-1]))
+
+    assert panel._apply_pose_model(dlc_folder) is True
+    assert warned and "no execution provider" in warned[0]
 
 
 def test_selecting_a_pose_model_calls_update_settings(qtbot, dlc_folder, monkeypatch):
@@ -138,4 +178,4 @@ def test_picking_a_second_pose_model_reloads_with_its_own_names(qtbot, tmp_path,
 
     panel._apply_pose_model(Path(second))
     assert panel._cv_processor.settings.keypoint_names == ["x", "y", "z"]
-    assert panel._cv_processor.settings.model_path == str(second / "model.onnx")
+    assert panel._cv_processor.settings.model_path == str(second)

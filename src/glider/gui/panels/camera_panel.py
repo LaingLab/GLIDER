@@ -1697,9 +1697,26 @@ class CameraPanel(QWidget):
         if spec.kind in ("sleap", "dlc"):
             settings = self._cv_processor.settings.copy()
             settings.backend = DetectionBackend.POSE_MODEL
-            settings.model_path = str(spec.model_path)
+            # The folder, not spec.model_path. CVSettings holds a string that
+            # load_pose_backend re-resolves with identify_pose_model, and a bare
+            # model.onnx only resolves when a glider_pose.json sits beside it --
+            # which a SLEAP conversion does not write. The folder carries the
+            # training_config.json that names the keypoints, so it is the only
+            # form that survives the round trip.
+            settings.model_path = str(spec.root or path)
             settings.keypoint_names = list(spec.keypoint_names)
-            self._cv_processor.update_settings(settings)
+            try:
+                self._cv_processor.update_settings(settings)
+            except Exception as exc:  # noqa: BLE001 - surfaced, never fatal
+                # A pose backend refuses to load rather than degrading to a
+                # different algorithm, which is right -- but that refusal
+                # reaching a Qt slot uncaught takes the application down.
+                logger.exception("Could not use %s for tracking", path)
+                QMessageBox.warning(
+                    self,
+                    "Pose model",
+                    f"{Path(path).name} loaded, but tracking could not use it:\n\n{exc}",
+                )
 
         self._update_live_controls_enabled()
         return True
