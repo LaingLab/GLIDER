@@ -239,6 +239,49 @@ def test_sleap_multi_instance_head_is_rejected_by_name(tmp_path):
         identify_pose_model(tmp_path)
 
 
+def test_sleap_names_the_head_the_model_actually_has(tmp_path):
+    """A real SLEAP config carries all four head keys, three of them null.
+
+    The message used to list the dict's keys, so a centroid model was rejected
+    with "has no single_instance head (found: centered_instance, centroid,
+    multi_instance, single_instance)" -- naming single_instance as present in
+    the same breath as calling it absent. It reads as a GLIDER bug rather than
+    as the wrong model, which is the one thing an error like this must not do.
+    """
+    _write_sleap(
+        tmp_path,
+        {
+            "model": {
+                "heads": {
+                    "single_instance": None,
+                    "centroid": {"anchor_part": None, "sigma": 2.5},
+                    "centered_instance": None,
+                    "multi_instance": None,
+                }
+            }
+        },
+    )
+    with pytest.raises(PoseModelError) as excinfo:
+        identify_pose_model(tmp_path)
+
+    message = str(excinfo.value)
+    assert "found: centroid" in message
+    # The whole defect: the head it says is missing must not also be listed
+    # among the heads it says it found.
+    assert "found: centroid, single_instance" not in message
+    assert message.count("single_instance") == 1
+
+
+def test_sleap_config_with_no_configured_head_says_none(tmp_path):
+    """Every head null is a real shape -- an untrained or hand-edited config."""
+    _write_sleap(
+        tmp_path,
+        {"model": {"heads": {"single_instance": None, "centroid": None}}},
+    )
+    with pytest.raises(PoseModelError, match="found: none"):
+        identify_pose_model(tmp_path)
+
+
 def test_sleap_config_without_part_names_is_an_error(tmp_path):
     _write_sleap(tmp_path, {"model": {"heads": {"single_instance": {"output_stride": 2}}}})
     with pytest.raises(PoseModelError, match="part_names"):

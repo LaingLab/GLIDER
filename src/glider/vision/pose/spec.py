@@ -208,7 +208,12 @@ def _from_sleap_config(root: Path, cfg_path: Path) -> PoseModelSpec:
 
     head = heads.get("single_instance")
     if head is None:
-        found = ", ".join(sorted(heads)) or "none"
+        # Only the heads that are actually configured. SLEAP writes all four
+        # keys into every training_config.json and nulls the ones the model
+        # does not use, so listing the keys named single_instance as "found"
+        # in the same breath as calling it missing -- which reads as a GLIDER
+        # bug rather than as the wrong model being picked.
+        found = ", ".join(sorted(k for k, v in heads.items() if v is not None)) or "none"
         raise PoseModelError(
             f"{cfg_path} has no single_instance head (found: {found}). GLIDER "
             "runs SLEAP single-instance models only; top-down and bottom-up "

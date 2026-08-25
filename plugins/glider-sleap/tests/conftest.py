@@ -8,7 +8,25 @@ application and is done by hand here.
 
 import pytest
 
-from glider_sleap import POSE_CONVERTERS
+# When the plugin is not installed, ignore this directory instead of failing
+# collection for the whole repository. glider-sleap declares tensorflow-cpu,
+# which publishes wheels only for manylinux x86_64 and win_amd64 -- so on an
+# Apple Silicon machine it cannot be installed at all, and the module-scope
+# import that used to sit here took `pytest` down before a single unrelated
+# test in any other directory ran.
+#
+# collect_ignore_glob rather than pytest.importorskip: raising Skipped while a
+# conftest is being imported is a collection *error*, not a skip. This is the
+# supported way to say "there is nothing to collect here".
+#
+# Nothing is being papered over. These tests are not passing, they are absent,
+# and the plugin's own workflow installs it on a platform that has the wheels
+# and runs them there.
+try:
+    from glider_sleap import POSE_CONVERTERS
+except ImportError:  # pragma: no cover - depends on the host's wheels
+    POSE_CONVERTERS = None
+    collect_ignore_glob = ["*"]
 
 
 @pytest.fixture
