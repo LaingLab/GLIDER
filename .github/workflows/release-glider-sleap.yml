@@ -11,11 +11,31 @@ name: Release glider-sleap
 #   https://pypi.org/manage/account/publishing/ -> "Add a new pending publisher"
 #     PyPI project name : glider-sleap
 #     Owner             : LaingLab
-#     Repository name   : glider
+#     Repository name   : GLIDER
 #     Workflow name     : release-glider-sleap.yml
 #     Environment name  : pypi
+#
+# Copy those exactly. Warehouse compares `repository_owner` and the workflow
+# filename with str.__eq__ -- both are CASE-SENSITIVE, and a wrong case fails
+# with `invalid-publisher` and no hint about which field is wrong. (The
+# repository name itself is compared case-insensitively, so `glider` would also
+# work; it is written `GLIDER` here to match what GitHub reports in the token's
+# claims, which is what you will be comparing against if this goes wrong.)
+#
 # A *pending* publisher is the right choice while the project does not exist on
-# PyPI yet; it becomes a normal publisher when the first upload creates it.
+# PyPI yet; it becomes a normal publisher when the first upload creates it. It
+# has to be created on the PyPI account that should own the project -- pending
+# publishers are per-account, so one created on the wrong login is invisible to
+# this workflow and looks identical to not having created one at all.
+#
+# TestPyPI is a separate site with separate publisher configuration. The
+# workflow_dispatch -> testpypi path needs its own pending publisher at
+# https://test.pypi.org/manage/account/publishing/ with the same values.
+#
+# If a run fails with `invalid-publisher`, the job summary prints the claims
+# GitHub actually sent. Compare them field by field against the publisher on
+# PyPI; the mismatch is always in one of owner, repository, workflow filename,
+# or environment.
 #
 # This file is a near-copy of release-glider-harp.yml, deliberately. PyPI
 # matches its trusted publisher against the workflow that requests the token
