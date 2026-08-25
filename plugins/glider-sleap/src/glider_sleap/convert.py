@@ -132,6 +132,42 @@ def is_conversion_current(model_dir: Path, onnx_path: Path) -> bool:
     return stamp == _stamp_for(checkpoint)
 
 
+def _keras2_custom_objects() -> dict:
+    """Deserialisers for Keras 2 configs that Keras 3 no longer accepts.
+
+    SLEAP checkpoints were written by Keras 2, which serialised ``groups`` into
+    every convolution's config. Keras 3 keeps that argument on ``Conv2D`` and
+    removed it from ``Conv2DTranspose``, so a SLEAP UNet trained with
+    ``upsampling: transposed_conv`` -- an ordinary option, not an exotic one --
+    fails to load with::
+
+        Unrecognized keyword arguments passed to Conv2DTranspose: {'groups': 1}
+
+    Nothing about the model is custom; only the config's vocabulary moved. A
+    ``groups`` of 1 is precisely what a plain transposed convolution already
+    is, so dropping it is lossless. Anything above 1 is a real architecture
+    this shim must not quietly reinterpret, so it is refused instead.
+    """
+    from keras.layers import Conv2DTranspose
+
+    class _Keras2Conv2DTranspose(Conv2DTranspose):
+        @classmethod
+        def from_config(cls, config):
+            config = dict(config)
+            groups = config.pop("groups", 1)
+            if groups not in (1, None):
+                raise ValueError(
+                    f"{config.get('name', 'a Conv2DTranspose layer')} declares "
+                    f"groups={groups}. GLIDER can read a Keras 2 transposed "
+                    "convolution only where groups is 1, which is what a plain "
+                    "transposed convolution is; a grouped one would have to be "
+                    "converted with the Keras version that wrote it."
+                )
+            return super().from_config(config)
+
+    return {"Conv2DTranspose": _Keras2Conv2DTranspose}
+
+
 def convert_sleap_to_onnx(
     model_dir: Path | str,
     onnx_path: Path | str | None = None,
@@ -162,13 +198,17 @@ def convert_sleap_to_onnx(
         raise ConversionError(INSTALL_HINT) from exc
 
     try:
-        model = tf.keras.models.load_model(str(checkpoint), compile=False)
+        model = tf.keras.models.load_model(
+            str(checkpoint), compile=False, custom_objects=_keras2_custom_objects()
+        )
     except Exception as exc:
         raise ConversionError(
             f"{checkpoint.name} could not be loaded as a Keras model ({exc}). "
             "GLIDER converts single-instance SLEAP models saved as ordinary "
-            "Keras checkpoints; a model using custom layers cannot be read "
-            "without SLEAP itself."
+            "Keras checkpoints. If the layer named above is one SLEAP defines "
+            "itself, it cannot be read without SLEAP; if it is a stock Keras "
+            "layer, this is a Keras 2 config Keras 3 no longer accepts and is "
+            "worth reporting."
         ) from exc
 
     if len(model.inputs) != 1 or len(model.outputs) != 1:
