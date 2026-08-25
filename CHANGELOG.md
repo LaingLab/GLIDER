@@ -26,6 +26,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Builder's Device Control panel and the Runner's manual controls. This is
   what makes Maimu's `pulse` — a period and a duration — pressable from
   either.
+- **Plugins can teach GLIDER to read a new pose format.** A plugin that
+  registers a `POSE_CONVERTERS` table (entry point group `glider.pose`) is
+  asked about every model folder a researcher selects, and converts the ones it
+  recognises into the ONNX + `glider_pose.json` pair GLIDER runs. The division
+  is that core runs ONNX and plugins turn a vendor's folder into it, which is
+  what lets each vendor's framework stay out of GLIDER's dependency tree.
+- **DeepLabCut models load, through the new `glider-dlc` plugin.** Select the
+  folder DeepLabCut wrote — `pytorch_config.yaml` beside a `snapshot-*.pt`, or
+  the project above it — and GLIDER converts it once and runs it. DeepLabCut
+  3.x, single animal; a 2.x (TensorFlow) folder is recognised and says so
+  rather than reporting a missing config, and a multi-animal head is named
+  rather than converted wrongly.
+  - The plugin itself has **no dependencies**. DeepLabCut is needed to read a
+    snapshot at all — a checkpoint is a bare PyTorch `state_dict` — but it
+    brings about 1.3 GB with it, so instead of carrying that, the first
+    conversion builds a private Python 3.12 environment under
+    `~/.glider/envs/deeplabcut` with `uv` and converts in there. The dialog
+    says so, with the size, before anything is downloaded. Set
+    `GLIDER_DLC_ENV` to an existing DeepLabCut virtualenv and nothing is.
+  - The output stride is **measured from the network** rather than read from
+    its config: it is the backbone's stride divided by whatever the head's
+    deconvolutions undo, and a ResNet-50 and an HRNet-w32 trained on the same
+    data differ by a factor of four. Measured from two input sizes, not one,
+    because every DeepLabCut head adds a cell past the edge — a single ratio
+    reads a stride-8 ResNet as 7.53 at 128 px and 7.88 at 512 px. Verified
+    against DeepLabCut 3.0.1 for both backbone families, matching its own
+    inference to within 3.1e-06.
+- **`glider-maimu`, `glider-sleap` and `glider-dlc` can be released to PyPI**,
+  each by its own workflow using Trusted Publishing, exactly as `glider-harp`
+  already is — no API token exists anywhere. Tag `<dist>-v<version>` to
+  publish; a tag that disagrees with the declared version fails before the
+  build, because PyPI never lets a version be re-uploaded.
+  - Each release also checks its wheel *registers*: the entry-point group and
+    name are asserted against the built artifact. That is the one failure that
+    is otherwise invisible — a plugin registered under the wrong name loads
+    without error and does nothing, which is how `glider-maimu` shipped once.
+  - Three near-identical workflow files rather than one shared one, on
+    purpose: PyPI matches its trusted publisher against the workflow that
+    requests the token and does not support reusable workflows
+    (warehouse#11096), so factoring the body out would stop publishing working.
+- **The Plugins window lists all four in-repo plugins.** `glider-maimu` was
+  installable but absent from the bundled catalogue, so it did not appear
+  there at all; `glider-sleap` and `glider-dlc` join it. The catalogue is what
+  the window reads, so an entry is what makes a plugin visible and described
+  rather than something you have to already know about.
+- **A converter can say what a conversion will cost before it starts**
+  (`preflight`), shown above the question in the confirmation dialog. Optional,
+  and deliberately not part of the converter Protocol, so adding it cannot make
+  an existing converter stop satisfying the check. It is what keeps a
+  multi-gigabyte first run from starting silently behind a wait cursor.
+
+### Changed
+
+- **SLEAP support moved out of core into the `glider-sleap` plugin.** Point
+  GLIDER at the folder SLEAP wrote and it still converts on first selection and
+  runs — what changed is where TensorFlow lives. `pip install glider-sleap`
+  replaces the `glider[sleap]` extra, which is gone: TensorFlow is a large
+  thing to carry for a lab that tracks with YOLO and has never opened SLEAP.
+  The plugin still does not depend on `sleap` itself.
+  - The dependency floors moved with it, and not cosmetically:
+    `tensorflow-cpu>=2.20` (earlier releases publish no 3.13 wheels, which
+    would have capped the plugin below GLIDER's own Python range) and
+    `tf2onnx>=1.17` (the first release that converts a Keras 3 model, which is
+    what any usable TensorFlow loads a SLEAP checkpoint into). Conversion is
+    verified end to end on tensorflow-cpu 2.21 with tf2onnx 1.17.
 
 ### Fixed
 

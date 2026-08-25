@@ -1,0 +1,150 @@
+name: Release glider-maimu
+
+# Publishes the glider-maimu plugin to PyPI via Trusted Publishing (OIDC).
+#
+# No API token exists anywhere -- not in the repository, not in Actions secrets,
+# not on a maintainer's machine. GitHub mints a short-lived identity token for
+# this specific workflow in this specific repository, and PyPI trades it for an
+# equally short-lived upload token. Nothing to leak and nothing to rotate.
+#
+# One-time setup on PyPI, before the first run:
+#   https://pypi.org/manage/account/publishing/ -> "Add a new pending publisher"
+#     PyPI project name : glider-maimu
+#     Owner             : LaingLab
+#     Repository name   : glider
+#     Workflow name     : release-glider-maimu.yml
+#     Environment name  : pypi
+# A *pending* publisher is the right choice while the project does not exist on
+# PyPI yet; it becomes a normal publisher when the first upload creates it.
+#
+# This file is a near-copy of release-glider-harp.yml, deliberately. PyPI
+# matches its trusted publisher against the workflow that requests the token
+# and does not support reusable workflows (warehouse#11096), so factoring the
+# shared body into a `workflow_call` would stop publishing working at all.
+#
+# To release: bump `version` in plugins/glider-maimu/pyproject.toml, merge, then
+#   git tag glider-maimu-v0.1.0 && git push origin glider-maimu-v0.1.0
+#
+# The tag is namespaced because this repository also releases GLIDER itself and
+# its other plugins; a bare `v0.1.0` would be ambiguous about which
+# artifact it refers to.
+
+on:
+  push:
+    tags:
+      - "glider-maimu-v*"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish"
+        required: true
+        default: testpypi
+        type: choice
+        options: [testpypi, pypi]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: plugins/glider-maimu
+
+jobs:
+  build:
+    name: Build and check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build twine
+
+      - name: Refuse a tag that disagrees with the version
+        # A tag naming one version while pyproject declares another publishes
+        # the wrong thing under the right name, and PyPI never lets a version
+        # be re-uploaded -- so this has to fail before the build, not after.
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          declared=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          tagged="${GITHUB_REF_NAME#glider-maimu-v}"
+          echo "declared=$declared tagged=$tagged"
+          if [ "$declared" != "$tagged" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match pyproject version $declared"
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Check metadata renders
+        run: twine check dist/*
+
+      - name: Verify the wheel registers and carries what it needs
+        # The entry point is the whole plugin: registered under the wrong name,
+        # or missing, it loads without error and does nothing. That is exactly
+        # how this plugin shipped once -- class-style entry points registered
+        # `maimu` and `maimu_node` while DEVICE_TYPES never ran, and every
+        # saved .glider file names `Maimu`.
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+
+          whl = glob.glob("dist/*.whl")[0]
+          archive = zipfile.ZipFile(whl)
+          names = archive.namelist()
+
+          problems = []
+
+          entry_points = [n for n in names if n.endswith("entry_points.txt")]
+          if not entry_points:
+              problems.append("no entry_points.txt: the plugin would never load")
+          else:
+              declared = archive.read(entry_points[0]).decode()
+              expected = "[glider.device]\nglider_maimu = glider_maimu"
+              if expected not in declared:
+                  problems.append(f"entry point is {declared!r}, expected {expected!r}")
+
+          for path in ['LICENSE', 'glider_maimu/device.py', 'glider_maimu/node.py']:
+              if not any(n.endswith(path) for n in names):
+                  problems.append(f"missing {path}")
+
+          if problems:
+              sys.exit("wheel is not publishable:\n  " + "\n  ".join(problems))
+          print("wheel registers as [glider.device] glider_maimu and carries its files")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: plugins/glider-maimu/dist/
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'pypi' }}
+    permissions:
+      id-token: write # the OIDC token; this is what replaces an API token
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
+
+      - name: Publish to PyPI
+        if: github.event_name != 'workflow_dispatch' || inputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

@@ -1,33 +1,52 @@
 # Pose models: YOLO, DeepLabCut, and SLEAP
 
 GLIDER runs three kinds of pose model. Ultralytics YOLO weights (`.pt`) load
-directly. DeepLabCut and SLEAP models run through ONNX, after a one-time export
-you perform in your own DeepLabCut or SLEAP environment.
+directly. DeepLabCut and SLEAP models run through ONNX, converted the first time
+you select one.
 
-Once a model is prepared, **drag its folder onto the camera panel**. The panel
-routes a dropped item by type, so a pose model, a behavior model (`.pkl`), and a
-video can all be dropped the same way — together or separately.
+**Drag the model's folder onto the camera panel.** The panel routes a dropped
+item by type, so a pose model, a behavior model (`.pkl`), and a video can all be
+dropped the same way — together or separately.
 
-## Why the export step exists
+## Install the plugin for your format
 
-Converting a native DeepLabCut or SLEAP checkpoint requires the framework that
-produced it: DeepLabCut's model classes to rebuild a snapshot, TensorFlow plus
-`tf2onnx` for a SLEAP SavedModel. GLIDER does not depend on either.
+| You have | Install |
+| --- | --- |
+| Ultralytics YOLO `.pt` | nothing |
+| SLEAP models | `pip install glider-sleap` |
+| DeepLabCut 3.x models | `pip install glider-dlc` |
 
-That is not squeamishness about dependencies. Full `sleap` is TensorFlow-pinned
-and has historically capped out around Python 3.10, while GLIDER targets
-3.11–3.13 across Windows, macOS, and Linux — the two genuinely cannot share an
-environment. Exporting once, in the environment that already has those tools,
-keeps GLIDER installable and lets the same exported folder run on a Raspberry Pi
-where neither framework will install at all.
+With the right plugin installed, selecting the folder your framework wrote is
+all there is to it: GLIDER asks once, converts, and keeps the result beside the
+model. Retrain and drop in a new checkpoint and it notices and reconverts — a
+stale ONNX would run perfectly well while answering with the network you just
+replaced.
+
+## Why they are plugins
+
+Converting a native checkpoint requires the framework that produced it:
+DeepLabCut's model classes to rebuild a snapshot, TensorFlow to open a SLEAP
+one. Between them that is several gigabytes, and it is not something to put in
+the dependency tree of a lab that tracks with YOLO and has opened neither.
+
+So GLIDER itself carries onnxruntime and nothing else, and each plugin owns one
+vendor's conversion. Installing one is how you say you have that vendor's
+models. `glider-dlc` goes further and carries no dependencies at all — it builds
+a private DeepLabCut environment under `~/.glider/envs` the first time you need
+one, and converts in that.
+
+The division also keeps the *running* side installable everywhere it needs to
+be. The same converted folder runs on a Raspberry Pi, where neither framework
+would install at all.
 
 ## What GLIDER supports
 
 | Format | Architecture | Status |
 | --- | --- | --- |
 | Ultralytics YOLO | pose `.pt` | Loads directly |
-| DeepLabCut | single-animal (heatmaps + location refinement) | Via ONNX export |
-| SLEAP | single-instance (confidence maps) | Via ONNX export |
+| DeepLabCut 3.x | single-animal (heatmaps + location refinement) | Converted on selection, with `glider-dlc` |
+| DeepLabCut 2.x | TensorFlow checkpoints | Hand export only |
+| SLEAP | single-instance (confidence maps) | Converted on selection, with `glider-sleap` |
 | SLEAP | top-down, bottom-up | **Not supported** |
 | Any | multi-animal | **Not supported** |
 
@@ -36,11 +55,11 @@ architectures have nowhere to put a second subject. A SLEAP model with a
 `centered_instance` or bottom-up head is rejected by name at load time rather
 than silently producing one arbitrary animal's keypoints.
 
-## Exporting
+## Exporting by hand
 
-Install nothing new in GLIDER. Copy `tools/export_pose_onnx.py` into the
-environment where DeepLabCut or SLEAP already works, and run it there — it
-imports nothing from `glider`.
+Only needed for DeepLabCut 2.x, or on a machine that should download nothing.
+Copy `tools/export_pose_onnx.py` into the environment where DeepLabCut or SLEAP
+already works, and run it there — it imports nothing from `glider`.
 
 ### DeepLabCut
 
@@ -151,6 +170,37 @@ sets. They must match.
 on"** — the names are right but the order is not. The message prints both
 orderings.
 
+## DeepLabCut models
+
+Point GLIDER at the folder DeepLabCut wrote — the `train` folder holding
+`pytorch_config.yaml` and `snapshot-*.pt`, or the project above it.
+
+```bash
+pip install glider-dlc
+```
+
+That plugin has no dependencies of its own. The first time you select a
+DeepLabCut model it builds a private Python environment under
+`~/.glider/envs/deeplabcut` with `uv`, installs DeepLabCut into that, and
+converts there — about 1.3 GB, downloaded once, and GLIDER's own environment is
+untouched. The dialog tells you before anything starts.
+
+Already have DeepLabCut working somewhere? Set `GLIDER_DLC_ENV` to that
+virtualenv and nothing is downloaded at all.
+
+!!! note "DeepLabCut 3.x, single animal"
+    A 2.x folder is TensorFlow rather than PyTorch and says so rather than
+    reporting a missing config; export it by hand. Multi-animal models — the
+    ones with a `paf` or `identity` head — are reported by name rather than
+    converted wrongly.
+
+Everything in the sidecar is read from the model's own config, except the output
+stride, which is measured from the network. That is deliberate: the effective
+stride is the backbone's divided by whatever the head's deconvolutions undo, and
+a ResNet-50 and an HRNet-w32 trained on the same data differ by a factor of
+four. Nothing is defaulted — a wrong stride does not fail, it shifts every
+keypoint by a constant and still draws a plausible skeleton.
+
 ## SLEAP models
 
 Point GLIDER at the folder SLEAP produced — the one holding `training_config.json`
@@ -158,14 +208,19 @@ and `best_model.h5`. The first time you select it, GLIDER converts the model to
 ONNX and keeps the result beside it; every later run reuses that.
 
 ```bash
-pip install 'glider[sleap]'
+pip install glider-sleap
 ```
 
-That installs TensorFlow and tf2onnx. **It does not install SLEAP, and does not
-need to** — a SLEAP model is saved as an ordinary Keras checkpoint, which
-TensorFlow opens on its own. (SLEAP itself is pinned to older Pythons than
-GLIDER runs on, so it could not share the environment anyway. That limit applies
-to *running* SLEAP, not to reading what it wrote.)
+That is a plugin, not an extra. It carries TensorFlow and tf2onnx, which is a
+large thing to put in the dependency tree of a lab that tracks with YOLO and has
+never opened SLEAP — installing it is how you say you have SLEAP models. GLIDER
+itself carries onnxruntime and nothing else.
+
+**It does not install SLEAP, and does not need to** — a SLEAP model is saved as
+an ordinary Keras checkpoint, which TensorFlow opens on its own. (SLEAP itself
+is pinned to older Pythons than GLIDER runs on, so it could not share the
+environment anyway. That limit applies to *running* SLEAP, not to reading what
+it wrote.)
 
 !!! note "Single-instance models only"
     GLIDER runs SLEAP's **single_instance** models. Top-down and bottom-up

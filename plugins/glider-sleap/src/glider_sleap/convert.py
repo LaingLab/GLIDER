@@ -25,12 +25,12 @@ Verified against SLEAP's own ``minimal_robot.UNet.single_instance`` test
 fixture: loads without SLEAP, converts in one call, and the ONNX matches the
 Keras output to 7e-7 -- floating-point noise.
 
-TensorFlow is an optional extra (``glider[sleap]``) rather than a dependency:
-it is a large install that only matters to people with SLEAP models, and
-importing it costs seconds and grabs threads. So this module is designed to run
-**as a subprocess** -- ``python -m glider.vision.pose.convert`` -- which keeps
-TensorFlow out of the application's process entirely and lets it be reclaimed
-when the child exits.
+TensorFlow ships with this plugin rather than with GLIDER: it is a large
+thing to put in the dependency tree of a lab that tracks with YOLO and has
+never opened SLEAP. Importing it also costs seconds and grabs threads, so this
+module is designed to run **as a script** -- it imports nothing from glider --
+which keeps TensorFlow out of the application's process entirely and lets it be
+reclaimed when the child exits.
 """
 
 from __future__ import annotations
@@ -52,10 +52,10 @@ STAMP_NAME = ".glider_onnx_source.json"
 DEFAULT_OPSET = 13
 
 INSTALL_HINT = (
-    "Converting a SLEAP model needs TensorFlow and tf2onnx, which GLIDER does "
-    "not install by default because they are large and only matter to people "
-    "with SLEAP models. Install them with:\n\n"
-    "    pip install 'glider[sleap]'\n\n"
+    "Converting a SLEAP model needs TensorFlow and tf2onnx. They ship with the "
+    "glider-sleap plugin rather than with GLIDER, because they are large and "
+    "only matter to people with SLEAP models. Install it with:\n\n"
+    "    pip install glider-sleap\n\n"
     "Nothing from SLEAP itself is required."
 )
 
@@ -205,7 +205,7 @@ def convert_sleap_to_onnx(
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point, so the conversion can run as a subprocess."""
     parser = argparse.ArgumentParser(
-        prog="python -m glider.vision.pose.convert",
+        prog="python -m glider_sleap.convert",
         description="Convert a SLEAP model folder to ONNX for GLIDER.",
     )
     parser.add_argument("model_dir", type=Path, help="the folder SLEAP produced")

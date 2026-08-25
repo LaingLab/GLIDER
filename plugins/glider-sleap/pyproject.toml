@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glider-sleap"
+version = "0.1.0"
+description = "Run SLEAP pose models in GLIDER"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+# The same range GLIDER itself supports. TensorFlow publishes cp313 wheels from
+# 2.20 on, so there is no version of Python GLIDER runs on where this plugin
+# cannot follow.
+requires-python = ">=3.11,<3.14"
+authors = [
+    {name = "LaingLab"}
+]
+keywords = ["sleap", "glider", "pose", "behavior", "onnx"]
+classifiers = [
+    # Alpha: converted models have been checked against SLEAP's own test
+    # fixture, but no lab has run an experiment off one.
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    # NOT sleap. A SLEAP model is an ordinary Keras checkpoint, which
+    # TensorFlow opens on its own; sleap is pinned to older Pythons than GLIDER
+    # runs on and could not sit here anyway. That ceiling applies to running
+    # SLEAP, not to reading what it wrote.
+    #
+    # tensorflow-cpu, not tensorflow: conversion is a one-off graph trace, GPU
+    # buys nothing, and the CPU wheel is a fraction of the size.
+    #
+    # The floors are not decorative. 2.20 is where cp313 wheels start, so
+    # anything lower would silently cap this plugin below GLIDER's own Python
+    # range. tf2onnx 1.17 is the first release that handles Keras 3, which is
+    # what TensorFlow >=2.16 loads a SLEAP checkpoint into; 1.16 fails on one.
+    # Conversion is verified end to end on tensorflow-cpu 2.21 + tf2onnx 1.17.
+    "tensorflow-cpu>=2.20",
+    "tf2onnx>=1.17",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+# Module-style, deliberately. An entry point naming a class registers under the
+# entry point's own name; a module lets PluginManager read the POSE_CONVERTERS
+# table, which names the converter itself.
+[project.entry-points."glider.pose"]
+glider_sleap = "glider_sleap"
+
+[project.urls]
+Homepage = "https://github.com/LaingLab/glider"
+Repository = "https://github.com/LaingLab/glider"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "slow: needs TensorFlow and a real SLEAP model (deselect with -m 'not slow')",
+]

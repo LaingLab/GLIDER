@@ -44,9 +44,10 @@ jobs:
       - name: Install dev extras
         run: uv sync --extra dev
 
-      # `plugins` covers the in-repo plugin distributions (plugins/glider-harp
-      # and any future sibling). Before it was listed here, the plugin's source
-      # and the `src = [".", "src", "plugins/glider-harp/src"]` import-root
+      # `plugins` covers the in-repo plugin distributions (glider-harp,
+      # glider-maimu, glider-sleap, glider-dlc and any future sibling).
+      # Before it was
+      # listed here, the plugins' source and the `src = [...]` import-root
       # config in the root pyproject were only ever exercised on a developer's
       # machine.
       - name: Ruff
@@ -127,6 +128,17 @@ jobs:
         run: |
           uv pip install -e ./plugins/glider-harp
           uv pip install -e ./plugins/glider-maimu
+          # --no-deps for glider-sleap: its dependency is TensorFlow, a
+          # several-hundred-megabyte wheel downloaded on every job of a
+          # nine-cell matrix to be imported by exactly one test, which
+          # skips without it. What CI needs from this plugin is that it
+          # registers through the glider.pose entry point and that its
+          # path logic is right, and neither needs TF. The conversion
+          # itself is verified by hand against a real SLEAP model.
+          uv pip install -e ./plugins/glider-sleap --no-deps
+          # glider-dlc has no dependencies of its own by design: it builds
+          # a DeepLabCut environment at runtime rather than carrying one.
+          uv pip install -e ./plugins/glider-dlc
 
       - name: Run tests with coverage
         # Force bash on all platforms: the default Windows shell is PowerShell,
@@ -149,10 +161,14 @@ jobs:
         # they match what `testpaths` in pyproject.toml lists.
         run: |
           uv run --no-sync pytest tests/ plugins/glider-harp/tests/ \
-            plugins/glider-maimu/tests/ -v -m "not slow" \
+            plugins/glider-maimu/tests/ plugins/glider-sleap/tests/ \
+            plugins/glider-dlc/tests/ \
+            -v -m "not slow" \
             --cov=glider \
             --cov=glider_harp \
             --cov=glider_maimu \
+            --cov=glider_sleap \
+            --cov=glider_dlc \
             --cov-report=xml \
             --cov-report=term
 

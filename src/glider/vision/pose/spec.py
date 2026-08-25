@@ -27,11 +27,12 @@ SIDECAR_NAME = "glider_pose.json"
 
 _HELPER_HINT = (
     "no GLIDER pose sidecar or recognisable DeepLabCut/SLEAP config found in "
-    "{root}. A SLEAP model folder (one holding training_config.json and "
-    "best_model.h5) is converted automatically when you select it, with "
-    "'glider[sleap]' installed. For DeepLabCut, export the model in your own "
-    f"DLC environment with tools/export_pose_onnx.py, which writes model.onnx "
-    f"alongside {SIDECAR_NAME}."
+    "{root}. A vendor's own model folder is converted automatically when you "
+    "select it, if the plugin that handles that vendor is installed: "
+    "glider-sleap for SLEAP, glider-dlc for DeepLabCut 3.x. A DeepLabCut 2.x "
+    "(TensorFlow) model has to be exported by hand in your own DLC environment "
+    f"with tools/export_pose_onnx.py, which writes model.onnx alongside "
+    f"{SIDECAR_NAME}."
 )
 
 

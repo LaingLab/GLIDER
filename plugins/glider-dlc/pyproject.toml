@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glider-dlc"
+version = "0.1.0"
+description = "Run DeepLabCut pose models in GLIDER"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+# The same range GLIDER supports. Nothing here constrains it: DeepLabCut runs
+# in an environment of its own, on its own Python.
+requires-python = ">=3.11,<3.14"
+authors = [
+    {name = "LaingLab"}
+]
+keywords = ["deeplabcut", "dlc", "glider", "pose", "behavior", "onnx"]
+classifiers = [
+    # Alpha: converted models have been checked against DeepLabCut's own
+    # inference, but no lab has run an experiment off one.
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+
+# Deliberately empty, and that is the whole design.
+#
+# DeepLabCut cannot be a dependency here. It is needed to read a snapshot at
+# all -- a DLC checkpoint is a bare PyTorch state_dict -- but it brings torch,
+# timm and albumentations with it, about 1.3 GB installed, and putting that in
+# GLIDER's environment is exactly what this plugin exists to avoid. So the
+# plugin is small, and the first conversion builds a private environment under
+# ~/.glider/envs with `uv` and installs DeepLabCut into that instead.
+#
+# uv is found on PATH at that point rather than declared: it is a standalone
+# binary, not a Python package to import, and it is what GLIDER's own installer
+# already uses. Its absence is reported with an install link, not a crash.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+# Module-style, deliberately. An entry point naming a class registers under the
+# entry point's own name; a module lets PluginManager read the POSE_CONVERTERS
+# table, which names the converter itself.
+[project.entry-points."glider.pose"]
+glider_dlc = "glider_dlc"
+
+[project.urls]
+Homepage = "https://github.com/LaingLab/glider"
+Repository = "https://github.com/LaingLab/glider"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "slow: needs the provisioned DeepLabCut environment and a real model (deselect with -m 'not slow')",
+]
