@@ -140,4 +140,11 @@ def decode_sleap_confmaps(
         xy[i, 1] = float((patch * rr).sum() / total)
 
     xy *= stride
-    return xy, conf
+    # SLEAP's confidence maps are not bounded at 1: the peak of a strong,
+    # narrow response overshoots, and this model routinely returns 1.0-1.5.
+    # Every consumer treats confidence as [0, 1] -- the protocol says so, and
+    # keypoint_min_confidence gates on it -- so an unclamped value silently
+    # disables that gate and lets a garbage keypoint through as the most
+    # confident thing on the frame. Clamping costs nothing real: anything at
+    # or above 1 is already saturated.
+    return xy, np.clip(conf, 0.0, 1.0)

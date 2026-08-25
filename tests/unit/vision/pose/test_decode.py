@@ -158,3 +158,28 @@ def test_each_channel_refines_independently():
 def test_sleap_non_3d_input_is_an_error():
     with pytest.raises(ValueError, match="K, H, W"):
         decode_sleap_confmaps(np.zeros((4, 4)), stride=1.0)
+
+
+def test_sleap_confidence_is_clamped_to_the_documented_range():
+    """SLEAP confmaps overshoot 1.0, and every consumer assumes [0, 1].
+
+    A real minimal_robot run returned 1.010-1.509 on every frame for one
+    keypoint. keypoint_min_confidence gates on this value, so an unclamped
+    score silently disables the gate: a keypoint the model is not actually
+    sure about passes as the most confident thing on the frame, and the
+    tracker builds a detection out of it.
+    """
+    import numpy as np
+
+    from glider.vision.pose.decode import decode_sleap_confmaps
+
+    # One channel with a sharp peak well above 1, one ordinary.
+    confmaps = np.zeros((2, 8, 8), dtype=float)
+    confmaps[0, 4, 4] = 1.5
+    confmaps[1, 2, 2] = 0.4
+
+    _xy, conf = decode_sleap_confmaps(confmaps, stride=1.0)
+
+    assert conf[0] == 1.0
+    assert conf[1] == pytest.approx(0.4)
+    assert np.all((conf >= 0.0) & (conf <= 1.0))
