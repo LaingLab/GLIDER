@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -217,6 +219,111 @@ def test_the_cli_writes_its_result_to_a_file(tmp_path, monkeypatch):
 
 
 # --- the real thing, where TensorFlow is available ----------------------------
+
+
+def test_keras2_conv2dtranspose_groups_is_dropped():
+    """SLEAP checkpoints are Keras 2; Keras 3 dropped `groups` from the transpose.
+
+    Keras 2 serialised `groups` into every convolution's config. Keras 3 keeps
+    it on Conv2D and removed it from Conv2DTranspose, so a SLEAP UNet trained
+    with `upsampling: transposed_conv` fails to deserialise with:
+
+        Unrecognized keyword arguments passed to Conv2DTranspose: {'groups': 1}
+
+    `groups=1` is what a plain transposed convolution already is, so dropping
+    it changes nothing about the model. Anything above 1 would, so that is
+    refused rather than silently reinterpreted.
+    """
+    keras = pytest.importorskip("keras")
+    from glider_sleap.convert import _keras2_custom_objects
+
+    shim = _keras2_custom_objects()["Conv2DTranspose"]
+    cfg = {
+        "name": "stack0_dec0_s8_to_s4_trans_conv",
+        "filters": 36,
+        "kernel_size": [3, 3],
+        "strides": [2, 2],
+        "padding": "same",
+        "groups": 1,
+    }
+    layer = shim.from_config(dict(cfg))
+    assert isinstance(layer, keras.layers.Conv2DTranspose)
+    assert layer.filters == 36
+    assert tuple(layer.strides) == (2, 2)
+
+
+def test_keras2_grouped_transpose_is_refused_not_reinterpreted():
+    """groups > 1 is a real architecture, and silently dropping it would be wrong."""
+    pytest.importorskip("keras")
+    from glider_sleap.convert import _keras2_custom_objects
+
+    shim = _keras2_custom_objects()["Conv2DTranspose"]
+    with pytest.raises(ValueError, match="groups=4"):
+        shim.from_config({"name": "g", "filters": 8, "kernel_size": [3, 3], "groups": 4})
+
+
+def test_a_load_failure_does_not_blame_custom_layers_for_a_stock_one(tmp_path, monkeypatch):
+    """The old message blamed "custom layers" for every load failure.
+
+    Conv2DTranspose is a stock Keras layer, so that reading sent a researcher
+    looking for a SLEAP dependency they did not need and could not have
+    installed anyway.
+    """
+    d = _sleap_dir(tmp_path)
+
+    def _load_model(*_args, **_kwargs):
+        raise ValueError("Unrecognized keyword arguments passed to Foo: {'x': 1}")
+
+    fake_tf = SimpleNamespace(keras=SimpleNamespace(models=SimpleNamespace(load_model=_load_model)))
+    monkeypatch.setitem(sys.modules, "tensorflow", fake_tf)
+    monkeypatch.setitem(sys.modules, "tf2onnx", object())
+    with pytest.raises(ConversionError) as excinfo:
+        convert_sleap_to_onnx(d)
+    assert "custom layers" not in str(excinfo.value)
+
+
+@pytest.mark.slow
+def test_the_shimmed_transpose_still_converts_to_onnx():
+    """The shim subclasses Conv2DTranspose, and tf2onnx must not care.
+
+    None of SLEAP's own single-instance fixtures use transposed-conv
+    upsampling, so no fixture exercises the shim all the way through
+    conversion. This builds the smallest model that does.
+    """
+    tf = pytest.importorskip("tensorflow")
+    tf2onnx = pytest.importorskip("tf2onnx")
+    ort = pytest.importorskip("onnxruntime")
+    import numpy as np
+
+    from glider_sleap.convert import _keras2_custom_objects
+
+    shim = _keras2_custom_objects()["Conv2DTranspose"]
+    inp = tf.keras.Input((16, 16, 8))
+    out = shim.from_config(
+        {
+            "name": "t",
+            "filters": 4,
+            "kernel_size": [3, 3],
+            "strides": [2, 2],
+            "padding": "same",
+            "groups": 1,
+        }
+    )(inp)
+    model = tf.keras.Model(inp, out)
+
+    onnx_path = Path(tempfile.mkdtemp()) / "shim.onnx"
+    tf2onnx.convert.from_keras(
+        model,
+        input_signature=(tf.TensorSpec((1, 16, 16, 8), tf.float32, name="input"),),
+        opset=13,
+        output_path=str(onnx_path),
+    )
+
+    data = np.random.RandomState(0).rand(1, 16, 16, 8).astype(np.float32)
+    keras_out = model.predict(data, verbose=0)
+    onnx_out = ort.InferenceSession(str(onnx_path)).run(None, {"input": data})[0]
+    assert keras_out.shape == onnx_out.shape
+    assert np.abs(keras_out - onnx_out).max() < 1e-5
 
 
 @pytest.mark.slow
