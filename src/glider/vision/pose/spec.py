@@ -241,6 +241,12 @@ def _from_sleap_config(root: Path, cfg_path: Path) -> PoseModelSpec:
         root=root,
         keypoint_names=names,
         source_label=f"sleap_{root.name}",
+        # SLEAP trains in TensorFlow and exports through tf2onnx, which keeps
+        # the graph's own layout -- so the ONNX takes NHWC, not the NCHW that
+        # torch-exported models take and that PoseModelSpec defaults to.
+        # Getting this wrong does not fail quietly: onnxruntime rejects the
+        # feed outright with "Got invalid dimensions for input".
+        input_layout="NHWC",
         output_stride=float(head.get("output_stride", 1)),
         # SLEAP has no location-refinement head; None selects peak refinement.
         locref_stdev=None,

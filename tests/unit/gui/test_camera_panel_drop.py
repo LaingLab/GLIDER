@@ -77,7 +77,7 @@ def _drag_enter(panel, paths):
 
 
 @pytest.fixture
-def dlc_folder(tmp_path):
+def dlc_folder(tmp_path, monkeypatch):
     root = tmp_path / "exp6_dlc"
     root.mkdir()
     (root / "glider_pose.json").write_text(
@@ -92,6 +92,15 @@ def dlc_folder(tmp_path):
         )
     )
     (root / "model.onnx").write_bytes(b"stub")
+
+    # Applying this folder now also points tracking at it (POSE_MODEL backend),
+    # which really tries to load the model. ``model.onnx`` is a stub, not a
+    # parseable ONNX graph, so stand in for onnxruntime the same way the pose
+    # backend's own unit tests do (see tests/unit/vision/pose/test_backend.py)
+    # rather than shipping a real model file just to satisfy a session load.
+    from glider.vision.pose import backend as pose_backend_mod
+
+    monkeypatch.setattr(pose_backend_mod, "_make_session", lambda spec: object())
     return root
 
 
