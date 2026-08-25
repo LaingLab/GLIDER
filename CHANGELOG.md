@@ -94,6 +94,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Experiment and Tools menus are back on the menu bar.** Slimming the bar
+  to four menus took both off it, and unlike Hardware and Run neither had
+  anywhere else to go — every one of their eight actions has exactly one call
+  site, and it is the menu action. That left the command palette as the only
+  route to Experiment Settings, Add Subject, Lab Setup, Behavior Analysis,
+  Batch Pose Tracking, Session Review, GPU / Device Check and **the plugin
+  manager**, in an application where every user is currently a first-time user.
+  Five instructions elsewhere in the app were still telling people to use those
+  menus, and four pages of documentation with them.
+  - The rule is now written down: a menu leaves the bar only when its actions
+    already have another *visible* home — a panel button or a toolbar button.
+    The palette does not count. Hardware and Run keep theirs; the Hardware panel
+    carries Add Board and Add Device, and the toolbar carries Connect, Start and
+    Stop.
+  - Three actions in those two menus are still palette-only — New Custom Device
+    Type, Disconnect All, and Emergency Stop. They are recorded in
+    `PALETTE_ONLY_ACTIONS` rather than glossed over, and the instructions that
+    pointed at them now name where they actually are.
+  - A new test reads every `Menu ▸ Item` string in the source and fails if it
+    names a menu that is not on the bar. That is the check that was missing:
+    each of those strings stayed perfectly accurate about where the action
+    lived, while ceasing to describe anywhere a person could go.
+
 - A BLE device with notifications enabled lost its subscription on the first
   reconnect and stayed silent for the rest of the session — `get_state()`
   returning `None` — with nothing logged.

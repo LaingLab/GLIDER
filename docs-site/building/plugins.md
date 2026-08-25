@@ -16,7 +16,8 @@ catalogue](#installing-plugins-from-the-catalogue).
 
 ## No-code custom devices
 
-Open **Hardware → New Custom Device Type...** to open the Custom Device builder.
+Open the command palette with **Ctrl+K** and run **New Custom Device
+Type...** to open the Custom Device builder.
 You describe the device as data — no Python — and GLIDER saves it to your device
 library and registers it, so it shows up in **Add Device** like any built-in.
 

@@ -24,7 +24,7 @@ You add a board first, then add devices onto it.
 
 ## Adding a board
 
-Open **Hardware → Add Board...**. Pick a board type:
+Click **Add Board** in the Hardware panel. Pick a board type:
 
 | Option in the dialog | Hardware | Notes |
 |---|---|---|
@@ -35,7 +35,8 @@ Open **Hardware → Add Board...**. Pick a board type:
 
 Give the board an ID (or accept the default), pick a serial port where it
 applies, and confirm. Once boards are added, connect them all with
-**Hardware → Connect All** (and **Disconnect All** to release them).
+**Connect** on the toolbar (and **Disconnect All**, in the command palette
+under Ctrl+K, to release them).
 
 !!! note "No hardware? Design offline."
     You can build and even run a graph with nothing connected. Add real boards
@@ -43,7 +44,8 @@ applies, and confirm. Once boards are added, connect them all with
 
 ## Adding a device
 
-Open **Hardware → Add Device...** (you need at least one board first). Choose a
+Click **Add Device** in the Hardware panel (you need at least one board
+first). Choose a
 device type, give it a **Device ID** and pick the **Board** it lives on, then
 fill in the pins and settings the dialog shows for that type.
 

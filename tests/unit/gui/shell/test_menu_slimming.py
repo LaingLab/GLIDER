@@ -1,19 +1,34 @@
-"""Four menus on the bar, and nothing lost behind them.
+"""What comes off the menu bar, and what has to stay on it.
 
-The menu bar keeps **File, Edit, View, Help**. Experiment, Hardware, Run and
-Tools come off it. The whole risk of that change is in one sentence: the palette
-used to source its corpus by walking the real ``QMenuBar``, so deleting four
-menus would have deleted their sixteen actions from the palette *as well* --
-and the palette is where they were supposed to have gone. The actions would
-still exist, still work when triggered, and be reachable from nowhere. Nothing
-raises. Nothing else in the suite notices.
+The bar is **File, Edit, Experiment, View, Tools, Help**. Hardware and Run come
+off, under a rule worth stating in full because the first version of this change
+did not have one:
 
-So the load-bearing test here is :func:`test_every_relocated_action_is_still_reachable`,
-and it is written to derive its list from the window rather than from names
-typed into this file: it walks the window's own menu registry for the four
-relocated categories and demands each action back out of the palette's corpus
-*by identity*. An action added to the Hardware menu next year is covered the
-day it is added.
+    a menu leaves the bar only when its actions already have another *visible*
+    home -- a panel button or a toolbar button. The palette does not count.
+
+Hardware and Run satisfy it: the Hardware panel carries Add Board and Add
+Device, and the toolbar carries Connect, Start and Stop. Experiment and Tools
+were taken off with them and did not, which is what this file's rule now exists
+to prevent -- eight actions, including the plugin manager, whose only remaining
+route was a command palette you have to know about before you can use it.
+
+The original risk of taking *any* menu off is still here and still the sharpest
+thing in this file: the palette used to source its corpus by walking the real
+``QMenuBar``, so deleting a menu would have deleted its actions from the palette
+*as well* -- the place they were supposed to have gone. The actions would still
+exist, still work when triggered, and be reachable from nowhere. Nothing raises.
+Nothing else in the suite notices.
+
+So the load-bearing tests here are :func:`test_every_relocated_action_is_still_reachable`,
+-- written to derive its list from the window rather than from names typed
+into this file, so that it walks the window's own menu registry for whichever
+categories are currently relocated and demands each action back out of the
+palette's corpus *by identity*. An action added to the Hardware menu next year
+is covered the day it is added.
+
+Whether a menu should be off the bar at all is the other half, and it lives in
+``test_menu_paths_are_followable.py``.
 
 That derivation cannot see an action that was deleted outright, so it is paired
 with :func:`test_the_menus_that_came_off_the_bar_kept_their_actions`, which
@@ -42,9 +57,11 @@ from glider.gui.main_window import MENU_BAR_TITLES, RELOCATED_MENU_TITLES
 pytestmark = pytest.mark.usefixtures("qtbot")
 
 
-#: The actions the four removed menus carried on the day they came off the bar.
-#: A floor, not an inventory: later additions are the derived test's job, and
-#: this list exists only so that *deleting* one of them cannot pass quietly.
+#: The actions these four menus carried on the day they came off the bar.
+#: Experiment and Tools have since gone back on it and are kept here anyway:
+#: the point of the list is that *deleting* one of these actions cannot pass
+#: quietly, and that is worth having whether or not the menu is on the bar.
+#: A floor, not an inventory -- later additions are the derived test's job.
 ACTIONS_THE_REMOVED_MENUS_CARRIED = {
     "Experiment": ["Experiment Settings...", "Add Subject...", "Lab Setup..."],
     "Hardware": [
@@ -132,9 +149,10 @@ def _open_palette(qtbot, window):
 # ------------------------------------------------------------------ the bar
 
 
-def test_the_menu_bar_is_exactly_four_menus(qtbot, main_window_factory):
+def test_the_menu_bar_is_the_menus_with_something_only_they_can_show(qtbot, main_window_factory):
+    """Experiment and Tools are on it because nothing else shows their actions."""
     window = _builder(qtbot, main_window_factory)
-    assert _bar_titles(window) == ["File", "Edit", "View", "Help"]
+    assert _bar_titles(window) == ["File", "Edit", "Experiment", "View", "Tools", "Help"]
     assert tuple(_bar_titles(window)) == MENU_BAR_TITLES
     del window
 
@@ -149,7 +167,8 @@ def test_the_relocated_menus_are_not_on_the_bar(qtbot, main_window_factory):
 
 def test_the_window_still_builds_all_eight_menus_in_menu_order(qtbot, main_window_factory):
     """The registry keeps the original order, so the unfiltered palette still
-    reads File, Edit, Experiment, … -- the only grouping a first-time user has."""
+    reads File, Edit, Experiment, … -- and so the bar, which is a filter over
+    this list, comes out in menu order rather than build-accident order."""
     window = _builder(qtbot, main_window_factory)
     assert _registry_titles(window) == [
         "File",
@@ -177,7 +196,10 @@ def test_every_relocated_action_is_still_reachable(qtbot, main_window_factory):
     window = _builder(qtbot, main_window_factory)
 
     relocated = _relocated_actions(window)
-    assert len(relocated) >= 16, "the relocated menus came back empty"
+    # Hardware's five and Run's three, as of the day Experiment and Tools went
+    # back on the bar. A floor, so that a menu quietly emptying is not mistaken
+    # for a menu whose actions are all reachable.
+    assert len(relocated) >= 8, "the relocated menus came back empty"
 
     reachable = {id(command.action) for command in window.commands()}
     unreachable = [_plain(action.text()) for action in relocated if id(action) not in reachable]
@@ -289,9 +311,11 @@ def test_an_action_in_a_submenu_off_the_bar_is_adopted_too(qtbot, main_window_fa
     the exact silent failure the adoption exists to prevent.
     """
     window = _builder(qtbot, main_window_factory)
-    tools = _menu(window, "Tools")
-    assert tools is not None
-    submenu = tools.addMenu("&Diagnostics")
+    # Hardware rather than Tools: the menu has to be one that is actually off
+    # the bar, or the adoption this checks is not the thing being exercised.
+    hardware = _menu(window, "Hardware")
+    assert hardware is not None
+    submenu = hardware.addMenu("&Diagnostics")
     buried = QAction("&Ping Board", window)
     buried.setShortcut("Ctrl+Alt+P")
     submenu.addAction(buried)

@@ -80,18 +80,53 @@ LAB_SETUP_COMPLETE_KEY = "first_run/setup_complete"
 # GLIDER has no existing users and so for the foreseeable future *every* user is
 # a first-time one. Same reason the palette greys a disabled command instead of
 # hiding it, and a collapsed panel leaves its icon rail behind.
-MENU_BAR_TITLES = ("File", "Edit", "View", "Help")
+MENU_BAR_TITLES = ("File", "Edit", "Experiment", "View", "Tools", "Help")
 
-# The menus that came off the bar. Every one of them is still built, still
-# populated and still owned by the window; they are simply not added to the bar,
-# and they reach the user through the command palette (and, where one already
-# owned the handler, through a panel).
+# The menus that came off the bar, and the rule for what may join them:
+#
+#   a menu leaves the bar only when its actions already have another *visible*
+#   home -- a panel button or a toolbar button. The palette does not count.
+#
+# Hardware and Run satisfy it for the actions anyone reaches for. The Hardware
+# panel carries Add Board and Add Device; the toolbar carries Connect, Start and
+# Stop; Stop is on the run banner and the Runner panel besides.
+#
+# Experiment and Tools did not satisfy it at all, which is the bug this list now
+# exists to prevent. Experiment Settings, Add Subject and Lab Setup have exactly
+# one call site each and it is the menu action; so do Behavior Analysis, Batch
+# Pose Tracking, Session Review, GPU / Device Check and Plugins. Eight actions
+# whose only route was a palette you have to know about first -- in an
+# application whose own comment three lines up says every user is a first-time
+# user. Five strings elsewhere in the app were still telling people to use those
+# menus, and the plugin manager had no other door at all.
+#
+# Three actions in the two menus that stayed off are still palette-only, and are
+# named rather than glossed over -- see PALETTE_ONLY_ACTIONS below. Each wants a
+# home of its own; none of them is the plugin manager, which is why they are a
+# separate piece of work rather than this one.
 #
 # The distinction that matters is *shown* versus *built*. ``_setup_menu`` builds
-# all eight into ``_menus``; the bar shows four of them; ``commands()`` reads all
+# all eight into ``_menus``; the bar shows six of them; ``commands()`` reads all
 # eight. One list, two consumers -- rather than a bar and a separate registry
 # that would drift, which is the failure this project has hit before.
-RELOCATED_MENU_TITLES = ("Experiment", "Hardware", "Run", "Tools")
+RELOCATED_MENU_TITLES = ("Hardware", "Run")
+
+# The remaining gap, written down so it is a decision rather than an oversight.
+#
+# These three live in menus that are off the bar and have no panel button, no
+# toolbar button and no other caller -- the command palette is the only way to
+# reach them with a mouse. Emergency Stop at least appears in the Help dialog's
+# shortcut table and answers to Ctrl+Shift+Escape, which is a thin defence for
+# the most safety-critical action in the application.
+#
+# Closing this means giving them real homes: Disconnect All and New Custom
+# Device Type belong on the Hardware panel beside Add Board and Add Device, and
+# Emergency Stop wants a decision about where a stop control lives rather than a
+# button dropped somewhere. Until then the honest thing is a list.
+PALETTE_ONLY_ACTIONS = {
+    "Hardware": ("New Custom Device Type...", "Disconnect All"),
+    "Run": ("Emergency Stop",),
+}
 
 
 def _plain_title(title: str) -> str:
@@ -361,7 +396,7 @@ class MainWindow(QMainWindow):
         # only from Qt's shortcut map; see _install_palette_shortcut.
         self._palette_action: QAction | None = None
         # Every menu the window builds, in menu order -- the four on the bar and
-        # the four that are not. _setup_menu fills it; commands() reads it.
+        # the two that are not. _setup_menu fills it; commands() reads it.
         self._menus: list[QMenu] = []
         # The command palette, built on first Ctrl+K rather than at startup:
         # it reads the menus when it opens, so there is nothing for it to do
@@ -2585,7 +2620,8 @@ class MainWindow(QMainWindow):
             # The new type is registered in DEVICE_REGISTRY and appears the next
             # time Add Device is opened.
             self._show_status_message(
-                f"Custom device '{dialog.device_name}' created — add it via Hardware → Add Device",
+                f"Custom device '{dialog.device_name}' created — add it with "
+                "Add Device in the Hardware panel",
                 5000,
             )
 
