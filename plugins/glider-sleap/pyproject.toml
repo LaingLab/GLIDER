@@ -39,12 +39,22 @@ dependencies = [
     # tensorflow-cpu, not tensorflow: conversion is a one-off graph trace, GPU
     # buys nothing, and the CPU wheel is a fraction of the size.
     #
+    # Except on macOS, where tensorflow-cpu is not published at all -- its
+    # wheels are manylinux x86_64 and win_amd64 only, so naming it
+    # unconditionally made this plugin uninstallable on every Apple Silicon
+    # machine, which is most of the lab's laptops. Plain `tensorflow` has the
+    # arm64 wheels, and on Apple Silicon it is CPU-only regardless unless
+    # tensorflow-metal is added alongside it -- so the reasoning above is not
+    # given up on macOS, it simply has one package to choose from instead of
+    # two.
+    #
     # The floors are not decorative. 2.20 is where cp313 wheels start, so
     # anything lower would silently cap this plugin below GLIDER's own Python
     # range. tf2onnx 1.17 is the first release that handles Keras 3, which is
     # what TensorFlow >=2.16 loads a SLEAP checkpoint into; 1.16 fails on one.
     # Conversion is verified end to end on tensorflow-cpu 2.21 + tf2onnx 1.17.
-    "tensorflow-cpu>=2.20",
+    "tensorflow-cpu>=2.20; platform_system != 'Darwin'",
+    "tensorflow>=2.20; platform_system == 'Darwin'",
     "tf2onnx>=1.17",
 ]
 
