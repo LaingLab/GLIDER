@@ -15,6 +15,7 @@ command the caller had just issued.
 
 import asyncio
 import sys
+import time
 
 import pytest
 
@@ -112,13 +113,32 @@ async def _initialized(**settings):
     return device
 
 
-async def _settle(device, tries=200):
-    """Let the reconnect task run to a resting state."""
-    for _ in range(tries):
+async def _settle(device, timeout=5.0):
+    """Let the reconnect task run to a resting state.
+
+    Budgeted in **wall-clock seconds, not iterations**, and that is the whole
+    point of the shape. The loop being waited on sleeps on a real backoff --
+    collapsed to a millisecond by ``instant_backoff``, but still real time --
+    while ``asyncio.sleep(0)`` costs no time at all, it only yields. Two hundred
+    of those cost about 0.3 ms on an idle event loop, so a test that needs two
+    reconnect attempts was racing 2 ms of backoff with a budget that could
+    expire in a seventh of it.
+
+    Which it did, exactly as a load-dependent flake does: green on an unloaded
+    machine, green on two of three CI runners, and one red
+    ``test_a_failed_resubscribe_is_rebuilt_not_short_circuited`` on the busy
+    one. Counting iterations measures how many times the loop was entered, and
+    the thing being waited for is measured in seconds.
+
+    Still ``sleep(0)`` inside, so the happy path costs nothing beyond the
+    backoff itself; only the budget changed.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         if device.link_state is not ConnectionState.RECONNECTING:
             return
         await asyncio.sleep(0)
-    raise AssertionError("reconnect never settled")
+    raise AssertionError(f"reconnect never settled within {timeout}s")
 
 
 # --- the loop ----------------------------------------------------------------
