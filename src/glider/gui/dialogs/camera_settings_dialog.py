@@ -452,10 +452,11 @@ class CameraSettingsDialog(QDialog):
         self._backend_combo.addItem("Motion Only", DetectionBackend.MOTION_ONLY)
         self._backend_combo.addItem("YOLO v8", DetectionBackend.YOLO_V8)
         self._backend_combo.addItem("YOLO+ByteTrack", DetectionBackend.YOLO_BYTETRACK)
+        self._backend_combo.addItem("Pose Model", DetectionBackend.POSE_MODEL)
         self._backend_combo.currentIndexChanged.connect(self._on_backend_changed)
         detection_layout.addRow("Backend:", self._backend_combo)
 
-        # YOLO model path (only visible for YOLO backend)
+        # Model path (visible for any model-backed backend: YOLO or pose)
         model_layout = QHBoxLayout()
         model_layout.setSpacing(8)
         self._model_path_edit = QLineEdit()
@@ -812,6 +813,7 @@ class CameraSettingsDialog(QDialog):
         """Handle backend selection change."""
         backend = self._backend_combo.itemData(index)
         is_yolo = backend in (DetectionBackend.YOLO_V8, DetectionBackend.YOLO_BYTETRACK)
+        is_pose = backend == DetectionBackend.POSE_MODEL
 
         # If the user just switched to a YOLO backend, make sure the
         # ultralytics library is actually available (or offer to install it
@@ -819,7 +821,8 @@ class CameraSettingsDialog(QDialog):
         # it, revert the combo to Background Sub so the rest of the UI
         # doesn't end up half-configured. Guarded by an attribute so unit
         # tests and migrations can construct the dialog without triggering
-        # a real install prompt.
+        # a real install prompt. Not a concern for POSE_MODEL: it never
+        # touches ultralytics.
         if is_yolo and not getattr(self, "_suppress_yolo_prompt", False):
             from glider.vision.yolo_install import ensure_ultralytics_installed
 
@@ -839,13 +842,22 @@ class CameraSettingsDialog(QDialog):
                     self._backend_combo.blockSignals(False)
                 is_yolo = False
 
-        self._model_path_edit.setVisible(is_yolo)
-        self._model_path_label.setVisible(is_yolo)
-        self._browse_model_btn.setVisible(is_yolo)
-        # Keypoint names only mean anything for a model-backed backend; a pose
-        # model is a YOLO model here, so the gate is the same.
-        self._keypoint_names_edit.setVisible(is_yolo)
-        self._keypoint_names_label.setVisible(is_yolo)
+        # The model field is shared by every model-backed backend. Its
+        # placeholder used to claim to be YOLO-only, which stopped being true
+        # once a pose model could drive tracking too.
+        is_model_backed = is_yolo or is_pose
+        self._model_path_edit.setPlaceholderText(
+            "Pose model (SLEAP/DLC folder or .onnx, or a YOLO-pose .pt)"
+            if is_pose
+            else "YOLO model (.pt or NCNN .param)"
+        )
+        self._model_path_edit.setVisible(is_model_backed)
+        self._model_path_label.setVisible(is_model_backed)
+        self._browse_model_btn.setVisible(is_model_backed)
+        # Keypoint names mean something for any model-backed backend now, not
+        # only YOLO: a pose model's bodypart names label the keypoints CSV too.
+        self._keypoint_names_edit.setVisible(is_model_backed)
+        self._keypoint_names_label.setVisible(is_model_backed)
 
     def _on_miniscope_mode_toggle(self, enabled: bool):
         """Handle miniscope mode toggle - auto-set recommended values."""

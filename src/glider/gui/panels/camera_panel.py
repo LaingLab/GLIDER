@@ -1652,6 +1652,7 @@ class CameraPanel(QWidget):
         """
         from PyQt6.QtWidgets import QMessageBox
 
+        from glider.vision.cv_processor import DetectionBackend
         from glider.vision.pose.converters import needs_conversion
         from glider.vision.pose.spec import PoseModelError, identify_pose_model
 
@@ -1688,6 +1689,17 @@ class CameraPanel(QWidget):
             self._kp_names_edit.setReadOnly(False)
             self._kp_hint.setText(_MANUAL_NAMES_HINT)
             self._pose_model_label.setText(f"Pose model: {Path(path).name} ({kind})")
+
+        # Only SLEAP/DeepLabCut point tracking at this model: load_pose_backend
+        # needs caller-supplied keypoint names to run a YOLO checkpoint, which
+        # this panel does not prompt for, so a .pt selection leaves the CV
+        # backend (background subtraction, YOLO, whatever Settings has) alone.
+        if spec.kind in ("sleap", "dlc"):
+            settings = self._cv_processor.settings.copy()
+            settings.backend = DetectionBackend.POSE_MODEL
+            settings.model_path = str(spec.model_path)
+            settings.keypoint_names = list(spec.keypoint_names)
+            self._cv_processor.update_settings(settings)
 
         self._update_live_controls_enabled()
         return True

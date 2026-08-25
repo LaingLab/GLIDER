@@ -174,11 +174,22 @@ class DetectionBackend(Enum):
     YOLO_V8 = auto()  # Requires ultralytics (detection only)
     YOLO_BYTETRACK = auto()  # YOLO + ByteTrack multi-object tracking
     MOTION_ONLY = auto()  # Just motion detection
+    POSE_MODEL = auto()  # SLEAP / DeepLabCut single-instance keypoints
 
 
 # Backends that load weights from ``CVSettings.model_path``. Changing the path
 # on one of these has to force a reload; the others ignore it entirely.
-_MODEL_BACKED_BACKENDS = frozenset({DetectionBackend.YOLO_V8, DetectionBackend.YOLO_BYTETRACK})
+_MODEL_BACKED_BACKENDS = frozenset(
+    {DetectionBackend.YOLO_V8, DetectionBackend.YOLO_BYTETRACK, DetectionBackend.POSE_MODEL}
+)
+
+# Padding added around the extent of a pose model's confident keypoints, as a
+# fraction of the box's larger side. A box that hugs the keypoints exactly
+# would have zero area for an animal seen head-on or tail-on.
+POSE_BBOX_MARGIN = 0.10
+# Floor for that padding, in pixels, so a tight cluster of keypoints (e.g. two
+# adjacent points) still gets a usable box instead of one a few pixels wide.
+POSE_BBOX_MIN_MARGIN_PX = 4.0
 
 
 def parse_keypoint_names(text: str) -> list[str]:
@@ -560,6 +571,7 @@ class CVProcessor:
         self._degradation_callbacks: list[Callable[[BackendDegradation], None]] = []
         self._bg_subtractor: cv2.BackgroundSubtractor | None = None
         self._yolo_model = None
+        self._pose_backend = None
         # Resolved to the best available accelerator when a YOLO model loads;
         # stays "cpu" until then and if no GPU is present.
         self._device: str = "cpu"
@@ -739,6 +751,10 @@ class CVProcessor:
                 ):
                     self._load_yolo_model()
 
+                # Initialize the pose-model backend if selected
+                elif self._active_backend == DetectionBackend.POSE_MODEL:
+                    self._load_pose_model()
+
                 # Initialize tracker
                 if self._settings.tracking_enabled:
                     self._tracker = ObjectTracker(max_disappeared=self._settings.max_disappeared)
@@ -747,6 +763,13 @@ class CVProcessor:
                 self._initialized = True
 
         except Exception as e:
+            # Every other backend degrades to something it can run (see
+            # _load_yolo_model) and reports False here; a pose backend does
+            # not get that treatment. Silently falling back to a different
+            # algorithm is exactly the bug this backend exists to fix, so the
+            # operator gets the model's own error instead.
+            if self._active_backend == DetectionBackend.POSE_MODEL:
+                raise
             logger.error(f"CV initialization failed: {e}")
             return False
 
@@ -832,6 +855,26 @@ class CVProcessor:
                 f"the model could not be loaded: {e}",
             )
             self._bg_subtractor = cv2.createBackgroundSubtractorMOG2()
+
+    def _load_pose_model(self) -> None:
+        """Load the configured SLEAP/DeepLabCut backend for detection.
+
+        Unlike ``_load_yolo_model``, a failure here is not caught: the
+        exception is left to propagate out of ``initialize()`` so the operator
+        sees the model's own error rather than tracking quietly switching to
+        background subtraction — the exact bug this backend exists to fix.
+        """
+        from glider.vision.pose.backend import load_pose_backend
+
+        self._pose_backend = load_pose_backend(
+            self._settings.model_path,
+            conf_threshold=self._settings.keypoint_min_confidence,
+        )
+        logger.info(
+            "Loaded pose model: %s (%d keypoints)",
+            self._settings.model_path,
+            len(self._pose_backend.keypoint_names),
+        )
 
     def _degrade_to(self, backend: DetectionBackend, reason: str) -> None:
         """Fall back to ``backend`` at runtime, leaving configuration alone.
@@ -955,6 +998,8 @@ class CVProcessor:
             return self._detect_yolo(frame)
         elif self._active_backend == DetectionBackend.YOLO_BYTETRACK and self._yolo_model:
             return self._detect_yolo_bytetrack(frame)
+        elif self._active_backend == DetectionBackend.POSE_MODEL and self._pose_backend is not None:
+            return self._detect_pose(frame)
         elif self._active_backend == DetectionBackend.MOTION_ONLY:
             return []  # Motion-only mode, no object detection
         else:
@@ -1065,6 +1110,50 @@ class CVProcessor:
                 detections.append(detection)
 
         return detections
+
+    def _detect_pose(self, frame: np.ndarray) -> list[Detection]:
+        """Pose-model detection: one detection per frame, when enough is seen.
+
+        Mirrors the shape of the YOLO-pose branches above (see
+        ``_detect_yolo``): a single ``Detection`` carries the full keypoint
+        array as ``_keypoints``, so the tracker, the CSV writer and keypoint
+        drawing pick it up exactly as they already do for YOLO-pose.
+        """
+        if self._pose_backend is None:
+            return []
+
+        xy, conf = self._pose_backend.predict(frame)
+        xy = np.asarray(xy, dtype=np.float64)
+        conf = np.asarray(conf, dtype=np.float64)
+
+        confident = conf >= self._settings.keypoint_min_confidence
+        if int(np.count_nonzero(confident)) < 2:
+            # The same answer background subtraction gives when it finds
+            # nothing; the tracker's disappeared-frame handling covers a
+            # brief occlusion. One confident point has no extent to box.
+            return []
+
+        kept_xy = xy[confident]
+        min_xy = kept_xy.min(axis=0)
+        max_xy = kept_xy.max(axis=0)
+        margin = max(float(np.max(max_xy - min_xy)) * POSE_BBOX_MARGIN, POSE_BBOX_MIN_MARGIN_PX)
+
+        frame_h, frame_w = frame.shape[:2]
+        x1 = max(0.0, float(min_xy[0]) - margin)
+        y1 = max(0.0, float(min_xy[1]) - margin)
+        x2 = min(float(frame_w), float(max_xy[0]) + margin)
+        y2 = min(float(frame_h), float(max_xy[1]) + margin)
+
+        det = Detection(
+            class_id=0,
+            class_name="animal",
+            confidence=float(conf[confident].mean()),
+            bbox=(int(x1), int(y1), int(x2 - x1), int(y2 - y1)),
+        )
+        # Every keypoint, not only the confident ones, so the CSV keeps the
+        # model's own output; drawing already filters by keypoint_min_confidence.
+        det._keypoints = np.concatenate([xy, conf[:, None]], axis=1)
+        return [det]
 
     def _detect_background_subtraction(
         self, frame: np.ndarray, fg_mask: np.ndarray | None = None
