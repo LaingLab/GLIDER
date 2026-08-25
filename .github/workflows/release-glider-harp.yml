@@ -29,8 +29,18 @@ name: Release glider-harp
 # this workflow and looks identical to not having created one at all.
 #
 # TestPyPI is a separate site with separate publisher configuration. The
-# workflow_dispatch -> testpypi path needs its own pending publisher at
-# https://test.pypi.org/manage/account/publishing/ with the same values.
+# workflow_dispatch dry run needs its own pending publisher at
+# https://test.pypi.org/manage/account/publishing/ with the same values, except
+# Environment name, which is `testpypi`.
+#
+# Scoping the publisher to an environment is not optional here, it is the whole
+# access control. Trusted Publishing removes the API token; it does not decide
+# who may publish. Anyone with write access to this repository can push a tag,
+# so what stands between that and PyPI is the protection rules on the `pypi`
+# GitHub environment -- required reviewers, and deployments restricted to
+# protected tags. Leave Environment blank on PyPI and any workflow in the
+# repository that can request an OIDC token could publish, with no rule able to
+# stop it.
 #
 # If a run fails with `invalid-publisher`, the job summary prints the claims
 # GitHub actually sent. Compare them field by field against the publisher on
@@ -47,14 +57,12 @@ on:
   push:
     tags:
       - "glider-harp-v*"
+  # A dry run against TestPyPI, and deliberately nothing more. This used to
+  # offer a choice of target, which made it the loosest path to PyPI in the
+  # repository: the tag/version guard below is a no-op without a tag, and a
+  # dispatch builds from whatever ref the person running it picked. Publishing
+  # to PyPI now requires a tag, so both of those always apply.
   workflow_dispatch:
-    inputs:
-      target:
-        description: "Where to publish"
-        required: true
-        default: testpypi
-        type: choice
-        options: [testpypi, pypi]
 
 permissions:
   contents: read
@@ -69,6 +77,24 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Whole history, so the ancestry check below can actually be made.
+          fetch-depth: 0
+
+      - name: Refuse a tag that is not on main
+        # A tag can point at any commit in the repository, including one on a
+        # branch nobody reviewed. Publishing is the one place that matters:
+        # a wheel built from an unmerged branch reaches every user of the
+        # plugin under this project's name. Requiring the tagged commit to be
+        # an ancestor of main means what ships is what was merged.
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main. Merge it first."
+            exit 1
+          fi
+          echo "$GITHUB_SHA is on main"
 
       - uses: actions/setup-python@v5
         with:
@@ -130,8 +156,14 @@ jobs:
     name: Publish
     needs: build
     runs-on: ubuntu-22.04
+    # The gate. Protection rules on the `pypi` environment -- required
+    # reviewers, and deployments restricted to protected tags -- are what stop
+    # any one person with write access publishing on their own, and they apply
+    # here because the publisher registered on PyPI is scoped to this
+    # environment name. A dispatch lands in `testpypi` instead and is not
+    # subject to them.
     environment:
-      name: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'pypi' }}
+      name: ${{ github.event_name == 'workflow_dispatch' && 'testpypi' || 'pypi' }}
     permissions:
       id-token: write # the OIDC token; this is what replaces an API token
     steps:
@@ -141,14 +173,14 @@ jobs:
           path: dist/
 
       - name: Publish to TestPyPI
-        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+        if: github.event_name == 'workflow_dispatch'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
           packages-dir: dist/
 
       - name: Publish to PyPI
-        if: github.event_name != 'workflow_dispatch' || inputs.target == 'pypi'
+        if: github.event_name != 'workflow_dispatch'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
