@@ -142,7 +142,14 @@ def decode(raw: bytes) -> HarpFrame:
         address=message.address,
         port=message.port,
         payload_type=raw[_PAYLOAD_TYPE_OFFSET] & ~_TIMESTAMP_FLAG,
-        payload=bytes(message.payload),
+        # `payload_bytes`, not `payload`: since harp-protocol 0.5.0 the latter
+        # means "the payload as the register that parsed this message defines
+        # it", and raises for a frame straight off the wire that no register
+        # has decoded -- which is every frame arriving here. `payload_bytes` is
+        # the raw span, timestamp and checksum already excluded, which is what
+        # `HarpFrame.payload` has always carried and what `decode_payload`
+        # downstream expects.
+        payload=bytes(message.payload_bytes),
         timestamp=message.timestamp,
     )
 
