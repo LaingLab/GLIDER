@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glider-sleap-nn"
+version = "0.1.0"
+description = "Run sleap-nn (PyTorch SLEAP) pose models in GLIDER"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+# The same range GLIDER supports. Nothing here constrains it: sleap-nn runs in
+# an environment of its own, on its own Python.
+requires-python = ">=3.11,<3.14"
+authors = [
+    {name = "LaingLab"}
+]
+keywords = ["sleap", "sleap-nn", "glider", "pose", "behavior", "onnx"]
+classifiers = [
+    # Alpha: converted models have been checked against sleap-nn's own
+    # inference, but no lab has run an experiment off one.
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+
+# Deliberately empty, and that is the whole design.
+#
+# sleap-nn cannot be a dependency here. It is needed to *read* a checkpoint at
+# all -- a sleap-nn model is a PyTorch Lightning checkpoint, and rebuilding the
+# network from one needs sleap-nn's own model classes -- but it brings torch,
+# torchvision, lightning and a long tail with it, which is not something to put
+# in the environment of a lab that tracks with YOLO and has never opened SLEAP.
+#
+# So the first conversion builds a private environment under ~/.glider/envs
+# with `uv` and installs sleap-nn into that instead. `uv` is found on PATH at
+# that point rather than declared: it is a standalone binary, not a Python
+# package to import, and it is what GLIDER's own installer already uses.
+#
+# This is the same arrangement glider-dlc uses, for the same reason. It is NOT
+# the arrangement glider-sleap uses -- a classic SLEAP model is an ordinary
+# Keras checkpoint that TensorFlow opens without SLEAP being involved at all,
+# so that plugin can and does depend on tensorflow-cpu directly.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pyyaml",
+]
+
+# Module-style, deliberately. An entry point naming a class registers under the
+# entry point's own name; a module lets PluginManager read the POSE_CONVERTERS
+# table, which names the converter itself.
+[project.entry-points."glider.pose"]
+glider_sleap_nn = "glider_sleap_nn"
+
+[project.urls]
+Homepage = "https://github.com/LaingLab/glider"
+Repository = "https://github.com/LaingLab/glider"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "slow: needs the provisioned sleap-nn environment and a real model (deselect with -m 'not slow')",
+]

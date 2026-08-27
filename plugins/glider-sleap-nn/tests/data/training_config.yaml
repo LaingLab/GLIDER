@@ -1,0 +1,46 @@
+data_config:
+  preprocessing:
+    ensure_rgb: true
+    ensure_grayscale: false
+    max_height: 480
+    max_width: 640
+    scale: 1.0
+model_config:
+  backbone_config:
+    unet:
+      in_channels: 3
+      kernel_size: 3
+      filters: 16
+      filters_rate: 2.0
+      max_stride: 16
+      stem_stride: null
+      middle_block: true
+      up_interpolate: true
+      stacks: 1
+      convs_per_block: 2
+      output_stride: 2
+    convnext: null
+    swint: null
+    pretrained: null
+  head_configs:
+    single_instance:
+      confmaps:
+        part_names:
+        - left_ear
+        - right_ear
+        - nose
+        - body_center
+        - left_hip
+        - right_hip
+        - tail_base
+        sigma: 2.5
+        output_stride: 2
+    centroid: null
+    centered_instance: null
+    bottomup: null
+    multi_class_bottomup: null
+    multi_class_topdown: null
+    bottomup_segmentation: null
+    centered_instance_segmentation: null
+    semantic_segmentation: null
+sleap_nn_version: 0.3.3

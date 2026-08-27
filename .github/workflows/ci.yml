@@ -139,6 +139,10 @@ jobs:
           # glider-dlc has no dependencies of its own by design: it builds
           # a DeepLabCut environment at runtime rather than carrying one.
           uv pip install -e ./plugins/glider-dlc
+          # glider-sleap-nn likewise. Note this is the opposite of
+          # glider-sleap above, which needs --no-deps to keep TensorFlow out
+          # of the matrix: there is nothing here to keep out.
+          uv pip install -e ./plugins/glider-sleap-nn
 
       - name: Run tests with coverage
         # Force bash on all platforms: the default Windows shell is PowerShell,
@@ -162,13 +166,14 @@ jobs:
         run: |
           uv run --no-sync pytest tests/ plugins/glider-harp/tests/ \
             plugins/glider-maimu/tests/ plugins/glider-sleap/tests/ \
-            plugins/glider-dlc/tests/ \
+            plugins/glider-dlc/tests/ plugins/glider-sleap-nn/tests/ \
             -v -m "not slow" \
             --cov=glider \
             --cov=glider_harp \
             --cov=glider_maimu \
             --cov=glider_sleap \
             --cov=glider_dlc \
+            --cov=glider_sleap_nn \
             --cov-report=xml \
             --cov-report=term
 

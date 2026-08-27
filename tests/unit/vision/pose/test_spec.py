@@ -347,3 +347,51 @@ def test_a_slp_file_is_named_as_labels_not_a_model(tmp_path):
     message = str(excinfo.value)
     assert "labels file, not a trained model" in message
     assert "training_config.json" in message, "it must say what to pick instead"
+
+
+def _sleap_nn_folder(tmp_path):
+    folder = tmp_path / "sleap_model1.single_instance.n=598"
+    folder.mkdir()
+    (folder / "training_config.yaml").write_text("model_config: {}\n")
+    (folder / "best.ckpt").write_bytes(b"PK\x03\x04")
+    return folder
+
+
+def test_a_sleap_nn_folder_names_the_plugin_to_install(tmp_path):
+    """SLEAP has two generations sharing no filename, and the newer one needs a
+    different plugin. Falling through to the generic 'no model here' sends
+    someone back to SLEAP to re-export a model that is already fine."""
+    from glider.vision.pose.spec import PoseModelError, identify_pose_model
+
+    with pytest.raises(PoseModelError) as excinfo:
+        identify_pose_model(_sleap_nn_folder(tmp_path))
+
+    message = str(excinfo.value)
+    assert "sleap-nn" in message
+    assert "glider-sleap-nn" in message, "it must name the plugin to install"
+    assert "best_model.h5" in message, "and say what the other plugin does read"
+
+
+def test_a_converted_sleap_nn_folder_loads_normally(tmp_path):
+    """The signpost is a last resort: once converted, the sidecar wins and the
+    message must not fire."""
+    import json
+
+    from glider.vision.pose.spec import identify_pose_model
+
+    folder = _sleap_nn_folder(tmp_path)
+    (folder / "model.onnx").write_bytes(b"stub")
+    (folder / "glider_pose.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "sleap",
+                "onnx": "model.onnx",
+                "keypoint_names": ["nose", "tail_base"],
+            }
+        )
+    )
+
+    spec = identify_pose_model(folder)
+    assert spec.kind == "sleap"
+    assert spec.keypoint_names == ["nose", "tail_base"]
