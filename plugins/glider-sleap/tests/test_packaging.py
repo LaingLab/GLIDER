@@ -62,10 +62,21 @@ async def test_the_converter_registers(loaded):
 async def test_no_stray_aliases(loaded):
     """``glider_sleap`` -- the entry point's own name -- is what a class-style
     entry point would have produced. A stray alias means the same converter is
-    asked twice about every folder and reported as two plugins."""
-    strays = [n for n in POSE_CONVERTERS if "sleap" in n.lower() and n != EXPECTED_NAME]
+    asked twice about every folder and reported as two plugins.
 
-    assert strays == [], f"unexpected registrations: {strays}"
+    Matched on the converter rather than on the name. Testing for names
+    containing "sleap" was a fine proxy while this was the only SLEAP-ish
+    plugin, but glider-sleap-nn registers ``sleap_nn`` for a genuinely
+    different converter -- a *distinct* registration, which is the thing this
+    test exists to permit, not the duplicate it exists to catch.
+    """
+    strays = [
+        name
+        for name, cls in POSE_CONVERTERS.items()
+        if cls is SleapConverter and name != EXPECTED_NAME
+    ]
+
+    assert strays == [], f"SleapConverter registered under extra names: {strays}"
 
 
 async def test_the_converter_is_attributed_to_this_plugin(loaded):

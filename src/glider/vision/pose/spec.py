@@ -316,6 +316,21 @@ def identify_pose_model(path: str | Path) -> PoseModelSpec:
         sleap_cfg = path / "training_config.json"
         if sleap_cfg.is_file():
             return _from_sleap_config(path, sleap_cfg)
+        # Reached only when no sidecar exists and no converter has run, so a
+        # working glider-sleap-nn install never lands here.
+        if (path / "training_config.yaml").is_file() and (path / "best.ckpt").is_file():
+            # SLEAP has two generations that share no filename, and the newer
+            # one needs a different plugin. Falling through to the generic
+            # "no model here" would send someone back to SLEAP to re-export a
+            # model that is already perfectly good.
+            raise PoseModelError(
+                f"{path.name} is a sleap-nn (PyTorch) model. GLIDER runs these "
+                "through the glider-sleap-nn plugin, which is not installed — "
+                "install it with `uv pip install glider-sleap-nn`.\n\n"
+                "The glider-sleap plugin reads only classic TensorFlow SLEAP "
+                "models, which are a training_config.json beside a "
+                "best_model.h5."
+            )
         raise PoseModelError(_HELPER_HINT.format(root=path))
 
     raise PoseModelError(f"{path} does not exist.")
