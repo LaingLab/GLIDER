@@ -454,14 +454,52 @@ async def test_an_entry_without_requirements_is_unchanged():
     assert seen["args"][-1] == "glider-harp"
 
 
-def test_the_bundled_harp_entry_declares_its_prerelease_requirement():
-    """Without this the Install button fails on every uv-built environment --
-    the resolve refuses the transitive pre-release. Pinned here so nobody
-    'tidies' the field away without knowing what it holds up."""
+def test_a_prerelease_pin_is_named_directly_and_nothing_else_is():
+    """The catalogue's `requirements` field holds up exactly one thing.
+
+    uv honours a pre-release marker only on a *direct* requirement, so a plugin
+    whose dependency pins a pre-release installs under pip and fails under uv
+    unless the catalogue names that pin itself. glider-harp needed this while
+    it pinned `harp-protocol>=0.5.0rc1`.
+
+    It no longer does: 0.5.0 final shipped, and the pin moved to `>=0.5.0`. The
+    field is therefore empty for every plugin -- and this test now pins the
+    *rule* rather than that one instance, so it comes back on its own the next
+    time any plugin depends on a pre-release, and stays quiet otherwise.
+
+    The predecessor of this test guarded the harp entry specifically, with a
+    docstring warning nobody to tidy the field away. That warning was right and
+    is why this replaces it rather than deleting it.
+    """
+    import re
+    import tomllib
+    from pathlib import Path
+
     from glider.plugins.registry import PluginRegistry
 
-    entry = next(p for p in PluginRegistry.load_bundled().plugins if p["name"] == "glider-harp")
-    assert any(r.startswith("harp-protocol>=0.5.0rc1") for r in entry["requirements"])
+    plugins_dir = Path(__file__).resolve().parents[3] / "plugins"
+    prerelease = re.compile(r"(a|b|rc)\d", re.IGNORECASE)
+
+    for entry in PluginRegistry.load_bundled().plugins:
+        pyproject = plugins_dir / entry["name"] / "pyproject.toml"
+        if not pyproject.is_file():
+            continue
+        declared = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"].get(
+            "dependencies", []
+        )
+        needed = {d for d in declared if prerelease.search(d)}
+        listed = set(entry.get("requirements") or [])
+
+        assert needed <= listed, (
+            f"{entry['name']} depends on a pre-release {sorted(needed - listed)}, which "
+            "uv will refuse unless the catalogue names it directly"
+        )
+        assert listed <= needed, (
+            f"{entry['name']} lists {sorted(listed - needed)} in the catalogue, but the "
+            "field is only for pre-release pins -- a stale copy re-permits versions the "
+            "plugin has since excluded, and a copy without its environment markers "
+            "installs on platforms the plugin excluded"
+        )
 
 
 # --- argv injection through catalogue tokens ---------------------------------

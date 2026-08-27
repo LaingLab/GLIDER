@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "updated": "2026-08-24",
+  "updated": "2026-08-27",
   "plugins": [
     {
       "name": "glider-harp",
@@ -15,9 +15,7 @@
         "driver",
         "device"
       ],
-      "requirements": [
-        "harp-protocol>=0.5.0rc1,<0.6"
-      ]
+      "requirements": []
     },
     {
       "name": "glider-maimu",
@@ -32,26 +30,35 @@
         "device",
         "node"
       ],
-      "requirements": [
-        "bleak>=0.21"
-      ]
+      "requirements": []
+    },
+    {
+      "name": "glider-sleap-nn",
+      "display_name": "SLEAP Models",
+      "version": "0.1.0",
+      "pypi": "glider-sleap-nn",
+      "description": "Load SLEAP pose models saved as training_config.yaml + best.ckpt, which is what current SLEAP writes. Converts to ONNX on first use, in a sleap-nn environment it builds for itself. For an older model saved as training_config.json + best_model.h5, install SLEAP Models (Legacy) instead.",
+      "author": "Laing Lab",
+      "homepage": "https://github.com/LaingLab/glider/tree/main/plugins/glider-sleap-nn",
+      "glider_requires": ">=1.0,<2.0",
+      "provides": [
+        "pose"
+      ],
+      "requirements": []
     },
     {
       "name": "glider-sleap",
-      "display_name": "SLEAP Models",
+      "display_name": "SLEAP Models (Legacy)",
       "version": "0.1.0",
       "pypi": "glider-sleap",
-      "description": "Load SLEAP pose models. Converts them to ONNX on first use; needs no SLEAP install.",
+      "description": "Load pose models from the TensorFlow generation of SLEAP, saved as training_config.json + best_model.h5. Converts to ONNX on first use; needs no SLEAP install. If your model folder has training_config.yaml + best.ckpt, install SLEAP Models instead.",
       "author": "Laing Lab",
       "homepage": "https://github.com/LaingLab/glider/tree/main/plugins/glider-sleap",
       "glider_requires": ">=1.0,<2.0",
       "provides": [
         "pose"
       ],
-      "requirements": [
-        "tensorflow-cpu>=2.20",
-        "tf2onnx>=1.17"
-      ]
+      "requirements": []
     },
     {
       "name": "glider-dlc",
