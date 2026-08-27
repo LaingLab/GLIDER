@@ -1,6 +1,12 @@
 # glider-sleap
 
-Run [SLEAP](https://sleap.ai) pose models in GLIDER.
+Run **legacy** [SLEAP](https://sleap.ai) pose models in GLIDER — the TensorFlow
+generation, saved as `training_config.json` beside `best_model.h5`.
+
+If your model folder holds `training_config.yaml` and `best.ckpt`, that is
+current SLEAP (sleap-nn) and you want [`glider-sleap-nn`](../glider-sleap-nn)
+instead. The two generations share no filename, and GLIDER says which one a
+folder is if you pick the wrong plugin.
 
 Install this, point GLIDER at the folder SLEAP wrote, and it converts once and
 runs. There is nothing to export beforehand and no command to remember.

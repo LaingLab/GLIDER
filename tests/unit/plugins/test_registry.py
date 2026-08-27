@@ -7,6 +7,7 @@ listed" is otherwise unanswerable.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -148,3 +149,87 @@ async def test_the_default_fetcher_still_reads_a_normal_index(tmp_path):
     text = await _default_fetcher(path.as_uri(), 1.0)
 
     assert json.loads(text)["updated"] == "2026-08-01"
+
+
+class TestTheBundledCatalogueMatchesTheRepository:
+    """Every in-repo plugin must be offerable from the Plugins window.
+
+    glider-sleap-nn shipped to PyPI and did not appear in the window, because
+    adding a plugin means touching two places nothing connected: the `plugins/`
+    directory and this catalogue. Publishing succeeded, CI was green, and the
+    only symptom was a plugin nobody could find.
+    """
+
+    @staticmethod
+    def _plugins_dir() -> Path:
+        return Path(__file__).resolve().parents[3] / "plugins"
+
+    @classmethod
+    def _bundled(cls) -> dict:
+        return {p["name"]: p for p in PluginRegistry.load_bundled().plugins}
+
+    @classmethod
+    def _in_repo(cls) -> set[str]:
+        return {
+            d.name
+            for d in cls._plugins_dir().iterdir()
+            if d.is_dir() and (d / "pyproject.toml").is_file()
+        }
+
+    def test_every_in_repo_plugin_is_offered(self):
+        missing = self._in_repo() - set(self._bundled())
+        assert not missing, (
+            "these plugins exist in plugins/ but are not offered in "
+            f"src/glider/plugins/index.json: {sorted(missing)}"
+        )
+
+    def test_the_catalogue_names_no_plugin_that_is_not_there(self):
+        """A stale entry offers an install that cannot work.
+
+        Only entries whose homepage points into this tree are expected on disk:
+        glider-harp is also published from a repository of its own.
+        """
+        expected_here = {
+            name
+            for name, entry in self._bundled().items()
+            if "/tree/main/plugins/" in (entry.get("homepage") or "")
+        }
+        assert not (expected_here - self._in_repo()), (
+            "catalogue points at plugins/ folders that do not exist: "
+            f"{sorted(expected_here - self._in_repo())}"
+        )
+
+    def test_catalogue_requirements_are_copied_verbatim_or_not_at_all(self):
+        """A catalogue requirement is appended to the install command as-is.
+
+        It exists for one reason (see `installer.install_command`): uv honours
+        a pre-release marker only on a *direct* requirement. So it is a
+        duplicate of a line in the plugin's own pyproject, and a duplicate that
+        has drifted is worse than no duplicate:
+
+        * dropping an environment marker installs on a platform the plugin
+          deliberately excluded -- `tensorflow-cpu` has no macOS wheel, and the
+          catalogue once asked pip for it there unconditionally;
+        * keeping an old pin re-permits a version the plugin has since
+          excluded, undoing from here a pin tightened over there.
+
+        Verbatim or absent. Nothing in between.
+        """
+        import re
+        import tomllib
+
+        for name, entry in self._bundled().items():
+            pyproject = self._plugins_dir() / name / "pyproject.toml"
+            if not pyproject.is_file():
+                continue
+            declared = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"].get(
+                "dependencies", []
+            )
+            by_package = {re.split(r"[<>=!~\[]", d, maxsplit=1)[0].strip(): d for d in declared}
+            for requirement in entry.get("requirements") or []:
+                package = re.split(r"[<>=!~\[]", requirement, maxsplit=1)[0].strip()
+                if package in by_package:
+                    assert requirement == by_package[package], (
+                        f"{name}: the catalogue asks pip for {requirement!r} but its "
+                        f"pyproject declares {by_package[package]!r}"
+                    )
