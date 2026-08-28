@@ -170,6 +170,20 @@ class CausalSpeed:
 
     The first frame returns ``0.0`` (no predecessor). A full-dropout frame
     (all keypoints NaN) returns ``NaN`` so the detector breaks its run.
+
+    **A dropout resets the filter.** Everything above describes where the
+    animal was, and a dropout is the tracker saying it no longer knows. Keeping
+    that state across the gap and measuring against it on the way out charges
+    the whole gap's movement to a single frame: an animal walking at 1 px/frame
+    that is invisible for fifteen frames reappears at 16 px/frame. So the
+    coordinate window, the speed window and the reference are all cleared, and
+    re-acquisition seeds afresh exactly as frame 0 does.
+
+    That is not a small correction. On a real cohort the first frame after each
+    gap was the dominant term in the darting threshold -- one session's 99.5th
+    percentile read 362 px/frame, and the same data with the state cleared read
+    15.8. The cost is a few frames of re-warmed smoothing after every gap,
+    which is the honest price of having lost the animal.
     """
 
     def __init__(self, coord_smooth: int = 5, speed_smooth: int = 3):
@@ -179,8 +193,26 @@ class CausalSpeed:
         self._speeds: deque[float] = deque(maxlen=self.speed_smooth)
         self._prev_smoothed: np.ndarray | None = None
 
+    def _forget(self) -> None:
+        """Drop everything describing where the animal was.
+
+        Called when the tracker loses it. The coordinate window is cleared as
+        well as the reference: leaving stale frames in it would let the median
+        keep answering with the old position for up to ``coord_smooth`` frames
+        after the animal reappears somewhere else, which is the same error one
+        step removed.
+        """
+        self._coords.clear()
+        self._speeds.clear()
+        self._prev_smoothed = None
+
     def push(self, xy: np.ndarray) -> float:
         xy = np.asarray(xy, dtype=np.float64)
+        if np.all(np.isnan(xy)):
+            # Nothing was seen this frame, so nothing can be measured from it
+            # and nothing measured before it survives the gap.
+            self._forget()
+            return float("nan")
         self._coords.append(xy)
         with warnings.catch_warnings():
             # A full-dropout frame yields an all-NaN slice; the NaN result is

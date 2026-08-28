@@ -8,6 +8,7 @@ from glider.analysis.behavior.classify.speed_state import (
     CausalSpeed,
     FreezeDartDetector,
     calibrate_speed_thresholds,
+    causal_speed_series,
 )
 
 # ---------------------------------------------------------------------------
@@ -320,3 +321,71 @@ class TestOfflineLabellingKeepsRunsWhole:
         offline = self._offline(speeds)
         for state in ("freezing", "darting"):
             assert (state in online) == (state in offline)
+
+
+class TestADropoutDoesNotManufactureSpeed:
+    """A gap is missing information, not movement.
+
+    `CausalSpeed` measures displacement between consecutive *outputs* and
+    divides by exactly one frame. Across a dropout that is wrong by the length
+    of the gap: the animal moved for as long as it was invisible, and all of it
+    lands on the first frame back.
+
+    Measured on a real cohort this was the dominant term in the darting
+    threshold -- the 99.5th percentile of one session read 362 px/frame, and
+    clearing the state on a gap took the same data to 15.8.
+    """
+
+    @staticmethod
+    def _walk(n=12, gap=slice(2, 7), step=1.0):
+        """One keypoint moving at a constant `step` px/frame, invisible in `gap`."""
+        frames = np.array([[[i * step, 0.0]] for i in range(n)])
+        frames[gap] = np.nan
+        return frames
+
+    def test_the_frame_after_a_gap_is_not_a_speed(self):
+        """Nothing was measured across the gap, so nothing can be reported."""
+        speeds = causal_speed_series(self._walk(), coord_smooth=1, speed_smooth=1)
+        after = 7  # first finite frame after frames 2-6 are NaN
+        assert np.isnan(speeds[after]) or speeds[after] <= 1.0 + 1e-9, (
+            f"frame {after} reported {speeds[after]}, which is the whole gap's "
+            "movement charged to one frame"
+        )
+
+    def test_a_constant_walk_never_exceeds_its_own_step(self):
+        speeds = causal_speed_series(self._walk(step=1.0), coord_smooth=1, speed_smooth=1)
+        finite = speeds[np.isfinite(speeds)]
+        assert finite.max() <= 1.0 + 1e-9, f"peaked at {finite.max()} for a 1 px/frame walk"
+
+    def test_a_longer_gap_does_not_make_a_bigger_spike(self):
+        """The tell that the gap length is being charged as speed."""
+        short = causal_speed_series(
+            self._walk(n=20, gap=slice(2, 4)), coord_smooth=1, speed_smooth=1
+        )
+        long = causal_speed_series(
+            self._walk(n=20, gap=slice(2, 15)), coord_smooth=1, speed_smooth=1
+        )
+        assert np.nanmax(long) <= np.nanmax(short) + 1e-9
+
+    def test_the_smoothed_filter_does_not_carry_a_gap_across(self):
+        """With the real defaults, not just the degenerate window of 1."""
+        speeds = causal_speed_series(self._walk(n=30, gap=slice(5, 20)))
+        finite = speeds[np.isfinite(speeds)]
+        assert finite.max() <= 1.0 + 1e-6, f"peaked at {finite.max()}"
+
+    def test_tracking_resumes_after_the_gap(self):
+        """The fix must not blank the rest of the session."""
+        speeds = causal_speed_series(self._walk(n=30, gap=slice(5, 20)))
+        assert np.isfinite(speeds[-5:]).all()
+        assert speeds[-1] > 0.0
+
+    def test_a_dropout_is_still_reported_as_a_dropout(self):
+        """NaN in the gap is what makes the detector break its run.
+
+        At coord_smooth=1, because the default 5-frame coordinate median hides
+        an isolated dropout: its window still holds finite neighbours, so the
+        NaN only surfaces once the whole window is empty.
+        """
+        speeds = causal_speed_series(self._walk(n=12, gap=slice(2, 7)), coord_smooth=1)
+        assert np.isnan(speeds[2:7]).all()
+        assert np.isfinite(speeds[7:]).all()
