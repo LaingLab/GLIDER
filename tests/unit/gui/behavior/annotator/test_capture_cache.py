@@ -33,6 +33,14 @@ class _FakeCap:
     def read(self):
         return False, None
 
+    # ExactFrameReader walks with grab()/retrieve() rather than seeking, so a
+    # stand-in has to model that part of the VideoCapture contract too.
+    def grab(self):
+        return False
+
+    def retrieve(self):
+        return False, None
+
 
 def test_capture_cache_returns_same_handle_for_repeated_path(monkeypatch):
     from glider.gui.behavior.annotator import capture_cache

@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 
 from glider.vision.pose.core import PoseData
+from glider.vision.video_source import ExactFrameReader
 
 # Reasonably distinct colors (BGR for OpenCV).
 _PALETTE = [
@@ -87,11 +88,14 @@ def overlay_frames(
         frame_indices = np.linspace(0, min(pose.n_frames, total) - 1, n, dtype=int).tolist()
     frame_indices = [int(i) for i in frame_indices]
 
+    # Exact frame access: this pairs pose with the image by index, and a
+    # long-GOP seek lands several frames off, which draws the skeleton on a
+    # frame the animal has already left.
+    reader = ExactFrameReader(cap)
     rendered: list[np.ndarray] = []
     for idx in frame_indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ok, frame = cap.read()
-        if not ok:
+        frame = reader.read(idx)
+        if frame is None:
             continue
         if idx >= pose.n_frames:
             continue

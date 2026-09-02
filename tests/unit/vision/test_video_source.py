@@ -77,30 +77,44 @@ class _SeekRecorder:
         return getattr(self._cap, name)
 
 
+def _record_seeks(src: VideoFileSource) -> _SeekRecorder:
+    """Put a recorder in front of the capture the reader actually uses.
+
+    Swapping only ``src._cap`` records nothing: the ExactFrameReader holds its
+    own reference, so the seeks that matter go straight past the recorder.
+    """
+    recorder = _SeekRecorder(src._cap)
+    src._cap = recorder
+    src._reader._cap = recorder
+    return recorder
+
+
 def test_reading_forward_does_not_reseek(synthetic_clip: Path):
     """Playback is a run of consecutive reads; on a long-GOP codec a seek per
     frame re-decodes from the previous keyframe."""
     src = VideoFileSource()
     src.load(synthetic_clip)
-    recorder = _SeekRecorder(src._cap)
-    src._cap = recorder
+    recorder = _record_seeks(src)
 
     for n in range(5):
         assert src.read_frame(n) is not None
-    assert recorder.seeks == []  # frame 0 onward is already where the decoder sits
+    # One rewind to frame 0 to establish an exact position, then nothing:
+    # every later frame is reached by grabbing onward.
+    assert recorder.seeks == [0]
     src._cap = recorder._cap
     src.release()
 
 
-def test_jumping_backwards_still_seeks(synthetic_clip: Path):
+def test_jumping_backwards_rewinds_rather_than_trusting_a_seek(synthetic_clip: Path):
+    """Only a seek to frame 0 is exact on a long-GOP codec, so a backwards
+    jump re-counts from there instead of seeking to the target."""
     src = VideoFileSource()
     src.load(synthetic_clip)
     src.read_frame(5)
-    recorder = _SeekRecorder(src._cap)
-    src._cap = recorder
+    recorder = _record_seeks(src)
 
-    src.read_frame(2)
-    assert recorder.seeks == [2]
+    assert src.read_frame(2) is not None
+    assert recorder.seeks == [0]
     src._cap = recorder._cap
     src.release()
 
@@ -122,3 +136,55 @@ def test_the_fast_path_returns_the_same_frames_as_seeking(synthetic_clip: Path):
 
     for a, b in zip(walked, jumped, strict=True):
         assert np.array_equal(a, b)
+
+
+def test_read_frame_matches_a_sequential_decode(synthetic_clip: Path):
+    """Scrubbing must return the same pixels as decoding straight through.
+
+    Frame access is how pose is paired with video; an index that lands
+    approximately puts the skeleton on the wrong frame.
+    """
+    import cv2
+
+    cap = cv2.VideoCapture(str(synthetic_clip))
+    expected = []
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        expected.append(frame)
+    cap.release()
+
+    src = VideoFileSource()
+    src.load(synthetic_clip)
+    try:
+        for n in (9, 1, 6, 0, 11):
+            assert np.array_equal(src.read_frame(n), expected[n]), f"frame {n}"
+    finally:
+        src.release()
+
+
+def test_read_frame_is_still_exact_after_iterating(synthetic_clip: Path):
+    """frames() drives the same decoder, so scrubbing afterwards must not
+    trust a position the iterator moved out from under it."""
+    import cv2
+
+    cap = cv2.VideoCapture(str(synthetic_clip))
+    expected = []
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        expected.append(frame)
+    cap.release()
+
+    src = VideoFileSource()
+    src.load(synthetic_clip)
+    try:
+        assert np.array_equal(src.read_frame(8), expected[8])
+        for _n, _frame in src.frames():
+            pass
+        assert np.array_equal(src.read_frame(3), expected[3])
+        assert np.array_equal(src.read_frame(8), expected[8])
+    finally:
+        src.release()

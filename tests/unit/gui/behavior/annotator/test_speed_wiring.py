@@ -299,6 +299,14 @@ def test_clip_player_reports_the_frame_it_displayed(qtbot, tmp_path, monkeypatch
         def read(self):
             return True, np.zeros((4, 4, 3), dtype=np.uint8)
 
+        # ExactFrameReader reaches a frame by grabbing forward from 0 rather
+        # than trusting a seek, so the fake models grab()/retrieve() too.
+        def grab(self):
+            return True
+
+        def retrieve(self):
+            return True, np.zeros((4, 4, 3), dtype=np.uint8)
+
         def release(self):
             pass
 
