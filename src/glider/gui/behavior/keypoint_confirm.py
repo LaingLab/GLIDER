@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.gui.styles import colors
+from glider.vision.video_source import ExactFrameReader
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +94,10 @@ def first_detected_frame(video, yolo_path, *, max_frames: int = 90, stride: int 
     try:
         if not cap.isOpened():
             return None
+        reader = ExactFrameReader(cap)
         for n in range(0, max_frames * stride, stride):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, n)
-            ok, frame = cap.read()
-            if not ok:
+            frame = reader.read(n)
+            if frame is None:
                 break
             result = model.predict(frame, verbose=False)[0]
             kp = result.keypoints
@@ -140,11 +141,12 @@ def first_tracked_frame(video, pose_csv):
     try:
         if not cap.isOpened():
             return None
-        cap.set(cv2.CAP_PROP_POS_FRAMES, index)
-        ok, frame = cap.read()
+        # Exact: the frame is handed back paired with xy[index], so an
+        # approximate seek silently shows the keypoints of a different frame.
+        frame = ExactFrameReader(cap).read(index)
     finally:
         cap.release()
-    return (frame, xy[index]) if ok else None
+    return (frame, xy[index]) if frame is not None else None
 
 
 class _PreviewWorker(QObject):

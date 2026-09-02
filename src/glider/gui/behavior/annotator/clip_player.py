@@ -33,6 +33,7 @@ from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QLabel, QSizePolicy
 
 from glider.gui.styles import colors
+from glider.vision.video_source import ExactFrameReader
 
 if TYPE_CHECKING:
     from glider.gui.behavior.annotator.capture_cache import VideoCaptureCache
@@ -65,6 +66,7 @@ class ClipPlayer(QLabel):
 
         self._capture_cache = capture_cache  # may be None for legacy single-clip use
         self._cap = None  # only used when capture_cache is None
+        self._reader: ExactFrameReader | None = None
         self._cap_path: Path | None = None
         self._start_frame: int = 0
         self._end_frame: int = 0
@@ -107,6 +109,10 @@ class ClipPlayer(QLabel):
             try:
                 self._cap = self._capture_cache.get(path)
                 self._cap_path = path
+                # A cached capture is shared, so anyone else may have moved it
+                # since we last read. A fresh reader starts from "position
+                # unknown" and rewinds once rather than trusting a stale count.
+                self._reader = ExactFrameReader(self._cap)
             except OSError:
                 self._stop_timer()
                 self.setText(f"couldn't open\n{path.name}")
@@ -157,6 +163,7 @@ class ClipPlayer(QLabel):
         if self._capture_cache is None and self._cap is not None:
             self._cap.release()
         self._cap = None
+        self._reader = None
         self._cap_path = None
 
     # ------------------------------------------------------------------
@@ -168,27 +175,28 @@ class ClipPlayer(QLabel):
         if self._cap is not None:
             self._cap.release()
             self._cap = None
+            self._reader = None
         cap = cv2.VideoCapture(str(path))
         if not cap.isOpened():
             self.setText(f"failed to open\n{path.name}")
             self._cap = None
+            self._reader = None
             self._cap_path = None
             return
         self._cap = cap
         self._cap_path = path
+        self._reader = ExactFrameReader(cap)
 
     def _seek_to_start(self) -> None:
-        if self._cap is None:
+        # Exact, not approximate: frame_changed drives the pose overlay, and a
+        # seek that lands a few frames off makes every index this clip reports
+        # wrong for as long as it plays.
+        if self._cap is None or self._reader is None:
             return
-        import cv2
-
-        self._cap.set(cv2.CAP_PROP_POS_FRAMES, self._start_frame)
+        frame_bgr = self._reader.read(self._start_frame)
         self._current_frame = self._start_frame
-        ok, frame_bgr = self._cap.read()
-        if ok and frame_bgr is not None:
+        if frame_bgr is not None:
             self._display_bgr(frame_bgr)
-            # cv2 advances POS_FRAMES on read; track that. The frame now on
-            # screen is _start_frame, which is what listeners are told.
             self._current_frame = self._start_frame + 1
             self.frame_changed.emit(self._start_frame)
 
@@ -200,8 +208,8 @@ class ClipPlayer(QLabel):
             # End of clip → loop back to start.
             self._seek_to_start()
             return
-        ok, frame_bgr = self._cap.read()
-        if not ok or frame_bgr is None:
+        frame_bgr = self._reader.read(self._current_frame) if self._reader else None
+        if frame_bgr is None:
             # Reached end of file unexpectedly; treat as end-of-clip.
             self._seek_to_start()
             return
