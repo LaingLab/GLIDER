@@ -41,6 +41,7 @@ class PoseBatchWorker(QObject):
         require_gpu=False,
         overwrite=False,
         filtering=None,
+        zones=None,
     ):
         super().__init__()
         self._videos = list(videos)
@@ -51,6 +52,9 @@ class PoseBatchWorker(QObject):
         self._require_gpu = require_gpu
         self._overwrite = overwrite
         self._filtering = filtering
+        # Centre zones per video, when arenas have been drawn. Scored from the
+        # track as each video finishes, so no second pass over the video.
+        self._zones = zones or {}
         self._cancel = threading.Event()
         self._last_emit = 0.0
 
@@ -101,6 +105,7 @@ class PoseBatchWorker(QObject):
                 on_event=self._on_event,
                 cancel_cb=self._cancel.is_set,
                 progress_cb=self._on_frame,
+                zones=self._zones,
             )
         except Exception as e:  # surface as a UI message, never crash the thread
             self.failed.emit(str(e))

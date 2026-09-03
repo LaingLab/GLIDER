@@ -36,7 +36,7 @@ def test_one_row_per_video(table, tmp_path):
 def test_uncalibrated_videos_are_flagged(table, tmp_path):
     table.set_videos([tmp_path / "a.mp4"])
     assert "—" in table.item(0, 2).text()
-    assert "Needs calibration" in table.item(0, 3).text()
+    assert "Needs calibration" in table.item(0, 4).text()
 
 
 def test_calibrated_videos_show_their_scale(table, tmp_path):
@@ -47,7 +47,7 @@ def test_calibrated_videos_show_their_scale(table, tmp_path):
     table.set_videos([video])
     assert "6.4" in table.item(0, 2).text()
     assert "640x480" in table.item(0, 1).text()
-    assert "Calibrated" in table.item(0, 3).text()
+    assert "Calibrated" in table.item(0, 4).text()
 
 
 def test_refresh_picks_up_a_new_calibration(table, tmp_path):
@@ -55,11 +55,11 @@ def test_refresh_picks_up_a_new_calibration(table, tmp_path):
     cal_set = CalibrationSet()
     table.set_calibration_set(cal_set)
     table.set_videos([video])
-    assert "Needs calibration" in table.item(0, 3).text()
+    assert "Needs calibration" in table.item(0, 4).text()
 
     cal_set.set(video, _cal())
     table.refresh()
-    assert "Calibrated" in table.item(0, 3).text()
+    assert "Calibrated" in table.item(0, 4).text()
 
 
 def test_selected_videos_reports_the_selection(table, tmp_path):

@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from glider.vision.arena import ArenaCalibration, DegenerateArenaError
 from glider.vision.calibration import CameraCalibration
 
 logger = logging.getLogger(__name__)
@@ -34,9 +35,17 @@ class CalibrationSetError(ValueError):
 
 @dataclass
 class CalibrationSet:
-    """Calibrations for the videos of one batch, keyed by resolved video path."""
+    """Calibrations for the videos of one batch, keyed by resolved video path.
+
+    A video can carry a drawn *line* (:class:`CameraCalibration`), a drawn
+    *arena* (:class:`~glider.vision.arena.ArenaCalibration`), or both. They are
+    kept in separate maps because they answer different questions - only the
+    arena knows where the floor is, so only it can place a zone - but where
+    both exist the arena sets the scale. See :meth:`px_per_mm`.
+    """
 
     entries: dict[Path, CameraCalibration] = field(default_factory=dict)
+    arenas: dict[Path, ArenaCalibration] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # map
@@ -65,6 +74,19 @@ class CalibrationSet:
     def discard(self, video: Path | str) -> None:
         self.entries.pop(self._key(video), None)
 
+    def set_arena(self, video: Path | str, arena: ArenaCalibration) -> None:
+        self.arenas[self._key(video)] = arena
+
+    def get_arena(self, video: Path | str) -> ArenaCalibration | None:
+        return self.arenas.get(self._key(video))
+
+    def discard_arena(self, video: Path | str) -> None:
+        self.arenas.pop(self._key(video), None)
+
+    def videos(self) -> list[Path]:
+        """Every video this set knows anything about, line or arena."""
+        return sorted(set(self.entries) | set(self.arenas))
+
     def subset(self, videos: Iterable[Path | str]) -> CalibrationSet:
         """A new set holding only the entries for *videos*.
 
@@ -79,6 +101,9 @@ class CalibrationSet:
             calibration = self.entries.get(key)
             if calibration is not None:
                 picked.entries[key] = calibration
+            arena = self.arenas.get(key)
+            if arena is not None:
+                picked.arenas[key] = arena
         return picked
 
     # ------------------------------------------------------------------
@@ -86,7 +111,28 @@ class CalibrationSet:
     # ------------------------------------------------------------------
 
     def px_per_mm(self, video: Path | str) -> float | None:
-        """Scale for *video*, or None when absent or carrying no usable scale."""
+        """Scale for *video*, or None when absent or carrying no usable scale.
+
+        A drawn arena wins over a drawn line. Four corners of a known square
+        are a better-conditioned measurement than one freehand segment - the
+        square constrains itself, a line has nothing to check it against - and
+        the arena reports the scale at the centre of the floor rather than
+        wherever the line happened to be drawn, which on a tilted view is not
+        the same number.
+
+        An arena that does not describe a usable quadrilateral is ignored
+        rather than fatal: a half-drawn perimeter must not knock out a line
+        scale that already works.
+        """
+        arena = self.get_arena(video)
+        if arena is not None:
+            try:
+                ppm = arena.px_per_mm_centre
+                if ppm > 0:
+                    return ppm
+            except DegenerateArenaError:
+                logger.warning("ignoring unusable arena for %s", video)
+
         calibration = self.get(video)
         if calibration is None:
             return None
@@ -119,20 +165,31 @@ class CalibrationSet:
         # Sorted by path (not insertion order) so two runs over the same batch
         # produce diffable files regardless of the order the operator happened
         # to calibrate videos in.
-        for video, calibration in sorted(self.entries.items(), key=lambda kv: kv[0]):
-            ppm = calibration.pixels_per_mm
-            videos.append(
-                {
-                    "video": str(video),
-                    "resolution": [
-                        calibration.calibration_width,
-                        calibration.calibration_height,
-                    ],
-                    "px_per_mm": ppm,
-                    "mm_per_px": (1.0 / ppm) if ppm > 0 else None,
-                    "calibration": calibration.to_dict(),
-                }
-            )
+        for video in self.videos():
+            calibration = self.entries.get(video) or CameraCalibration()
+            arena = self.arenas.get(video)
+            # The written scale is the one px_per_mm() would answer with, so
+            # an analyst joining this file to the CSVs sees what the pipeline
+            # actually used rather than only what the lines say.
+            ppm = self.px_per_mm(video) or 0.0
+
+            width = calibration.calibration_width
+            height = calibration.calibration_height
+            if not width and arena is not None:
+                width, height = arena.frame_size
+
+            entry = {
+                "video": str(video),
+                "resolution": [width, height],
+                "px_per_mm": ppm,
+                "mm_per_px": (1.0 / ppm) if ppm > 0 else None,
+                "calibration": calibration.to_dict(),
+            }
+            # Optional, and only when drawn. Absent keys keep files written by
+            # line-only batches byte-identical to what earlier builds produced.
+            if arena is not None:
+                entry["arena"] = arena.to_dict()
+            videos.append(entry)
         return {
             "schema_version": SCHEMA_VERSION,
             "created": datetime.now().isoformat(timespec="seconds"),
@@ -223,6 +280,10 @@ class CalibrationSet:
                     )
                 stored = Path(entry["video"])
                 calibration = CameraCalibration.from_dict(calibration_data)
+                arena_data = entry.get("arena")
+                if arena_data is not None and not isinstance(arena_data, dict):
+                    raise TypeError(f"'arena' is a {type(arena_data).__name__}, not an object")
+                arena = ArenaCalibration.from_dict(arena_data) if arena_data else None
                 key = cls._key(stored)
                 try:
                     key.stat()
@@ -250,4 +311,6 @@ class CalibrationSet:
                     )
                     continue
             cal_set.entries[key] = calibration
+            if arena is not None:
+                cal_set.arenas[key] = arena
         return cal_set

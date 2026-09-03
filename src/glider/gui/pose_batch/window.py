@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QObject, QSettings, Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -53,10 +55,14 @@ from glider.gui.widgets.tool_ui import (
     set_button_role,
     set_text_role,
 )
+from glider.vision.arena import DegenerateArenaError
 from glider.vision.calibration import CameraCalibration
 from glider.vision.calibration_set import CalibrationSet, CalibrationSetError
 from glider.vision.pose import batch as batch_core
 from glider.vision.pose.spec import read_pose_model_meta
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from glider.vision.zones import ZoneConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +166,9 @@ class PoseBatchWindow(QMainWindow):
         self._meta = None
         self._videos: list[Path] = []
         self._calibrations = CalibrationSet()
+        # Side of the centre zone written for any video with a drawn arena.
+        # Follows whatever the operator last chose in the arena dialog.
+        self._zone_cm = 10.0
         self._loaded_master: Path | None = None
         # The last value we defaulted into the master field. While the field
         # still holds it, the path is ours to keep in step with the videos;
@@ -363,6 +372,7 @@ class PoseBatchWindow(QMainWindow):
         self._cal_table = CalibrationTable()
         self._cal_table.set_calibration_set(self._calibrations)
         self._cal_table.calibrate_requested.connect(self._open_calibration)
+        self._cal_table.arena_requested.connect(self._open_arena)
         # ~4-5 rows: enough to see calibration status at a glance even if the
         # splitter above gets dragged down to its floor.
         self._cal_table.setMinimumHeight(140)
@@ -371,6 +381,13 @@ class PoseBatchWindow(QMainWindow):
         calibrate = QPushButton("Calibrate…")
         calibrate.setToolTip("Calibrate the selected video (or double-click its row)")
         calibrate.clicked.connect(self._calibrate_selected)
+        arena = QPushButton("Arena…")
+        arena.setToolTip(
+            "Draw the floor perimeter of the selected video (or double-click its "
+            "Arena cell).\nGives a centre zone that means the same patch of floor "
+            "in every video, and a scale that accounts for perspective."
+        )
+        arena.clicked.connect(self._arena_selected)
         copy_btn = QPushButton("Copy to Selected")
         copy_btn.setToolTip(
             "Stamp one calibration onto the other selected videos — for videos "
@@ -383,7 +400,7 @@ class PoseBatchWindow(QMainWindow):
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
-        for button in (calibrate, copy_btn, clear_btn):
+        for button in (calibrate, arena, copy_btn, clear_btn):
             buttons.addWidget(button)
         buttons.addStretch(1)
         card.add(buttons)
@@ -618,6 +635,96 @@ class PoseBatchWindow(QMainWindow):
             )
             return
         self._open_calibration(selected[0])
+
+    def _open_arena(self, video: Path) -> None:
+        """Click the four floor corners of *video*'s arena on a scrubbed frame."""
+        from glider.gui.dialogs.arena_dialog import ArenaDialog
+        from glider.vision.video_source import VideoFileSource
+
+        reader = VideoFileSource()
+        frame = None
+        try:
+            if reader.load(video):
+                # A quarter in: rigs are often still being adjusted at the
+                # start, and a hand in shot hides the corner to be clicked.
+                frame = reader.read_frame(int(reader.frame_count * 0.25))
+        finally:
+            reader.release()
+
+        if frame is None:
+            QMessageBox.warning(
+                self,
+                "Cannot Open Video",
+                f"{video.name} could not be opened to draw its arena.",
+            )
+            return
+
+        dialog = None
+        try:
+            dialog = ArenaDialog(frame, title=video.name, parent=self)
+            existing = self._calibrations.get_arena(video)
+            if existing is not None:
+                dialog.arena_spin.setValue(existing.width_cm)
+                dialog.canvas.set_corners(existing.corners)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                arena = dialog.calibration()
+                if arena is not None:
+                    self._calibrations.set_arena(video, arena)
+                    self._zone_cm = dialog.zone_size_cm()
+                    self._log.appendPlainText(
+                        f"{video.name}: arena drawn, "
+                        f"{arena.px_per_cm_centre / 10:.3f} px/mm at the floor centre"
+                    )
+        finally:
+            if dialog is not None:
+                # parent=self hands ownership to the window, so dropping the
+                # Python reference leaves the C++ dialog — and the full-res
+                # frame it holds — alive for the session.
+                dialog.deleteLater()
+
+        self._cal_table.refresh()
+        self._validate()
+
+    def _arena_selected(self) -> None:
+        selected = self._cal_table.selected_videos()
+        if not selected:
+            QMessageBox.information(self, "Arena", "Select a video in the calibration table first.")
+            return
+        self._open_arena(selected[0])
+
+    def _zone_configs(self) -> dict[Path, ZoneConfiguration]:
+        """Centre zones for the batch, keyed the way run_batch resolves videos.
+
+        Only videos with a drawn arena appear; the rest simply get no zone
+        CSVs. A perimeter that does not yet describe a quadrilateral is skipped
+        with a note rather than failing the run — the pose inference is the
+        expensive part and must not be held hostage to a half-drawn zone.
+        """
+        from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape
+
+        configs: dict[Path, ZoneConfiguration] = {}
+        for video in self._videos:
+            arena = self._calibrations.get_arena(video)
+            if arena is None:
+                continue
+            try:
+                vertices = arena.centre_zone_vertices(self._zone_cm)
+            except (DegenerateArenaError, ValueError) as e:
+                self._log.appendPlainText(f"{video.name}: no zone written ({e})")
+                continue
+            config = ZoneConfiguration()
+            config.config_width, config.config_height = arena.frame_size
+            config.add_zone(
+                Zone(
+                    id=str(uuid.uuid4()),
+                    name=f"Centre {self._zone_cm:g}cm",
+                    shape=ZoneShape.POLYGON,
+                    vertices=vertices,
+                    color=(0, 165, 255),
+                )
+            )
+            configs[Path(video).resolve()] = config
+        return configs
 
     def _retarget_calibration(
         self, template: CameraCalibration, video: Path
@@ -1047,6 +1154,7 @@ class PoseBatchWindow(QMainWindow):
             require_gpu=self._require_gpu.isChecked(),
             overwrite=self._overwrite.isChecked(),
             filtering=self._filter_settings(),
+            zones=self._zone_configs(),
         )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)

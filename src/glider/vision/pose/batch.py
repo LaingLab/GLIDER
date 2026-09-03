@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from glider.vision.pose.core import PoseData
+    from glider.vision.zones import ZoneConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,38 @@ def discover_videos(paths: Iterable[Path], *, recursive: bool = True) -> list[Pa
                 if child.is_file() and child.suffix.lower() in VIDEO_EXTS:
                     found.add(child.resolve())
     return sorted(found)
+
+
+def _score_zones(video: Path, pose, zones, keypoint: str) -> str:
+    """Write zone CSVs for *video*, returning a warning string or "".
+
+    Runs here rather than in a later pass because the track is already in hand:
+    whether a point is inside a polygon needs no pixels, so the alternative is
+    decoding every video a second time to learn something already known.
+
+    Never raises. By this point the pose CSV is written and valid, and that is
+    the artifact that matters - a zone that cannot be scored is a warning about
+    the zone, not a failed video.
+    """
+    if not zones:
+        return ""
+    config = zones.get(video) or zones.get(Path(video))
+    if config is None:
+        return ""
+    try:
+        from glider.vision.zone_scoring import score_pose, write_zone_csvs, zone_output_dir
+
+        resolution = None
+        if pose.metadata:
+            raw = pose.metadata.get("resolution")
+            if raw:
+                resolution = (int(raw[0]), int(raw[1]))
+        scoring = score_pose(pose, config, resolution=resolution, keypoint=keypoint)
+        write_zone_csvs(scoring, zone_output_dir(video))
+    except Exception as e:
+        logger.warning("could not score zones for %s: %s", video.name, e)
+        return f"zones not scored: {e}"
+    return ""
 
 
 def _output_stem(video: Path, model: Path) -> str:
@@ -229,6 +262,8 @@ def run_batch(
     cancel_cb: Callable[[], bool] | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
     infer: Callable[..., PoseData] | None = None,
+    zones: Mapping[Path, ZoneConfiguration] | None = None,
+    zone_keypoint: str = "body_center",
 ) -> BatchResult:
     """Run a pose model over ``videos``, writing a DLC CSV beside each one.
 
@@ -296,6 +331,7 @@ def run_batch(
         if on_event is not None:
             on_event(BatchEvent(kind=kind, video=video, index=index, total=total, **kwargs))
 
+    zone_warning = ""
     for index, raw_video in enumerate(videos):
         video = Path(raw_video).resolve()
         primary = dlc_output_path(video, model_path)
@@ -337,6 +373,7 @@ def run_batch(
             # Written only after inference returns a complete PoseData, so a
             # cancelled or failed video never leaves a partial CSV behind.
             to_dlc_csv(pose, primary)
+            zone_warning = _score_zones(video, pose, zones, zone_keypoint)
         except PoseCancelledError:
             result.cancelled = True
             emit(EventKind.CANCELLED, video, index)
@@ -347,6 +384,6 @@ def run_batch(
             continue
 
         result.completed.append(video)
-        emit(EventKind.WROTE, video, index, output=primary)
+        emit(EventKind.WROTE, video, index, output=primary, message=zone_warning)
 
     return result
