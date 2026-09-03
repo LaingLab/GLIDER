@@ -42,6 +42,7 @@ __all__ = [
     "occupancy_grid",
     "position_track",
     "tracking_frame",
+    "write_occupancy_export",
     "zone_occupancy",
 ]
 
@@ -276,3 +277,34 @@ def occupancy_grid(
         high = np.inf if end_frame is None else end_frame
         frame = frame[(frame["frame"] >= low) & (frame["frame"] <= high)].reset_index(drop=True)
     return compute_occupancy(frame, bins=bins, frame_size=view.resolution)
+
+
+def write_occupancy_export(
+    grid: np.ndarray,
+    x_edges: np.ndarray,
+    y_edges: np.ndarray,
+    base_path: Path | str,
+    *,
+    title: str | None = None,
+) -> tuple[Path | None, Path]:
+    """Write ``<base>.png`` and ``<base>.csv``. Returns ``(png_or_None, csv)``.
+
+    ``grid`` is ``(nx, ny)`` as ``compute_occupancy`` returns it. The CSV is
+    written the other way round -- rows are y, columns are x -- because that is
+    how a reader expects a table of the arena to look, so the data block is
+    ``grid.T`` and cell ``(row j, column i)`` holds ``grid[i, j]``. The GUI bins
+    a square grid, so a transposed file would raise nothing and be visible only
+    by eye against the figure; the orientation is pinned by test.
+
+    ``png`` is None when matplotlib is unavailable -- the CSV is the half worth
+    keeping, and losing it because an optional renderer is missing would be the
+    wrong trade.
+    """
+    base = Path(base_path).with_suffix("")
+    csv_path = base.with_suffix(".csv")
+
+    x_centres = (x_edges[:-1] + x_edges[1:]) / 2.0
+    y_centres = (y_edges[:-1] + y_edges[1:]) / 2.0
+    table = pd.DataFrame(grid.T.astype(int), index=y_centres, columns=x_centres)
+    table.to_csv(csv_path)
+    return None, csv_path

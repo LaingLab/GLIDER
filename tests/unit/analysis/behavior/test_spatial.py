@@ -332,3 +332,47 @@ class TestTheEthogramNamesTheFrameNotTheRow:
         view = self._view(tmp_path, first=3600, count=100, x_origin=100.0 - 3600)
         grid, _x, _y = occupancy_grid(view, bins=8, start_frame=3600, end_frame=3649)
         assert grid.sum() == 50
+
+
+def _demo_grid():
+    """A deliberately non-square grid, so a transpose cannot hide."""
+    grid = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])  # (nx=3, ny=2)
+    x_edges = np.array([0.0, 10.0, 20.0, 30.0])  # centres 5, 15, 25
+    y_edges = np.array([0.0, 8.0, 16.0])  # centres 4, 12
+    return grid, x_edges, y_edges
+
+
+def test_export_csv_is_rows_y_columns_x(tmp_path):
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    grid, xe, ye = _demo_grid()
+    _png, csv_path = write_occupancy_export(grid, xe, ye, tmp_path / "h")
+
+    table = pd.read_csv(csv_path, index_col=0)
+    assert table.shape == (2, 3)  # ny rows, nx columns
+    assert [float(c) for c in table.columns] == [5.0, 15.0, 25.0]
+    assert list(table.index) == [4.0, 12.0]
+    for i in range(grid.shape[0]):
+        for j in range(grid.shape[1]):
+            assert table.iat[j, i] == grid[i, j], f"cell (row {j}, col {i})"
+
+
+def test_export_writes_counts_as_integers(tmp_path):
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    grid, xe, ye = _demo_grid()
+    _png, csv_path = write_occupancy_export(grid, xe, ye, tmp_path / "h")
+    # The demo centres (x 5/15/25, y 4/12) are picked so none contains the
+    # substring "1.0" -- otherwise this passes or fails for the wrong reason.
+    # Actual output: ,5.0,15.0,25.0 / 4.0,1,3,5 / 12.0,2,4,6
+    assert "1.0" not in csv_path.read_text()
+
+
+def test_export_base_suffix_is_replaced_not_appended(tmp_path):
+    """Typing heatmap.csv in the dialog must not yield heatmap.csv.csv."""
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    grid, xe, ye = _demo_grid()
+    _png, csv_path = write_occupancy_export(grid, xe, ye, tmp_path / "heatmap.csv")
+    assert csv_path == tmp_path / "heatmap.csv"
+    assert not (tmp_path / "heatmap.csv.csv").exists()
