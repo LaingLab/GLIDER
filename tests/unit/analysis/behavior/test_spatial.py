@@ -379,6 +379,24 @@ def test_export_base_suffix_is_replaced_not_appended(tmp_path):
     assert (tmp_path / "heatmap.png").exists()
 
 
+def test_export_keeps_a_dotted_stem_intact(tmp_path):
+    """Session dirs are named from the video stem, so dotted names are normal.
+
+    with_suffix() replaces everything after the last dot, which silently ate
+    the frame range out of the GUI's own default filename -- and with it the
+    only record of which window an export covers.
+    """
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    grid, xe, ye = _demo_grid()
+    base = tmp_path / "2026-09-02 14.30.05_heatmap_0-299.png"
+    png_path, csv_path = write_occupancy_export(grid, xe, ye, base)
+
+    assert csv_path.name == "2026-09-02 14.30.05_heatmap_0-299.csv"
+    assert png_path.name == "2026-09-02 14.30.05_heatmap_0-299.png"
+    assert csv_path.exists() and png_path.exists()
+
+
 def test_export_writes_a_png_without_leaking_a_pyplot_figure(tmp_path):
     pytest.importorskip("matplotlib")
     import matplotlib

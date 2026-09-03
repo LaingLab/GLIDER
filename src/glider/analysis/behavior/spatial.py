@@ -289,6 +289,12 @@ def write_occupancy_export(
 ) -> tuple[Path | None, Path]:
     """Write ``<base>.png`` and ``<base>.csv``. Returns ``(png_or_None, csv)``.
 
+    Only a trailing ``.png``/``.csv`` is stripped from ``base_path``, and the
+    two extensions are then appended rather than substituted: session
+    directories are named from the video stem, so dotted names are ordinary,
+    and ``with_suffix`` would replace everything after the last dot -- eating
+    the frame range out of the caller's own filename.
+
     ``grid`` is ``(nx, ny)`` as ``compute_occupancy`` returns it. The CSV is
     written the other way round -- rows are y, columns are x -- because that is
     how a reader expects a table of the arena to look, so the data block is
@@ -300,7 +306,8 @@ def write_occupancy_export(
     keeping, and losing it because an optional renderer is missing would be the
     wrong trade.
     """
-    base = Path(base_path).with_suffix("")
+    p = Path(base_path)
+    base = p.with_suffix("") if p.suffix.lower() in {".png", ".csv"} else p
     if (
         grid.size == 0
         or x_edges.size == 0
@@ -312,14 +319,14 @@ def write_occupancy_export(
             "nothing to export: the occupancy grid is empty. An empty or "
             "all-NaN track yields a full-size grid with no bin edges."
         )
-    csv_path = base.with_suffix(".csv")
+    csv_path = base.with_name(base.name + ".csv")
 
     x_centres = (x_edges[:-1] + x_edges[1:]) / 2.0
     y_centres = (y_edges[:-1] + y_edges[1:]) / 2.0
     table = pd.DataFrame(grid.T.astype(int), index=y_centres, columns=x_centres)
     table.to_csv(csv_path)
 
-    png_path: Path | None = base.with_suffix(".png")
+    png_path: Path | None = base.with_name(base.name + ".png")
     try:
         # Our own figure, never pyplot's: this runs inside a live Qt app, and a
         # pyplot figure per export would both leak and risk pulling in the Qt
