@@ -397,3 +397,20 @@ def test_export_writes_a_png_without_leaking_a_pyplot_figure(tmp_path):
     assert png_path == tmp_path / "h.png"
     assert png_path.stat().st_size > 0
     assert plt.get_fignums() == []
+
+
+@pytest.mark.parametrize(
+    "grid,xe,ye",
+    [
+        (np.zeros((4, 4)), np.arange(5.0), np.arange(5.0)),  # nobody moved
+        (np.zeros((60, 60)), np.array([]), np.array([])),  # what an empty track returns
+        (np.full((4, 4), np.nan), np.arange(5.0), np.arange(5.0)),  # all-NaN
+    ],
+    ids=["all-zero", "no-edges", "all-nan"],
+)
+def test_export_refuses_a_degenerate_grid(tmp_path, grid, xe, ye):
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    with pytest.raises(ValueError):
+        write_occupancy_export(grid, xe, ye, tmp_path / "h")
+    assert not list(tmp_path.iterdir())  # and leaves no half-written file

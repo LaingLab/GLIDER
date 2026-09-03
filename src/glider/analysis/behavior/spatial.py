@@ -301,6 +301,17 @@ def write_occupancy_export(
     wrong trade.
     """
     base = Path(base_path).with_suffix("")
+    if (
+        grid.size == 0
+        or x_edges.size == 0
+        or y_edges.size == 0
+        or not np.isfinite(grid).any()
+        or np.nansum(grid) == 0
+    ):
+        raise ValueError(
+            "nothing to export: the occupancy grid is empty. An empty or "
+            "all-NaN track yields a full-size grid with no bin edges."
+        )
     csv_path = base.with_suffix(".csv")
 
     x_centres = (x_edges[:-1] + x_edges[1:]) / 2.0
