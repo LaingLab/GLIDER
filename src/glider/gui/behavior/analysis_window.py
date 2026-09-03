@@ -1338,7 +1338,9 @@ class AnalysisWindow(QMainWindow):
             seconds = self._frame / self._view.fps
             self._clock.setText(f"{int(seconds) // 60:d}:{seconds % 60:05.2f}")
 
-    def _refresh_heatmap_export_state(self, grid_tuple=None) -> None:
+    def _refresh_heatmap_export_state(
+        self, grid_tuple: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+    ) -> None:
         """Record the grid the overlay was drawn from, and gate the export.
 
         Enabled only when the canvas actually drew: set_heatmap refuses a grid
@@ -1552,7 +1554,7 @@ class AnalysisWindow(QMainWindow):
                     "dart_threshold_cm_s": view.applied_dart_cm_s,
                     "freeze_threshold_px_frame": view.applied_freeze_px,
                     "dart_threshold_px_frame": view.applied_dart_px,
-                    "duration_min": stats.duration_s / 60.0 if stats.duration_s else 0.0,
+                    "duration_min": stats.duration_s / 60.0,
                     # What this window alone would give, as the Selected-window
                     # panel reports it -- distinct from the applied thresholds
                     # above, which are what actually produced the labels. The
