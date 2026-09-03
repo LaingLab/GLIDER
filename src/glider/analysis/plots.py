@@ -168,7 +168,7 @@ def plot_trajectory(
 
     ax.plot(x, y, "-", linewidth=0.3, alpha=0.3, color="gray", zorder=1)
     sc = ax.scatter(x, y, c=c, cmap=cmap, s=4, alpha=0.7, zorder=2)
-    plt.colorbar(sc, ax=ax, label=cbar_label)
+    ax.get_figure().colorbar(sc, ax=ax, label=cbar_label)
     ax.set_xlabel("x (px)")
     ax.set_ylabel("y (px)")
     ax.set_aspect("equal", adjustable="datalim")
@@ -204,7 +204,7 @@ def plot_occupancy_heatmap(
     # coords to actual x/y range.
     extent = [x_edges[0], x_edges[-1], y_edges[-1], y_edges[0]]
     im = ax.imshow(heatmap.T, extent=extent, cmap=cmap, aspect="auto", origin="upper")
-    plt.colorbar(im, ax=ax, label="frames")
+    ax.get_figure().colorbar(im, ax=ax, label="frames")
     ax.set_xlabel("x (px)")
     ax.set_ylabel("y (px)")
     ax.set_title(title)

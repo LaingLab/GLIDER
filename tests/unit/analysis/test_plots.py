@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -146,3 +147,62 @@ def test_plot_empty_inputs_handled_gracefully():
     ]:
         assert "no data" in ax.get_title().lower()
         plt.close(ax.figure)
+
+
+def test_plotting_onto_a_supplied_axes_leaves_no_pyplot_figure():
+    """The colorbar used to go through pyplot's gcf(), which conjures a figure
+    even when the caller brought its own - leaking one per export and warning
+    about it."""
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    from glider.analysis.plots import plot_occupancy_heatmap
+
+    for num in plt.get_fignums():
+        plt.close(num)
+
+    fig = Figure(figsize=(4, 3))
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111)
+    plot_occupancy_heatmap(np.arange(16.0).reshape(4, 4), np.arange(5.0), np.arange(5.0), ax=ax)
+
+    assert plt.get_fignums() == []
+    # the colorbar still lands on the caller's figure: image axes + colorbar axes
+    assert len(fig.axes) == 2
+
+
+def test_trajectory_onto_a_supplied_axes_leaves_no_pyplot_figure():
+    """Same defect as the occupancy heatmap - the trajectory colorbar went
+    through gcf() too, leaking a figure on every analysis-panel render."""
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    from glider.analysis.plots import plot_trajectory
+
+    for num in plt.get_fignums():
+        plt.close(num)
+
+    fig = Figure(figsize=(4, 3))
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111)
+    # Non-empty, and carrying flow_elapsed_ms so this takes the default
+    # color_by="time" branch the panel uses. An empty frame returns early,
+    # before the colorbar is ever drawn.
+    trajectory = pd.DataFrame(
+        {
+            "center_x": [0.0, 1.0, 2.0, 3.0],
+            "center_y": [0.0, 1.0, 0.0, 1.0],
+            "flow_elapsed_ms": [0.0, 100.0, 200.0, 300.0],
+        }
+    )
+    plot_trajectory(trajectory, ax=ax)
+
+    assert plt.get_fignums() == []
+    # scatter axes + colorbar axes, both on the caller's figure
+    assert len(fig.axes) == 2

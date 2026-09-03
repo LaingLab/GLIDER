@@ -332,3 +332,128 @@ class TestTheEthogramNamesTheFrameNotTheRow:
         view = self._view(tmp_path, first=3600, count=100, x_origin=100.0 - 3600)
         grid, _x, _y = occupancy_grid(view, bins=8, start_frame=3600, end_frame=3649)
         assert grid.sum() == 50
+
+
+def _demo_grid():
+    """A deliberately non-square grid, so a transpose cannot hide."""
+    grid = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])  # (nx=3, ny=2)
+    x_edges = np.array([0.0, 10.0, 20.0, 30.0])  # centres 5, 15, 25
+    y_edges = np.array([0.0, 8.0, 16.0])  # centres 4, 12
+    return grid, x_edges, y_edges
+
+
+def test_export_csv_is_rows_y_columns_x(tmp_path):
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    grid, xe, ye = _demo_grid()
+    _png, csv_path = write_occupancy_export(grid, xe, ye, tmp_path / "h")
+
+    table = pd.read_csv(csv_path, index_col=0)
+    assert table.shape == (2, 3)  # ny rows, nx columns
+    assert [float(c) for c in table.columns] == [5.0, 15.0, 25.0]
+    assert list(table.index) == [4.0, 12.0]
+    for i in range(grid.shape[0]):
+        for j in range(grid.shape[1]):
+            assert table.iat[j, i] == grid[i, j], f"cell (row {j}, col {i})"
+
+
+def test_export_writes_counts_as_integers(tmp_path):
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    grid, xe, ye = _demo_grid()
+    _png, csv_path = write_occupancy_export(grid, xe, ye, tmp_path / "h")
+    # The demo centres (x 5/15/25, y 4/12) are picked so none contains the
+    # substring "1.0" -- otherwise this passes or fails for the wrong reason.
+    # Actual output: ,5.0,15.0,25.0 / 4.0,1,3,5 / 12.0,2,4,6
+    assert "1.0" not in csv_path.read_text()
+
+
+def test_export_base_suffix_is_replaced_not_appended(tmp_path):
+    """Typing heatmap.csv in the dialog must not yield heatmap.csv.csv."""
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    grid, xe, ye = _demo_grid()
+    _png, csv_path = write_occupancy_export(grid, xe, ye, tmp_path / "heatmap.csv")
+    assert csv_path == tmp_path / "heatmap.csv"
+    assert not (tmp_path / "heatmap.csv.csv").exists()
+    assert (tmp_path / "heatmap.png").exists()
+
+
+def test_export_keeps_a_dotted_stem_intact(tmp_path):
+    """Session dirs are named from the video stem, so dotted names are normal.
+
+    with_suffix() replaces everything after the last dot, which silently ate
+    the frame range out of the GUI's own default filename -- and with it the
+    only record of which window an export covers.
+    """
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    grid, xe, ye = _demo_grid()
+    base = tmp_path / "2026-09-02 14.30.05_heatmap_0-299.png"
+    png_path, csv_path = write_occupancy_export(grid, xe, ye, base)
+
+    assert csv_path.name == "2026-09-02 14.30.05_heatmap_0-299.csv"
+    assert png_path.name == "2026-09-02 14.30.05_heatmap_0-299.png"
+    assert csv_path.exists() and png_path.exists()
+
+
+def test_export_writes_a_png_without_leaking_a_pyplot_figure(tmp_path):
+    pytest.importorskip("matplotlib")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    for num in plt.get_fignums():
+        plt.close(num)
+
+    grid, xe, ye = _demo_grid()
+    png_path, _csv = write_occupancy_export(grid, xe, ye, tmp_path / "h", title="demo")
+
+    assert png_path == tmp_path / "h.png"
+    assert png_path.stat().st_size > 0
+    assert plt.get_fignums() == []
+
+
+@pytest.mark.parametrize(
+    "grid,xe,ye",
+    [
+        (np.zeros((4, 4)), np.arange(5.0), np.arange(5.0)),  # nobody moved
+        (np.zeros((60, 60)), np.array([]), np.array([])),  # what an empty track returns
+        (np.full((4, 4), np.nan), np.arange(5.0), np.arange(5.0)),  # all-NaN
+    ],
+    ids=["all-zero", "no-edges", "all-nan"],
+)
+def test_export_refuses_a_degenerate_grid(tmp_path, grid, xe, ye):
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    with pytest.raises(ValueError):
+        write_occupancy_export(grid, xe, ye, tmp_path / "h")
+    assert not list(tmp_path.iterdir())  # and leaves no half-written file
+
+
+def test_export_without_matplotlib_still_writes_the_csv(tmp_path, monkeypatch):
+    """The data half is the half worth keeping."""
+    import sys
+
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    for name in list(sys.modules):
+        if name == "matplotlib" or name.startswith("matplotlib."):
+            monkeypatch.setitem(sys.modules, name, None)
+
+    grid, xe, ye = _demo_grid()
+    png_path, csv_path = write_occupancy_export(grid, xe, ye, tmp_path / "h")
+
+    assert png_path is None
+    assert csv_path.exists()
+
+
+def test_export_propagates_a_write_failure(tmp_path):
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    grid, xe, ye = _demo_grid()
+    with pytest.raises(OSError):
+        write_occupancy_export(grid, xe, ye, tmp_path / "no-such-dir" / "h")

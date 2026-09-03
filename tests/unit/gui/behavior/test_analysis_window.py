@@ -710,6 +710,54 @@ class TestZonesInTheWindow:
         assert any(c.endswith("_entries") for c in zone_cols)
         assert any(c.endswith("_latency_s") for c in zone_cols)
 
+    def test_window_summary_carries_the_panel_numbers(self, qtbot, tmp_path):
+        """Everything the Selected-window panel shows should reach the CSV.
+
+        The window-derived thresholds are not the applied ones: the panel calls
+        them what this window alone would give, and they are what a reader needs
+        to judge whether the loaded thresholds suited this stretch.
+        """
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        rows = win.cohort_rows(0, 299)
+
+        assert rows, "no cohort rows to check"
+        row = rows[0]
+        for column in (
+            "duration_s",
+            "duration_min",
+            "distance_cm",
+            "mean_cm_s",
+            "peak_cm_s",
+            "window_freeze_threshold",
+            "window_dart_threshold",
+            "window_threshold_unit",
+        ):
+            assert column in row, f"missing column: {column}"
+
+        assert row["duration_min"] == pytest.approx(row["duration_s"] / 60.0)
+        # unit-neutral on purpose: an uncalibrated session reports px/frame
+        assert row["window_threshold_unit"] in ("cm/s", "px/frame", "")
+
+    def test_the_panel_numbers_reach_the_written_csv(self, qtbot, tmp_path, monkeypatch):
+        """The dict is not the deliverable — the file on disk is."""
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        out = tmp_path / "window.csv"
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: (str(out), ""),
+        )
+        win._export_window()
+        written = pd.read_csv(out)
+        for column in (
+            "duration_min",
+            "window_freeze_threshold",
+            "window_dart_threshold",
+            "window_threshold_unit",
+        ):
+            assert column in written.columns, f"missing column: {column}"
+
     def test_the_heatmap_is_off_until_asked_for(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._bar.set_selection(0, 299)
@@ -727,6 +775,100 @@ class TestZonesInTheWindow:
         win._bar.set_selection(0, 299)
         win._heatmap_on.setChecked(False)
         assert win._canvas._heatmap is None
+
+    def test_has_heatmap_follows_the_drawn_overlay(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        assert win._canvas.has_heatmap() is False
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        assert win._canvas.has_heatmap() is True
+        win._heatmap_on.setChecked(False)
+        assert win._canvas.has_heatmap() is False
+
+    def test_export_button_is_disabled_until_a_heatmap_is_drawn(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        assert win._export_heatmap_btn.isEnabled() is False
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        assert win._export_heatmap_btn.isEnabled() is True
+
+    def test_turning_the_heatmap_off_disables_the_export(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        win._heatmap_on.setChecked(False)
+        assert win._export_heatmap_btn.isEnabled() is False
+        assert win._heatmap_grid is None
+
+    def test_a_spatial_error_leaves_the_export_disabled(self, qtbot, tmp_path, monkeypatch):
+        """The checkbox stays checked on this path, so the checkbox alone is
+        not a safe enable rule."""
+        from glider.analysis.behavior import spatial
+
+        win = self._win(qtbot, tmp_path)
+
+        def _boom(*_a, **_k):
+            raise spatial.SpatialError("no poses")
+
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        assert win._export_heatmap_btn.isEnabled() is True  # a real grid first
+
+        monkeypatch.setattr(spatial, "occupancy_grid", _boom)
+        win._bar.set_selection(0, 199)  # re-fire; the checkbox stays checked
+
+        assert win._heatmap_on.isChecked() is True
+        assert win._heatmap_grid is None
+        assert win._export_heatmap_btn.isEnabled() is False
+
+    def test_loading_another_session_clears_the_heatmap(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        assert win._export_heatmap_btn.isEnabled() is True
+
+        second = _session(tmp_path / "second")
+        win.load(second)
+
+        assert win._canvas.has_heatmap() is False
+        assert win._heatmap_grid is None
+        assert win._export_heatmap_btn.isEnabled() is False
+
+    def test_exporting_writes_a_png_and_a_csv(self, qtbot, tmp_path, monkeypatch):
+        from glider.gui.behavior import analysis_window as mod
+
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+
+        target = tmp_path / "out" / "picked.png"
+        target.parent.mkdir()
+        monkeypatch.setattr(mod.QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), ""))
+
+        win._export_heatmap()
+
+        assert target.exists()
+        csv_path = target.with_suffix(".csv")
+        assert csv_path.exists()
+
+        # The file must be the grid the overlay was drawn from, not a fresh
+        # computation: same shape, same values, same orientation (rows y,
+        # columns x). Recomputing at a different bin count would pass a
+        # mere existence check.
+        grid = win._heatmap_grid[0]
+        table = pd.read_csv(csv_path, index_col=0)
+        assert table.shape == (grid.shape[1], grid.shape[0])
+        assert table.to_numpy().tolist() == grid.T.astype(int).tolist()
+
+    def test_exporting_is_a_no_op_when_cancelled(self, qtbot, tmp_path, monkeypatch):
+        from glider.gui.behavior import analysis_window as mod
+
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        monkeypatch.setattr(mod.QFileDialog, "getSaveFileName", lambda *a, **k: ("", ""))
+
+        win._export_heatmap()  # must not raise
 
     def test_the_canvas_paints_with_zones_and_heatmap(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)

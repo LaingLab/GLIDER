@@ -42,6 +42,7 @@ __all__ = [
     "occupancy_grid",
     "position_track",
     "tracking_frame",
+    "write_occupancy_export",
     "zone_occupancy",
 ]
 
@@ -276,3 +277,73 @@ def occupancy_grid(
         high = np.inf if end_frame is None else end_frame
         frame = frame[(frame["frame"] >= low) & (frame["frame"] <= high)].reset_index(drop=True)
     return compute_occupancy(frame, bins=bins, frame_size=view.resolution)
+
+
+def write_occupancy_export(
+    grid: np.ndarray,
+    x_edges: np.ndarray,
+    y_edges: np.ndarray,
+    base_path: Path | str,
+    *,
+    title: str | None = None,
+) -> tuple[Path | None, Path]:
+    """Write ``<base>.png`` and ``<base>.csv``. Returns ``(png_or_None, csv)``.
+
+    Only a trailing ``.png``/``.csv`` is stripped from ``base_path``, and the
+    two extensions are then appended rather than substituted: session
+    directories are named from the video stem, so dotted names are ordinary,
+    and ``with_suffix`` would replace everything after the last dot -- eating
+    the frame range out of the caller's own filename.
+
+    ``grid`` is ``(nx, ny)`` as ``compute_occupancy`` returns it. The CSV is
+    written the other way round -- rows are y, columns are x -- because that is
+    how a reader expects a table of the arena to look, so the data block is
+    ``grid.T`` and cell ``(row j, column i)`` holds ``grid[i, j]``. The GUI bins
+    a square grid, so a transposed file would raise nothing and be visible only
+    by eye against the figure; the orientation is pinned by test.
+
+    ``png`` is None when matplotlib is unavailable -- the CSV is the half worth
+    keeping, and losing it because an optional renderer is missing would be the
+    wrong trade.
+    """
+    p = Path(base_path)
+    base = p.with_suffix("") if p.suffix.lower() in {".png", ".csv"} else p
+    if (
+        grid.size == 0
+        or x_edges.size == 0
+        or y_edges.size == 0
+        or not np.isfinite(grid).any()
+        or np.nansum(grid) == 0
+    ):
+        raise ValueError(
+            "nothing to export: the occupancy grid is empty. An empty or "
+            "all-NaN track yields a full-size grid with no bin edges."
+        )
+    csv_path = base.with_name(base.name + ".csv")
+
+    x_centres = (x_edges[:-1] + x_edges[1:]) / 2.0
+    y_centres = (y_edges[:-1] + y_edges[1:]) / 2.0
+    table = pd.DataFrame(grid.T.astype(int), index=y_centres, columns=x_centres)
+    table.to_csv(csv_path)
+
+    png_path: Path | None = base.with_name(base.name + ".png")
+    try:
+        # Our own figure, never pyplot's: this runs inside a live Qt app, and a
+        # pyplot figure per export would both leak and risk pulling in the Qt
+        # backend. The colorbar fix in plots.py is what makes this hold.
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+
+        from glider.analysis.plots import plot_occupancy_heatmap
+
+        figure = Figure(figsize=(6.0, 5.0), layout="tight")
+        FigureCanvasAgg(figure)
+        axes = figure.add_subplot(111)
+        extra = {} if title is None else {"title": title}
+        plot_occupancy_heatmap(grid, x_edges, y_edges, ax=axes, **extra)
+        figure.savefig(png_path, dpi=150)
+        figure.clf()
+    except ImportError:
+        logger.info("matplotlib unavailable; wrote %s without a figure", csv_path.name)
+        png_path = None
+    return png_path, csv_path

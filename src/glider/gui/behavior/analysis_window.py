@@ -496,6 +496,15 @@ class KeypointCanvas(QWidget):
     def has_video(self) -> bool:
         return self._view is not None and self._view.video_path is not None
 
+    def has_heatmap(self) -> bool:
+        """Whether an overlay is actually on screen.
+
+        Not the same as "the checkbox is on": set_heatmap refuses a grid whose
+        peak is <= 0 or that is all-NaN, so the checkbox can be checked with
+        nothing drawn.
+        """
+        return self._heatmap is not None
+
     def _close_reader(self) -> None:
         if self._reader is not None:
             self._reader.release()
@@ -673,6 +682,9 @@ class AnalysisWindow(QMainWindow):
         self._view: SessionView | None = None
         self._ethogram_csv: Path | None = None
         self._frame = 0
+        # The grid the overlay on screen was drawn from, so an export writes
+        # that picture rather than computing a second one.
+        self._heatmap_grid: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
         # Every loaded session, in the order they were found. The canvas shows
         # one of them; the window applies to all of them.
         self._cohort: list[tuple[Path, SessionView]] = []
@@ -948,6 +960,15 @@ class AnalysisWindow(QMainWindow):
         self._heatmap_on.toggled.connect(self._apply_heatmap)
         row.addWidget(self._heatmap_on)
 
+        self._export_heatmap_btn = QPushButton("Export heatmap…")
+        self._export_heatmap_btn.setToolTip(
+            "Write the heatmap on screen as a PNG figure and a CSV of the grid "
+            "behind it, for the animal and window currently shown."
+        )
+        self._export_heatmap_btn.setEnabled(False)
+        self._export_heatmap_btn.clicked.connect(self._export_heatmap)
+        row.addWidget(self._export_heatmap_btn)
+
         self._trail_on = QCheckBox("Centroid trail")
         self._trail_on.setChecked(True)
         self._trail_on.toggled.connect(self._apply_trail)
@@ -1095,6 +1116,13 @@ class AnalysisWindow(QMainWindow):
         self._path_label.setToolTip(str(ethogram_csv))
         self._bar.set_view(view)
         self._canvas.set_view(view)
+        # The overlay belongs to the session that just left. Nothing else
+        # clears it: set_view leaves _heatmap alone and bar.set_view drops the
+        # selection without emitting, so without this the next session's arena
+        # wears the previous animal's heatmap and the export button stays live
+        # over a grid that is no longer on screen.
+        self._canvas.set_heatmap(None)
+        self._refresh_heatmap_export_state()
         self._refresh_bout_filter()
         self._apply_trail()
         self._set_frame(self._bar.frame_bounds()[0])
@@ -1310,23 +1338,37 @@ class AnalysisWindow(QMainWindow):
             seconds = self._frame / self._view.fps
             self._clock.setText(f"{int(seconds) // 60:d}:{seconds % 60:05.2f}")
 
+    def _refresh_heatmap_export_state(
+        self, grid_tuple: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+    ) -> None:
+        """Record the grid the overlay was drawn from, and gate the export.
+
+        Enabled only when the canvas actually drew: set_heatmap refuses a grid
+        whose peak is <= 0, so the checkbox being on is not enough.
+        """
+        self._heatmap_grid = grid_tuple
+        self._export_heatmap_btn.setEnabled(grid_tuple is not None and self._canvas.has_heatmap())
+
     def _apply_heatmap(self, *_args) -> None:
         """Bin the selected window, or clear the overlay."""
         selection = self._bar.selection()
         if not self._heatmap_on.isChecked() or self._view is None or selection is None:
             self._canvas.set_heatmap(None)
+            self._refresh_heatmap_export_state()
             return
-        from glider.analysis.behavior.spatial import SpatialError, occupancy_grid
+        from glider.analysis.behavior import spatial
 
         try:
-            grid, _x, _y = occupancy_grid(
+            grid, x_edges, y_edges = spatial.occupancy_grid(
                 self._view, bins=60, start_frame=selection[0], end_frame=selection[1]
             )
-        except SpatialError as e:
+        except spatial.SpatialError as e:
             logger.info("no heatmap for this session: %s", e)
             self._canvas.set_heatmap(None)
+            self._refresh_heatmap_export_state()
             return
         self._canvas.set_heatmap(grid)
+        self._refresh_heatmap_export_state((grid, x_edges, y_edges))
 
     def _apply_trail(self, *_args) -> None:
         self._canvas.set_trail(self._trail_s.value(), self._trail_on.isChecked())
@@ -1512,6 +1554,16 @@ class AnalysisWindow(QMainWindow):
                     "dart_threshold_cm_s": view.applied_dart_cm_s,
                     "freeze_threshold_px_frame": view.applied_freeze_px,
                     "dart_threshold_px_frame": view.applied_dart_px,
+                    "duration_min": stats.duration_s / 60.0,
+                    # What this window alone would give, as the Selected-window
+                    # panel reports it -- distinct from the applied thresholds
+                    # above, which are what actually produced the labels. The
+                    # unit varies per session (cm/s with a pixel scale,
+                    # px/frame without), so it travels in its own column rather
+                    # than being baked into these names.
+                    "window_freeze_threshold": stats.freeze_threshold,
+                    "window_dart_threshold": stats.dart_threshold,
+                    "window_threshold_unit": stats.threshold_unit,
                     "top_behavior": top,
                     **{
                         f"{state}_s": float(total)
@@ -1608,6 +1660,41 @@ class AnalysisWindow(QMainWindow):
             QMessageBox.critical(self, "Export window", f"Could not write {path}: {e}")
             return
         self._summary.setText(f"{self._summary.text()}\nWrote {path}")
+
+    def _export_heatmap(self) -> None:
+        """Write the heatmap on screen as a PNG figure plus a CSV of its grid."""
+        selection = self._bar.selection()
+        if self._heatmap_grid is None or selection is None or self._ethogram_csv is None:
+            return
+        start, end = selection
+        # Named from the session on screen, not the cohort root: _export_window
+        # uses self._cohort[0][0], which is the *first* session and the wrong
+        # answer whenever a later one is displayed.
+        session_dir = self._ethogram_csv.parent
+        default = session_dir / f"{session_dir.name}_heatmap_{start}-{end}.png"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export heatmap", str(default), "PNG Files (*.png)"
+        )
+        if not path:
+            return
+
+        from glider.analysis.behavior.spatial import write_occupancy_export
+
+        grid, x_edges, y_edges = self._heatmap_grid
+        try:
+            png_path, csv_path = write_occupancy_export(
+                grid,
+                x_edges,
+                y_edges,
+                Path(path),
+                title=f"{session_dir.name}  frames {start}-{end}",
+            )
+        except (OSError, ValueError) as e:
+            QMessageBox.critical(self, "Export heatmap", f"Could not write {path}: {e}")
+            return
+        wrote = str(csv_path) if png_path is None else f"{png_path} and {csv_path.name}"
+        note = "" if png_path is not None else " (no figure: matplotlib is not installed)"
+        self._summary.setText(f"{self._summary.text()}\nWrote {wrote}{note}")
 
     def _describe(self, stats) -> str:
         span = (
