@@ -414,3 +414,28 @@ def test_export_refuses_a_degenerate_grid(tmp_path, grid, xe, ye):
     with pytest.raises(ValueError):
         write_occupancy_export(grid, xe, ye, tmp_path / "h")
     assert not list(tmp_path.iterdir())  # and leaves no half-written file
+
+
+def test_export_without_matplotlib_still_writes_the_csv(tmp_path, monkeypatch):
+    """The data half is the half worth keeping."""
+    import sys
+
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    for name in list(sys.modules):
+        if name == "matplotlib" or name.startswith("matplotlib."):
+            monkeypatch.setitem(sys.modules, name, None)
+
+    grid, xe, ye = _demo_grid()
+    png_path, csv_path = write_occupancy_export(grid, xe, ye, tmp_path / "h")
+
+    assert png_path is None
+    assert csv_path.exists()
+
+
+def test_export_propagates_a_write_failure(tmp_path):
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    grid, xe, ye = _demo_grid()
+    with pytest.raises(OSError):
+        write_occupancy_export(grid, xe, ye, tmp_path / "no-such-dir" / "h")
