@@ -204,7 +204,7 @@ def plot_occupancy_heatmap(
     # coords to actual x/y range.
     extent = [x_edges[0], x_edges[-1], y_edges[-1], y_edges[0]]
     im = ax.imshow(heatmap.T, extent=extent, cmap=cmap, aspect="auto", origin="upper")
-    plt.colorbar(im, ax=ax, label="frames")
+    ax.get_figure().colorbar(im, ax=ax, label="frames")
     ax.set_xlabel("x (px)")
     ax.set_ylabel("y (px)")
     ax.set_title(title)
