@@ -710,6 +710,54 @@ class TestZonesInTheWindow:
         assert any(c.endswith("_entries") for c in zone_cols)
         assert any(c.endswith("_latency_s") for c in zone_cols)
 
+    def test_window_summary_carries_the_panel_numbers(self, qtbot, tmp_path):
+        """Everything the Selected-window panel shows should reach the CSV.
+
+        The window-derived thresholds are not the applied ones: the panel calls
+        them what this window alone would give, and they are what a reader needs
+        to judge whether the loaded thresholds suited this stretch.
+        """
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        rows = win.cohort_rows(0, 299)
+
+        assert rows, "no cohort rows to check"
+        row = rows[0]
+        for column in (
+            "duration_s",
+            "duration_min",
+            "distance_cm",
+            "mean_cm_s",
+            "peak_cm_s",
+            "window_freeze_threshold",
+            "window_dart_threshold",
+            "window_threshold_unit",
+        ):
+            assert column in row, f"missing column: {column}"
+
+        assert row["duration_min"] == pytest.approx(row["duration_s"] / 60.0)
+        # unit-neutral on purpose: an uncalibrated session reports px/frame
+        assert row["window_threshold_unit"] in ("cm/s", "px/frame", "")
+
+    def test_the_panel_numbers_reach_the_written_csv(self, qtbot, tmp_path, monkeypatch):
+        """The dict is not the deliverable — the file on disk is."""
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        out = tmp_path / "window.csv"
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: (str(out), ""),
+        )
+        win._export_window()
+        written = pd.read_csv(out)
+        for column in (
+            "duration_min",
+            "window_freeze_threshold",
+            "window_dart_threshold",
+            "window_threshold_unit",
+        ):
+            assert column in written.columns, f"missing column: {column}"
+
     def test_the_heatmap_is_off_until_asked_for(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._bar.set_selection(0, 299)

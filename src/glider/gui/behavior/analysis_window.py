@@ -1552,6 +1552,16 @@ class AnalysisWindow(QMainWindow):
                     "dart_threshold_cm_s": view.applied_dart_cm_s,
                     "freeze_threshold_px_frame": view.applied_freeze_px,
                     "dart_threshold_px_frame": view.applied_dart_px,
+                    "duration_min": stats.duration_s / 60.0 if stats.duration_s else 0.0,
+                    # What this window alone would give, as the Selected-window
+                    # panel reports it -- distinct from the applied thresholds
+                    # above, which are what actually produced the labels. The
+                    # unit varies per session (cm/s with a pixel scale,
+                    # px/frame without), so it travels in its own column rather
+                    # than being baked into these names.
+                    "window_freeze_threshold": stats.freeze_threshold,
+                    "window_dart_threshold": stats.dart_threshold,
+                    "window_threshold_unit": stats.threshold_unit,
                     "top_behavior": top,
                     **{
                         f"{state}_s": float(total)
