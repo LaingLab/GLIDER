@@ -810,11 +810,15 @@ class TestZonesInTheWindow:
         def _boom(*_a, **_k):
             raise spatial.SpatialError("no poses")
 
-        monkeypatch.setattr(spatial, "occupancy_grid", _boom)
         win._heatmap_on.setChecked(True)
         win._bar.set_selection(0, 299)
+        assert win._export_heatmap_btn.isEnabled() is True  # a real grid first
+
+        monkeypatch.setattr(spatial, "occupancy_grid", _boom)
+        win._bar.set_selection(0, 199)  # re-fire; the checkbox stays checked
 
         assert win._heatmap_on.isChecked() is True
+        assert win._heatmap_grid is None
         assert win._export_heatmap_btn.isEnabled() is False
 
     def test_loading_another_session_clears_the_heatmap(self, qtbot, tmp_path):
@@ -844,7 +848,17 @@ class TestZonesInTheWindow:
         win._export_heatmap()
 
         assert target.exists()
-        assert target.with_suffix(".csv").exists()
+        csv_path = target.with_suffix(".csv")
+        assert csv_path.exists()
+
+        # The file must be the grid the overlay was drawn from, not a fresh
+        # computation: same shape, same values, same orientation (rows y,
+        # columns x). Recomputing at a different bin count would pass a
+        # mere existence check.
+        grid = win._heatmap_grid[0]
+        table = pd.read_csv(csv_path, index_col=0)
+        assert table.shape == (grid.shape[1], grid.shape[0])
+        assert table.to_numpy().tolist() == grid.T.astype(int).tolist()
 
     def test_exporting_is_a_no_op_when_cancelled(self, qtbot, tmp_path, monkeypatch):
         from glider.gui.behavior import analysis_window as mod
