@@ -769,6 +769,19 @@ class TestZonesInTheWindow:
         assert win._heatmap_on.isChecked() is True
         assert win._export_heatmap_btn.isEnabled() is False
 
+    def test_loading_another_session_clears_the_heatmap(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        assert win._export_heatmap_btn.isEnabled() is True
+
+        second = _session(tmp_path / "second")
+        win.load(second)
+
+        assert win._canvas.has_heatmap() is False
+        assert win._heatmap_grid is None
+        assert win._export_heatmap_btn.isEnabled() is False
+
     def test_the_canvas_paints_with_zones_and_heatmap(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._heatmap_on.setChecked(True)

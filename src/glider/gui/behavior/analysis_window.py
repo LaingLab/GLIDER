@@ -1115,6 +1115,13 @@ class AnalysisWindow(QMainWindow):
         self._path_label.setToolTip(str(ethogram_csv))
         self._bar.set_view(view)
         self._canvas.set_view(view)
+        # The overlay belongs to the session that just left. Nothing else
+        # clears it: set_view leaves _heatmap alone and bar.set_view drops the
+        # selection without emitting, so without this the next session's arena
+        # wears the previous animal's heatmap and the export button stays live
+        # over a grid that is no longer on screen.
+        self._canvas.set_heatmap(None)
+        self._refresh_heatmap_export_state()
         self._refresh_bout_filter()
         self._apply_trail()
         self._set_frame(self._bar.frame_bounds()[0])
