@@ -966,6 +966,7 @@ class AnalysisWindow(QMainWindow):
             "behind it, for the animal and window currently shown."
         )
         self._export_heatmap_btn.setEnabled(False)
+        self._export_heatmap_btn.clicked.connect(self._export_heatmap)
         row.addWidget(self._export_heatmap_btn)
 
         self._trail_on = QCheckBox("Centroid trail")
@@ -1647,6 +1648,41 @@ class AnalysisWindow(QMainWindow):
             QMessageBox.critical(self, "Export window", f"Could not write {path}: {e}")
             return
         self._summary.setText(f"{self._summary.text()}\nWrote {path}")
+
+    def _export_heatmap(self) -> None:
+        """Write the heatmap on screen as a PNG figure plus a CSV of its grid."""
+        selection = self._bar.selection()
+        if self._heatmap_grid is None or selection is None or self._ethogram_csv is None:
+            return
+        start, end = selection
+        # Named from the session on screen, not the cohort root: _export_window
+        # uses self._cohort[0][0], which is the *first* session and the wrong
+        # answer whenever a later one is displayed.
+        session_dir = self._ethogram_csv.parent
+        default = session_dir / f"{session_dir.name}_heatmap_{start}-{end}.png"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export heatmap", str(default), "PNG Files (*.png)"
+        )
+        if not path:
+            return
+
+        from glider.analysis.behavior.spatial import write_occupancy_export
+
+        grid, x_edges, y_edges = self._heatmap_grid
+        try:
+            png_path, csv_path = write_occupancy_export(
+                grid,
+                x_edges,
+                y_edges,
+                Path(path),
+                title=f"{session_dir.name}  frames {start}-{end}",
+            )
+        except (OSError, ValueError) as e:
+            QMessageBox.critical(self, "Export heatmap", f"Could not write {path}: {e}")
+            return
+        wrote = str(csv_path) if png_path is None else f"{png_path} and {csv_path.name}"
+        note = "" if png_path is not None else " (no figure: matplotlib is not installed)"
+        self._summary.setText(f"{self._summary.text()}\nWrote {wrote}{note}")
 
     def _describe(self, stats) -> str:
         span = (

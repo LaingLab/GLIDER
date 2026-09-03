@@ -782,6 +782,32 @@ class TestZonesInTheWindow:
         assert win._heatmap_grid is None
         assert win._export_heatmap_btn.isEnabled() is False
 
+    def test_exporting_writes_a_png_and_a_csv(self, qtbot, tmp_path, monkeypatch):
+        from glider.gui.behavior import analysis_window as mod
+
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+
+        target = tmp_path / "out" / "picked.png"
+        target.parent.mkdir()
+        monkeypatch.setattr(mod.QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), ""))
+
+        win._export_heatmap()
+
+        assert target.exists()
+        assert target.with_suffix(".csv").exists()
+
+    def test_exporting_is_a_no_op_when_cancelled(self, qtbot, tmp_path, monkeypatch):
+        from glider.gui.behavior import analysis_window as mod
+
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        monkeypatch.setattr(mod.QFileDialog, "getSaveFileName", lambda *a, **k: ("", ""))
+
+        win._export_heatmap()  # must not raise
+
     def test_the_canvas_paints_with_zones_and_heatmap(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._heatmap_on.setChecked(True)
