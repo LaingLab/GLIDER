@@ -728,6 +728,15 @@ class TestZonesInTheWindow:
         win._heatmap_on.setChecked(False)
         assert win._canvas._heatmap is None
 
+    def test_has_heatmap_follows_the_drawn_overlay(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        assert win._canvas.has_heatmap() is False
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        assert win._canvas.has_heatmap() is True
+        win._heatmap_on.setChecked(False)
+        assert win._canvas.has_heatmap() is False
+
     def test_the_canvas_paints_with_zones_and_heatmap(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._heatmap_on.setChecked(True)

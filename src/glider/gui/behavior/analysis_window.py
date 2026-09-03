@@ -496,6 +496,15 @@ class KeypointCanvas(QWidget):
     def has_video(self) -> bool:
         return self._view is not None and self._view.video_path is not None
 
+    def has_heatmap(self) -> bool:
+        """Whether an overlay is actually on screen.
+
+        Not the same as "the checkbox is on": set_heatmap refuses a grid whose
+        peak is <= 0 or that is all-NaN, so the checkbox can be checked with
+        nothing drawn.
+        """
+        return self._heatmap is not None
+
     def _close_reader(self) -> None:
         if self._reader is not None:
             self._reader.release()
