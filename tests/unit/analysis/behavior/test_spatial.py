@@ -376,3 +376,24 @@ def test_export_base_suffix_is_replaced_not_appended(tmp_path):
     _png, csv_path = write_occupancy_export(grid, xe, ye, tmp_path / "heatmap.csv")
     assert csv_path == tmp_path / "heatmap.csv"
     assert not (tmp_path / "heatmap.csv.csv").exists()
+    assert (tmp_path / "heatmap.png").exists()
+
+
+def test_export_writes_a_png_without_leaking_a_pyplot_figure(tmp_path):
+    pytest.importorskip("matplotlib")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from glider.analysis.behavior.spatial import write_occupancy_export
+
+    for num in plt.get_fignums():
+        plt.close(num)
+
+    grid, xe, ye = _demo_grid()
+    png_path, _csv = write_occupancy_export(grid, xe, ye, tmp_path / "h", title="demo")
+
+    assert png_path == tmp_path / "h.png"
+    assert png_path.stat().st_size > 0
+    assert plt.get_fignums() == []

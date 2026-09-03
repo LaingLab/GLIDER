@@ -307,4 +307,20 @@ def write_occupancy_export(
     y_centres = (y_edges[:-1] + y_edges[1:]) / 2.0
     table = pd.DataFrame(grid.T.astype(int), index=y_centres, columns=x_centres)
     table.to_csv(csv_path)
-    return None, csv_path
+
+    png_path = base.with_suffix(".png")
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    from glider.analysis.plots import plot_occupancy_heatmap
+
+    # Our own figure, never pyplot's: this runs inside a live Qt app, and a
+    # pyplot figure per export would both leak and risk pulling in the Qt
+    # backend. The colorbar fix in plots.py is what makes this hold.
+    figure = Figure(figsize=(6.0, 5.0), layout="tight")
+    FigureCanvasAgg(figure)
+    axes = figure.add_subplot(111)
+    extra = {} if title is None else {"title": title}
+    plot_occupancy_heatmap(grid, x_edges, y_edges, ax=axes, **extra)
+    figure.savefig(png_path, dpi=150)
+    return png_path, csv_path
