@@ -737,6 +737,38 @@ class TestZonesInTheWindow:
         win._heatmap_on.setChecked(False)
         assert win._canvas.has_heatmap() is False
 
+    def test_export_button_is_disabled_until_a_heatmap_is_drawn(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        assert win._export_heatmap_btn.isEnabled() is False
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        assert win._export_heatmap_btn.isEnabled() is True
+
+    def test_turning_the_heatmap_off_disables_the_export(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        win._heatmap_on.setChecked(False)
+        assert win._export_heatmap_btn.isEnabled() is False
+        assert win._heatmap_grid is None
+
+    def test_a_spatial_error_leaves_the_export_disabled(self, qtbot, tmp_path, monkeypatch):
+        """The checkbox stays checked on this path, so the checkbox alone is
+        not a safe enable rule."""
+        from glider.analysis.behavior import spatial
+
+        win = self._win(qtbot, tmp_path)
+
+        def _boom(*_a, **_k):
+            raise spatial.SpatialError("no poses")
+
+        monkeypatch.setattr(spatial, "occupancy_grid", _boom)
+        win._heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+
+        assert win._heatmap_on.isChecked() is True
+        assert win._export_heatmap_btn.isEnabled() is False
+
     def test_the_canvas_paints_with_zones_and_heatmap(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._heatmap_on.setChecked(True)

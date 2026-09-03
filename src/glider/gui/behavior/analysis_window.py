@@ -682,6 +682,9 @@ class AnalysisWindow(QMainWindow):
         self._view: SessionView | None = None
         self._ethogram_csv: Path | None = None
         self._frame = 0
+        # The grid the overlay on screen was drawn from, so an export writes
+        # that picture rather than computing a second one.
+        self._heatmap_grid: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
         # Every loaded session, in the order they were found. The canvas shows
         # one of them; the window applies to all of them.
         self._cohort: list[tuple[Path, SessionView]] = []
@@ -956,6 +959,14 @@ class AnalysisWindow(QMainWindow):
         )
         self._heatmap_on.toggled.connect(self._apply_heatmap)
         row.addWidget(self._heatmap_on)
+
+        self._export_heatmap_btn = QPushButton("Export heatmap…")
+        self._export_heatmap_btn.setToolTip(
+            "Write the heatmap on screen as a PNG figure and a CSV of the grid "
+            "behind it, for the animal and window currently shown."
+        )
+        self._export_heatmap_btn.setEnabled(False)
+        row.addWidget(self._export_heatmap_btn)
 
         self._trail_on = QCheckBox("Centroid trail")
         self._trail_on.setChecked(True)
@@ -1319,23 +1330,35 @@ class AnalysisWindow(QMainWindow):
             seconds = self._frame / self._view.fps
             self._clock.setText(f"{int(seconds) // 60:d}:{seconds % 60:05.2f}")
 
+    def _refresh_heatmap_export_state(self, grid_tuple=None) -> None:
+        """Record the grid the overlay was drawn from, and gate the export.
+
+        Enabled only when the canvas actually drew: set_heatmap refuses a grid
+        whose peak is <= 0, so the checkbox being on is not enough.
+        """
+        self._heatmap_grid = grid_tuple
+        self._export_heatmap_btn.setEnabled(grid_tuple is not None and self._canvas.has_heatmap())
+
     def _apply_heatmap(self, *_args) -> None:
         """Bin the selected window, or clear the overlay."""
         selection = self._bar.selection()
         if not self._heatmap_on.isChecked() or self._view is None or selection is None:
             self._canvas.set_heatmap(None)
+            self._refresh_heatmap_export_state()
             return
-        from glider.analysis.behavior.spatial import SpatialError, occupancy_grid
+        from glider.analysis.behavior import spatial
 
         try:
-            grid, _x, _y = occupancy_grid(
+            grid, x_edges, y_edges = spatial.occupancy_grid(
                 self._view, bins=60, start_frame=selection[0], end_frame=selection[1]
             )
-        except SpatialError as e:
+        except spatial.SpatialError as e:
             logger.info("no heatmap for this session: %s", e)
             self._canvas.set_heatmap(None)
+            self._refresh_heatmap_export_state()
             return
         self._canvas.set_heatmap(grid)
+        self._refresh_heatmap_export_state((grid, x_edges, y_edges))
 
     def _apply_trail(self, *_args) -> None:
         self._canvas.set_trail(self._trail_s.value(), self._trail_on.isChecked())
