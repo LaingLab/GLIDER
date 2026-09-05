@@ -97,6 +97,24 @@ def _resolve_resolution(pose, arena, explicit) -> tuple[int, int]:
     )
 
 
+def _detected(pose) -> np.ndarray:
+    """Boolean ``(T, K)``: keypoints the detector actually localized.
+
+    Finite coordinates are not enough. The Ultralytics branch of
+    :func:`~glider.vision.pose.core.infer_video` does not NaN-mask below-
+    threshold keypoints -- ``mask_low_confidence`` does that later, inside
+    ``smooth()``, which runs *after* this gate -- so an unlocalized keypoint
+    arrives as ``(0.0, 0.0)`` at confidence 0: a finite pixel at the frame's
+    top-left corner, which is outside every arena.
+
+    Testing NaN alone would therefore make ``min_detected_fraction`` inert on
+    the inference path while live on the post-hoc path, which reads an already
+    masked CSV -- identical settings meaning different things while the
+    provenance block recorded them as the same.
+    """
+    return np.isfinite(pose.xy).all(axis=-1) & (pose.confidence > 0)
+
+
 def _outside(arena, xy_px, resolution, margin_cm) -> np.ndarray:
     """Boolean ``(T, K)``: keypoints beyond the arena plus its margin.
 
@@ -154,8 +172,18 @@ def gate_to_arena(pose, arena, *, settings=None, resolution=None):
     if pose.n_frames == 0:
         return out, GateReport(0, 0, 0, 0, {}, settings, corners)
 
+    if np.all(pose.confidence == 1.0):
+        # Not a hypothetical: core.py:428 substitutes np.ones when a model
+        # emits no keypoint confidences, and (0,0) pads then read as real.
+        logger.warning(
+            "%s: confidences are uniformly 1.0, so unlocalized keypoints "
+            "cannot be told from real ones and (0,0) padding may be gated as "
+            "out-of-arena",
+            getattr(pose, "source", "this track"),
+        )
+
     resolution = _resolve_resolution(pose, arena, resolution)
-    detected = np.isfinite(pose.xy).all(axis=-1)
+    detected = _detected(pose)
     outside = _outside(arena, pose.xy, resolution, settings.margin_for(arena))
 
     # Strays. A keypoint the detector never localized is not a stray.

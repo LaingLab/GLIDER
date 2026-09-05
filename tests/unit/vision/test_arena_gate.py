@@ -150,3 +150,35 @@ class TestReport:
 
         with pytest.raises(DegenerateArenaError):
             gate_to_arena(_pose(_one_frame()), _arena(corners=[(0.5, 0.5)] * 4))
+
+
+class TestDetected:
+    def test_ultralytics_zero_padding_is_not_detected(self):
+        """Raw YOLO pads unlocalized keypoints with (0,0) at confidence 0.
+        Counting those as detected would mask them as out-of-arena and, once
+        the quorum lands, blank any frame under half localized."""
+        xy = _one_frame([0.0, 0.0])
+        conf = np.array([[0.0, 0.9, 0.9, 0.9]])
+        _, report = gate_to_arena(_pose(xy, conf), _arena())
+        assert report.keypoints_masked == 0
+
+    def test_a_raw_track_and_its_masked_equivalent_gate_identically(self):
+        """Same settings must mean the same thing on the inference path (raw,
+        zero-padded) and the post-hoc path (an already NaN-masked CSV)."""
+        conf = np.array([[0.0, 0.9, 0.9, 0.9]])
+        raw = _one_frame([0.0, 0.0])
+        masked = raw.copy()
+        masked[0, 0] = np.nan
+
+        _, from_raw = gate_to_arena(_pose(raw, conf), _arena())
+        _, from_masked = gate_to_arena(_pose(masked, conf), _arena())
+        assert from_raw.keypoints_masked == from_masked.keypoints_masked
+        assert from_raw.frames_considered == from_masked.frames_considered
+
+    def test_a_uniform_confidence_track_warns_once(self, caplog):
+        """A model with no keypoint confidences gets np.ones (core.py:428), so
+        (0,0) pads read as detected. Say so rather than gating silently."""
+        pose = _pose(_one_frame(), confidence=np.ones((1, 4)))
+        with caplog.at_level("WARNING"):
+            gate_to_arena(pose, _arena())
+        assert caplog.text.count("uniformly 1.0") == 1
