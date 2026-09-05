@@ -394,13 +394,21 @@ class PoseBatchWindow(QMainWindow):
             "shot on the same rig at the same camera height."
         )
         copy_btn.clicked.connect(self._copy_calibration_to_selected)
+        copy_arena_btn = QPushButton("Copy Arena…")
+        copy_arena_btn.setToolTip(
+            "Stamp one video's floor perimeter onto the other selected videos.\n"
+            "The copies land unconfirmed: an arena that does not fit gives no "
+            "warning of its own, so open each one and check the outline before "
+            "the batch will run."
+        )
+        copy_arena_btn.clicked.connect(self._copy_arena_to_selected)
         clear_btn = QPushButton("Clear")
         set_button_role(clear_btn, "ghost")
         clear_btn.clicked.connect(self._clear_selected_calibrations)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
-        for button in (calibrate, arena, copy_btn, clear_btn):
+        for button in (calibrate, arena, copy_btn, copy_arena_btn, clear_btn):
             buttons.addWidget(button)
         buttons.addStretch(1)
         card.add(buttons)
@@ -669,7 +677,10 @@ class PoseBatchWindow(QMainWindow):
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 arena = dialog.calibration()
                 if arena is not None:
-                    self._calibrations.set_arena(video, arena)
+                    # Explicit, because this is the only thing that confirms a
+                    # copied arena: an operator has now seen the overlay sit on
+                    # this video's own floor, which residuals() cannot tell them.
+                    self._calibrations.set_arena(video, arena, confirmed=True)
                     self._zone_cm = dialog.zone_size_cm()
                     self._log.appendPlainText(
                         f"{video.name}: arena drawn, "
@@ -796,6 +807,42 @@ class PoseBatchWindow(QMainWindow):
         self._log.appendPlainText(
             f"Copied {source.name}'s calibration: {filled} uncalibrated video(s) filled, "
             f"{overwritten} existing calibration(s) overwritten."
+        )
+        if skipped:
+            names = ", ".join(v.name for v in skipped)
+            self._log.appendPlainText(
+                f"Not copied to {len(skipped)} video(s) that could not be opened to "
+                f"read their resolution: {names}"
+            )
+        self._cal_table.refresh()
+        self._validate()
+
+    def _copy_arena_to_selected(self) -> None:
+        """Stamp the first selected video's arena onto the rest of the selection.
+
+        The copies land unconfirmed, so Run stays blocked until each has been
+        opened and checked — see :func:`arena_actions.copy_arena_to` for why.
+        """
+        from glider.gui.pose_batch import arena_actions
+
+        selected = self._cal_table.selected_videos()
+        sources = [v for v in selected if self._calibrations.get_arena(v) is not None]
+        if not sources:
+            QMessageBox.information(
+                self,
+                "Copy Arena",
+                "Select one video with a drawn arena plus the videos to copy it to.",
+            )
+            return
+
+        source = sources[0]
+        targets = [v for v in selected if v != source]
+        skipped = arena_actions.copy_arena_to(self._calibrations, source, targets)
+
+        copied = len(targets) - len(skipped)
+        self._log.appendPlainText(
+            f"Copied {source.name}'s arena to {copied} video(s). Each is marked "
+            "unconfirmed: open it and check the outline sits on that video's floor."
         )
         if skipped:
             names = ", ".join(v.name for v in skipped)

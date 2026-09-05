@@ -50,6 +50,48 @@ def _ready_window(window, tmp_path, *, count=1, with_csv=False):
     return videos[0] if count == 1 else videos
 
 
+def _accept_arena_dialog(monkeypatch, *, returning):
+    """Run ``_open_arena`` headless with an accepted dialog returning *returning*.
+
+    Both halves have to be stubbed: the real dialog needs a frame, and the
+    fixture videos are empty files that no reader can open.
+    """
+    import numpy as np
+    from PyQt6.QtWidgets import QDialog
+
+    class _Reader:
+        frame_count = 100
+
+        def load(self, path):
+            return True
+
+        def read_frame(self, n):
+            return np.zeros((480, 640, 3), dtype=np.uint8)
+
+        def release(self):
+            pass
+
+    class _Dialog:
+        def __init__(self, frame, title="", parent=None, **kwargs):
+            self.arena_spin = SimpleNamespace(setValue=lambda value: None)
+            self.canvas = SimpleNamespace(set_corners=lambda corners: None)
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def calibration(self):
+            return returning
+
+        def zone_size_cm(self):
+            return 10.0
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr("glider.vision.video_source.VideoFileSource", _Reader)
+    monkeypatch.setattr("glider.gui.dialogs.arena_dialog.ArenaDialog", _Dialog)
+
+
 def _line_calibration():
     """A CameraCalibration with a drawn line, i.e. what satisfies Run today."""
     from glider.vision.calibration import CalibrationLine, CameraCalibration, LengthUnit
@@ -226,3 +268,49 @@ class TestRunRequiresArena:
         assert window._cal_table.selected_videos()  # guard: the row really is selected
         window._clear_selected_calibrations()
         assert window._calibrations.get_arena(video) is None
+
+
+class TestCopyingAnArena:
+    """Copying is a starting point, not a calibration: it lands unconfirmed."""
+
+    def test_copying_an_arena_lands_unconfirmed(self, window, tmp_path, monkeypatch):
+        """A copied arena that does not fit shows no residual warning, so it must
+        not satisfy the Run gate until someone has seen the overlay."""
+        from glider.gui.pose_batch import arena_actions
+
+        monkeypatch.setattr(arena_actions, "resolution_of", lambda v: (640, 480))
+        videos = _ready_window(window, tmp_path, count=2)
+        window._calibrations.set_arena(videos[0], _arena())
+
+        arena_actions.copy_arena_to(window._calibrations, videos[0], videos[1:])
+
+        assert window._calibrations.get_arena(videos[1]) is not None
+        assert not window._calibrations.is_arena_confirmed(videos[1])
+        assert window._calibrations.missing_arenas(videos) == [videos[1]]
+
+    def test_a_copied_arena_takes_the_target_resolution(self, window, tmp_path, monkeypatch):
+        from glider.gui.pose_batch import arena_actions
+
+        monkeypatch.setattr(arena_actions, "resolution_of", lambda v: (1280, 720))
+        videos = _ready_window(window, tmp_path, count=2)
+        window._calibrations.set_arena(videos[0], _arena())
+        arena_actions.copy_arena_to(window._calibrations, videos[0], videos[1:])
+        assert window._calibrations.get_arena(videos[1]).frame_size == (1280, 720)
+
+    def test_an_unreadable_target_is_skipped_not_guessed(self, window, tmp_path, monkeypatch):
+        from glider.gui.pose_batch import arena_actions
+
+        monkeypatch.setattr(arena_actions, "resolution_of", lambda v: None)
+        videos = _ready_window(window, tmp_path, count=2)
+        window._calibrations.set_arena(videos[0], _arena())
+        skipped = arena_actions.copy_arena_to(window._calibrations, videos[0], videos[1:])
+        assert window._calibrations.get_arena(videos[1]) is None
+        assert skipped == [videos[1]]
+
+    def test_accepting_the_arena_dialog_confirms_a_copy(self, window, tmp_path, monkeypatch):
+        """Opening a copied arena and pressing OK is what confirms it."""
+        videos = _ready_window(window, tmp_path, count=2)
+        window._calibrations.set_arena(videos[1], _arena(), confirmed=False)
+        _accept_arena_dialog(monkeypatch, returning=_arena())
+        window._open_arena(videos[1])
+        assert window._calibrations.is_arena_confirmed(videos[1])
