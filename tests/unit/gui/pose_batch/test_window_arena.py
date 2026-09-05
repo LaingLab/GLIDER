@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,6 +29,45 @@ def _video(tmp_path, name="t1_d2.mp4") -> Path:
 
 def _arena(corners=TRAPEZOID) -> ArenaCalibration:
     return ArenaCalibration(corners=corners, frame_size=(640, 480))
+
+
+def _ready_window(window, tmp_path, *, count=1, with_csv=False):
+    """A window whose only remaining Run blocker is calibration.
+
+    `_validate` (window.py:1068-1108) checks model path, keypoint names, the
+    model's keypoint count and the video list *before* it reaches calibration,
+    so a test that only sets videos never exercises the branch it means to.
+    """
+    videos = [_video(tmp_path, f"t{i}_d1.mp4") for i in range(count)]
+    window._videos = [v.resolve() for v in videos]
+    window._model_path = tmp_path / "exp-7.pt"
+    window._names_field.setText(",".join(f"kp{i}" for i in range(7)))
+    window._meta = SimpleNamespace(n_keypoints=7)
+    window._cal_table.set_videos(window._videos)  # else selected_videos() == []
+    if with_csv:
+        for v in window._videos:
+            (v.parent / f"{v.stem}DLC_exp-7.csv").write_text("x")
+    return videos[0] if count == 1 else videos
+
+
+def _line_calibration():
+    """A CameraCalibration with a drawn line, i.e. what satisfies Run today."""
+    from glider.vision.calibration import CalibrationLine, CameraCalibration, LengthUnit
+
+    return CameraCalibration(
+        lines=[
+            CalibrationLine(
+                start_x=0.2,
+                start_y=0.5,
+                end_x=0.8,
+                end_y=0.5,
+                length=300.0,
+                unit=LengthUnit.MILLIMETERS,
+            )
+        ],
+        calibration_width=640,
+        calibration_height=480,
+    )
 
 
 class TestZoneConfigs:
@@ -147,3 +187,34 @@ def test_load_master_applies_arenas(window, tmp_path):
     window._load_master(master)
 
     assert window._calibrations.get_arena(video) is not None
+
+
+class TestRunRequiresArena:
+    """A drawn arena replaces the line as the Run gate's calibration check."""
+
+    def test_run_is_blocked_by_a_line_only_calibration(self, window, tmp_path):
+        video = _ready_window(window, tmp_path)
+        window._calibrations.set(video, _line_calibration())
+        window._validate()
+        assert not window._run_button.isEnabled()
+        assert "arena" in window._run_button.toolTip().lower()
+
+    def test_run_is_blocked_by_an_unconfirmed_arena(self, window, tmp_path):
+        video = _ready_window(window, tmp_path)
+        window._calibrations.set_arena(video, _arena(), confirmed=False)
+        window._validate()
+        assert not window._run_button.isEnabled()
+
+    def test_a_confirmed_arena_alone_enables_run(self, window, tmp_path):
+        """No line drawn at all. The arena carries the scale."""
+        video = _ready_window(window, tmp_path)
+        window._calibrations.set_arena(video, _arena())
+        window._validate()
+        assert window._run_button.isEnabled()
+
+    def test_the_badge_counts_arenas(self, window, tmp_path):
+        videos = _ready_window(window, tmp_path, count=2)
+        window._calibrations.set_arena(videos[0], _arena())
+        window._validate()
+        # Card has no badge getter; read the underlying label it sets.
+        assert "1 / 2 arenas drawn" in window._calibration_card._badge.text()

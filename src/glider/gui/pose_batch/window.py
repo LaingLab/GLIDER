@@ -1089,9 +1089,13 @@ class PoseBatchWindow(QMainWindow):
         elif not self._videos:
             problem = "Add at least one video or directory."
         else:
-            uncalibrated = self._calibrations.missing(self._videos)
-            if uncalibrated:
-                problem = f"{len(uncalibrated)} video(s) still need calibration."
+            # An arena, not just a line: only the perimeter can place a zone or
+            # gate a detection, and on this cohort the line ran systematically
+            # 2.34% high. A usable arena carries the scale by construction, so
+            # this replaces the old line check rather than adding to it.
+            no_arena = self._calibrations.missing_arenas(self._videos)
+            if no_arena:
+                problem = f"{len(no_arena)} video(s) still need an arena drawn."
 
         self._names_field.setStyleSheet(_INVALID_STYLE if names_bad else "")
         self._run_button.setEnabled(problem is None)
@@ -1101,9 +1105,9 @@ class PoseBatchWindow(QMainWindow):
         self._rail.set_blocker(problem or "")
 
         if self._videos:
-            missing = len(self._calibrations.missing(self._videos))
+            missing = len(self._calibrations.missing_arenas(self._videos))
             done = len(self._videos) - missing
-            self._calibration_card.set_badge(f"{done} / {len(self._videos)} calibrated")
+            self._calibration_card.set_badge(f"{done} / {len(self._videos)} arenas drawn")
         else:
             self._calibration_card.set_badge("")
 
