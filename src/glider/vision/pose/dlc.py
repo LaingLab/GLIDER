@@ -77,6 +77,13 @@ def write_pose_meta(pose: PoseData, csv_path: str | Path) -> Path:
                 payload["resolution"] = [width, height]
         except (TypeError, ValueError):
             pass
+    # Provenance, not decoration: scoring refuses thresholds derived under a
+    # different gate, so this block is what makes that check possible. Absent
+    # means ungated, which is true of every file written before the gate
+    # existed. Optional and additive, so META_SCHEMA_VERSION does not move.
+    gate = pose.metadata.get("arena_gate") if pose.metadata else None
+    if gate:
+        payload["arena_gate"] = gate
     try:
         path.write_text(json.dumps(payload, indent=2) + "\n")
     except OSError as e:  # pragma: no cover - depends on filesystem state
