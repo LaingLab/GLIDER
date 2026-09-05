@@ -131,3 +131,19 @@ class TestRunGating:
         window._videos = [video]
         window._calibrations.set_arena(video, _arena())
         assert window._calibrations.missing(window._videos) == []
+
+
+def test_load_master_applies_arenas(window, tmp_path):
+    """Regression: _load_master applied entries and dropped arenas."""
+    from glider.vision.calibration_set import CalibrationSet
+
+    video = _video(tmp_path)
+    master = tmp_path / "master.json"
+    seed = CalibrationSet()
+    seed.set_arena(video, _arena())
+    seed.save(master)
+
+    window._videos = [video.resolve()]
+    window._load_master(master)
+
+    assert window._calibrations.get_arena(video) is not None

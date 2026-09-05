@@ -903,8 +903,10 @@ class PoseBatchWindow(QMainWindow):
             return
 
         self._calibrations.entries.update(loaded.entries)
+        self._calibrations.arenas.update(loaded.arenas)
         self._log.appendPlainText(
-            f"Loaded calibration for {len(loaded.entries)} video(s) from {path.name}."
+            f"Loaded calibration for {len(loaded.entries)} video(s) "
+            f"and {len(loaded.arenas)} arena(s) from {path.name}."
         )
         self._cal_table.refresh()
         self._validate()
