@@ -60,11 +60,17 @@ def _write_track(
     fps=30.0,
     gate_block=None,
     outside=False,
+    pad=(320.0, 240.0),
 ):
-    """A real pose CSV plus its sidecar, so gate_pose_csv has something to read."""
+    """A real pose CSV plus its sidecar, so gate_pose_csv has something to read.
+
+    ``pad`` moves the in-arena keypoints, which is how a second call stands in
+    for a *re-run of inference*: same video, same output path, different
+    coordinates.
+    """
     from glider.vision.pose.dlc import to_dlc_csv
 
-    xy = _one_frame([-900.0, -900.0]) if outside else _one_frame()
+    xy = _one_frame([-900.0, -900.0], pad=pad) if outside else _one_frame(pad=pad)
     pose = _pose(np.repeat(xy, 10, axis=0))
     pose.fps = fps
     pose.metadata["resolution"] = list(resolution)
@@ -372,6 +378,26 @@ class TestPostHoc:
         csv = _write_track(tmp_path, gate_block={"gated": True, "settings": {}})
         with pytest.raises(ValueError, match="_raw"):
             gate_pose_csv(csv, _arena(), settings=ArenaGateSettings(min_detected_fraction=1.0))
+
+    def test_it_refuses_an_ungated_that_outlived_its_primary(self, tmp_path):
+        """Re-running inference leaves the old ``_ungated`` beside a primary it
+        no longer describes, and "always gate from the pristine original" would
+        then gate the *previous* run and write it over the new one."""
+        csv = _write_track(tmp_path, outside=True)
+        gate_pose_csv(csv, _arena())
+        _write_track(tmp_path, pad=(200.0, 200.0))  # inference re-run, overwrite=True
+        with pytest.raises(ValueError, match="_ungated"):
+            gate_pose_csv(csv, _arena())
+
+    def test_the_refusal_leaves_the_new_run_where_it_was(self, tmp_path):
+        """The damage the refusal exists to prevent: an hour of inference
+        silently replaced by the gated remains of the run before it."""
+        csv = _write_track(tmp_path, outside=True)
+        gate_pose_csv(csv, _arena())
+        fresh = _write_track(tmp_path, pad=(200.0, 200.0)).read_bytes()
+        with pytest.raises(ValueError):
+            gate_pose_csv(csv, _arena())
+        assert csv.read_bytes() == fresh
 
     def test_a_sidecar_less_csv_still_gates(self, tmp_path):
         """write_pose_meta is best-effort and DEFAULT_FPS exists for exactly

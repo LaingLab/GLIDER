@@ -112,6 +112,39 @@ def _score_zones(video: Path, pose, zones, keypoint: str) -> str:
     return ""
 
 
+def _drop_stale_ungated(primary: Path) -> None:
+    """Remove an ``_ungated`` companion orphaned by the primary just written.
+
+    ``gate_pose_csv`` makes that file by renaming the primary it is about to
+    replace, and then always gates *it* rather than the primary, so that
+    re-gating with different settings cannot compound one gate on another. The
+    rule holds only while the companion is the original of the primary beside
+    it. A fresh inference run breaks that: the companion becomes the original of
+    a track no longer on disk, and the next post-hoc pass would gate it and
+    write the previous run's coordinates over this one.
+
+    Nothing the operator asked to keep is lost. The run this file belongs to is
+    the one being overwritten, and the pristine original of the *new* run is the
+    primary itself -- or its ``_raw`` companion when gating or filtering is on.
+
+    Never raises: by here the pose CSV is written and valid, which is the
+    artifact that matters, and a leftover companion is a warning rather than a
+    failed video. ``gate_pose_csv`` refuses one it cannot account for anyway.
+    """
+    from glider.vision.arena_gate import ungated_path
+    from glider.vision.pose.dlc import meta_path
+
+    stale = ungated_path(primary)
+    if not stale.exists():
+        return
+    for path in (stale, meta_path(stale)):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:  # pragma: no cover - depends on filesystem state
+            logger.warning("could not remove the superseded %s: %s", path.name, e)
+    logger.info("%s was re-tracked, so the superseded %s was removed", primary.name, stale.name)
+
+
 def _output_stem(video: Path, model: Path) -> str:
     """Shared stem, so the primary and raw names can never drift apart."""
     return f"{Path(video).stem}DLC_{Path(model).stem}"
@@ -429,6 +462,7 @@ def run_batch(
             # Written only after inference returns a complete PoseData, so a
             # cancelled or failed video never leaves a partial CSV behind.
             to_dlc_csv(pose, primary)
+            _drop_stale_ungated(primary)
             zone_warning = _score_zones(video, pose, zones, zone_keypoint)
         except PoseCancelledError:
             result.cancelled = True

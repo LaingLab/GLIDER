@@ -655,6 +655,44 @@ def test_the_gate_block_survives_filtering(tmp_path, video):
     assert meta["arena_gate"]["gated"] is True
 
 
+def test_overwriting_a_primary_drops_the_stale_ungated(tmp_path, video):
+    """``_ungated`` is the pristine original of the *current* primary.
+
+    Re-running inference replaces that primary, so the companion now describes
+    a run that is no longer on disk — and the post-hoc gate, whose rule is
+    "always gate from the pristine original", would gate it and write the
+    previous run's coordinates over the one just paid for.
+    """
+    from glider.vision.arena_gate import gate_pose_csv, ungated_path
+    from glider.vision.pose.dlc import meta_path
+
+    primary = batch.dlc_output_path(video, tmp_path / "exp-7.pt")
+    _run(tmp_path, video, pose=_clean_pose())
+    gate_pose_csv(primary, _arena())
+    assert ungated_path(primary).exists()
+
+    _run(tmp_path, video, pose=_relocated_pose(), overwrite=True)
+    assert not ungated_path(primary).exists()
+    assert not meta_path(ungated_path(primary)).exists()
+
+
+def test_a_skipped_video_keeps_its_ungated(tmp_path, video):
+    """Only a primary that was actually rewritten orphans its companion.
+
+    A resumed batch skips the videos it already tracked, and deleting their
+    originals would destroy exactly the file the post-hoc pass exists to keep.
+    """
+    from glider.vision.arena_gate import gate_pose_csv, ungated_path
+
+    primary = batch.dlc_output_path(video, tmp_path / "exp-7.pt")
+    _run(tmp_path, video, pose=_clean_pose())
+    gate_pose_csv(primary, _arena())
+
+    result = _run(tmp_path, video, pose=_clean_pose())
+    assert result.skipped == [video.resolve()]
+    assert ungated_path(primary).exists()
+
+
 def test_each_video_reports_only_its_own_zone_warning(tmp_path, monkeypatch):
     """zone_warning used to be bound once, before the loop.
 

@@ -40,6 +40,7 @@ __all__ = [
     "gate_pose_csv",
     "gate_to_arena",
     "inside_fraction",
+    "ungated_path",
 ]
 
 #: Margin as a fraction of the shorter arena side when none is given. A quarter
@@ -267,6 +268,17 @@ def _same_gate(block, settings, arena) -> bool:
     return block.get("settings") == asdict(settings) and stored == corners
 
 
+def ungated_path(csv_path) -> Path:
+    """Where :func:`gate_pose_csv` keeps the pristine original of *csv_path*.
+
+    Single-sourced because ``run_batch`` has to recognise the same file: it
+    removes a stale one when a fresh inference run replaces the primary the
+    companion was taken from.
+    """
+    csv_path = Path(csv_path)
+    return csv_path.with_name(f"{csv_path.stem}_ungated{csv_path.suffix}")
+
+
 def gate_pose_csv(csv_path, arena, *, settings=None) -> GateReport:
     """Gate a tracked CSV in place, keeping the original as ``_ungated``.
 
@@ -277,12 +289,29 @@ def gate_pose_csv(csv_path, arena, *, settings=None) -> GateReport:
     ``min_detected_fraction=1.0`` -- and the second run would rename the
     already-gated primary over the true original, compound the second gate on
     the first, and record only the second settings as provenance.
+
+    **That rule is only sound while ``_ungated`` is the original of the
+    *current* primary, and two things enforce it.** ``run_batch`` deletes the
+    companion whenever it writes a new primary over the one it was taken from,
+    and this function refuses when the primary carries no ``arena_gate`` block
+    of its own. Every primary this pass writes carries one, so its absence
+    beside an ``_ungated`` means the primary came from somewhere else -- in
+    practice a re-run of inference -- and gating the companion would write the
+    *previous* run's coordinates over it, with a provenance block describing
+    the gate and saying nothing about the substitution. Refusing rather than
+    picking one of the two files matches the rename below: this pass never
+    silently discards a track, in either direction.
+
+    The residue that neither catches is a primary gated *at inference time*
+    sitting beside a stale companion, which the block cannot distinguish from a
+    legitimate re-gate. Only a build predating the ``run_batch`` cleanup can
+    produce it.
     """
     from glider.vision.pose.dlc import from_dlc_csv, meta_path, read_pose_meta, to_dlc_csv
 
     csv_path = Path(csv_path)
     settings = settings or ArenaGateSettings()
-    ungated = csv_path.with_name(f"{csv_path.stem}_ungated{csv_path.suffix}")
+    ungated = ungated_path(csv_path)
     source = ungated if ungated.exists() else csv_path
 
     existing = (read_pose_meta(csv_path) or {}).get("arena_gate")
@@ -294,6 +323,16 @@ def gate_pose_csv(csv_path, arena, *, settings=None) -> GateReport:
             f"{csv_path.name} was gated during inference and has no _ungated "
             f"companion, so the original cannot be preserved. Re-gate from its "
             f"_raw file, or re-run inference with the settings you want."
+        )
+
+    if ungated.exists() and not existing:
+        raise ValueError(
+            f"{csv_path.name} has an _ungated companion but records no arena "
+            f"gate of its own, so it was not written by this pass -- most "
+            f"likely inference has been re-run since, and {ungated.name} is the "
+            f"original of the run before it. Gating that would silently restore "
+            f"the older track. Delete {ungated.name} to gate what is there now, "
+            f"or put it back over {csv_path.name} to keep the older run."
         )
 
     # Read before renaming: from_dlc_csv reads fps from the sidecar.
