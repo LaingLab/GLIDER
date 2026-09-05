@@ -220,3 +220,54 @@ class TestQuorum:
         _, report = gate_to_arena(_pose(np.full((5, 4, 2), np.nan)), _arena())
         assert report.frames_considered == 0
         assert report.blanked_fraction == 0.0
+
+
+class TestDetectedFraction:
+    def test_it_is_off_by_default(self):
+        """A partial-but-in-arena frame survives. Default-on would blank every
+        legitimately occluded frame in every cohort."""
+        xy = np.full((1, 4, 2), np.nan)
+        xy[0, :1] = [320.0, 240.0]
+        _, report = gate_to_arena(_pose(xy), _arena())
+        assert report.frames_blanked == 0
+
+    def test_at_one_it_reproduces_the_prototype(self):
+        """min_detected_fraction=1.0 blanks any incomplete frame, which is what
+        reject_partial_frames(min_keypoints=None) did."""
+        xy = np.full((1, 4, 2), np.nan)
+        xy[0, :3] = [320.0, 240.0]
+        _, report = gate_to_arena(
+            _pose(xy), _arena(), settings=ArenaGateSettings(min_detected_fraction=1.0)
+        )
+        assert report.frames_blanked == 1
+
+    def test_a_complete_in_arena_frame_survives_at_one(self):
+        _, report = gate_to_arena(
+            _pose(_one_frame()),
+            _arena(),
+            settings=ArenaGateSettings(min_detected_fraction=1.0),
+        )
+        assert report.frames_blanked == 0
+
+
+class TestInsideFraction:
+    def test_it_scores_a_fully_in_arena_detection_as_one(self):
+        from glider.vision.arena_gate import inside_fraction
+
+        xy = np.full((4, 2), [320.0, 240.0])
+        conf = np.full(4, 0.9)
+        assert inside_fraction(_arena(), xy, conf, (640, 480)) == 1.0
+
+    def test_padding_does_not_drag_the_score_down(self):
+        """The same (0,0) trap, at candidate-selection time: a good detection
+        with one pad must not score 3/4 and lose to a bench-floor blob."""
+        from glider.vision.arena_gate import inside_fraction
+
+        xy = np.array([[0.0, 0.0], [320.0, 240.0], [320.0, 240.0], [320.0, 240.0]])
+        conf = np.array([0.0, 0.9, 0.9, 0.9])
+        assert inside_fraction(_arena(), xy, conf, (640, 480)) == 1.0
+
+    def test_a_detection_with_nothing_detected_scores_zero(self):
+        from glider.vision.arena_gate import inside_fraction
+
+        assert inside_fraction(_arena(), np.zeros((4, 2)), np.zeros(4), (640, 480)) == 0.0

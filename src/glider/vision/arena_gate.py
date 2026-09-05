@@ -33,7 +33,7 @@ from glider.vision.arena import ArenaCalibration
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ArenaGateSettings", "GateReport", "gate_to_arena"]
+__all__ = ["ArenaGateSettings", "GateReport", "gate_to_arena", "inside_fraction"]
 
 #: Margin as a fraction of the shorter arena side when none is given. A quarter
 #: of a 30 cm arena is 7.5 cm, which clears any plausible rear -- a 9 cm rear
@@ -203,7 +203,10 @@ def gate_to_arena(pose, arena, *, settings=None, resolution=None):
         too_few_inside = considered & (
             inside_count / np.maximum(detected_count, 1) < settings.min_inside_fraction
         )
-    blank = too_few_inside
+        too_few_detected = considered & (
+            detected_count / pose.n_keypoints < settings.min_detected_fraction
+        )
+    blank = too_few_inside | too_few_detected
     out.xy[blank] = np.nan
     out.confidence[blank] = 0.0
 
@@ -221,3 +224,26 @@ def gate_to_arena(pose, arena, *, settings=None, resolution=None):
         settings=settings,
         arena_corners=corners,
     )
+
+
+def inside_fraction(arena, xy, confidence, resolution, settings=None) -> float:
+    """Share of one detection's *localized* keypoints that are in the arena.
+
+    Factored out so :func:`gate_to_arena` and the candidate re-ranking in
+    :func:`~glider.vision.pose.core.infer_video` cannot drift into a state
+    where inference keeps a candidate the gate then deletes.
+
+    Takes ``confidence`` as well as ``xy`` for the reason :func:`_detected`
+    explains: raw Ultralytics output pads unlocalized keypoints with ``(0, 0)``
+    at confidence 0, and scoring those as out-of-arena would make a good
+    detection with a few pads lose to a confident false one. Returns 0.0 when
+    nothing was localized, so an empty detection never wins a comparison.
+    """
+    settings = settings or ArenaGateSettings()
+    xy = np.asarray(xy, dtype=float).reshape(1, -1, 2)
+    confidence = np.asarray(confidence, dtype=float).reshape(1, -1)
+    detected = np.isfinite(xy).all(axis=-1) & (confidence > 0)
+    if not detected.any():
+        return 0.0
+    outside = _outside(arena, xy, resolution, settings.margin_for(arena))
+    return float((detected & ~outside).sum() / detected.sum())
