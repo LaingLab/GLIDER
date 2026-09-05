@@ -165,7 +165,7 @@ def resolve_speed_thresholds(
     dart_threshold: float | None = None,
     score_freezing: bool = True,
     score_darting: bool = True,
-) -> dict[str, float]:
+) -> dict[str, object]:
     """Freeze/dart thresholds in px/frame, ready for :class:`LiveInferenceConfig`.
 
     Exactly one of three modes, never mixed:
@@ -239,6 +239,12 @@ def resolve_speed_thresholds(
 
     rate = fps if fps is not None else _video_fps(video)
 
+    # Which arena gate the cut-offs were derived under, for the caller to
+    # compare against the CSV it is about to score. Only the cohort mode can
+    # carry one: absolute cut-offs are not derived from poses at all, and
+    # percentile ones come from the very CSV being scored.
+    gate_provenance: dict | None = None
+
     if wants_px:
         if (score_freezing and freeze_threshold is None) or (
             score_darting and dart_threshold is None
@@ -258,6 +264,7 @@ def resolve_speed_thresholds(
         from glider.analysis.behavior.cohort_speed import CohortSpeedThresholds
 
         cohort = CohortSpeedThresholds.load(cohort_thresholds)
+        gate_provenance = cohort.gate_provenance
         scale = px_per_mm if px_per_mm is not None else load_px_per_mm(calibration_master, video)
         freeze_px, dart_px = cohort.to_px_per_frame(px_per_mm=scale, fps=rate)
         # The file always carries both; the run may still be about one.
@@ -326,12 +333,37 @@ def resolve_speed_thresholds(
         if freeze_px is None or dart_px is None:  # pragma: no cover - guarded above
             raise ValueError("could not convert the thresholds to pixels per frame")
 
-    out: dict[str, float] = {"freeze_threshold": freeze_px, "dart_threshold": dart_px}
+    out: dict[str, object] = {"freeze_threshold": freeze_px, "dart_threshold": dart_px}
+    if gate_provenance is not None:
+        out["gate_provenance"] = gate_provenance
     if freeze_min_s is not None:
         out["freeze_min_frames"] = _min_frames(freeze_min_s, rate, default=30)
     if dart_min_s is not None:
         out["dart_min_frames"] = _min_frames(dart_min_s, rate, default=3)
     return out
+
+
+def _refuse_gate_mismatch(pose_csv, cohort_gate) -> None:
+    """Raise if a track and the cut-offs about to score it were gated differently.
+
+    Gating deletes out-of-arena detections, so a gated track has a lower speed
+    distribution than the same track ungated. Cohort cut-offs are percentiles
+    of a pooled distribution, so applying ones derived under the other gate
+    shifts every freeze and dart call — by an amount nothing in the output
+    reports. A hard error is the only version of this that an operator finds.
+    """
+    from glider.vision.pose.dlc import read_pose_meta
+
+    csv_gated = bool((read_pose_meta(pose_csv) or {}).get("arena_gate", {}).get("gated"))
+    cohort_gated = bool((cohort_gate or {}).get("gated"))
+    if csv_gated == cohort_gated:
+        return
+    raise ValueError(
+        f"{Path(pose_csv).name} is {'gated' if csv_gated else 'ungated'} but "
+        f"these thresholds were derived from "
+        f"{'gated' if cohort_gated else 'ungated'} poses. Re-derive the cohort "
+        f"thresholds from the same data you are scoring."
+    )
 
 
 @dataclass
@@ -527,6 +559,20 @@ def classify(
             score_darting=score_darting,
         )
     )
+    # Before the batch/stream fork, because batch_apply declines two paths that
+    # still read this CSV: an annotated output video, and a CNN sequence model.
+    # Both fall through to LiveInferencePipeline, whose _make_tracker reads
+    # config.pose_csv_in through PoseReplay -- so a check sited inside
+    # batch_apply would let exactly those two score gated data against ungated
+    # thresholds, silently, which is what this exists to stop.
+    #
+    # Only against cohort thresholds. Absolute cm/s cut-offs are not derived
+    # from poses at all, and percentile ones come from the very CSV being
+    # scored, so neither can disagree with it -- and since the post-hoc gating
+    # pass rewrites every tracked session in a folder, checking those paths
+    # would break every non-cohort scoring run.
+    if pose_csv_in is not None and cohort_thresholds is not None:
+        _refuse_gate_mismatch(pose_csv_in, opts.get("gate_provenance"))
     if speed_only and opts.get("freeze_threshold") is None:
         # Checked before anything expensive: with no classifier and no
         # thresholds there is nothing left to score, and finding that out
