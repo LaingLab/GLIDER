@@ -365,8 +365,10 @@ class PoseBatchWindow(QMainWindow):
         card = Card("Pixel-to-distance calibration", "required for every video")
         self._calibration_card = card
         card.setToolTip(
-            "Every video needs a scale before the batch can run. The DLC CSVs "
-            "stay in pixels; the scale is written to the master calibration file."
+            "Every video needs its floor perimeter drawn before the batch can "
+            "run; the arena carries the scale, so a measurement line is optional. "
+            "The DLC CSVs stay in pixels; the scale is written to the master "
+            "calibration file."
         )
 
         self._cal_table = CalibrationTable()
@@ -378,20 +380,28 @@ class PoseBatchWindow(QMainWindow):
         self._cal_table.setMinimumHeight(140)
         card.add(self._cal_table, 1)
 
-        calibrate = QPushButton("Calibrate…")
-        calibrate.setToolTip("Calibrate the selected video (or double-click its row)")
-        calibrate.clicked.connect(self._calibrate_selected)
+        # The arena leads this row: it is what Run requires, and it supplies the
+        # scale as a by-product. The line is the optional cross-check now.
         arena = QPushButton("Arena…")
+        set_button_role(arena, "primary")
         arena.setToolTip(
-            "Draw the floor perimeter of the selected video (or double-click its "
-            "Arena cell).\nGives a centre zone that means the same patch of floor "
-            "in every video, and a scale that accounts for perspective."
+            "Required. Draw the floor perimeter of the selected video (or "
+            "double-click its Arena cell).\nGives a centre zone that means the "
+            "same patch of floor in every video, and a scale that accounts for "
+            "perspective."
         )
         arena.clicked.connect(self._arena_selected)
+        calibrate = QPushButton("Calibrate…")
+        calibrate.setToolTip(
+            "Optional. Draw a measurement line on the selected video (or "
+            "double-click its row).\nThe arena already carries the scale; a line "
+            "is a second opinion, not a substitute."
+        )
+        calibrate.clicked.connect(self._calibrate_selected)
         copy_btn = QPushButton("Copy to Selected")
         copy_btn.setToolTip(
-            "Stamp one calibration onto the other selected videos — for videos "
-            "shot on the same rig at the same camera height."
+            "Stamp one measurement line onto the other selected videos — for "
+            "videos shot on the same rig at the same camera height."
         )
         copy_btn.clicked.connect(self._copy_calibration_to_selected)
         copy_arena_btn = QPushButton("Copy Arena…")
@@ -408,7 +418,7 @@ class PoseBatchWindow(QMainWindow):
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
-        for button in (calibrate, arena, copy_btn, copy_arena_btn, clear_btn):
+        for button in (arena, copy_arena_btn, calibrate, copy_btn, clear_btn):
             buttons.addWidget(button)
         buttons.addStretch(1)
         card.add(buttons)

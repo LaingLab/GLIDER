@@ -98,11 +98,19 @@ class CalibrationTable(QTableWidget):
             self._set_cell(row, 1, resolution)
             self._set_cell(row, 2, f"{ppm:.3f}" if ppm else "—", tooltip=self._scale_tip(video))
             self._set_cell(row, ARENA_COLUMN, arena_text, tooltip=arena_tip)
-            self._set_cell(
-                row,
-                _STATUS_COLUMN,
-                "✓ Calibrated" if ppm else "⚠ Needs calibration",
-            )
+            self._set_cell(row, _STATUS_COLUMN, self._status_text(video))
+
+    def _status_text(self, video: Path) -> str:
+        """Run-readiness, not merely whether a scale exists.
+
+        The Run gate now asks for a confirmed arena, so a row that shows only
+        "Calibrated" while Run stays disabled sends the operator hunting.
+        """
+        if self._calibrations.get_arena(video) is None:
+            return "⚠ Needs arena"
+        if not self._calibrations.is_arena_confirmed(video):
+            return "⚠ Copied — confirm it"
+        return "✓ Calibrated" if self._calibrations.px_per_mm(video) else "⚠ Needs calibration"
 
     def _arena_cell(self, video: Path) -> tuple[str, str]:
         """Text and tooltip for the arena column.
