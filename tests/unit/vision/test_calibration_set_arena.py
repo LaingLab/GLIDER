@@ -209,9 +209,18 @@ class TestConfirmedState:
         assert cal_set.missing_arenas([video]) == [video]
 
     def test_discarding_clears_the_unconfirmed_flag(self, tmp_path):
+        """A stale flag must not outlive the arena it described.
+
+        Written against a direct ``arenas`` write rather than ``set_arena``,
+        because that is the path that actually breaks: ``_load_master`` does
+        ``self._calibrations.arenas.update(loaded.arenas)``, bypassing
+        ``set_arena`` and its flag-clearing. Going through ``set_arena`` here
+        instead would clear the flag on its own and the test would pass even
+        with the cleanup removed from ``discard_arena``.
+        """
         cal_set, video = _set_with_arena(tmp_path, confirmed=False)
         cal_set.discard_arena(video)
-        cal_set.set_arena(video, ArenaCalibration(corners=TRAPEZOID))
+        cal_set.arenas.update({cal_set._key(video): ArenaCalibration(corners=TRAPEZOID)})
         assert cal_set.is_arena_confirmed(video)
 
     def test_subset_carries_confirmed_state(self, tmp_path):
