@@ -228,6 +228,42 @@ class TestConfirmedState:
         assert not cal_set.subset([video]).is_arena_confirmed(video)
 
 
+class TestMerge:
+    """One entry point so the three maps cannot be updated two at a time."""
+
+    def _other(self, tmp_path, video, *, confirmed):
+        other = CalibrationSet()
+        other.set_arena(video, ArenaCalibration(corners=TRAPEZOID), confirmed=confirmed)
+        return other
+
+    def test_an_unconfirmed_arena_arrives_unconfirmed(self, tmp_path):
+        cal_set = CalibrationSet()
+        video = tmp_path / "s1.mp4"
+        cal_set.merge(self._other(tmp_path, video, confirmed=False))
+        assert cal_set.get_arena(video) is not None
+        assert not cal_set.is_arena_confirmed(video)
+
+    def test_a_confirmed_arena_clears_a_stale_flag(self, tmp_path):
+        cal_set, video = _set_with_arena(tmp_path, confirmed=False)
+        cal_set.merge(self._other(tmp_path, video, confirmed=True))
+        assert cal_set.is_arena_confirmed(video)
+
+    def test_videos_the_other_set_never_names_are_untouched(self, tmp_path):
+        cal_set, mine = _set_with_arena(tmp_path, confirmed=False)
+        theirs = tmp_path / "s2.mp4"
+        cal_set.merge(self._other(tmp_path, theirs, confirmed=True))
+        assert not cal_set.is_arena_confirmed(mine)
+        assert cal_set.is_arena_confirmed(theirs)
+
+    def test_lines_come_across_too(self, tmp_path, line):
+        video = tmp_path / "s1.mp4"
+        other = CalibrationSet()
+        other.set(video, line)
+        cal_set = CalibrationSet()
+        cal_set.merge(other)
+        assert cal_set.get(video) is line
+
+
 def test_confirmed_arenas_write_no_extra_key(tmp_path):
     """A normal file must stay byte-identical to what earlier builds wrote."""
     cal_set, _ = _set_with_arena(tmp_path)

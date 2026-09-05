@@ -126,6 +126,28 @@ class CalibrationSet:
                     picked._unconfirmed.add(key)
         return picked
 
+    def merge(self, other: CalibrationSet) -> None:
+        """Apply everything *other* knows on top of this set, in place.
+
+        The three maps have to move together. A hand-rolled
+        ``entries.update(); arenas.update()`` at the call site silently drops
+        the confirmed state, which is how a copied arena came back confirmed
+        after one save/reload cycle -- the flag was written to the master file,
+        read correctly by :meth:`load`, then discarded by the merge.
+
+        *other* is authoritative for the videos it names and silent about the
+        rest: an arena it carries as confirmed clears any stale unconfirmed
+        flag here, and a video it does not mention keeps whatever this set
+        already had.
+        """
+        self.entries.update(other.entries)
+        for key, arena in other.arenas.items():
+            self.arenas[key] = arena
+            if key in other._unconfirmed:
+                self._unconfirmed.add(key)
+            else:
+                self._unconfirmed.discard(key)
+
     # ------------------------------------------------------------------
     # queries
     # ------------------------------------------------------------------

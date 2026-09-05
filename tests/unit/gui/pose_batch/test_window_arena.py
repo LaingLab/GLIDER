@@ -231,6 +231,51 @@ def test_load_master_applies_arenas(window, tmp_path):
     assert window._calibrations.get_arena(video) is not None
 
 
+class TestLoadMasterKeepsConfirmedState:
+    """Regression: ``_load_master`` merged ``entries`` and ``arenas`` by hand
+    and dropped ``_unconfirmed``, so one save/reload cycle confirmed every
+    copied arena -- on exactly the workflow copies exist for."""
+
+    def _saved_master(self, tmp_path, video, *, confirmed):
+        from glider.vision.calibration_set import CalibrationSet
+
+        master = tmp_path / "master.json"
+        seed = CalibrationSet()
+        seed.set_arena(video, _arena(), confirmed=confirmed)
+        seed.save(master)
+        return master
+
+    def test_a_copied_arena_is_still_unconfirmed_after_a_reload(self, window, tmp_path):
+        video = _ready_window(window, tmp_path)
+        master = self._saved_master(tmp_path, video, confirmed=False)
+
+        window._load_master(master)
+
+        assert window._calibrations.get_arena(video) is not None
+        assert not window._calibrations.is_arena_confirmed(video)
+
+    def test_run_stays_blocked_after_the_reload(self, window, tmp_path):
+        """The whole point of the flag: Run must not come back on its own."""
+        video = _ready_window(window, tmp_path)
+        master = self._saved_master(tmp_path, video, confirmed=False)
+
+        window._load_master(master)
+
+        assert window._calibrations.missing_arenas(window._videos) == [video]
+        assert not window._run_button.isEnabled()
+
+    def test_loading_a_confirmed_arena_clears_a_stale_flag(self, window, tmp_path):
+        """The reverse direction: the file is the truth for the videos it names,
+        so an arena confirmed on disk must not stay blocked by an old copy."""
+        video = _ready_window(window, tmp_path)
+        window._calibrations.set_arena(video, _arena(), confirmed=False)
+        master = self._saved_master(tmp_path, video, confirmed=True)
+
+        window._load_master(master)
+
+        assert window._calibrations.is_arena_confirmed(video)
+
+
 class TestRunRequiresArena:
     """A drawn arena replaces the line as the Run gate's calibration check."""
 

@@ -975,8 +975,10 @@ class PoseBatchWindow(QMainWindow):
             QMessageBox.warning(self, "Calibration File", str(e))
             return
 
-        self._calibrations.entries.update(loaded.entries)
-        self._calibrations.arenas.update(loaded.arenas)
+        # Not a hand-rolled two-map update: the confirmed state is a third map
+        # that has to travel with the arenas, or a copied arena comes back
+        # confirmed after one save/reload cycle.
+        self._calibrations.merge(loaded)
         self._log.appendPlainText(
             f"Loaded calibration for {len(loaded.entries)} video(s) "
             f"and {len(loaded.arenas)} arena(s) from {path.name}."
