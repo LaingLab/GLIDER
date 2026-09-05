@@ -447,3 +447,158 @@ class TestWhyAPoolFellBackToPixels:
             )
         )
         assert CohortSpeedThresholds.load(path).n_uncalibrated == 0
+
+
+def _gate_block(gated: bool) -> dict:
+    """A gate block as a *session sidecar* carries it: corners, counts and all.
+
+    The cohort keeps only part of this, so the helper hands out the whole
+    thing — a test that fed the trimmed shape in could not notice the trim.
+    """
+    from dataclasses import asdict
+
+    from glider.vision.arena_gate import ArenaGateSettings
+
+    return {
+        "frames_total": 9000,
+        "frames_considered": 8800,
+        "frames_blanked": 41,
+        "keypoints_masked": 260,
+        "masked_by_keypoint": {"a": 260, "b": 0, "c": 0},
+        "settings": asdict(ArenaGateSettings(margin_cm=7.5)),
+        "arena_corners": [[0.0, 0.0], [640.0, 0.0], [640.0, 480.0], [0.0, 480.0]],
+        "gated": gated,
+    }
+
+
+def _thresholds(*, gated: bool) -> CohortSpeedThresholds:
+    return CohortSpeedThresholds(
+        freeze=0.55,
+        dart=27.68,
+        unit=CM_PER_S,
+        freeze_pct=10.0,
+        dart_pct=99.5,
+        n_sessions=31,
+        n_samples=269_964,
+        gate_provenance=_gate_block(gated),
+    )
+
+
+def _session_csv(tmp_path, name, *, gated, blanked=41):
+    """A session pose CSV whose sidecar says whether it was gated."""
+    from glider.vision.pose.core import PoseData
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    rng = np.random.default_rng(len(name))
+    xy = np.cumsum(rng.normal(0, 2.0, size=(200, 3, 2)), axis=0) + 100.0
+    block = {**_gate_block(True), "frames_blanked": blanked} if gated else None
+    pose = PoseData(
+        xy=xy,
+        confidence=np.ones((200, 3)),
+        keypoint_names=["a", "b", "c"],
+        fps=30.0,
+        metadata={"arena_gate": block} if block else {},
+    )
+    return to_dlc_csv(pose, tmp_path / f"{name}DLC_m.csv")
+
+
+class TestWhichGateTheseWereDerivedUnder:
+    """Thresholds are percentiles of a pooled distribution, and gating lowers
+    that distribution. Applying an ungated cut-off to a gated track produces a
+    plausible number with no error, so the file has to say which it is.
+    """
+
+    def test_the_cohort_block_omits_arena_corners(self):
+        """Corners are per-video: 31 sessions have 31 perimeters, so no single
+        fingerprint could match them all and comparing would raise every time."""
+        block = _thresholds(gated=True).to_dict()["arena_gate"]
+        assert "arena_corners" not in block
+        assert block["gated"] is True
+        assert "settings" in block
+
+    def test_a_v1_file_still_loads(self, tmp_path):
+        path = tmp_path / "c.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "freeze": 0.5,
+                    "dart": 30.0,
+                    "unit": CM_PER_S,
+                    "n_sessions": 4,
+                }
+            )
+        )
+        assert CohortSpeedThresholds.load(path) is not None
+
+    def test_a_v1_file_reads_as_ungated(self, tmp_path):
+        """Gating did not exist when v1 was written, so absent means ungated --
+        the only reading that does not silently defeat the guard on stale files."""
+        path = tmp_path / "c.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "freeze": 0.5,
+                    "dart": 30.0,
+                    "unit": CM_PER_S,
+                    "n_sessions": 4,
+                }
+            )
+        )
+        assert CohortSpeedThresholds.load(path).gate_provenance["gated"] is False
+
+    def test_the_block_survives_a_round_trip(self, tmp_path):
+        path = tmp_path / "c.json"
+        _thresholds(gated=True).save(path)
+        loaded = CohortSpeedThresholds.load(path)
+        assert loaded.gate_provenance["gated"] is True
+        assert loaded.gate_provenance["settings"]["margin_cm"] == 7.5
+
+    def test_a_gated_pool_records_that_it_was_gated(self, tmp_path):
+        a = _session_csv(tmp_path, "a", gated=True)
+        b = _session_csv(tmp_path, "b", gated=True)
+        block = compute_cohort_thresholds([a, b]).gate_provenance
+        assert block["gated"] is True
+        assert block["settings"]["margin_cm"] == 7.5
+        assert "arena_corners" not in block
+
+    def test_an_ungated_pool_records_that_it_was_not(self, tmp_path):
+        a = _session_csv(tmp_path, "a", gated=False)
+        assert compute_cohort_thresholds([a]).gate_provenance["gated"] is False
+
+    def test_a_mixed_pool_is_refused(self, tmp_path):
+        """One boolean cannot describe a half-gated cohort: whichever value it
+        took, the other half would hard-raise at scoring time."""
+        gated = _session_csv(tmp_path, "a", gated=True)
+        ungated = _session_csv(tmp_path, "b", gated=False)
+        with pytest.raises(CohortSpeedError, match="mix of gated and ungated"):
+            compute_cohort_thresholds([gated, ungated], px_per_mm=1.3, fps=30.0)
+
+    def test_the_mixed_pool_is_refused_before_any_session_is_read(self, tmp_path, monkeypatch):
+        """Reading a real cohort is minutes of CSV; the refusal is arithmetic."""
+        import glider.vision.pose.dlc as dlc_mod
+
+        gated = _session_csv(tmp_path, "a", gated=True)
+        ungated = _session_csv(tmp_path, "b", gated=False)
+        monkeypatch.setattr(
+            dlc_mod,
+            "from_dlc_csv",
+            lambda *a, **k: pytest.fail("a session was read before the pool was checked"),
+        )
+        with pytest.raises(CohortSpeedError, match="mix of gated and ungated"):
+            compute_cohort_thresholds([gated, ungated])
+
+    def test_a_heavily_blanked_session_is_named(self, tmp_path, caplog):
+        """The cohort percentile is derived from whatever survived the gate."""
+        heavy = _session_csv(tmp_path, "heavy", gated=True, blanked=4000)
+        with caplog.at_level("WARNING"):
+            # Calibrated, so the only thing that could name it is the gate.
+            compute_cohort_thresholds([heavy], px_per_mm=4.0, fps=30.0)
+        assert "heavyDLC_m.csv" in caplog.text
+
+    def test_a_lightly_blanked_session_is_not(self, tmp_path, caplog):
+        light = _session_csv(tmp_path, "light", gated=True, blanked=4)
+        with caplog.at_level("WARNING"):
+            compute_cohort_thresholds([light], px_per_mm=4.0, fps=30.0)
+        assert "lightDLC_m.csv" not in caplog.text
