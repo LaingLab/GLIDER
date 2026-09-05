@@ -79,3 +79,58 @@ def copy_arena_to(
             confirmed=False,
         )
     return skipped
+
+
+def regatable(videos: Iterable[Path]) -> list[Path]:
+    """Those of *videos* that already have a pose CSV to re-gate.
+
+    The re-gate pass is for tracks that exist on disk; a cohort that has not
+    been tracked yet wants Run, not this.
+    """
+    from glider.vision.pose.batch import find_pose_csv
+
+    return [video for video in videos if find_pose_csv(video) is not None]
+
+
+def regate_videos(
+    videos: Iterable[Path],
+    calibrations: CalibrationSet,
+    *,
+    settings=None,
+    on_log=None,
+    on_progress=None,
+) -> tuple[int, int]:
+    """Re-gate each video's pose CSV in place. Returns ``(gated, skipped)``.
+
+    Never raises for one video. A refusal (``ValueError``) and an unreadable
+    file (``OSError``) are both skips with a logged reason: this is a batch
+    maintenance pass over a whole cohort, and stopping at the first awkward
+    session would leave the folder half-converted with no record of where.
+    """
+    from glider.vision.arena_gate import gate_pose_csv
+    from glider.vision.pose.batch import find_pose_csv
+
+    videos = list(videos)
+    gated = skipped = 0
+    for index, video in enumerate(videos):
+        arena = calibrations.get_arena(video)
+        csv = find_pose_csv(video)
+        if arena is None or csv is None:
+            skipped += 1
+            if on_log:
+                reason = "no arena drawn" if arena is None else "no pose CSV"
+                on_log(f"{video.name}: skipped ({reason})")
+        else:
+            try:
+                report = gate_pose_csv(csv, arena, settings=settings)
+            except (ValueError, OSError) as e:
+                skipped += 1
+                if on_log:
+                    on_log(f"{video.name}: skipped ({e})")
+            else:
+                gated += 1
+                if on_log:
+                    on_log(f"{video.name}: blanked {report.blanked_fraction:.1%}")
+        if on_progress:
+            on_progress(index + 1, len(videos))
+    return gated, skipped

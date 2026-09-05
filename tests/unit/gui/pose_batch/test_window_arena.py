@@ -314,3 +314,50 @@ class TestCopyingAnArena:
         _accept_arena_dialog(monkeypatch, returning=_arena())
         window._open_arena(videos[1])
         assert window._calibrations.is_arena_confirmed(videos[1])
+
+
+def test_regate_is_disabled_without_pose_csvs(window, tmp_path):
+    video = _ready_window(window, tmp_path)
+    window._calibrations.set_arena(video, _arena())
+    window._validate()
+    assert not window._regate_button.isEnabled()
+
+
+def test_regate_is_disabled_by_an_unconfirmed_arena(window, tmp_path):
+    video = _ready_window(window, tmp_path, with_csv=True)
+    window._calibrations.set_arena(video, _arena(), confirmed=False)
+    window._validate()
+    assert not window._regate_button.isEnabled()
+
+
+def test_regate_is_enabled_with_a_confirmed_arena_and_a_csv(window, tmp_path):
+    video = _ready_window(window, tmp_path, with_csv=True)
+    window._calibrations.set_arena(video, _arena())
+    window._validate()
+    assert window._regate_button.isEnabled()
+
+
+def test_one_bad_video_does_not_end_the_pass(tmp_path, monkeypatch):
+    """A refusal or an unreadable file is a skip, not a stop -- the whole point
+    of a batch operation is that it finishes."""
+    from glider.gui.pose_batch.arena_actions import regate_videos
+    from glider.vision.calibration_set import CalibrationSet
+
+    videos = [_video(tmp_path, "a.mp4"), _video(tmp_path, "b.mp4")]
+    calibrations = CalibrationSet()
+    for video in videos:
+        calibrations.set_arena(video, _arena())
+        (video.parent / f"{video.stem}DLC_exp-7.csv").write_text("x")
+
+    calls = []
+
+    def flaky(csv, arena, settings=None):
+        calls.append(csv)
+        if len(calls) == 1:
+            raise ValueError("refused")
+        return SimpleNamespace(blanked_fraction=0.0)
+
+    monkeypatch.setattr("glider.vision.arena_gate.gate_pose_csv", flaky)
+    gated, skipped = regate_videos(videos, calibrations, on_log=lambda m: None)
+    assert len(calls) == 2
+    assert gated == 1 and skipped == 1

@@ -178,6 +178,11 @@ class PoseBatchWindow(QMainWindow):
         self._worker = None
         self._meta_thread: QThread | None = None
         self._meta_worker: _MetaWorker | None = None
+        # The post-hoc re-gate runs on its own thread rather than borrowing the
+        # batch one: it is I/O over a handful of CSVs with no cancel, and the
+        # two would otherwise share a teardown that means different things.
+        self._regate_thread: QThread | None = None
+        self._regate_worker = None
 
         self._build_ui()
         self._refresh_videos()
@@ -239,6 +244,16 @@ class PoseBatchWindow(QMainWindow):
         self._cancel_button.setVisible(True)
         self._cancel_button.setEnabled(False)
         self._cancel_button.clicked.connect(self._cancel)
+
+        # Beside Run rather than in a menu: the cohort this exists for is
+        # already tracked, so for those 61 sessions this button *is* the action
+        # the window performs, and re-running inference to apply a gate would
+        # cost hours of GPU time for a result the CSVs already contain.
+        self._regate_button = QPushButton("Re-gate tracked CSVs")
+        set_button_role(self._regate_button, "ghost")
+        self._regate_button.setEnabled(False)
+        self._regate_button.clicked.connect(self._start_regate)
+        rail.card.add(self._regate_button)
 
         # Hidden until a batch starts: two empty bars sitting at zero read as
         # a run that has stalled rather than one that has not begun.
@@ -1169,6 +1184,32 @@ class PoseBatchWindow(QMainWindow):
         else:
             self._calibration_card.set_badge("")
 
+        self._validate_regate()
+
+    def _validate_regate(self) -> None:
+        """Re-gate needs arenas and existing tracks — not a model.
+
+        Deliberately not gated on ``problem``: this pass touches CSVs that are
+        already on disk, so demanding the weights that produced them would make
+        the button unavailable on exactly the archived cohort it is for.
+        """
+        from glider.gui.pose_batch.arena_actions import regatable
+
+        ready = (
+            self._regate_thread is None
+            and self._thread is None
+            and bool(self._videos)
+            and not self._calibrations.missing_arenas(self._videos)
+            and bool(regatable(self._videos))
+        )
+        self._regate_button.setEnabled(ready)
+        self._regate_button.setToolTip(
+            "Apply the drawn arenas to the pose CSVs already beside these "
+            "videos. Originals are kept as _ungated.csv."
+            if ready
+            else "Needs a confirmed arena on every video and a pose CSV to re-gate."
+        )
+
     # ------------------------------------------------------------------
     # running
     # ------------------------------------------------------------------
@@ -1230,6 +1271,7 @@ class PoseBatchWindow(QMainWindow):
         self._worker.failed.connect(self._on_failed)
 
         self._run_button.setEnabled(False)
+        self._regate_button.setEnabled(False)  # _validate returns early mid-run
         self._cancel_button.setEnabled(True)
         self._overall_bar.setVisible(True)
         self._video_bar.setVisible(True)
@@ -1285,6 +1327,73 @@ class PoseBatchWindow(QMainWindow):
         self._cancel_button.setEnabled(False)
         self._validate()
 
+    # ------------------------------------------------------------------
+    # post-hoc re-gating
+    # ------------------------------------------------------------------
+
+    def _start_regate(self) -> None:
+        from glider.gui.pose_batch.arena_actions import regatable
+        from glider.gui.pose_batch.regate_worker import RegateWorker
+
+        if self._regate_thread is not None or self._thread is not None:
+            return
+        videos = regatable(self._videos)
+        if not videos:
+            return
+
+        # Confirmed because it rewrites files the operator did not just make.
+        # Naming what survives is the point of the prompt: without the second
+        # sentence the honest answer to "can I undo this?" is not visible
+        # anywhere in the UI.
+        answer = QMessageBox.question(
+            self,
+            "Re-gate tracked CSVs",
+            f"Rewrite {len(videos)} pose CSV(s) in place?\n\n"
+            f"Originals are kept as _ungated.csv.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._log.appendPlainText(f"Re-gating {len(videos)} tracked CSV(s)…")
+        self._overall_bar.setRange(0, len(videos))
+        self._overall_bar.setValue(0)
+        self._overall_bar.setVisible(True)
+
+        self._regate_worker = RegateWorker(videos, self._calibrations)
+        self._regate_thread = QThread(self)
+        self._regate_worker.moveToThread(self._regate_thread)
+        self._regate_thread.started.connect(self._regate_worker.run)
+        self._regate_worker.progress.connect(self._on_progress)
+        self._regate_worker.log.connect(self._log.appendPlainText)
+        self._regate_worker.finished.connect(self._on_regate_finished)
+        self._regate_worker.failed.connect(self._on_regate_failed)
+
+        self._run_button.setEnabled(False)
+        self._regate_button.setEnabled(False)
+        self._rail.status.set_state("running", "Re-gating")
+        self._regate_thread.start()
+
+    def _on_regate_finished(self, gated: int, skipped: int) -> None:
+        self._overall_bar.setValue(self._overall_bar.maximum())
+        self._log.appendPlainText(f"Re-gated {gated}, skipped {skipped}.")
+        self._rail.status.set_state("warn" if skipped else "ok", "Done")
+        self._teardown_regate()
+
+    def _on_regate_failed(self, message: str) -> None:
+        self._rail.status.set_state("error", "Failed")
+        self._log.appendPlainText(f"Re-gate could not run: {message}")
+        QMessageBox.critical(self, "Re-gate tracked CSVs", message)
+        self._teardown_regate()
+
+    def _teardown_regate(self) -> None:
+        if self._regate_thread is not None:
+            self._regate_thread.quit()
+            self._regate_thread.wait(5000)
+            self._regate_thread.deleteLater()
+            self._regate_thread = None
+        self._regate_worker = None
+        self._validate()
+
     def closeEvent(self, event):
         """Never let a running batch outlive its window."""
         if self._thread is not None and self._worker is not None:
@@ -1293,5 +1402,12 @@ class PoseBatchWindow(QMainWindow):
             self._thread.wait(5000)
             self._thread = None
             self._worker = None
+        # No cancel to ask for: the re-gate has none, so the wait is the whole
+        # story. It finishes a CSV in the time a window takes to close.
+        if self._regate_thread is not None:
+            self._regate_thread.quit()
+            self._regate_thread.wait(5000)
+            self._regate_thread = None
+            self._regate_worker = None
         self._stop_meta_thread()
         super().closeEvent(event)
