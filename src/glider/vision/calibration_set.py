@@ -229,6 +229,11 @@ class CalibrationSet:
             # line-only batches byte-identical to what earlier builds produced.
             if arena is not None:
                 entry["arena"] = arena.to_dict()
+                # Only when unconfirmed: absent means drawn-and-checked, so
+                # files written by earlier builds keep their meaning and files
+                # written by this one stay diffable against them.
+                if video in self._unconfirmed:
+                    entry["arena_confirmed"] = False
             videos.append(entry)
         return {
             "schema_version": SCHEMA_VERSION,
@@ -353,4 +358,6 @@ class CalibrationSet:
             cal_set.entries[key] = calibration
             if arena is not None:
                 cal_set.arenas[key] = arena
+                if entry.get("arena_confirmed") is False:
+                    cal_set._unconfirmed.add(key)
         return cal_set

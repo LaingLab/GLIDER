@@ -217,3 +217,24 @@ class TestConfirmedState:
     def test_subset_carries_confirmed_state(self, tmp_path):
         cal_set, video = _set_with_arena(tmp_path, confirmed=False)
         assert not cal_set.subset([video]).is_arena_confirmed(video)
+
+
+def test_confirmed_arenas_write_no_extra_key(tmp_path):
+    """A normal file must stay byte-identical to what earlier builds wrote."""
+    cal_set, _ = _set_with_arena(tmp_path)
+    assert "arena_confirmed" not in cal_set.to_dict()["videos"][0]
+
+
+def test_unconfirmed_arenas_round_trip(tmp_path):
+    cal_set, video = _set_with_arena(tmp_path, confirmed=False)
+    master = tmp_path / "m.json"
+    cal_set.save(master)
+    assert not CalibrationSet.load(master, known_videos=[video]).is_arena_confirmed(video)
+
+
+def test_a_file_without_the_key_loads_as_confirmed(tmp_path):
+    """Every master file written before this change. Absent means drawn."""
+    cal_set, video = _set_with_arena(tmp_path)
+    master = tmp_path / "m.json"
+    cal_set.save(master)
+    assert CalibrationSet.load(master, known_videos=[video]).is_arena_confirmed(video)
