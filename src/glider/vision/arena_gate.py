@@ -191,13 +191,33 @@ def gate_to_arena(pose, arena, *, settings=None, resolution=None):
     out.xy[stray] = np.nan
     out.confidence[stray] = 0.0
 
+    # The quorum, as an independent predicate rather than a second filter.
+    # Sequencing a partial-skeleton test before this one would blank both of
+    # the cases it exists to distinguish: a 3-of-7 occluded frame and a
+    # 6-detected/5-outside relocation are both simply "partial".
+    detected_count = detected.sum(axis=1)
+    inside_count = (detected & ~outside).sum(axis=1)
+    considered = detected_count > 0
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        too_few_inside = considered & (
+            inside_count / np.maximum(detected_count, 1) < settings.min_inside_fraction
+        )
+    blank = too_few_inside
+    out.xy[blank] = np.nan
+    out.confidence[blank] = 0.0
+
+    # Keypoints inside a blanked frame are not strays: they were discarded by
+    # the frame verdict, not by their own position. blank is (T,), so the
+    # trailing axis is added to broadcast against stray's (T, K).
+    counted = stray & ~blank[:, None]
     names = list(pose.keypoint_names)
     return out, GateReport(
         frames_total=int(pose.n_frames),
-        frames_considered=int((detected.sum(axis=1) > 0).sum()),
-        frames_blanked=0,
-        keypoints_masked=int(stray.sum()),
-        masked_by_keypoint={n: int(stray[:, i].sum()) for i, n in enumerate(names)},
+        frames_considered=int(considered.sum()),
+        frames_blanked=int(blank.sum()),
+        keypoints_masked=int(counted.sum()),
+        masked_by_keypoint={n: int(counted[:, i].sum()) for i, n in enumerate(names)},
         settings=settings,
         arena_corners=corners,
     )

@@ -182,3 +182,41 @@ class TestDetected:
         with caplog.at_level("WARNING"):
             gate_to_arena(pose, _arena())
         assert caplog.text.count("uniformly 1.0") == 1
+
+
+class TestQuorum:
+    def test_an_occluded_but_in_arena_frame_survives(self):
+        """3 of 4 localized, all inside. Legitimate occlusion, not a glitch."""
+        xy = np.full((1, 4, 2), np.nan)
+        xy[0, :3] = [320.0, 240.0]
+        _, report = gate_to_arena(_pose(xy), _arena())
+        assert report.frames_blanked == 0
+
+    def test_a_relocated_skeleton_is_blanked_whole(self):
+        """3 of 4 detected keypoints outside: below min_inside_fraction=0.5."""
+        xy = _one_frame([-900.0, -900.0], [-900.0, -900.0], [-900.0, -900.0])
+        out, report = gate_to_arena(_pose(xy), _arena())
+        assert report.frames_blanked == 1
+        assert np.isnan(out.xy[0]).all()
+        assert (out.confidence[0] == 0).all()
+
+    def test_keypoints_in_a_blanked_frame_are_not_counted_as_strays(self):
+        """They were discarded by the frame verdict, not by their position;
+        counting both would double-report the same rejection."""
+        xy = _one_frame([-900.0, -900.0], [-900.0, -900.0], [-900.0, -900.0])
+        _, report = gate_to_arena(_pose(xy), _arena())
+        assert report.keypoints_masked == 0
+
+    def test_a_zero_detection_frame_is_excluded_not_blanked(self):
+        xy = np.full((2, 4, 2), np.nan)
+        xy[0] = [320.0, 240.0]
+        _, report = gate_to_arena(_pose(xy), _arena())
+        assert report.frames_total == 2
+        assert report.frames_considered == 1
+        assert report.frames_blanked == 0
+        assert report.blanked_fraction == 0.0
+
+    def test_blanked_fraction_is_zero_when_nothing_was_considered(self):
+        _, report = gate_to_arena(_pose(np.full((5, 4, 2), np.nan)), _arena())
+        assert report.frames_considered == 0
+        assert report.blanked_fraction == 0.0
