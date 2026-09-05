@@ -361,6 +361,69 @@ class TestCopyingAnArena:
         assert window._calibrations.is_arena_confirmed(videos[1])
 
 
+def _capture_worker(monkeypatch) -> dict:
+    """Run ``_start_worker`` for real but stop short of any inference."""
+    from glider.gui.pose_batch import worker as worker_mod
+
+    captured: dict = {}
+    real = worker_mod.PoseBatchWorker
+
+    class Capturing(real):
+        def __init__(self, *args, **kwargs):
+            captured.update(kwargs)
+            super().__init__(*args, **kwargs)
+
+        def run(self):  # never touch the GPU from a unit test
+            pass
+
+    monkeypatch.setattr(worker_mod, "PoseBatchWorker", Capturing)
+    return captured
+
+
+class TestTheRunCarriesTheArenas:
+    """Inference-time gating and arena-aware candidate selection are reachable
+    only through the worker; the window is where the arenas come from."""
+
+    def test_the_drawn_arenas_are_handed_to_the_worker(self, window, tmp_path, monkeypatch):
+        captured = _capture_worker(monkeypatch)
+        videos = _ready_window(window, tmp_path, count=2)
+        arenas = [_arena(), _arena([(0.3, 0.2), (0.7, 0.2), (0.75, 0.8), (0.25, 0.8)])]
+        for video, arena in zip(videos, arenas, strict=True):
+            window._calibrations.set_arena(video, arena)
+
+        window._start_worker()
+        window._teardown_thread()
+
+        assert captured["arenas"] == {v.resolve(): a for v, a in zip(videos, arenas, strict=True)}
+
+    def test_the_gate_is_enabled_for_the_run(self, window, tmp_path, monkeypatch):
+        from glider.vision.arena_gate import ArenaGateSettings
+
+        captured = _capture_worker(monkeypatch)
+        video = _ready_window(window, tmp_path)
+        window._calibrations.set_arena(video, _arena())
+
+        window._start_worker()
+        window._teardown_thread()
+
+        # No UI for tuning it yet, so the defaults are the contract; what
+        # matters is that gating is on at all, since zones are scored from the
+        # gated pose and candidate re-ranking cannot be redone afterwards.
+        assert captured["gate"] == ArenaGateSettings()
+
+    def test_only_the_listed_videos_are_carried(self, window, tmp_path, monkeypatch):
+        """The set can hold arenas from folders visited earlier this session."""
+        captured = _capture_worker(monkeypatch)
+        video = _ready_window(window, tmp_path)
+        window._calibrations.set_arena(video, _arena())
+        window._calibrations.set_arena(_video(tmp_path, "elsewhere.mp4"), _arena())
+
+        window._start_worker()
+        window._teardown_thread()
+
+        assert list(captured["arenas"]) == [video.resolve()]
+
+
 def test_regate_is_disabled_without_pose_csvs(window, tmp_path):
     video = _ready_window(window, tmp_path)
     window._calibrations.set_arena(video, _arena())

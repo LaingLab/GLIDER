@@ -55,7 +55,7 @@ from glider.gui.widgets.tool_ui import (
     set_button_role,
     set_text_role,
 )
-from glider.vision.arena import DegenerateArenaError
+from glider.vision.arena import ArenaCalibration, DegenerateArenaError
 from glider.vision.calibration import CameraCalibration
 from glider.vision.calibration_set import CalibrationSet, CalibrationSetError
 from glider.vision.pose import batch as batch_core
@@ -728,6 +728,21 @@ class PoseBatchWindow(QMainWindow):
             return
         self._open_arena(selected[0])
 
+    def _arena_map(self) -> dict[Path, ArenaCalibration]:
+        """Arenas for the batch, keyed the way run_batch resolves videos.
+
+        Only the listed videos: the set can also hold arenas from folders
+        visited earlier this session, and handing those over would key the gate
+        off files this run knows nothing about. Run is gated on every listed
+        video having a confirmed arena, so in practice this covers all of them.
+        """
+        arenas: dict[Path, ArenaCalibration] = {}
+        for video in self._videos:
+            arena = self._calibrations.get_arena(video)
+            if arena is not None:
+                arenas[Path(video).resolve()] = arena
+        return arenas
+
     def _zone_configs(self) -> dict[Path, ZoneConfiguration]:
         """Centre zones for the batch, keyed the way run_batch resolves videos.
 
@@ -1245,6 +1260,7 @@ class PoseBatchWindow(QMainWindow):
         device = self._device_combo.currentText()
 
         from glider.gui.pose_batch.worker import PoseBatchWorker
+        from glider.vision.arena_gate import ArenaGateSettings
 
         self._log.clear()
         self._log.appendPlainText(f"Starting {len(self._videos)} video(s)…")
@@ -1262,6 +1278,13 @@ class PoseBatchWindow(QMainWindow):
             overwrite=self._overwrite.isChecked(),
             filtering=self._filter_settings(),
             zones=self._zone_configs(),
+            arenas=self._arena_map(),
+            # Defaults, and no UI to tune them: gating is not optional here.
+            # Zones below are scored from the gated pose — centre time computed
+            # from bench-floor detections is meaningless — and the arena also
+            # re-ranks multi-detection frames during inference, which is the
+            # one part no post-hoc pass can recover.
+            gate=ArenaGateSettings(),
         )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
