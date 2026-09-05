@@ -47,6 +47,12 @@ class CalibrationSet:
     entries: dict[Path, CameraCalibration] = field(default_factory=dict)
     arenas: dict[Path, ArenaCalibration] = field(default_factory=dict)
 
+    #: Arenas stamped by a copy and not yet checked against their own video.
+    #: A copied arena that does not fit shows no residual warning -- residuals
+    #: are computed from the corners alone -- so it must not satisfy the Run
+    #: gate until an operator has seen the overlay on that video's floor.
+    _unconfirmed: set[Path] = field(default_factory=set)
+
     # ------------------------------------------------------------------
     # map
     # ------------------------------------------------------------------
@@ -74,14 +80,26 @@ class CalibrationSet:
     def discard(self, video: Path | str) -> None:
         self.entries.pop(self._key(video), None)
 
-    def set_arena(self, video: Path | str, arena: ArenaCalibration) -> None:
-        self.arenas[self._key(video)] = arena
+    def set_arena(
+        self, video: Path | str, arena: ArenaCalibration, *, confirmed: bool = True
+    ) -> None:
+        key = self._key(video)
+        self.arenas[key] = arena
+        if confirmed:
+            self._unconfirmed.discard(key)
+        else:
+            self._unconfirmed.add(key)
 
     def get_arena(self, video: Path | str) -> ArenaCalibration | None:
         return self.arenas.get(self._key(video))
 
+    def is_arena_confirmed(self, video: Path | str) -> bool:
+        return self._key(video) not in self._unconfirmed
+
     def discard_arena(self, video: Path | str) -> None:
-        self.arenas.pop(self._key(video), None)
+        key = self._key(video)
+        self.arenas.pop(key, None)
+        self._unconfirmed.discard(key)
 
     def videos(self) -> list[Path]:
         """Every video this set knows anything about, line or arena."""
@@ -104,6 +122,8 @@ class CalibrationSet:
             arena = self.arenas.get(key)
             if arena is not None:
                 picked.arenas[key] = arena
+                if key in self._unconfirmed:
+                    picked._unconfirmed.add(key)
         return picked
 
     # ------------------------------------------------------------------
@@ -146,6 +166,26 @@ class CalibrationSet:
         calibration the operator never drew a usable line on is not one.
         """
         return [v for v in videos if self.px_per_mm(v) is None]
+
+    def missing_arenas(self, videos: Sequence[Path]) -> list[Path]:
+        """Videos still needing a usable, confirmed arena, in the order given.
+
+        Parallel to :meth:`missing`, which asks the weaker question "is there a
+        scale". An arena that will not fit a homography is ignored the same way
+        ``px_per_mm`` ignores it, but here that makes the video missing rather
+        than merely falling back to a line.
+        """
+        out = []
+        for video in videos:
+            arena = self.get_arena(video)
+            if arena is None or not self.is_arena_confirmed(video):
+                out.append(video)
+                continue
+            try:
+                arena.homography()
+            except DegenerateArenaError:
+                out.append(video)
+        return out
 
     def is_complete(self, videos: Sequence[Path]) -> bool:
         return not self.missing(videos)

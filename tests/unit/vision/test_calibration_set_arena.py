@@ -177,3 +177,43 @@ class TestMasterFile:
 
         with pytest.raises(CalibrationSetError, match="malformed"):
             CalibrationSet.load(path)
+
+
+def _set_with_arena(tmp_path, *, confirmed=True):
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"")
+    cal_set = CalibrationSet()
+    cal_set.set_arena(video, ArenaCalibration(corners=TRAPEZOID), confirmed=confirmed)
+    return cal_set, video
+
+
+class TestConfirmedState:
+    def test_a_drawn_arena_is_confirmed(self, tmp_path):
+        cal_set, video = _set_with_arena(tmp_path)
+        assert cal_set.is_arena_confirmed(video)
+
+    def test_an_unconfirmed_arena_counts_as_missing(self, tmp_path):
+        cal_set, video = _set_with_arena(tmp_path, confirmed=False)
+        assert cal_set.get_arena(video) is not None
+        assert cal_set.missing_arenas([video]) == [video]
+
+    def test_confirming_clears_it(self, tmp_path):
+        cal_set, video = _set_with_arena(tmp_path, confirmed=False)
+        cal_set.set_arena(video, cal_set.get_arena(video), confirmed=True)
+        assert cal_set.missing_arenas([video]) == []
+
+    def test_a_degenerate_arena_counts_as_missing(self, tmp_path):
+        video = tmp_path / "s1.mp4"
+        cal_set = CalibrationSet()
+        cal_set.set_arena(video, ArenaCalibration(corners=[(0.5, 0.5)] * 4))
+        assert cal_set.missing_arenas([video]) == [video]
+
+    def test_discarding_clears_the_unconfirmed_flag(self, tmp_path):
+        cal_set, video = _set_with_arena(tmp_path, confirmed=False)
+        cal_set.discard_arena(video)
+        cal_set.set_arena(video, ArenaCalibration(corners=TRAPEZOID))
+        assert cal_set.is_arena_confirmed(video)
+
+    def test_subset_carries_confirmed_state(self, tmp_path):
+        cal_set, video = _set_with_arena(tmp_path, confirmed=False)
+        assert not cal_set.subset([video]).is_arena_confirmed(video)
