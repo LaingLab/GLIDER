@@ -196,6 +196,8 @@ AGENTS.md
 .superpowers/
 
 docs/*
+# Design specs are kept: they travel with the branch that implements them.
+!docs/superpowers/
 # Pass-2 code review raw agent transcripts (kept locally for reference)
 .review-section*-raw.txt
 manuscript_figures/*
