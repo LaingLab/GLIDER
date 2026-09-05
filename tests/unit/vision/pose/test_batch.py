@@ -471,3 +471,214 @@ def test_a_single_candidate_is_not_logged_as_ambiguous(tmp_path, caplog):
     with caplog.at_level("INFO", logger="glider.vision.pose.batch"):
         assert batch.find_pose_csv(video) == only
     assert caplog.text == ""
+
+
+# --------------------------------------------------------------------------
+# Arena gating
+#
+# The detector is confident when it finds something that is not the animal, so
+# the confidence mask inside smooth() never sees it. Geometry does: keypoints
+# that landed off the arena floor are blanked before anything downstream —
+# zone scoring included — is allowed to read them.
+# --------------------------------------------------------------------------
+
+GATE_NAMES = ["a", "b", "c", "d"]
+
+#: The fronto-parallel square from test_arena_gate.py: a real 400x400 px square
+#: in a 640x480 frame, which is close to what these rigs produce.
+SQUARE = [
+    (120 / 640, 40 / 480),
+    (520 / 640, 40 / 480),
+    (520 / 640, 440 / 480),
+    (120 / 640, 440 / 480),
+]
+
+
+def _arena():
+    from glider.vision.arena import ArenaCalibration
+
+    return ArenaCalibration(corners=SQUARE, width_cm=30.0, height_cm=30.0, frame_size=(640, 480))
+
+
+def _gate_settings(**kw):
+    from glider.vision.arena_gate import ArenaGateSettings
+
+    return ArenaGateSettings(**kw)
+
+
+def _gate_pose(points) -> PoseData:
+    """One frame of four keypoints at *points*, all confidently detected."""
+    xy = np.array([points], dtype=float)
+    return PoseData(xy=xy, confidence=np.full(xy.shape[:2], 0.9), keypoint_names=GATE_NAMES)
+
+
+def _relocated_pose() -> PoseData:
+    """Three of four keypoints out on the bench floor, one still in the arena.
+
+    Below ``min_inside_fraction=0.5``, so the gate blanks the frame whole —
+    the case gating exists for, and the one a per-keypoint mask would keep.
+    """
+    return _gate_pose([[-900.0, -900.0]] * 3 + [[320.0, 240.0]])
+
+
+def _clean_pose() -> PoseData:
+    """Centred in the arena: nothing for the gate to blank."""
+    return _gate_pose([[320.0, 240.0]] * 4)
+
+
+def _run(tmp_path, video, *, pose, **kw):
+    return batch.run_batch(
+        [video],
+        tmp_path / "exp-7.pt",
+        GATE_NAMES,
+        infer=lambda **_: pose.copy(),
+        **kw,
+    )
+
+
+@pytest.fixture
+def video(tmp_path):
+    return _touch(tmp_path / "session.mp4")
+
+
+def test_gating_runs_before_zone_scoring(tmp_path, video, monkeypatch):
+    """Centre-time computed from bench-floor detections is meaningless."""
+    seen = {}
+
+    def fake_score(video, pose, zones, keypoint):
+        seen["blanked"] = int(np.isnan(pose.xy[:, 0, 0]).sum())
+        return ""
+
+    monkeypatch.setattr(batch, "_score_zones", fake_score)
+    _run(
+        tmp_path,
+        video,
+        pose=_relocated_pose(),
+        arenas={video: _arena()},
+        gate=_gate_settings(),
+    )
+    assert seen["blanked"] == 1
+
+
+def test_raw_is_written_when_gating_without_filtering(tmp_path, video):
+    """_raw is 'what the model actually said'. Gating without it would discard
+    data with no companion."""
+    _run(
+        tmp_path,
+        video,
+        pose=_relocated_pose(),
+        filtering=None,
+        arenas={video: _arena()},
+        gate=_gate_settings(),
+    )
+    assert batch.raw_output_path(video, tmp_path / "exp-7.pt").exists()
+
+
+def test_the_primary_carries_the_gate_block(tmp_path, video):
+    from glider.vision.pose.dlc import read_pose_meta
+
+    _run(
+        tmp_path,
+        video,
+        pose=_relocated_pose(),
+        arenas={video: _arena()},
+        gate=_gate_settings(),
+    )
+    meta = read_pose_meta(batch.dlc_output_path(video, tmp_path / "exp-7.pt"))
+    assert meta["arena_gate"]["gated"] is True
+    assert meta["arena_gate"]["frames_blanked"] == 1
+
+
+def test_no_arena_means_no_gating(tmp_path, video):
+    """arenas={} must leave the pipeline byte-identical to today."""
+    from glider.vision.pose.dlc import read_pose_meta
+
+    _run(tmp_path, video, pose=_relocated_pose(), arenas={}, gate=_gate_settings())
+    meta = read_pose_meta(batch.dlc_output_path(video, tmp_path / "exp-7.pt"))
+    assert "arena_gate" not in meta
+    assert not batch.raw_output_path(video, tmp_path / "exp-7.pt").exists()
+
+
+def test_a_clean_video_reports_no_warning(tmp_path, video):
+    """gate_warning must be initialized per video, not only assigned inside the
+    over-threshold branch — otherwise the common case raises NameError."""
+    result = _run(
+        tmp_path,
+        video,
+        pose=_clean_pose(),
+        arenas={video: _arena()},
+        gate=_gate_settings(),
+    )
+    assert result.completed == [video.resolve()]
+
+
+def test_a_heavily_blanked_video_is_called_out(tmp_path, video):
+    messages = []
+    _run(
+        tmp_path,
+        video,
+        pose=_relocated_pose(),
+        arenas={video: _arena()},
+        gate=_gate_settings(),
+        on_event=lambda e: messages.append(e.message),
+    )
+    assert any("gate blanked" in m for m in messages)
+
+
+def test_a_degenerate_arena_does_not_fail_the_video(tmp_path, video):
+    """Mirrors _score_zones: by here the inference is done and valid."""
+    from glider.vision.arena import ArenaCalibration
+    from glider.vision.pose.dlc import read_pose_meta
+
+    bad = ArenaCalibration(corners=[(0.5, 0.5)] * 4, frame_size=(640, 480))
+    result = _run(
+        tmp_path, video, pose=_relocated_pose(), arenas={video: bad}, gate=_gate_settings()
+    )
+    assert result.completed == [video.resolve()]
+    assert not result.failed
+    assert "arena_gate" not in read_pose_meta(batch.dlc_output_path(video, tmp_path / "exp-7.pt"))
+
+
+def test_the_gate_block_survives_filtering(tmp_path, video):
+    """smooth() returns a new PoseData; the provenance must reach the sidecar."""
+    from glider.vision.pose.dlc import read_pose_meta
+
+    _run(
+        tmp_path,
+        video,
+        pose=_clean_pose(),
+        filtering=batch.FilterSettings(),
+        arenas={video: _arena()},
+        gate=_gate_settings(),
+    )
+    meta = read_pose_meta(batch.dlc_output_path(video, tmp_path / "exp-7.pt"))
+    assert meta["arena_gate"]["gated"] is True
+
+
+def test_each_video_reports_only_its_own_zone_warning(tmp_path, monkeypatch):
+    """zone_warning used to be bound once, before the loop.
+
+    Nothing observable came of it — it was reassigned before every emit — but
+    it is one edited branch away from labelling a clean video with the
+    previous one's problem, which is exactly the shape of bug gate_warning
+    would have had. Both are per-video now, and this holds them there.
+    """
+    first = _touch(tmp_path / "a.mp4")
+    second = _touch(tmp_path / "b.mp4")
+    monkeypatch.setattr(
+        batch,
+        "_score_zones",
+        lambda video, pose, zones, keypoint: (
+            "zones not scored: boom" if video.name == "a.mp4" else ""
+        ),
+    )
+    messages = {}
+    batch.run_batch(
+        [first, second],
+        tmp_path / "exp-7.pt",
+        GATE_NAMES,
+        infer=lambda **_: _clean_pose(),
+        on_event=lambda e: messages.setdefault(e.video.name, []).append(e.message),
+    )
+    assert any("boom" in m for m in messages["a.mp4"])
+    assert not any("boom" in m for m in messages["b.mp4"])
