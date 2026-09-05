@@ -862,6 +862,12 @@ class PoseBatchWindow(QMainWindow):
 
         The copies land unconfirmed, so Run stays blocked until each has been
         opened and checked — see :func:`arena_actions.copy_arena_to` for why.
+
+        Asks before replacing an arena that is already there, the way
+        :meth:`_copy_calibration_to_selected` does. Selecting a whole cohort
+        and clicking Copy is one action with no undo, and what it would
+        otherwise destroy is exactly the per-video human judgement this window
+        now makes mandatory.
         """
         from glider.gui.pose_batch import arena_actions
 
@@ -877,12 +883,21 @@ class PoseBatchWindow(QMainWindow):
 
         source = sources[0]
         targets = [v for v in selected if v != source]
+        already = {v for v in targets if self._calibrations.get_arena(v) is not None}
+
+        if already and not self._confirm_overwrite(source, len(already), noun="arena"):
+            # Declined: filling the blanks is what "copy to selected" is for,
+            # and it is the half of the job that cannot destroy anything.
+            targets = [v for v in targets if v not in already]
+
         skipped = arena_actions.copy_arena_to(self._calibrations, source, targets)
 
-        copied = len(targets) - len(skipped)
+        copied = [v for v in targets if v not in skipped]
+        overwritten = sum(1 for v in copied if v in already)
         self._log.appendPlainText(
-            f"Copied {source.name}'s arena to {copied} video(s). Each is marked "
-            "unconfirmed: open it and check the outline sits on that video's floor."
+            f"Copied {source.name}'s arena: {len(copied) - overwritten} video(s) with no "
+            f"arena filled, {overwritten} existing arena(s) overwritten. Each copy is "
+            "marked unconfirmed: open it and check the outline sits on that video's floor."
         )
         if skipped:
             names = ", ".join(v.name for v in skipped)
@@ -893,14 +908,19 @@ class PoseBatchWindow(QMainWindow):
         self._cal_table.refresh()
         self._validate()
 
-    def _confirm_overwrite(self, source: Path, count: int) -> bool:
-        """Ask before replacing calibrations the operator drew themselves."""
+    def _confirm_overwrite(self, source: Path, count: int, *, noun: str = "calibration") -> bool:
+        """Ask before replacing work the operator drew themselves.
+
+        Shared by the line and arena copies rather than duplicated: the two
+        already drifted apart once, and the half without the prompt is the one
+        that destroys data.
+        """
         answer = QMessageBox.question(
             self,
-            "Overwrite Calibrations?",
-            f"{count} of the selected video(s) already have their own calibration.\n\n"
+            f"Overwrite {noun.capitalize()}s?",
+            f"{count} of the selected video(s) already have their own {noun}.\n\n"
             f"Overwrite them with {source.name}'s?\n"
-            "Choose No to fill only the uncalibrated videos.",
+            f"Choose No to fill only the videos with no {noun}.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )

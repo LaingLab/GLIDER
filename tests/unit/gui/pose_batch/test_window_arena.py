@@ -12,6 +12,20 @@ from glider.vision.arena import ArenaCalibration
 from glider.vision.zones import ZoneShape
 
 TRAPEZOID = [(0.28, 0.1), (0.72, 0.1), (0.76, 0.9), (0.24, 0.9)]
+#: A visibly different quad, so a test can tell a survivor from a replacement.
+OTHER_QUAD = [(0.3, 0.2), (0.7, 0.2), (0.75, 0.8), (0.25, 0.8)]
+
+
+def _answer_overwrite(monkeypatch, button):
+    """Stub the overwrite confirmation; returns the list of prompts raised."""
+    prompts = []
+
+    def question(_parent, _title, text, *args, **kwargs):
+        prompts.append(text)
+        return button
+
+    monkeypatch.setattr("glider.gui.pose_batch.window.QMessageBox.question", question)
+    return prompts
 
 
 @pytest.fixture
@@ -351,6 +365,86 @@ class TestCopyingAnArena:
         skipped = arena_actions.copy_arena_to(window._calibrations, videos[0], videos[1:])
         assert window._calibrations.get_arena(videos[1]) is None
         assert skipped == [videos[1]]
+
+    def test_a_copy_does_not_silently_destroy_drawn_arenas(self, window, tmp_path, monkeypatch):
+        """selectAll() + Copy Arena is one click away, and there is no undo.
+
+        Its sibling ``_copy_calibration_to_selected`` has asked before
+        replacing drawn work since it shipped; the arena path had no guard at
+        all, so it replaced per-video human judgement -- the thing this branch
+        makes mandatory -- with unconfirmed copies of the first video's.
+        """
+        from PyQt6.QtWidgets import QMessageBox
+
+        from glider.gui.pose_batch import arena_actions
+
+        monkeypatch.setattr(arena_actions, "resolution_of", lambda v: (640, 480))
+        prompts = _answer_overwrite(monkeypatch, QMessageBox.StandardButton.No)
+        videos = _ready_window(window, tmp_path, count=3)
+        drawn = [_arena(OTHER_QUAD) for _ in videos[1:]]
+        window._calibrations.set_arena(videos[0], _arena())
+        for video, arena in zip(videos[1:], drawn, strict=True):
+            window._calibrations.set_arena(video, arena)
+        window._cal_table.selectAll()
+
+        window._copy_arena_to_selected()
+
+        assert prompts, "the operator must be asked before arenas are replaced"
+        for video, arena in zip(videos[1:], drawn, strict=True):
+            assert window._calibrations.get_arena(video) is arena
+            assert window._calibrations.is_arena_confirmed(video)
+
+    def test_declining_still_fills_the_videos_with_no_arena(self, window, tmp_path, monkeypatch):
+        """Filling the blanks is what Copy is for, and cannot destroy anything."""
+        from PyQt6.QtWidgets import QMessageBox
+
+        from glider.gui.pose_batch import arena_actions
+
+        monkeypatch.setattr(arena_actions, "resolution_of", lambda v: (640, 480))
+        _answer_overwrite(monkeypatch, QMessageBox.StandardButton.No)
+        source, drawn, blank = _ready_window(window, tmp_path, count=3)
+        window._calibrations.set_arena(source, _arena())
+        window._calibrations.set_arena(drawn, _arena(OTHER_QUAD))
+        window._cal_table.selectAll()
+
+        window._copy_arena_to_selected()
+
+        assert window._calibrations.get_arena(drawn).corners == OTHER_QUAD
+        assert window._calibrations.get_arena(blank).corners == TRAPEZOID
+        assert not window._calibrations.is_arena_confirmed(blank)
+
+    def test_confirming_replaces_them_unconfirmed(self, window, tmp_path, monkeypatch):
+        from PyQt6.QtWidgets import QMessageBox
+
+        from glider.gui.pose_batch import arena_actions
+
+        monkeypatch.setattr(arena_actions, "resolution_of", lambda v: (640, 480))
+        _answer_overwrite(monkeypatch, QMessageBox.StandardButton.Yes)
+        source, drawn = _ready_window(window, tmp_path, count=2)
+        window._calibrations.set_arena(source, _arena())
+        window._calibrations.set_arena(drawn, _arena(OTHER_QUAD))
+        window._cal_table.selectAll()
+
+        window._copy_arena_to_selected()
+
+        assert window._calibrations.get_arena(drawn).corners == TRAPEZOID
+        assert not window._calibrations.is_arena_confirmed(drawn)
+
+    def test_nothing_to_replace_raises_no_prompt(self, window, tmp_path, monkeypatch):
+        from PyQt6.QtWidgets import QMessageBox
+
+        from glider.gui.pose_batch import arena_actions
+
+        monkeypatch.setattr(arena_actions, "resolution_of", lambda v: (640, 480))
+        prompts = _answer_overwrite(monkeypatch, QMessageBox.StandardButton.No)
+        source, blank = _ready_window(window, tmp_path, count=2)
+        window._calibrations.set_arena(source, _arena())
+        window._cal_table.selectAll()
+
+        window._copy_arena_to_selected()
+
+        assert prompts == []
+        assert window._calibrations.get_arena(blank) is not None
 
     def test_accepting_the_arena_dialog_confirms_a_copy(self, window, tmp_path, monkeypatch):
         """Opening a copied arena and pressing OK is what confirms it."""
