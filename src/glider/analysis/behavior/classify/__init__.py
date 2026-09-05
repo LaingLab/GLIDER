@@ -354,7 +354,10 @@ def _refuse_gate_mismatch(pose_csv, cohort_gate) -> None:
     """
     from glider.vision.pose.dlc import read_pose_meta
 
-    csv_gated = bool((read_pose_meta(pose_csv) or {}).get("arena_gate", {}).get("gated"))
+    # ``or {}`` at both hops, matching the reads in cohort_speed.py: a sidecar
+    # may spell the absent block out as ``"arena_gate": null``, and a default
+    # argument does not fire for a key that is present and None.
+    csv_gated = bool(((read_pose_meta(pose_csv) or {}).get("arena_gate") or {}).get("gated"))
     cohort_gated = bool((cohort_gate or {}).get("gated"))
     if csv_gated == cohort_gated:
         return

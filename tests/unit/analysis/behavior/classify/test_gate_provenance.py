@@ -17,6 +17,7 @@ only to pin that placement.
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
 
 import numpy as np
@@ -26,7 +27,7 @@ from glider.analysis.behavior.classify import classify
 from glider.analysis.behavior.cohort_speed import PX_PER_FRAME, CohortSpeedThresholds
 from glider.vision.arena_gate import ArenaGateSettings
 from glider.vision.pose.core import PoseData
-from glider.vision.pose.dlc import to_dlc_csv
+from glider.vision.pose.dlc import meta_path, to_dlc_csv
 
 KP = ["nose", "body_center", "tail_base"]
 
@@ -227,6 +228,19 @@ class TestWhatIsNotChecked:
         disagree with it."""
         gated = _gated_csv(tmp_path)
         _run(tmp_path, pose_csv_in=gated, pose_csv=gated, freeze_pct=1.0, dart_pct=99.5)
+        assert (tmp_path / "out" / "ethogram_raw.csv").exists()
+
+    def test_an_explicit_null_gate_block_reads_as_ungated(self, tmp_path):
+        """``.get("arena_gate", {})`` hands back the ``None`` that is in the
+        file, not the default, and ``None`` has no ``.get`` -- so a sidecar
+        spelling the absent block out as null crashed instead of scoring.
+        The sibling reads in cohort_speed.py already use the ``or {}`` form.
+        """
+        csv = _ungated_csv(tmp_path)
+        meta = json.loads(meta_path(csv).read_text())
+        meta["arena_gate"] = None
+        meta_path(csv).write_text(json.dumps(meta))
+        _run(tmp_path, pose_csv_in=csv, cohort_thresholds=_cohort(tmp_path, gated=False))
         assert (tmp_path / "out" / "ethogram_raw.csv").exists()
 
     def test_a_speed_only_run_with_no_csv_is_not_checked(self, tmp_path, monkeypatch):
