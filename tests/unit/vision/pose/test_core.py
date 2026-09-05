@@ -160,8 +160,8 @@ def _fake_result(*, boxes_conf, keypoints, keypoint_conf):
     )
 
 
-def _infer_with(stub, tmp_path, result, **kwargs):
-    stub.YOLO = fake_yolo_streaming([result])
+def _infer_frames(stub, tmp_path, results, **kwargs):
+    stub.YOLO = fake_yolo_streaming(list(results))
     return core.infer_video(
         tmp_path / "model.pt",
         tmp_path / "video.mp4",
@@ -170,6 +170,10 @@ def _infer_with(stub, tmp_path, result, **kwargs):
         echo_device=False,
         **kwargs,
     )
+
+
+def _infer_with(stub, tmp_path, result, **kwargs):
+    return _infer_frames(stub, tmp_path, [result], **kwargs)
 
 
 @pytest.fixture
@@ -272,6 +276,42 @@ def test_an_unreadable_frame_size_falls_back_to_the_arenas_own(stub_ultralytics,
     )
     pose = _infer_with(stub_ultralytics, tmp_path, result, arena=_arena())
     assert _is_inside(pose.xy[0, 0])
+
+
+def _degenerate_arena():
+    """Four coincident corners: ``homography()`` refuses this quad."""
+    from glider.vision.arena import ArenaCalibration
+
+    return ArenaCalibration(corners=[(0.5, 0.5)] * 4, frame_size=(640, 480))
+
+
+def test_a_degenerate_arena_does_not_fail_the_video(stub_ultralytics, sized_video, tmp_path):
+    """run_batch already refuses to lose a video to a bad quad at the gate step;
+    a raise from inside the frame loop would lose the inference itself, which
+    is the expensive half. Re-ranking degrades to plain argmax instead."""
+    result = _fake_result(
+        boxes_conf=[0.85, 0.90],
+        keypoints=[_inside_arena(), _on_the_bench_floor()],
+        keypoint_conf=[[0.9] * 4, [0.9] * 4],
+    )
+    pose = _infer_with(stub_ultralytics, tmp_path, result, arena=_degenerate_arena())
+    np.testing.assert_allclose(pose.xy[0], _on_the_bench_floor())
+
+
+def test_the_degenerate_arena_is_reported_once_not_per_frame(
+    stub_ultralytics, sized_video, caplog, tmp_path
+):
+    """Silent degradation would look like the gate working. Per-frame would
+    bury the run's real output under one line per decoded frame."""
+    result = _fake_result(
+        boxes_conf=[0.85, 0.90],
+        keypoints=[_inside_arena(), _on_the_bench_floor()],
+        keypoint_conf=[[0.9] * 4, [0.9] * 4],
+    )
+    with caplog.at_level("WARNING"):
+        _infer_frames(stub_ultralytics, tmp_path, [result] * 5, arena=_degenerate_arena())
+    warnings = [r for r in caplog.records if "arena" in r.getMessage()]
+    assert len(warnings) == 1
 
 
 def test_the_backend_path_logs_the_no_op(stub_ultralytics, caplog, tmp_path, monkeypatch):

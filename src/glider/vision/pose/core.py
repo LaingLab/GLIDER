@@ -346,6 +346,9 @@ def infer_video(
         confident one outside it. A re-ranking, not a filter — see
         :func:`_pick_candidate`. No-op on the DLC/SLEAP backends, which emit
         one detection per frame. Blanking remains the gate's job, downstream.
+        An arena whose corners do not describe a usable quad is reported once
+        and ignored, leaving plain ``argmax``: a calibration problem must not
+        cost a run of inference.
 
     Returns
     -------
@@ -419,6 +422,31 @@ def infer_video(
     # project keypoints into the arena, and the metadata block needs the same
     # value. A per-frame header read would cost a file open on every frame.
     resolution = video_resolution(video_path)
+
+    # Solved once, here, for the same reason. _pick_candidate projects keypoints
+    # through arena.homography(), which raises DegenerateArenaError -- a
+    # ValueError -- for a quad that is collapsed or self-intersecting, so a bad
+    # calibration would otherwise abort the video on its first frame. run_batch
+    # already declines to lose a video that way at the *gate* step
+    # (batch.py:_score_zones has the same shape), and inference is the half that
+    # costs hours, so it cannot be the stricter of the two. Re-ranking is an
+    # improvement over argmax, never a precondition for it: without a usable
+    # arena the run falls back to exactly what it did before arenas existed.
+    #
+    # A successful call caches the matrix on the object, so the per-frame calls
+    # below are attribute reads rather than 8x8 solves.
+    if arena is not None:
+        try:
+            arena.homography()
+        except ValueError as e:
+            logger.warning(
+                "%s: the arena is unusable (%s), so detections are picked by "
+                "confidence alone for this video; fix the calibration and "
+                "re-run to gate it",
+                video_path.name,
+                e,
+            )
+            arena = None
 
     if echo_device:
         if resolved_device.startswith("cuda"):
