@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -228,6 +229,30 @@ class TestWhatIsNotChecked:
         disagree with it."""
         gated = _gated_csv(tmp_path)
         _run(tmp_path, pose_csv_in=gated, pose_csv=gated, freeze_pct=1.0, dart_pct=99.5)
+        assert (tmp_path / "out" / "ethogram_raw.csv").exists()
+
+    def test_a_run_that_uses_no_speed_thresholds_is_not_checked(self, tmp_path, monkeypatch):
+        """With both sides of the speed axis off, ``resolve_speed_thresholds``
+        returns ``{}`` before it opens the cohort file at all -- so no cut-off
+        derived under any gate is applied to this CSV, and there is nothing to
+        disagree with. The check saw the missing provenance as "ungated" and
+        refused a gated CSV over thresholds that were never used.
+        """
+        from glider.analysis.behavior.classify import batch as batch_mod
+
+        def _apply(config, ethogram_csv, model, **kwargs):
+            Path(ethogram_csv).write_text("frame,behavior\n0,walking\n")
+            return True
+
+        monkeypatch.setattr(batch_mod, "batch_apply", _apply)
+        _run(
+            tmp_path,
+            model=object(),
+            pose_csv_in=_gated_csv(tmp_path),
+            cohort_thresholds=_cohort(tmp_path, gated=False),
+            score_freezing=False,
+            score_darting=False,
+        )
         assert (tmp_path / "out" / "ethogram_raw.csv").exists()
 
     def test_an_explicit_null_gate_block_reads_as_ungated(self, tmp_path):

@@ -574,7 +574,17 @@ def classify(
     # scored, so neither can disagree with it -- and since the post-hoc gating
     # pass rewrites every tracked session in a folder, checking those paths
     # would break every non-cohort scoring run.
-    if pose_csv_in is not None and cohort_thresholds is not None:
+    #
+    # And only when the speed axis is on at all. With both sides off,
+    # resolve_speed_thresholds returns {} before it opens the cohort file, so
+    # no cut-off derived under any gate reaches this run -- but the absent
+    # provenance reads as "ungated", which refused every gated CSV over
+    # thresholds that were never used.
+    if (
+        pose_csv_in is not None
+        and cohort_thresholds is not None
+        and (score_freezing or score_darting)
+    ):
         _refuse_gate_mismatch(pose_csv_in, opts.get("gate_provenance"))
     if speed_only and opts.get("freeze_threshold") is None:
         # Checked before anything expensive: with no classifier and no
