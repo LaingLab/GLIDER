@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 
 from glider.vision.arena import ArenaCalibration
-from glider.vision.arena_gate import ArenaGateSettings, gate_to_arena
+from glider.vision.arena_gate import ArenaGateSettings, gate_pose_csv, gate_to_arena
+from glider.vision.pose.dlc import meta_path, read_pose_meta
 
 # The fronto-parallel square from test_arena.py: a real 400x400 px square in a
 # 640x480 frame, which is close to what these rigs produce (30 cm at 13.3 px/cm).
@@ -49,6 +50,29 @@ def _one_frame(*points, pad=(320.0, 240.0)):
     """
     pts = list(points) + [list(pad)] * (4 - len(points))
     return np.array([pts], dtype=float)
+
+
+def _write_track(
+    tmp_path,
+    *,
+    name="t1_d1DLC_exp-7.csv",
+    resolution=(640, 480),
+    fps=30.0,
+    gate_block=None,
+    outside=False,
+):
+    """A real pose CSV plus its sidecar, so gate_pose_csv has something to read."""
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    xy = _one_frame([-900.0, -900.0]) if outside else _one_frame()
+    pose = _pose(np.repeat(xy, 10, axis=0))
+    pose.fps = fps
+    pose.metadata["resolution"] = list(resolution)
+    if gate_block:
+        pose.metadata["arena_gate"] = gate_block
+    csv = tmp_path / name
+    to_dlc_csv(pose, csv)
+    return csv
 
 
 class TestGeometry:
@@ -271,3 +295,88 @@ class TestInsideFraction:
         from glider.vision.arena_gate import inside_fraction
 
         assert inside_fraction(_arena(), np.zeros((4, 2)), np.zeros(4), (640, 480)) == 0.0
+
+
+class TestPostHoc:
+    def test_it_preserves_the_original_and_its_sidecar(self, tmp_path):
+        csv = _write_track(tmp_path, outside=True)
+        gate_pose_csv(csv, _arena())
+        assert (tmp_path / f"{csv.stem}_ungated.csv").exists()
+        assert (tmp_path / f"{csv.stem}_ungated.meta.json").exists()
+
+    def test_the_sidecar_keeps_its_resolution(self, tmp_path):
+        """to_dlc_csv rebuilds the sidecar from pose.metadata and from_dlc_csv
+        populates none, so a naive round trip destroys resolution -- breaking
+        the viewer and making a second pass refuse."""
+        csv = _write_track(tmp_path, resolution=(640, 480))
+        gate_pose_csv(csv, _arena())
+        assert read_pose_meta(csv)["resolution"] == [640, 480]
+
+    def test_it_keeps_the_fps(self, tmp_path):
+        csv = _write_track(tmp_path, fps=25.0)
+        gate_pose_csv(csv, _arena())
+        assert read_pose_meta(csv)["fps"] == 25.0
+
+    def test_a_second_pass_with_the_same_settings_is_skipped(self, tmp_path):
+        csv = _write_track(tmp_path, outside=True)
+        gate_pose_csv(csv, _arena())
+        before = csv.read_bytes()
+        gate_pose_csv(csv, _arena())
+        assert csv.read_bytes() == before
+
+    def test_the_skip_survives_a_json_round_trip(self, tmp_path):
+        """arena_corners is declared list[tuple] but returns as list[list], so
+        an identity comparison would never match and the skip never fire."""
+        csv = _write_track(tmp_path, outside=True)
+        gate_pose_csv(csv, _arena())
+        original = (tmp_path / f"{csv.stem}_ungated.csv").read_bytes()
+        gate_pose_csv(csv, _arena())
+        assert (tmp_path / f"{csv.stem}_ungated.csv").read_bytes() == original
+
+    def test_the_skip_does_not_re_read_the_track(self, tmp_path, monkeypatch):
+        """The one observable consequence of the skip actually firing.
+
+        Re-gating from ``_ungated`` with the same settings produces byte-
+        identical output, so no comparison of file contents can tell a skip
+        from a repeat -- which is exactly how a broken comparison would hide,
+        rewriting every CSV in the cohort on every pass while looking correct.
+        """
+        csv = _write_track(tmp_path, outside=True)
+        gate_pose_csv(csv, _arena())
+
+        def boom(*args, **kwargs):
+            raise AssertionError("re-read the track instead of skipping it")
+
+        monkeypatch.setattr("glider.vision.pose.dlc.from_dlc_csv", boom)
+        gate_pose_csv(csv, _arena())
+
+    def test_a_skipped_pass_returns_the_recorded_report(self, tmp_path):
+        """Rehydrated from the block, so a caller logging blanked_fraction gets
+        the same number on the second pass as on the first."""
+        csv = _write_track(tmp_path, outside=True)
+        first = gate_pose_csv(csv, _arena())
+        assert gate_pose_csv(csv, _arena()) == first
+
+    def test_changed_settings_regate_from_the_original(self, tmp_path):
+        """The documented workflow: run with defaults, read the report,
+        escalate. The second run must not eat the true original."""
+        csv = _write_track(tmp_path, outside=True)
+        gate_pose_csv(csv, _arena())
+        original = (tmp_path / f"{csv.stem}_ungated.csv").read_bytes()
+        gate_pose_csv(csv, _arena(), settings=ArenaGateSettings(min_detected_fraction=1.0))
+        assert (tmp_path / f"{csv.stem}_ungated.csv").read_bytes() == original
+
+    def test_it_refuses_an_inference_gated_primary(self, tmp_path):
+        """A primary gated by run_batch has a gate block and no _ungated twin.
+        Renaming it would make 'the original survives' false."""
+        csv = _write_track(tmp_path, gate_block={"gated": True, "settings": {}})
+        with pytest.raises(ValueError, match="_raw"):
+            gate_pose_csv(csv, _arena(), settings=ArenaGateSettings(min_detected_fraction=1.0))
+
+    def test_a_sidecar_less_csv_still_gates(self, tmp_path):
+        """write_pose_meta is best-effort and DEFAULT_FPS exists for exactly
+        these files, so a missing sidecar must not end the pass."""
+        csv = _write_track(tmp_path)
+        meta_path(csv).unlink()
+        gate_pose_csv(csv, _arena(), settings=ArenaGateSettings(margin_cm=7.5))
+        assert (tmp_path / f"{csv.stem}_ungated.csv").exists()

@@ -25,7 +25,8 @@ notebook can too.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 import numpy as np
 
@@ -33,7 +34,13 @@ from glider.vision.arena import ArenaCalibration
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ArenaGateSettings", "GateReport", "gate_to_arena", "inside_fraction"]
+__all__ = [
+    "ArenaGateSettings",
+    "GateReport",
+    "gate_pose_csv",
+    "gate_to_arena",
+    "inside_fraction",
+]
 
 #: Margin as a fraction of the shorter arena side when none is given. A quarter
 #: of a 30 cm arena is 7.5 cm, which clears any plausible rear -- a 9 cm rear
@@ -224,6 +231,89 @@ def gate_to_arena(pose, arena, *, settings=None, resolution=None):
         settings=settings,
         arena_corners=corners,
     )
+
+
+#: GateReport fields reconstructible from a stored block. `gated` is added on
+#: write and is not a field; `settings` round-trips as a plain dict and has to
+#: be re-hydrated, or the returned report would compare unequal to a fresh one.
+_REPORT_KEYS = (
+    "frames_total",
+    "frames_considered",
+    "frames_blanked",
+    "keypoints_masked",
+    "masked_by_keypoint",
+    "arena_corners",
+)
+
+
+def _report_from_block(block) -> GateReport:
+    fields = {k: block[k] for k in _REPORT_KEYS if k in block}
+    return GateReport(**fields, settings=ArenaGateSettings(**block.get("settings", {})))
+
+
+def _same_gate(block, settings, arena) -> bool:
+    """Whether *block* records this exact gate. Value comparison, not identity.
+
+    ``arena_corners`` is declared ``list[tuple[float, float]]`` but comes back
+    from JSON as a list of lists, so an identity comparison never matches and
+    the idempotency skip would never fire -- making every re-run rewrite, and
+    the ``_ungated`` guard the only thing standing between a re-run and data
+    loss.
+    """
+    if not block:
+        return False
+    corners = [[float(x), float(y)] for x, y in arena.corners]
+    stored = [[float(x), float(y)] for x, y in block.get("arena_corners", [])]
+    return block.get("settings") == asdict(settings) and stored == corners
+
+
+def gate_pose_csv(csv_path, arena, *, settings=None) -> GateReport:
+    """Gate a tracked CSV in place, keeping the original as ``_ungated``.
+
+    Always reads the *pristine* track. When ``<stem>_ungated.csv`` already
+    exists it is the input and only the primary is overwritten; the original is
+    never renamed over. Without that rule the documented workflow destroys it:
+    run with defaults, read the report, escalate a known-bad cohort to
+    ``min_detected_fraction=1.0`` -- and the second run would rename the
+    already-gated primary over the true original, compound the second gate on
+    the first, and record only the second settings as provenance.
+    """
+    from glider.vision.pose.dlc import from_dlc_csv, meta_path, read_pose_meta, to_dlc_csv
+
+    csv_path = Path(csv_path)
+    settings = settings or ArenaGateSettings()
+    ungated = csv_path.with_name(f"{csv_path.stem}_ungated{csv_path.suffix}")
+    source = ungated if ungated.exists() else csv_path
+
+    existing = (read_pose_meta(csv_path) or {}).get("arena_gate")
+    if _same_gate(existing, settings, arena):
+        return _report_from_block(existing)
+
+    if not ungated.exists() and existing:
+        raise ValueError(
+            f"{csv_path.name} was gated during inference and has no _ungated "
+            f"companion, so the original cannot be preserved. Re-gate from its "
+            f"_raw file, or re-run inference with the settings you want."
+        )
+
+    # Read before renaming: from_dlc_csv reads fps from the sidecar.
+    meta = read_pose_meta(source) or {}
+    pose = from_dlc_csv(source)
+    gated, report = gate_to_arena(pose, arena, settings=settings, resolution=meta.get("resolution"))
+
+    if source == csv_path:
+        # rename, not os.replace: refusing an existing target is the point.
+        csv_path.rename(ungated)
+        # Best-effort, like write_pose_meta itself: a CSV predating sidecars is
+        # a supported case, and one missing file must not end a batch re-gate.
+        if meta_path(csv_path).exists():
+            meta_path(csv_path).rename(meta_path(ungated))
+
+    if meta.get("resolution"):
+        gated.metadata["resolution"] = meta["resolution"]
+    gated.metadata["arena_gate"] = {**asdict(report), "gated": True}
+    to_dlc_csv(gated, csv_path)
+    return report
 
 
 def inside_fraction(arena, xy, confidence, resolution, settings=None) -> float:
