@@ -134,10 +134,6 @@ def _on_the_bench_floor():
     return _four(BENCH_FLOOR_PX)
 
 
-def _far_outside():
-    return _four(BENCH_FLOOR_PX)
-
-
 def _further_outside():
     return _four(FURTHER_OUT_PX)
 
@@ -200,7 +196,7 @@ def test_it_falls_back_to_argmax_when_none_are_inside(stub_ultralytics, sized_vi
     """Never turns a frame that had a usable detection into a dropout."""
     result = _fake_result(
         boxes_conf=[0.4, 0.9],
-        keypoints=[_far_outside(), _further_outside()],
+        keypoints=[_on_the_bench_floor(), _further_outside()],
         keypoint_conf=[[0.9] * 4, [0.9] * 4],
     )
     pose = _infer_with(stub_ultralytics, tmp_path, result, arena=_arena())
@@ -219,18 +215,22 @@ def test_a_padded_but_correct_detection_still_wins(stub_ultralytics, sized_video
     assert _is_inside(pose.xy[0, 0])
 
 
-def test_without_an_arena_the_result_is_unchanged(stub_ultralytics, sized_video, tmp_path):
-    """The guard that this cannot silently move existing results."""
+def test_without_an_arena_the_pick_is_plain_argmax(stub_ultralytics, sized_video, tmp_path):
+    """The guard that this cannot silently move existing results.
 
-    def run(**kwargs):
-        result = _fake_result(
-            boxes_conf=[0.85, 0.90],
-            keypoints=[_inside_arena(), _on_the_bench_floor()],
-            keypoint_conf=[[0.9] * 4, [0.9] * 4],
-        )
-        return _infer_with(stub_ultralytics, tmp_path, result, **kwargs)
-
-    np.testing.assert_array_equal(run(arena=None).xy, run().xy)
+    A fixed expectation, not a comparison against another run of the same
+    function: ``arena=None`` *is* the default, so the two calls take one path
+    and agree however the pick is made. What "unchanged" means here is the
+    bench-floor blob at 0.90 beating the real mouse at 0.85 — the behaviour
+    every result on disk was produced under.
+    """
+    result = _fake_result(
+        boxes_conf=[0.85, 0.90],
+        keypoints=[_inside_arena(), _on_the_bench_floor()],
+        keypoint_conf=[[0.9] * 4, [0.9] * 4],
+    )
+    pose = _infer_with(stub_ultralytics, tmp_path, result)
+    np.testing.assert_allclose(pose.xy[0], _on_the_bench_floor())
 
 
 def test_an_arena_without_settings_does_not_crash(stub_ultralytics, sized_video, tmp_path):

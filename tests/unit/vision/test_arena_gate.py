@@ -330,14 +330,17 @@ class TestPostHoc:
         gate_pose_csv(csv, _arena())
         assert csv.read_bytes() == before
 
-    def test_the_skip_survives_a_json_round_trip(self, tmp_path):
-        """arena_corners is declared list[tuple] but returns as list[list], so
-        an identity comparison would never match and the skip never fire."""
+    def test_the_skip_compares_corners_by_value(self, tmp_path):
+        """arena_corners is declared list[tuple] but comes back from JSON as a
+        list of lists, so an identity comparison never matches and the skip
+        never fires. Asserted against a block that has actually been through
+        the sidecar, since that round trip is what breaks the comparison."""
+        from glider.vision.arena_gate import _same_gate
+
         csv = _write_track(tmp_path, outside=True)
         gate_pose_csv(csv, _arena())
-        original = (tmp_path / f"{csv.stem}_ungated.csv").read_bytes()
-        gate_pose_csv(csv, _arena())
-        assert (tmp_path / f"{csv.stem}_ungated.csv").read_bytes() == original
+        stored = read_pose_meta(csv)["arena_gate"]
+        assert _same_gate(stored, ArenaGateSettings(), _arena())
 
     def test_the_skip_does_not_re_read_the_track(self, tmp_path, monkeypatch):
         """The one observable consequence of the skip actually firing.
