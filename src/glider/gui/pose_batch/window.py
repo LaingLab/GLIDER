@@ -822,6 +822,7 @@ class PoseBatchWindow(QMainWindow):
     def _clear_selected_calibrations(self) -> None:
         for video in self._cal_table.selected_videos():
             self._calibrations.discard(video)
+            self._calibrations.discard_arena(video)
         self._cal_table.refresh()
         self._validate()
 

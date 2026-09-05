@@ -218,3 +218,11 @@ class TestRunRequiresArena:
         window._validate()
         # Card has no badge getter; read the underlying label it sets.
         assert "1 / 2 arenas drawn" in window._calibration_card._badge.text()
+
+    def test_clear_removes_the_arena_as_well_as_the_line(self, window, tmp_path):
+        video = _ready_window(window, tmp_path)
+        window._calibrations.set_arena(video, _arena())
+        window._cal_table.selectRow(0)
+        assert window._cal_table.selected_videos()  # guard: the row really is selected
+        window._clear_selected_calibrations()
+        assert window._calibrations.get_arena(video) is None
