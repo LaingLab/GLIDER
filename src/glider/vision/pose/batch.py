@@ -134,11 +134,6 @@ def raw_output_path(video: Path, model: Path) -> Path:
     return video.parent / f"{_output_stem(video, model)}_raw.csv"
 
 
-# Stem suffixes that share the "<stem>DLC_<model>" prefix but are not pose
-# data. Anything a tool writes beside a pose CSV using its stem belongs here.
-_NOT_POSE_SUFFIXES = ("_raw", "_annotations")
-
-
 def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Path | None:
     """The pose CSV belonging to *video*, or ``None`` if there isn't one.
 
@@ -152,12 +147,14 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
         what the annotate and train paths have always expected.
     ``<stem>DLC_<model>.csv``
         What :func:`run_batch` writes. Companions that share this prefix but
-        are not pose data are skipped (see :data:`_NOT_POSE_SUFFIXES`):
-        ``_raw`` is the unsmoothed inference, never the one to analyze, and
-        ``_annotations`` is the annotator's behavior zones. The latter is
-        written *after* the pose CSV, so before it was excluded it won the
-        most-recent tie-break and every reader downstream — annotate, train,
-        apply — was handed a file of labels in place of keypoints.
+        are not pose data are skipped (see
+        :data:`~glider.vision.pose.dlc.NOT_POSE_SUFFIXES`): ``_raw`` is the
+        ungated, unsmoothed inference, never the one to analyze, ``_ungated``
+        is its post-hoc equivalent, and ``_annotations`` is the annotator's
+        behavior zones. The last is written *after* the pose CSV, so before it
+        was excluded it won the most-recent tie-break and every reader
+        downstream — annotate, train, apply — was handed a file of labels in
+        place of keypoints.
 
     The exact-stem form wins when both exist, so a file the operator placed
     deliberately is never shadowed by a batch run. When several models have
@@ -166,6 +163,10 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     quietly scoring a cohort with a superseded pose model. Naming the file
     explicitly is still the only way to be certain.
     """
+    # Imported here, not at module scope: dlc imports pandas, and this module
+    # stays cheap to import because the GUI does so while building menus.
+    from glider.vision.pose.dlc import NOT_POSE_SUFFIXES
+
     video = Path(video)
     directory = Path(search_dir) if search_dir is not None else video.parent
     if not directory.is_dir():
@@ -178,7 +179,7 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     matches = [
         p
         for p in sorted(directory.glob(f"{video.stem}DLC_*.csv"))
-        if not p.stem.endswith(_NOT_POSE_SUFFIXES)
+        if not p.stem.endswith(NOT_POSE_SUFFIXES)
     ]
     if not matches:
         return None

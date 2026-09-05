@@ -189,6 +189,14 @@ def _build_dataframe(pose: PoseData) -> pd.DataFrame:
     return df
 
 
+#: Stem suffixes that share a pose CSV's "<stem>DLC_<model>" prefix but are not
+#: pose data to analyse. Lives here because two separate discovery paths need
+#: it and they drifted apart once already: find_pose_csv excluded _raw while
+#: the cohort collector did not, so every session was pooled twice and each
+#: animal's weight in the percentiles was silently halved.
+NOT_POSE_SUFFIXES = ("_raw", "_annotations", "_ungated")
+
+
 def to_dlc_csv(pose: PoseData, path: str | Path, *, write_meta: bool = True) -> Path:
     """Write a DeepLabCut-format CSV, plus its frame-rate sidecar.
 
