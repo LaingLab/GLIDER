@@ -16,12 +16,19 @@ in this module operates on one mouse per video.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from glider.vision.arena import ArenaCalibration
+    from glider.vision.arena_gate import ArenaGateSettings
+
+logger = logging.getLogger(__name__)
 
 
 class PoseCancelledError(RuntimeError):
@@ -232,6 +239,46 @@ def _infer_video_backend(
     )
 
 
+def _pick_candidate(result, confidences, arena, settings, resolution) -> int:
+    """Index of the detection to keep.
+
+    Plain ``argmax`` when there is no arena, so that path stays exactly what it
+    was. With one, the highest-confidence candidate whose keypoints clear
+    ``min_inside_fraction`` wins -- and if none do, ``argmax`` again.
+
+    That fallback is what makes this a re-ranking rather than a filter: it can
+    replace a bad pick with a good one but can never turn a frame that had a
+    usable detection into a dropout. Blanking is the gate's job, downstream.
+
+    Keypoint confidences are passed to :func:`inside_fraction`, not just ``xy``,
+    for the reason its docstring gives: raw Ultralytics output pads unlocalized
+    keypoints with ``(0, 0)`` at confidence 0, a finite pixel in the frame's
+    top-left corner that is outside every arena. Judging on ``xy`` alone would
+    score a correct detection with a few pads below quorum and hand the frame
+    back to the bench-floor blob -- the exact trap this exists to close.
+    """
+    if arena is None:
+        return int(confidences.argmax())
+
+    from glider.vision.arena_gate import ArenaGateSettings, inside_fraction
+
+    # run_batch gates on `gate is not None and arena is not None`, so an arena
+    # can arrive here with no settings.
+    settings = settings or ArenaGateSettings()
+    # video_resolution returns None for a header it cannot read. Fall back to
+    # the frame the corners were clicked on -- the same last resort
+    # arena_gate._resolve_resolution uses. Re-ranking one candidate must never
+    # be the thing that kills a multi-hour batch.
+    resolution = resolution or arena.frame_size
+    keypoint_conf = result.keypoints.conf
+    for index in np.argsort(confidences)[::-1]:
+        xy = result.keypoints.xy[index].cpu().numpy()
+        cf = keypoint_conf[index].cpu().numpy() if keypoint_conf is not None else np.ones(len(xy))
+        if inside_fraction(arena, xy, cf, resolution, settings) >= settings.min_inside_fraction:
+            return int(index)
+    return int(confidences.argmax())
+
+
 def infer_video(
     model_path: str | Path,
     video_path: str | Path,
@@ -247,6 +294,8 @@ def infer_video(
     echo_device: bool = True,
     progress_cb: Callable[[int, int], None] | None = None,
     cancel_cb: Callable[[], bool] | None = None,
+    arena: ArenaCalibration | None = None,
+    gate_settings: ArenaGateSettings | None = None,
 ) -> PoseData:
     """Run an Ultralytics YOLO-pose model over a video and return PoseData.
 
@@ -292,6 +341,11 @@ def infer_video(
         Polled once per frame. Returning ``True`` aborts the run and raises
         :class:`PoseCancelledError`. Because Ultralytics streams results per frame,
         a cancel lands within one frame even on a multi-hour video.
+    arena, gate_settings
+        Re-rank multi-detection frames so an in-arena candidate beats a more
+        confident one outside it. A re-ranking, not a filter — see
+        :func:`_pick_candidate`. No-op on the DLC/SLEAP backends, which emit
+        one detection per frame. Blanking remains the gate's job, downstream.
 
     Returns
     -------
@@ -318,6 +372,14 @@ def infer_video(
     # ultralytics streaming loop nor the caller's names apply.
     spec = identify_pose_model(model_path)
     if spec.kind != "yolo":
+        # Logged here, not inside _infer_video_backend, which is never handed
+        # the arena: one detection per frame means there is nothing to re-rank.
+        if arena is not None:
+            logger.info(
+                "%s yields one detection per frame, so there are no candidates "
+                "to re-rank; the arena still gates downstream",
+                spec.kind,
+            )
         return _infer_video_backend(
             spec,
             video_path,
@@ -353,6 +415,10 @@ def infer_video(
     from glider.vision.video_source import video_resolution
 
     resolved_device = resolve_device(device, require_gpu=require_gpu)
+    # Read once, before the loop: candidate re-ranking needs the frame size to
+    # project keypoints into the arena, and the metadata block needs the same
+    # value. A per-frame header read would cost a file open on every frame.
+    resolution = video_resolution(video_path)
 
     if echo_device:
         if resolved_device.startswith("cuda"):
@@ -415,9 +481,11 @@ def infer_video(
             xy_rows.append(np.full((n_kpts, 2), np.nan))
             conf_rows.append(np.zeros(n_kpts))
         else:
-            # Highest-confidence detection on this frame.
+            # Highest-confidence detection on this frame — preferring one
+            # inside the arena, when there is an arena to prefer.
             if r.boxes is not None and r.boxes.conf is not None:
-                best = int(r.boxes.conf.cpu().numpy().argmax())
+                confidences = r.boxes.conf.cpu().numpy()
+                best = _pick_candidate(r, confidences, arena, gate_settings, resolution)
             else:
                 best = 0
 
@@ -457,6 +525,6 @@ def infer_video(
             "device": resolved_device,
             # Pose coordinates are pixels; a viewer without the video needs
             # the canvas they were measured on to place them.
-            "resolution": video_resolution(video_path),
+            "resolution": resolution,
         },
     )

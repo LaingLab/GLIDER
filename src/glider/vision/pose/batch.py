@@ -373,6 +373,10 @@ def run_batch(
         zone_warning = ""
         gate_warning = ""
         try:
+            # Resolved before inference, not after: the arena also re-ranks
+            # multi-detection frames inside infer_video, and a detection
+            # discarded there can never be recovered by the post-hoc gate.
+            arena = (arenas or {}).get(video)
             pose = infer(
                 model_path=str(model_path),
                 video_path=str(video),
@@ -384,8 +388,9 @@ def run_batch(
                 echo_device=False,
                 progress_cb=progress_cb,
                 cancel_cb=cancel_cb,
+                arena=arena,
+                gate_settings=gate,
             )
-            arena = (arenas or {}).get(video)
             gating = gate is not None and arena is not None
 
             # _raw is the "what did the model actually say" file, so it must be
