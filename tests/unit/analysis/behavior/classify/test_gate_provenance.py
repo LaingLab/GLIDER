@@ -85,8 +85,15 @@ def _ungated_csv(tmp_path):
     return _csv(tmp_path, gated=False)
 
 
-def _cohort(tmp_path, *, gated):
-    """Cohort cut-offs already in px/frame, so no calibration is involved."""
+def _cohort(tmp_path, *, gated, settings=None):
+    """Cohort cut-offs already in px/frame, so no calibration is involved.
+
+    A gated cohort defaults to the settings :func:`_gate_block` records, since
+    that is what pooling those sessions would have written: agreeing on the
+    boolean is not the same as describing the same gate.
+    """
+    if settings is None:
+        settings = asdict(ArenaGateSettings(margin_cm=7.5)) if gated else {}
     path = tmp_path / "cohort_speed.json"
     CohortSpeedThresholds(
         freeze=0.5,
@@ -96,7 +103,7 @@ def _cohort(tmp_path, *, gated):
         dart_pct=99.5,
         n_sessions=31,
         n_samples=100_000,
-        gate_provenance={"gated": gated, "settings": {}},
+        gate_provenance={"gated": gated, "settings": settings},
     ).save(path)
     return path
 
@@ -172,6 +179,35 @@ class TestRefusingAMismatch:
                 cohort_thresholds=_cohort(tmp_path, gated=False),
             )
 
+    def test_the_same_flag_with_different_settings_raises_too(self, tmp_path):
+        """The documented workflow produces exactly this pool: run the cohort
+        with defaults, read the report, escalate the known-bad males to
+        ``min_detected_fraction=1.0``. Both sides then say "gated" while
+        describing different distributions, and the boolean cannot tell."""
+        with pytest.raises(ValueError, match="(?i)gated with"):
+            _run(
+                tmp_path,
+                pose_csv_in=_gated_csv(tmp_path),
+                cohort_thresholds=_cohort(
+                    tmp_path,
+                    gated=True,
+                    settings=asdict(ArenaGateSettings(margin_cm=7.5, min_detected_fraction=1.0)),
+                ),
+            )
+
+    def test_the_settings_message_names_the_file_and_both_gates(self, tmp_path):
+        with pytest.raises(ValueError) as excinfo:
+            _run(
+                tmp_path,
+                pose_csv_in=_gated_csv(tmp_path),
+                cohort_thresholds=_cohort(
+                    tmp_path, gated=True, settings=asdict(ArenaGateSettings(margin_cm=1.0))
+                ),
+            )
+        message = str(excinfo.value)
+        assert "clipDLC_yolo.csv" in message
+        assert "7.5" in message and "1.0" in message
+
     def test_it_raises_before_either_branch_of_the_fork_runs(self, tmp_path, monkeypatch):
         """Neither ``batch_apply`` nor the streaming pipeline may be entered.
 
@@ -229,6 +265,30 @@ class TestWhatIsNotChecked:
         disagree with it."""
         gated = _gated_csv(tmp_path)
         _run(tmp_path, pose_csv_in=gated, pose_csv=gated, freeze_pct=1.0, dart_pct=99.5)
+        assert (tmp_path / "out" / "ethogram_raw.csv").exists()
+
+    def test_settings_that_only_omit_the_defaults_still_match(self, tmp_path):
+        """Blocks are written by different halves of the pipeline at different
+        times: one spells out every field, another records only what was
+        changed. Both describe the same gate, so a raw dict comparison would
+        refuse a pair that agrees."""
+        _run(
+            tmp_path,
+            pose_csv_in=_gated_csv(tmp_path),
+            cohort_thresholds=_cohort(tmp_path, gated=True, settings={"margin_cm": 7.5}),
+        )
+        assert (tmp_path / "out" / "ethogram_raw.csv").exists()
+
+    def test_ungated_sides_are_not_compared_on_settings(self, tmp_path):
+        """Nothing was gated, so a settings dict on either side describes
+        nothing that happened to the data."""
+        _run(
+            tmp_path,
+            pose_csv_in=_ungated_csv(tmp_path),
+            cohort_thresholds=_cohort(
+                tmp_path, gated=False, settings=asdict(ArenaGateSettings(margin_cm=99.0))
+            ),
+        )
         assert (tmp_path / "out" / "ethogram_raw.csv").exists()
 
     def test_a_run_that_uses_no_speed_thresholds_is_not_checked(self, tmp_path, monkeypatch):

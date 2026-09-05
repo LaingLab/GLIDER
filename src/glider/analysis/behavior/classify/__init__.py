@@ -351,22 +351,48 @@ def _refuse_gate_mismatch(pose_csv, cohort_gate) -> None:
     of a pooled distribution, so applying ones derived under the other gate
     shifts every freeze and dart call — by an amount nothing in the output
     reports. A hard error is the only version of this that an operator finds.
+
+    Both halves of "differently" count. The gated/ungated flag is the coarse
+    one. The settings are the fine one, and they matter for the same reason:
+    ``min_detected_fraction`` decides how much of the track survives, so two
+    gates that disagree on it leave two different speed distributions behind.
+    The documented workflow produces exactly that pool — derive the cohort with
+    defaults, read the report, re-gate the known-bad sessions at
+    ``min_detected_fraction=1.0`` — and comparing only the boolean would call
+    it a match.
+
+    Settings are compared only when both sides are gated: with nothing gated
+    they describe nothing that happened to the data.
     """
+    from glider.vision.arena_gate import settings_from_block
     from glider.vision.pose.dlc import read_pose_meta
 
     # ``or {}`` at both hops, matching the reads in cohort_speed.py: a sidecar
     # may spell the absent block out as ``"arena_gate": null``, and a default
     # argument does not fire for a key that is present and None.
-    csv_gated = bool(((read_pose_meta(pose_csv) or {}).get("arena_gate") or {}).get("gated"))
-    cohort_gated = bool((cohort_gate or {}).get("gated"))
-    if csv_gated == cohort_gated:
+    csv_gate = (read_pose_meta(pose_csv) or {}).get("arena_gate") or {}
+    cohort_gate = cohort_gate or {}
+    csv_gated = bool(csv_gate.get("gated"))
+    cohort_gated = bool(cohort_gate.get("gated"))
+    if csv_gated != cohort_gated:
+        raise ValueError(
+            f"{Path(pose_csv).name} is {'gated' if csv_gated else 'ungated'} but "
+            f"these thresholds were derived from "
+            f"{'gated' if cohort_gated else 'ungated'} poses. Re-derive the cohort "
+            f"thresholds from the same data you are scoring."
+        )
+    if not csv_gated:
         return
-    raise ValueError(
-        f"{Path(pose_csv).name} is {'gated' if csv_gated else 'ungated'} but "
-        f"these thresholds were derived from "
-        f"{'gated' if cohort_gated else 'ungated'} poses. Re-derive the cohort "
-        f"thresholds from the same data you are scoring."
-    )
+    csv_settings = settings_from_block(csv_gate)
+    cohort_settings = settings_from_block(cohort_gate)
+    if csv_settings != cohort_settings:
+        raise ValueError(
+            f"{Path(pose_csv).name} was gated with {csv_settings} but these "
+            f"thresholds were derived from poses gated with {cohort_settings}. "
+            f"How much of a track survives the gate is what these settings "
+            f"decide, so the two describe different speed distributions. "
+            f"Re-derive the cohort thresholds from the same data you are scoring."
+        )
 
 
 @dataclass

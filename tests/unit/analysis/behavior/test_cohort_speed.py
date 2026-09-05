@@ -484,14 +484,16 @@ def _thresholds(*, gated: bool) -> CohortSpeedThresholds:
     )
 
 
-def _session_csv(tmp_path, name, *, gated, blanked=41):
-    """A session pose CSV whose sidecar says whether it was gated."""
+def _session_csv(tmp_path, name, *, gated, blanked=41, settings=None):
+    """A session pose CSV whose sidecar says whether, and how, it was gated."""
     from glider.vision.pose.core import PoseData
     from glider.vision.pose.dlc import to_dlc_csv
 
     rng = np.random.default_rng(len(name))
     xy = np.cumsum(rng.normal(0, 2.0, size=(200, 3, 2)), axis=0) + 100.0
     block = {**_gate_block(True), "frames_blanked": blanked} if gated else None
+    if block is not None and settings is not None:
+        block["settings"] = settings
     pose = PoseData(
         xy=xy,
         confidence=np.ones((200, 3)),
@@ -588,6 +590,49 @@ class TestWhichGateTheseWereDerivedUnder:
         )
         with pytest.raises(CohortSpeedError, match="mix of gated and ungated"):
             compute_cohort_thresholds([gated, ungated])
+
+    def test_a_pool_gated_under_different_settings_is_refused(self, tmp_path):
+        """The block carries one settings dict, so a pool that mixes gates is
+        misdescribed by whichever one it keeps -- and the sessions on the other
+        side then hard-raise at scoring time, one video at a time, after the
+        pooling has been paid for. The documented escalation workflow (defaults
+        first, then min_detected_fraction=1.0 for the known-bad sessions) is
+        how a folder ends up like this."""
+        from dataclasses import asdict
+
+        from glider.vision.arena_gate import ArenaGateSettings
+
+        lenient = _session_csv(tmp_path, "a", gated=True)
+        strict = _session_csv(
+            tmp_path,
+            "b",
+            gated=True,
+            settings=asdict(ArenaGateSettings(margin_cm=7.5, min_detected_fraction=1.0)),
+        )
+        with pytest.raises(CohortSpeedError, match="(?i)settings"):
+            compute_cohort_thresholds([lenient, strict], px_per_mm=1.3, fps=30.0)
+
+    def test_the_settings_refusal_names_both_sessions(self, tmp_path):
+        from dataclasses import asdict
+
+        from glider.vision.arena_gate import ArenaGateSettings
+
+        lenient = _session_csv(tmp_path, "a", gated=True)
+        strict = _session_csv(
+            tmp_path, "b", gated=True, settings=asdict(ArenaGateSettings(margin_cm=1.0))
+        )
+        with pytest.raises(CohortSpeedError) as excinfo:
+            compute_cohort_thresholds([lenient, strict], px_per_mm=1.3, fps=30.0)
+        assert "aDLC_m.csv" in str(excinfo.value)
+        assert "bDLC_m.csv" in str(excinfo.value)
+
+    def test_settings_that_only_omit_the_defaults_pool_together(self, tmp_path):
+        """Same gate, written two ways. Refusing that pair would refuse a
+        cohort that is in fact consistent."""
+        spelled_out = _session_csv(tmp_path, "a", gated=True)
+        terse = _session_csv(tmp_path, "b", gated=True, settings={"margin_cm": 7.5})
+        block = compute_cohort_thresholds([spelled_out, terse], px_per_mm=1.3, fps=30.0)
+        assert block.gate_provenance["gated"] is True
 
     def test_a_heavily_blanked_session_is_named(self, tmp_path, caplog):
         """The cohort percentile is derived from whatever survived the gate."""

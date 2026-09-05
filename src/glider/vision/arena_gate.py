@@ -40,6 +40,7 @@ __all__ = [
     "gate_pose_csv",
     "gate_to_arena",
     "inside_fraction",
+    "settings_from_block",
     "ungated_path",
 ]
 
@@ -245,6 +246,23 @@ _REPORT_KEYS = (
     "masked_by_keypoint",
     "arena_corners",
 )
+
+
+def settings_from_block(block) -> dict:
+    """The settings a stored ``arena_gate`` block records, defaults filled in.
+
+    Lives here, with the dataclass, because two consumers compare these across
+    files: scoring refuses a track gated differently from the cut-offs about to
+    score it, and cohort pooling refuses a pool that mixes gates. Blocks reach
+    both from files written at different times, so one may spell out every
+    field where another records only what was changed -- the same gate, and a
+    raw dict comparison would call them different.
+
+    Unknown keys are kept rather than dropped: a field this build does not
+    understand is still a difference between two blocks, and silently ignoring
+    it is how a real mismatch would pass.
+    """
+    return {**asdict(ArenaGateSettings()), **((block or {}).get("settings") or {})}
 
 
 def _report_from_block(block) -> GateReport:

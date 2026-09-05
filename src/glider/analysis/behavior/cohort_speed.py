@@ -100,7 +100,7 @@ def _blanked_fraction(block) -> float:
 
 
 def _pool_gate_provenance(paths) -> dict:
-    """The gate block for a pool, refusing one that mixes gated and ungated.
+    """The gate block for a pool, refusing one that mixes gates.
 
     Up front, before a byte of CSV is read: this is arithmetic on sidecars and
     the pooling it guards is minutes of work per cohort.
@@ -109,7 +109,16 @@ def _pool_gate_provenance(paths) -> dict:
     block is one boolean. Whichever value it took, every session on the other
     side would hard-raise at scoring time — and the operator would learn about
     it one video at a time, after the pooling had already been paid for.
+
+    A pool gated under *different settings* is refused for the same reason and
+    with the same consequence: the block carries one settings dict, and the
+    settings are what decide how much of each track survived, so keeping either
+    one misdescribes the sessions gated under the other. The documented
+    escalation workflow — derive with defaults, read the report, re-gate the
+    known-bad sessions at ``min_detected_fraction=1.0`` — is exactly how a
+    folder comes to hold both.
     """
+    from glider.vision.arena_gate import settings_from_block
     from glider.vision.pose.dlc import read_pose_meta
 
     blocks = [(p, (read_pose_meta(p) or {}).get("arena_gate") or {}) for p in paths]
@@ -123,6 +132,27 @@ def _pool_gate_provenance(paths) -> dict:
             f"distribution. Re-gate the whole cohort, or pool only one kind. "
             f"First of each: {gated[0].name}, {ungated[0].name}"
         )
+
+    # Keyed on the normalised settings, so a block that spells out the defaults
+    # and one that omits them are the same gate rather than two.
+    by_settings: dict[str, list[Path]] = {}
+    for path, block in blocks:
+        if block.get("gated"):
+            key = json.dumps(settings_from_block(block), sort_keys=True, default=str)
+            by_settings.setdefault(key, []).append(path)
+    if len(by_settings) > 1:
+        named = "; ".join(
+            f"{group[0].name} gated with {settings}"
+            for settings, group in list(by_settings.items())[:2]
+        )
+        raise CohortSpeedError(
+            f"this pool was gated under {len(by_settings)} different sets of gate "
+            f"settings, and the cohort file records one: whichever it kept, the "
+            f"sessions gated under the others would be scored against cut-offs "
+            f"derived from a distribution they are not part of. Re-gate the whole "
+            f"cohort the same way, or pool each set separately. First two: {named}"
+        )
+
     for path, block in blocks:
         share = _blanked_fraction(block)
         if share > _REJECT_WARN:
