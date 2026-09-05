@@ -424,6 +424,56 @@ class TestTheRunCarriesTheArenas:
         assert list(captured["arenas"]) == [video.resolve()]
 
 
+class TestRunIsBlockedDuringARegate:
+    """Both passes write the same primary CSVs.
+
+    ``gate_pose_csv`` renames the primary to ``_ungated`` and rewrites it in
+    place; ``run_batch`` writes the primary. Overlap them and a half-written
+    primary is captured as the permanent "pristine original", and the re-gate
+    has no cancel, so the window is tens of seconds wide on a real cohort.
+    """
+
+    def _regating(self, window, tmp_path):
+        """A window that would otherwise be ready to Run, mid-re-gate."""
+        video = _ready_window(window, tmp_path, with_csv=True)
+        window._calibrations.set_arena(video, _arena())
+        window._validate()
+        assert window._run_button.isEnabled()  # guard: nothing else is blocking
+        # What _start_regate leaves behind. A stand-in rather than a real
+        # QThread, but it answers closeEvent's quit/wait so the fixture can
+        # still tear the window down.
+        window._regate_thread = SimpleNamespace(quit=lambda: None, wait=lambda ms: None)
+        window._run_button.setEnabled(False)
+        return video
+
+    def test_validate_does_not_re_enable_run(self, window, tmp_path):
+        self._regating(window, tmp_path)
+        window._validate()
+        assert not window._run_button.isEnabled()
+
+    def test_a_signal_that_calls_validate_does_not_re_enable_run(self, window, tmp_path):
+        """_overwrite.toggled is one of four connections that reach _validate."""
+        self._regating(window, tmp_path)
+        window._overwrite.toggle()
+        assert not window._run_button.isEnabled()
+
+    def test_start_refuses(self, window, tmp_path, monkeypatch):
+        captured = _capture_worker(monkeypatch)
+        self._regating(window, tmp_path)
+
+        window._start()
+
+        assert captured == {}
+        assert window._thread is None
+
+    def test_run_comes_back_once_the_regate_is_torn_down(self, window, tmp_path):
+        """The block is the re-gate's, not a latch that outlives it."""
+        self._regating(window, tmp_path)
+        window._regate_thread = None
+        window._validate()
+        assert window._run_button.isEnabled()
+
+
 def test_regate_is_disabled_without_pose_csvs(window, tmp_path):
     video = _ready_window(window, tmp_path)
     window._calibrations.set_arena(video, _arena())

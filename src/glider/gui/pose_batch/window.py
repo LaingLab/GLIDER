@@ -1155,10 +1155,23 @@ class PoseBatchWindow(QMainWindow):
     # validation
     # ------------------------------------------------------------------
 
+    def _busy(self) -> bool:
+        """True while either pass owns the pose CSVs.
+
+        Both write the same primary files: ``run_batch`` writes the primary,
+        and the re-gate renames it to ``_ungated`` and rewrites it in place.
+        Overlapping them can capture a half-written primary as the permanent
+        "pristine original", and the re-gate has no cancel, so the window is
+        tens of seconds wide on a real cohort. Asking one question keeps the
+        Run gate and the button-disabling in ``_start_regate`` from drifting
+        apart the way they already did once.
+        """
+        return self._thread is not None or self._regate_thread is not None
+
     def _validate(self) -> None:
         """Disable Run — and say why — rather than failing an overnight batch."""
-        if self._thread is not None:
-            return  # a run is in flight; Run stays disabled
+        if self._busy():
+            return  # a run or a re-gate is in flight; Run stays disabled
 
         names = self._current_names()
         expected = getattr(self._meta, "n_keypoints", None)
@@ -1213,8 +1226,7 @@ class PoseBatchWindow(QMainWindow):
         from glider.gui.pose_batch.arena_actions import regatable
 
         ready = (
-            self._regate_thread is None
-            and self._thread is None
+            not self._busy()
             and bool(self._videos)
             and not self._calibrations.missing_arenas(self._videos)
             and bool(regatable(self._videos))
@@ -1242,7 +1254,10 @@ class PoseBatchWindow(QMainWindow):
         )
 
     def _start(self) -> None:
-        if self._thread is not None:
+        # Not just a run already in flight: a re-gate is rewriting the very
+        # CSVs this would write. Checked before the master file is written, so
+        # a click that cannot start also cannot touch the disk.
+        if self._busy():
             return
 
         # Written before inference begins — the calibration is complete and
@@ -1360,7 +1375,7 @@ class PoseBatchWindow(QMainWindow):
         from glider.gui.pose_batch.arena_actions import regatable
         from glider.gui.pose_batch.regate_worker import RegateWorker
 
-        if self._regate_thread is not None or self._thread is not None:
+        if self._busy():
             return
         videos = regatable(self._videos)
         if not videos:
