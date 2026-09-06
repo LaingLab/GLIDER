@@ -158,12 +158,19 @@ class ViewManager:
             return self._style_path / "desktop.qss"
 
     def apply_stylesheet(self, widget: "QWidget") -> None:
-        """Apply the appropriate stylesheet to a widget."""
-        style_path = self.get_stylesheet_path()
+        """Apply the appropriate stylesheet to a widget.
 
-        if style_path.exists():
-            with open(style_path) as f:
-                stylesheet = f.read()
+        Goes through :func:`~glider.gui.styles.load_stylesheet` rather than
+        reading the file, because that is where ``@ICONS@`` and the corner
+        scale are substituted. Reading the raw text would hand Qt tokens it
+        does not understand, and Qt drops the whole rule containing one without
+        saying so.
+        """
+        from glider.gui.styles import load_stylesheet
+
+        style_path = self.get_stylesheet_path()
+        stylesheet = load_stylesheet(style_path.stem)
+        if stylesheet:
             widget.setStyleSheet(stylesheet)
             logger.info(f"Applied stylesheet: {style_path}")
         else:

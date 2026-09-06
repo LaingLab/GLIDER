@@ -22,15 +22,13 @@ this file exists to catch.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
 
-import glider.gui.styles
 from glider.gui.shell.status_strip import STRIP_HEIGHT, StatusStrip
+from glider.gui.styles import load_stylesheet
 from glider.gui.styles.colors import STATE_ERR, STATE_WARN
 
 #: The mockup's rig: two healthy boards and a camera that wants a look at.
@@ -60,8 +58,11 @@ def _shown(qtbot, *, themed: bool = False, width: int = 900) -> tuple[QWidget, S
     host = QWidget()
     qtbot.addWidget(host)
     if themed:
-        qss = Path(glider.gui.styles.__file__).with_name("desktop.qss")
-        host.setStyleSheet(qss.read_text(encoding="utf-8"))
+        # Through the app's loader, not the raw file: load_stylesheet is what
+        # resolves @RADIUS_*@ and @ICONS@, and Qt discards a whole sheet it
+        # cannot parse -- so reading the file directly would mount an
+        # unstyled strip and fail on the colour, several steps from the cause.
+        host.setStyleSheet(load_stylesheet("desktop"))
 
     layout = QVBoxLayout(host)
     layout.setContentsMargins(0, 0, 0, 0)

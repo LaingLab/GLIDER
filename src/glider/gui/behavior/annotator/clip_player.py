@@ -32,7 +32,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QLabel, QSizePolicy
 
-from glider.gui.styles import colors
+from glider.gui.styles import colors, radius
 from glider.vision.video_source import ExactFrameReader
 
 if TYPE_CHECKING:
@@ -58,7 +58,7 @@ class ClipPlayer(QLabel):
         super().__init__(parent)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet(
-            f"background: {colors.CANVAS}; color: {colors.TEXT_MUTED}; border-radius: 8px;"
+            f"background: {colors.CANVAS}; color: {colors.TEXT_MUTED}; border-radius: {radius.MEDIUM}px;"
         )
         self.setMinimumSize(640, 360)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)

@@ -33,7 +33,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from glider.gui.styles import colors
+from glider.gui.styles import colors, radius
 from glider.vision.calibration import CameraCalibration, LengthUnit
 
 if TYPE_CHECKING:
@@ -59,7 +59,7 @@ class CalibrationPreviewWidget(QLabel):
             QLabel {{
                 background-color: {colors.CANVAS};
                 border: 2px solid {colors.BORDER};
-                border-radius: 4px;
+                border-radius: {radius.SMALL}px;
             }}
         """)
         self.setMouseTracking(True)
