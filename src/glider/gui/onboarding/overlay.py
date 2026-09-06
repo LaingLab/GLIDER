@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.gui.styles import colors
+from glider.gui.styles import colors, radius
 
 # Padding around the target rect for the cutout, and the corner radius.
 _CUTOUT_PAD = 6
@@ -170,7 +170,7 @@ class TourOverlay(QWidget):
             QFrame#tourCallout {{
                 background-color: {colors.SURFACE_2};
                 border: 1px solid {colors.ACCENT};
-                border-radius: 10px;
+                border-radius: {radius.MEDIUM}px;
             }}
             """)
         layout = QVBoxLayout(card)

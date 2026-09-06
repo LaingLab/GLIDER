@@ -45,13 +45,13 @@ QScrollArea {
 QScrollBar:vertical {
     background-color: #0b0f14;
     width: 20px;
-    border-radius: 10px;
+    border-radius: 10px;  /* geometric */
     margin: 4px;
 }
 
 QScrollBar::handle:vertical {
     background-color: #1e2530;
-    border-radius: 8px;
+    border-radius: 8px;  /* geometric */
     min-height: 60px;
 }
 
@@ -67,13 +67,13 @@ QScrollBar::sub-line:vertical {
 QScrollBar:horizontal {
     background-color: #0b0f14;
     height: 20px;
-    border-radius: 10px;
+    border-radius: 10px;  /* geometric */
     margin: 4px;
 }
 
 QScrollBar::handle:horizontal {
     background-color: #1e2530;
-    border-radius: 8px;
+    border-radius: 8px;  /* geometric */
     min-width: 60px;
 }
 
@@ -91,7 +91,7 @@ QPushButton {
     background-color: #38bdf8;
     color: #e2e8f0;
     border: none;
-    border-radius: 8px;
+    border-radius: @RADIUS_MEDIUM@;
     padding: 12px 20px;
     font-size: 14px;
     font-weight: bold;
@@ -114,7 +114,7 @@ QPushButton:disabled {
    never relies on color alone. */
 QLabel#runnerStatusStrip {
     padding: 10px 14px;
-    border-radius: 8px;
+    border-radius: @RADIUS_MEDIUM@;
     font-size: 15px;
     font-weight: 600;
     color: #e2e8f0;
@@ -198,7 +198,7 @@ QSlider {
 QSlider::groove:horizontal {
     height: 24px;
     background-color: #1e2530;
-    border-radius: 12px;
+    border-radius: 12px;  /* geometric */
 }
 
 QSlider::handle:horizontal {
@@ -206,7 +206,7 @@ QSlider::handle:horizontal {
     height: 48px;
     margin: -12px 0;
     background-color: #38bdf8;
-    border-radius: 24px;
+    border-radius: 24px;  /* geometric */
     border: 4px solid #0ea5e9;
 }
 
@@ -217,13 +217,13 @@ QSlider::handle:horizontal:pressed {
 
 QSlider::sub-page:horizontal {
     background-color: #38bdf8;
-    border-radius: 12px;
+    border-radius: 12px;  /* geometric */
 }
 
 QSlider::groove:vertical {
     width: 24px;
     background-color: #1e2530;
-    border-radius: 12px;
+    border-radius: 12px;  /* geometric */
 }
 
 QSlider::handle:vertical {
@@ -231,7 +231,7 @@ QSlider::handle:vertical {
     height: 48px;
     margin: 0 -12px;
     background-color: #38bdf8;
-    border-radius: 24px;
+    border-radius: 24px;  /* geometric */
     border: 4px solid #0ea5e9;
 }
 
@@ -240,7 +240,7 @@ QSpinBox,
 QDoubleSpinBox {
     background-color: #0f1419;
     border: 2px solid #1e2530;
-    border-radius: 6px;
+    border-radius: @RADIUS_MEDIUM@;
     padding: 8px;
     font-size: 16px;
     min-height: 40px;
@@ -279,7 +279,7 @@ QDoubleSpinBox::down-button:pressed {
 QLineEdit {
     background-color: #0f1419;
     border: 2px solid #1e2530;
-    border-radius: 6px;
+    border-radius: @RADIUS_MEDIUM@;
     padding: 8px;
     font-size: 14px;
     min-height: 36px;
@@ -294,7 +294,7 @@ QLineEdit:focus {
 QComboBox {
     background-color: #0f1419;
     border: 2px solid #1e2530;
-    border-radius: 6px;
+    border-radius: @RADIUS_MEDIUM@;
     padding: 8px;
     font-size: 14px;
     min-height: 40px;
@@ -312,7 +312,7 @@ QComboBox::drop-down {
 QComboBox QAbstractItemView {
     background-color: #0f1419;
     border: 2px solid #38bdf8;
-    border-radius: 8px;
+    border-radius: @RADIUS_LARGE@;
     selection-background-color: #38bdf8;
 }
 
@@ -331,7 +331,7 @@ QCheckBox::indicator {
     width: 36px;
     height: 36px;
     border: 3px solid #1e2530;
-    border-radius: 8px;
+    border-radius: @RADIUS_MEDIUM@;
     background-color: #0f1419;
 }
 
@@ -344,7 +344,7 @@ QCheckBox::indicator:checked {
 QProgressBar {
     background-color: #1e2530;
     border: none;
-    border-radius: 12px;
+    border-radius: 12px;  /* geometric */
     height: 24px;
     text-align: center;
     font-size: 14px;
@@ -352,14 +352,14 @@ QProgressBar {
 
 QProgressBar::chunk {
     background-color: #38bdf8;
-    border-radius: 12px;
+    border-radius: 12px;  /* geometric */
 }
 
 /* === Frame === */
 QFrame[class="card"] {
     background-color: #0f1419;
     border: 2px solid #1e2530;
-    border-radius: 16px;
+    border-radius: @RADIUS_LARGE@;
     padding: 16px;
 }
 
@@ -371,7 +371,7 @@ QFrame[class="separator"] {
 /* === Group Box === */
 QGroupBox {
     border: 2px solid #1e2530;
-    border-radius: 12px;
+    border-radius: @RADIUS_LARGE@;
     margin-top: 20px;
     padding: 16px;
     padding-top: 24px;
@@ -390,7 +390,7 @@ QGroupBox::title {
 QListWidget {
     background-color: #0f1419;
     border: 2px solid #1e2530;
-    border-radius: 8px;
+    border-radius: @RADIUS_LARGE@;
 }
 
 QListWidget::item {
@@ -410,7 +410,7 @@ QListWidget::item:hover {
 /* === Tab Widget === */
 QTabWidget::pane {
     border: 2px solid #1e2530;
-    border-radius: 8px;
+    border-radius: @RADIUS_LARGE@;
     background-color: #0f1419;
 }
 
@@ -450,7 +450,7 @@ QToolTip {
     background-color: #1e2530;
     color: #e2e8f0;
     border: 2px solid #38bdf8;
-    border-radius: 8px;
+    border-radius: @RADIUS_LARGE@;
     padding: 12px;
     font-size: 14px;
 }
@@ -485,7 +485,7 @@ QDialog {
 .DashboardWidget {
     background-color: #0f1419;
     border: 2px solid #1e2530;
-    border-radius: 16px;
+    border-radius: @RADIUS_LARGE@;
     margin: 8px;
     padding: 16px;
 }
@@ -537,7 +537,7 @@ QDialog {
 .StatusIndicator {
     min-height: 40px;
     padding: 8px 16px;
-    border-radius: 20px;
+    border-radius: 20px;  /* geometric */
     font-size: 14px;
     font-weight: bold;
 }
@@ -578,7 +578,7 @@ QDialog {
 /* === Runner Status Colors === */
 QLabel[runnerStatus="true"] {
     padding: 6px 14px;
-    border-radius: 12px;
+    border-radius: @RADIUS_LARGE@;
     font-size: 14px;
     font-weight: bold;
     color: #e2e8f0;
@@ -619,7 +619,7 @@ QLabel[recording="true"] {
     background-color: rgba(248, 113, 113, 0.2);
     color: #f87171;
     padding: 4px 12px;
-    border-radius: 10px;
+    border-radius: @RADIUS_MEDIUM@;
     font-size: 13px;
     font-weight: bold;
 }
@@ -630,7 +630,7 @@ QPushButton[runnerAction="start"] {
     color: #e2e8f0;
     font-size: 20px;
     font-weight: bold;
-    border-radius: 12px;
+    border-radius: @RADIUS_LARGE@;
     border: none;
 }
 
@@ -643,7 +643,7 @@ QPushButton[runnerAction="stop"] {
     color: #e2e8f0;
     font-size: 20px;
     font-weight: bold;
-    border-radius: 12px;
+    border-radius: @RADIUS_LARGE@;
     border: none;
 }
 
@@ -656,7 +656,7 @@ QPushButton[runnerAction="emergency"] {
     color: #f87171;
     font-size: 18px;
     font-weight: bold;
-    border-radius: 12px;
+    border-radius: @RADIUS_LARGE@;
     border: 2px solid #f87171;
 }
 
@@ -667,7 +667,7 @@ QPushButton[runnerAction="emergency"]:pressed {
 /* === Runner View === */
 QWidget[runnerHeader="true"] {
     background-color: #0b0f14;
-    border-radius: 8px;
+    border-radius: @RADIUS_LARGE@;
 }
 
 /* === Persistent Run Banner (shown across Runner pages during a live run) === */
@@ -693,7 +693,7 @@ QPushButton[readinessRow="blocked"] {
     font-size: 15px;
     font-weight: bold;
     min-height: 60px;
-    border-radius: 10px;
+    border-radius: @RADIUS_MEDIUM@;
     border: none;
     text-align: left;
     padding-left: 16px;
@@ -711,7 +711,7 @@ QPushButton[readinessRow="ok"] {
     font-weight: bold;
     min-height: 32px;
     max-height: 32px;
-    border-radius: 8px;
+    border-radius: @RADIUS_MEDIUM@;
     border: 1px solid rgba(52, 211, 153, 0.3);
     text-align: left;
     padding-left: 16px;
@@ -723,7 +723,7 @@ QPushButton[readinessRow="ok"]:pressed {
 
 QWidget[runnerControls="true"] {
     background-color: #0b0f14;
-    border-radius: 12px;
+    border-radius: @RADIUS_LARGE@;
 }
 
 /* === Dynamic Property Selectors (touch sizes: +2px from desktop) === */
@@ -741,7 +741,7 @@ QPushButton[buttonRole="secondary"]:hover { background-color: #2a3440; }
 QPushButton[buttonRole="danger"] { background-color: rgba(248, 113, 113, 0.15); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.3); }
 
 /* Input value display */
-QLabel[inputValue="true"] { background-color: #151c25; border-radius: 4px; color: #34d399; padding: 4px 8px; }
+QLabel[inputValue="true"] { background-color: #151c25; border-radius: @RADIUS_MEDIUM@; color: #34d399; padding: 4px 8px; }
 
 /* Properties panel section headers */
 QLabel[class="props-section-header"] {
@@ -760,10 +760,10 @@ QFrame[class="props-divider"] {
 }
 
 /* Device card */
-QWidget[deviceCard="true"] { background-color: #0f1419; border: 2px solid #1e2530; border-radius: 12px; }
+QWidget[deviceCard="true"] { background-color: #0f1419; border: 2px solid #1e2530; border-radius: @RADIUS_LARGE@; }
 
 /* Status indicator (dynamic property version) */
-QLabel[statusIndicator="true"] { color: #e2e8f0; padding: 4px 12px; border-radius: 4px; font-weight: bold; margin: 2px; }
+QLabel[statusIndicator="true"] { color: #e2e8f0; padding: 4px 12px; border-radius: @RADIUS_MEDIUM@; font-weight: bold; margin: 2px; }
 
 /* Drag-and-drop target: the camera panel accepts pose models, behavior
    models and videos, routed by type. The accent border is the only

@@ -38,7 +38,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.gui.styles import STYLES_DIR, load_stylesheet, restyle
+from glider.gui.styles import load_stylesheet, restyle
 
 __all__ = [
     "Card",
@@ -132,21 +132,17 @@ def readable_text_on(background: str) -> str:
 
 
 def _tool_stylesheet() -> str:
-    """``desktop.qss`` with ``tools.qss`` layered over it, icon paths resolved.
+    """``desktop.qss`` with ``tools.qss`` layered over it.
 
     Later rules win in Qt style sheets, so the tool layer can quiet down
     desktop's accent-filled default button without either file knowing about
     the other.
 
-    ``@ICONS@`` in the QSS becomes the absolute path of ``styles/icons``. Qt
-    resolves ``url()`` relative to the *application's* working directory, not
-    the stylesheet, and it has no data-URI support -- so a token substituted at
-    load time is the only way to reference the arrow assets from a package that
-    may be installed anywhere. Posix separators because QSS ``url()`` rejects
-    Windows backslashes.
+    ``@ICONS@`` and the corner scale are resolved by ``load_stylesheet``, which
+    is now the only way a stylesheet is read - substituting in one place here
+    meant the same sheet loaded through ``ViewManager`` kept its tokens.
     """
-    sheet = load_stylesheet("desktop") + "\n" + load_stylesheet("tools")
-    return sheet.replace("@ICONS@", (STYLES_DIR / "icons").as_posix())
+    return load_stylesheet("desktop") + "\n" + load_stylesheet("tools")
 
 
 def apply_tool_theme(widget: QWidget) -> None:

@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.gui.styles import colors
+from glider.gui.styles import colors, radius
 
 if TYPE_CHECKING:
     from glider.core.experiment_session import ExperimentSession, Subject
@@ -243,7 +243,7 @@ class ExperimentDialog(QDialog):
             QFrame {{
                 background-color: {colors.with_alpha(colors.SUCCESS, 0.1)};
                 border: 1px solid {colors.with_alpha(colors.SUCCESS, 0.3)};
-                border-radius: 4px;
+                border-radius: {radius.SMALL}px;
                 padding: 4px;
             }}
         """)
