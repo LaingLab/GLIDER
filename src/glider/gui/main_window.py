@@ -1439,6 +1439,13 @@ class MainWindow(QMainWindow):
             )
         tools_menu.addAction(pose_batch_action)
 
+        multi_camera_action = QAction("&Multi-Camera Recording…", self)
+        multi_camera_action.setStatusTip(
+            "Preview, record and monitor every camera in the rig at once"
+        )
+        multi_camera_action.triggered.connect(self._open_multi_camera)
+        tools_menu.addAction(multi_camera_action)
+
         review_action = QAction("&Session Review…", self)
         review_action.setStatusTip(
             "Scrub an analyzed session, select a window, and read what is in it"
@@ -1522,6 +1529,29 @@ class MainWindow(QMainWindow):
         self._pose_batch_window.show()
         self._pose_batch_window.raise_()
         self._pose_batch_window.activateWindow()
+
+    def _open_multi_camera(self) -> None:
+        """Open (or re-surface) the Multi-Camera Recording window.
+
+        Same keep-on-self pattern as the other tool windows, so closing it and
+        reopening does not rebuild the grid or lose the status history. It is
+        given the core's manager and recorder rather than its own, so it shows
+        the same session the camera panel does rather than a second one.
+        """
+        from glider.gui.multi_camera.window import MultiCameraWindow
+
+        if getattr(self, "_multi_camera_window", None) is None:
+            self._multi_camera_window = MultiCameraWindow(
+                self._core.multi_camera_manager,
+                recorder=self._core.multi_video_recorder,
+                parent=None,
+            )
+        else:
+            # Cameras may have been added or removed since it was last open.
+            self._multi_camera_window.refresh_cameras()
+        self._multi_camera_window.show()
+        self._multi_camera_window.raise_()
+        self._multi_camera_window.activateWindow()
 
     def _open_session_review(self) -> None:
         """Open (or re-surface) the session review window.

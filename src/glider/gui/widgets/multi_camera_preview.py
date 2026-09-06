@@ -6,6 +6,7 @@ with visual indicators for the primary camera and recording status.
 """
 
 import logging
+import math
 
 import cv2
 import numpy as np
@@ -24,6 +25,27 @@ from PyQt6.QtWidgets import (
 from glider.gui.styles import colors
 
 logger = logging.getLogger(__name__)
+
+
+def grid_columns(count: int) -> int:
+    """Columns to lay *count* preview tiles out in.
+
+    Square-ish, biased wide: monitors are wider than they are tall, and a tall
+    grid shrinks every tile to fit the short axis. The small counts are spelled
+    out because ``ceil(sqrt())`` would render two cameras as a single column,
+    which reads as a mistake even though it tiles correctly.
+
+    Grows without bound rather than pinning at 3x3 as it used to - past nine
+    cameras the old layout left the extras out of the grid entirely, so they
+    recorded but never appeared.
+    """
+    if count <= 1:
+        return 1
+    if count <= 4:
+        return 2
+    if count <= 9:
+        return 3
+    return math.ceil(math.sqrt(count))
 
 
 class CameraPreviewTile(QFrame):
@@ -195,12 +217,10 @@ class MultiCameraPreviewWidget(QWidget):
     """
     Grid layout widget showing all connected cameras.
 
-    Layout adapts based on camera count:
-    - 1 camera: Single view
-    - 2 cameras: 1x2 horizontal
-    - 3-4 cameras: 2x2 grid
-    - 5-6 cameras: 2x3 grid
-    - 7+ cameras: 3x3 grid
+    Layout adapts based on camera count; see :func:`grid_columns`. It keeps
+    growing past nine, which the fixed 3x3 it replaced did not - the extra
+    tiles were built and fed frames but never placed, so a 16-camera rig
+    recorded sixteen files and showed nine.
 
     Thread Safety:
     - All methods must be called from the main Qt thread
@@ -339,17 +359,7 @@ class MultiCameraPreviewWidget(QWidget):
         if count == 0:
             return
 
-        # Determine grid dimensions
-        if count == 1:
-            cols, _rows = 1, 1
-        elif count == 2:
-            cols, _rows = 2, 1
-        elif count <= 4:
-            cols, _rows = 2, 2
-        elif count <= 6:
-            cols, _rows = 3, 2
-        else:
-            cols, _rows = 3, 3
+        cols = grid_columns(count)
 
         # Add tiles to grid
         camera_ids = list(self._tiles.keys())

@@ -12,7 +12,12 @@ from collections.abc import Callable
 
 import numpy as np
 
-from glider.vision.camera_manager import CameraInfo, CameraManager, CameraSettings
+from glider.vision.camera_manager import (
+    MAX_CAMERAS,
+    CameraInfo,
+    CameraManager,
+    CameraSettings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +85,7 @@ class MultiCameraManager:
         return self._camera_settings.get(camera_id)
 
     @staticmethod
-    def enumerate_all_cameras(max_cameras: int = 10) -> list[CameraInfo]:
+    def enumerate_all_cameras(max_cameras: int = MAX_CAMERAS) -> list[CameraInfo]:
         """
         Enumerate all available camera devices.
 
