@@ -41,6 +41,12 @@ logger = logging.getLogger(__name__)
 #: so an early gap must not stop the scan.
 MAX_CAMERAS = 16
 
+#: How many consecutive empty indices end a scan. Four steps over the gap an
+#: unplugged camera leaves without probing all sixteen slots on a machine that
+#: has one webcam -- which cost about a second of startup and printed fifteen
+#: OpenCV errors before this existed.
+_STOP_AFTER_MISSES = 4
+
 
 # Miniscope V4 hardware-safe value ranges. Validation lives at the public-API
 # boundary (CameraManager.set_led_power / set_ewl_focus and
@@ -1069,7 +1075,10 @@ class CameraManager:
         return self._current_fps
 
     @staticmethod
-    def enumerate_cameras(max_cameras: int = MAX_CAMERAS) -> list[CameraInfo]:
+    def enumerate_cameras(
+        max_cameras: int = MAX_CAMERAS,
+        stop_after_misses: int | None = _STOP_AFTER_MISSES,
+    ) -> list[CameraInfo]:
         """
         Enumerate all available camera devices.
 
@@ -1077,7 +1086,9 @@ class CameraManager:
         without trying to read frames. Format negotiation happens during connect.
 
         Args:
-            max_cameras: Maximum number of camera indices to check
+            max_cameras: Highest camera index to consider.
+            stop_after_misses: Give up after this many consecutive empty
+                indices. ``None`` probes every index up to *max_cameras*.
 
         Returns:
             List of available cameras
@@ -1105,7 +1116,17 @@ class CameraManager:
                     backends_to_try = [_get_camera_backend()]
 
                 for backend in backends_to_try:
+                    misses = 0
                     for i in range(max_cameras):
+                        # Probing an absent index is not free -- on macOS each
+                        # one costs tens of milliseconds and prints an OpenCV
+                        # error -- so stop once a run of them says we are past
+                        # the end. The run has to be long enough to step over a
+                        # gap left by an unplugged camera, which is why this is
+                        # not "stop at the first miss".
+                        if stop_after_misses is not None and misses >= stop_after_misses:
+                            break
+
                         # Skip if we already found this camera index
                         if i in found_indices:
                             continue
@@ -1114,6 +1135,10 @@ class CameraManager:
                             # Quick check - just see if camera opens
                             # Don't try to read frames here (too slow for problematic cameras)
                             cap = cv2.VideoCapture(i, backend)
+                            if not cap.isOpened():
+                                misses += 1
+                            else:
+                                misses = 0
                             if cap.isOpened():
                                 # Camera found - add it to the list
                                 # Use detected name if available, otherwise fallback

@@ -17,7 +17,7 @@ import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -48,6 +48,11 @@ _POLL_MS = 500
 class MultiCameraWindow(QMainWindow):
     """Preview, record and monitor every camera in the rig at once."""
 
+    #: Frames arrive on each camera's capture thread. Qt widgets may only be
+    #: touched from the GUI thread, so they cross on a signal rather than being
+    #: painted where they land - the same hop CameraPanel makes.
+    _frame_received = pyqtSignal(str, object)
+
     def __init__(
         self,
         multi_camera_manager: MultiCameraManager,
@@ -57,17 +62,20 @@ class MultiCameraWindow(QMainWindow):
         super().__init__(parent)
         self._manager = multi_camera_manager
         self._recorder = recorder
+        self._subscribed: set[str] = set()
 
         self.setWindowTitle("Multi-Camera Recording")
         self.resize(1400, 900)
         self._build_ui()
         apply_tool_theme(self)
 
+        self._frame_received.connect(self._show_frame)
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._poll_status)
         self._timer.start(_POLL_MS)
 
-        self.refresh_cameras()
+        self.connect_cameras()
 
     # ------------------------------------------------------------------
     # ui
@@ -144,14 +152,62 @@ class MultiCameraWindow(QMainWindow):
         self.status_table.set_cameras(ids)
         self._refresh_controls()
 
-    def on_frame(self, camera_id: str, frame: np.ndarray, timestamp: float = 0.0) -> None:
-        """Feed a frame to its tile. Unknown cameras are ignored.
+    def connect_cameras(self) -> None:
+        """Enumerate, register and start every camera, then show them.
 
-        Frames arrive on capture threads; the caller is responsible for
-        marshalling to the Qt thread, exactly as CameraPanel does.
+        The window cannot assume someone else has done this. It shares the
+        core's manager with CameraPanel, so the cameras may already be there -
+        in which case adding them again would stack a second frame callback on
+        each one - but nothing guarantees the panel has ever been opened.
         """
+        try:
+            existing = set(getattr(self._manager, "cameras", {}) or {})
+            if not existing:
+                self._add_enumerated_cameras()
+            for camera_id in self.camera_ids():
+                self._subscribe(camera_id)
+            self._manager.start_all_streaming()
+        except Exception:
+            logger.exception("MultiCameraWindow: could not connect cameras")
+        self.refresh_cameras()
+
+    def _add_enumerated_cameras(self) -> None:
+        """Register every camera the manager can see, with default settings."""
+        from glider.vision.camera_manager import CameraSettings
+
+        for info in self._manager.enumerate_all_cameras() or []:
+            index = getattr(info, "index", None)
+            if index is None:
+                continue
+            camera_id = self._manager.camera_id_from_index(index)
+            self._manager.add_camera(camera_id, CameraSettings(camera_index=index))
+
+    def _subscribe(self, camera_id: str) -> None:
+        """Register the frame callback once per camera."""
+        if camera_id in self._subscribed:
+            return
+        self._manager.on_frame(camera_id, self._on_camera_frame)
+        self._subscribed.add(camera_id)
+
+    def _on_camera_frame(self, camera_id: str, frame: np.ndarray, timestamp: float) -> None:
+        """Capture-thread entry point. Copies and hands off to the GUI thread.
+
+        The copy matters: the capture loop reuses its buffer, so painting the
+        original from another thread races the next grab.
+        """
+        try:
+            self._frame_received.emit(camera_id, frame.copy())
+        except Exception:
+            logger.exception("MultiCameraWindow: dropping a frame from %s", camera_id)
+
+    def _show_frame(self, camera_id: str, frame: np.ndarray) -> None:
+        """GUI-thread half of the hop. Unknown cameras are ignored."""
         if camera_id in self.preview._tiles:
             self.preview.update_frame(camera_id, frame)
+
+    def on_frame(self, camera_id: str, frame: np.ndarray, timestamp: float = 0.0) -> None:
+        """Push a frame in from outside, already on the GUI thread."""
+        self._show_frame(camera_id, frame)
 
     # ------------------------------------------------------------------
     # recording
