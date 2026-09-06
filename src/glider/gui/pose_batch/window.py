@@ -55,7 +55,7 @@ from glider.gui.widgets.tool_ui import (
     set_button_role,
     set_text_role,
 )
-from glider.vision.arena import DegenerateArenaError
+from glider.vision.arena import ArenaCalibration, DegenerateArenaError
 from glider.vision.calibration import CameraCalibration
 from glider.vision.calibration_set import CalibrationSet, CalibrationSetError
 from glider.vision.pose import batch as batch_core
@@ -178,6 +178,11 @@ class PoseBatchWindow(QMainWindow):
         self._worker = None
         self._meta_thread: QThread | None = None
         self._meta_worker: _MetaWorker | None = None
+        # The post-hoc re-gate runs on its own thread rather than borrowing the
+        # batch one: it is I/O over a handful of CSVs with no cancel, and the
+        # two would otherwise share a teardown that means different things.
+        self._regate_thread: QThread | None = None
+        self._regate_worker = None
 
         self._build_ui()
         self._refresh_videos()
@@ -239,6 +244,16 @@ class PoseBatchWindow(QMainWindow):
         self._cancel_button.setVisible(True)
         self._cancel_button.setEnabled(False)
         self._cancel_button.clicked.connect(self._cancel)
+
+        # Beside Run rather than in a menu: the cohort this exists for is
+        # already tracked, so for those 61 sessions this button *is* the action
+        # the window performs, and re-running inference to apply a gate would
+        # cost hours of GPU time for a result the CSVs already contain.
+        self._regate_button = QPushButton("Re-gate tracked CSVs")
+        set_button_role(self._regate_button, "ghost")
+        self._regate_button.setEnabled(False)
+        self._regate_button.clicked.connect(self._start_regate)
+        rail.card.add(self._regate_button)
 
         # Hidden until a batch starts: two empty bars sitting at zero read as
         # a run that has stalled rather than one that has not begun.
@@ -365,8 +380,10 @@ class PoseBatchWindow(QMainWindow):
         card = Card("Pixel-to-distance calibration", "required for every video")
         self._calibration_card = card
         card.setToolTip(
-            "Every video needs a scale before the batch can run. The DLC CSVs "
-            "stay in pixels; the scale is written to the master calibration file."
+            "Every video needs its floor perimeter drawn before the batch can "
+            "run; the arena carries the scale, so a measurement line is optional. "
+            "The DLC CSVs stay in pixels; the scale is written to the master "
+            "calibration file."
         )
 
         self._cal_table = CalibrationTable()
@@ -378,29 +395,45 @@ class PoseBatchWindow(QMainWindow):
         self._cal_table.setMinimumHeight(140)
         card.add(self._cal_table, 1)
 
-        calibrate = QPushButton("Calibrate…")
-        calibrate.setToolTip("Calibrate the selected video (or double-click its row)")
-        calibrate.clicked.connect(self._calibrate_selected)
+        # The arena leads this row: it is what Run requires, and it supplies the
+        # scale as a by-product. The line is the optional cross-check now.
         arena = QPushButton("Arena…")
+        set_button_role(arena, "primary")
         arena.setToolTip(
-            "Draw the floor perimeter of the selected video (or double-click its "
-            "Arena cell).\nGives a centre zone that means the same patch of floor "
-            "in every video, and a scale that accounts for perspective."
+            "Required. Draw the floor perimeter of the selected video (or "
+            "double-click its Arena cell).\nGives a centre zone that means the "
+            "same patch of floor in every video, and a scale that accounts for "
+            "perspective."
         )
         arena.clicked.connect(self._arena_selected)
+        calibrate = QPushButton("Calibrate…")
+        calibrate.setToolTip(
+            "Optional. Draw a measurement line on the selected video (or "
+            "double-click its row).\nThe arena already carries the scale; a line "
+            "is a second opinion, not a substitute."
+        )
+        calibrate.clicked.connect(self._calibrate_selected)
         copy_btn = QPushButton("Copy to Selected")
         copy_btn.setToolTip(
-            "Stamp one calibration onto the other selected videos — for videos "
-            "shot on the same rig at the same camera height."
+            "Stamp one measurement line onto the other selected videos — for "
+            "videos shot on the same rig at the same camera height."
         )
         copy_btn.clicked.connect(self._copy_calibration_to_selected)
+        copy_arena_btn = QPushButton("Copy Arena…")
+        copy_arena_btn.setToolTip(
+            "Stamp one video's floor perimeter onto the other selected videos.\n"
+            "The copies land unconfirmed: an arena that does not fit gives no "
+            "warning of its own, so open each one and check the outline before "
+            "the batch will run."
+        )
+        copy_arena_btn.clicked.connect(self._copy_arena_to_selected)
         clear_btn = QPushButton("Clear")
         set_button_role(clear_btn, "ghost")
         clear_btn.clicked.connect(self._clear_selected_calibrations)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
-        for button in (calibrate, arena, copy_btn, clear_btn):
+        for button in (arena, copy_arena_btn, calibrate, copy_btn, clear_btn):
             buttons.addWidget(button)
         buttons.addStretch(1)
         card.add(buttons)
@@ -669,7 +702,10 @@ class PoseBatchWindow(QMainWindow):
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 arena = dialog.calibration()
                 if arena is not None:
-                    self._calibrations.set_arena(video, arena)
+                    # Explicit, because this is the only thing that confirms a
+                    # copied arena: an operator has now seen the overlay sit on
+                    # this video's own floor, which residuals() cannot tell them.
+                    self._calibrations.set_arena(video, arena, confirmed=True)
                     self._zone_cm = dialog.zone_size_cm()
                     self._log.appendPlainText(
                         f"{video.name}: arena drawn, "
@@ -691,6 +727,21 @@ class PoseBatchWindow(QMainWindow):
             QMessageBox.information(self, "Arena", "Select a video in the calibration table first.")
             return
         self._open_arena(selected[0])
+
+    def _arena_map(self) -> dict[Path, ArenaCalibration]:
+        """Arenas for the batch, keyed the way run_batch resolves videos.
+
+        Only the listed videos: the set can also hold arenas from folders
+        visited earlier this session, and handing those over would key the gate
+        off files this run knows nothing about. Run is gated on every listed
+        video having a confirmed arena, so in practice this covers all of them.
+        """
+        arenas: dict[Path, ArenaCalibration] = {}
+        for video in self._videos:
+            arena = self._calibrations.get_arena(video)
+            if arena is not None:
+                arenas[Path(video).resolve()] = arena
+        return arenas
 
     def _zone_configs(self) -> dict[Path, ZoneConfiguration]:
         """Centre zones for the batch, keyed the way run_batch resolves videos.
@@ -806,14 +857,70 @@ class PoseBatchWindow(QMainWindow):
         self._cal_table.refresh()
         self._validate()
 
-    def _confirm_overwrite(self, source: Path, count: int) -> bool:
-        """Ask before replacing calibrations the operator drew themselves."""
+    def _copy_arena_to_selected(self) -> None:
+        """Stamp the first selected video's arena onto the rest of the selection.
+
+        The copies land unconfirmed, so Run stays blocked until each has been
+        opened and checked — see :func:`arena_actions.copy_arena_to` for why.
+
+        Asks before replacing an arena that is already there, the way
+        :meth:`_copy_calibration_to_selected` does. Selecting a whole cohort
+        and clicking Copy is one action with no undo, and what it would
+        otherwise destroy is exactly the per-video human judgement this window
+        now makes mandatory.
+        """
+        from glider.gui.pose_batch import arena_actions
+
+        selected = self._cal_table.selected_videos()
+        sources = [v for v in selected if self._calibrations.get_arena(v) is not None]
+        if not sources:
+            QMessageBox.information(
+                self,
+                "Copy Arena",
+                "Select one video with a drawn arena plus the videos to copy it to.",
+            )
+            return
+
+        source = sources[0]
+        targets = [v for v in selected if v != source]
+        already = {v for v in targets if self._calibrations.get_arena(v) is not None}
+
+        if already and not self._confirm_overwrite(source, len(already), noun="arena"):
+            # Declined: filling the blanks is what "copy to selected" is for,
+            # and it is the half of the job that cannot destroy anything.
+            targets = [v for v in targets if v not in already]
+
+        skipped = arena_actions.copy_arena_to(self._calibrations, source, targets)
+
+        copied = [v for v in targets if v not in skipped]
+        overwritten = sum(1 for v in copied if v in already)
+        self._log.appendPlainText(
+            f"Copied {source.name}'s arena: {len(copied) - overwritten} video(s) with no "
+            f"arena filled, {overwritten} existing arena(s) overwritten. Each copy is "
+            "marked unconfirmed: open it and check the outline sits on that video's floor."
+        )
+        if skipped:
+            names = ", ".join(v.name for v in skipped)
+            self._log.appendPlainText(
+                f"Not copied to {len(skipped)} video(s) that could not be opened to "
+                f"read their resolution: {names}"
+            )
+        self._cal_table.refresh()
+        self._validate()
+
+    def _confirm_overwrite(self, source: Path, count: int, *, noun: str = "calibration") -> bool:
+        """Ask before replacing work the operator drew themselves.
+
+        Shared by the line and arena copies rather than duplicated: the two
+        already drifted apart once, and the half without the prompt is the one
+        that destroys data.
+        """
         answer = QMessageBox.question(
             self,
-            "Overwrite Calibrations?",
-            f"{count} of the selected video(s) already have their own calibration.\n\n"
+            f"Overwrite {noun.capitalize()}s?",
+            f"{count} of the selected video(s) already have their own {noun}.\n\n"
             f"Overwrite them with {source.name}'s?\n"
-            "Choose No to fill only the uncalibrated videos.",
+            f"Choose No to fill only the videos with no {noun}.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -822,6 +929,7 @@ class PoseBatchWindow(QMainWindow):
     def _clear_selected_calibrations(self) -> None:
         for video in self._cal_table.selected_videos():
             self._calibrations.discard(video)
+            self._calibrations.discard_arena(video)
         self._cal_table.refresh()
         self._validate()
 
@@ -902,9 +1010,13 @@ class PoseBatchWindow(QMainWindow):
             QMessageBox.warning(self, "Calibration File", str(e))
             return
 
-        self._calibrations.entries.update(loaded.entries)
+        # Not a hand-rolled two-map update: the confirmed state is a third map
+        # that has to travel with the arenas, or a copied arena comes back
+        # confirmed after one save/reload cycle.
+        self._calibrations.merge(loaded)
         self._log.appendPlainText(
-            f"Loaded calibration for {len(loaded.entries)} video(s) from {path.name}."
+            f"Loaded calibration for {len(loaded.entries)} video(s) "
+            f"and {len(loaded.arenas)} arena(s) from {path.name}."
         )
         self._cal_table.refresh()
         self._validate()
@@ -1063,10 +1175,23 @@ class PoseBatchWindow(QMainWindow):
     # validation
     # ------------------------------------------------------------------
 
+    def _busy(self) -> bool:
+        """True while either pass owns the pose CSVs.
+
+        Both write the same primary files: ``run_batch`` writes the primary,
+        and the re-gate renames it to ``_ungated`` and rewrites it in place.
+        Overlapping them can capture a half-written primary as the permanent
+        "pristine original", and the re-gate has no cancel, so the window is
+        tens of seconds wide on a real cohort. Asking one question keeps the
+        Run gate and the button-disabling in ``_start_regate`` from drifting
+        apart the way they already did once.
+        """
+        return self._thread is not None or self._regate_thread is not None
+
     def _validate(self) -> None:
         """Disable Run — and say why — rather than failing an overnight batch."""
-        if self._thread is not None:
-            return  # a run is in flight; Run stays disabled
+        if self._busy():
+            return  # a run or a re-gate is in flight; Run stays disabled
 
         names = self._current_names()
         expected = getattr(self._meta, "n_keypoints", None)
@@ -1087,9 +1212,13 @@ class PoseBatchWindow(QMainWindow):
         elif not self._videos:
             problem = "Add at least one video or directory."
         else:
-            uncalibrated = self._calibrations.missing(self._videos)
-            if uncalibrated:
-                problem = f"{len(uncalibrated)} video(s) still need calibration."
+            # An arena, not just a line: only the perimeter can place a zone or
+            # gate a detection, and on this cohort the line ran systematically
+            # 2.34% high. A usable arena carries the scale by construction, so
+            # this replaces the old line check rather than adding to it.
+            no_arena = self._calibrations.missing_arenas(self._videos)
+            if no_arena:
+                problem = f"{len(no_arena)} video(s) still need an arena drawn."
 
         self._names_field.setStyleSheet(_INVALID_STYLE if names_bad else "")
         self._run_button.setEnabled(problem is None)
@@ -1099,11 +1228,36 @@ class PoseBatchWindow(QMainWindow):
         self._rail.set_blocker(problem or "")
 
         if self._videos:
-            missing = len(self._calibrations.missing(self._videos))
+            missing = len(self._calibrations.missing_arenas(self._videos))
             done = len(self._videos) - missing
-            self._calibration_card.set_badge(f"{done} / {len(self._videos)} calibrated")
+            self._calibration_card.set_badge(f"{done} / {len(self._videos)} arenas drawn")
         else:
             self._calibration_card.set_badge("")
+
+        self._validate_regate()
+
+    def _validate_regate(self) -> None:
+        """Re-gate needs arenas and existing tracks — not a model.
+
+        Deliberately not gated on ``problem``: this pass touches CSVs that are
+        already on disk, so demanding the weights that produced them would make
+        the button unavailable on exactly the archived cohort it is for.
+        """
+        from glider.gui.pose_batch.arena_actions import regatable
+
+        ready = (
+            not self._busy()
+            and bool(self._videos)
+            and not self._calibrations.missing_arenas(self._videos)
+            and bool(regatable(self._videos))
+        )
+        self._regate_button.setEnabled(ready)
+        self._regate_button.setToolTip(
+            "Apply the drawn arenas to the pose CSVs already beside these "
+            "videos. Originals are kept as _ungated.csv."
+            if ready
+            else "Needs a confirmed arena on every video and a pose CSV to re-gate."
+        )
 
     # ------------------------------------------------------------------
     # running
@@ -1120,7 +1274,10 @@ class PoseBatchWindow(QMainWindow):
         )
 
     def _start(self) -> None:
-        if self._thread is not None:
+        # Not just a run already in flight: a re-gate is rewriting the very
+        # CSVs this would write. Checked before the master file is written, so
+        # a click that cannot start also cannot touch the disk.
+        if self._busy():
             return
 
         # Written before inference begins — the calibration is complete and
@@ -1138,6 +1295,7 @@ class PoseBatchWindow(QMainWindow):
         device = self._device_combo.currentText()
 
         from glider.gui.pose_batch.worker import PoseBatchWorker
+        from glider.vision.arena_gate import ArenaGateSettings
 
         self._log.clear()
         self._log.appendPlainText(f"Starting {len(self._videos)} video(s)…")
@@ -1155,6 +1313,13 @@ class PoseBatchWindow(QMainWindow):
             overwrite=self._overwrite.isChecked(),
             filtering=self._filter_settings(),
             zones=self._zone_configs(),
+            arenas=self._arena_map(),
+            # Defaults, and no UI to tune them: gating is not optional here.
+            # Zones below are scored from the gated pose — centre time computed
+            # from bench-floor detections is meaningless — and the arena also
+            # re-ranks multi-detection frames during inference, which is the
+            # one part no post-hoc pass can recover.
+            gate=ArenaGateSettings(),
         )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
@@ -1166,6 +1331,7 @@ class PoseBatchWindow(QMainWindow):
         self._worker.failed.connect(self._on_failed)
 
         self._run_button.setEnabled(False)
+        self._regate_button.setEnabled(False)  # _validate returns early mid-run
         self._cancel_button.setEnabled(True)
         self._overall_bar.setVisible(True)
         self._video_bar.setVisible(True)
@@ -1221,6 +1387,73 @@ class PoseBatchWindow(QMainWindow):
         self._cancel_button.setEnabled(False)
         self._validate()
 
+    # ------------------------------------------------------------------
+    # post-hoc re-gating
+    # ------------------------------------------------------------------
+
+    def _start_regate(self) -> None:
+        from glider.gui.pose_batch.arena_actions import regatable
+        from glider.gui.pose_batch.regate_worker import RegateWorker
+
+        if self._busy():
+            return
+        videos = regatable(self._videos)
+        if not videos:
+            return
+
+        # Confirmed because it rewrites files the operator did not just make.
+        # Naming what survives is the point of the prompt: without the second
+        # sentence the honest answer to "can I undo this?" is not visible
+        # anywhere in the UI.
+        answer = QMessageBox.question(
+            self,
+            "Re-gate tracked CSVs",
+            f"Rewrite {len(videos)} pose CSV(s) in place?\n\n"
+            f"Originals are kept as _ungated.csv.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._log.appendPlainText(f"Re-gating {len(videos)} tracked CSV(s)…")
+        self._overall_bar.setRange(0, len(videos))
+        self._overall_bar.setValue(0)
+        self._overall_bar.setVisible(True)
+
+        self._regate_worker = RegateWorker(videos, self._calibrations)
+        self._regate_thread = QThread(self)
+        self._regate_worker.moveToThread(self._regate_thread)
+        self._regate_thread.started.connect(self._regate_worker.run)
+        self._regate_worker.progress.connect(self._on_progress)
+        self._regate_worker.log.connect(self._log.appendPlainText)
+        self._regate_worker.finished.connect(self._on_regate_finished)
+        self._regate_worker.failed.connect(self._on_regate_failed)
+
+        self._run_button.setEnabled(False)
+        self._regate_button.setEnabled(False)
+        self._rail.status.set_state("running", "Re-gating")
+        self._regate_thread.start()
+
+    def _on_regate_finished(self, gated: int, skipped: int) -> None:
+        self._overall_bar.setValue(self._overall_bar.maximum())
+        self._log.appendPlainText(f"Re-gated {gated}, skipped {skipped}.")
+        self._rail.status.set_state("warn" if skipped else "ok", "Done")
+        self._teardown_regate()
+
+    def _on_regate_failed(self, message: str) -> None:
+        self._rail.status.set_state("error", "Failed")
+        self._log.appendPlainText(f"Re-gate could not run: {message}")
+        QMessageBox.critical(self, "Re-gate tracked CSVs", message)
+        self._teardown_regate()
+
+    def _teardown_regate(self) -> None:
+        if self._regate_thread is not None:
+            self._regate_thread.quit()
+            self._regate_thread.wait(5000)
+            self._regate_thread.deleteLater()
+            self._regate_thread = None
+        self._regate_worker = None
+        self._validate()
+
     def closeEvent(self, event):
         """Never let a running batch outlive its window."""
         if self._thread is not None and self._worker is not None:
@@ -1229,5 +1462,12 @@ class PoseBatchWindow(QMainWindow):
             self._thread.wait(5000)
             self._thread = None
             self._worker = None
+        # No cancel to ask for: the re-gate has none, so the wait is the whole
+        # story. It finishes a CSV in the time a window takes to close.
+        if self._regate_thread is not None:
+            self._regate_thread.quit()
+            self._regate_thread.wait(5000)
+            self._regate_thread = None
+            self._regate_worker = None
         self._stop_meta_thread()
         super().closeEvent(event)

@@ -221,3 +221,35 @@ def test_backfill_refuses_a_nonsense_resolution(kpt_names, tmp_path, bad):
 
     assert dlc_io.backfill_resolution(out, bad) is False
     assert dlc_io.resolution_for_csv(out) == (640, 480)  # unchanged
+
+
+# --------------------------------------------------------------------------
+# Arena-gate provenance
+#
+# write_pose_meta builds a whitelist, so pose.metadata["arena_gate"] does not
+# ride along by itself. This block is provenance, not decoration: scoring
+# refuses to run when a gated CSV meets thresholds derived from ungated poses,
+# and this is what makes that check possible.
+# --------------------------------------------------------------------------
+
+
+def test_the_sidecar_carries_the_gate_block(tmp_path, synthetic_pose):
+    synthetic_pose.metadata["arena_gate"] = {
+        "frames_total": 100,
+        "frames_considered": 90,
+        "frames_blanked": 9,
+        "keypoints_masked": 4,
+        "gated": True,
+    }
+    csv = tmp_path / "s.csv"
+    dlc_io.to_dlc_csv(synthetic_pose, csv)
+
+    assert dlc_io.read_pose_meta(csv)["arena_gate"]["frames_blanked"] == 9
+
+
+def test_an_ungated_pose_writes_no_gate_block(tmp_path, synthetic_pose):
+    """Absent means ungated. Files from before this change keep their meaning."""
+    csv = tmp_path / "s.csv"
+    dlc_io.to_dlc_csv(synthetic_pose, csv)
+
+    assert "arena_gate" not in dlc_io.read_pose_meta(csv)

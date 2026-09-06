@@ -33,9 +33,17 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PX_PER_FRAME = "px/frame"
 CM_PER_S = "cm/s"
+
+#: Share of a session's tracked frames the arena gate may blank before pooling
+#: it earns a callout. The cohort percentile is derived from whatever survived
+#: the gate, so a session that lost a twentieth of its tracked frames has
+#: contributed a distribution that is not quite the one it was tracked with —
+#: worth naming, not worth refusing, because heavy blanking is sometimes
+#: exactly what the gate is for.
+_REJECT_WARN = 0.05
 
 __all__ = [
     "CM_PER_S",
@@ -62,6 +70,101 @@ def _optional_float(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _cohort_gate_block(block) -> dict:
+    """The part of a session's gate block a *cohort* can honestly carry.
+
+    ``arena_corners`` is deliberately dropped, and so are the per-video frame
+    counts. Corners are per-video: a cohort pools 31 sessions with 31 drawn
+    perimeters, so no single fingerprint could match them all, and a scoring
+    run that compared them would raise on every video. What survives is what
+    is true of the whole pool — the gate settings, and whether it was gated at
+    all.
+    """
+    block = block or {}
+    return {
+        "gated": bool(block.get("gated")),
+        "settings": dict(block.get("settings") or {}),
+    }
+
+
+def _blanked_fraction(block) -> float:
+    """Share of a session's *considered* frames its gate blanked.
+
+    Recomputed rather than read: ``GateReport.blanked_fraction`` is a property,
+    so ``asdict(report)`` never wrote it to the sidecar.
+    """
+    considered = block.get("frames_considered", 0)
+    return block.get("frames_blanked", 0) / considered if considered else 0.0
+
+
+def _pool_gate_provenance(paths) -> dict:
+    """The gate block for a pool, refusing one that mixes gates.
+
+    Up front, before a byte of CSV is read: this is arithmetic on sidecars and
+    the pooling it guards is minutes of work per cohort.
+
+    A half-gated pool is refused rather than described, because the cohort
+    block is one boolean. Whichever value it took, every session on the other
+    side would hard-raise at scoring time — and the operator would learn about
+    it one video at a time, after the pooling had already been paid for.
+
+    A pool gated under *different settings* is refused for the same reason and
+    with the same consequence: the block carries one settings dict, and the
+    settings are what decide how much of each track survived, so keeping either
+    one misdescribes the sessions gated under the other. The documented
+    escalation workflow — derive with defaults, read the report, re-gate the
+    known-bad sessions at ``min_detected_fraction=1.0`` — is exactly how a
+    folder comes to hold both.
+    """
+    from glider.vision.arena_gate import settings_from_block
+    from glider.vision.pose.dlc import read_pose_meta
+
+    blocks = [(p, (read_pose_meta(p) or {}).get("arena_gate") or {}) for p in paths]
+    gated = [p for p, b in blocks if b.get("gated")]
+    ungated = [p for p, b in blocks if not b.get("gated")]
+    if gated and ungated:
+        raise CohortSpeedError(
+            f"this pool is a mix of gated and ungated sessions "
+            f"({len(gated)} gated, {len(ungated)} not), and one set of cut-offs "
+            f"cannot describe both: gating lowers a session's speed "
+            f"distribution. Re-gate the whole cohort, or pool only one kind. "
+            f"First of each: {gated[0].name}, {ungated[0].name}"
+        )
+
+    # Keyed on the normalised settings, so a block that spells out the defaults
+    # and one that omits them are the same gate rather than two.
+    by_settings: dict[str, list[Path]] = {}
+    for path, block in blocks:
+        if block.get("gated"):
+            key = json.dumps(settings_from_block(block), sort_keys=True, default=str)
+            by_settings.setdefault(key, []).append(path)
+    if len(by_settings) > 1:
+        named = "; ".join(
+            f"{group[0].name} gated with {settings}"
+            for settings, group in list(by_settings.items())[:2]
+        )
+        raise CohortSpeedError(
+            f"this pool was gated under {len(by_settings)} different sets of gate "
+            f"settings, and the cohort file records one: whichever it kept, the "
+            f"sessions gated under the others would be scored against cut-offs "
+            f"derived from a distribution they are not part of. Re-gate the whole "
+            f"cohort the same way, or pool each set separately. First two: {named}"
+        )
+
+    for path, block in blocks:
+        share = _blanked_fraction(block)
+        if share > _REJECT_WARN:
+            logger.warning(
+                "%s: the arena gate blanked %.1f%% of its tracked frames, so the "
+                "cohort percentiles are derived from what survived",
+                path.name,
+                share * 100,
+            )
+    # Mixed pools are already refused, so the first gated block speaks for all
+    # of them.
+    return _cohort_gate_block(next((b for _, b in blocks if b.get("gated")), None))
 
 
 def video_for_pose_csv(pose_csv: Path | str) -> Path | None:
@@ -183,6 +286,13 @@ class CohortSpeedThresholds:
     # only logged because a log line is invisible from a GUI — the operator
     # sees a file in the wrong unit and no reason for it.
     n_uncalibrated: int = 0
+    # Which arena gate these were derived under. Gating removes out-of-arena
+    # detections, which lowers the speed distribution these percentiles are
+    # taken from, so a cut-off derived from ungated speed and applied to a
+    # gated track is wrong — and silently so. Scoring compares this against
+    # the CSV's own sidecar and refuses a mismatch. Default ungated, which is
+    # what every file written before the gate existed actually is.
+    gate_provenance: dict = field(default_factory=lambda: {"gated": False})
 
     @property
     def window(self) -> tuple[float | None, float | None] | None:
@@ -228,6 +338,9 @@ class CohortSpeedThresholds:
             "sources": list(self.sources),
             "start_s": self.start_s,
             "end_s": self.end_s,
+            # Trimmed on the way out as well as on the way in, so a corner list
+            # cannot reach the file by some other route.
+            "arena_gate": _cohort_gate_block(self.gate_provenance),
         }
 
     def save(self, path: Path | str) -> None:
@@ -248,10 +361,12 @@ class CohortSpeedThresholds:
     def from_dict(cls, data: dict) -> CohortSpeedThresholds:
         if not isinstance(data, dict):
             raise CohortSpeedError("not a cohort threshold file")
-        if data.get("schema_version") != SCHEMA_VERSION:
+        # v1 is still read: it predates the arena gate entirely, and its one
+        # missing field means exactly what its absence says.
+        if data.get("schema_version") not in (1, SCHEMA_VERSION):
             raise CohortSpeedError(
                 f"schema_version {data.get('schema_version')!r}; "
-                f"this build understands {SCHEMA_VERSION}"
+                f"this build understands 1 and {SCHEMA_VERSION}"
             )
         try:
             return cls(
@@ -269,6 +384,11 @@ class CohortSpeedThresholds:
                 start_s=_optional_float(data.get("start_s")),
                 end_s=_optional_float(data.get("end_s")),
                 n_uncalibrated=int(data.get("n_uncalibrated", 0)),
+                # Absent in v1, which is factually ungated: gating did not
+                # exist when those files were written. Reading it as anything
+                # else would defeat the scoring guard on exactly the stale
+                # files that motivate it.
+                gate_provenance=_cohort_gate_block(data.get("arena_gate")),
             )
         except (KeyError, TypeError, ValueError) as e:
             raise CohortSpeedError(f"malformed cohort threshold file: {e}") from e
@@ -335,6 +455,10 @@ def compute_cohort_thresholds(
     if float(freeze_pct) >= float(dart_pct):
         raise CohortSpeedError(f"freeze_pct ({freeze_pct}) must be below dart_pct ({dart_pct})")
 
+    # Sidecars only, before any CSV is opened: a pool that cannot be described
+    # by one gate flag must not cost minutes of reading to find that out.
+    gate_provenance = _pool_gate_provenance(paths)
+
     # Each session is read ONCE. The raw px/frame speeds are kept alongside the
     # scale that would convert them, so falling back to pixels is arithmetic
     # rather than a second pass over hundreds of megabytes of CSV.
@@ -399,4 +523,5 @@ def compute_cohort_thresholds(
         n_uncalibrated=len(uncalibrated),
         sources=[p.name for p in paths],
         created=datetime.now().isoformat(timespec="seconds"),
+        gate_provenance=gate_provenance,
     )

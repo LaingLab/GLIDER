@@ -77,6 +77,13 @@ def write_pose_meta(pose: PoseData, csv_path: str | Path) -> Path:
                 payload["resolution"] = [width, height]
         except (TypeError, ValueError):
             pass
+    # Provenance, not decoration: scoring refuses thresholds derived under a
+    # different gate, so this block is what makes that check possible. Absent
+    # means ungated, which is true of every file written before the gate
+    # existed. Optional and additive, so META_SCHEMA_VERSION does not move.
+    gate = pose.metadata.get("arena_gate") if pose.metadata else None
+    if gate:
+        payload["arena_gate"] = gate
     try:
         path.write_text(json.dumps(payload, indent=2) + "\n")
     except OSError as e:  # pragma: no cover - depends on filesystem state
@@ -180,6 +187,14 @@ def _build_dataframe(pose: PoseData) -> pd.DataFrame:
     df = pd.DataFrame(flat, columns=columns)
     # DLC convention: index has no name (so pd.to_csv emits exactly 3 header rows).
     return df
+
+
+#: Stem suffixes that share a pose CSV's "<stem>DLC_<model>" prefix but are not
+#: pose data to analyse. Lives here because two separate discovery paths need
+#: it and they drifted apart once already: find_pose_csv excluded _raw while
+#: the cohort collector did not, so every session was pooled twice and each
+#: animal's weight in the percentiles was silently halved.
+NOT_POSE_SUFFIXES = ("_raw", "_annotations", "_ungated")
 
 
 def to_dlc_csv(pose: PoseData, path: str | Path, *, write_meta: bool = True) -> Path:

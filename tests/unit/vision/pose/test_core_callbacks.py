@@ -7,47 +7,19 @@ what makes the injection work.
 
 from __future__ import annotations
 
-import sys
-import types
-
 import numpy as np
 import pytest
 
 from glider.vision.pose import core
 
+from .conftest import FakeResult
+
 NAMES = ["a", "b", "c"]
 
 
-class _FakeTensor:
-    """Minimal stand-in for a torch tensor: supports indexing, .cpu(), .numpy()."""
-
-    def __init__(self, array):
-        self._array = np.asarray(array)
-
-    def __getitem__(self, index):
-        return _FakeTensor(self._array[index])
-
-    @property
-    def shape(self):
-        return self._array.shape
-
-    def cpu(self):
-        return self
-
-    def numpy(self):
-        return self._array
-
-
-class _FakeKeypoints:
-    def __init__(self, n_kpts):
-        self.xy = _FakeTensor(np.zeros((1, n_kpts, 2)))
-        self.conf = _FakeTensor(np.ones((1, n_kpts)))
-
-
-class _FakeResult:
-    def __init__(self, n_kpts):
-        self.keypoints = _FakeKeypoints(n_kpts)
-        self.boxes = None
+def _detected_frame():
+    n_kpts = len(NAMES)
+    return FakeResult(np.zeros((1, n_kpts, 2)), keypoint_conf=np.ones((1, n_kpts)))
 
 
 class _FakeYOLO:
@@ -61,21 +33,14 @@ class _FakeYOLO:
 
     def predict(self, **kwargs):
         for _ in range(self.frames):
-            yield _FakeResult(len(NAMES))
+            yield _detected_frame()
 
 
 @pytest.fixture
-def stub_yolo(monkeypatch):
-    """Install a fake ultralytics module and neutralize device/fps probing."""
-    module = types.ModuleType("ultralytics")
-    module.YOLO = _FakeYOLO
-    monkeypatch.setitem(sys.modules, "ultralytics", module)
-    monkeypatch.setattr(core, "_video_fps", lambda path: 30.0)
-
-    import glider.vision.pose.device as device_mod
-
-    monkeypatch.setattr(device_mod, "resolve_device", lambda d, require_gpu=False: "cpu")
-    return module
+def stub_yolo(stub_ultralytics):
+    """The shared ultralytics stub, streaming five ordinary detected frames."""
+    stub_ultralytics.YOLO = _FakeYOLO
+    return stub_ultralytics
 
 
 def _run(tmp_path, **kwargs):
@@ -135,9 +100,9 @@ def test_undetected_frames_still_advance_progress(stub_yolo, tmp_path, monkeypat
 
     class _MixedYOLO(_FakeYOLO):
         def predict(self, **kwargs):
-            yield _FakeResult(len(NAMES))
+            yield _detected_frame()
             yield _EmptyResult()
-            yield _FakeResult(len(NAMES))
+            yield _detected_frame()
 
     stub_yolo.YOLO = _MixedYOLO
     seen: list[int] = []

@@ -226,8 +226,19 @@ def test_names_are_parsed_and_trimmed(window):
 # --------------------------------------------------------------------------
 
 
+# A real, non-degenerate perimeter — same corners used across the arena test
+# suite — so a confirmed homography can always be fit for it.
+_TRAPEZOID = [(0.28, 0.1), (0.72, 0.1), (0.76, 0.9), (0.24, 0.9)]
+
+
 def _calibrate_all(window):
-    """Give every discovered video a usable calibration."""
+    """Give every discovered video a usable calibration and a confirmed arena.
+
+    Run now requires a drawn arena (not just a line) per video, so a helper
+    claiming to put the window into an "otherwise runnable" state has to
+    supply both to keep meaning what its name says.
+    """
+    from glider.vision.arena import ArenaCalibration
     from glider.vision.calibration import CameraCalibration, LengthUnit
 
     for video in window._videos:
@@ -240,6 +251,9 @@ def _calibrate_all(window):
             resolution=(640, 480),
         )
         window._calibrations.set(video, cal)
+        window._calibrations.set_arena(
+            video, ArenaCalibration(corners=_TRAPEZOID, frame_size=(640, 480))
+        )
     window._cal_table.refresh()
     window._validate()
 
@@ -252,7 +266,8 @@ def test_run_blocked_until_every_video_is_calibrated(window, tmp_path):
     window._sources.add_paths([tmp_path])
     window._names_field.setText("a, b")
     assert window._run_button.isEnabled() is False
-    assert "need calibration" in window._run_button.toolTip()
+    # Run now gates on a drawn arena, not a line; see window.py's _validate().
+    assert "arena" in window._run_button.toolTip()
 
 
 def test_run_enabled_once_all_videos_are_calibrated(window, tmp_path):

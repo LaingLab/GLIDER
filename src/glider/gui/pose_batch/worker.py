@@ -42,6 +42,8 @@ class PoseBatchWorker(QObject):
         overwrite=False,
         filtering=None,
         zones=None,
+        arenas=None,
+        gate=None,
     ):
         super().__init__()
         self._videos = list(videos)
@@ -55,6 +57,12 @@ class PoseBatchWorker(QObject):
         # Centre zones per video, when arenas have been drawn. Scored from the
         # track as each video finishes, so no second pass over the video.
         self._zones = zones or {}
+        # Both halves of inference-time gating. ``arenas`` also re-ranks
+        # multi-detection frames inside infer_video, which no post-hoc pass can
+        # redo -- the losing candidate never reaches a file. Keyed by resolved
+        # video path, the way run_batch looks them up.
+        self._arenas = arenas or {}
+        self._gate = gate
         self._cancel = threading.Event()
         self._last_emit = 0.0
 
@@ -106,6 +114,8 @@ class PoseBatchWorker(QObject):
                 cancel_cb=self._cancel.is_set,
                 progress_cb=self._on_frame,
                 zones=self._zones,
+                arenas=self._arenas,
+                gate=self._gate,
             )
         except Exception as e:  # surface as a UI message, never crash the thread
             self.failed.emit(str(e))

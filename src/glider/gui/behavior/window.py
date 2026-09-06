@@ -2944,11 +2944,23 @@ def _unique_pose_csvs(folder: Path) -> list[Path]:
 
     Keyed on the file name, and the shallowest copy wins, because that is the
     one that lives beside its video.
+
+    Companions that share a pose CSV's stem are excluded, on the one list
+    ``find_pose_csv`` uses: ``_raw`` and ``_ungated`` are the same session's
+    pre-filter and pre-gate inference, and ``_annotations`` is a file of
+    behavior labels. Pooling ``_raw`` beside its primary is how 61 videos
+    reported 122 sessions — every animal counted twice, at half the weight it
+    should have had in the percentiles the whole cohort is then scored on.
     """
+    # Imported here, not at module scope: dlc pulls in pandas, and this module
+    # is imported while the main window builds its menus.
+    from glider.vision.pose.dlc import NOT_POSE_SUFFIXES
+
     seen: dict[str, Path] = {}
     for path in sorted(folder.rglob("*.csv"), key=lambda p: (len(p.relative_to(folder).parts), p)):
-        if "DLC_" in path.stem and path.name not in seen:
-            seen[path.name] = path
+        if "DLC_" in path.stem and not path.stem.endswith(NOT_POSE_SUFFIXES):
+            if path.name not in seen:
+                seen[path.name] = path
     return sorted(seen.values())
 
 

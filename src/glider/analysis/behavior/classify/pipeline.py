@@ -195,6 +195,11 @@ class LiveInferenceConfig:
     # biggest cost in an apply run is re-deriving poses that Batch Pose
     # Tracking already computed.
     pose_csv_in: Path | None = None
+    # Which arena gate the speed thresholds were derived under, when they came
+    # from a cohort file. Carried rather than acted on here: the run refuses a
+    # mismatch before this config is built, and the field exists so the block
+    # can travel with the resolved thresholds instead of being dropped.
+    gate_provenance: dict | None = None
 
 
 def _make_tracker(config, raw_queue, tracked_queue, display_queue, stop_event):

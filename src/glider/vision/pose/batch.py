@@ -17,12 +17,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from glider.vision.arena import ArenaCalibration
+    from glider.vision.arena_gate import ArenaGateSettings
     from glider.vision.pose.core import PoseData
     from glider.vision.zones import ZoneConfiguration
 
@@ -37,6 +39,11 @@ VIDEO_EXTS = frozenset({".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv", ".webm"}
 #: Qt file-dialog filter over :data:`VIDEO_EXTS`, so pickers can't drift from
 #: what discovery actually accepts.
 VIDEO_FILTER = "Video files (" + " ".join(f"*{e}" for e in sorted(VIDEO_EXTS)) + ");;All files (*)"
+
+#: Blanked share above which a video is called out rather than merely logged.
+#: On the cohort this was built for the bad sessions ran 3-34%, so a session
+#: past this is a tracking problem to look at, not a result to analyse.
+_GATE_WARN = 0.10
 
 __all__ = [
     "VIDEO_EXTS",
@@ -105,6 +112,39 @@ def _score_zones(video: Path, pose, zones, keypoint: str) -> str:
     return ""
 
 
+def _drop_stale_ungated(primary: Path) -> None:
+    """Remove an ``_ungated`` companion orphaned by the primary just written.
+
+    ``gate_pose_csv`` makes that file by renaming the primary it is about to
+    replace, and then always gates *it* rather than the primary, so that
+    re-gating with different settings cannot compound one gate on another. The
+    rule holds only while the companion is the original of the primary beside
+    it. A fresh inference run breaks that: the companion becomes the original of
+    a track no longer on disk, and the next post-hoc pass would gate it and
+    write the previous run's coordinates over this one.
+
+    Nothing the operator asked to keep is lost. The run this file belongs to is
+    the one being overwritten, and the pristine original of the *new* run is the
+    primary itself -- or its ``_raw`` companion when gating or filtering is on.
+
+    Never raises: by here the pose CSV is written and valid, which is the
+    artifact that matters, and a leftover companion is a warning rather than a
+    failed video. ``gate_pose_csv`` refuses one it cannot account for anyway.
+    """
+    from glider.vision.arena_gate import ungated_path
+    from glider.vision.pose.dlc import meta_path
+
+    stale = ungated_path(primary)
+    if not stale.exists():
+        return
+    for path in (stale, meta_path(stale)):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:  # pragma: no cover - depends on filesystem state
+            logger.warning("could not remove the superseded %s: %s", path.name, e)
+    logger.info("%s was re-tracked, so the superseded %s was removed", primary.name, stale.name)
+
+
 def _output_stem(video: Path, model: Path) -> str:
     """Shared stem, so the primary and raw names can never drift apart."""
     return f"{Path(video).stem}DLC_{Path(model).stem}"
@@ -117,14 +157,14 @@ def dlc_output_path(video: Path, model: Path) -> Path:
 
 
 def raw_output_path(video: Path, model: Path) -> Path:
-    """Unfiltered companion CSV. Written only when filtering is enabled."""
+    """Untouched companion CSV: what the model actually said.
+
+    Written whenever gating or filtering is enabled, since both discard data
+    and neither should be able to do so without a companion to compare
+    against. Never written when the primary is already the raw inference.
+    """
     video = Path(video)
     return video.parent / f"{_output_stem(video, model)}_raw.csv"
-
-
-# Stem suffixes that share the "<stem>DLC_<model>" prefix but are not pose
-# data. Anything a tool writes beside a pose CSV using its stem belongs here.
-_NOT_POSE_SUFFIXES = ("_raw", "_annotations")
 
 
 def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Path | None:
@@ -140,12 +180,14 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
         what the annotate and train paths have always expected.
     ``<stem>DLC_<model>.csv``
         What :func:`run_batch` writes. Companions that share this prefix but
-        are not pose data are skipped (see :data:`_NOT_POSE_SUFFIXES`):
-        ``_raw`` is the unsmoothed inference, never the one to analyze, and
-        ``_annotations`` is the annotator's behavior zones. The latter is
-        written *after* the pose CSV, so before it was excluded it won the
-        most-recent tie-break and every reader downstream — annotate, train,
-        apply — was handed a file of labels in place of keypoints.
+        are not pose data are skipped (see
+        :data:`~glider.vision.pose.dlc.NOT_POSE_SUFFIXES`): ``_raw`` is the
+        ungated, unsmoothed inference, never the one to analyze, ``_ungated``
+        is its post-hoc equivalent, and ``_annotations`` is the annotator's
+        behavior zones. The last is written *after* the pose CSV, so before it
+        was excluded it won the most-recent tie-break and every reader
+        downstream — annotate, train, apply — was handed a file of labels in
+        place of keypoints.
 
     The exact-stem form wins when both exist, so a file the operator placed
     deliberately is never shadowed by a batch run. When several models have
@@ -154,6 +196,10 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     quietly scoring a cohort with a superseded pose model. Naming the file
     explicitly is still the only way to be certain.
     """
+    # Imported here, not at module scope: dlc imports pandas, and this module
+    # stays cheap to import because the GUI does so while building menus.
+    from glider.vision.pose.dlc import NOT_POSE_SUFFIXES
+
     video = Path(video)
     directory = Path(search_dir) if search_dir is not None else video.parent
     if not directory.is_dir():
@@ -166,7 +212,7 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     matches = [
         p
         for p in sorted(directory.glob(f"{video.stem}DLC_*.csv"))
-        if not p.stem.endswith(_NOT_POSE_SUFFIXES)
+        if not p.stem.endswith(NOT_POSE_SUFFIXES)
     ]
     if not matches:
         return None
@@ -264,6 +310,8 @@ def run_batch(
     infer: Callable[..., PoseData] | None = None,
     zones: Mapping[Path, ZoneConfiguration] | None = None,
     zone_keypoint: str = "body_center",
+    arenas: Mapping[Path, ArenaCalibration] | None = None,
+    gate: ArenaGateSettings | None = None,
 ) -> BatchResult:
     """Run a pose model over ``videos``, writing a DLC CSV beside each one.
 
@@ -279,6 +327,11 @@ def run_batch(
         When given, the unfiltered result is written to the ``_raw`` path first
         and the smoothed result becomes the primary CSV — an unhappy filter
         setting can never destroy the inference run.
+    arenas, gate
+        Both are needed to gate: an arena for the video *and* gate settings.
+        Detections that left that arena are blanked before the primary CSV is
+        written and before zones are scored, and the ``_raw`` companion holds
+        the ungated inference. A video with no arena is untouched.
     infer
         Injection point for tests; defaults to
         :func:`glider.vision.pose.core.infer_video`.
@@ -331,7 +384,6 @@ def run_batch(
         if on_event is not None:
             on_event(BatchEvent(kind=kind, video=video, index=index, total=total, **kwargs))
 
-    zone_warning = ""
     for index, raw_video in enumerate(videos):
         video = Path(raw_video).resolve()
         primary = dlc_output_path(video, model_path)
@@ -347,7 +399,17 @@ def run_batch(
             break
 
         emit(EventKind.STARTED, video, index)
+        # Per video, not before the loop: a warning assigned only inside its
+        # own branch below would raise NameError on every clean video, and one
+        # carried over from the previous video would label this one with a
+        # problem it does not have.
+        zone_warning = ""
+        gate_warning = ""
         try:
+            # Resolved before inference, not after: the arena also re-ranks
+            # multi-detection frames inside infer_video, and a detection
+            # discarded there can never be recovered by the post-hoc gate.
+            arena = (arenas or {}).get(video)
             pose = infer(
                 model_path=str(model_path),
                 video_path=str(video),
@@ -359,11 +421,38 @@ def run_batch(
                 echo_device=False,
                 progress_cb=progress_cb,
                 cancel_cb=cancel_cb,
+                arena=arena,
+                gate_settings=gate,
             )
+            gating = gate is not None and arena is not None
+
+            # _raw is the "what did the model actually say" file, so it must be
+            # pre-gate as well as pre-filter — and it must exist whenever
+            # either is active, or gating discards data with no companion.
+            if gating or filtering is not None:
+                to_dlc_csv(pose, raw_output_path(video, model_path))
+
+            if gating:
+                from glider.vision.arena_gate import gate_to_arena
+
+                try:
+                    pose, report = gate_to_arena(pose, arena, settings=gate)
+                except ValueError as e:
+                    # DegenerateArenaError subclasses ValueError, so this
+                    # covers both. Mirrors _score_zones: by here the inference
+                    # is done and valid, and that is what matters.
+                    logger.warning("could not gate %s: %s", video.name, e)
+                else:
+                    pose.metadata["arena_gate"] = {**asdict(report), "gated": True}
+                    if report.blanked_fraction > _GATE_WARN:
+                        gate_warning = (
+                            f"gate blanked {report.blanked_fraction:.1%} of "
+                            f"{report.frames_considered} tracked frames"
+                        )
+
             if filtering is not None:
                 from glider.vision.pose.filtering import smooth
 
-                to_dlc_csv(pose, raw_output_path(video, model_path))
                 pose = smooth(
                     pose,
                     confidence_threshold=filtering.confidence_threshold,
@@ -373,6 +462,7 @@ def run_batch(
             # Written only after inference returns a complete PoseData, so a
             # cancelled or failed video never leaves a partial CSV behind.
             to_dlc_csv(pose, primary)
+            _drop_stale_ungated(primary)
             zone_warning = _score_zones(video, pose, zones, zone_keypoint)
         except PoseCancelledError:
             result.cancelled = True
@@ -384,6 +474,12 @@ def run_batch(
             continue
 
         result.completed.append(video)
-        emit(EventKind.WROTE, video, index, output=primary, message=zone_warning)
+        emit(
+            EventKind.WROTE,
+            video,
+            index,
+            output=primary,
+            message="; ".join(w for w in (zone_warning, gate_warning) if w),
+        )
 
     return result

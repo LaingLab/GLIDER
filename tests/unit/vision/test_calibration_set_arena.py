@@ -177,3 +177,109 @@ class TestMasterFile:
 
         with pytest.raises(CalibrationSetError, match="malformed"):
             CalibrationSet.load(path)
+
+
+def _set_with_arena(tmp_path, *, confirmed=True):
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"")
+    cal_set = CalibrationSet()
+    cal_set.set_arena(video, ArenaCalibration(corners=TRAPEZOID), confirmed=confirmed)
+    return cal_set, video
+
+
+class TestConfirmedState:
+    def test_a_drawn_arena_is_confirmed(self, tmp_path):
+        cal_set, video = _set_with_arena(tmp_path)
+        assert cal_set.is_arena_confirmed(video)
+
+    def test_an_unconfirmed_arena_counts_as_missing(self, tmp_path):
+        cal_set, video = _set_with_arena(tmp_path, confirmed=False)
+        assert cal_set.get_arena(video) is not None
+        assert cal_set.missing_arenas([video]) == [video]
+
+    def test_confirming_clears_it(self, tmp_path):
+        cal_set, video = _set_with_arena(tmp_path, confirmed=False)
+        cal_set.set_arena(video, cal_set.get_arena(video), confirmed=True)
+        assert cal_set.missing_arenas([video]) == []
+
+    def test_a_degenerate_arena_counts_as_missing(self, tmp_path):
+        video = tmp_path / "s1.mp4"
+        cal_set = CalibrationSet()
+        cal_set.set_arena(video, ArenaCalibration(corners=[(0.5, 0.5)] * 4))
+        assert cal_set.missing_arenas([video]) == [video]
+
+    def test_discarding_clears_the_unconfirmed_flag(self, tmp_path):
+        """A stale flag must not outlive the arena it described.
+
+        Written against a direct ``arenas`` write rather than ``set_arena``,
+        because that is the path that actually breaks: ``_load_master`` does
+        ``self._calibrations.arenas.update(loaded.arenas)``, bypassing
+        ``set_arena`` and its flag-clearing. Going through ``set_arena`` here
+        instead would clear the flag on its own and the test would pass even
+        with the cleanup removed from ``discard_arena``.
+        """
+        cal_set, video = _set_with_arena(tmp_path, confirmed=False)
+        cal_set.discard_arena(video)
+        cal_set.arenas.update({cal_set._key(video): ArenaCalibration(corners=TRAPEZOID)})
+        assert cal_set.is_arena_confirmed(video)
+
+    def test_subset_carries_confirmed_state(self, tmp_path):
+        cal_set, video = _set_with_arena(tmp_path, confirmed=False)
+        assert not cal_set.subset([video]).is_arena_confirmed(video)
+
+
+class TestMerge:
+    """One entry point so the three maps cannot be updated two at a time."""
+
+    def _other(self, tmp_path, video, *, confirmed):
+        other = CalibrationSet()
+        other.set_arena(video, ArenaCalibration(corners=TRAPEZOID), confirmed=confirmed)
+        return other
+
+    def test_an_unconfirmed_arena_arrives_unconfirmed(self, tmp_path):
+        cal_set = CalibrationSet()
+        video = tmp_path / "s1.mp4"
+        cal_set.merge(self._other(tmp_path, video, confirmed=False))
+        assert cal_set.get_arena(video) is not None
+        assert not cal_set.is_arena_confirmed(video)
+
+    def test_a_confirmed_arena_clears_a_stale_flag(self, tmp_path):
+        cal_set, video = _set_with_arena(tmp_path, confirmed=False)
+        cal_set.merge(self._other(tmp_path, video, confirmed=True))
+        assert cal_set.is_arena_confirmed(video)
+
+    def test_videos_the_other_set_never_names_are_untouched(self, tmp_path):
+        cal_set, mine = _set_with_arena(tmp_path, confirmed=False)
+        theirs = tmp_path / "s2.mp4"
+        cal_set.merge(self._other(tmp_path, theirs, confirmed=True))
+        assert not cal_set.is_arena_confirmed(mine)
+        assert cal_set.is_arena_confirmed(theirs)
+
+    def test_lines_come_across_too(self, tmp_path, line):
+        video = tmp_path / "s1.mp4"
+        other = CalibrationSet()
+        other.set(video, line)
+        cal_set = CalibrationSet()
+        cal_set.merge(other)
+        assert cal_set.get(video) is line
+
+
+def test_confirmed_arenas_write_no_extra_key(tmp_path):
+    """A normal file must stay byte-identical to what earlier builds wrote."""
+    cal_set, _ = _set_with_arena(tmp_path)
+    assert "arena_confirmed" not in cal_set.to_dict()["videos"][0]
+
+
+def test_unconfirmed_arenas_round_trip(tmp_path):
+    cal_set, video = _set_with_arena(tmp_path, confirmed=False)
+    master = tmp_path / "m.json"
+    cal_set.save(master)
+    assert not CalibrationSet.load(master, known_videos=[video]).is_arena_confirmed(video)
+
+
+def test_a_file_without_the_key_loads_as_confirmed(tmp_path):
+    """Every master file written before this change. Absent means drawn."""
+    cal_set, video = _set_with_arena(tmp_path)
+    master = tmp_path / "m.json"
+    cal_set.save(master)
+    assert CalibrationSet.load(master, known_videos=[video]).is_arena_confirmed(video)

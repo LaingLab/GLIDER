@@ -40,9 +40,13 @@ def _line(px_per_mm: float = 6.4) -> CameraCalibration:
     return cal
 
 
-def _with_arena(video, corners=TRAPEZOID) -> CalibrationSet:
+def _with_arena(video, corners=TRAPEZOID, *, confirmed: bool = True) -> CalibrationSet:
     cal_set = CalibrationSet()
-    cal_set.set_arena(video, ArenaCalibration(corners=corners, frame_size=(640, 480)))
+    cal_set.set_arena(
+        video,
+        ArenaCalibration(corners=corners, frame_size=(640, 480)),
+        confirmed=confirmed,
+    )
     return cal_set
 
 
@@ -87,6 +91,40 @@ class TestScaleSource:
         table.set_calibration_set(cal_set)
         table.set_videos([video])
         assert "6.400" not in table.item(0, 2).text()
+
+
+class TestStatusColumn:
+    """The status column answers "can this run", not "is there a scale".
+
+    A row reading "Calibrated" beside a disabled Run button sends the operator
+    hunting for a blocker the table refused to name.
+    """
+
+    @pytest.mark.parametrize(
+        "state, expected",
+        [
+            (None, "Needs arena"),
+            ("unconfirmed", "confirm it"),
+        ],
+    )
+    def test_status_column_reports_arena_state(self, table, video, state, expected):
+        cal_set = _with_arena(video, confirmed=False) if state else CalibrationSet()
+        table.set_calibration_set(cal_set)
+        table.set_videos([video])
+        assert expected in table.item(0, 4).text()
+
+    def test_a_confirmed_arena_still_reads_as_calibrated(self, table, video):
+        table.set_calibration_set(_with_arena(video))
+        table.set_videos([video])
+        assert "Calibrated" in table.item(0, 4).text()
+
+    def test_a_drawn_line_alone_does_not_read_as_calibrated(self, table, video):
+        """The line still supplies a scale, but Run will not accept it."""
+        cal_set = CalibrationSet()
+        cal_set.set(video, _line())
+        table.set_calibration_set(cal_set)
+        table.set_videos([video])
+        assert "Needs arena" in table.item(0, 4).text()
 
 
 class TestRequests:
