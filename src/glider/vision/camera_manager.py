@@ -32,6 +32,15 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+#: How many camera indices enumeration probes, and so the largest rig the UI
+#: can see. Sixteen covers the behaviour arrays this is built for.
+#:
+#: Not free: each index opens a device, and on Windows an absent index can take
+#: a noticeable moment to fail. That cost is why this is a fixed cap rather
+#: than "scan until nothing answers" - indices are not necessarily contiguous,
+#: so an early gap must not stop the scan.
+MAX_CAMERAS = 16
+
 
 # Miniscope V4 hardware-safe value ranges. Validation lives at the public-API
 # boundary (CameraManager.set_led_power / set_ewl_focus and
@@ -1060,7 +1069,7 @@ class CameraManager:
         return self._current_fps
 
     @staticmethod
-    def enumerate_cameras(max_cameras: int = 4) -> list[CameraInfo]:
+    def enumerate_cameras(max_cameras: int = MAX_CAMERAS) -> list[CameraInfo]:
         """
         Enumerate all available camera devices.
 

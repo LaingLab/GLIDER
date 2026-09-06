@@ -303,6 +303,25 @@ class MultiVideoRecorder:
         """The exception that caused a writer to abort, if any."""
         return self._writer_error
 
+    @property
+    def frames_dropped(self) -> dict[str, int]:
+        """Frames dropped so far, per camera.
+
+        A copy, so a caller polling this for a status display cannot reach in
+        and disturb the counters the writer threads are updating.
+
+        Readable during the run, not only from the summary logged at stop. On a
+        sixteen-camera rig one starved writer silently shortens one animal's
+        recording, and that is worth catching while the session can still be
+        restarted.
+        """
+        return dict(self._frames_dropped)
+
+    @property
+    def total_frames_dropped(self) -> int:
+        """Frames dropped across every camera."""
+        return sum(self._frames_dropped.values())
+
     def _on_frame(self, camera_id: str, frame: np.ndarray, timestamp: float) -> None:
         """
         Handle incoming frame for recording.
