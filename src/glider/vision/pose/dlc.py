@@ -257,10 +257,20 @@ def from_dlc_csv(path: str | Path, *, fps: float | None = None) -> PoseData:
         xy[:, i, 1] = df[(scorer, bp, "y")].to_numpy()
         cf[:, i] = df[(scorer, bp, "likelihood")].to_numpy()
 
+    # Carry the sidecar's frame size across. Without this a read/write
+    # round-trip writes a sidecar with no resolution, and downstream that is
+    # not an error -- it is a blank speed axis, because resolution is what
+    # converts px to cm and freezing/darting are never scored without it.
+    metadata: dict[str, Any] = {}
+    resolution = resolution_for_csv(path)
+    if resolution is not None:
+        metadata["resolution"] = list(resolution)
+
     return PoseData(
         xy=xy,
         confidence=cf,
         keypoint_names=bodyparts,
         fps=fps,
         source=scorer,
+        metadata=metadata,
     )

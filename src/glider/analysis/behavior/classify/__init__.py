@@ -796,6 +796,38 @@ def classify(
     return result
 
 
+def classify_session(session, model_path, yolo_path, keypoint_names, **opts) -> EthogramResult:
+    """Run :func:`classify` over a :class:`~glider.core.session.Session`.
+
+    The recording, the pose track and the output folder all come from one
+    object, so they cannot be pointed at three different sessions - and, more
+    to the point, the pose CSV cannot be named without its sidecar coming with
+    it. Passing them separately is how an ``exp-7`` CSV came to be scored
+    against metadata parked in another folder, which left eleven recordings
+    with no speed axis and nothing to say so.
+
+    Every :func:`classify` keyword still works and takes precedence, so this is
+    a shorter way to spell a correct call rather than a different pipeline.
+    """
+    video = session.video
+    if video is None:
+        raise FileNotFoundError(f"no recording found for session {session.session_id!r}")
+
+    opts.setdefault("output_dir", session.folder / "analysis")
+    # Only offer the existing pose track: naming one that is not there would
+    # fail the run, and a session that has not been tracked yet should simply
+    # be tracked as part of this one.
+    pose_csv = session.pose_csv
+    if pose_csv is not None:
+        opts.setdefault("pose_csv_in", pose_csv)
+        # The poses are already on disk; writing a second copy beside the
+        # outputs would leave two tracks for one session and no record of
+        # which produced the numbers.
+        opts.setdefault("write_pose_csv", False)
+
+    return classify(video, model_path, yolo_path, keypoint_names, **opts)
+
+
 def _frame_range(
     start_s: float | None, end_s: float | None, fps: float | None, name: str
 ) -> tuple[int, int] | None:
@@ -883,4 +915,5 @@ __all__ = [
     "EthogramResult",
     "ethogram_from_labels",
     "classify",
+    "classify_session",
 ]

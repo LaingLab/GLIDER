@@ -32,6 +32,7 @@ from glider.gui.multi_camera.status_table import CameraStatusTable
 from glider.gui.styles import colors
 from glider.gui.widgets.multi_camera_preview import MultiCameraPreviewWidget
 from glider.gui.widgets.tool_ui import Card, apply_tool_theme, hint, set_button_role
+from glider.vision.camera_manager import CameraSettings
 
 if TYPE_CHECKING:
     from glider.vision.multi_camera_manager import MultiCameraManager
@@ -57,11 +58,16 @@ class MultiCameraWindow(QMainWindow):
         self,
         multi_camera_manager: MultiCameraManager,
         recorder: MultiVideoRecorder | None = None,
+        base_settings: CameraSettings | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self._manager = multi_camera_manager
         self._recorder = recorder
+        # What the operator configured in the Settings dialog. Registering
+        # cameras on bare defaults would silently record 640x480 at 30 fps on a
+        # rig set up for something else, and a recording cannot be redone.
+        self._base_settings = base_settings or CameraSettings()
         self._subscribed: set[str] = set()
 
         self.setWindowTitle("Multi-Camera Recording")
@@ -172,15 +178,20 @@ class MultiCameraWindow(QMainWindow):
         self.refresh_cameras()
 
     def _add_enumerated_cameras(self) -> None:
-        """Register every camera the manager can see, with default settings."""
-        from glider.vision.camera_manager import CameraSettings
+        """Register every camera the manager can see, at the configured settings.
+
+        Each gets its own copy via ``replace``: the base settings object is
+        shared with the camera panel, so stamping an index onto it in place
+        would retarget that panel's camera too.
+        """
+        from dataclasses import replace
 
         for info in self._manager.enumerate_all_cameras() or []:
             index = getattr(info, "index", None)
             if index is None:
                 continue
             camera_id = self._manager.camera_id_from_index(index)
-            self._manager.add_camera(camera_id, CameraSettings(camera_index=index))
+            self._manager.add_camera(camera_id, replace(self._base_settings, camera_index=index))
 
     def _subscribe(self, camera_id: str) -> None:
         """Register the frame callback once per camera."""

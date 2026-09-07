@@ -1544,6 +1544,7 @@ class MainWindow(QMainWindow):
             self._multi_camera_window = MultiCameraWindow(
                 self._core.multi_camera_manager,
                 recorder=self._core.multi_video_recorder,
+                base_settings=self._core.camera_manager.settings,
                 parent=None,
             )
         else:
