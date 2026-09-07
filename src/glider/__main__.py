@@ -11,6 +11,7 @@ Usage:
     python -m glider --file path  # Open an experiment file
 """
 
+import os
 import sys
 
 # --- Windows torch / PyQt6 DLL load-order workaround ------------------------
@@ -25,7 +26,14 @@ import sys
 # order is still clean. Best-effort: torch is an optional dependency (absent on
 # minimal / Raspberry Pi installs), so any failure is swallowed and the vision
 # layer degrades exactly as it does today.
-if sys.platform == "win32":
+#
+# ``GLIDER_SKIP_TORCH_PRELOAD=1`` turns the preload off. It exists because the
+# trade runs both ways: torch also ships its own copies of libraries Qt links
+# against, so on some Windows environments loading it first is what breaks Qt
+# instead. If GLIDER will not start with a Qt DLL error, set that variable --
+# if it then starts, the preload was the cause and tracking, not the GUI, is
+# what needs the workaround.
+if sys.platform == "win32" and os.environ.get("GLIDER_SKIP_TORCH_PRELOAD") != "1":
     try:
         import torch  # noqa: F401  (imported for its DLL-load side effect)
     except Exception:
@@ -37,13 +45,33 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt
-
 if TYPE_CHECKING:
     from glider.core.glider_core import GliderCore
     from glider.gui.main_window import MainWindow
-from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import QApplication
+
+# Every Qt import together, and last, so a machine that cannot load Qt says so
+# once and usefully. A bare "DLL load failed while importing QtCore" is the
+# first thing a new install sees and gives nothing to act on; neither cause
+# below is guessable from the message Windows produces.
+try:
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QFont
+    from PyQt6.QtWidgets import QApplication
+except ImportError as e:  # pragma: no cover - depends on the machine's DLLs
+    raise ImportError(
+        f"{e}\n\n"
+        f"GLIDER could not load Qt. Two causes account for this in practice:\n\n"
+        f"  1. An untested Python. The release builds ship 3.12 and CI covers "
+        f"3.11, so 3.13 is allowed by pyproject.toml but exercised nowhere, and "
+        f"has been seen to resolve to PyQt6 wheels that do not load. This "
+        f"project pins 3.12 in .python-version -- delete .venv and re-run "
+        f"'uv venv' so that pin is honoured.\n\n"
+        f"  2. The Windows torch preload above. torch ships its own copies of "
+        f"libraries Qt links against, so loading it first can break Qt on some "
+        f"machines. Set GLIDER_SKIP_TORCH_PRELOAD=1 and try again; if GLIDER "
+        f"then starts, the preload was the cause.\n\n"
+        f"Running Python {sys.version.split()[0]} at {sys.executable}"
+    ) from e
 
 # Configure logging before importing GLIDER modules
 logging.basicConfig(

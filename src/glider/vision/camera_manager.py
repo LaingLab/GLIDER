@@ -1492,12 +1492,23 @@ class CameraManager:
             # First try direct read()
             for attempt in range(15):
                 try:
+                    # Time the read itself, not the retry sleep below. A healthy
+                    # camera returns a buffered frame in about a millisecond; one
+                    # whose exposure has run long blocks for the whole exposure,
+                    # and that difference is the only warning before it fails to
+                    # stream. Two cameras on an eight-camera rig blocked for
+                    # 1000 ms each here -- visible in the timestamps, but only if
+                    # you went looking, because nothing measured it.
+                    read_started = time.monotonic()
                     ret, frame = self._capture.read()
+                    read_ms = (time.monotonic() - read_started) * 1000.0
                     if ret and frame is not None and frame.size > 0:
                         success_count += 1
                         logger.info(
-                            f"Frame {success_count} via read(): shape={frame.shape}, dtype={frame.dtype}"
+                            f"Frame {success_count} via read(): shape={frame.shape}, "
+                            f"dtype={frame.dtype}, took {read_ms:.0f} ms"
                         )
+                        self._warn_if_slow(read_ms)
                         if success_count >= 2:
                             logger.info(
                                 f"Grayscale camera connected via {backend_name}: "
@@ -2255,6 +2266,33 @@ class CameraManager:
             self._running = False
         logger.debug("Capture loop ended")
 
+    #: A read slower than this is reported. Generous on purpose: the first
+    #: frame after opening a device is legitimately slow, so the threshold is
+    #: set where a camera can no longer keep up with any usable frame rate
+    #: rather than where it is merely sluggish.
+    _SLOW_READ_MS = 250.0
+
+    def _warn_if_slow(self, read_ms: float) -> None:
+        """Say so when a camera delivers frames far slower than it was asked to.
+
+        A camera that blocks for a second per frame opens cleanly, reports the
+        right resolution and format, and then simply fails to stream -- which
+        surfaces as "failed to retrieve frame" with nothing connecting it to
+        the cause. The usual reason is exposure: auto-exposure in a dark arena
+        runs the exposure time out to a second, and the frame rate is then its
+        reciprocal. Naming that here turns a hardware mystery into a setting.
+        """
+        if read_ms < self._SLOW_READ_MS:
+            return
+        implied_fps = 1000.0 / read_ms if read_ms > 0 else 0.0
+        logger.warning(
+            f"Camera {self._settings.camera_index}: a frame took {read_ms:.0f} ms to "
+            f"arrive (about {implied_fps:.1f} fps against the {self._settings.fps} fps "
+            f"requested). The camera is delivering frames this slowly, so streaming "
+            f"will stall. Check its exposure -- auto-exposure in a dark arena runs out "
+            f"to a full second, and the frame rate follows it."
+        )
+
     def _capture_loop_inner(self) -> None:
         """Inner capture loop - separated so top-level exceptions are always caught."""
         consecutive_failures = 0
@@ -2280,7 +2318,10 @@ class CameraManager:
                         consecutive_failures == 1
                         or consecutive_failures % max_failures_before_log == 0
                     ):
-                        logger.warning(f"picamera2 capture failed: {e}")
+                        logger.warning(
+                            f"Camera {self._settings.camera_index}: picamera2 capture "
+                            f"failed: {e}"
+                        )
                     time.sleep(0.01)
                     continue
             # Handle OpenCV capture
@@ -2292,7 +2333,10 @@ class CameraManager:
                         consecutive_failures == 1
                         or consecutive_failures % max_failures_before_log == 0
                     ):
-                        logger.warning(f"Failed to grab frame (attempt {consecutive_failures})")
+                        logger.warning(
+                            f"Camera {self._settings.camera_index}: failed to grab "
+                            f"frame (attempt {consecutive_failures})"
+                        )
                     time.sleep(0.01)
                     continue
 
@@ -2303,7 +2347,10 @@ class CameraManager:
                         consecutive_failures == 1
                         or consecutive_failures % max_failures_before_log == 0
                     ):
-                        logger.warning(f"Failed to retrieve frame (attempt {consecutive_failures})")
+                        logger.warning(
+                            f"Camera {self._settings.camera_index}: failed to retrieve "
+                            f"frame (attempt {consecutive_failures})"
+                        )
                     time.sleep(0.01)
                     continue
             else:
