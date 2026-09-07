@@ -13,6 +13,7 @@ re-surfaced rather than rebuilt, so state survives closing it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QPushButton,
     QSplitter,
@@ -45,6 +47,11 @@ logger = logging.getLogger(__name__)
 #: updates never compete with the capture threads for the GIL.
 _POLL_MS = 500
 
+#: Prefix for a run started from this window rather than from an experiment.
+#: Files are "<name>_<timestamp>[_camN].mp4", so the timestamp already makes
+#: them unique -- the name is what makes them findable a month later.
+DEFAULT_EXPERIMENT_NAME = "multicam"
+
 
 class MultiCameraWindow(QMainWindow):
     """Preview, record and monitor every camera in the rig at once."""
@@ -59,6 +66,7 @@ class MultiCameraWindow(QMainWindow):
         multi_camera_manager: MultiCameraManager,
         recorder: MultiVideoRecorder | None = None,
         base_settings: CameraSettings | None = None,
+        experiment_name: str = DEFAULT_EXPERIMENT_NAME,
         parent=None,
     ):
         super().__init__(parent)
@@ -68,6 +76,7 @@ class MultiCameraWindow(QMainWindow):
         # cameras on bare defaults would silently record 640x480 at 30 fps on a
         # rig set up for something else, and a recording cannot be redone.
         self._base_settings = base_settings or CameraSettings()
+        self._default_experiment_name = experiment_name or DEFAULT_EXPERIMENT_NAME
         self._subscribed: set[str] = set()
 
         self.setWindowTitle("Multi-Camera Recording")
@@ -93,6 +102,15 @@ class MultiCameraWindow(QMainWindow):
         layout = QVBoxLayout(central)
 
         controls = QHBoxLayout()
+        # Eight files land per run. Without a name they are distinguishable
+        # only by timestamp, which is not what anyone remembers a session by.
+        controls.addWidget(QLabel("Name"))
+        self.name_edit = QLineEdit(self._default_experiment_name)
+        self.name_edit.setPlaceholderText(DEFAULT_EXPERIMENT_NAME)
+        self.name_edit.setToolTip("Prefix for every file this run writes")
+        self.name_edit.setMaximumWidth(220)
+        controls.addWidget(self.name_edit)
+
         self.record_button = QPushButton("Record All")
         self.record_button.setToolTip("Start recording on every connected camera")
         self.record_button.clicked.connect(self.start_recording)
@@ -228,22 +246,64 @@ class MultiCameraWindow(QMainWindow):
     def is_recording(self) -> bool:
         return bool(self._recorder is not None and getattr(self._recorder, "is_recording", False))
 
+    @property
+    def _experiment_name(self) -> str:
+        """What this run's files are named after.
+
+        Falls back to the default when the field is blank rather than
+        writing files that begin with an underscore.
+        """
+        typed = self.name_edit.text().strip() if hasattr(self, "name_edit") else ""
+        return typed or self._default_experiment_name or DEFAULT_EXPERIMENT_NAME
+
     def start_recording(self) -> None:
         if self._recorder is None or not self.camera_ids():
             return
-        try:
-            self._recorder.start_recording()
-        except Exception:
-            logger.exception("MultiCameraWindow: could not start recording")
-        self._refresh_controls()
+        self._schedule(
+            self._recorder.start(self._experiment_name),
+            "could not start recording",
+        )
 
     def stop_recording(self) -> None:
         if self._recorder is None:
             return
+        self._schedule(self._recorder.stop(), "could not stop recording")
+
+    def _schedule(self, coro, description: str) -> None:
+        """Run one of the recorder's coroutines on the Qt event loop.
+
+        ``MultiVideoRecorder.start`` / ``stop`` are async -- they open and
+        drain a writer thread per camera, which must not block the GUI thread
+        while eight files are finalised. qasync runs the asyncio loop on the Qt
+        main thread, so the completion callback is already where it needs to be
+        to touch widgets.
+        """
         try:
-            self._recorder.stop_recording()
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop: headless, or a unit test driving the window
+            # directly. Close the coroutine so it does not warn about never
+            # being awaited, and leave the controls describing reality.
+            coro.close()
+            logger.debug("MultiCameraWindow: %s - no running event loop", description)
+            self._refresh_controls()
+            return
+        task = loop.create_task(coro)
+        task.add_done_callback(lambda finished: self._recorder_task_done(finished, description))
+
+    def _recorder_task_done(self, task, description: str) -> None:
+        """Report what the scheduled recorder call did, and resync the buttons.
+
+        A bare ``create_task`` swallows the exception, which would leave Record
+        greyed out and Stop enabled with nothing recording -- the window saying
+        a run is in flight that never started.
+        """
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
         except Exception:
-            logger.exception("MultiCameraWindow: could not stop recording")
+            logger.exception("MultiCameraWindow: %s", description)
         self._refresh_controls()
 
     def _refresh_controls(self) -> None:

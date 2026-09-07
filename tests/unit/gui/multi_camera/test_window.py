@@ -12,7 +12,9 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from glider.gui.multi_camera.window import MultiCameraWindow
+from glider.gui.multi_camera.window import DEFAULT_EXPERIMENT_NAME, MultiCameraWindow
+from glider.vision.multi_camera_manager import MultiCameraManager
+from glider.vision.multi_video_recorder import MultiVideoRecorder
 
 
 def _manager(count: int = 4, *, available: int = 0):
@@ -25,7 +27,7 @@ def _manager(count: int = 4, *, available: int = 0):
     ``available`` is how many enumeration reports, for the case where the
     window has to register them itself.
     """
-    manager = MagicMock()
+    manager = MagicMock(spec=MultiCameraManager)
     ids = [f"cam_{i}" for i in range(count)]
     manager.cameras = {i: MagicMock() for i in ids}
     manager.camera_count = count
@@ -46,11 +48,17 @@ def _manager(count: int = 4, *, available: int = 0):
 def _recorder():
     """A MultiVideoRecorder stand-in that is idle.
 
-    is_recording has to be set explicitly: a bare MagicMock attribute is
-    truthy, which would leave the window correctly believing a run is already
-    in flight and disabling Record.
+    ``spec=`` is load-bearing, not tidiness. A bare MagicMock answers to any
+    attribute, so this file once asserted ``recorder.start_recording.called``
+    and passed for months against a method MultiVideoRecorder does not have.
+    The window shipped, and the first person to press Record on real hardware
+    got an AttributeError. With a spec, calling something the real class does
+    not define fails here instead.
+
+    is_recording is set explicitly because a bare mock attribute is truthy,
+    which would leave the window believing a run is already in flight.
     """
-    rec = MagicMock()
+    rec = MagicMock(spec=MultiVideoRecorder)
     rec.is_recording = False
     rec.frames_dropped = {}
     return rec
@@ -84,15 +92,28 @@ class TestLayout:
 
 
 class TestRecording:
-    def test_record_starts_every_camera(self, window):
+    def test_record_calls_the_recorder_the_real_class_exposes(self, window):
+        # MultiVideoRecorder's API is `start(name)`, not `start_recording()`.
+        # The spec'd mock is what makes this assertion mean anything.
         window.record_button.click()
-        assert window._recorder.start_recording.called
+        assert window._recorder.start.called
+
+    def test_it_names_the_run(self, window):
+        window.name_edit.setText("trh day 2")
+        window.record_button.click()
+        assert window._recorder.start.call_args.args[0] == "trh day 2"
+
+    def test_a_blank_name_falls_back_to_the_default(self, window):
+        # Otherwise every file in the run begins with an underscore.
+        window.name_edit.setText("   ")
+        window.record_button.click()
+        assert window._recorder.start.call_args.args[0] == DEFAULT_EXPERIMENT_NAME
 
     def test_stop_stops_recording(self, window):
         window._recorder.is_recording = True
         window._refresh_controls()
         window.stop_button.click()
-        assert window._recorder.stop_recording.called
+        assert window._recorder.stop.called
 
     def test_stop_is_disabled_until_recording(self, window):
         window._recorder.is_recording = False
