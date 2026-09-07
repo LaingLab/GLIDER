@@ -43,7 +43,11 @@ run on Windows, macOS, and Linux.
    - macOS: `brew install ffmpeg`
    - Linux/Raspberry Pi: `sudo apt install ffmpeg`
 
-> GLIDER requires Python 3.11–3.13 (3.14+ is not supported).
+> GLIDER requires Python 3.11–3.13 (3.14+ is not supported). **3.12 is the
+> version to use**: it is what the release builds ship, and `.python-version`
+> pins it so `uv venv` picks it for you. Without that pin `uv` takes the newest
+> interpreter on the machine, and a fresh install on 3.13 has been seen to fail
+> at startup with `DLL load failed while importing QtCore` on Windows.
 
 ## Quick start
 
