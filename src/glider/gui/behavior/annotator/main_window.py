@@ -64,7 +64,7 @@ from glider.gui.behavior.annotator.sampler import ProposedClip
 from glider.gui.behavior.annotator.speed_source import SpeedCache, load_session_speed
 from glider.gui.behavior.annotator.speed_trace import SpeedTrace
 from glider.gui.behavior.annotator.trim_bar import TrimBar, compute_window
-from glider.gui.styles import colors
+from glider.gui.styles import colors, radius
 from glider.gui.widgets.tool_ui import apply_tool_theme, readable_text_on
 
 if TYPE_CHECKING:
@@ -81,6 +81,11 @@ RESERVED_LABELS: tuple[str, ...] = (MULTI_BEHAVIOR, UNCLEAR)
 # trim editor's seekable window. Behaviors often start/end just outside
 # the short proposed clip, so the labeler needs reach into the context.
 TRIM_PAD_SECONDS = 1.0
+
+#: Side of the vocabulary colour dot, in pixels. Named so its corner radius can
+#: be derived from it rather than written out halved beside it, which is how a
+#: dot ends up an oval when someone resizes it.
+_DOT_SIDE = 10
 
 
 def _next_free_hotkey(vocab: Vocabulary) -> str:
@@ -304,7 +309,7 @@ class AnnotatorWindow(QMainWindow):
         label_card.setObjectName("LabelCard")
         label_card.setStyleSheet(
             f"QFrame#LabelCard {{ background: {colors.SURFACE_1}; "
-            f"border: 1px solid {colors.BORDER}; border-radius: 10px; }}"
+            f"border: 1px solid {colors.BORDER}; border-radius: {radius.MEDIUM}px; }}"
         )
         lcv = QVBoxLayout(label_card)
         lcv.setContentsMargins(16, 14, 16, 14)
@@ -429,7 +434,7 @@ class AnnotatorWindow(QMainWindow):
         sidebar.setObjectName("Sidebar")  # qualified -- see LabelCard above
         sidebar.setStyleSheet(
             f"QFrame#Sidebar {{ background: {colors.SURFACE_1}; "
-            f"border: 1px solid {colors.BORDER}; border-radius: 10px; }}"
+            f"border: 1px solid {colors.BORDER}; border-radius: {radius.MEDIUM}px; }}"
         )
         v = QVBoxLayout(sidebar)
         v.setContentsMargins(14, 12, 14, 12)
@@ -1344,14 +1349,14 @@ class _VocabRow(QFrame):
         self.setObjectName("VocabRow")  # qualified -- see LabelCard
         self.setStyleSheet(
             f"QFrame#VocabRow {{ background: {colors.BASE}; "
-            f"border: 1px solid {colors.BORDER}; border-radius: 6px; }}"
+            f"border: 1px solid {colors.BORDER}; border-radius: {radius.MEDIUM}px; }}"
         )
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 4, 4)
         layout.setSpacing(8)
         dot = QLabel()
-        dot.setFixedSize(10, 10)
-        dot.setStyleSheet(f"background: {color}; border-radius: 5px;")
+        dot.setFixedSize(_DOT_SIDE, _DOT_SIDE)
+        dot.setStyleSheet(f"background: {color}; border-radius: {radius.pill(_DOT_SIDE)}px;")
         layout.addWidget(dot)
         name_label = QLabel(name)
         name_label.setStyleSheet(f"font-weight: 500; color: {colors.TEXT_SECONDARY};")
@@ -1361,7 +1366,7 @@ class _VocabRow(QFrame):
         kbd.setStyleSheet(
             f"color: {colors.TEXT_TERTIARY}; font-family: SF Mono, monospace; "
             f"font-size: 11px; background: {colors.CHROME}; "
-            f"border: 1px solid {colors.BORDER}; border-radius: 4px; padding: 0 5px;"
+            f"border: 1px solid {colors.BORDER}; border-radius: {radius.SMALL}px; padding: 0 5px;"
         )
         layout.addWidget(kbd)
         count_label = QLabel(str(count))
@@ -1398,10 +1403,11 @@ CHIP_ID = "Chip"
 
 # A real radius, not a 999px sentinel. Qt does not clamp an oversized
 # border-radius, it ignores the declaration outright -- so with the theme
-# applied the pills came back as square-cornered rectangles. 14px is past half
-# a chip's ~29px height, which is a full pill, and degrades to a rounded
-# rectangle rather than to nothing if the chip ever gets taller.
-CHIP_RADIUS = 14
+# applied the pills came back as square-cornered rectangles. Half the chip's
+# height is a full pill, and degrades to a rounded rectangle rather than to
+# nothing if the chip ever gets taller.
+CHIP_HEIGHT = 29
+CHIP_RADIUS = radius.pill(CHIP_HEIGHT)
 
 
 def _chip_css(color: str) -> str:

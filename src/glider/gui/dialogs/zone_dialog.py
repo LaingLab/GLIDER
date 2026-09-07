@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from glider.gui.styles import colors
+from glider.gui.styles import colors, radius
 from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape, draw_zones
 
 if TYPE_CHECKING:
@@ -74,7 +74,7 @@ class ZonePreviewWidget(QLabel):
             QLabel {{
                 background-color: {colors.CANVAS};
                 border: 2px solid {colors.BORDER};
-                border-radius: 4px;
+                border-radius: {radius.SMALL}px;
             }}
         """)
         self.setMouseTracking(True)

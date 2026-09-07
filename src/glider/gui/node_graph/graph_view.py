@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.gui.styles import colors
+from glider.gui.styles import colors, radius
 
 if TYPE_CHECKING:
     from glider.core.flow_engine import FlowEngine
@@ -149,7 +149,7 @@ class _GraphOverlayControls(QWidget):
                 background-color: {colors.SURFACE_1};
                 color: {colors.TEXT_PRIMARY};
                 border: 1px solid {colors.BORDER};
-                border-radius: 4px;
+                border-radius: {radius.SMALL}px;
                 font-size: 16px;
                 font-weight: bold;
                 padding: 0;

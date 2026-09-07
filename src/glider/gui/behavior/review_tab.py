@@ -46,7 +46,7 @@ from PyQt6.QtWidgets import (
 
 from glider.analysis.behavior.run_report import RunReportError, TrainingRun
 from glider.gui.behavior.embedding_view import EmbeddingView
-from glider.gui.styles import colors
+from glider.gui.styles import colors, radius
 from glider.gui.widgets.tool_ui import (
     CARD_GAP,
     GUTTER,
@@ -175,7 +175,7 @@ def _advice_row(message: str) -> QWidget:
     holder.setStyleSheet(
         f"QFrame#Advice {{ background: {colors.with_alpha(colors.WARNING, 0.07)}; "
         f"border: 1px solid {colors.with_alpha(colors.WARNING, 0.28)}; "
-        "border-radius: 7px; }"
+        "border-radius: {radius.MEDIUM}px; }"
     )
     row = QHBoxLayout(holder)
     row.setContentsMargins(12, 9, 12, 9)
@@ -218,7 +218,7 @@ class Verdict(QFrame):
         self.setStyleSheet(
             f"QFrame#Verdict {{ background: {colors.SURFACE_1}; "
             f"border: 1px solid {colors.BORDER}; "
-            f"border-left: 3px solid {accent}; border-radius: 10px; }}"
+            f"border-left: 3px solid {accent}; border-radius: {radius.MEDIUM}px; }}"
         )
 
         top = QHBoxLayout()
@@ -277,7 +277,7 @@ class MetricTile(QFrame):
         self.setObjectName("MetricTile")
         self.setStyleSheet(
             f"QFrame#MetricTile {{ background: {colors.BASE}; "
-            f"border: 1px solid {colors.BORDER}; border-radius: 8px; }}"
+            f"border: 1px solid {colors.BORDER}; border-radius: {radius.MEDIUM}px; }}"
         )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 12)

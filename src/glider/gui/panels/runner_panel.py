@@ -28,7 +28,7 @@ from glider.core.config import get_config
 from glider.gui.device_status import link_status_color, link_status_text
 from glider.gui.runner.readiness import compute_readiness
 from glider.gui.runner.run_timer import format_elapsed
-from glider.gui.styles import colors
+from glider.gui.styles import colors, radius
 
 if TYPE_CHECKING:
     from glider.core.glider_core import GliderCore
@@ -391,7 +391,7 @@ class RunnerPanel(QWidget):
                         color: {colors.TEXT_PRIMARY};
                         font-size: {font_size};
                         font-weight: bold;
-                        border-radius: 8px;
+                        border-radius: {radius.MEDIUM}px;
                         padding: 4px 8px;
                         border: none;
                         line-height: 1.2;
@@ -477,7 +477,7 @@ class RunnerPanel(QWidget):
                 color: {colors.TEXT_PRIMARY};
                 font-size: {"11px" if is_analog_input else "14px"};
                 font-weight: bold;
-                border-radius: 8px;
+                border-radius: {radius.MEDIUM}px;
                 padding: 4px 8px;
                 border: none;
                 line-height: 1.2;

@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.gui.styles import colors
+from glider.gui.styles import colors, radius
 
 CONTENT_STYLE = f"""
 body {{
@@ -34,7 +34,7 @@ h3 {{ color: {colors.ACCENT_HOVER}; }}
 code {{
     background-color: {colors.SURFACE_2};
     padding: 2px 5px;
-    border-radius: 3px;
+    border-radius: {radius.SMALL}px;
     font-family: monospace;
     color: {colors.WARNING};
 }}

@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.gui.styles import colors
+from glider.gui.styles import colors, radius
 
 if TYPE_CHECKING:
     from glider.gui.node_graph.graph_view import NodeGraphView
@@ -446,7 +446,7 @@ class NodeLibraryPanel(QWidget):
                     background-color: {colors.with_alpha(color, 0.2)};
                     color: {colors.TEXT_TERTIARY};
                     border: none;
-                    border-radius: 4px;
+                    border-radius: {radius.SMALL}px;
                     padding: 2px;
                     font-size: 14px;
                     font-weight: bold;

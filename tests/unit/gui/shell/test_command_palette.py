@@ -30,14 +30,11 @@ drop the host and Qt destroys it and, with it, the widget under test.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QAction, QKeySequence, QPalette
 from PyQt6.QtWidgets import QLabel, QMenuBar, QVBoxLayout, QWidget
 
-import glider.gui.styles
 from glider.gui.shell.command_palette import (
     Command,
     CommandPalette,
@@ -45,6 +42,7 @@ from glider.gui.shell.command_palette import (
     match_positions,
     rank,
 )
+from glider.gui.styles import load_stylesheet
 from glider.gui.styles.colors import TEXT_DISABLED
 
 #: The host the overlay covers. Big enough that "centred" is a real claim rather
@@ -229,8 +227,11 @@ def _shown(qtbot, commands=None, *, themed: bool = False) -> tuple[QWidget, Comm
     host = QWidget()
     qtbot.addWidget(host)
     if themed:
-        qss = Path(glider.gui.styles.__file__).with_name("desktop.qss")
-        host.setStyleSheet(qss.read_text(encoding="utf-8"))
+        # Through the app's loader, not the raw file: load_stylesheet is what
+        # resolves @RADIUS_*@ and @ICONS@, and Qt discards a whole sheet it
+        # cannot parse -- so reading the file directly would mount an
+        # unstyled strip and fail on the colour, several steps from the cause.
+        host.setStyleSheet(load_stylesheet("desktop"))
     layout = QVBoxLayout(host)
     layout.addWidget(QLabel("the builder is under here"))
     host.resize(_HOST_WIDTH, _HOST_HEIGHT)

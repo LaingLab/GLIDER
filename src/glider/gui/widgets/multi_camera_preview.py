@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.gui.styles import colors
+from glider.gui.styles import colors, radius
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ class CameraPreviewTile(QFrame):
                 background-color: {colors.ACCENT};
                 color: white;
                 padding: 2px 6px;
-                border-radius: 4px;
+                border-radius: {radius.SMALL}px;
                 font-size: 9px;
                 font-weight: bold;
             }}
@@ -108,7 +108,7 @@ class CameraPreviewTile(QFrame):
                 background-color: {colors.ERROR};
                 color: white;
                 padding: 2px 6px;
-                border-radius: 4px;
+                border-radius: {radius.SMALL}px;
                 font-size: 9px;
                 font-weight: bold;
             }}
@@ -127,7 +127,7 @@ class CameraPreviewTile(QFrame):
         self._preview.setStyleSheet(f"""
             QLabel {{
                 background-color: {colors.CANVAS};
-                border-radius: 4px;
+                border-radius: {radius.SMALL}px;
             }}
         """)
         self._preview.setText("No Feed")
@@ -149,7 +149,7 @@ class CameraPreviewTile(QFrame):
                 CameraPreviewTile {{
                     background-color: {colors.SURFACE_2};
                     border: 2px solid {colors.ACCENT};
-                    border-radius: 8px;
+                    border-radius: {radius.MEDIUM}px;
                 }}
             """)
         else:
@@ -157,7 +157,7 @@ class CameraPreviewTile(QFrame):
                 CameraPreviewTile {{
                     background-color: {colors.SURFACE_2};
                     border: 1px solid {colors.BORDER};
-                    border-radius: 8px;
+                    border-radius: {radius.MEDIUM}px;
                 }}
                 CameraPreviewTile:hover {{
                     border: 1px solid {colors.ACCENT};

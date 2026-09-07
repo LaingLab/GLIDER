@@ -47,7 +47,7 @@ QLabel#ToolHeaderSubtitle {
 QFrame#Card {
     background-color: #111820;
     border: 1px solid #1e2530;
-    border-radius: 10px;
+    border-radius: @RADIUS_MEDIUM@;
 }
 
 /* Children sit on the card, not on the page. Qt does not inherit
@@ -91,7 +91,7 @@ QLabel#CardBadge {
     font-size: 11px;
     background-color: #0b0f14;
     border: 1px solid #1e2530;
-    border-radius: 8px;
+    border-radius: @RADIUS_SMALL@;
     padding: 2px 8px;
 }
 
@@ -109,7 +109,7 @@ QPushButton {
     background-color: #151c25;
     color: #c0c8d4;
     border: 1px solid #1e2530;
-    border-radius: 6px;
+    border-radius: @RADIUS_SMALL@;
     padding: 6px 12px;
     font-weight: 500;
 }
@@ -198,7 +198,7 @@ QPushButton[role="ghost"]:disabled {
 QPushButton[role="icon"] {
     background-color: #151c25;
     border: 1px solid #1e2530;
-    border-radius: 6px;
+    border-radius: @RADIUS_SMALL@;
     padding: 4px 6px;
     color: #c0c8d4;
     font-size: 13px;
@@ -246,7 +246,7 @@ QLabel[textRole="error"] {
 QLabel[textRole="path"] {
     background-color: #0b0f14;
     border: 1px solid #1e2530;
-    border-radius: 6px;
+    border-radius: @RADIUS_SMALL@;
     padding: 6px 10px;
     color: #c0c8d4;
 }
@@ -259,7 +259,7 @@ QLabel[textRole="path"][filled="false"] {
 /* === Status pill ===================================================== */
 
 QLabel#StatusPill {
-    border-radius: 9px;
+    border-radius: 9px;  /* geometric */
     padding: 3px 10px;
     font-size: 11px;
     font-weight: 600;
@@ -300,7 +300,7 @@ QDoubleSpinBox,
 QComboBox {
     background-color: #0b0f14;
     border: 1px solid #1e2530;
-    border-radius: 6px;
+    border-radius: @RADIUS_SMALL@;
     padding: 6px 8px;
     color: #e2e8f0;
     selection-background-color: #38bdf8;
@@ -422,7 +422,7 @@ QComboBox::down-arrow:disabled {
 QComboBox QAbstractItemView {
     background-color: #111820;
     border: 1px solid #1e2530;
-    border-radius: 6px;
+    border-radius: @RADIUS_MEDIUM@;
     padding: 4px;
     outline: none;
     selection-background-color: #38bdf8;
@@ -443,7 +443,7 @@ QCheckBox::indicator {
     width: 16px;
     height: 16px;
     border: 1px solid #2a3441;
-    border-radius: 4px;
+    border-radius: @RADIUS_SMALL@;
     background-color: #0b0f14;
 }
 
@@ -493,7 +493,7 @@ QGroupBox::indicator {
     width: 16px;
     height: 16px;
     border: 1px solid #2a3441;
-    border-radius: 4px;
+    border-radius: @RADIUS_SMALL@;
     background-color: #0b0f14;
 }
 
@@ -511,7 +511,7 @@ QTableWidget,
 QTableView {
     background-color: #0b0f14;
     border: 1px solid #1e2530;
-    border-radius: 8px;
+    border-radius: @RADIUS_MEDIUM@;
     alternate-background-color: #0f1419;
     gridline-color: #1e2530;
 }
@@ -554,7 +554,7 @@ QTextEdit,
 QPlainTextEdit {
     background-color: #0b0f14;
     border: 1px solid #1e2530;
-    border-radius: 8px;
+    border-radius: @RADIUS_SMALL@;
     padding: 8px;
     color: #c0c8d4;
     selection-background-color: #38bdf8;
@@ -572,7 +572,7 @@ QPlainTextEdit#LogPane {
 QProgressBar {
     background-color: #0b0f14;
     border: 1px solid #1e2530;
-    border-radius: 6px;
+    border-radius: @RADIUS_SMALL@;
     height: 18px;
     text-align: center;
     color: #94a3b8;
@@ -581,7 +581,7 @@ QProgressBar {
 
 QProgressBar::chunk {
     background-color: #38bdf8;
-    border-radius: 5px;
+    border-radius: @RADIUS_SMALL@;
     margin: 1px;
 }
 
@@ -633,7 +633,7 @@ QScrollBar:vertical {
 
 QScrollBar::handle:vertical {
     background-color: #1e2530;
-    border-radius: 5px;
+    border-radius: 5px;  /* geometric */
     min-height: 28px;
 }
 
@@ -649,7 +649,7 @@ QScrollBar:horizontal {
 
 QScrollBar::handle:horizontal {
     background-color: #1e2530;
-    border-radius: 5px;
+    border-radius: 5px;  /* geometric */
     min-width: 28px;
 }
 
@@ -686,6 +686,6 @@ QToolTip {
     background-color: #151c25;
     color: #e2e8f0;
     border: 1px solid #2a3441;
-    border-radius: 6px;
+    border-radius: @RADIUS_MEDIUM@;
     padding: 6px 8px;
 }
