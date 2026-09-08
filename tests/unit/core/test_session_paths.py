@@ -6,7 +6,7 @@ the flat folders that already exist, because nothing has moved yet and real
 cohorts cannot be asked to reorganise before they can be read.
 
 The relationship that matters most is pose_csv/pose_meta. Those two drifting
-apart is what silently erased freezing from eleven VMHAHA recordings: the
+apart is what silently erased freezing from eleven recordings: the
 sidecar carries the resolution, and without it classify scores no speed axis at
 all. Resolving them from one object is the point.
 """
@@ -125,7 +125,7 @@ class TestMissingArtifacts:
         assert session.arena is None
 
     def test_a_pose_csv_with_no_sidecar_reports_none(self, tmp_path):
-        # The VMHAHA failure exactly: the CSV is there, the sidecar is not, and
+        # The failure exactly: the CSV is there, the sidecar is not, and
         # nothing downstream can compute a speed axis.
         (tmp_path / "Test 9.mp4").touch()
         _pose_csv(tmp_path / "Test 9DLC_exp-7.csv")
@@ -164,7 +164,7 @@ class TestRealWorldLayouts:
     """
 
     def test_analysis_in_a_final_outputs_subfolder(self, tmp_path):
-        # What the reorganised TRH cohort looks like.
+        # What a folder reorganised by hand tends to look like.
         folder = tmp_path / "Test 1"
         (folder / "final_outputs").mkdir(parents=True)
         (folder / "Test 1.mp4").touch()
@@ -175,7 +175,7 @@ class TestRealWorldLayouts:
         assert session.run_manifest is not None
 
     def test_video_in_a_media_subfolder_beside_the_analysis(self, tmp_path):
-        # What VMHAHA looks like: analysis in <root>/<id>/, video in
+        # A cohort split by sex: analysis in <root>/<id>/, video in
         # <root>/males/.
         (tmp_path / "males").mkdir()
         (tmp_path / "males" / "Test 17.mp4").touch()

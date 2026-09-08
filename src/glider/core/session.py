@@ -31,7 +31,7 @@ __all__ = ["Session"]
 _SESSIONS_DIR = "sessions"
 
 #: Folders that have held analysis outputs, in preference order. "analysis" is
-#: canonical; "final_outputs" is what the reorganised TRH cohort uses.
+#: canonical; "final_outputs" is what an earlier reorganisation left behind.
 _ANALYSIS_DIRS = ("analysis", "final_outputs")
 
 #: Immediate subfolders are searched for media as well as the root, because a

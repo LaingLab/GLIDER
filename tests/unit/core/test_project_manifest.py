@@ -26,13 +26,13 @@ from glider.core.project import (
 @pytest.fixture
 def cohort(tmp_path):
     """Two mice, two days each - the crossover this was written for."""
-    project = Project(root=tmp_path, name="TRH open field")
+    project = Project(root=tmp_path, name="open field crossover")
     for subject_id, sex in (("M001", "Male"), ("M002", "Male")):
         subject = Subject(subject_id=subject_id, sex=sex, strain="C57BL/6J")
         project.set_session(f"{subject_id} d1", subject=subject, group="saline", day="1")
-        project.set_session(f"{subject_id} d2", subject=subject, group="TRH", day="2")
+        project.set_session(f"{subject_id} d2", subject=subject, group="drug", day="2")
     # Counterbalanced: the second animal gets the arms the other way round.
-    project.set_session("M002 d1", group="TRH")
+    project.set_session("M002 d1", group="drug")
     project.set_session("M002 d2", group="saline")
     return project
 
@@ -70,7 +70,7 @@ class TestCrossover:
     def test_one_subject_spans_both_arms(self, cohort):
         assert cohort.sessions_for_subject("M001") == ["M001 d1", "M001 d2"]
         assert cohort.group_for("M001 d1") == "saline"
-        assert cohort.group_for("M001 d2") == "TRH"
+        assert cohort.group_for("M001 d2") == "drug"
 
     def test_the_subject_is_the_same_object_both_days(self, cohort):
         assert cohort.subject_for("M001 d1") is cohort.subject_for("M001 d2")
@@ -81,22 +81,22 @@ class TestCrossover:
         project = Project(root=tmp_path)
         subject = Subject(subject_id="M001", group="saline")
         project.set_session("d1", subject=subject)
-        project.set_session("d2", subject=subject, group="TRH")
+        project.set_session("d2", subject=subject, group="drug")
         assert project.group_for("d1") == "saline"
-        assert project.group_for("d2") == "TRH"
+        assert project.group_for("d2") == "drug"
 
     def test_groups_lists_both_arms(self, cohort):
         assert cohort.groups() == {
-            "TRH": ["M001 d2", "M002 d1"],
+            "drug": ["M001 d2", "M002 d1"],
             "saline": ["M001 d1", "M002 d2"],
         }
 
     def test_per_session_treatment_survives_the_round_trip(self, tmp_path):
         project = Project(root=tmp_path)
-        project.set_session("d2", group="TRH", treatment={"solution": "TRH", "dose": "1 mg/kg"})
+        project.set_session("d2", group="drug", treatment={"solution": "drug", "dose": "1 mg/kg"})
         project.save()
         assert Project.load(tmp_path).record("d2").treatment == {
-            "solution": "TRH",
+            "solution": "drug",
             "dose": "1 mg/kg",
         }
 
@@ -214,11 +214,11 @@ class TestPartialUpdates:
 class TestSessionIntegration:
     def test_session_subject_resolves_through_the_manifest(self, tmp_path):
         project = Project(root=tmp_path)
-        project.set_session("Test 1", subject=Subject(subject_id="M001", sex="Male"), group="TRH")
+        project.set_session("Test 1", subject=Subject(subject_id="M001", sex="Male"), group="drug")
         project.save()
         session = project.session("Test 1")
         assert session.subject.subject_id == "M001"
-        assert session.group == "TRH"
+        assert session.group == "drug"
 
     def test_session_subject_is_none_without_a_manifest(self, tmp_path):
         (tmp_path / "Test 1.mp4").touch()
