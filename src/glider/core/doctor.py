@@ -6,8 +6,7 @@ folder from its CSV, so ``classify`` computed no speed axis, so freezing and
 darting were never scored for eleven recordings. Nothing raised. It surfaced
 weeks later, from an unrelated check that noticed 21,576 empty speed cells.
 
-Phase 4 of the project-structure work (see
-``docs/superpowers/specs/2026-09-06-project-structure-design.md``).
+Phase 4 of the project-structure work.
 
 Two rules keep this useful:
 

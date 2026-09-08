@@ -7,8 +7,7 @@ pose tracks against AnyMaze trajectories; an earlier attempt to infer it from
 distance rank agreed with the truth on 0 of 15 videos and would have
 mislabelled the whole experiment. That is what the manifest is for.
 
-Phase 3 of the project-structure work (see
-``docs/superpowers/specs/2026-09-06-project-structure-design.md``).
+Phase 3 of the project-structure work.
 
 Two properties shape the design:
 

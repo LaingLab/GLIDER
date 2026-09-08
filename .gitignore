@@ -196,8 +196,11 @@ AGENTS.md
 .superpowers/
 
 docs/*
-# Design specs are kept: they travel with the branch that implements them.
-!docs/superpowers/
+# docs/superpowers/ stays out of the repo. It holds working design notes that
+# quote unpublished cohort results -- thresholds, per-animal failures, findings
+# from data that has not been published -- and this repository is public. The
+# specs were briefly admitted so they would travel with the branch that
+# implemented them; they travel in the pull request description instead.
 # Pass-2 code review raw agent transcripts (kept locally for reference)
 .review-section*-raw.txt
 manuscript_figures/*
