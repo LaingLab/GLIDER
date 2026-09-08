@@ -61,12 +61,14 @@ class CameraPreviewTile(QFrame):
     """
 
     clicked = pyqtSignal(str)  # camera_id when clicked
+    rename_requested = pyqtSignal(str)  # camera_id double-clicked
 
     def __init__(self, camera_id: str, is_primary: bool = False, parent=None):
         super().__init__(parent)
         self._camera_id = camera_id
         self._is_primary = is_primary
         self._is_recording = False
+        self._is_focused = False
 
         self._setup_ui()
         self._update_style()
@@ -81,6 +83,7 @@ class CameraPreviewTile(QFrame):
         header = QHBoxLayout()
 
         self._camera_label = QLabel(f"Camera {self._camera_id.replace('cam_', '')}")
+        self._camera_label.setToolTip("Double-click the tile to rename this camera")
         self._camera_label.setStyleSheet("font-size: 11px; font-weight: bold;")
         header.addWidget(self._camera_label)
 
@@ -144,7 +147,15 @@ class CameraPreviewTile(QFrame):
 
     def _update_style(self) -> None:
         """Update tile style based on state."""
-        if self._is_primary:
+        if self._is_focused:
+            self.setStyleSheet(f"""
+                CameraPreviewTile {{
+                    background-color: {colors.SURFACE_2};
+                    border: 2px solid {colors.STATE_OK};
+                    border-radius: {radius.MEDIUM}px;
+                }}
+            """)
+        elif self._is_primary:
             self.setStyleSheet(f"""
                 CameraPreviewTile {{
                     background-color: {colors.SURFACE_2};
@@ -173,6 +184,19 @@ class CameraPreviewTile(QFrame):
         """Update primary indicator."""
         self._is_primary = is_primary
         self._primary_indicator.setVisible(is_primary)
+        self._update_style()
+
+    def set_display_name(self, name: str) -> None:
+        """Caption this tile with the operator's name for the arena.
+
+        Falls back to the camera id rather than rendering an empty header,
+        because a tile with no caption is worse than one labelled cam_3.
+        """
+        self._camera_label.setText(name or self._camera_id)
+
+    def set_focused(self, is_focused: bool) -> None:
+        """Mark this tile as the enlarged one."""
+        self._is_focused = is_focused
         self._update_style()
 
     def set_recording(self, is_recording: bool) -> None:
@@ -212,6 +236,11 @@ class CameraPreviewTile(QFrame):
         self.clicked.emit(self._camera_id)
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event):
+        """Double-click renames -- the gesture people already try."""
+        self.rename_requested.emit(self._camera_id)
+        super().mouseDoubleClickEvent(event)
+
 
 class MultiCameraPreviewWidget(QWidget):
     """
@@ -228,11 +257,20 @@ class MultiCameraPreviewWidget(QWidget):
     """
 
     primary_changed = pyqtSignal(str)  # camera_id of new primary
+    focus_changed = pyqtSignal(str)  # camera_id now focused, or "" for the grid
+    rename_requested = pyqtSignal(str)  # camera_id the operator wants to rename
+
+    #: How many columns the focused tile spans. The rest of the cameras sit
+    #: in a single column beside it, still live -- the point of focusing is
+    #: to look closely at one arena *without* losing sight of the others,
+    #: which is the whole reason to run eight at once.
+    FOCUS_SPAN = 3
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._tiles: dict[str, CameraPreviewTile] = {}
         self._primary_id: str | None = None
+        self._focused_id: str | None = None
 
         self._setup_ui()
 
@@ -272,6 +310,7 @@ class MultiCameraPreviewWidget(QWidget):
 
         tile = CameraPreviewTile(camera_id, is_primary)
         tile.clicked.connect(self._on_tile_clicked)
+        tile.rename_requested.connect(self._on_tile_rename)
         self._tiles[camera_id] = tile
 
         if is_primary:
@@ -343,20 +382,62 @@ class MultiCameraPreviewWidget(QWidget):
         if tile:
             tile.set_recording(recording)
 
+    def set_display_name(self, camera_id: str, name: str) -> None:
+        """Caption one tile."""
+        tile = self._tiles.get(camera_id)
+        if tile is not None:
+            tile.set_display_name(name)
+
+    def _on_tile_rename(self, camera_id: str) -> None:
+        self.rename_requested.emit(camera_id)
+
     def _on_tile_clicked(self, camera_id: str) -> None:
         """Handle tile click to change primary camera."""
         if camera_id != self._primary_id:
             self.set_primary(camera_id)
             self.primary_changed.emit(camera_id)
 
+    @property
+    def focused_camera_id(self) -> str | None:
+        """The camera currently enlarged, or None when showing an even grid."""
+        return self._focused_id
+
+    def set_focus(self, camera_id: str | None) -> None:
+        """Enlarge one camera, or pass None to go back to the even grid.
+
+        Focusing a camera that is not there is a no-op rather than an error:
+        the id can go stale between a click and a camera being unplugged.
+        """
+        if camera_id is not None and camera_id not in self._tiles:
+            return
+        if camera_id == self._focused_id:
+            return
+        self._focused_id = camera_id
+        for cid, tile in self._tiles.items():
+            tile.set_focused(cid == camera_id)
+        self._reflow_grid()
+        self.focus_changed.emit(camera_id or "")
+
+    def toggle_focus(self, camera_id: str) -> None:
+        """Focus this camera, or unfocus it if it is already focused."""
+        self.set_focus(None if camera_id == self._focused_id else camera_id)
+
     def _reflow_grid(self) -> None:
         """Recalculate grid layout based on camera count."""
         # Remove all from grid
         for tile in self._tiles.values():
             self._grid_layout.removeWidget(tile)
+        for column in range(self._grid_layout.columnCount()):
+            self._grid_layout.setColumnStretch(column, 0)
+        for row in range(self._grid_layout.rowCount()):
+            self._grid_layout.setRowStretch(row, 0)
 
         count = len(self._tiles)
         if count == 0:
+            return
+
+        if self._focused_id in self._tiles and count > 1:
+            self._reflow_focused()
             return
 
         cols = grid_columns(count)
@@ -367,6 +448,28 @@ class MultiCameraPreviewWidget(QWidget):
             row = i // cols
             col = i % cols
             self._grid_layout.addWidget(self._tiles[camera_id], row, col)
+            self._grid_layout.setColumnStretch(col, 1)
+            self._grid_layout.setRowStretch(row, 1)
+
+    def _reflow_focused(self) -> None:
+        """One large tile, the rest in a strip beside it.
+
+        The others keep receiving frames -- they are the same widgets, just
+        placed differently -- so nothing stops while a camera is focused.
+        """
+        others = [cid for cid in self._tiles if cid != self._focused_id]
+        rows = max(len(others), 1)
+
+        self._grid_layout.addWidget(self._tiles[self._focused_id], 0, 0, rows, self.FOCUS_SPAN)
+        for row, camera_id in enumerate(others):
+            self._grid_layout.addWidget(self._tiles[camera_id], row, self.FOCUS_SPAN)
+            self._grid_layout.setRowStretch(row, 1)
+
+        for column in range(self.FOCUS_SPAN):
+            self._grid_layout.setColumnStretch(column, 1)
+        # The strip is deliberately narrow: it is for noticing that another
+        # arena needs attention, not for watching it.
+        self._grid_layout.setColumnStretch(self.FOCUS_SPAN, 1)
 
     def _update_placeholder_visibility(self) -> None:
         """Show/hide placeholder based on camera count."""
