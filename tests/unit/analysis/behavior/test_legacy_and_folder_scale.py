@@ -80,7 +80,7 @@ class TestLegacyModuleAliases:
 
 class TestFolderMateScale:
     def test_borrows_from_a_calibrated_video_in_the_same_folder(self, tmp_path):
-        folder = tmp_path / "5 mgkg final mp4"
+        folder = tmp_path / "5 mg kg final mp4"
         folder.mkdir()
         calibrated = _clip(folder / "T12_5.avi", 64, 48)
         uncalibrated = _clip(folder / "T7_5.avi", 64, 48)
@@ -147,9 +147,9 @@ class TestFolderMateScale:
     @pytest.mark.parametrize(
         ("stored", "expected"),
         [
-            (r"\\130.74.60.149\lainglab\Garrett\5 mgkg final mp4\T12_5.avi", "5 mgkg final mp4"),
-            (r"Z:\Lab Members\Garrett\5 mgkg final mp4\T12_5.avi", "5 mgkg final mp4"),
-            ("/mnt/lainglab/Garrett/5 mgkg final mp4/T12_5.avi", "5 mgkg final mp4"),
+            (r"\\fileserver\share\studies\5 mg kg final mp4\T12_5.avi", "5 mg kg final mp4"),
+            (r"Z:\studies\5 mg kg final mp4\T12_5.avi", "5 mg kg final mp4"),
+            ("/mnt/share/studies/5 mg kg final mp4/T12_5.avi", "5 mg kg final mp4"),
             (r"C:\data\RIG\a.avi", "rig"),
             ("bare.avi", ""),
         ],
@@ -168,14 +168,14 @@ class TestFolderMateScale:
 
     def test_matches_folders_by_name_across_unc_and_drive_letters(self, tmp_path):
         """The same share is routinely addressed as Z:\\... and \\\\host\\share\\..."""
-        folder = tmp_path / "5 mgkg final mp4"
+        folder = tmp_path / "5 mg kg final mp4"
         folder.mkdir()
         target = _clip(folder / "T7_5.avi", 64, 48)
 
         # Stored under a path that does not exist here, but the same folder name.
         cal_set = CalibrationSet()
         cal_set.set(
-            r"\\130.74.60.149\lainglab\Lab Members\Garrett\5 mgkg final mp4\T12_5.avi",
+            r"\\fileserver\share\studies\5 mg kg final mp4\T12_5.avi",
             _cal(4.0, 64, 48),
         )
         master = folder / "pose_calibration.json"

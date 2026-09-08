@@ -56,8 +56,8 @@ def copy_arena_to(
 
     Unconfirmed on purpose. ``residuals()`` is computed from the corners alone,
     so a copy that does not fit this video's floor produces no warning at all;
-    on the TRH cohort the camera height varied per animal, which is precisely
-    the error the arena was drawn to eliminate.
+    and camera height has in practice varied from one recording to the next,
+    which is precisely the error the arena was drawn to eliminate.
     """
     arena = calibrations.get_arena(source)
     if arena is None:
