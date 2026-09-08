@@ -21,6 +21,7 @@ import numpy as np
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -30,6 +31,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.multi_camera.camera_names import CameraLabels
+from glider.gui.multi_camera.camera_properties import CameraPropertiesPanel
 from glider.gui.multi_camera.status_table import CameraStatusTable
 from glider.gui.styles import colors
 from glider.gui.widgets.multi_camera_preview import MultiCameraPreviewWidget
@@ -67,6 +70,7 @@ class MultiCameraWindow(QMainWindow):
         recorder: MultiVideoRecorder | None = None,
         base_settings: CameraSettings | None = None,
         experiment_name: str = DEFAULT_EXPERIMENT_NAME,
+        labels: CameraLabels | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -77,7 +81,9 @@ class MultiCameraWindow(QMainWindow):
         # rig set up for something else, and a recording cannot be redone.
         self._base_settings = base_settings or CameraSettings()
         self._default_experiment_name = experiment_name or DEFAULT_EXPERIMENT_NAME
+        self._labels = labels if labels is not None else CameraLabels()
         self._subscribed: set[str] = set()
+        self._selected_id: str | None = None
 
         self.setWindowTitle("Multi-Camera Recording")
         self.resize(1400, 900)
@@ -85,6 +91,8 @@ class MultiCameraWindow(QMainWindow):
         apply_tool_theme(self)
 
         self._frame_received.connect(self._show_frame)
+        self.preview.primary_changed.connect(self.select_camera)
+        self.preview.rename_requested.connect(self.rename_camera)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._poll_status)
@@ -121,6 +129,13 @@ class MultiCameraWindow(QMainWindow):
         self.stop_button.clicked.connect(self.stop_recording)
         controls.addWidget(self.stop_button)
 
+        # Elapsed time. A recording with no clock on it is one nobody can
+        # stop at the right moment, and every protocol here is timed.
+        self.elapsed_label = QLabel("--:--")
+        self.elapsed_label.setToolTip("Time recorded so far")
+        self.elapsed_label.setStyleSheet("font-weight: bold; font-size: 15px;")
+        controls.addWidget(self.elapsed_label)
+
         refresh = QPushButton("Refresh Cameras")
         refresh.setToolTip("Re-read the camera list from the manager")
         refresh.clicked.connect(self.refresh_cameras)
@@ -152,8 +167,17 @@ class MultiCameraWindow(QMainWindow):
             )
         )
         split.addWidget(status_card)
-        split.setStretchFactor(0, 3)
+
+        properties_card = Card("Camera", "exposure, and what it is costing right now")
+        self.properties = CameraPropertiesPanel()
+        self.properties.settings_changed.connect(self._apply_camera_settings)
+        self.properties.rename_requested.connect(self.rename_camera)
+        properties_card.add(self.properties, 1)
+        split.addWidget(properties_card)
+
+        split.setStretchFactor(0, 4)
         split.setStretchFactor(1, 2)
+        split.setStretchFactor(2, 2)
         layout.addWidget(split, 1)
 
     # ------------------------------------------------------------------
@@ -174,6 +198,14 @@ class MultiCameraWindow(QMainWindow):
             self.preview.add_camera(camera_id, is_primary=(camera_id == primary))
 
         self.status_table.set_cameras(ids)
+        self._refresh_names()
+        # Something has to be selected for the properties panel to be useful,
+        # and the primary is the camera the operator already thinks in terms of.
+        if self._selected_id not in ids:
+            self._selected_id = None
+            self.properties.set_camera(None, None, "")
+        if self._selected_id is None and ids:
+            self.select_camera(primary if primary in ids else ids[0])
         self._refresh_controls()
 
     def connect_cameras(self) -> None:
@@ -231,12 +263,90 @@ class MultiCameraWindow(QMainWindow):
 
     def _show_frame(self, camera_id: str, frame: np.ndarray) -> None:
         """GUI-thread half of the hop. Unknown cameras are ignored."""
-        if camera_id in self.preview._tiles:
-            self.preview.update_frame(camera_id, frame)
+        if camera_id not in self.preview._tiles:
+            return
+        self.preview.update_frame(camera_id, frame)
+        # Only the selected camera is measured. Reading all sixteen every frame
+        # would compete with the capture threads for the GIL to answer a
+        # question about a camera nobody is looking at.
+        if camera_id == self._selected_id:
+            self.properties.update_readout(frame)
 
     def on_frame(self, camera_id: str, frame: np.ndarray, timestamp: float = 0.0) -> None:
         """Push a frame in from outside, already on the GUI thread."""
         self._show_frame(camera_id, frame)
+
+    # ------------------------------------------------------------------
+    # selection, focus and naming
+    # ------------------------------------------------------------------
+
+    def select_camera(self, camera_id: str) -> None:
+        """Point the properties panel at one camera.
+
+        Clicking a tile selects it; clicking the selected one enlarges it. The
+        two are deliberately separate: selecting to read a camera's exposure
+        should not rearrange the whole window under the operator.
+        """
+        if camera_id not in self.preview._tiles:
+            return
+        if camera_id == self._selected_id:
+            self.preview.toggle_focus(camera_id)
+        self._selected_id = camera_id
+        self.properties.set_camera(
+            camera_id,
+            self._manager.get_camera_settings(camera_id),
+            self._labels.display_name(camera_id),
+        )
+
+    def rename_camera(self, camera_id: str) -> None:
+        """Ask for a name for this camera and remember it.
+
+        The name reaches the filenames, which is the point -- naming a camera
+        in the window and still getting ``_cam5`` on disk would leave the same
+        question unanswered a month later.
+        """
+        current = self._labels.label(camera_id)
+        name, accepted = QInputDialog.getText(
+            self,
+            "Name this camera",
+            f"Name for {camera_id} (used on the tile and in its filenames):",
+            text=current,
+        )
+        if not accepted:
+            return
+        self._labels.set_label(camera_id, name)
+        self._refresh_names()
+        if camera_id == self._selected_id:
+            self.properties.set_camera(
+                camera_id,
+                self._manager.get_camera_settings(camera_id),
+                self._labels.display_name(camera_id),
+            )
+
+    def _refresh_names(self) -> None:
+        """Push the current names onto the tiles and into the recorder."""
+        for camera_id in self.camera_ids():
+            self.preview.set_display_name(camera_id, self._labels.display_name(camera_id))
+        setter = getattr(self._recorder, "set_camera_labels", None)
+        if callable(setter):
+            try:
+                setter({cid: self._labels.file_fragment(cid) for cid in self.camera_ids()})
+            except Exception:
+                logger.exception("MultiCameraWindow: could not hand labels to the recorder")
+
+    def _apply_camera_settings(self, camera_id: str, settings) -> None:
+        """Push edited settings to one camera, live.
+
+        Never raises: a camera that rejects a property -- and DirectShow
+        devices reject plenty -- must not take the window down mid-session.
+        """
+        camera = self._manager.get_camera(camera_id)
+        if camera is None:
+            return
+        try:
+            camera.apply_settings(settings)
+        except Exception:
+            logger.exception("MultiCameraWindow: could not apply settings to %s", camera_id)
 
     # ------------------------------------------------------------------
     # recording
@@ -306,6 +416,36 @@ class MultiCameraWindow(QMainWindow):
             logger.exception("MultiCameraWindow: %s", description)
         self._refresh_controls()
 
+    @staticmethod
+    def _format_elapsed(seconds: float) -> str:
+        """mm:ss, or h:mm:ss once a session runs past an hour."""
+        seconds = max(0, int(seconds))
+        hours, rest = divmod(seconds, 3600)
+        minutes, secs = divmod(rest, 60)
+        return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
+    def _refresh_elapsed(self) -> None:
+        """Show how long this run has been going.
+
+        Holds the final time after Stop rather than resetting to zero: the last
+        thing an operator wants to know when a run ends is how long it was.
+        """
+        recorder = self._recorder
+        if recorder is None:
+            return
+        try:
+            elapsed = float(getattr(recorder, "duration", 0.0) or 0.0)
+        except Exception:
+            return
+        if self.is_recording:
+            self.elapsed_label.setText(self._format_elapsed(elapsed))
+            self.elapsed_label.setStyleSheet(
+                f"font-weight: bold; font-size: 15px; color: {colors.ERROR};"
+            )
+        elif elapsed <= 0:
+            self.elapsed_label.setText("--:--")
+            self.elapsed_label.setStyleSheet("font-weight: bold; font-size: 15px;")
+
     def _refresh_controls(self) -> None:
         recording = self.is_recording
         self.record_button.setEnabled(bool(self.camera_ids()) and not recording)
@@ -322,6 +462,7 @@ class MultiCameraWindow(QMainWindow):
         or a recorder torn down between ticks must not take the window with it.
         """
         try:
+            self._refresh_elapsed()
             recorder = self._recorder
             recording = self.is_recording
             dropped_all = dict(getattr(recorder, "frames_dropped", {}) or {}) if recorder else {}

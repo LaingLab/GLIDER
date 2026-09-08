@@ -63,6 +63,9 @@ class MultiVideoRecorder:
         self._frame_callbacks_registered: dict[str, bool] = {}
         self._record_annotated = False
         self._recording_fps: dict[str, float] = {}
+        #: camera_id -> filename-safe operator label. Empty until something
+        #: names the cameras; falls back to the camera index, as before.
+        self._camera_labels: dict[str, str] = {}
         self._buffer_size: int | None = None
         self._writer_error: BaseException | None = None
 
@@ -133,8 +136,13 @@ class MultiVideoRecorder:
             # Primary camera uses simple naming for backwards compatibility
             return f"{safe_name}_{timestamp}{self._video_format.extension}"
         else:
-            # Secondary cameras include camera identifier
-            # Extract camera number from camera_id (e.g., "cam_1" -> "1")
+            # Secondary cameras carry the operator's name for the camera when
+            # there is one. "_cam5" identifies an enumeration order, which
+            # answers nothing a month later about which arena was recorded --
+            # and enumeration order is not stable across replugging.
+            label = self._camera_labels.get(camera_id)
+            if label:
+                return f"{safe_name}_{timestamp}_{label}{self._video_format.extension}"
             cam_num = camera_id.replace("cam_", "")
             return f"{safe_name}_{timestamp}_cam{cam_num}{self._video_format.extension}"
 
@@ -452,6 +460,16 @@ class MultiVideoRecorder:
         if self._start_time is None:
             return 0.0
         return (datetime.now() - self._start_time).total_seconds()
+
+    def set_camera_labels(self, labels: dict[str, str]) -> None:
+        """Name the cameras, for the filenames this recorder writes.
+
+        Ignored for a run already in progress: the files are already open, and
+        renaming half a set partway through would be worse than not renaming.
+        """
+        if self._state == RecordingState.RECORDING:
+            return
+        self._camera_labels = {str(k): str(v) for k, v in (labels or {}).items() if str(v).strip()}
 
     def set_buffer_size(self, max_frames: int) -> None:
         """
