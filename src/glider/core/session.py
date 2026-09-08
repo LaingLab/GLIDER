@@ -10,9 +10,7 @@ Resolving both from one object is the fix. ``pose_csv`` and ``pose_meta`` are
 properties of the same session, so separating them takes deliberate effort
 rather than inattention.
 
-This is phase 1 of the project-structure work (see
-``docs/superpowers/specs/2026-09-06-project-structure-design.md``): resolution
-only. It reads the canonical layout *and* the flat folders that already exist,
+This is phase 1 of the project-structure work: resolution only. It reads the canonical layout *and* the flat folders that already exist,
 because real cohorts cannot be asked to reorganise before they can be read.
 
 An artifact that is not there resolves to ``None``, never to a path that does

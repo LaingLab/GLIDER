@@ -3,9 +3,8 @@
 Existing cohorts are flat, inconsistently named, and are real data. Adoption
 plans the whole move first, shows it, and only then touches the disk.
 
-Phase 4 of the project-structure work (see
-``docs/superpowers/specs/2026-09-06-project-structure-design.md``). The
-constraints below were each learned from doing this by hand:
+Phase 4 of the project-structure work. The constraints below were each
+learned from doing this by hand:
 
 **Verify the whole plan before moving one file.** A collision found halfway
 through leaves a folder that is neither shape, and the operator now has to

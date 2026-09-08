@@ -3,7 +3,7 @@
 Pure functions over the windowed feature frame the base model consumes. Turns
 graded freeze/dart activations into a per-class log-prior via semantic class
 tags, so the same rules transfer across vocabularies (rules key off tags, not
-class names). See docs/superpowers/specs/2026-07-07-hybrid-behavior-prior-fusion-design.md.
+class names).
 """
 
 from __future__ import annotations
