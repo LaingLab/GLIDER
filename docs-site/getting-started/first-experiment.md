@@ -21,12 +21,14 @@ When the loop finishes its repetitions, control returns and the experiment ends.
 
 ## 1. Open GLIDER
 
-Launch the app (see [Installation](installation.md)). You'll land in **desktop
-mode**: a canvas in the middle, a **Node Library** to add nodes, a **Properties**
-panel for the selected node, and the **File / Edit / Experiment / View / Hardware
-/ Run / Tools / Help** menu bar.
+Launch the app (see [Installation](installation.md)). After the splash you
+land on a chooser: **New Experiment**, **Open Experiment…**, and your recent
+files.
 
-Start fresh with **File → New**.
+Choose **New Experiment**. GLIDER opens on the **Experiment** tab — name the
+experiment there if you like, then switch to **Dashboard**, which is where the
+rest of this walkthrough happens: a canvas in the middle, a **Node Library** to
+add nodes, and a **Properties** panel for the selected node.
 
 ## 2. Connect a board and add an LED
 

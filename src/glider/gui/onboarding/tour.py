@@ -404,19 +404,32 @@ class Tour(QObject):
 
     @staticmethod
     def _raise_tabs(widget: QWidget | None) -> None:
-        """Select the tab page holding ``widget``, for every tab widget above it.
+        """Bring ``widget``'s page to the front, for every stack above it.
 
-        Walks the whole ancestor chain rather than stopping at the first tab
-        widget: tabs nest, and a target two levels in needs both switched or
-        it stays hidden behind the outer one.
+        Walks the whole ancestor chain rather than stopping at the first one:
+        stacks nest, and a target two levels in needs both switched or it stays
+        hidden behind the outer one.
+
+        **Both kinds of stack, not only a tab widget's.** A ``QStackedWidget``
+        owned by a ``QTabWidget`` is switched through the tab widget, so the tab
+        header follows. A bare one is switched directly -- and that is the case
+        that matters now: the window's pages (Landing, Dashboard, Experiment,
+        Run, Analyze) are a bare stack, and so are the Experiment tab's
+        sections. Without this the walkthrough opened on the landing page and
+        every single one of its targets was on a page that was not showing --
+        measured, all seven -- so each step rendered as a centred caption with
+        nothing highlighted, which is a tour of nothing.
         """
         node = widget
         while node is not None:
             parent = node.parentWidget()
             if isinstance(parent, QStackedWidget):
                 tabs = parent.parentWidget()
-                if isinstance(tabs, QTabWidget) and tabs.currentWidget() is not node:
-                    tabs.setCurrentWidget(node)
+                if isinstance(tabs, QTabWidget):
+                    if tabs.currentWidget() is not node:
+                        tabs.setCurrentWidget(node)
+                elif parent.currentWidget() is not node:
+                    parent.setCurrentWidget(node)
             node = parent
 
     def _show(self) -> None:

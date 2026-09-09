@@ -18,7 +18,7 @@ frame-by-frame record of what the animal was doing.
 
 ## Opening the tool
 
-Choose **Tools ▸ Behavior Analysis…**. If the `behavior` extra isn't installed,
+Open the **Analyze** tab and choose **Behavior Analysis**. If the `behavior` extra isn't installed,
 the item is greyed out and its tooltip tells you what's missing and how to fix it:
 
 > Install the behavior extra: pip install glider[behavior] (missing: …)

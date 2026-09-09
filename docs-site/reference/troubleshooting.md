@@ -48,7 +48,8 @@ These are **optional** features behind extras:
   (`uv sync --extra pc --extra behavior`). The menu entry stays disabled — with
   an install hint in its tooltip — until those packages are present.
 
-Confirm your machine's compute setup with **Tools → GPU / Device Check**.
+Confirm your machine's compute setup from the **Analyze** tab, with
+**GPU / Device Check**.
 
 ## macOS won't open the app
 

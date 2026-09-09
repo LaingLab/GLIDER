@@ -43,7 +43,7 @@ convention: **++ctrl++ on Windows/Linux, ++cmd++ on macOS**.
 !!! tip "Discover the rest"
     Press ++ctrl+k++ to open the [command
     palette](../building/builder-window.md#command-palette). It lists every
-    command GLIDER has — including the ones in the **Experiment**, **Hardware**,
-    **Run** and **Tools** menus, which are not on the menu bar — with each
+    command GLIDER has — including the ones in the **Hardware**, **Run** and
+    **Tools** menus, which are not on the menu bar — with each
     command's shortcut beside it. It is the quickest way to learn what's
     available.
