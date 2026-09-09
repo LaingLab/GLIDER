@@ -16,7 +16,6 @@ os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 import contextlib
 import io
 import logging
-import shutil
 import subprocess
 import sys
 import threading
@@ -29,6 +28,8 @@ from typing import Any
 
 import cv2
 import numpy as np
+
+from glider.core.executables import find_executable
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ class FFmpegCapture:
             self.release()
 
         # Check if ffmpeg is available
-        ffmpeg_path = shutil.which("ffmpeg")
+        ffmpeg_path = find_executable("ffmpeg")
         if not ffmpeg_path:
             logger.warning("FFmpeg not found in PATH")
             return False

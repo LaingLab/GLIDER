@@ -50,6 +50,12 @@ logger = logging.getLogger(__name__)
 #: updates never compete with the capture threads for the GIL.
 _POLL_MS = 500
 
+#: This window's streaming claim on the shared :class:`~glider.vision.multi_camera_manager.MultiCameraManager`.
+#: Named rather than passed around so the acquire in ``connect_cameras``
+#: and the release in ``closeEvent`` cannot drift apart -- a mismatch
+#: would leak the claim and keep the cameras on for the rest of the session.
+_STREAM_OWNER = "multi_camera_window"
+
 #: Prefix for a run started from this window rather than from an experiment.
 #: Files are "<name>_<timestamp>[_camN].mp4", so the timestamp already makes
 #: them unique -- the name is what makes them findable a month later.
@@ -222,7 +228,7 @@ class MultiCameraWindow(QMainWindow):
                 self._add_enumerated_cameras()
             for camera_id in self.camera_ids():
                 self._subscribe(camera_id)
-            self._manager.start_all_streaming()
+            self._manager.start_all_streaming(owner=_STREAM_OWNER)
         except Exception:
             logger.exception("MultiCameraWindow: could not connect cameras")
         self.refresh_cameras()
@@ -495,15 +501,50 @@ class MultiCameraWindow(QMainWindow):
 
     # ------------------------------------------------------------------
 
-    def closeEvent(self, event):  # noqa: N802 - Qt override
-        """Stop polling, but leave recording alone.
+    def showEvent(self, event):  # noqa: N802 - Qt override
+        """Take the cameras and restart polling, every time it is opened.
 
-        Closing this window must not end a run: it is a monitor, and the
-        operator may well close it to free the screen while the session
-        continues.
+        Symmetrical with :meth:`closeEvent`, and it has to be: the window is
+        kept on the main window and reused, so a close that tore things down
+        with nothing to build them back left the reopened window showing dead
+        tiles and a status table frozen at whatever it last read. Setting up
+        here rather than only in ``__init__`` is what makes reopening work.
+
+        Both calls are idempotent -- the timer restarts harmlessly and
+        ``connect_cameras`` re-registers nothing it has already registered --
+        so a ``show()`` on an already-open window costs nothing.
+        """
+        super().showEvent(event)
+        self._timer.start(_POLL_MS)
+        self.connect_cameras()
+
+    def closeEvent(self, event):  # noqa: N802 - Qt override
+        """Stop polling and let the cameras go, unless a recording needs them.
+
+        Closing this window used to leave every camera streaming: it stopped
+        its own poll timer and nothing else, so the capture threads ran and the
+        camera lights stayed on until the app quit.
+
+        It releases rather than stops, because this manager is shared with the
+        camera panel's multi-camera preview -- see
+        :meth:`~glider.vision.multi_camera_manager.MultiCameraManager.stop_all_streaming`.
+        And it does not release at all while the recorder is running: closing a
+        monitor must never end a run, which is the reason this window did
+        nothing on close in the first place.
         """
         self._timer.stop()
+        self._release_cameras()
         super().closeEvent(event)
+
+    def _release_cameras(self) -> None:
+        """Drop this window's streaming claim, if a run does not still need it."""
+        if self._recorder is not None and getattr(self._recorder, "is_recording", False):
+            logger.debug("MultiCameraWindow closed mid-recording; leaving cameras streaming")
+            return
+        try:
+            self._manager.stop_all_streaming(owner=_STREAM_OWNER)
+        except Exception:  # pragma: no cover - a close must not raise
+            logger.exception("MultiCameraWindow: could not release cameras")
 
 
 __all__ = ["MultiCameraWindow"]

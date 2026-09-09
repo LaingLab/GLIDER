@@ -51,6 +51,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+#: This panel's streaming claim on the shared MultiCameraManager. See
+#: :meth:`~glider.vision.multi_camera_manager.MultiCameraManager.stop_all_streaming`.
+_STREAM_OWNER = "camera_panel"
 #: Shown under the keypoint-names field when the operator must type the names.
 #: YOLO checkpoints record class names and a kpt_shape, never body-part names.
 _MANUAL_NAMES_HINT = "Names must be in the model's training order."
@@ -1171,8 +1174,10 @@ class CameraPanel(QWidget):
                 # Register frame callback
                 self._multi_cam.on_frame(camera_id, self._on_multi_camera_frame)
 
-        # Start streaming on all cameras
-        self._multi_cam.start_all_streaming()
+        # Start streaming on all cameras. Under this panel's own name: the
+        # Multi-Camera window drives the same manager, and neither should be
+        # able to stop the other's preview.
+        self._multi_cam.start_all_streaming(owner=_STREAM_OWNER)
 
         # Initialize CV processor for primary camera
         if self._cv_enabled_cb.isChecked():
@@ -1195,7 +1200,7 @@ class CameraPanel(QWidget):
         if self._multi_cam is None:
             return
 
-        self._multi_cam.stop_all_streaming()
+        self._multi_cam.stop_all_streaming(owner=_STREAM_OWNER)
         self._multi_cam.remove_all_cameras()
         self._multi_preview.remove_all_cameras()
 

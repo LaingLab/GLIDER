@@ -236,3 +236,69 @@ class TestCameraWiring:
         window._on_camera_frame("cam_1", frame, 0.0)
         qtbot.wait(50)
         assert window.preview._tiles["cam_1"]._preview.pixmap() is not None
+
+
+class TestClosingReleasesTheCameras:
+    """Closing the window used to leave every camera streaming.
+
+    It stopped its own poll timer and nothing else, so the capture threads kept
+    running and the camera lights stayed on until the app quit.
+    """
+
+    def test_closing_stops_streaming(self, qtbot):
+        manager = _manager(2)
+        win = MultiCameraWindow(manager, recorder=_recorder(), parent=None)
+        qtbot.addWidget(win)
+
+        win.close()
+
+        manager.stop_all_streaming.assert_called_once_with(owner="multi_camera_window")
+
+    def test_closing_mid_recording_leaves_them_alone(self, qtbot):
+        """A monitor closing must never end a run -- which is why this window
+        did nothing at all on close before."""
+        manager = _manager(2)
+        recorder = _recorder()
+        recorder.is_recording = True
+        win = MultiCameraWindow(manager, recorder=recorder, parent=None)
+        qtbot.addWidget(win)
+
+        win.close()
+
+        assert not manager.stop_all_streaming.called
+
+    def test_it_releases_rather_than_stops(self, qtbot):
+        """The claim is named, so the camera panel's preview survives this
+        window closing. An unconditional stop would black it out."""
+        manager = _manager(2)
+        win = MultiCameraWindow(manager, recorder=_recorder(), parent=None)
+        qtbot.addWidget(win)
+
+        assert manager.start_all_streaming.call_args.kwargs == {"owner": "multi_camera_window"}
+
+    def test_reopening_takes_the_cameras_back(self, qtbot):
+        """The other half, and the reason a plain stop-on-close would not do:
+        the window is kept and reused, so what close tears down show must
+        rebuild."""
+        manager = _manager(2)
+        win = MultiCameraWindow(manager, recorder=_recorder(), parent=None)
+        qtbot.addWidget(win)
+        win.close()
+        manager.start_all_streaming.reset_mock()
+
+        win.show()
+
+        assert manager.start_all_streaming.called
+
+    def test_reopening_restarts_polling(self, qtbot):
+        """Close stopped the poll timer and nothing restarted it, so a reopened
+        window showed a status table frozen at whatever it last read."""
+        manager = _manager(2)
+        win = MultiCameraWindow(manager, recorder=_recorder(), parent=None)
+        qtbot.addWidget(win)
+        win.close()
+        assert not win._timer.isActive()
+
+        win.show()
+
+        assert win._timer.isActive()

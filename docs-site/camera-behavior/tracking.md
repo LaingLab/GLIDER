@@ -182,7 +182,7 @@ format — the pose inference itself is done by YOLO.)
 ## Checking your GPU
 
 Tracking and pose models run much faster on a GPU. To see what GLIDER will use,
-open **Tools ▸ GPU / Device Check…**, or run it headless:
+open the **Analyze** tab and choose **GPU / Device Check**, or run it headless:
 
 ```bash
 glider --gpu-check

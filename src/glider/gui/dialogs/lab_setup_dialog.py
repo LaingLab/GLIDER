@@ -59,6 +59,7 @@ from PyQt6.QtWidgets import (
 
 from glider.core.config import get_config
 from glider.core.vocabulary import LISTS, Vocabulary, load, save
+from glider.gui.styles import colors
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,9 @@ class LabSetupDialog(QDialog):
     ):
         super().__init__(parent)
         self._is_touch_mode = is_touch_mode
+        # Set by :meth:`embed`. Guards :meth:`accept`, which would otherwise
+        # hide the widget out of the tab that contains it.
+        self._embedded = False
         source = vocabulary if vocabulary is not None else load(self._library_dir())
 
         # Edit a copy. Skip must cost nothing, in memory as well as on disk,
@@ -241,7 +245,7 @@ class LabSetupDialog(QDialog):
         self.error_label = QLabel()
         self.error_label.setWordWrap(True)
         self.error_label.setObjectName("errorLabel")
-        self.error_label.setStyleSheet("color: #c0392b;")
+        self.error_label.setStyleSheet(f"color: {colors.ERROR};")
         self.error_label.setVisible(False)
         layout.addWidget(self.error_label)
 
@@ -253,6 +257,39 @@ class LabSetupDialog(QDialog):
         self.done_button.clicked.connect(self._on_done)
         self.skip_button.clicked.connect(self.reject)
         layout.addWidget(buttons)
+
+    def embed(self) -> "LabSetupDialog":
+        """Turn this form into a plain widget for the Experiment tab.
+
+        Returns ``self`` so it can be added to a layout in one expression.
+
+        *Skip* goes -- it means "close without saving", and there is nothing to
+        close. *Done* stays, relabelled, because it is not a dialog button at
+        all: it is the only thing that writes the vocabulary file, and the form
+        edits a private copy until it runs. Removing it would give the tab five
+        editable lists that quietly discard everything typed into them.
+
+        :meth:`accept` is neutered rather than disconnected, because
+        :meth:`_on_done` calls it on a successful write and a ``QDialog``
+        hides itself there -- which, embedded, takes the page away the instant
+        the save succeeds.
+        """
+        self._embedded = True
+        self.setWindowFlags(Qt.WindowType.Widget)
+        self.skip_button.hide()
+        self.done_button.setText("Save Lab Vocabulary")
+        return self
+
+    def accept(self) -> None:  # noqa: D102 - see embed()
+        if self._embedded:
+            # Saved, and staying put. Reuse the error label as the receipt:
+            # it is the one place on this form already reserved for telling
+            # the user what just happened to their file.
+            self.error_label.setStyleSheet(f"color: {colors.SUCCESS};")
+            self.error_label.setText("Lab vocabulary saved.")
+            self.error_label.setVisible(True)
+            return
+        super().accept()
 
     def _clear_default_buttons(self) -> None:
         """Make sure neither button is the window's default.
@@ -340,6 +377,9 @@ class LabSetupDialog(QDialog):
             return
 
         logger.warning("Lab setup could not save the vocabulary to %s", library_dir)
+        # Reset the colour: embedded, the previous message may have been the
+        # green "saved" receipt, and a failure printed in green reads as one.
+        self.error_label.setStyleSheet(f"color: {colors.ERROR};")
         self.error_label.setText(
             f"Could not save the lab vocabulary to {library_dir}. "
             "Check that the folder exists and is writable, then press Done again. "

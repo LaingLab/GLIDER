@@ -1,8 +1,24 @@
-# The Builder Window
+# The Dashboard
 
-The Builder is where you design an experiment. This page is about the frame
-around the canvas — the panels, the status strip along the top, the command
-palette, and the fact that GLIDER remembers how you left it.
+The **Dashboard** tab is where you design an experiment. This page is about the
+frame around the canvas — the panels, the chrome strip along the top, the
+command palette, and the fact that GLIDER remembers how you left it.
+
+## Where it sits
+
+GLIDER opens on a landing page — **New Experiment**, **Open Experiment…**, and
+your recent files. Once something is open, four tabs appear, centred at the top
+of the window:
+
+| Tab | What it is |
+|---|---|
+| **Experiment** | Metadata, mice, zones, lab vocabulary and plugins. Where you say what this experiment *is*. |
+| **Dashboard** | This page: the node graph, hardware, camera and properties. |
+| **Run** | The operator view — run control, device states, camera, experiment info. |
+| **Analyze** | Behavior Analysis, Batch Pose Tracking, Session Review, Multi-Camera Recording and the device check. Each opens in its own window. |
+
+New and Open both land you on **Experiment**, because naming the experiment and
+entering its animals comes before wiring anything up.
 
 ## What's on screen
 
@@ -10,18 +26,19 @@ From top to bottom:
 
 | Part | What it is |
 |---|---|
-| **Menu bar** | Four menus: **File**, **Edit**, **View**, **Help**. |
-| **Status strip** | A single 40-pixel row: panel toggles, the experiment name, the run-state pill, one dot per board, and the ++ctrl+k++ hint. |
+| **Menu bar** | Five menus: **File**, **Edit**, **Experiment**, **View**, **Help**. |
+| **Chrome strip** | One row carrying the experiment name, the run-state pill, one dot per board, the centred tabs, and the ++ctrl+k++ hint. The two panel toggles appear on this tab only, since they drive the panels below. |
 | **Left panel** | Tabs: **Nodes**, **Hardware**, **Control**, **Files**. |
 | **The canvas** | The node graph itself. Everything else gets out of its way. |
 | **Right panel** | Tabs: **Properties**, **Camera**. |
 | **Status bar** | The thin line along the bottom: connection indicator, session state, and transient messages. |
 
-Four menus, not eight; two panels, not a window full of separate dockable ones.
+Five menus, not eight; two panels, not a window full of separate dockable ones.
 Nothing became unreachable in the process:
-[the four menus that came off the bar](#where-the-other-menus-went) are still
-built, their shortcuts still work, and ++ctrl+k++ reaches every command in all
-of them.
+[the menus that came off the bar](#where-the-other-menus-went) are still built,
+their shortcuts still work, and ++ctrl+k++ reaches every command in all of them.
+**Tools** is off the bar because everything in it now has a card on the
+**Analyze** tab.
 
 ## The side panels
 
@@ -72,19 +89,25 @@ Drag the divider between a panel and the canvas to resize it. Three rules apply:
 - An expanded panel will not go narrower than 160 pixels, and the canvas will
   not be squeezed below 240 pixels.
 
-## The status strip
+## The chrome strip
 
-The strip is the one piece of the Builder that cannot be collapsed, hidden or
-summoned. That is deliberate: a board that drops out 40 minutes into an
-unattended run has to be visible to whoever walks past the rig.
+The strip is the one piece of GLIDER that cannot be collapsed, hidden or
+summoned, and it is on **every** tab. That is deliberate: a board that drops out
+40 minutes into an unattended run has to be visible to whoever walks past the
+rig, whichever tab happens to be showing.
 
 Left to right, it carries:
 
-- **The two panel toggles.**
+- **The two panel toggles** — on the **Dashboard** only, since they drive the
+  panels below. They disappear on the other tabs rather than sitting there
+  collapsing something you cannot see.
 - **The experiment name**, followed by **— edited** while there are unsaved
   changes. A brand-new session carries its default name, *Untitled
-  Experiment*, until you name it in **Experiment Settings…**.
+  Experiment*, until you name it on the **Experiment** tab.
 - **The run-state pill.**
+- **The four tabs**, centred on the window — centred on the *window*, not on
+  the space left over, so they do not shift when the experiment name changes
+  length.
 - **One dot per board**, each labelled with the board's name.
 - **The `Ctrl K` hint**, which is a button — clicking it opens the command
   palette, exactly as the shortcut does.
@@ -182,16 +205,20 @@ If you type something with no matches, the box says so — *No commands match
 
 ## Where the other menus went
 
-The menu bar keeps **File**, **Edit**, **View** and **Help**. Four menus came
-off it. They still exist, they are still built with exactly the same commands,
-and **their keyboard shortcuts still work** — they are simply not on the bar.
+The menu bar keeps **File**, **Edit**, **Experiment**, **View** and **Help**.
+Three menus came off it. They still exist, they are still built with exactly the
+same commands, and **their keyboard shortcuts still work** — they are simply not
+on the bar.
+
+A menu only comes off once its commands have somewhere else you can *see* them.
+The command palette does not count: it is something you have to already know
+about.
 
 | Menu | Its commands | How to reach them now |
 |---|---|---|
-| **Experiment** | Experiment Settings…, Add Subject…, Lab Setup… | ++ctrl+k++ |
-| **Hardware** | Add Board…, Add Device…, New Custom Device Type…, Connect All, Disconnect All | ++ctrl+k++ — and **Add Board** and **Add Device** are also buttons in the **Hardware** tab, which is where you were probably already looking |
-| **Run** | Start (++f5++), Stop (++shift+f5++), Emergency Stop (++ctrl+shift+escape++) | The shortcuts, or ++ctrl+k++ |
-| **Tools** | Behavior Analysis…, Batch Pose Tracking…, Session Review…, GPU / Device Check…, Plugins… | ++ctrl+k++ |
+| **Hardware** | Add Board…, Add Device…, New Custom Device Type…, Connect All, Disconnect All | **Add Board** and **Add Device** are buttons in the **Hardware** tab, which is where you were probably already looking. The rest: ++ctrl+k++ |
+| **Run** | Start (++f5++), Stop (++shift+f5++), Emergency Stop (++ctrl+shift+escape++) | The toolbar, the run banner, the shortcuts, or ++ctrl+k++ |
+| **Tools** | Behavior Analysis…, Batch Pose Tracking…, Session Review…, Multi-Camera Recording…, GPU / Device Check… | The **Analyze** tab, which has a card for each — including, when a tool needs an optional dependency stack, the exact install line. **Plugins** moved to the **Experiment** tab instead |
 
 Every row in the palette names the menu it came from, so if you remember that
 something "was under Tools", the palette still tells you so.

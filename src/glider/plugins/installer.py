@@ -12,14 +12,17 @@ import importlib
 import importlib.util
 import logging
 import re
-import shutil
 import sys
+import sysconfig
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
+
+from glider.core.executables import find_executable
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +33,20 @@ _UNREADABLE = (InvalidSpecifier, InvalidVersion, TypeError)
 
 
 class NoInstallerError(RuntimeError):
-    """Neither pip nor uv is available to install with."""
+    """Nothing here is able to install into this environment."""
+
+
+class ExternallyManagedError(NoInstallerError):
+    """PEP 668: this interpreter's own installer forbids adding packages.
+
+    A subclass rather than a sibling, so every existing ``except
+    NoInstallerError`` keeps working -- the caller's job is the same either
+    way, which is to put the message on the plugin's row.
+
+    It exists as its own type because the two are not the same problem and do
+    not have the same fix: "install pip or uv" is useless advice to somebody
+    whose Python is refusing on principle.
+    """
 
 
 class MalformedEntryError(ValueError):
@@ -78,6 +94,24 @@ def _refuse_argv_injection(package: str, requirements: Sequence[str]) -> None:
             )
 
 
+def _is_externally_managed() -> bool:
+    """Whether PEP 668 forbids installing into this interpreter.
+
+    **The marker is ignored inside a virtual environment.** That is what PEP
+    668 specifies and what pip itself does, and it is the case that matters
+    here: GLIDER's documented setup is ``uv venv``, and uv marks the base
+    interpreters it manages -- so a venv built from one is perfectly
+    installable while its base is not. Testing the marker without this check
+    would refuse every uv-managed install GLIDER actually supports.
+    """
+    if sys.prefix != sys.base_prefix:
+        return False
+    try:
+        return (Path(sysconfig.get_path("stdlib")) / "EXTERNALLY-MANAGED").exists()
+    except Exception:  # pragma: no cover - a sysconfig without a stdlib path
+        return False
+
+
 def _pip_is_importable() -> bool:
     """Can the interpreter we install into actually run ``-m pip``?
 
@@ -89,7 +123,15 @@ def _pip_is_importable() -> bool:
 
 
 def _find_uv() -> str | None:
-    return shutil.which("uv")
+    """Where uv is, including where a Dock launch cannot see it.
+
+    Not ``shutil.which``: uv's installer puts it in ``~/.local/bin``, which is
+    not on the PATH an app launched from the Dock inherits -- so on GLIDER's
+    documented ``uv venv`` setup, where uv is the *only* installer available,
+    plugins could not be installed at all unless GLIDER had been started from a
+    terminal. See :mod:`glider.core.executables`.
+    """
+    return find_executable("uv")
 
 
 def installer_command(
@@ -98,6 +140,7 @@ def installer_command(
     *,
     pip_available: Callable[[], bool] = _pip_is_importable,
     uv_path: Callable[[], str | None] = _find_uv,
+    externally_managed: Callable[[], bool] = _is_externally_managed,
 ) -> list[str]:
     """Build the command that installs ``package`` into this interpreter.
 
@@ -118,6 +161,8 @@ def installer_command(
     assumption about which environment uv would otherwise choose.
 
     Raises:
+        ExternallyManagedError: if PEP 668 forbids installing into this
+            interpreter at all. Checked first, because it defeats both tools.
         NoInstallerError: if neither is available. The caller shows this on the
             plugin's row; it is a condition to report, not to crash on.
         MalformedEntryError: if any token would reach argv as an installer
@@ -125,6 +170,23 @@ def installer_command(
             pip/uv split, so both command shapes are covered.
     """
     _refuse_argv_injection(package, requirements)
+
+    if externally_managed():
+        # Checked before the pip/uv split because it defeats both: pip refuses
+        # outright, and uv refuses the same environment for the same reason.
+        # Left to pip, the user gets PEP 668's own wall of text through a
+        # "pip exited with code 1" -- which is accurate, unreadable, and says
+        # nothing about what to do.
+        raise ExternallyManagedError(
+            "GLIDER is running on a Python that is marked externally managed "
+            "(PEP 668), so neither pip nor uv may add packages to it -- which "
+            "means plugins cannot be installed here.\n\n"
+            "Plugins need GLIDER to be running from a virtual environment. "
+            "Create one and install GLIDER into it:\n"
+            "    uv venv\n"
+            "    uv pip install -e .\n"
+            "then start GLIDER from that environment."
+        )
 
     if pip_available():
         return [sys.executable, "-m", "pip", "install", package, *requirements]
@@ -137,8 +199,11 @@ def installer_command(
         return [uv, "pip", "install", "--python", sys.executable, package, *requirements]
 
     raise NoInstallerError(
-        "Neither pip nor uv is available in this environment, so plugins cannot "
-        "be installed. Install pip into GLIDER's environment, or install uv."
+        "Neither pip nor uv is available in this environment, so plugins "
+        "cannot be installed.\n\n"
+        "Install uv (https://docs.astral.sh/uv/), or install pip into "
+        "GLIDER's environment with:\n"
+        "    python -m ensurepip"
     )
 
 

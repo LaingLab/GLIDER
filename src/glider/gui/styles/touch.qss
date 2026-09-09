@@ -771,3 +771,31 @@ QLabel[statusIndicator="true"] { color: #e2e8f0; padding: 4px 12px; border-radiu
 CameraPanel[dropActive="true"] {
     border: 2px dashed #38bdf8;
 }
+
+/* ============================================================================
+ * Top-level navigation on the Pi.
+ *
+ * The tab bar exists in runner mode too -- the operator does occasionally need
+ * the Experiment tab to pick a subject -- but 480px is not a desktop, so the
+ * tabs get touch-sized targets and nothing else from the desktop sheet.
+ * ========================================================================= */
+
+QFrame#shellTabBar {
+    background-color: #0b0f14;                      /* CHROME */
+}
+
+QToolButton#shellTab {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: @RADIUS_SMALL@;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 15px;
+    font-weight: 500;
+    padding: 9px 16px;
+}
+
+QToolButton#shellTab:checked {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    border-color: rgba(56, 189, 248, 0.40);
+    color: #38bdf8;                                 /* ACCENT */
+}

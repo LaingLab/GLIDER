@@ -159,6 +159,10 @@ glider = [
     # without these an installed (non-editable) build renders spin boxes,
     # combos and checkboxes with no indicator at all.
     "gui/styles/icons/*.svg",
+    # The Lucide set the section rail and tool cards draw, plus its ISC
+    # licence, which has to travel with them.
+    "gui/styles/icons/lucide/*.svg",
+    "gui/styles/icons/lucide/LICENSE",
     "assets/*.png",
     # The curated plugin catalogue PluginRegistry falls back to when the
     # machine is offline; without this line it exists in a source checkout and

@@ -67,7 +67,7 @@ counts-per-turn. Downstream nodes then just read a finished number.
 
 ## Installing plugins from the catalogue
 
-Open **Tools → Plugins…**. GLIDER shows a curated catalogue of published plugins
+Open the **Experiment** tab and choose **Plugins**. GLIDER shows a curated catalogue of published plugins
 — one row each, with the package name, version, what it provides, and its
 current state. Search the list or use the **All / Installed / Available** filters
 to narrow it.

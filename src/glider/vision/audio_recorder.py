@@ -6,10 +6,11 @@ and soundfile. Follows the same lifecycle pattern as VideoRecorder.
 """
 
 import logging
-import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
+
+from glider.core.executables import find_executable
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ class AudioRecorder:
     @staticmethod
     def is_ffmpeg_available() -> bool:
         """Check whether ffmpeg is on PATH."""
-        return shutil.which("ffmpeg") is not None
+        return find_executable("ffmpeg") is not None
 
     async def start(
         self,

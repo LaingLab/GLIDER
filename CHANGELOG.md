@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A splash screen, a landing page, and top-level tabs.** GLIDER used to open
+  straight onto an empty node graph belonging to an unnamed, unsaved session,
+  with no sign it was still starting up.
+  - The **splash** shows the logo while plugin discovery, hardware enumeration
+    and the vision imports run. Its five seconds are a *floor*, not a duration:
+    initialisation that runs longer keeps it up, and the main window is not
+    shown until it hands over, so the window never appears before the logo it
+    was meant to be hiding behind.
+  - The **landing page** offers New Experiment, Open Experiment… and a recent
+    list (pruned on read, so an entry that no longer resolves is not offered).
+    Skipped when `--file` named something, and on the Pi, which is a kiosk
+    beside a rig and opens on the run.
+  - Four **tabs**, centred: **Experiment**, **Dashboard**, **Run**, **Analyze**.
+    New and Open land on Experiment, because naming the experiment and entering
+    its animals comes before wiring anything up.
+- **Experiment setup is a page, not four modal dialogs.** Experiment Settings,
+  Zone Configuration and Lab Setup were modals you had to know the name of to
+  find, and no two could be open at once. They are now sections of the
+  **Experiment** tab — **Metadata**, **Mice**, **Zones**, **Lab Vocabulary** and
+  **Plugins** — each still the same editor, embedded rather than rewritten.
+  Metadata and Mice are backed by one editor underneath, so a subject added on
+  one and a protocol typed on the other reach the session through a single
+  object. The dialogs still work as dialogs for every other caller.
+- **An Analyze tab.** Behavior Analysis, Batch Pose Tracking, Session Review,
+  Multi-Camera Recording and the device check each get a card. They stay
+  windows — each wants a whole screen — so the cards are front doors; what was
+  missing was never the window, it was any sign that the window existed. A card
+  can also do what a greyed menu item could not: for the three tools that need
+  an optional dependency stack, it prints the exact install line.
+- **The experiment name, run state and board dots are on every tab.** The status
+  strip moved out of the Builder frame and onto the window, which also means it
+  finally reports in runner mode, where there is no Builder frame and every
+  refresh used to be dropped. The tabs are centred on the *window* by overlay
+  rather than by a stretch, so the group does not slide sideways when the
+  experiment name changes length.
+- **Section and tool icons**, drawn from the vendored [Lucide](https://lucide.dev)
+  set (ISC, in `gui/styles/icons/lucide/` with its licence) and recoloured to a
+  pastel per section. The colour is identity rather than state: an icon keeps
+  its hue when its row is selected, because an icon that changed colour on
+  selection would throw away the thing that made it findable.
+
 - **BLE peripherals report their own connection state**, separately from the
   host adapter's. A peripheral that goes out of range, loses power, or is
   claimed by another central shows **Disconnected** in the Hardware panel and
@@ -79,6 +120,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`Tools` comes off the menu bar** — File, Edit, Experiment, View, Help
+  remain. This is the recorded rule being satisfied rather than bent: a menu
+  leaves the bar only once its actions have another *visible* home, and every
+  Tools entry now has a card on the **Analyze** tab or a section on
+  **Experiment**. The menu is still built and still off the bar only in that
+  sense: ++ctrl+k++ reaches all of it, and its shortcuts still work. A test
+  fails if a tool is added to the menu without a card, so it cannot quietly
+  become palette-only again.
+
 - **SLEAP support moved out of core into the `glider-sleap` plugin.** Point
   GLIDER at the folder SLEAP wrote and it still converts on first selection and
   runs — what changed is where TensorFlow lives. `pip install glider-sleap`
@@ -93,6 +143,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     verified end to end on tensorflow-cpu 2.21 with tf2onnx 1.17.
 
 ### Fixed
+
+- **Closing the Multi-Camera window left every camera streaming.** It stopped
+  its own poll timer and nothing else, so capture threads ran and camera lights
+  stayed on until the app quit. Streaming is now claimed by name, because the
+  manager is shared with the camera panel's multi-camera preview and an
+  unconditional stop from either window blacked out the other's live preview.
+  The window declines to release while a recording is running — closing a
+  monitor must never end a run. Reopening it also works again: close stopped
+  the poll timer and nothing restarted it, so a reopened window showed dead
+  tiles and a status table frozen at whatever it last read.
+- **`uv` and `ffmpeg` are found when GLIDER is launched from the Dock.**
+  `shutil.which` searches `PATH`, and an app launched from the Dock or Finder
+  inherits launchd's, not the shell's — measured on one machine, a single
+  directory. uv installs to `~/.local/bin` and Homebrew to `/opt/homebrew/bin`,
+  so both were invisible. Since `uv venv` installs no pip, uv is the only
+  installer on GLIDER's documented setup, and plugins could not be installed at
+  all on macOS unless GLIDER had been started from a terminal. ffmpeg was
+  missing on the same machines, silently, taking audio recording with it.
+- **An externally-managed environment says so.** A plugin install used to fail
+  with PEP 668's own text surfaced as "pip exited with code 1". The check now
+  runs before choosing between pip and uv — it defeats both — and names the
+  problem and the fix. The marker is deliberately ignored inside a virtual
+  environment, as PEP 668 specifies and pip itself does: uv marks the base
+  interpreters it manages, so a `uv venv` built from one is perfectly
+  installable while its base is not.
+- **The first-run walkthrough spotlights things again.** It starts from the
+  landing page, and its targets are on the Dashboard — a page of a plain
+  `QStackedWidget`. The tour raised `QTabWidget` pages but not bare stacks, so
+  all seven targets were on a page that was not showing and every step rendered
+  as a centred caption with nothing highlighted.
 
 - **The Experiment and Tools menus are back on the menu bar.** Slimming the bar
   to four menus took both off it, and unlike Hardware and Run neither had

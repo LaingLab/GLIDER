@@ -137,6 +137,16 @@ class AppShell(QWidget):
             inspects it. ``None`` gives an empty placeholder, replaceable later
             with :meth:`set_centre`.
         parent: Standard Qt parent.
+        strip: A status strip owned by somebody else, to wire to instead of
+            building one. ``None`` -- the default, and what every test and any
+            standalone use gets -- builds and hosts its own, exactly as before.
+
+            The window passes its own strip because the strip outgrew this
+            frame: the experiment name and run state belong on every tab, not
+            only the one the node graph lives on, and a strip inside this page
+            disappears with the page. What stays here either way is the
+            *wiring* -- the panel toggles belong to the panels, which are this
+            frame's business and nobody else's.
 
     The shell does not populate its panels -- the owner calls
     ``shell.left.add_tab(...)``. It also does not save its own layout on close:
@@ -144,7 +154,12 @@ class AppShell(QWidget):
     it calls :meth:`save_layout` when it closes.
     """
 
-    def __init__(self, centre: QWidget | None = None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        centre: QWidget | None = None,
+        parent: QWidget | None = None,
+        strip: StatusStrip | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("appShell")
 
@@ -152,8 +167,13 @@ class AppShell(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        self._strip = StatusStrip(self)
-        outer.addWidget(self._strip)
+        # Hosted here only when we built it. A strip handed in is laid out by
+        # its owner; adding it to this layout would reparent it off the window
+        # and back onto the page it was moved out of.
+        self._hosts_strip = strip is None
+        self._strip = strip if strip is not None else StatusStrip(self)
+        if self._hosts_strip:
+            outer.addWidget(self._strip)
 
         self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
         self._splitter.setObjectName("appShellSplitter")
@@ -226,8 +246,18 @@ class AppShell(QWidget):
 
     @property
     def strip(self) -> StatusStrip:
-        """The always-present status strip."""
+        """The status strip this frame's toggles drive.
+
+        Owned by this frame, or by the window when one was handed in --
+        :attr:`hosts_strip` says which. Either way the panel toggles on it are
+        wired to these panels.
+        """
         return self._strip
+
+    @property
+    def hosts_strip(self) -> bool:
+        """Whether the strip is laid out inside this frame."""
+        return self._hosts_strip
 
     @property
     def left(self) -> SidePanel:

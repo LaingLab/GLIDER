@@ -19,21 +19,35 @@ from glider.gui.shell.command_palette import (
     commands_from_menus,
     menu_actions,
 )
+from glider.gui.shell.landing import (
+    LandingPage,
+    forget_experiment,
+    recent_experiments,
+    remember_experiment,
+)
 from glider.gui.shell.side_panel import DEFAULT_WIDTH, RAIL_WIDTH, SidePanel
 from glider.gui.shell.status_strip import STRIP_HEIGHT, StatusStrip
+from glider.gui.shell.tab_bar import TAB_BAR_HEIGHT, TAB_KEYS, ShellTabBar
 
 __all__ = [
     "DEFAULT_WIDTH",
     "RAIL_WIDTH",
     "STRIP_HEIGHT",
+    "TAB_BAR_HEIGHT",
+    "TAB_KEYS",
     "AppShell",
     "Command",
     "CommandPalette",
+    "LandingPage",
+    "ShellTabBar",
     "SidePanel",
     "StatusStrip",
     "commands_from_menu_bar",
     "commands_from_menus",
     "fit_window_to_screen",
+    "forget_experiment",
     "menu_actions",
     "primary_available_geometry",
+    "recent_experiments",
+    "remember_experiment",
 ]

@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -44,16 +45,22 @@ from glider.gui.dialogs.zone_dialog import ZoneDialog
 from glider.gui.node_graph.graph_view import NodeGraphView
 from glider.gui.panels.camera_panel import CameraPanel
 from glider.gui.panels.device_control_panel import DeviceControlPanel
+from glider.gui.panels.experiment_page import ExperimentPage
 from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController, node_category_for_type
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
+from glider.gui.panels.tools_page import ToolsPage
 from glider.gui.shell import (
     AppShell,
     Command,
     CommandPalette,
+    LandingPage,
+    ShellTabBar,
+    StatusStrip,
     commands_from_menus,
     fit_window_to_screen,
     menu_actions,
+    remember_experiment,
 )
 from glider.gui.styles import colors
 from glider.gui.view_manager import ViewManager, ViewMode
@@ -71,6 +78,39 @@ logger = logging.getLogger(__name__)
 # through the walkthrough silences the setup form nobody has seen yet.
 LAB_SETUP_COMPLETE_KEY = "first_run/setup_complete"
 
+# --- Stack pages -------------------------------------------------------------
+#
+# The window's QStackedWidget, by index. The Builder and operator indices are 0
+# and 1 and must stay there: they predate the tab bar, and the switching helpers
+# (switch_to_builder, _enter_dashboard, _switch_to_desktop_mode) and their tests
+# were written against those numbers. Landing and Experiment were therefore
+# *appended* rather than slotted in at the front, which is why the page order
+# does not match the tab order -- see PAGE_BY_TAB below, which is where the two
+# are reconciled and the only place that mapping is written down.
+PAGE_BUILDER = 0
+PAGE_OPERATOR = 1
+PAGE_EXPERIMENT = 2
+PAGE_LANDING = 3
+PAGE_ANALYZE = 4
+
+# Which page each tab shows. Keys are from
+# :data:`glider.gui.shell.tab_bar.TAB_KEYS`; "dashboard" is the Builder (nodes,
+# hardware, camera, properties) and "run" is the operator view, which is the
+# vocabulary the tabs use on screen and deliberately not the vocabulary the
+# code grew up with.
+PAGE_BY_TAB = {
+    "dashboard": PAGE_BUILDER,
+    "experiment": PAGE_EXPERIMENT,
+    "run": PAGE_OPERATOR,
+    "analyze": PAGE_ANALYZE,
+}
+
+# The reverse, for moving the tab highlight when a page switch started
+# somewhere else -- the View menu, the Pi layout action, a run beginning.
+# PAGE_LANDING is deliberately absent: the tab bar is hidden there, so there is
+# no tab to highlight.
+TAB_BY_PAGE = {page: tab for tab, page in PAGE_BY_TAB.items()}
+
 # The menus that appear on the menu bar, in bar order.
 #
 # The bar stays, and stays this short, for two reasons written out in spec §9.
@@ -80,7 +120,7 @@ LAB_SETUP_COMPLETE_KEY = "first_run/setup_complete"
 # GLIDER has no existing users and so for the foreseeable future *every* user is
 # a first-time one. Same reason the palette greys a disabled command instead of
 # hiding it, and a collapsed panel leaves its icon rail behind.
-MENU_BAR_TITLES = ("File", "Edit", "Experiment", "View", "Tools", "Help")
+MENU_BAR_TITLES = ("File", "Edit", "Experiment", "View", "Help")
 
 # The menus that came off the bar, and the rule for what may join them:
 #
@@ -109,7 +149,7 @@ MENU_BAR_TITLES = ("File", "Edit", "Experiment", "View", "Tools", "Help")
 # all eight into ``_menus``; the bar shows six of them; ``commands()`` reads all
 # eight. One list, two consumers -- rather than a bar and a separate registry
 # that would drift, which is the failure this project has hit before.
-RELOCATED_MENU_TITLES = ("Hardware", "Run")
+RELOCATED_MENU_TITLES = ("Hardware", "Run", "Tools")
 
 # The remaining gap, written down so it is a decision rather than an oversight.
 #
@@ -384,6 +424,23 @@ class MainWindow(QMainWindow):
         # helper: switching the stack takes the entire frame off screen, so
         # nothing can linger over the operator view (issue #39).
         self._builder_view: AppShell | None = None
+        # Top-level navigation and the pages it reaches. All four are built in
+        # _setup_ui; declared here so every guard below can read them during
+        # construction, before that runs.
+        self._tab_bar: ShellTabBar | None = None
+        self._landing_page: LandingPage | None = None
+        self._experiment_page: ExperimentPage | None = None
+        self._analyze_page: ToolsPage | None = None
+        # The one status strip. Owned by the window rather than by the Builder
+        # frame, so the experiment name and run state stay on screen whichever
+        # tab is showing -- and so they still report in runner mode, where
+        # there is no Builder frame at all.
+        self._status_strip: StatusStrip | None = None
+        # The editor behind the Metadata and Mice sections, and the two pages
+        # it was split into. Both are rebuilt per session; see
+        # _experiment_detail_pages.
+        self._experiment_details: ExperimentDialog | None = None
+        self._experiment_detail_widgets: tuple[QWidget, QWidget] | None = None
         # The node editor's properties form lives inside this; see PropertiesHost.
         self._properties_host: PropertiesHost | None = None
         self._properties_widget: QWidget | None = None
@@ -543,26 +600,469 @@ class MainWindow(QMainWindow):
             )
 
     def _setup_ui(self) -> None:
-        """Set up the main UI components."""
-        self._stack = QStackedWidget()
-        self.setCentralWidget(self._stack)
+        """Set up the main UI components.
+
+        The central widget is a column: the navigation tabs, then the page
+        stack. The stack was the central widget until the tabs existed, and
+        keeping the tabs *outside* it is what lets them stay put across page
+        switches -- a bar built into each page would have to be four bars kept
+        in step, and would blink on every switch.
+        """
+        container = QWidget()
+        container.setObjectName("shellContainer")
+        column = QVBoxLayout(container)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+
+        column.addWidget(self._build_chrome_row(container))
+
+        self._stack = QStackedWidget(container)
+        column.addWidget(self._stack, 1)
+        self.setCentralWidget(container)
 
         self._create_builder_view()
         self._create_runner_view()
 
-        self._stack.addWidget(self._builder_view)  # Index 0
+        self._stack.addWidget(self._builder_view)  # Index 0 -- PAGE_BUILDER
         # Index 1 is the operator view: RunnerShell (runner) or DashboardView
         # (desktop). _create_runner_view built exactly one of them.
         self._operator_view = self._runner_shell or self._dashboard_view
-        self._stack.addWidget(self._operator_view)  # Index 1
+        self._stack.addWidget(self._operator_view)  # Index 1 -- PAGE_OPERATOR
+
+        self._create_experiment_page()
+        self._stack.addWidget(self._experiment_page)  # Index 2 -- PAGE_EXPERIMENT
+        self._create_landing_page()
+        self._stack.addWidget(self._landing_page)  # Index 3 -- PAGE_LANDING
+        self._create_analyze_page()
+        self._stack.addWidget(self._analyze_page)  # Index 4 -- PAGE_ANALYZE
+
+        self._wire_tab_bar()
 
         if self._view_manager.is_runner_mode:
-            self._stack.setCurrentIndex(1)
+            # The Pi is a kiosk beside a rig: it is switched on to run a
+            # protocol that is already written, so it opens on the operator
+            # view and never on a chooser.
+            self._stack.setCurrentIndex(PAGE_OPERATOR)
         else:
-            self._stack.setCurrentIndex(0)
+            self._stack.setCurrentIndex(PAGE_BUILDER)
             self._populate_builder_panels()
+            if not self._has_open_experiment():
+                self._show_landing()
 
         self._install_palette_shortcut()
+
+    def _build_chrome_row(self, parent: QWidget) -> QWidget:
+        """One strip carrying the experiment name, the tabs and the run state.
+
+        The two used to be separate rows because the strip lived inside
+        :class:`~glider.gui.shell.app_shell.AppShell` -- the Dashboard page --
+        and the tabs had to sit above the stack to survive a page switch. That
+        put two bars of chrome above every screen and, worse, left the
+        experiment name and run state invisible on two tabs out of three.
+
+        **The tabs are centred by overlay, not by a stretch.** Both widgets go
+        in the same grid cell: the strip fills it, and the tab bar is placed
+        over the strip's own central gap with ``AlignHCenter``. A stretch
+        between the strip's left and right groups would centre the tabs in
+        whatever space those groups left over, so the group would slide
+        sideways every time the experiment name changed length -- which reads
+        as a rendering bug, because nothing on screen explains the movement.
+        Overlaying costs nothing: the strip's middle is empty by construction,
+        and the tab bar carries the same CHROME ground, so the seam is
+        invisible.
+        """
+        row = QWidget(parent)
+        row.setObjectName("shellChromeRow")
+        grid = QGridLayout(row)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(0)
+
+        self._status_strip = StatusStrip(row)
+        grid.addWidget(self._status_strip, 0, 0)
+
+        self._tab_bar = ShellTabBar(row)
+        grid.addWidget(
+            self._tab_bar,
+            0,
+            0,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+        )
+        return row
+
+    def _has_open_experiment(self) -> bool:
+        """Whether something was already opened before the window was built.
+
+        True when ``--file`` loaded an experiment during start-up: the landing
+        page would then be a chooser standing between the user and the file
+        they named on the command line.
+        """
+        session = self._core.session
+        return bool(session is not None and getattr(session, "file_path", None))
+
+    # --- Navigation ---
+
+    def _create_experiment_page(self) -> None:
+        """Build the Experiment tab, with its sections built on first visit.
+
+        The builders close over ``self`` rather than being handed finished
+        widgets, because the editors bind to session-owned objects that *New*
+        and *Open* replace; see :meth:`ExperimentPage.reset`.
+        """
+        self._experiment_page = ExperimentPage(
+            {
+                "metadata": lambda: self._experiment_detail_pages()[0],
+                "mice": lambda: self._experiment_detail_pages()[1],
+                "zones": self._build_zones_section,
+                "vocabulary": self._build_vocabulary_section,
+                "plugins": self._build_plugins_section,
+            },
+            parent=self,
+        )
+
+    def _experiment_detail_pages(self) -> tuple[QWidget, QWidget]:
+        """The Metadata and Mice pages, from one shared dialog.
+
+        Both come out of a single :class:`ExperimentDialog`, built on first
+        use: the two group boxes are separate pages on the rail but the same
+        editor underneath, so a subject added on Mice and the protocol typed on
+        Metadata reach the session through one object that knows about both.
+        Two dialogs would mean two ``set_session`` targets and two ideas of
+        which subject is active.
+
+        A *separate* instance from the one ``Experiment > Settings`` opens:
+        :meth:`ExperimentDialog.detach_sections` empties the dialog it is
+        called on, so sharing would turn that menu item into an empty window.
+
+        Cached because ``detach_sections`` may only run once per instance.
+        Cleared by :meth:`_reset_experiment_page` when the session is replaced.
+        """
+        if self._experiment_detail_widgets is None:
+            dialog = ExperimentDialog(
+                session=self._core.session,
+                parent=self._experiment_page,
+                is_touch_mode=self._view_manager.is_runner_mode,
+            )
+            dialog.metadata_changed.connect(self._on_experiment_metadata_changed)
+            dialog.edit_subject_requested.connect(self._on_edit_subject)
+            dialog.recording_directory_changed.connect(self._on_recording_directory_changed)
+            # Held for the lifetime of the pages: the group boxes moved out,
+            # but every signal and handler still belongs to the dialog, so
+            # dropping this reference would collect the editor out from under
+            # its own widgets.
+            self._experiment_details = dialog
+            self._experiment_detail_widgets = dialog.detach_sections()
+        return self._experiment_detail_widgets
+
+    def _reset_experiment_page(self) -> None:
+        """Drop the Experiment tab's sections and the editor behind them.
+
+        Called wherever the session or the zone configuration is replaced. The
+        dialog goes with the pages: it is bound to the session it was built
+        with, and a surviving instance would keep writing subjects into an
+        experiment nothing reads any more.
+        """
+        if self._experiment_page is not None:
+            self._experiment_page.reset()
+        self._experiment_details = None
+        self._experiment_detail_widgets = None
+
+    def _build_zones_section(self) -> QWidget:
+        """The zone editor, embedded and propagating as you draw.
+
+        The editor mutates ``self._zone_config`` in place, so what
+        :meth:`_on_zones_changed` does is not "collect the result" but "tell
+        everything downstream that the object it already holds has moved on".
+        """
+        editor = ZoneDialog(
+            camera_manager=self._core.camera_manager,
+            zone_config=self._zone_config,
+            parent=self._experiment_page,
+        ).embed()
+        editor.zones_changed.connect(self._on_zones_changed)
+        return editor
+
+    def _build_plugins_section(self) -> QWidget:
+        """The plugin browser, embedded, once its catalogue has been fetched.
+
+        The section is handed a callable rather than the manager itself: plugin
+        discovery may not have run when this is built, and the difference
+        between "no plugins" and "not asked yet" is the whole reason that
+        section says something instead of showing an empty list.
+        """
+        from glider.gui.panels.plugins_section import PluginsSection
+
+        return PluginsSection(lambda: self._core.plugin_manager, parent=self._experiment_page)
+
+    def _build_vocabulary_section(self) -> QWidget:
+        """The lab vocabulary form, embedded."""
+        from glider.gui.dialogs.lab_setup_dialog import LabSetupDialog
+
+        return LabSetupDialog(
+            parent=self._experiment_page,
+            is_touch_mode=self._view_manager.is_runner_mode,
+        ).embed()
+
+    def _on_zones_changed(self) -> None:
+        """Push the current zone set to everything that reads it.
+
+        The same propagation the modal zone dialog did on ``accept()``, minus
+        the reassignment: embedded, the editor was handed this very object and
+        has been editing it in place, so there is nothing to fetch back.
+        """
+        if self._camera_panel:
+            self._camera_panel.set_zone_configuration(self._zone_config)
+        self._core.cv_processor.set_zone_configuration(self._zone_config)
+        self._core.tracking_logger.set_zone_configuration(self._zone_config)
+        if hasattr(self._core, "data_recorder"):
+            self._core.data_recorder.set_zone_configuration(self._zone_config)
+            self._core.data_recorder.set_cv_processor(self._core.cv_processor)
+
+        self._save_zones_to_session()
+
+        if self._node_library_panel:
+            self._node_library_panel.refresh_zones(self._zone_config)
+        if self._node_editor:
+            self._node_editor.set_zone_configuration(self._zone_config)
+
+    def _create_analyze_page(self) -> None:
+        """Build the Analyze tab: a front door for each tool window.
+
+        The availability probes are the same ones the Tools menu used, and are
+        still lazy imports for the same reason -- they pull the optional
+        behavior and vision stacks, which must stay out of startup.
+
+        The difference from the menu is what happens when a probe fails. A menu
+        item could only grey itself and hide the reason in a tooltip; a card has
+        room to print the install line, which is what turns "Behavior Analysis
+        is greyed out" from a support question into something the user can act
+        on.
+        """
+        from glider.gui.behavior.availability import (
+            behavior_available,
+            missing_behavior_deps,
+        )
+        from glider.gui.panels.tools_page import ToolCard
+        from glider.gui.pose_batch.availability import (
+            missing_pose_batch_deps,
+            pose_batch_available,
+        )
+
+        def _install_line(extra: str, missing) -> str:
+            return (
+                f"Needs the {extra} extra. Install it with:\n"
+                f"    pip install 'glider[{extra}]'\n"
+                f"Missing: {', '.join(missing)}"
+            )
+
+        has_behavior = behavior_available()
+        has_pose = pose_batch_available()
+        behavior_reason = "" if has_behavior else _install_line("behavior", missing_behavior_deps())
+
+        cards = [
+            ToolCard(
+                key="behavior",
+                title="Behavior Analysis",
+                description=(
+                    "Cluster and label behaviour from pose tracks, and train a "
+                    "classifier on what you label."
+                ),
+                glyph="behavior",
+                available=has_behavior,
+                unavailable_reason=behavior_reason,
+            ),
+            ToolCard(
+                key="pose",
+                title="Batch Pose Tracking",
+                description=(
+                    "Run a pose model over directories of videos and write " "DeepLabCut CSVs."
+                ),
+                glyph="pose",
+                available=has_pose,
+                unavailable_reason=(
+                    "" if has_pose else _install_line("vision", missing_pose_batch_deps())
+                ),
+            ),
+            ToolCard(
+                key="review",
+                title="Session Review",
+                description=(
+                    "Scrub an analyzed session, select a window, and read what " "is in it."
+                ),
+                glyph="review",
+                available=has_behavior,
+                # The same probe: this reads the behavior tool's own outputs.
+                unavailable_reason=behavior_reason,
+            ),
+            ToolCard(
+                key="multicam",
+                title="Multi-Camera Recording",
+                description=("Preview, record and monitor every camera in the rig at once."),
+                glyph="multicam",
+            ),
+            ToolCard(
+                key="devices",
+                title="GPU / Device Check",
+                description=(
+                    "What inference will actually run on, and why. Worth opening "
+                    "precisely when something is missing."
+                ),
+                glyph="devices",
+            ),
+        ]
+
+        self._analyze_page = ToolsPage(cards, parent=self)
+        self._analyze_page.tool_chosen.connect(self._on_tool_chosen)
+
+    def _on_tool_chosen(self, key: str) -> None:
+        """Open the window a card stands for.
+
+        Routed through the same handlers the menu used, rather than duplicating
+        their lazy imports and their already-open bookkeeping.
+        """
+        opener = {
+            "behavior": self._open_behavior_analysis,
+            "pose": self._open_pose_batch,
+            "review": self._open_session_review,
+            "multicam": self._open_multi_camera,
+            "devices": self._on_gpu_check,
+        }.get(key)
+        if opener is None:  # pragma: no cover - a card with no handler
+            logger.warning("No handler for tool card %r", key)
+            return
+        opener()
+
+    def _create_landing_page(self) -> None:
+        """Build the landing page and wire its five actions to the window."""
+        self._landing_page = LandingPage(settings=self._settings, parent=self)
+        self._landing_page.new_requested.connect(self._on_landing_new)
+        self._landing_page.open_requested.connect(self._on_landing_open)
+        self._landing_page.recent_requested.connect(self._on_landing_recent)
+        self._landing_page.lab_setup_requested.connect(self._on_lab_setup)
+        self._landing_page.guide_requested.connect(self._on_landing_guide)
+
+    def _wire_tab_bar(self) -> None:
+        """Connect the tabs to the stack, in both directions.
+
+        The return path is the half that is easy to leave out and the half that
+        breaks first. Every existing programmatic switch goes through
+        ``_stack.setCurrentIndex``; without ``currentChanged`` moving the
+        highlight, ``View > Dashboard`` would change the page and leave the tab
+        bar claiming you were still on the Builder.
+        """
+        if self._tab_bar is None or self._stack is None:
+            return
+        self._tab_bar.tab_selected.connect(self._on_tab_selected)
+        self._stack.currentChanged.connect(self._on_page_changed)
+        self._on_page_changed(self._stack.currentIndex())
+
+    def _on_tab_selected(self, key: str) -> None:
+        """A tab press. Routed through the existing switchers, not the stack.
+
+        ``switch_to_builder`` and ``_enter_dashboard`` do more than move the
+        stack -- they carry the single CameraPanel between views and hide or
+        restore the Analysis dock. Setting the index directly here would skip
+        all of it and leave the camera in the page the user just left.
+        """
+        if key == "dashboard":
+            self.switch_to_builder()
+        elif key == "run":
+            self._enter_dashboard()
+        elif key == "experiment":
+            self._show_experiment_tab()
+        elif key == "analyze":
+            self._stack.setCurrentIndex(PAGE_ANALYZE)
+
+    def _show_experiment_tab(self) -> None:
+        """Show the Experiment page and build whatever section is selected."""
+        if self._stack is None or self._experiment_page is None:
+            return
+        self._stack.setCurrentIndex(PAGE_EXPERIMENT)
+        self._experiment_page.refresh()
+
+    def _on_page_changed(self, index: int) -> None:
+        """Follow a page switch that did not start at the tab bar.
+
+        Also owns the tab bar's visibility: it is hidden on the landing page,
+        where the three tabs would all lead to an experiment that does not
+        exist yet.
+        """
+        if self._tab_bar is None:
+            return
+        self._tab_bar.setVisible(index != PAGE_LANDING)
+
+        # The strip is on every page now, but its two panel toggles drive the
+        # Builder's side panels -- which only exist on the Dashboard. Left up
+        # elsewhere they are buttons that collapse something you cannot see.
+        if self._status_strip is not None:
+            on_dashboard = index == PAGE_BUILDER
+            self._status_strip.left_toggle().setVisible(on_dashboard)
+            self._status_strip.right_toggle().setVisible(on_dashboard)
+            # Nothing is open on the landing page, so there is no name, no run
+            # state and no rig to report on.
+            self._status_strip.setVisible(index != PAGE_LANDING)
+
+        tab = TAB_BY_PAGE.get(index)
+        if tab is not None:
+            self._tab_bar.set_current(tab)
+
+    # --- Landing page ---
+
+    def is_on_landing(self) -> bool:
+        """Whether the landing page is the page currently showing.
+
+        Public because ``__main__`` needs it: it applies the startup view mode
+        by calling :meth:`switch_to_builder`, which would otherwise navigate
+        straight off the landing page the window had just chosen.
+        """
+        return self._stack is not None and self._stack.currentIndex() == PAGE_LANDING
+
+    def _show_landing(self) -> None:
+        """Put the landing page up and refresh its recent list."""
+        if self._stack is None or self._landing_page is None:
+            return
+        self._landing_page.refresh_recent()
+        self._stack.setCurrentIndex(PAGE_LANDING)
+
+    def _leave_landing(self) -> None:
+        """Enter the Experiment tab, from wherever the landing page sent us.
+
+        The Experiment tab and not the Dashboard: whether you arrived by *New*
+        or by *Open*, the next thing to do is confirm what this experiment is
+        and who is in it. Dropping someone onto a node graph straight from
+        *New Experiment* skips the step that makes the recording identifiable
+        afterwards -- which is the step that gets forgotten.
+        """
+        if self._stack is not None and self._stack.currentIndex() == PAGE_LANDING:
+            self._show_experiment_tab()
+
+    def _on_landing_new(self) -> None:
+        self._on_new()
+        self._leave_landing()
+
+    def _on_landing_open(self) -> None:
+        """*Open Experiment...* from the landing page.
+
+        Stays on the landing page if the file dialog was cancelled or the load
+        failed, so a mis-click does not dump the user onto an empty Builder
+        they did not ask for.
+        """
+        self._on_open()
+        if self._has_open_experiment():
+            self._leave_landing()
+
+    def _on_landing_recent(self, path: str) -> None:
+        """Open a recent experiment directly, skipping the file dialog."""
+        if not self._check_save():
+            return
+        if self._load_experiment_path(path):
+            self._leave_landing()
+
+    def _on_landing_guide(self) -> None:
+        from PyQt6.QtGui import QDesktopServices
+
+        from glider.first_run import USER_GUIDE_URL
+
+        QDesktopServices.openUrl(QUrl(USER_GUIDE_URL))
 
     def _install_palette_shortcut(self) -> None:
         """Bind ``Ctrl+K`` to the command palette, window-wide.
@@ -610,7 +1110,7 @@ class MainWindow(QMainWindow):
         self._node_editor.status_message.connect(self._show_status_message)
         self._node_editor.undo_redo_changed.connect(self._update_undo_redo_actions)
 
-        self._builder_view = AppShell(centre=self._graph_view)
+        self._builder_view = AppShell(centre=self._graph_view, strip=self._status_strip)
         self._builder_view.strip.palette_requested.connect(self._on_palette_requested)
 
     def _on_palette_requested(self) -> None:
@@ -1010,7 +1510,7 @@ class MainWindow(QMainWindow):
         # otherwise it stays in the operator view. This runs at desktop startup
         # (and on runner->desktop switch) with Builder shown, so the camera
         # correctly lands here then.
-        if self._stack is not None and self._stack.currentIndex() == 0:
+        if self._stack is not None and self._stack.currentIndex() == PAGE_BUILDER:
             self._move_camera_to_builder()
 
         # --- Files ---
@@ -1090,12 +1590,19 @@ class MainWindow(QMainWindow):
     # --- The status strip ---
 
     def _strip(self):
-        """The Builder's status strip, or ``None`` before the frame exists.
+        """The window's status strip, or ``None`` before it is built.
 
+        Reads the window's own attribute rather than the Builder frame's, which
+        is what lets the strip keep reporting in runner mode -- where there is
+        no Builder frame at all, and where this used to return ``None`` and
+        silently drop every refresh.
+
+        ``getattr`` rather than the attribute, because ``_setup_menu`` is
+        exercised on its own against an instance whose ``__init__`` was bypassed.
         Every refresh below is reached from a signal that can fire during
-        construction or in runner mode, so none of them may assume a frame.
+        construction, so none of them may assume a strip.
         """
-        return getattr(self._shell(), "strip", None)
+        return getattr(self, "_status_strip", None)
 
     def _refresh_strip_experiment(self) -> None:
         """Put the session's name and unsaved state on the strip."""
@@ -1547,9 +2054,9 @@ class MainWindow(QMainWindow):
                 base_settings=self._core.camera_manager.settings,
                 parent=None,
             )
-        else:
-            # Cameras may have been added or removed since it was last open.
-            self._multi_camera_window.refresh_cameras()
+        # Nothing to re-attach here: the window reconnects and re-enumerates in
+        # its own showEvent, which is also the path a reopen after a close has
+        # to go through to get its cameras streaming again.
         self._multi_camera_window.show()
         self._multi_camera_window.raise_()
         self._multi_camera_window.activateWindow()
@@ -2176,10 +2683,11 @@ class MainWindow(QMainWindow):
     # --- View switching ---
 
     def _enter_dashboard(self) -> None:
-        """Show the operator view (stack index 1) and refresh its hardware-derived
-        panels, so a hardware change made via the desktop dock in Builder mode is
-        reflected on entry. Shared by the menu toggle and programmatic switch."""
-        self._stack.setCurrentIndex(1)
+        """Show the operator view (``PAGE_OPERATOR``) and refresh its
+        hardware-derived panels, so a hardware change made via the desktop dock
+        in Builder mode is reflected on entry. Shared by the Run tab, the menu
+        toggle and programmatic switches."""
+        self._stack.setCurrentIndex(PAGE_OPERATOR)
         self._move_camera_to_operator_view()
         # Everything the Builder shows is inside the stack page that just went
         # away -- except the Analysis dock, which is a dock on the window and so
@@ -2191,13 +2699,22 @@ class MainWindow(QMainWindow):
         self._heal_stale_paint()
 
     def _toggle_view(self) -> None:
-        if self._stack.currentIndex() == 0:
-            self._enter_dashboard()
-        else:
+        """F11 / View > Dashboard: to the operator view, or back to the Builder.
+
+        The test is "am I on the operator view?", not "am I on page 0?". Those
+        were the same question while the stack held two pages and stopped being
+        the same question when it grew to four: from the Landing or Experiment
+        page the old form fell through to the else branch and went to the
+        Builder, so F11 did nothing visible on Landing and the wrong thing on
+        Experiment.
+        """
+        if self._stack.currentIndex() == PAGE_OPERATOR:
             self.switch_to_builder()
+        else:
+            self._enter_dashboard()
 
     def switch_to_builder(self) -> None:
-        self._stack.setCurrentIndex(0)
+        self._stack.setCurrentIndex(PAGE_BUILDER)
         self._move_camera_to_builder()
         self._restore_analysis_dock()
         self._heal_stale_paint()
@@ -2278,7 +2795,7 @@ class MainWindow(QMainWindow):
         self.setWindowFlags(Qt.WindowType.Window)
         self.showNormal()
 
-        self._stack.setCurrentIndex(0)
+        self._stack.setCurrentIndex(PAGE_BUILDER)
         self._restore_analysis_dock()
 
         if self._node_library_panel is None:
@@ -2320,6 +2837,10 @@ class MainWindow(QMainWindow):
                 self._node_editor.set_zone_configuration(self._zone_config)
             if self._experiment_dialog:
                 self._experiment_dialog.set_session(self._core.session)
+            # Same reason as in _load_experiment_path: the Experiment tab's
+            # sections hold the session and ZoneConfiguration that were just
+            # thrown away.
+            self._reset_experiment_page()
 
     def _on_open(self) -> None:
         """Open experiment file."""
@@ -2340,28 +2861,60 @@ class MainWindow(QMainWindow):
             self.showFullScreen()
 
         if file_path:
-            try:
-                self._core.load_session(file_path)
-                self._populate_hardware_from_session()
-                self._populate_graph_from_session()
-                self._load_zones_from_session()
-                self.session_changed.emit()
-                if self._hardware_panel:
-                    self._hardware_panel.refresh_tree()
-                if self._dash_hardware_panel:
-                    self._dash_hardware_panel.refresh_tree()
-                if self._node_library_panel:
-                    self._node_library_panel.refresh_flow_functions()
-                    self._node_library_panel.refresh_zones(self._zone_config)
-                if self._experiment_dialog:
-                    self._experiment_dialog.set_session(self._core.session)
-                rec_dir = self._core.session.metadata.recording_directory
-                if rec_dir:
-                    self._core.set_recording_directory(Path(rec_dir))
-                self._show_status_message(f"Opened: {file_path}")
-            except Exception as e:
-                logger.exception(f"Failed to open file: {e}")
-                QMessageBox.critical(self, "Error", f"Failed to open file: {e}")
+            self._load_experiment_path(file_path)
+
+    def _load_experiment_path(self, file_path: str) -> bool:
+        """Load ``file_path`` into the window, and report whether it worked.
+
+        Split out of :meth:`_on_open` so the landing page's recent rows can
+        open a file without going through a file dialog to name one it already
+        knows. The boolean is what the landing page needs: it stays put on a
+        failure rather than dropping the user onto an empty Builder and calling
+        that "opened".
+        """
+        try:
+            self._core.load_session(file_path)
+            self._populate_hardware_from_session()
+            self._populate_graph_from_session()
+            self._load_zones_from_session()
+            self.session_changed.emit()
+            if self._hardware_panel:
+                self._hardware_panel.refresh_tree()
+            if self._dash_hardware_panel:
+                self._dash_hardware_panel.refresh_tree()
+            if self._node_library_panel:
+                self._node_library_panel.refresh_flow_functions()
+                self._node_library_panel.refresh_zones(self._zone_config)
+            if self._experiment_dialog:
+                self._experiment_dialog.set_session(self._core.session)
+            rec_dir = self._core.session.metadata.recording_directory
+            if rec_dir:
+                self._core.set_recording_directory(Path(rec_dir))
+            self._remember_current_experiment(file_path)
+            # The Experiment tab's sections are bound to the session and zone
+            # config this load just replaced. Dropping them is what stops the
+            # tab editing objects nothing reads any more.
+            self._reset_experiment_page()
+            self._show_status_message(f"Opened: {file_path}")
+            return True
+        except Exception as e:
+            logger.exception(f"Failed to open file: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to open file: {e}")
+            return False
+
+    def _remember_current_experiment(self, file_path: str) -> None:
+        """Put ``file_path`` at the top of the landing page's recent list.
+
+        Best-effort: a settings backend that will not write costs the recent
+        list an entry, and must not cost the user the file they just opened.
+        """
+        try:
+            remember_experiment(file_path, self._settings)
+        except Exception:  # pragma: no cover - depends on the settings backend
+            logger.debug("Could not record recent experiment", exc_info=True)
+            return
+        if self._landing_page is not None:
+            self._landing_page.refresh_recent()
 
     def _populate_hardware_from_session(self) -> None:
         """Rebuild the hardware manager from the open session.
@@ -2481,6 +3034,7 @@ class MainWindow(QMainWindow):
             try:
                 self._core.save_session(file_path)
                 self._refresh_strip_experiment()
+                self._remember_current_experiment(file_path)
                 self._show_status_message(f"Saved: {file_path}")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save: {e}")
@@ -3115,7 +3669,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _on_gpu_check(self) -> None:
-        """Show accelerator diagnostics (Tools ▸ GPU / Device Check).
+        """Show accelerator diagnostics (the Analyze tab's GPU / Device Check).
 
         Reuses the pose subsystem's device utilities so the report matches what
         inference resolves at runtime (CUDA > MPS > CPU). Works — and is worth

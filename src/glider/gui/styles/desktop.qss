@@ -1482,3 +1482,301 @@ QLabel#commandPaletteEmpty {
 CameraPanel[dropActive="true"] {
     border: 2px dashed #38bdf8;
 }
+
+/* ============================================================================
+ * Top-level navigation, landing page, Experiment tab
+ *
+ * Hex values are the tokens from glider/gui/styles/colors.py, named in the
+ * comments -- QSS cannot import them.
+ * ========================================================================= */
+
+/* -- the centred tab bar --
+ *
+ * Sits directly above StatusStrip on the Dashboard, so it carries the same
+ * CHROME ground and no bottom border of its own: two 1px rules 36px apart read
+ * as a boxed-in strip rather than as one block of chrome. The strip below
+ * draws the single line that separates all of it from the work surface.
+ */
+
+QFrame#shellTabBar {
+    background-color: #0b0f14;                      /* CHROME */
+}
+
+QToolButton#shellTab {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: @RADIUS_SMALL@;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 13px;
+    font-weight: 500;
+    padding: 5px 18px;
+}
+
+QToolButton#shellTab:hover {
+    background-color: #151c25;                      /* SURFACE_2 */
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+}
+
+/* The selected tab. Tinted rather than filled: this bar is chrome, and a
+ * solid accent block at the top of the window competes with the accent on the
+ * primary action inside whichever page it selected. */
+QToolButton#shellTab:checked {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    border-color: rgba(56, 189, 248, 0.40);
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+/* -- landing page -- */
+
+QWidget#landingPage,
+QScrollArea#landingScroll,
+QWidget#landingHost {
+    background-color: #0a0e13;                      /* CANVAS */
+}
+
+/* The card is the only lit surface on the page, which is what makes a window
+ * with nothing open still look deliberate rather than unfinished. */
+QFrame#landingCard {
+    background-color: #0f1419;                      /* BASE */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_LARGE@;
+}
+
+QLabel#landingTitle {
+    background-color: transparent;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: 3px;
+}
+
+QLabel#landingSubtitle {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 12px;
+}
+
+QLabel#landingSectionLabel {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+QLabel#landingEmpty {
+    background-color: transparent;
+    color: #475569;                                 /* TEXT_DISABLED */
+    font-size: 12px;
+    padding: 6px 0;
+}
+
+QPushButton#landingPrimary {
+    background-color: #38bdf8;                      /* ACCENT */
+    border: none;
+    border-radius: @RADIUS_MEDIUM@;
+    color: #0a0e13;                                 /* CANVAS -- on accent */
+    font-size: 14px;
+    font-weight: 600;
+    padding: 11px 16px;
+}
+
+QPushButton#landingPrimary:hover {
+    background-color: #0ea5e9;                      /* ACCENT_HOVER */
+}
+
+QPushButton#landingPrimary:pressed {
+    background-color: #0284c7;                      /* ACCENT_PRESSED */
+}
+
+QPushButton#landingSecondary {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_MEDIUM@;
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+    font-size: 14px;
+    padding: 11px 16px;
+}
+
+QPushButton#landingSecondary:hover {
+    border-color: rgba(56, 189, 248, 0.40);         /* ACCENT @ 40% */
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+}
+
+/* Recent rows. Full width and left-aligned so the list reads as a list; a
+ * centred row of filenames looks like a group of buttons and hides which one
+ * is at the top. */
+QToolButton#landingRecent {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: @RADIUS_SMALL@;
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+    font-size: 13px;
+    padding: 7px 10px;
+    text-align: left;
+}
+
+QToolButton#landingRecent:hover {
+    background-color: #151c25;                      /* SURFACE_2 */
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+QToolButton#landingLink {
+    background-color: transparent;
+    border: none;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 12px;
+    padding: 2px 0;
+}
+
+QToolButton#landingLink:hover {
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+/* -- Experiment tab -- */
+
+QWidget#experimentPage {
+    background-color: #0a0e13;                      /* CANVAS */
+}
+
+QFrame#experimentRail {
+    background-color: #0f1419;                      /* BASE */
+    border-right: 1px solid #1e2530;                /* BORDER */
+}
+
+QLabel#experimentRailHeading {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    padding-left: 6px;
+    text-transform: uppercase;
+}
+
+QToolButton#experimentRailItem {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: @RADIUS_SMALL@;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 13px;
+    padding: 8px 10px;
+    text-align: left;
+}
+
+QToolButton#experimentRailItem:hover {
+    background-color: #151c25;                      /* SURFACE_2 */
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+}
+
+QToolButton#experimentRailItem:checked {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    border-color: rgba(56, 189, 248, 0.40);
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+QStackedWidget#experimentSections {
+    background-color: #0a0e13;                      /* CANVAS */
+}
+
+QLabel#experimentPlaceholder {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 13px;
+    padding: 32px;
+}
+
+/* -- Plugins section: what stands in while the catalogue loads -- */
+
+QLabel#pluginsSectionStatus {
+    background-color: transparent;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 13px;
+    padding: 0 48px;
+}
+
+QPushButton#pluginsSectionRetry {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_MEDIUM@;
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+    font-size: 13px;
+    padding: 7px 18px;
+}
+
+QPushButton#pluginsSectionRetry:hover {
+    border-color: rgba(56, 189, 248, 0.40);         /* ACCENT @ 40% */
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+}
+
+/* -- Analyze tab: tool cards -- */
+
+QWidget#toolsPage,
+QScrollArea#toolsScroll,
+QWidget#toolsHost {
+    background-color: #0a0e13;                      /* CANVAS */
+}
+
+QLabel#toolsHeading {
+    background-color: transparent;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    font-size: 18px;
+    font-weight: 600;
+}
+
+QLabel#toolsSubheading {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 12px;
+}
+
+QFrame#toolCard {
+    background-color: #0f1419;                      /* BASE */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_LARGE@;
+    max-width: 720px;
+}
+
+QFrame#toolCard[available="true"]:hover {
+    background-color: #111820;                      /* SURFACE_1 */
+    border-color: rgba(56, 189, 248, 0.40);         /* ACCENT @ 40% */
+}
+
+/* A tool whose dependencies are missing. Dimmed as a whole rather than only in
+ * its text: a card that looks live and does nothing is worse than one that
+ * plainly says it is not ready. */
+QFrame#toolCard[available="false"] {
+    background-color: #0b0f14;                      /* CHROME */
+    border-style: dashed;
+}
+
+QLabel#toolCardTitle {
+    background-color: transparent;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    font-size: 14px;
+    font-weight: 600;
+}
+
+QFrame#toolCard[available="false"] QLabel#toolCardTitle {
+    color: #718096;                                 /* TEXT_MUTED */
+}
+
+QLabel#toolCardBody {
+    background-color: transparent;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 12px;
+}
+
+/* The install line. Monospaced so the pip command reads as something to type
+ * rather than as prose about typing something. */
+QLabel#toolCardUnavailable {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-family: "SF Mono", "Cascadia Mono", "DejaVu Sans Mono", monospace;
+    font-size: 11px;
+}
+
+QLabel#toolCardIcon {
+    background-color: transparent;
+}

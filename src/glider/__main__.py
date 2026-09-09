@@ -351,7 +351,14 @@ def create_main_window(
         logger.info("Starting in Runner mode")
     else:
         stylesheet = get_desktop_stylesheet()
-        window.switch_to_builder()
+        # Only if the window has not already chosen the landing page. It picks
+        # its own first page during construction -- landing when nothing is
+        # open, the Builder when --file named something -- and switch_to_builder
+        # here would navigate straight off the landing page every launch,
+        # making it unreachable. Not caught by the window's own tests, which
+        # construct MainWindow directly and never come through here.
+        if not window.is_on_landing():
+            window.switch_to_builder()
         logger.info("Starting in Builder mode")
 
     # Applied to the application, not the window: the tool windows (Behavior
@@ -487,6 +494,13 @@ def main() -> int:
 
         # Schedule the async initialization
         async def run_app():
+            # Up before any of the slow work below -- plugin discovery,
+            # hardware enumeration, the vision imports -- because that stretch
+            # is precisely the gap this covers. It is best-effort and may be
+            # None; every use below guards.
+            from glider.gui.splash import show_splash
+
+            splash = show_splash()
             try:
                 core = await init_glider(app, args)
 
@@ -497,32 +511,54 @@ def main() -> int:
                     force_mode = "runner"
 
                 window = create_main_window(app, core, force_mode)
-                window.show()
 
-                # Packaging phase-1 wiring: first-run welcome + post-launch
-                # silent update check. Both are best-effort — any failure
-                # here must never prevent the app from coming up.
-                try:
-                    from glider.first_run import run_first_run_if_needed
+                def _after_window_shown() -> None:
+                    """Packaging phase-1 wiring, run once the window is up.
 
-                    run_first_run_if_needed(window)
-                except Exception:
-                    logger.warning("First-run setup failed", exc_info=True)
+                    Deferred behind the splash rather than fired here: the
+                    first-run welcome is *modal*, and opening it while the
+                    splash is still the visible app puts a dialog on screen
+                    belonging to a window nobody has been shown yet. Both
+                    halves stay best-effort — neither may prevent the app from
+                    coming up.
+                    """
+                    try:
+                        from glider.first_run import run_first_run_if_needed
 
-                try:
-                    from PyQt6.QtCore import QTimer
+                        run_first_run_if_needed(window)
+                    except Exception:
+                        logger.warning("First-run setup failed", exc_info=True)
 
-                    # Delay so the update check doesn't race first-paint or
-                    # compete with hardware enumeration on slow machines.
-                    QTimer.singleShot(3000, lambda: window.check_for_updates(silent=True))
-                except Exception:
-                    logger.debug("Could not schedule startup update check", exc_info=True)
+                    try:
+                        from PyQt6.QtCore import QTimer
+
+                        # Delay so the update check doesn't race first-paint or
+                        # compete with hardware enumeration on slow machines.
+                        QTimer.singleShot(3000, lambda: window.check_for_updates(silent=True))
+                    except Exception:
+                        logger.debug("Could not schedule startup update check", exc_info=True)
+
+                if splash is not None:
+                    # The splash is what shows the window -- deliberately not
+                    # shown here. Showing it now would put it on screen beside
+                    # the splash for the rest of the floor, which is exactly
+                    # the "window appears before the logo" this is meant to
+                    # prevent.
+                    splash.finish_when_due(window, on_shown=_after_window_shown)
+                else:
+                    window.show()
+                    _after_window_shown()
 
                 # Store core reference for cleanup
                 app._glider_core = core
 
             except Exception as e:
                 logger.exception(f"Initialization error: {e}")
+                if splash is not None:
+                    # Without this the splash outlives the app: it is a
+                    # top-level window of its own, so quitting with it up
+                    # leaves a logo on the desktop and nothing to close it.
+                    splash.close()
                 app.quit()
 
         # Run initialization
@@ -590,7 +626,8 @@ def run_sync_fallback(app: QApplication, args: argparse.Namespace) -> int:
         window.switch_to_runner()
     else:
         app.setStyleSheet(get_desktop_stylesheet())
-        window.switch_to_builder()
+        if not window.is_on_landing():  # see create_main_window
+            window.switch_to_builder()
 
     window.show()
 

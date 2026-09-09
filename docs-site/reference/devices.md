@@ -30,7 +30,7 @@ how to add and bind them, see [Devices & Hardware](../building/devices.md).
 
 !!! tip "Maimu stimulators come from a plugin"
     The **Maimu** device and node ship in `glider-maimu`, installable from
-    **Tools → Plugins…**. It bakes in the stimulator's UUIDs and command
+    the **Experiment** tab's **Plugins** section. It bakes in the stimulator's UUIDs and command
     protocol, so adding one is **Add Device → Maimu → Scan** rather than
     pasting UUIDs into a generic BLE device.
 

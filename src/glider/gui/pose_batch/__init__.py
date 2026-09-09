@@ -1,4 +1,4 @@
-"""Batch pose tracking tool (Tools → Batch Pose Tracking…).
+"""Batch pose tracking tool (the Analyze tab, Batch Pose Tracking).
 
 Runs a YOLO-pose model over directories of videos and writes a DeepLabCut
 CSV beside each one, driving the Qt-free core in

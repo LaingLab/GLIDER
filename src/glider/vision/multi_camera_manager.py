@@ -44,6 +44,12 @@ class MultiCameraManager:
         # Callbacks for each camera
         self._frame_callbacks: dict[str, list[Callable[[str, np.ndarray, float], None]]] = {}
 
+        # Who currently wants the cameras streaming. This manager is shared --
+        # the camera panel's multi-camera preview and the Multi-Camera window
+        # both drive the same physical cameras -- so "stop" cannot mean "stop"
+        # for whichever of them says it first. See :meth:`stop_all_streaming`.
+        self._stream_owners: set[str] = set()
+
     @property
     def enabled(self) -> bool:
         """Whether multi-camera mode is enabled."""
@@ -220,22 +226,55 @@ class MultiCameraManager:
         if camera:
             camera.stop_streaming()
 
-    def start_all_streaming(self) -> dict[str, bool]:
+    def start_all_streaming(self, owner: str | None = None) -> dict[str, bool]:
         """
         Start streaming on all connected cameras.
+
+        Args:
+            owner: A caller identifying itself, so its later
+                :meth:`stop_all_streaming` releases only its own claim. Callers
+                that pass one here must pass the same one when they stop.
 
         Returns:
             Dictionary of camera_id -> success
         """
+        if owner is not None:
+            self._stream_owners.add(owner)
         results = {}
         for camera_id, camera in self._cameras.items():
             results[camera_id] = camera.start_streaming()
         return results
 
-    def stop_all_streaming(self) -> None:
-        """Stop streaming on all cameras."""
+    def stop_all_streaming(self, owner: str | None = None) -> None:
+        """Release ``owner``'s claim, and stop only if nobody else holds one.
+
+        Two windows drive these cameras -- the camera panel's multi-camera
+        preview and the Multi-Camera window -- and both share this manager. An
+        unconditional stop from either turns the other one's live preview black
+        while it is still on screen, which is why the claim is tracked here
+        rather than guessed at by each caller: only this object can see both.
+
+        ``owner=None`` stops unconditionally and drops every claim. That is the
+        shutdown path, and the historical behaviour, so a caller that never
+        opted into a claim is unaffected.
+        """
+        if owner is None:
+            self._stream_owners.clear()
+        else:
+            self._stream_owners.discard(owner)
+            if self._stream_owners:
+                logger.debug(
+                    "Keeping cameras streaming for %s after %s released",
+                    sorted(self._stream_owners),
+                    owner,
+                )
+                return
         for camera in self._cameras.values():
             camera.stop_streaming()
+
+    def stream_owners(self) -> set[str]:
+        """Who currently holds a streaming claim. For tests and diagnostics."""
+        return set(self._stream_owners)
 
     def is_camera_streaming(self, camera_id: str) -> bool:
         """Check if a specific camera is streaming."""
