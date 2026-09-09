@@ -575,7 +575,13 @@ class MainWindow(QMainWindow):
 
     def _setup_window(self) -> None:
         """Configure the main window properties."""
-        self.setWindowTitle("GLIDER - General Laboratory Interface")
+        # ``[*]`` is Qt's placeholder for the modified marker. It has to be in
+        # the title for setWindowModified to render anywhere: on macOS it puts
+        # the dot in the close button and leaves the text alone, elsewhere it
+        # substitutes an asterisk. This is the shell's only unsaved-work
+        # indicator now that the strip no longer writes "- edited" beside the
+        # name, and it is the one every other application on the platform uses.
+        self.setWindowTitle("GLIDER[*] - General Laboratory Interface")
         config = get_config()
 
         if self._view_manager.is_runner_mode:
@@ -1605,15 +1611,27 @@ class MainWindow(QMainWindow):
         return getattr(self, "_status_strip", None)
 
     def _refresh_strip_experiment(self) -> None:
-        """Put the session's name and unsaved state on the strip."""
+        """Put the session's name on the strip, and its unsaved state on the window.
+
+        Two places, because they are two different jobs. The strip carries the
+        name. Unsaved work goes to ``setWindowModified``, which is the
+        platform's own indicator -- the dot in the close button on macOS -- and
+        replaces the "- edited" the strip used to append to the name.
+
+        Set on the window rather than the strip so it survives a runner-mode
+        launch, where there is no strip at all.
+        """
+        session = self._core.session
+        dirty = bool(session is not None and session.is_dirty)
+        self.setWindowModified(dirty)
+
         strip = self._strip()
         if strip is None:
             return
-        session = self._core.session
         if session is None:
             strip.set_experiment("", False)
             return
-        strip.set_experiment(session.metadata.name or "", bool(session.is_dirty))
+        strip.set_experiment(session.metadata.name or "", dirty)
 
     def _refresh_strip_devices(self) -> None:
         """Put one dot per registered board on the strip, from real state.

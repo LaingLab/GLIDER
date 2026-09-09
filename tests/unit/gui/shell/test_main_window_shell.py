@@ -387,23 +387,38 @@ def test_view_menu_has_no_dangling_dock_toggles(qtbot, main_window_factory):
 # ------------------------------------------------------------------ the strip
 
 
-def test_strip_shows_the_experiment_name_and_dirty_state(qtbot, main_window_factory):
+def test_strip_shows_the_experiment_name(qtbot, main_window_factory):
     window = _builder(main_window_factory)
     strip = window._builder_view.strip
 
     window._core.session.name = "Open Field Day 3"
     window._refresh_strip_experiment()
     assert strip.name_label().text() == "Open Field Day 3"
-    assert strip.dirty_label().isVisible()  # setting the name marks it dirty
+
+
+def test_the_window_carries_the_unsaved_marker(qtbot, main_window_factory):
+    """``setWindowModified`` rather than text in the strip: it is the
+    platform's own indicator -- the dot in the close button on macOS -- and it
+    is set on the *window*, so it survives a runner-mode launch where there is
+    no strip at all.
+
+    The title has to keep its ``[*]`` placeholder or Qt renders nothing.
+    """
+    window = _builder(main_window_factory)
+    assert "[*]" in window.windowTitle()
+
+    window._core.session.name = "Open Field Day 3"
+    window._refresh_strip_experiment()
+    assert window.isWindowModified()  # setting the name marks it dirty
 
     window._core.session._dirty = False
     window._refresh_strip_experiment()
-    assert not strip.dirty_label().isVisible()
+    assert not window.isWindowModified()
 
 
-# The window title is set once and never updated, so the strip's marker is the
-# only unsaved-work indicator in the shell. These drive real edits -- a node
-# dropped on the canvas, a node dragged -- rather than calling the refresh.
+# ``setWindowModified`` is the shell's only unsaved-work indicator, so these
+# drive real edits -- a node dropped on the canvas, a node dragged -- rather
+# than calling the refresh.
 
 
 def _clean(window) -> None:
@@ -421,7 +436,7 @@ def test_dropping_a_node_raises_the_dirty_marker(qtbot, main_window_factory):
     window._graph_view.node_created.emit("DigitalWrite", 100.0, 100.0)
 
     assert window._core.session.is_dirty
-    assert window._builder_view.strip.dirty_label().isVisible()
+    assert window.isWindowModified()
 
 
 def test_moving_a_node_raises_the_dirty_marker(qtbot, main_window_factory):
@@ -435,7 +450,7 @@ def test_moving_a_node_raises_the_dirty_marker(qtbot, main_window_factory):
     window._graph_view.node_moved.emit(node_id, 220.0, 140.0)
 
     assert window._core.session.is_dirty
-    assert window._builder_view.strip.dirty_label().isVisible()
+    assert window.isWindowModified()
 
 
 def test_a_new_session_starts_the_marker_watching_again(qtbot, main_window_factory):
@@ -448,7 +463,7 @@ def test_a_new_session_starts_the_marker_watching_again(qtbot, main_window_facto
 
     window._graph_view.node_created.emit("DigitalWrite", 10.0, 10.0)
 
-    assert window._builder_view.strip.dirty_label().isVisible()
+    assert window.isWindowModified()
 
 
 def test_strip_run_state_follows_the_session(qtbot, main_window_factory):

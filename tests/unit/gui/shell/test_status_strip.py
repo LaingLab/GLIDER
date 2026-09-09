@@ -99,10 +99,21 @@ def themed_strip(qtbot):
 # --------------------------------------------------------------- the experiment
 
 
-def test_the_experiment_name_and_its_dirty_marker_both_render(strip):
+def test_the_experiment_name_renders(strip):
     assert strip.name_label().text() == "open-field-cohort-3"
     assert strip.name_label().isVisible()
-    assert strip.dirty_label().isVisible()
+
+
+def test_the_dirty_marker_is_tracked_but_never_shown(strip):
+    """The marker is deliberately invisible: a strip that appends "- edited"
+    to a name the moment you type in it is telling you what you just did.
+
+    It is still *kept*, so anything reading it back gets the truth, and the
+    window carries the real indicator -- see
+    ``test_the_window_carries_the_unsaved_marker``.
+    """
+    strip.set_experiment("open-field-cohort-3", dirty=True)
+    assert not strip.dirty_label().isVisible()
     assert strip.dirty_label().text().strip() != ""
 
 
@@ -112,13 +123,13 @@ def test_the_dirty_marker_is_kept_out_of_the_name(strip):
     assert strip.dirty_label().text() not in strip.name_label().text()
 
 
-def test_saving_takes_the_dirty_marker_away_and_editing_brings_it_back(strip, qtbot):
+def test_the_name_survives_a_dirty_toggle(strip):
+    """Whatever the marker does, the name is what the strip is for."""
     strip.set_experiment("open-field-cohort-3", dirty=False)
-    qtbot.waitUntil(lambda: not strip.dirty_label().isVisible())
     assert strip.name_label().text() == "open-field-cohort-3"
 
     strip.set_experiment("open-field-cohort-3", dirty=True)
-    qtbot.waitUntil(strip.dirty_label().isVisible)
+    assert strip.name_label().text() == "open-field-cohort-3"
 
 
 def test_an_unnamed_experiment_still_leaves_a_readable_strip(strip):
@@ -411,8 +422,13 @@ def test_each_toggle_sits_at_the_edge_of_the_panel_it_controls(strip):
     """
     left = _span(strip, strip.left_toggle())
     right = _span(strip, strip.right_toggle())
-    between = [_span(strip, w) for w in (strip.name_label(), strip.pill(), strip.palette_hint())]
-    between += [_span(strip, chip) for chip in strip.device_chips()]
+    # Visible widgets only. A hidden one has no place in the row -- its span
+    # collapses to the origin, which would put it "left of" the left toggle and
+    # fail this for a reason that has nothing to do with where the toggles are.
+    # The pill is hidden while idle, which is the state this fixture is in.
+    candidates = [strip.name_label(), strip.pill(), strip.palette_hint()]
+    candidates += list(strip.device_chips())
+    between = [_span(strip, w) for w in candidates if w.isVisible()]
 
     assert between, "nothing between the toggles makes this claim vacuous"
     assert all(left[1] <= start for start, _ in between)

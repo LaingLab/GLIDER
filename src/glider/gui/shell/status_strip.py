@@ -375,6 +375,14 @@ class StatusStrip(QFrame):
         self._name.setObjectName("statusStripExperiment")
         outer.addWidget(self._name)
 
+        # Built, wired and never shown. Both used to sit here permanently and
+        # both were noise for the state the app is in almost all the time: the
+        # marker said "edited" beside a name you had just edited, and the pill
+        # said "Idle" beside an experiment that was, self-evidently, idle.
+        # Kept as widgets rather than deleted because set_experiment and
+        # set_run_state are called from a dozen places and still carry real
+        # information -- see set_run_state, which shows the pill again the
+        # moment the state stops being idle.
         self._dirty = QLabel(_DIRTY_MARK, self)
         self._dirty.setObjectName("statusStripDirty")
         self._dirty.setVisible(False)
@@ -383,6 +391,7 @@ class StatusStrip(QFrame):
         self._pill = QLabel(RUN_STATE_TEXT["idle"], self)
         self._pill.setObjectName("statusStripPill")
         self._pill.setProperty("state", "idle")
+        self._pill.setVisible(False)
         outer.addWidget(self._pill)
 
         outer.addStretch(1)
@@ -426,7 +435,12 @@ class StatusStrip(QFrame):
         session rather than a broken one.
         """
         self._name.setText(name.strip() or _UNNAMED)
-        self._dirty.setVisible(bool(dirty))
+        # Deliberately not shown. The marker is kept and kept up to date so
+        # dirty_label() still reports honestly to anything that asks, but a
+        # strip that appends "- edited" to a name the moment you type in it is
+        # telling you something you already know. Nothing is lost: _check_save
+        # still stops a close, a New or an Open over unsaved work.
+        self._dirty.setVisible(False)
 
     def name_label(self) -> QLabel:
         """The label carrying the experiment name."""
@@ -474,6 +488,12 @@ class StatusStrip(QFrame):
         text = RUN_STATE_TEXT[state]
         self._pill.setText(f"{text} {self._run_detail}" if self._run_detail else text)
         self._pill.setProperty("state", state)
+        # Shown only when it has something to say. Idle is the state the app is
+        # in almost all of the time, and a pill that is always there stops
+        # being read -- which is the failure mode for the one indicator that
+        # has to be noticed when a run starts, or a board drops out of one at
+        # 3am. Everything but idle appears.
+        self._pill.setVisible(state != "idle")
         restyle(self._pill)
 
     def pill(self) -> QLabel:
