@@ -286,22 +286,22 @@ class ExperimentDialog(QDialog):
 
         main_layout.addWidget(button_box)
 
-    def embed(self) -> "ExperimentDialog":
-        """Turn this dialog into a plain widget for the Experiment tab.
+    def detach_sections(self) -> tuple[QWidget, QWidget]:
+        """Take the two halves out and hand each back as its own page.
 
-        Returns ``self`` so it can be added to a layout in one expression.
+        Returns ``(metadata, subjects)`` -- the experiment-info form and the
+        subject table, each lifted out of this dialog and wrapped in a scroll
+        area of its own, ready to be a section of the Experiment tab.
 
-        Two changes, and both are needed. ``Qt.WindowType.Widget`` stops Qt
-        giving it a window of its own the moment it is shown -- without it the
-        "embedded" form opens as a floating window over the tab that is
-        supposed to contain it. Hiding the button box removes a *Close* that
-        would either do nothing or hide the page out from under the user,
-        depending on how the parent laid it out.
+        **Both halves stay wired to this instance**, which the caller must keep
+        alive: every signal, every edit handler and ``set_session`` still
+        belong to the dialog, and only its two group boxes have moved. That is
+        the point -- the alternative was two new widgets reimplementing a form
+        and a table that already work.
 
-        This does not change how the class behaves as a dialog: every other
-        caller still gets ``exec()`` and a Close button. The switch is one-way
-        per instance, which is why the Experiment tab builds its own rather
-        than borrowing the window's.
+        **Call this at most once per instance, and never on one you also mean
+        to** ``exec()``. It empties the dialog: what is left is a window with a
+        scroll area containing nothing.
         """
         self.setWindowFlags(Qt.WindowType.Widget)
         self._button_box.hide()
@@ -310,15 +310,42 @@ class ExperimentDialog(QDialog):
         # right-aligned labels. In a 600px dialog that reads fine; on the
         # Experiment tab, which is as wide as the window, it strands the labels
         # in the middle of the page with 200px fields beside them. Set both
-        # explicitly so the embedded form looks the same on every platform.
+        # explicitly so the form looks the same on every platform.
         self._info_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self._info_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
 
-        # ...and a ceiling, because "grows to fill" on a 27-inch display is a
-        # 2000px-wide box for a protocol id. The form stays a readable column.
+        # A ceiling on the form only. "Grows to fill" on a 27-inch display is a
+        # 2000px box for a protocol id, so the form stays a readable column --
+        # but the subject table is a table, and a table wants the width.
         self._info_group.setMaximumWidth(EMBEDDED_FORM_MAX_WIDTH)
-        self._subjects_group.setMaximumWidth(EMBEDDED_FORM_MAX_WIDTH)
-        return self
+
+        return self._as_page(self._info_group), self._as_page(self._subjects_group)
+
+    @staticmethod
+    def _as_page(group: QWidget) -> QWidget:
+        """One group box, reparented into a scroll area that fills a section.
+
+        The scroll area is not optional: the subject table and the seven-field
+        form both outgrow a short window, and a section that clips has no way
+        to reach what it clipped.
+        """
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        scroll = QScrollArea(page)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        layout.addWidget(scroll)
+
+        host = QWidget()
+        host_layout = QVBoxLayout(host)
+        host_layout.setContentsMargins(16, 16, 16, 16)
+        host_layout.addWidget(group)
+        host_layout.addStretch(1)
+        scroll.setWidget(host)
+        return page
 
     def _connect_signals(self) -> None:
         """Connect internal signals."""

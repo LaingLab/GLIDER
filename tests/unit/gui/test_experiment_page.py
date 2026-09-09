@@ -48,11 +48,11 @@ def test_a_section_is_built_once_and_then_reused(qtbot, counting_builders):
     qtbot.addWidget(page)
 
     page.show_section("zones")
-    page.show_section("details")
+    page.show_section("metadata")
     page.show_section("zones")
 
     assert calls["zones"] == 1
-    assert calls["details"] == 1
+    assert calls["metadata"] == 1
     assert calls["vocabulary"] == 0
 
 
@@ -60,13 +60,13 @@ def test_reset_drops_built_sections_so_they_rebuild(qtbot, counting_builders):
     calls, builders = counting_builders
     page = ExperimentPage(builders)
     qtbot.addWidget(page)
-    page.show_section("details")
+    page.show_section("metadata")
 
     page.reset()
     assert page.built_sections() == {}
 
     page.refresh()
-    assert calls["details"] == 2
+    assert calls["metadata"] == 2
 
 
 def test_a_builder_that_raises_costs_only_its_own_section(qtbot, counting_builders):
@@ -84,8 +84,8 @@ def test_a_builder_that_raises_costs_only_its_own_section(qtbot, counting_builde
     page.show_section("zones")
     assert page.built_sections() == {}
 
-    page.show_section("details")
-    assert "details" in page.built_sections()
+    page.show_section("metadata")
+    assert "metadata" in page.built_sections()
 
 
 def test_the_rail_switches_sections(qtbot, counting_builders):
@@ -102,17 +102,27 @@ def test_the_rail_switches_sections(qtbot, counting_builders):
 # ------------------------------------------------------- embedded dialogs
 
 
-def test_experiment_dialog_embeds_as_a_plain_widget(qtbot, main_window_factory):
-    """``embed()`` has to do both halves: without the Widget flag the
-    'embedded' form opens as a floating window over the tab meant to hold it."""
+def test_experiment_dialog_splits_into_two_pages(qtbot, main_window_factory):
+    """Metadata and Mice are separate pages backed by one editor -- so a
+    subject added on one and a protocol typed on the other reach the session
+    through a single object that knows about both."""
     from glider.gui.dialogs.experiment_dialog import ExperimentDialog
 
     window = main_window_factory(desktop_mode=True)
-    panel = ExperimentDialog(session=window._core.session).embed()
-    qtbot.addWidget(panel)
+    dialog = ExperimentDialog(session=window._core.session)
+    qtbot.addWidget(dialog)
 
-    assert panel.windowFlags() & Qt.WindowType.Widget == Qt.WindowType.Widget
-    assert not panel._button_box.isVisible()
+    metadata, mice = dialog.detach_sections()
+    qtbot.addWidget(metadata)
+    qtbot.addWidget(mice)
+
+    assert dialog.windowFlags() & Qt.WindowType.Widget == Qt.WindowType.Widget
+    assert not dialog._button_box.isVisible()
+    # Each group box actually moved into its own page, rather than being
+    # copied or left behind in the dialog's own scroll area.
+    assert dialog._info_group.window() is metadata.window()
+    assert dialog._subjects_group.window() is mice.window()
+    assert metadata is not mice
 
 
 def test_zone_editor_embeds_without_ok_or_cancel(qtbot):
@@ -144,7 +154,7 @@ def test_lab_setup_embedded_keeps_done_and_survives_accept(qtbot):
     assert form.isVisible()
 
 
-def test_the_window_builds_the_details_section_on_first_visit(qtbot, main_window_factory):
+def test_the_window_builds_the_metadata_section_on_first_visit(qtbot, main_window_factory):
     window = main_window_factory(desktop_mode=True)
     window.show()
     window.switch_to_builder()
@@ -152,7 +162,56 @@ def test_the_window_builds_the_details_section_on_first_visit(qtbot, main_window
     window._tab_bar.buttons()["experiment"].click()
 
     assert window._stack.currentIndex() == PAGE_EXPERIMENT
-    assert "details" in window._experiment_page.built_sections()
+    assert "metadata" in window._experiment_page.built_sections()
+
+
+def test_metadata_and_mice_share_one_editor(qtbot, main_window_factory):
+    """Two rail entries, one ExperimentDialog underneath."""
+    window = main_window_factory(desktop_mode=True)
+    window.show()
+    window._show_experiment_tab()
+    window._experiment_page.show_section("mice")
+
+    built = window._experiment_page.built_sections()
+    assert {"metadata", "mice"} <= set(built)
+    assert built["metadata"] is not built["mice"]
+    assert window._experiment_details is not None
+
+
+def test_new_experiment_drops_the_shared_editor_too(qtbot, main_window_factory):
+    """Not just the pages: a surviving dialog would keep writing subjects into
+    the experiment that was just replaced."""
+    window = main_window_factory(desktop_mode=True)
+    window.show()
+    window._show_experiment_tab()
+    assert window._experiment_details is not None
+
+    window._on_new()
+
+    assert window._experiment_details is None
+    assert window._experiment_detail_widgets is None
+
+
+def test_every_rail_entry_has_its_own_glyph(qtbot):
+    """Four distinguishable icons, painted rather than shipped -- a blank or a
+    duplicate here is invisible until someone looks at the rail."""
+    page = ExperimentPage({k: (lambda key=k: QLabel(key)) for k in SECTION_KEYS})
+    qtbot.addWidget(page)
+
+    seen = []
+    for key, button in page.rail_buttons().items():
+        assert not button.icon().isNull(), key
+        image = button.icon().pixmap(16, 16).toImage()
+        assert any(
+            image.pixelColor(x, y).alpha() > 0
+            for x in range(image.width())
+            for y in range(image.height())
+        ), f"{key} glyph painted nothing"
+        seen.append(image)
+
+    for i in range(len(seen)):
+        for j in range(i + 1, len(seen)):
+            assert seen[i] != seen[j], "two rail glyphs are identical"
 
 
 def test_new_experiment_resets_the_tab(qtbot, main_window_factory):

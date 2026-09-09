@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -54,6 +55,7 @@ from glider.gui.shell import (
     CommandPalette,
     LandingPage,
     ShellTabBar,
+    StatusStrip,
     commands_from_menus,
     fit_window_to_screen,
     menu_actions,
@@ -419,6 +421,22 @@ class MainWindow(QMainWindow):
         # helper: switching the stack takes the entire frame off screen, so
         # nothing can linger over the operator view (issue #39).
         self._builder_view: AppShell | None = None
+        # Top-level navigation and the pages it reaches. All four are built in
+        # _setup_ui; declared here so every guard below can read them during
+        # construction, before that runs.
+        self._tab_bar: ShellTabBar | None = None
+        self._landing_page: LandingPage | None = None
+        self._experiment_page: ExperimentPage | None = None
+        # The one status strip. Owned by the window rather than by the Builder
+        # frame, so the experiment name and run state stay on screen whichever
+        # tab is showing -- and so they still report in runner mode, where
+        # there is no Builder frame at all.
+        self._status_strip: StatusStrip | None = None
+        # The editor behind the Metadata and Mice sections, and the two pages
+        # it was split into. Both are rebuilt per session; see
+        # _experiment_detail_pages.
+        self._experiment_details: ExperimentDialog | None = None
+        self._experiment_detail_widgets: tuple[QWidget, QWidget] | None = None
         # The node editor's properties form lives inside this; see PropertiesHost.
         self._properties_host: PropertiesHost | None = None
         self._properties_widget: QWidget | None = None
@@ -592,8 +610,7 @@ class MainWindow(QMainWindow):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
 
-        self._tab_bar = ShellTabBar(container)
-        column.addWidget(self._tab_bar)
+        column.addWidget(self._build_chrome_row(container))
 
         self._stack = QStackedWidget(container)
         column.addWidget(self._stack, 1)
@@ -628,6 +645,44 @@ class MainWindow(QMainWindow):
 
         self._install_palette_shortcut()
 
+    def _build_chrome_row(self, parent: QWidget) -> QWidget:
+        """One strip carrying the experiment name, the tabs and the run state.
+
+        The two used to be separate rows because the strip lived inside
+        :class:`~glider.gui.shell.app_shell.AppShell` -- the Dashboard page --
+        and the tabs had to sit above the stack to survive a page switch. That
+        put two bars of chrome above every screen and, worse, left the
+        experiment name and run state invisible on two tabs out of three.
+
+        **The tabs are centred by overlay, not by a stretch.** Both widgets go
+        in the same grid cell: the strip fills it, and the tab bar is placed
+        over the strip's own central gap with ``AlignHCenter``. A stretch
+        between the strip's left and right groups would centre the tabs in
+        whatever space those groups left over, so the group would slide
+        sideways every time the experiment name changed length -- which reads
+        as a rendering bug, because nothing on screen explains the movement.
+        Overlaying costs nothing: the strip's middle is empty by construction,
+        and the tab bar carries the same CHROME ground, so the seam is
+        invisible.
+        """
+        row = QWidget(parent)
+        row.setObjectName("shellChromeRow")
+        grid = QGridLayout(row)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(0)
+
+        self._status_strip = StatusStrip(row)
+        grid.addWidget(self._status_strip, 0, 0)
+
+        self._tab_bar = ShellTabBar(row)
+        grid.addWidget(
+            self._tab_bar,
+            0,
+            0,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+        )
+        return row
+
     def _has_open_experiment(self) -> bool:
         """Whether something was already opened before the window was built.
 
@@ -649,30 +704,60 @@ class MainWindow(QMainWindow):
         """
         self._experiment_page = ExperimentPage(
             {
-                "details": self._build_experiment_details_section,
+                "metadata": lambda: self._experiment_detail_pages()[0],
+                "mice": lambda: self._experiment_detail_pages()[1],
                 "zones": self._build_zones_section,
                 "vocabulary": self._build_vocabulary_section,
             },
             parent=self,
         )
 
-    def _build_experiment_details_section(self) -> QWidget:
-        """The experiment metadata + subject table, embedded.
+    def _experiment_detail_pages(self) -> tuple[QWidget, QWidget]:
+        """The Metadata and Mice pages, from one shared dialog.
 
-        A second :class:`ExperimentDialog` instance rather than the one
-        ``Experiment > Settings`` opens: :meth:`ExperimentDialog.embed` is a
-        one-way switch on the instance, so sharing one would turn that menu
-        item into a window that never appears.
+        Both come out of a single :class:`ExperimentDialog`, built on first
+        use: the two group boxes are separate pages on the rail but the same
+        editor underneath, so a subject added on Mice and the protocol typed on
+        Metadata reach the session through one object that knows about both.
+        Two dialogs would mean two ``set_session`` targets and two ideas of
+        which subject is active.
+
+        A *separate* instance from the one ``Experiment > Settings`` opens:
+        :meth:`ExperimentDialog.detach_sections` empties the dialog it is
+        called on, so sharing would turn that menu item into an empty window.
+
+        Cached because ``detach_sections`` may only run once per instance.
+        Cleared by :meth:`_reset_experiment_page` when the session is replaced.
         """
-        panel = ExperimentDialog(
-            session=self._core.session,
-            parent=self._experiment_page,
-            is_touch_mode=self._view_manager.is_runner_mode,
-        ).embed()
-        panel.metadata_changed.connect(self._on_experiment_metadata_changed)
-        panel.edit_subject_requested.connect(self._on_edit_subject)
-        panel.recording_directory_changed.connect(self._on_recording_directory_changed)
-        return panel
+        if self._experiment_detail_widgets is None:
+            dialog = ExperimentDialog(
+                session=self._core.session,
+                parent=self._experiment_page,
+                is_touch_mode=self._view_manager.is_runner_mode,
+            )
+            dialog.metadata_changed.connect(self._on_experiment_metadata_changed)
+            dialog.edit_subject_requested.connect(self._on_edit_subject)
+            dialog.recording_directory_changed.connect(self._on_recording_directory_changed)
+            # Held for the lifetime of the pages: the group boxes moved out,
+            # but every signal and handler still belongs to the dialog, so
+            # dropping this reference would collect the editor out from under
+            # its own widgets.
+            self._experiment_details = dialog
+            self._experiment_detail_widgets = dialog.detach_sections()
+        return self._experiment_detail_widgets
+
+    def _reset_experiment_page(self) -> None:
+        """Drop the Experiment tab's sections and the editor behind them.
+
+        Called wherever the session or the zone configuration is replaced. The
+        dialog goes with the pages: it is bound to the session it was built
+        with, and a surviving instance would keep writing subjects into an
+        experiment nothing reads any more.
+        """
+        if self._experiment_page is not None:
+            self._experiment_page.reset()
+        self._experiment_details = None
+        self._experiment_detail_widgets = None
 
     def _build_zones_section(self) -> QWidget:
         """The zone editor, embedded and propagating as you draw.
@@ -776,6 +861,18 @@ class MainWindow(QMainWindow):
         if self._tab_bar is None:
             return
         self._tab_bar.setVisible(index != PAGE_LANDING)
+
+        # The strip is on every page now, but its two panel toggles drive the
+        # Builder's side panels -- which only exist on the Dashboard. Left up
+        # elsewhere they are buttons that collapse something you cannot see.
+        if self._status_strip is not None:
+            on_dashboard = index == PAGE_BUILDER
+            self._status_strip.left_toggle().setVisible(on_dashboard)
+            self._status_strip.right_toggle().setVisible(on_dashboard)
+            # Nothing is open on the landing page, so there is no name, no run
+            # state and no rig to report on.
+            self._status_strip.setVisible(index != PAGE_LANDING)
+
         tab = TAB_BY_PAGE.get(index)
         if tab is not None:
             self._tab_bar.set_current(tab)
@@ -885,7 +982,7 @@ class MainWindow(QMainWindow):
         self._node_editor.status_message.connect(self._show_status_message)
         self._node_editor.undo_redo_changed.connect(self._update_undo_redo_actions)
 
-        self._builder_view = AppShell(centre=self._graph_view)
+        self._builder_view = AppShell(centre=self._graph_view, strip=self._status_strip)
         self._builder_view.strip.palette_requested.connect(self._on_palette_requested)
 
     def _on_palette_requested(self) -> None:
@@ -1365,12 +1462,19 @@ class MainWindow(QMainWindow):
     # --- The status strip ---
 
     def _strip(self):
-        """The Builder's status strip, or ``None`` before the frame exists.
+        """The window's status strip, or ``None`` before it is built.
 
+        Reads the window's own attribute rather than the Builder frame's, which
+        is what lets the strip keep reporting in runner mode -- where there is
+        no Builder frame at all, and where this used to return ``None`` and
+        silently drop every refresh.
+
+        ``getattr`` rather than the attribute, because ``_setup_menu`` is
+        exercised on its own against an instance whose ``__init__`` was bypassed.
         Every refresh below is reached from a signal that can fire during
-        construction or in runner mode, so none of them may assume a frame.
+        construction, so none of them may assume a strip.
         """
-        return getattr(self._shell(), "strip", None)
+        return getattr(self, "_status_strip", None)
 
     def _refresh_strip_experiment(self) -> None:
         """Put the session's name and unsaved state on the strip."""
@@ -2608,8 +2712,7 @@ class MainWindow(QMainWindow):
             # Same reason as in _load_experiment_path: the Experiment tab's
             # sections hold the session and ZoneConfiguration that were just
             # thrown away.
-            if self._experiment_page is not None:
-                self._experiment_page.reset()
+            self._reset_experiment_page()
 
     def _on_open(self) -> None:
         """Open experiment file."""
@@ -2663,8 +2766,7 @@ class MainWindow(QMainWindow):
             # The Experiment tab's sections are bound to the session and zone
             # config this load just replaced. Dropping them is what stops the
             # tab editing objects nothing reads any more.
-            if self._experiment_page is not None:
-                self._experiment_page.reset()
+            self._reset_experiment_page()
             self._show_status_message(f"Opened: {file_path}")
             return True
         except Exception as e:
