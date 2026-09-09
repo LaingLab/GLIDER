@@ -38,8 +38,9 @@ Two reasons, and the second is the load-bearing one:
   discarded. :meth:`ExperimentPage.reset` is what the window calls to prevent
   that, and it must be called on every session change.
 
-**No colour is set from Python here**: every part carries an ``objectName`` and
-``desktop.qss`` owns the appearance.
+**No colour is set from Python here except the rail glyphs**, which are
+illustrations rather than controls -- see :class:`_SectionGlyphEngine`. Every
+other part carries an ``objectName`` and ``desktop.qss`` owns the appearance.
 """
 
 from __future__ import annotations
@@ -49,11 +50,11 @@ from collections.abc import Callable
 
 from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt
 from PyQt6.QtGui import (
+    QColor,
     QIcon,
     QIconEngine,
     QPainter,
     QPainterPath,
-    QPalette,
     QPen,
     QPixmap,
 )
@@ -66,6 +67,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from glider.gui.styles import colors
 
 logger = logging.getLogger(__name__)
 
@@ -100,20 +103,33 @@ RAIL_WIDTH = 168
 
 
 class _SectionGlyphEngine(QIconEngine):
-    """Paints one rail icon, in whatever colour the stylesheet is using.
+    """Paints one rail icon: a small pastel illustration of what the section is.
 
     Vector, and painted fresh per request, for the same reason
     :class:`~glider.gui.shell.status_strip._SidebarGlyphEngine` is: these are
-    drawn at 16px and a fixed-resolution pixmap stretched to a fractional
-    device pixel ratio smears.
+    drawn at 16px, and a fixed-resolution pixmap stretched to a fractional
+    device pixel ratio smears. One class rather than four SVG files for the
+    same reason.
 
-    **The colour is read from the widget's palette at paint time, never stored.**
-    ``desktop.qss`` sets ``color`` on ``QToolButton#experimentRailItem`` and on
-    its ``:checked`` rule; reading it live is what makes the icon go accent
-    along with its label when a section is selected, without this file naming a
-    colour of its own. That is also why there is one engine class and not four
-    icon files -- eight, really, since each would need a selected variant.
+    **These are the one place in the GUI where Python names colours**, against
+    the rule the rest of this package follows -- and the exception is the
+    point. Everything else on screen is a control, and a control's colour is a
+    *state*, which is why ``desktop.qss`` owns it. These are pictures, and a
+    picture's colour is its identity: you find Mice by its pink mouse rather
+    than by reading four labels, which is the whole reason a rail of icons
+    beats a rail of words. An icon that went accent on selection, the way the
+    label beside it does, would throw that away for the one entry you had
+    already found. The pairs live in :mod:`~glider.gui.styles.colors`, so a
+    re-theme still has one place to go.
     """
+
+    #: Fill and detail colour per section key.
+    _PALETTE: dict[str, tuple[str, str]] = {
+        "metadata": (colors.PASTEL_LILAC, colors.PASTEL_LILAC_DEEP),
+        "mice": (colors.PASTEL_ROSE, colors.PASTEL_ROSE_DEEP),
+        "zones": (colors.PASTEL_MINT, colors.PASTEL_MINT_DEEP),
+        "vocabulary": (colors.PASTEL_PEACH, colors.PASTEL_PEACH_DEEP),
+    }
 
     def __init__(self, widget: QWidget, key: str) -> None:
         super().__init__()
@@ -140,98 +156,104 @@ class _SectionGlyphEngine(QIconEngine):
     ) -> None:
         if painter is None:
             return
-        color = self._widget.palette().color(QPalette.ColorRole.WindowText)
+        pair = self._PALETTE.get(self._key)
+        if pair is None:
+            return
+        fill, detail = QColor(pair[0]), QColor(pair[1])
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        box = QRectF(rect).adjusted(1.5, 1.5, -1.5, -1.5)
-        stroke = max(box.height() * 0.10, 1.0)
-        pen = QPen(color)
-        pen.setWidthF(stroke)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
+        box = QRectF(rect).adjusted(1.0, 1.0, -1.0, -1.0)
+        # Line weight is a fraction of the glyph, not a constant: a 1px rule
+        # looks spindly on a Retina panel and heavy on a 1x one.
+        stroke = max(box.height() * 0.11, 1.0)
 
-        drawer = {
+        {
             "metadata": self._draw_metadata,
             "mice": self._draw_mouse,
             "zones": self._draw_zones,
             "vocabulary": self._draw_vocabulary,
-        }.get(self._key)
-        if drawer is not None:
-            drawer(painter, box, color)
+        }[self._key](painter, box, fill, detail, stroke)
         painter.restore()
 
-    # -- the four glyphs. Each draws inside `box`, in the pen already set. --
-
     @staticmethod
-    def _draw_metadata(painter: QPainter, box: QRectF, color) -> None:
-        """A sheet with three lines of text on it."""
+    def _line_pen(color: QColor, width: float) -> QPen:
+        pen = QPen(color)
+        pen.setWidthF(width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        return pen
+
+    # -- the four glyphs. Each fills a soft shape, then draws its detail. --
+
+    @classmethod
+    def _draw_metadata(cls, p: QPainter, box: QRectF, fill, detail, stroke) -> None:
+        """A filled card with three lines written on it."""
         w, h = box.width(), box.height()
-        sheet = QRectF(box.left() + w * 0.12, box.top(), w * 0.76, h)
-        painter.drawRoundedRect(sheet, w * 0.10, w * 0.10)
+        card = QRectF(box.left() + w * 0.10, box.top(), w * 0.80, h)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(fill)
+        p.drawRoundedRect(card, w * 0.14, w * 0.14)
+
+        p.setPen(cls._line_pen(detail, stroke))
         for i, frac in enumerate((0.30, 0.52, 0.74)):
-            y = sheet.top() + h * frac
-            # The last line is short, the way a paragraph's last line is --
-            # that is what stops three parallel strokes reading as a barcode.
-            right = sheet.right() - w * (0.36 if i == 2 else 0.16)
-            painter.drawLine(QPointF(sheet.left() + w * 0.16, y), QPointF(right, y))
+            y = card.top() + h * frac
+            # A short last line, the way a paragraph ends -- three equal
+            # strokes read as a barcode rather than as writing.
+            right = card.right() - w * (0.40 if i == 2 else 0.18)
+            p.drawLine(QPointF(card.left() + w * 0.18, y), QPointF(right, y))
 
-    @staticmethod
-    def _draw_mouse(painter: QPainter, box: QRectF, color) -> None:
-        """A mouse in profile: round body, one ear, a tail."""
+    @classmethod
+    def _draw_mouse(cls, p: QPainter, box: QRectF, fill, detail, stroke) -> None:
+        """A mouse in profile: filled body and ear, a curling tail."""
         w, h = box.width(), box.height()
-        body = QRectF(box.left() + w * 0.06, box.top() + h * 0.28, w * 0.62, h * 0.56)
-        painter.drawEllipse(body)
 
-        ear = QRectF(box.left() + w * 0.10, box.top() + h * 0.06, w * 0.30, h * 0.30)
-        painter.drawEllipse(ear)
-
-        # A nose dot, so the body reads as facing left rather than as a circle.
-        painter.save()
-        painter.setBrush(color)
-        painter.setPen(Qt.PenStyle.NoPen)
-        nose = w * 0.07
-        painter.drawEllipse(
-            QRectF(body.left() - nose * 0.3, body.center().y() - nose / 2, nose, nose)
-        )
-        painter.restore()
-
-        # Tail: out of the right flank and curling up.
-        tail = QPainterPath(QPointF(body.right() - w * 0.02, body.center().y() + h * 0.12))
+        # Tail first, so the body covers where it joins.
+        tail = QPainterPath(QPointF(box.left() + w * 0.62, box.top() + h * 0.80))
         tail.cubicTo(
-            QPointF(box.right(), box.bottom()),
-            QPointF(box.right(), box.top() + h * 0.30),
-            QPointF(box.right() - w * 0.18, box.top() + h * 0.22),
+            QPointF(box.right() + w * 0.04, box.bottom()),
+            QPointF(box.right(), box.top() + h * 0.34),
+            QPointF(box.right() - w * 0.22, box.top() + h * 0.26),
         )
-        painter.drawPath(tail)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(cls._line_pen(detail, stroke))
+        p.drawPath(tail)
 
-    @staticmethod
-    def _draw_zones(painter: QPainter, box: QRectF, color) -> None:
-        """An arena with a zone marked inside it."""
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(detail)
+        p.drawEllipse(QRectF(box.left() + w * 0.08, box.top() + h * 0.04, w * 0.34, h * 0.34))
+
+        p.setBrush(fill)
+        p.drawEllipse(QRectF(box.left(), box.top() + h * 0.26, w * 0.70, h * 0.60))
+
+        # An eye, in the deeper tone. Without it the body is just a circle.
+        eye = w * 0.10
+        p.setBrush(detail)
+        p.drawEllipse(QRectF(box.left() + w * 0.14, box.top() + h * 0.46, eye, eye))
+
+    @classmethod
+    def _draw_zones(cls, p: QPainter, box: QRectF, fill, detail, stroke) -> None:
+        """An arena, with one zone marked inside it."""
         w, h = box.width(), box.height()
-        painter.drawRoundedRect(box, w * 0.14, w * 0.14)
-        inner = QRectF(box.left() + w * 0.22, box.top() + h * 0.22, w * 0.40, h * 0.40)
-        painter.save()
-        painter.setBrush(color)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(inner)
-        painter.restore()
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(fill)
+        p.drawRoundedRect(box, w * 0.20, w * 0.20)
 
-    @staticmethod
-    def _draw_vocabulary(painter: QPainter, box: QRectF, color) -> None:
+        p.setBrush(detail)
+        p.drawEllipse(QRectF(box.left() + w * 0.18, box.top() + h * 0.18, w * 0.38, h * 0.38))
+
+    @classmethod
+    def _draw_vocabulary(cls, p: QPainter, box: QRectF, fill, detail, stroke) -> None:
         """A list: three terms, each with its bullet."""
         w, h = box.width(), box.height()
-        dot = w * 0.13
-        for frac in (0.16, 0.5, 0.84):
+        dot = w * 0.22
+        for frac in (0.14, 0.5, 0.86):
             y = box.top() + h * frac
-            painter.save()
-            painter.setBrush(color)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(QRectF(box.left(), y - dot / 2, dot, dot))
-            painter.restore()
-            painter.drawLine(QPointF(box.left() + w * 0.34, y), QPointF(box.right(), y))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(detail)
+            p.drawEllipse(QRectF(box.left(), y - dot / 2, dot, dot))
+            p.setPen(cls._line_pen(fill, stroke * 1.5))
+            p.drawLine(QPointF(box.left() + w * 0.40, y), QPointF(box.right(), y))
 
 
 class ExperimentPage(QWidget):

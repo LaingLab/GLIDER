@@ -143,6 +143,30 @@ Q_ACCENT = QColor(ACCENT)
 Q_ACCENT_HOVER = QColor(ACCENT_HOVER)
 Q_ACCENT_PRESSED = QColor(ACCENT_PRESSED)
 Q_SUCCESS = QColor(SUCCESS)
+# === Pastel illustration set ===
+#
+# For small illustrative icons -- currently the Experiment tab's section rail.
+# Deliberately apart from every palette above, and the one place in the theme
+# where colour identifies a *thing* rather than a state: the point of these is
+# that you find "Mice" by its pink mouse without reading four labels, which is
+# how a rail of icons earns its space over a rail of words.
+#
+# Each is a pair: a soft fill and a deeper line of the same hue, so a glyph can
+# be drawn as a filled shape with its own detail on top rather than as a flat
+# blob. They are fixed rather than palette-derived -- an icon that went accent
+# on selection would lose the identity that makes it findable.
+#
+# Tuned against the BASE/CANVAS surfaces above: pastel on a dark ground has to
+# sit high in lightness or it reads as mud at 16px.
+PASTEL_LILAC = "#c7c9f5"
+PASTEL_LILAC_DEEP = "#8b8fd9"
+PASTEL_ROSE = "#f6b6cd"
+PASTEL_ROSE_DEEP = "#d97fa6"
+PASTEL_MINT = "#a5e6d0"
+PASTEL_MINT_DEEP = "#5cbfa0"
+PASTEL_PEACH = "#fbd2a4"
+PASTEL_PEACH_DEEP = "#e2a35c"
+
 Q_WARNING = QColor(WARNING)
 Q_ERROR = QColor(ERROR)
 Q_INFO = QColor(INFO)
@@ -163,3 +187,12 @@ Q_RECORDING = QColor(RECORDING)
 Q_LED_ON = QColor(LED_ON)
 Q_LED_OFF = QColor(LED_OFF)
 Q_INPUT_VALUE = QColor(INPUT_VALUE)
+
+Q_PASTEL_LILAC = QColor(PASTEL_LILAC)
+Q_PASTEL_LILAC_DEEP = QColor(PASTEL_LILAC_DEEP)
+Q_PASTEL_ROSE = QColor(PASTEL_ROSE)
+Q_PASTEL_ROSE_DEEP = QColor(PASTEL_ROSE_DEEP)
+Q_PASTEL_MINT = QColor(PASTEL_MINT)
+Q_PASTEL_MINT_DEEP = QColor(PASTEL_MINT_DEEP)
+Q_PASTEL_PEACH = QColor(PASTEL_PEACH)
+Q_PASTEL_PEACH_DEEP = QColor(PASTEL_PEACH_DEEP)
