@@ -609,3 +609,63 @@ def test_a_plain_valid_case_builds_the_exact_argv_it_always_did():
         "glider-harp",
         "harp-protocol>=0.5.0rc1,<0.6",
     ]
+
+
+class TestExternallyManagedEnvironments:
+    """PEP 668. The report: a plugin install failed with pip's own wall of text
+    surfaced as "pip exited with code 1", which is accurate and useless."""
+
+    def test_it_refuses_before_choosing_a_tool(self):
+        """Checked ahead of the pip/uv split because it defeats both -- uv
+        refuses the same environment for the same reason pip does."""
+        from glider.plugins.installer import ExternallyManagedError, installer_command
+
+        with pytest.raises(ExternallyManagedError) as caught:
+            installer_command(
+                "glider-example",
+                externally_managed=lambda: True,
+                pip_available=lambda: True,
+                uv_path=lambda: "/usr/bin/uv",
+            )
+
+        message = str(caught.value)
+        assert "externally managed" in message
+        # It has to say what to do, not just what went wrong.
+        assert "uv venv" in message
+
+    def test_it_is_a_no_installer_error(self):
+        """A subclass, so every existing handler keeps catching it: the
+        caller's job is the same either way -- put the message on the row."""
+        from glider.plugins.installer import (
+            ExternallyManagedError,
+            NoInstallerError,
+            installer_command,
+        )
+
+        with pytest.raises(NoInstallerError):
+            installer_command("glider-example", externally_managed=lambda: True)
+        assert issubclass(ExternallyManagedError, NoInstallerError)
+
+    def test_a_venv_is_installable_even_from_a_marked_base(self, monkeypatch):
+        """The case that matters, and the one a naive marker check breaks.
+
+        GLIDER's documented setup is `uv venv`, and uv marks the base
+        interpreters it manages -- so testing the marker without the venv check
+        would refuse every install GLIDER actually supports.
+        """
+        from glider.plugins import installer
+
+        monkeypatch.setattr(installer.sys, "prefix", "/somewhere/.venv")
+        monkeypatch.setattr(installer.sys, "base_prefix", "/usr")
+        assert installer._is_externally_managed() is False
+
+    def test_a_real_install_is_unaffected(self):
+        """The default path still builds a command when nothing is marked."""
+        from glider.plugins.installer import installer_command
+
+        args = installer_command(
+            "glider-example",
+            externally_managed=lambda: False,
+            pip_available=lambda: True,
+        )
+        assert args[1:4] == ["-m", "pip", "install"]
