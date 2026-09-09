@@ -200,7 +200,7 @@ def test_new_from_landing_enters_the_experiment_tab(qtbot, main_window_factory):
 
 def test_experiment_is_the_first_tab(qtbot):
     """Order is part of the design, not an accident of the dict."""
-    assert TAB_KEYS == ("experiment", "dashboard", "run")
+    assert TAB_KEYS == ("experiment", "dashboard", "run", "analyze")
 
 
 def test_tabs_switch_pages(qtbot, main_window_factory):
@@ -305,3 +305,40 @@ def test_create_main_window_does_not_navigate_off_the_landing_page(qtbot, tmp_pa
         core.session._mark_clean()
         loop.run_until_complete(core.shutdown())
         loop.close()
+
+
+def test_analyze_is_the_fourth_tab(qtbot, main_window_factory):
+    from glider.gui.main_window import PAGE_ANALYZE
+
+    window = main_window_factory(desktop_mode=True)
+    window.show()
+    window.switch_to_builder()
+
+    window._tab_bar.buttons()["analyze"].click()
+
+    assert window._stack.currentIndex() == PAGE_ANALYZE
+    assert TAB_KEYS == ("experiment", "dashboard", "run", "analyze")
+
+
+def test_an_unavailable_tool_card_opens_nothing(qtbot):
+    """A greyed card must be inert, not merely styled as one -- the whole
+    reason it is greyed is that its dependencies are not installed."""
+    from glider.gui.panels.tools_page import ToolCard, ToolsPage
+
+    page = ToolsPage(
+        [
+            ToolCard("ok", "Fine", "works", "devices"),
+            ToolCard(
+                "no", "Broken", "", "pose", available=False, unavailable_reason="install something"
+            ),
+        ]
+    )
+    qtbot.addWidget(page)
+
+    chosen: list[str] = []
+    page.tool_chosen.connect(chosen.append)
+    page._on_clicked("no")
+    assert chosen == []
+
+    page._on_clicked("ok")
+    assert chosen == ["ok"]

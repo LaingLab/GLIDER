@@ -49,6 +49,7 @@ from glider.gui.panels.experiment_page import ExperimentPage
 from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController, node_category_for_type
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
+from glider.gui.panels.tools_page import ToolsPage
 from glider.gui.shell import (
     AppShell,
     Command,
@@ -90,6 +91,7 @@ PAGE_BUILDER = 0
 PAGE_OPERATOR = 1
 PAGE_EXPERIMENT = 2
 PAGE_LANDING = 3
+PAGE_ANALYZE = 4
 
 # Which page each tab shows. Keys are from
 # :data:`glider.gui.shell.tab_bar.TAB_KEYS`; "dashboard" is the Builder (nodes,
@@ -100,6 +102,7 @@ PAGE_BY_TAB = {
     "dashboard": PAGE_BUILDER,
     "experiment": PAGE_EXPERIMENT,
     "run": PAGE_OPERATOR,
+    "analyze": PAGE_ANALYZE,
 }
 
 # The reverse, for moving the tab highlight when a page switch started
@@ -117,7 +120,7 @@ TAB_BY_PAGE = {page: tab for tab, page in PAGE_BY_TAB.items()}
 # GLIDER has no existing users and so for the foreseeable future *every* user is
 # a first-time one. Same reason the palette greys a disabled command instead of
 # hiding it, and a collapsed panel leaves its icon rail behind.
-MENU_BAR_TITLES = ("File", "Edit", "Experiment", "View", "Tools", "Help")
+MENU_BAR_TITLES = ("File", "Edit", "Experiment", "View", "Help")
 
 # The menus that came off the bar, and the rule for what may join them:
 #
@@ -146,7 +149,7 @@ MENU_BAR_TITLES = ("File", "Edit", "Experiment", "View", "Tools", "Help")
 # all eight into ``_menus``; the bar shows six of them; ``commands()`` reads all
 # eight. One list, two consumers -- rather than a bar and a separate registry
 # that would drift, which is the failure this project has hit before.
-RELOCATED_MENU_TITLES = ("Hardware", "Run")
+RELOCATED_MENU_TITLES = ("Hardware", "Run", "Tools")
 
 # The remaining gap, written down so it is a decision rather than an oversight.
 #
@@ -427,6 +430,7 @@ class MainWindow(QMainWindow):
         self._tab_bar: ShellTabBar | None = None
         self._landing_page: LandingPage | None = None
         self._experiment_page: ExperimentPage | None = None
+        self._analyze_page: ToolsPage | None = None
         # The one status strip. Owned by the window rather than by the Builder
         # frame, so the experiment name and run state stay on screen whichever
         # tab is showing -- and so they still report in runner mode, where
@@ -629,6 +633,8 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._experiment_page)  # Index 2 -- PAGE_EXPERIMENT
         self._create_landing_page()
         self._stack.addWidget(self._landing_page)  # Index 3 -- PAGE_LANDING
+        self._create_analyze_page()
+        self._stack.addWidget(self._analyze_page)  # Index 4 -- PAGE_ANALYZE
 
         self._wire_tab_bar()
 
@@ -818,6 +824,113 @@ class MainWindow(QMainWindow):
         if self._node_editor:
             self._node_editor.set_zone_configuration(self._zone_config)
 
+    def _create_analyze_page(self) -> None:
+        """Build the Analyze tab: a front door for each tool window.
+
+        The availability probes are the same ones the Tools menu used, and are
+        still lazy imports for the same reason -- they pull the optional
+        behavior and vision stacks, which must stay out of startup.
+
+        The difference from the menu is what happens when a probe fails. A menu
+        item could only grey itself and hide the reason in a tooltip; a card has
+        room to print the install line, which is what turns "Behavior Analysis
+        is greyed out" from a support question into something the user can act
+        on.
+        """
+        from glider.gui.behavior.availability import (
+            behavior_available,
+            missing_behavior_deps,
+        )
+        from glider.gui.panels.tools_page import ToolCard
+        from glider.gui.pose_batch.availability import (
+            missing_pose_batch_deps,
+            pose_batch_available,
+        )
+
+        def _install_line(extra: str, missing) -> str:
+            return (
+                f"Needs the {extra} extra. Install it with:\n"
+                f"    pip install 'glider[{extra}]'\n"
+                f"Missing: {', '.join(missing)}"
+            )
+
+        has_behavior = behavior_available()
+        has_pose = pose_batch_available()
+        behavior_reason = "" if has_behavior else _install_line("behavior", missing_behavior_deps())
+
+        cards = [
+            ToolCard(
+                key="behavior",
+                title="Behavior Analysis",
+                description=(
+                    "Cluster and label behaviour from pose tracks, and train a "
+                    "classifier on what you label."
+                ),
+                glyph="behavior",
+                available=has_behavior,
+                unavailable_reason=behavior_reason,
+            ),
+            ToolCard(
+                key="pose",
+                title="Batch Pose Tracking",
+                description=(
+                    "Run a pose model over directories of videos and write " "DeepLabCut CSVs."
+                ),
+                glyph="pose",
+                available=has_pose,
+                unavailable_reason=(
+                    "" if has_pose else _install_line("vision", missing_pose_batch_deps())
+                ),
+            ),
+            ToolCard(
+                key="review",
+                title="Session Review",
+                description=(
+                    "Scrub an analyzed session, select a window, and read what " "is in it."
+                ),
+                glyph="review",
+                available=has_behavior,
+                # The same probe: this reads the behavior tool's own outputs.
+                unavailable_reason=behavior_reason,
+            ),
+            ToolCard(
+                key="multicam",
+                title="Multi-Camera Recording",
+                description=("Preview, record and monitor every camera in the rig at once."),
+                glyph="multicam",
+            ),
+            ToolCard(
+                key="devices",
+                title="GPU / Device Check",
+                description=(
+                    "What inference will actually run on, and why. Worth opening "
+                    "precisely when something is missing."
+                ),
+                glyph="devices",
+            ),
+        ]
+
+        self._analyze_page = ToolsPage(cards, parent=self)
+        self._analyze_page.tool_chosen.connect(self._on_tool_chosen)
+
+    def _on_tool_chosen(self, key: str) -> None:
+        """Open the window a card stands for.
+
+        Routed through the same handlers the menu used, rather than duplicating
+        their lazy imports and their already-open bookkeeping.
+        """
+        opener = {
+            "behavior": self._open_behavior_analysis,
+            "pose": self._open_pose_batch,
+            "review": self._open_session_review,
+            "multicam": self._open_multi_camera,
+            "devices": self._on_gpu_check,
+        }.get(key)
+        if opener is None:  # pragma: no cover - a card with no handler
+            logger.warning("No handler for tool card %r", key)
+            return
+        opener()
+
     def _create_landing_page(self) -> None:
         """Build the landing page and wire its five actions to the window."""
         self._landing_page = LandingPage(settings=self._settings, parent=self)
@@ -856,6 +969,8 @@ class MainWindow(QMainWindow):
             self._enter_dashboard()
         elif key == "experiment":
             self._show_experiment_tab()
+        elif key == "analyze":
+            self._stack.setCurrentIndex(PAGE_ANALYZE)
 
     def _show_experiment_tab(self) -> None:
         """Show the Experiment page and build whatever section is selected."""
@@ -3554,7 +3669,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _on_gpu_check(self) -> None:
-        """Show accelerator diagnostics (Tools ▸ GPU / Device Check).
+        """Show accelerator diagnostics (the Analyze tab's GPU / Device Check).
 
         Reuses the pose subsystem's device utilities so the report matches what
         inference resolves at runtime (CUDA > MPS > CPU). Works — and is worth

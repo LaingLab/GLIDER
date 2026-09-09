@@ -38,9 +38,10 @@ Two reasons, and the second is the load-bearing one:
   discarded. :meth:`ExperimentPage.reset` is what the window calls to prevent
   that, and it must be called on every session change.
 
-**No colour is set from Python here except the rail glyphs**, which are
-illustrations rather than controls -- see :class:`_SectionGlyphEngine`. Every
-other part carries an ``objectName`` and ``desktop.qss`` owns the appearance.
+**No colour is set from Python here**: every part carries an ``objectName``
+and ``desktop.qss`` owns the appearance. The rail glyphs are the exception that
+proves it, and they live in
+:mod:`~glider.gui.widgets.pastel_glyphs` rather than here.
 """
 
 from __future__ import annotations
@@ -48,16 +49,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt
-from PyQt6.QtGui import (
-    QColor,
-    QIcon,
-    QIconEngine,
-    QPainter,
-    QPainterPath,
-    QPen,
-    QPixmap,
-)
+from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -68,7 +60,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.gui.styles import colors
+from glider.gui.widgets.pastel_glyphs import glyph_icon
 
 logger = logging.getLogger(__name__)
 
@@ -103,362 +95,6 @@ ICON_PX = 20
 #: at the shipped font, and fixed so the editors beside it do not reflow when
 #: the selection moves.
 RAIL_WIDTH = 168
-
-
-class _SectionGlyphEngine(QIconEngine):
-    """Paints one rail icon: a small pastel illustration of what the section is.
-
-    Vector, and painted fresh per request, for the same reason
-    :class:`~glider.gui.shell.status_strip._SidebarGlyphEngine` is: these are
-    drawn at 16px, and a fixed-resolution pixmap stretched to a fractional
-    device pixel ratio smears. One class rather than four SVG files for the
-    same reason.
-
-    **These are the one place in the GUI where Python names colours**, against
-    the rule the rest of this package follows -- and the exception is the
-    point. Everything else on screen is a control, and a control's colour is a
-    *state*, which is why ``desktop.qss`` owns it. These are pictures, and a
-    picture's colour is its identity: you find Mice by its pink mouse rather
-    than by reading four labels, which is the whole reason a rail of icons
-    beats a rail of words. An icon that went accent on selection, the way the
-    label beside it does, would throw that away for the one entry you had
-    already found. The pairs live in :mod:`~glider.gui.styles.colors`, so a
-    re-theme still has one place to go.
-    """
-
-    #: Fill and detail colour per section key.
-    _PALETTE: dict[str, tuple[str, str]] = {
-        "metadata": (colors.PASTEL_LILAC, colors.PASTEL_LILAC_DEEP),
-        "mice": (colors.PASTEL_ROSE, colors.PASTEL_ROSE_DEEP),
-        "zones": (colors.PASTEL_MINT, colors.PASTEL_MINT_DEEP),
-        "vocabulary": (colors.PASTEL_PEACH, colors.PASTEL_PEACH_DEEP),
-        "plugins": (colors.PASTEL_SKY, colors.PASTEL_SKY_DEEP),
-    }
-
-    def __init__(self, widget: QWidget, key: str) -> None:
-        super().__init__()
-        self._widget = widget
-        self._key = key
-
-    def clone(self) -> _SectionGlyphEngine:
-        return _SectionGlyphEngine(self._widget, self._key)
-
-    def pixmap(self, size: QSize, mode: QIcon.Mode, state: QIcon.State) -> QPixmap:
-        # Same override, for the same reason, as the sidebar glyph: this Qt
-        # build's default QIconEngine.pixmap() hands back an opaque block
-        # rather than painting onto a transparent buffer, so every icon comes
-        # out as one solid swatch.
-        pixmap = QPixmap(size)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        self.paint(painter, QRect(0, 0, size.width(), size.height()), mode, state)
-        painter.end()
-        return pixmap
-
-    def paint(
-        self, painter: QPainter | None, rect: QRect, mode: QIcon.Mode, state: QIcon.State
-    ) -> None:
-        if painter is None:
-            return
-        pair = self._PALETTE.get(self._key)
-        if pair is None:
-            return
-        fill, detail = QColor(pair[0]), QColor(pair[1])
-
-        painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        box = QRectF(rect).adjusted(1.0, 1.0, -1.0, -1.0)
-        # Line weight is a fraction of the glyph, not a constant: a 1px rule
-        # looks spindly on a Retina panel and heavy on a 1x one.
-        stroke = max(box.height() * 0.11, 1.0)
-
-        {
-            "metadata": self._draw_metadata,
-            "mice": self._draw_mouse,
-            "zones": self._draw_zones,
-            "vocabulary": self._draw_vocabulary,
-            "plugins": self._draw_plugin,
-        }[self._key](painter, box, fill, detail, stroke)
-        painter.restore()
-
-    @staticmethod
-    def _line_pen(color: QColor, width: float) -> QPen:
-        pen = QPen(color)
-        pen.setWidthF(width)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        return pen
-
-    # -- the four glyphs --
-    #
-    # Each is built from three tones: the pastel `fill`, the deeper `detail`,
-    # and a `light` highlight derived from the fill. Two tones give you a
-    # silhouette with a mark on it; the third is what makes a shape read as
-    # lit from somewhere and turns a diagram into an illustration.
-
-    @staticmethod
-    def _light(fill: QColor) -> QColor:
-        """The highlight tone: the fill, lifted.
-
-        Derived rather than named in :mod:`~glider.gui.styles.colors` because
-        it is not a decision -- it is the same colour with more light on it,
-        and four more constants would be four more things to keep in step with
-        the fills they belong to.
-        """
-        return fill.lighter(112)
-
-    @classmethod
-    def _draw_metadata(cls, p: QPainter, box: QRectF, fill, detail, stroke) -> None:
-        """A record card: header band, ruled lines, and a clip at the top."""
-        w, h = box.width(), box.height()
-        card = QRectF(box.left() + w * 0.08, box.top() + h * 0.06, w * 0.84, h * 0.94)
-        radius = w * 0.13
-
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(fill)
-        p.drawRoundedRect(card, radius, radius)
-
-        # Header band, clipped to the card so it keeps the top two corners.
-        clip = QPainterPath()
-        clip.addRoundedRect(card, radius, radius)
-        p.save()
-        p.setClipPath(clip)
-        p.setBrush(detail)
-        p.drawRect(QRectF(card.left(), card.top(), card.width(), h * 0.22))
-        p.restore()
-
-        # The clip: a tab straddling the header, in the light tone so it reads
-        # as sitting on top rather than as a hole in the band.
-        tab = QRectF(card.center().x() - w * 0.13, box.top(), w * 0.26, h * 0.13)
-        p.setBrush(cls._light(fill))
-        p.drawRoundedRect(tab, w * 0.05, w * 0.05)
-
-        # Ruled lines. Widths vary and the last is short, the way a paragraph
-        # ends -- equal strokes read as a barcode rather than as writing.
-        p.setPen(cls._line_pen(detail, stroke * 0.85))
-        for frac, right_inset in ((0.42, 0.16), (0.60, 0.16), (0.78, 0.44)):
-            y = card.top() + card.height() * frac
-            p.drawLine(
-                QPointF(card.left() + w * 0.15, y),
-                QPointF(card.right() - w * right_inset, y),
-            )
-
-    @classmethod
-    def _draw_mouse(cls, p: QPainter, box: QRectF, fill, detail, stroke) -> None:
-        """A mouse in three-quarter profile: ear, snout, eye, whiskers, tail."""
-        w, h = box.width(), box.height()
-        light = cls._light(fill)
-
-        # Tail first: the body has to cover the joint, or it reads as a wire
-        # threaded through the animal.
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(cls._line_pen(detail, stroke * 0.9))
-        tail = QPainterPath(QPointF(box.left() + w * 0.58, box.top() + h * 0.82))
-        tail.cubicTo(
-            QPointF(box.right() + w * 0.02, box.bottom() + h * 0.02),
-            QPointF(box.right() + w * 0.02, box.top() + h * 0.30),
-            QPointF(box.right() - w * 0.20, box.top() + h * 0.20),
-        )
-        p.drawPath(tail)
-
-        p.setPen(Qt.PenStyle.NoPen)
-
-        # Ear: outer in the deep tone, inner in the light one.
-        ear = QRectF(box.left() + w * 0.20, box.top() + h * 0.02, w * 0.32, h * 0.32)
-        p.setBrush(detail)
-        p.drawEllipse(ear)
-        p.setBrush(light)
-        p.drawEllipse(ear.adjusted(w * 0.07, h * 0.07, -w * 0.07, -h * 0.07))
-
-        # Haunch, then head, so the head sits in front.
-        p.setBrush(fill)
-        p.drawEllipse(QRectF(box.left() + w * 0.22, box.top() + h * 0.30, w * 0.52, h * 0.56))
-        p.drawEllipse(QRectF(box.left() + w * 0.02, box.top() + h * 0.34, w * 0.44, h * 0.48))
-
-        # Snout, tapering forward off the head.
-        snout = QPainterPath(QPointF(box.left() + w * 0.22, box.top() + h * 0.52))
-        snout.quadTo(
-            QPointF(box.left() - w * 0.04, box.top() + h * 0.62),
-            QPointF(box.left() + w * 0.20, box.top() + h * 0.76),
-        )
-        snout.closeSubpath()
-        p.setBrush(light)
-        p.drawPath(snout)
-
-        # Nose, then eye. The nose is what fixes which way it is facing.
-        p.setBrush(detail)
-        nose = w * 0.09
-        p.drawEllipse(QRectF(box.left() - w * 0.01, box.top() + h * 0.60, nose, nose))
-        eye = w * 0.11
-        p.drawEllipse(QRectF(box.left() + w * 0.16, box.top() + h * 0.48, eye, eye))
-
-        # Whiskers: two strokes off the snout, thinner than everything else so
-        # they read as hair rather than as limbs.
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(cls._line_pen(detail, stroke * 0.5))
-        for dy in (0.60, 0.72):
-            p.drawLine(
-                QPointF(box.left() + w * 0.04, box.top() + h * dy),
-                QPointF(box.left() - w * 0.06, box.top() + h * (dy - 0.10)),
-            )
-
-        # A hind foot, so the body has something to stand on.
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(detail)
-        p.drawEllipse(QRectF(box.left() + w * 0.30, box.top() + h * 0.78, w * 0.20, h * 0.14))
-
-    @classmethod
-    def _draw_zones(cls, p: QPainter, box: QRectF, fill, detail, stroke) -> None:
-        """An arena from above: floor, a centre zone, and a corner zone."""
-        w, h = box.width(), box.height()
-        radius = w * 0.20
-
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(fill)
-        p.drawRoundedRect(box, radius, radius)
-
-        clip = QPainterPath()
-        clip.addRoundedRect(box, radius, radius)
-        p.save()
-        p.setClipPath(clip)
-
-        # Corner zone: a quadrant of the floor, in the light tone. Clipped to
-        # the arena, so it keeps the rounded corner instead of squaring it off
-        # -- which is the whole reason there is a clip here.
-        corner = QPainterPath()
-        corner.moveTo(box.topRight())
-        corner.lineTo(QPointF(box.right() - w * 0.42, box.top()))
-        corner.quadTo(
-            QPointF(box.right() - w * 0.20, box.top() + h * 0.20),
-            QPointF(box.right(), box.top() + h * 0.42),
-        )
-        corner.closeSubpath()
-        p.setBrush(cls._light(fill))
-        p.drawPath(corner)
-        # Outlined as well as filled. A tint alone is nearly invisible against
-        # the floor it is drawn on -- and an outline is what a zone *is*, so
-        # the edge is also the more honest picture.
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(cls._line_pen(detail, stroke * 0.7))
-        p.drawPath(corner)
-        p.restore()
-
-        # Wall, inset, so the floor has an edge rather than just ending.
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(cls._line_pen(detail, stroke * 0.7))
-        inset = w * 0.10
-        p.drawRoundedRect(box.adjusted(inset, inset, -inset, -inset), radius * 0.7, radius * 0.7)
-
-        # Centre zone: filled ring, the shape an open-field centre is drawn as.
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(detail)
-        centre = w * 0.34
-        p.drawEllipse(
-            QRectF(box.center().x() - centre / 2, box.center().y() - centre / 2, centre, centre)
-        )
-
-    @classmethod
-    def _draw_vocabulary(cls, p: QPainter, box: QRectF, fill, detail, stroke) -> None:
-        """An open book: two pages, a spine, ruled terms, and a bookmark.
-
-        A book rather than a bulleted list, which is what this was: a list of
-        three lines is what half the icons in any toolbar already look like,
-        and the section is a reference the lab writes once and consults after.
-        """
-        w, h = box.width(), box.height()
-        top, bottom = box.top() + h * 0.16, box.bottom() - h * 0.06
-        mid_x = box.center().x()
-        light = cls._light(fill)
-
-        # Each page is a leaf: square on the outside, curving up to the spine.
-        for sign, tone in ((-1, fill), (1, light)):
-            outer = mid_x + sign * w * 0.50
-            page = QPainterPath(QPointF(mid_x, top))
-            page.quadTo(
-                QPointF(mid_x + sign * w * 0.28, top - h * 0.10),
-                QPointF(outer, top + h * 0.06),
-            )
-            page.lineTo(QPointF(outer, bottom - h * 0.06))
-            page.quadTo(
-                QPointF(mid_x + sign * w * 0.28, bottom - h * 0.16),
-                QPointF(mid_x, bottom),
-            )
-            page.closeSubpath()
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(tone)
-            p.drawPath(page)
-
-        # Ruled terms, two to a page, shorter towards the spine so they follow
-        # the curve rather than cutting across it.
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(cls._line_pen(detail, stroke * 0.55))
-        for frac in (0.42, 0.62):
-            y = box.top() + h * frac
-            for sign in (-1, 1):
-                p.drawLine(
-                    QPointF(mid_x + sign * w * 0.10, y),
-                    QPointF(mid_x + sign * w * 0.40, y),
-                )
-
-        # Spine, and a bookmark hanging out of it.
-        p.setPen(cls._line_pen(detail, stroke * 0.8))
-        p.drawLine(QPointF(mid_x, top + h * 0.02), QPointF(mid_x, bottom))
-
-        # Bookmark, hanging down the right-hand page rather than out of the
-        # spine: at the spine it sits on the darkest part of the drawing and
-        # disappears into it.
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(detail)
-        left = mid_x + w * 0.20
-        width = w * 0.13
-        mark = QPainterPath(QPointF(left, top - h * 0.02))
-        mark.lineTo(QPointF(left + width, top - h * 0.04))
-        mark.lineTo(QPointF(left + width, top + h * 0.30))
-        mark.lineTo(QPointF(left + width / 2, top + h * 0.22))
-        mark.lineTo(QPointF(left, top + h * 0.32))
-        mark.closeSubpath()
-        p.drawPath(mark)
-
-    @classmethod
-    def _draw_plugin(cls, p: QPainter, box: QRectF, fill, detail, stroke) -> None:
-        """A jigsaw piece: a tab on one side, a socket on the other.
-
-        Both, not one. A piece with only a tab is a shape with a bump; the pair
-        is what says "this fits into something" -- which is the whole idea of a
-        plugin, and the reason the jigsaw piece became the convention.
-        """
-        w, h = box.width(), box.height()
-        body = QRectF(box.left() + w * 0.06, box.top() + h * 0.10, w * 0.80, h * 0.80)
-        knob = w * 0.17
-
-        piece = QPainterPath()
-        piece.addRoundedRect(body, w * 0.12, w * 0.12)
-
-        # Tab on the right, socket on the left, both at the same height so the
-        # piece reads as one row of a puzzle rather than as a random blob.
-        y = body.center().y()
-        tab = QPainterPath()
-        tab.addEllipse(QPointF(body.right(), y), knob, knob)
-        socket = QPainterPath()
-        socket.addEllipse(QPointF(body.left(), y), knob, knob)
-
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(fill)
-        p.drawPath(piece.united(tab).subtracted(socket))
-
-        # A notch of the deeper tone along the top, so the piece has a face
-        # rather than being a flat silhouette.
-        p.save()
-        clip = QPainterPath()
-        clip.addRoundedRect(body, w * 0.12, w * 0.12)
-        p.setClipPath(clip)
-        p.setBrush(detail)
-        p.drawRect(QRectF(body.left(), body.top(), body.width(), h * 0.20))
-        p.restore()
-
-        # And the highlight on the tab, which is the part that overhangs.
-        p.setBrush(cls._light(fill))
-        p.drawEllipse(QPointF(body.right(), y), knob * 0.52, knob * 0.52)
 
 
 class ExperimentPage(QWidget):
@@ -530,9 +166,7 @@ class ExperimentPage(QWidget):
             button.setAutoExclusive(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            # The engine reads its colour off this button, so the icon has to
-            # be built per button rather than shared across the rail.
-            button.setIcon(QIcon(_SectionGlyphEngine(button, key)))
+            button.setIcon(glyph_icon(button, key, ICON_PX))
             button.setIconSize(QSize(ICON_PX, ICON_PX))
             button.clicked.connect(lambda _checked, k=key: self.show_section(k))
             column.addWidget(button)

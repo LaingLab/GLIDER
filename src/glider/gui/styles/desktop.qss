@@ -1709,3 +1709,74 @@ QPushButton#pluginsSectionRetry:hover {
     border-color: rgba(56, 189, 248, 0.40);         /* ACCENT @ 40% */
     color: #e2e8f0;                                 /* TEXT_PRIMARY */
 }
+
+/* -- Analyze tab: tool cards -- */
+
+QWidget#toolsPage,
+QScrollArea#toolsScroll,
+QWidget#toolsHost {
+    background-color: #0a0e13;                      /* CANVAS */
+}
+
+QLabel#toolsHeading {
+    background-color: transparent;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    font-size: 18px;
+    font-weight: 600;
+}
+
+QLabel#toolsSubheading {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 12px;
+}
+
+QFrame#toolCard {
+    background-color: #0f1419;                      /* BASE */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_LARGE@;
+    max-width: 720px;
+}
+
+QFrame#toolCard[available="true"]:hover {
+    background-color: #111820;                      /* SURFACE_1 */
+    border-color: rgba(56, 189, 248, 0.40);         /* ACCENT @ 40% */
+}
+
+/* A tool whose dependencies are missing. Dimmed as a whole rather than only in
+ * its text: a card that looks live and does nothing is worse than one that
+ * plainly says it is not ready. */
+QFrame#toolCard[available="false"] {
+    background-color: #0b0f14;                      /* CHROME */
+    border-style: dashed;
+}
+
+QLabel#toolCardTitle {
+    background-color: transparent;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    font-size: 14px;
+    font-weight: 600;
+}
+
+QFrame#toolCard[available="false"] QLabel#toolCardTitle {
+    color: #718096;                                 /* TEXT_MUTED */
+}
+
+QLabel#toolCardBody {
+    background-color: transparent;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 12px;
+}
+
+/* The install line. Monospaced so the pip command reads as something to type
+ * rather than as prose about typing something. */
+QLabel#toolCardUnavailable {
+    background-color: transparent;
+    color: #718096;                                 /* TEXT_MUTED */
+    font-family: "SF Mono", "Cascadia Mono", "DejaVu Sans Mono", monospace;
+    font-size: 11px;
+}
+
+QLabel#toolCardIcon {
+    background-color: transparent;
+}

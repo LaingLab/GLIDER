@@ -56,13 +56,14 @@ TAB_BAR_HEIGHT = 36
 #: on the Dashboard, and you cannot Run either of them until both are done. It
 #: is also the tab the window opens on once an experiment exists, and a first
 #: tab that is not the landing tab reads as a bug.
-TAB_KEYS: tuple[str, ...] = ("experiment", "dashboard", "run")
+TAB_KEYS: tuple[str, ...] = ("experiment", "dashboard", "run", "analyze")
 
 #: What each key is called on screen.
 TAB_LABELS: dict[str, str] = {
     "dashboard": "Dashboard",
     "experiment": "Experiment",
     "run": "Run",
+    "analyze": "Analyze",
 }
 
 

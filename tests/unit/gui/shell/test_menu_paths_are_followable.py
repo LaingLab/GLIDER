@@ -98,42 +98,88 @@ def test_every_menu_path_names_a_menu_on_the_bar():
     assert not unfollowable, "\n" + "\n".join(unfollowable)
 
 
-@pytest.mark.parametrize("menu", ["Experiment", "Tools"])
+@pytest.mark.parametrize("menu", ["Experiment"])
 def test_the_menus_with_no_other_home_are_on_the_bar(menu):
     """Named outright, because the derived checks above cannot see this one.
 
-    Every action in these two has exactly one call site and it is the menu
-    action -- no panel button, no toolbar button. Taking either off the bar
-    leaves the command palette as the only route, and a palette is something
-    you have to already know about. Hardware and Run are off the bar precisely
-    because they do not have that problem: the Hardware panel carries Add Board
-    and Add Device, and the toolbar carries Connect, Start and Stop.
+    Every action in Experiment has exactly one call site and it is the menu
+    action -- no panel button, no toolbar button. Taking it off the bar leaves
+    the command palette as the only route, and a palette is something you have
+    to already know about. Hardware and Run are off the bar precisely because
+    they do not have that problem: the Hardware panel carries Add Board and Add
+    Device, and the toolbar carries Connect, Start and Stop.
+
+    **Tools was on this list and has come off it**, which is the rule working
+    rather than the rule being bent: every one of its actions now has a card on
+    the Analyze tab, and :func:`test_the_analyze_tab_offers_every_tool` is what
+    holds that open. Delete this parametrize down to nothing and the file has
+    stopped checking anything -- add the menu back to the bar instead.
     """
     assert menu in MENU_BAR_TITLES
     assert menu not in RELOCATED_MENU_TITLES
 
 
+def test_the_analyze_tab_offers_every_tool(qtbot, mock_core):
+    """The condition Tools had to satisfy to leave the bar.
+
+    The documented rule is that a menu may only be relocated once its actions
+    have another *visible* home. This is that home, so if a tool is ever added
+    to the Tools menu without a card, the menu quietly becomes palette-only
+    again -- which is the exact regression the plugin-manager report was.
+    """
+    from glider.gui.main_window import MainWindow
+
+    window = MainWindow(mock_core)
+    qtbot.addWidget(window)
+
+    tools_menu = next(menu for menu in window.menus() if menu.title().replace("&", "") == "Tools")
+    in_menu = {
+        action.text().replace("&", "").replace("…", "").strip()
+        for action in tools_menu.actions()
+        if not action.isSeparator()
+    }
+    on_page = {card.title for card in window._analyze_page.cards()}
+
+    # Titles differ in punctuation between the two surfaces, so compare on a
+    # normalised form rather than demanding they be written identically.
+    def _norm(values):
+        return {v.replace(" ", "").replace("/", "").lower() for v in values}
+
+    missing = _norm(in_menu) - _norm(on_page) - _norm({"Plugins"})
+    assert not missing, f"Tools actions with no card on Analyze: {sorted(missing)}"
+
+
 def test_the_plugin_manager_is_reachable_without_the_palette(qtbot, mock_core):
     """The report that started this: 'how are people supposed to get the plugin
-    manager without using the control search'."""
+    manager without using the control search'.
+
+    It used to be answered by the Tools menu on the bar. Tools has since come
+    off the bar and Plugins has become a section of the Experiment tab, so the
+    question is the same one and the place to look for the answer has moved.
+    What must not change is that there *is* an answer that is not Ctrl+K.
+    """
     from glider.gui.main_window import MainWindow
+    from glider.gui.panels.experiment_page import SECTION_LABELS
 
     window = MainWindow(mock_core)
     qtbot.addWidget(window)
     window.show()
 
-    # Down one level from the bar: the titles on it, then the items inside.
-    # Walking the real QMenuBar rather than the window's registry is the point
-    # -- the registry holds menus that are not on it.
-    reachable = {
+    on_the_bar = {
         f"{bar_action.text()} > {item.text()}".replace("&", "")
         for bar_action in window.menuBar().actions()
         if bar_action.menu() is not None
         for item in bar_action.menu().actions()
         if not item.isSeparator()
     }
+    on_the_rail = set(window._experiment_page.rail_buttons())
 
-    assert any("Plugins" in path for path in reachable), sorted(reachable)
+    assert "plugins" in on_the_rail or any("Plugins" in p for p in on_the_bar), (
+        sorted(on_the_rail),
+        sorted(on_the_bar),
+    )
+    # And it is labelled something a person would recognise, not just keyed.
+    assert SECTION_LABELS["plugins"] == "Plugins"
 
 
 def test_the_recorded_palette_only_gap_still_describes_real_actions(qtbot, mock_core):

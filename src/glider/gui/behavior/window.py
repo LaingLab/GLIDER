@@ -487,7 +487,7 @@ class AnnotateTab(QWidget):
         sources.add_row("Pose CSV folder", self._poses_label, poses_btn)
         sources.add(
             hint(
-                "Pose data comes from Tools ▸ Batch Pose Tracking. Both "
+                "Pose data comes from Batch Pose Tracking, on the Analyze tab. Both "
                 "<name>.csv and <name>DLC_<model>.csv naming are accepted."
             )
         )
@@ -779,8 +779,8 @@ class AnnotateTab(QWidget):
                 + "\n".join(missing)
                 + f"\n\nLooked in {poses_dir} for <name>.csv and "
                 "<name>DLC_<model>.csv.\n\nPose data comes from "
-                "Tools ▸ Batch Pose Tracking — run that over these videos "
-                "first, then come back here.",
+                "Batch Pose Tracking on the Analyze tab — run that over these "
+                "videos first, then come back here.",
             )
             return None
         return [(v, csv) for v, csv in located if csv is not None], poses_dir
@@ -848,8 +848,8 @@ class AnnotateTab(QWidget):
                 + "\n".join(missing)
                 + f"\n\nLooked in {poses_dir} for <name>.csv and "
                 "<name>DLC_<model>.csv.\n\nPose data comes from "
-                "Tools ▸ Batch Pose Tracking — run that over these videos "
-                "first, then come back here.",
+                "Batch Pose Tracking on the Analyze tab — run that over these "
+                "videos first, then come back here.",
             )
             return
         sessions = [(v, csv) for v, csv in located if csv is not None]
