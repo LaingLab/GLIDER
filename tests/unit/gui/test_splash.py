@@ -48,11 +48,17 @@ def test_a_slow_launch_hands_off_at_once(qtbot, monkeypatch):
 
     screen.finish_when_due(window)
     assert not screen.isVisible()
+    # The hand-off is what reveals the window -- nobody showed it here.
+    assert window.isVisible()
 
 
-def test_a_fast_launch_keeps_the_splash_up_until_the_floor(qtbot):
-    """The other half: without this the splash is a flash the eye reads as a
-    glitch on a machine that initialises in 300ms."""
+def test_the_window_stays_hidden_until_the_splash_hands_off(qtbot):
+    """The reported bug: the main window appeared before the logo did.
+
+    The caller used to ``show()`` the window and then start the splash's timer,
+    so for the rest of the floor the window sat on screen beside a splash that
+    was no longer hiding anything. Revealing the window IS the hand-off now.
+    """
     screen = show_splash()
     assert screen is not None
     qtbot.addWidget(screen)
@@ -62,8 +68,25 @@ def test_a_fast_launch_keeps_the_splash_up_until_the_floor(qtbot):
     screen.finish_when_due(window)
     try:
         assert screen.isVisible()
+        assert not window.isVisible()
     finally:
         screen.close()
+
+
+def test_on_shown_runs_after_the_window_is_up(qtbot):
+    """The first-run welcome is modal; it must not open over the splash,
+    belonging to a window nobody has been shown yet."""
+    screen = show_splash()
+    assert screen is not None
+    qtbot.addWidget(screen)
+    window = QWidget()
+    qtbot.addWidget(window)
+    screen._shown_at -= (MIN_VISIBLE_MS / 1000) + 1
+
+    seen: list[bool] = []
+    screen.finish_when_due(window, on_shown=lambda: seen.append(window.isVisible()))
+
+    assert seen == [True]
 
 
 def test_a_missing_icon_costs_the_splash_and_nothing_else(monkeypatch):

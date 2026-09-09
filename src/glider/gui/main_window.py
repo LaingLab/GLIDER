@@ -799,9 +799,16 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentIndex(PAGE_LANDING)
 
     def _leave_landing(self) -> None:
-        """Enter the Dashboard, from wherever the landing page sent us."""
+        """Enter the Experiment tab, from wherever the landing page sent us.
+
+        The Experiment tab and not the Dashboard: whether you arrived by *New*
+        or by *Open*, the next thing to do is confirm what this experiment is
+        and who is in it. Dropping someone onto a node graph straight from
+        *New Experiment* skips the step that makes the recording identifiable
+        afterwards -- which is the step that gets forgotten.
+        """
         if self._stack is not None and self._stack.currentIndex() == PAGE_LANDING:
-            self.switch_to_builder()
+            self._show_experiment_tab()
 
     def _on_landing_new(self) -> None:
         self._on_new()

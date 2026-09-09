@@ -511,34 +511,43 @@ def main() -> int:
                     force_mode = "runner"
 
                 window = create_main_window(app, core, force_mode)
-                window.show()
+
+                def _after_window_shown() -> None:
+                    """Packaging phase-1 wiring, run once the window is up.
+
+                    Deferred behind the splash rather than fired here: the
+                    first-run welcome is *modal*, and opening it while the
+                    splash is still the visible app puts a dialog on screen
+                    belonging to a window nobody has been shown yet. Both
+                    halves stay best-effort — neither may prevent the app from
+                    coming up.
+                    """
+                    try:
+                        from glider.first_run import run_first_run_if_needed
+
+                        run_first_run_if_needed(window)
+                    except Exception:
+                        logger.warning("First-run setup failed", exc_info=True)
+
+                    try:
+                        from PyQt6.QtCore import QTimer
+
+                        # Delay so the update check doesn't race first-paint or
+                        # compete with hardware enumeration on slow machines.
+                        QTimer.singleShot(3000, lambda: window.check_for_updates(silent=True))
+                    except Exception:
+                        logger.debug("Could not schedule startup update check", exc_info=True)
+
                 if splash is not None:
-                    # Closes now if the splash has already had its minimum
-                    # time, and otherwise schedules the hand-off for the
-                    # remainder -- so a fast machine still gets the whole
-                    # splash and a slow one waits no longer than it already
-                    # did. The window is up either way; the splash sits over
-                    # it until then.
-                    splash.finish_when_due(window)
-
-                # Packaging phase-1 wiring: first-run welcome + post-launch
-                # silent update check. Both are best-effort — any failure
-                # here must never prevent the app from coming up.
-                try:
-                    from glider.first_run import run_first_run_if_needed
-
-                    run_first_run_if_needed(window)
-                except Exception:
-                    logger.warning("First-run setup failed", exc_info=True)
-
-                try:
-                    from PyQt6.QtCore import QTimer
-
-                    # Delay so the update check doesn't race first-paint or
-                    # compete with hardware enumeration on slow machines.
-                    QTimer.singleShot(3000, lambda: window.check_for_updates(silent=True))
-                except Exception:
-                    logger.debug("Could not schedule startup update check", exc_info=True)
+                    # The splash is what shows the window -- deliberately not
+                    # shown here. Showing it now would put it on screen beside
+                    # the splash for the rest of the floor, which is exactly
+                    # the "window appears before the logo" this is meant to
+                    # prevent.
+                    splash.finish_when_due(window, on_shown=_after_window_shown)
+                else:
+                    window.show()
+                    _after_window_shown()
 
                 # Store core reference for cleanup
                 app._glider_core = core

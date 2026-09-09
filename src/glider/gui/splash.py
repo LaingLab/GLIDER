@@ -32,11 +32,12 @@ have gone wrong:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from time import monotonic
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QSplashScreen, QWidget
+from PyQt6.QtWidgets import QApplication, QSplashScreen, QWidget
 
 logger = logging.getLogger(__name__)
 
@@ -80,30 +81,53 @@ class GliderSplash(QSplashScreen):
         elapsed_ms = (monotonic() - self._shown_at) * 1000
         return max(0, int(MIN_VISIBLE_MS - elapsed_ms))
 
-    def finish_when_due(self, window: QWidget | None = None) -> None:
-        """Hand off to ``window`` as soon as the floor allows.
+    def finish_when_due(
+        self,
+        window: QWidget | None = None,
+        on_shown: Callable[[], None] | None = None,
+    ) -> None:
+        """Reveal ``window`` as soon as the floor allows, then close.
 
-        Called the moment the app is ready. If the floor has already elapsed
-        the hand-off is immediate; otherwise it is scheduled for the remainder,
-        so a fast machine still sees the whole splash and a slow one sees no
-        extra wait on top of the work it already did.
+        **The hand-off is what shows the window**, which is the whole point:
+        the caller must not ``show()`` it first. A window shown before the
+        splash's timer fires sits on screen beside the splash for the rest of
+        the floor -- the splash stops being a splash and becomes a sticker on
+        an app that has already started.
+
+        If the floor has elapsed the hand-off is immediate; otherwise it is
+        scheduled for the remainder, so a fast machine still sees the whole
+        splash and a slow one waits no longer than the work already took.
+
+        Args:
+            window: The window to reveal. ``None`` just closes the splash.
+            on_shown: Run once the window is up -- for anything that puts a
+                dialog over it (the first-run welcome), which must not be
+                allowed to appear while the splash is still the visible app.
         """
         remaining = self.remaining_ms()
         if remaining == 0:
-            self._hand_off(window)
+            self._hand_off(window, on_shown)
             return
-        QTimer.singleShot(remaining, lambda: self._hand_off(window))
+        QTimer.singleShot(remaining, lambda: self._hand_off(window, on_shown))
 
-    def _hand_off(self, window: QWidget | None) -> None:
+    def _hand_off(
+        self,
+        window: QWidget | None,
+        on_shown: Callable[[], None] | None = None,
+    ) -> None:
         try:
             if window is not None:
-                # finish() raises the window and closes us in one move, which
-                # is what keeps the desktop from flashing between the two.
-                self.finish(window)
-            else:
-                self.close()
+                window.show()
+                window.raise_()
+                window.activateWindow()
+            self.close()
         except RuntimeError:  # pragma: no cover - window deleted mid-launch
             logger.debug("Splash hand-off target was gone", exc_info=True)
+        if on_shown is not None:
+            try:
+                on_shown()
+            except Exception:  # pragma: no cover - caller's own failure
+                logger.warning("Post-splash callback failed", exc_info=True)
 
 
 def show_splash() -> GliderSplash | None:
@@ -129,6 +153,13 @@ def show_splash() -> GliderSplash | None:
         )
         splash = GliderSplash(pixmap)
         splash.show()
+        splash.raise_()
+        # Paint it NOW. show() only queues the expose; the caller's next move is
+        # init_glider, which blocks this thread for seconds at a time, so
+        # without a forced round of event processing the splash's first paint
+        # lands *after* everything it was supposed to cover -- which is how the
+        # main window ends up on screen before the logo it was hiding behind.
+        QApplication.processEvents()
         return splash
     except Exception:  # pragma: no cover - cosmetic path, never blocks launch
         logger.debug("Could not show splash screen", exc_info=True)

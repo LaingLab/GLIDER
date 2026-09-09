@@ -185,15 +185,22 @@ def test_runner_startup_skips_the_landing_page(qtbot, main_window_factory):
     assert window._stack.currentIndex() == PAGE_OPERATOR
 
 
-def test_new_from_landing_enters_the_dashboard(qtbot, main_window_factory):
+def test_new_from_landing_enters_the_experiment_tab(qtbot, main_window_factory):
+    """Not the Dashboard: the next thing to do after New is say what this
+    experiment is and who is in it."""
     window = main_window_factory(desktop_mode=True)
     window.show()
 
     window._landing_page.new_requested.emit()
 
-    assert window._stack.currentIndex() == PAGE_BUILDER
+    assert window._stack.currentIndex() == PAGE_EXPERIMENT
     assert window._tab_bar.isVisible()
-    assert window._tab_bar.current() == "dashboard"
+    assert window._tab_bar.current() == "experiment"
+
+
+def test_experiment_is_the_first_tab(qtbot):
+    """Order is part of the design, not an accident of the dict."""
+    assert TAB_KEYS == ("experiment", "dashboard", "run")
 
 
 def test_tabs_switch_pages(qtbot, main_window_factory):
@@ -249,7 +256,7 @@ def test_opening_a_recent_experiment_records_it_and_leaves_landing(
 
     window._landing_page.recent_requested.emit(str(saved))
 
-    assert window._stack.currentIndex() == PAGE_BUILDER
+    assert window._stack.currentIndex() == PAGE_EXPERIMENT
     assert recent_experiments(window._settings) == [saved.resolve()]
 
 

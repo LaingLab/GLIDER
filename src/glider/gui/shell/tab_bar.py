@@ -50,7 +50,13 @@ __all__ = ["TAB_BAR_HEIGHT", "TAB_KEYS", "TAB_LABELS", "ShellTabBar"]
 TAB_BAR_HEIGHT = 36
 
 #: The tabs, in order. These strings are the API: the owner maps them to pages.
-TAB_KEYS: tuple[str, ...] = ("dashboard", "experiment", "run")
+#:
+#: Experiment comes first because it is the order the work happens in: you name
+#: the experiment and enter its subjects before there is anything worth wiring
+#: on the Dashboard, and you cannot Run either of them until both are done. It
+#: is also the tab the window opens on once an experiment exists, and a first
+#: tab that is not the landing tab reads as a bug.
+TAB_KEYS: tuple[str, ...] = ("experiment", "dashboard", "run")
 
 #: What each key is called on screen.
 TAB_LABELS: dict[str, str] = {
