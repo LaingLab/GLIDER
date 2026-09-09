@@ -136,16 +136,28 @@ class TestResolveDeviceByName:
 
 
 class TestIsFFmpegAvailable:
+    """Patched at ``find_executable``, not at ``shutil.which``.
+
+    which() stopped being the whole answer when the lookup grew its fallback
+    directories: an app launched from the Dock gets launchd's PATH, so
+    Homebrew's ffmpeg is off it, and "not on PATH" no longer means "not
+    installed". Patching which() alone now leaves the fallback live and finds
+    the developer's real ffmpeg -- which is exactly what this test caught.
+    """
+
     def test_returns_true_when_found(self):
         from glider.vision.audio_recorder import AudioRecorder
 
-        with patch("shutil.which", return_value="/usr/bin/ffmpeg"):
+        with patch(
+            "glider.vision.audio_recorder.find_executable",
+            return_value="/usr/bin/ffmpeg",
+        ):
             assert AudioRecorder.is_ffmpeg_available() is True
 
     def test_returns_false_when_missing(self):
         from glider.vision.audio_recorder import AudioRecorder
 
-        with patch("shutil.which", return_value=None):
+        with patch("glider.vision.audio_recorder.find_executable", return_value=None):
             assert AudioRecorder.is_ffmpeg_available() is False
 
 

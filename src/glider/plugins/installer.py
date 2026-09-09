@@ -12,7 +12,6 @@ import importlib
 import importlib.util
 import logging
 import re
-import shutil
 import sys
 import sysconfig
 from collections.abc import Callable, Mapping, Sequence
@@ -22,6 +21,8 @@ from typing import Any
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
+
+from glider.core.executables import find_executable
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,15 @@ def _pip_is_importable() -> bool:
 
 
 def _find_uv() -> str | None:
-    return shutil.which("uv")
+    """Where uv is, including where a Dock launch cannot see it.
+
+    Not ``shutil.which``: uv's installer puts it in ``~/.local/bin``, which is
+    not on the PATH an app launched from the Dock inherits -- so on GLIDER's
+    documented ``uv venv`` setup, where uv is the *only* installer available,
+    plugins could not be installed at all unless GLIDER had been started from a
+    terminal. See :mod:`glider.core.executables`.
+    """
+    return find_executable("uv")
 
 
 def installer_command(
@@ -190,8 +199,11 @@ def installer_command(
         return [uv, "pip", "install", "--python", sys.executable, package, *requirements]
 
     raise NoInstallerError(
-        "Neither pip nor uv is available in this environment, so plugins cannot "
-        "be installed. Install pip into GLIDER's environment, or install uv."
+        "Neither pip nor uv is available in this environment, so plugins "
+        "cannot be installed.\n\n"
+        "Install uv (https://docs.astral.sh/uv/), or install pip into "
+        "GLIDER's environment with:\n"
+        "    python -m ensurepip"
     )
 
 
