@@ -351,7 +351,14 @@ def create_main_window(
         logger.info("Starting in Runner mode")
     else:
         stylesheet = get_desktop_stylesheet()
-        window.switch_to_builder()
+        # Only if the window has not already chosen the landing page. It picks
+        # its own first page during construction -- landing when nothing is
+        # open, the Builder when --file named something -- and switch_to_builder
+        # here would navigate straight off the landing page every launch,
+        # making it unreachable. Not caught by the window's own tests, which
+        # construct MainWindow directly and never come through here.
+        if not window.is_on_landing():
+            window.switch_to_builder()
         logger.info("Starting in Builder mode")
 
     # Applied to the application, not the window: the tool windows (Behavior
@@ -610,7 +617,8 @@ def run_sync_fallback(app: QApplication, args: argparse.Namespace) -> int:
         window.switch_to_runner()
     else:
         app.setStyleSheet(get_desktop_stylesheet())
-        window.switch_to_builder()
+        if not window.is_on_landing():  # see create_main_window
+            window.switch_to_builder()
 
     window.show()
 

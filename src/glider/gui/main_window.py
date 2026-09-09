@@ -782,6 +782,15 @@ class MainWindow(QMainWindow):
 
     # --- Landing page ---
 
+    def is_on_landing(self) -> bool:
+        """Whether the landing page is the page currently showing.
+
+        Public because ``__main__`` needs it: it applies the startup view mode
+        by calling :meth:`switch_to_builder`, which would otherwise navigate
+        straight off the landing page the window had just chosen.
+        """
+        return self._stack is not None and self._stack.currentIndex() == PAGE_LANDING
+
     def _show_landing(self) -> None:
         """Put the landing page up and refresh its recent list."""
         if self._stack is None or self._landing_page is None:

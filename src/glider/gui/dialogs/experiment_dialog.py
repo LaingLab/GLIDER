@@ -59,6 +59,12 @@ EXPERIMENT_TYPES = [
 ]
 
 
+#: Widest the embedded form is allowed to get on the Experiment tab. Wide
+#: enough for a long recording path, narrow enough that the eye does not have
+#: to travel the width of a 27-inch display from a label to its field.
+EMBEDDED_FORM_MAX_WIDTH = 900
+
+
 class ExperimentDialog(QDialog):
     """
     Dialog for managing experiment metadata and subjects.
@@ -123,6 +129,7 @@ class ExperimentDialog(QDialog):
         # Experiment Info group
         self._info_group = QGroupBox("Experiment Info")
         info_layout = QFormLayout(self._info_group)
+        self._info_layout = info_layout
         info_layout.setSpacing(8)
         info_layout.setContentsMargins(12, 20, 12, 12)
 
@@ -298,6 +305,19 @@ class ExperimentDialog(QDialog):
         """
         self.setWindowFlags(Qt.WindowType.Widget)
         self._button_box.hide()
+
+        # The macOS style defaults QFormLayout to FieldsStayAtSizeHint and
+        # right-aligned labels. In a 600px dialog that reads fine; on the
+        # Experiment tab, which is as wide as the window, it strands the labels
+        # in the middle of the page with 200px fields beside them. Set both
+        # explicitly so the embedded form looks the same on every platform.
+        self._info_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self._info_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # ...and a ceiling, because "grows to fill" on a 27-inch display is a
+        # 2000px-wide box for a protocol id. The form stays a readable column.
+        self._info_group.setMaximumWidth(EMBEDDED_FORM_MAX_WIDTH)
+        self._subjects_group.setMaximumWidth(EMBEDDED_FORM_MAX_WIDTH)
         return self
 
     def _connect_signals(self) -> None:

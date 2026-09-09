@@ -267,3 +267,34 @@ def test_a_failed_open_from_landing_stays_on_landing(
     window._landing_page.recent_requested.emit(str(tmp_path / "not-there.glider"))
 
     assert window._stack.currentIndex() == PAGE_LANDING
+
+
+def test_create_main_window_does_not_navigate_off_the_landing_page(qtbot, tmp_path):
+    """Regression, found by running the app rather than by the suite.
+
+    ``create_main_window`` applies the startup view mode by calling
+    ``switch_to_builder``, which navigated straight off the landing page the
+    window had just chosen -- so the landing page was unreachable in the real
+    app while every test above still passed, because they construct MainWindow
+    directly and never come through this path.
+    """
+    import asyncio
+
+    from PyQt6.QtWidgets import QApplication
+
+    from glider.__main__ import create_main_window
+    from glider.core.glider_core import GliderCore
+
+    core = GliderCore()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(core.initialize())
+    try:
+        window = create_main_window(QApplication.instance(), core, force_mode="builder")
+        qtbot.addWidget(window)
+        assert window._stack.currentIndex() == PAGE_LANDING
+        assert window.is_on_landing()
+    finally:
+        core.session._mark_clean()
+        loop.run_until_complete(core.shutdown())
+        loop.close()
