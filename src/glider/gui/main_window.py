@@ -1926,9 +1926,9 @@ class MainWindow(QMainWindow):
                 base_settings=self._core.camera_manager.settings,
                 parent=None,
             )
-        else:
-            # Cameras may have been added or removed since it was last open.
-            self._multi_camera_window.refresh_cameras()
+        # Nothing to re-attach here: the window reconnects and re-enumerates in
+        # its own showEvent, which is also the path a reopen after a close has
+        # to go through to get its cameras streaming again.
         self._multi_camera_window.show()
         self._multi_camera_window.raise_()
         self._multi_camera_window.activateWindow()
