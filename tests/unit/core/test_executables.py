@@ -26,6 +26,19 @@ def _no_cache():
     find_executable.cache_clear()
 
 
+def _same_path(a: str | None, b) -> bool:
+    """Compare two paths the way the platform does.
+
+    Windows resolves a bare name through ``PATHEXT``, which is uppercase, so
+    ``shutil.which("widget")`` hands back ``widget.EXE`` for a file written as
+    ``widget.exe``. Both name the same file -- the filesystem is
+    case-insensitive -- and comparing the strings is comparing the registry's
+    capitalisation, not the answer. ``normcase`` is a no-op on POSIX, where the
+    distinction is real.
+    """
+    return a is not None and os.path.normcase(a) == os.path.normcase(str(b))
+
+
 def _make_tool(directory, name: str):
     directory.mkdir(parents=True, exist_ok=True)
     tool = directory / (f"{name}.exe" if sys.platform == "win32" else name)
@@ -39,7 +52,7 @@ def test_path_wins(tmp_path, monkeypatch):
     on_path = _make_tool(tmp_path / "bin", "widget")
     monkeypatch.setenv("PATH", str(tmp_path / "bin"))
 
-    assert find_executable("widget") == str(on_path)
+    assert _same_path(find_executable("widget"), on_path)
 
 
 def test_it_looks_where_the_dock_cannot(tmp_path, monkeypatch):
@@ -53,7 +66,7 @@ def test_it_looks_where_the_dock_cannot(tmp_path, monkeypatch):
 
     monkeypatch.setattr(module, "EXTRA_BIN_DIRS", module._extra_bin_dirs())
 
-    assert find_executable("widget") == str(fallback)
+    assert _same_path(find_executable("widget"), fallback)
 
 
 def test_a_tool_that_really_is_absent_is_still_absent(tmp_path, monkeypatch):
