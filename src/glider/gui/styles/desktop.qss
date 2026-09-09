@@ -1686,3 +1686,26 @@ QLabel#experimentPlaceholder {
     font-size: 13px;
     padding: 32px;
 }
+
+/* -- Plugins section: what stands in while the catalogue loads -- */
+
+QLabel#pluginsSectionStatus {
+    background-color: transparent;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 13px;
+    padding: 0 48px;
+}
+
+QPushButton#pluginsSectionRetry {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_MEDIUM@;
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+    font-size: 13px;
+    padding: 7px 18px;
+}
+
+QPushButton#pluginsSectionRetry:hover {
+    border-color: rgba(56, 189, 248, 0.40);         /* ACCENT @ 40% */
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+}

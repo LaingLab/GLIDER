@@ -587,21 +587,8 @@ class PluginManagerDialog(QDialog):
         Returns None when the window could not be built; the failure is put in
         front of the user first.
         """
-        from glider.core.config import get_config
-
         try:
-            cache_dir = Path(get_config().paths.user_config_dir)
-            index = await PluginRegistry(cache_dir=cache_dir).resolve()
-            installed, disabled, failed = installed_state(index, plugin_manager)
-
-            dialog = cls(
-                index=index,
-                installed=installed,
-                disabled=disabled,
-                failed=failed,
-                plugin_manager=plugin_manager,
-                parent=parent,
-            )
+            dialog = await cls.build_for(parent=parent, plugin_manager=plugin_manager)
         except Exception as exc:
             logger.exception("Could not open the Plugins window")
             QMessageBox.warning(
@@ -616,3 +603,50 @@ class PluginManagerDialog(QDialog):
         dialog.raise_()
         dialog.activateWindow()
         return dialog
+
+    @classmethod
+    async def build_for(
+        cls, parent: QWidget | None, plugin_manager: PluginManager | None
+    ) -> PluginManagerDialog:
+        """Resolve the catalogue and construct the window, without showing it.
+
+        Split out of :meth:`open_for` for the Experiment tab's Plugins section,
+        which hosts this inside a page and so must not have a window put on
+        screen behind its back.
+
+        **Raises rather than reporting.** :meth:`open_for` came with a
+        ``QMessageBox`` because a menu item that silently does nothing is the
+        worst outcome there; a section embedded in a page has somewhere better
+        to put the message -- its own surface -- and a modal warning thrown out
+        of a tab the user is already looking at would be worse than the text.
+        Each caller renders the failure in the form that suits it; neither is
+        allowed to swallow it.
+        """
+        from glider.core.config import get_config
+
+        cache_dir = Path(get_config().paths.user_config_dir)
+        index = await PluginRegistry(cache_dir=cache_dir).resolve()
+        installed, disabled, failed = installed_state(index, plugin_manager)
+        return cls(
+            index=index,
+            installed=installed,
+            disabled=disabled,
+            failed=failed,
+            plugin_manager=plugin_manager,
+            parent=parent,
+        )
+
+    def embed(self) -> PluginManagerDialog:
+        """Turn this window into a plain widget for the Experiment tab.
+
+        Returns ``self`` so it can be added to a layout in one expression.
+
+        ``WA_DeleteOnClose`` has to go with the window flag. It exists because
+        this is normally constructed with ``parent=MainWindow`` and would
+        otherwise leak one full window per open-after-close -- but embedded,
+        "close" is the page being torn down, and a widget that deletes itself
+        on the way would take its section host with it.
+        """
+        self.setWindowFlags(Qt.WindowType.Widget)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        return self

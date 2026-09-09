@@ -225,3 +225,54 @@ def test_new_experiment_resets_the_tab(qtbot, main_window_factory):
     window._on_new()
 
     assert window._experiment_page.built_sections() == {}
+
+
+# ------------------------------------------------------------ plugins section
+
+
+def test_plugins_section_says_so_before_discovery_has_run(qtbot):
+    """An empty catalogue reads as 'no plugins exist' rather than 'not asked
+    yet' -- which is why this says something instead of showing a blank list."""
+    from glider.gui.panels.plugins_section import PluginsSection
+
+    section = PluginsSection(lambda: None)
+    qtbot.addWidget(section)
+
+    assert section.browser() is None
+    assert "has not started yet" in section.status_text()
+
+
+def test_plugins_section_reports_a_catalogue_it_cannot_read(qtbot, monkeypatch):
+    """build_for raises rather than reporting, precisely so the reason lands on
+    the section instead of in a modal thrown over the tab."""
+    import asyncio
+
+    from glider.gui.dialogs.plugin_manager_dialog import PluginManagerDialog
+    from glider.gui.panels.plugins_section import PluginsSection
+
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("no route to host")
+
+    monkeypatch.setattr(PluginManagerDialog, "build_for", _boom)
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        section = PluginsSection(lambda: object())
+        qtbot.addWidget(section)
+        loop.run_until_complete(section._task)
+    finally:
+        loop.close()
+
+    assert section.browser() is None
+    assert "no route to host" in section.status_text()
+
+
+def test_the_rail_offers_plugins(qtbot, counting_builders):
+    calls, builders = counting_builders
+    page = ExperimentPage(builders)
+    qtbot.addWidget(page)
+
+    assert "plugins" in page.rail_buttons()
+    page.rail_buttons()["plugins"].click()
+    assert calls["plugins"] == 1

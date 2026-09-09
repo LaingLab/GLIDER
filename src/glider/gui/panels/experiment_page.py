@@ -82,7 +82,7 @@ __all__ = ["SECTION_KEYS", "SECTION_LABELS", "ExperimentPage"]
 #: and experimenter once when the experiment is designed, the animal list again
 #: before every cohort -- and stacking them meant scrolling past seven fields
 #: you were not there to change to reach the table you were.
-SECTION_KEYS: tuple[str, ...] = ("metadata", "mice", "zones", "vocabulary")
+SECTION_KEYS: tuple[str, ...] = ("metadata", "mice", "zones", "vocabulary", "plugins")
 
 #: What each section is called on the rail.
 SECTION_LABELS: dict[str, str] = {
@@ -90,6 +90,7 @@ SECTION_LABELS: dict[str, str] = {
     "mice": "Mice",
     "zones": "Zones",
     "vocabulary": "Lab Vocabulary",
+    "plugins": "Plugins",
 }
 
 #: Rail icon edge length in pixels. 20 rather than a more conventional 16
@@ -131,6 +132,7 @@ class _SectionGlyphEngine(QIconEngine):
         "mice": (colors.PASTEL_ROSE, colors.PASTEL_ROSE_DEEP),
         "zones": (colors.PASTEL_MINT, colors.PASTEL_MINT_DEEP),
         "vocabulary": (colors.PASTEL_PEACH, colors.PASTEL_PEACH_DEEP),
+        "plugins": (colors.PASTEL_SKY, colors.PASTEL_SKY_DEEP),
     }
 
     def __init__(self, widget: QWidget, key: str) -> None:
@@ -175,6 +177,7 @@ class _SectionGlyphEngine(QIconEngine):
             "mice": self._draw_mouse,
             "zones": self._draw_zones,
             "vocabulary": self._draw_vocabulary,
+            "plugins": self._draw_plugin,
         }[self._key](painter, box, fill, detail, stroke)
         painter.restore()
 
@@ -415,6 +418,47 @@ class _SectionGlyphEngine(QIconEngine):
         mark.lineTo(QPointF(left, top + h * 0.32))
         mark.closeSubpath()
         p.drawPath(mark)
+
+    @classmethod
+    def _draw_plugin(cls, p: QPainter, box: QRectF, fill, detail, stroke) -> None:
+        """A jigsaw piece: a tab on one side, a socket on the other.
+
+        Both, not one. A piece with only a tab is a shape with a bump; the pair
+        is what says "this fits into something" -- which is the whole idea of a
+        plugin, and the reason the jigsaw piece became the convention.
+        """
+        w, h = box.width(), box.height()
+        body = QRectF(box.left() + w * 0.06, box.top() + h * 0.10, w * 0.80, h * 0.80)
+        knob = w * 0.17
+
+        piece = QPainterPath()
+        piece.addRoundedRect(body, w * 0.12, w * 0.12)
+
+        # Tab on the right, socket on the left, both at the same height so the
+        # piece reads as one row of a puzzle rather than as a random blob.
+        y = body.center().y()
+        tab = QPainterPath()
+        tab.addEllipse(QPointF(body.right(), y), knob, knob)
+        socket = QPainterPath()
+        socket.addEllipse(QPointF(body.left(), y), knob, knob)
+
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(fill)
+        p.drawPath(piece.united(tab).subtracted(socket))
+
+        # A notch of the deeper tone along the top, so the piece has a face
+        # rather than being a flat silhouette.
+        p.save()
+        clip = QPainterPath()
+        clip.addRoundedRect(body, w * 0.12, w * 0.12)
+        p.setClipPath(clip)
+        p.setBrush(detail)
+        p.drawRect(QRectF(body.left(), body.top(), body.width(), h * 0.20))
+        p.restore()
+
+        # And the highlight on the tab, which is the part that overhangs.
+        p.setBrush(cls._light(fill))
+        p.drawEllipse(QPointF(body.right(), y), knob * 0.52, knob * 0.52)
 
 
 class ExperimentPage(QWidget):

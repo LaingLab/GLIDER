@@ -708,6 +708,7 @@ class MainWindow(QMainWindow):
                 "mice": lambda: self._experiment_detail_pages()[1],
                 "zones": self._build_zones_section,
                 "vocabulary": self._build_vocabulary_section,
+                "plugins": self._build_plugins_section,
             },
             parent=self,
         )
@@ -773,6 +774,18 @@ class MainWindow(QMainWindow):
         ).embed()
         editor.zones_changed.connect(self._on_zones_changed)
         return editor
+
+    def _build_plugins_section(self) -> QWidget:
+        """The plugin browser, embedded, once its catalogue has been fetched.
+
+        The section is handed a callable rather than the manager itself: plugin
+        discovery may not have run when this is built, and the difference
+        between "no plugins" and "not asked yet" is the whole reason that
+        section says something instead of showing an empty list.
+        """
+        from glider.gui.panels.plugins_section import PluginsSection
+
+        return PluginsSection(lambda: self._core.plugin_manager, parent=self._experiment_page)
 
     def _build_vocabulary_section(self) -> QWidget:
         """The lab vocabulary form, embedded."""
