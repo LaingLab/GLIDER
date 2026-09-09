@@ -487,6 +487,13 @@ def main() -> int:
 
         # Schedule the async initialization
         async def run_app():
+            # Up before any of the slow work below -- plugin discovery,
+            # hardware enumeration, the vision imports -- because that stretch
+            # is precisely the gap this covers. It is best-effort and may be
+            # None; every use below guards.
+            from glider.gui.splash import show_splash
+
+            splash = show_splash()
             try:
                 core = await init_glider(app, args)
 
@@ -498,6 +505,14 @@ def main() -> int:
 
                 window = create_main_window(app, core, force_mode)
                 window.show()
+                if splash is not None:
+                    # Closes now if the splash has already had its minimum
+                    # time, and otherwise schedules the hand-off for the
+                    # remainder -- so a fast machine still gets the whole
+                    # splash and a slow one waits no longer than it already
+                    # did. The window is up either way; the splash sits over
+                    # it until then.
+                    splash.finish_when_due(window)
 
                 # Packaging phase-1 wiring: first-run welcome + post-launch
                 # silent update check. Both are best-effort — any failure
@@ -523,6 +538,11 @@ def main() -> int:
 
             except Exception as e:
                 logger.exception(f"Initialization error: {e}")
+                if splash is not None:
+                    # Without this the splash outlives the app: it is a
+                    # top-level window of its own, so quitting with it up
+                    # leaves a logo on the desktop and nothing to close it.
+                    splash.close()
                 app.quit()
 
         # Run initialization

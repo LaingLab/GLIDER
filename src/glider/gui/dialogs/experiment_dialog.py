@@ -267,15 +267,38 @@ class ExperimentDialog(QDialog):
         scroll_area.setWidget(content_widget)
         main_layout.addWidget(scroll_area)
 
-        # Dialog buttons
+        # Dialog buttons. Held on the instance because :meth:`embed` hides
+        # them: on the Experiment tab there is nothing to close.
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         button_box.rejected.connect(self.accept)
+        self._button_box = button_box
 
         if self._is_touch_mode:
             for button in button_box.buttons():
                 button.setMinimumHeight(44)
 
         main_layout.addWidget(button_box)
+
+    def embed(self) -> "ExperimentDialog":
+        """Turn this dialog into a plain widget for the Experiment tab.
+
+        Returns ``self`` so it can be added to a layout in one expression.
+
+        Two changes, and both are needed. ``Qt.WindowType.Widget`` stops Qt
+        giving it a window of its own the moment it is shown -- without it the
+        "embedded" form opens as a floating window over the tab that is
+        supposed to contain it. Hiding the button box removes a *Close* that
+        would either do nothing or hide the page out from under the user,
+        depending on how the parent laid it out.
+
+        This does not change how the class behaves as a dialog: every other
+        caller still gets ``exec()`` and a Close button. The switch is one-way
+        per instance, which is why the Experiment tab builds its own rather
+        than borrowing the window's.
+        """
+        self.setWindowFlags(Qt.WindowType.Widget)
+        self._button_box.hide()
+        return self
 
     def _connect_signals(self) -> None:
         """Connect internal signals."""

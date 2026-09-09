@@ -384,7 +384,17 @@ class ZoneDialog(QDialog):
     - Draw zones of different shapes on camera preview
     - Assign names and colors to zones
     - Save/load zone configurations
+
+    Signals:
+        zones_changed: Emitted whenever the zone set is altered -- a zone
+            added, removed, cleared or loaded from file. Exists for
+            :meth:`embed`: as a modal dialog the caller reads the result once
+            on ``accept()``, but embedded in the Experiment tab there is no
+            accept, so downstream consumers (the CV processor, the tracking
+            logger, the node library's zone list) need telling as it happens.
     """
+
+    zones_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -663,6 +673,7 @@ class ZoneDialog(QDialog):
         self._update_table()
         self._preview.set_zone_configuration(self._zone_config)
         self._preview._update_display()
+        self.zones_changed.emit()
 
     def _cancel_pending_zone(self) -> None:
         """Cancel pending zone addition."""
@@ -755,6 +766,7 @@ class ZoneDialog(QDialog):
             self._zone_config.remove_zone(zone.id)
             self._update_table()
             self._preview.set_zone_configuration(self._zone_config)
+            self.zones_changed.emit()
             self._preview._update_display()
 
     def _update_info(self) -> None:
@@ -791,6 +803,7 @@ class ZoneDialog(QDialog):
                 self._update_table()
                 self._preview.set_zone_configuration(self._zone_config)
                 self._preview._update_display()
+                self.zones_changed.emit()
                 QMessageBox.information(
                     self, "Loaded", f"Loaded {len(self._zone_config.zones)} zones"
                 )
@@ -813,6 +826,27 @@ class ZoneDialog(QDialog):
             self._update_table()
             self._preview.set_zone_configuration(self._zone_config)
             self._preview._update_display()
+            self.zones_changed.emit()
+
+    def embed(self) -> "ZoneDialog":
+        """Turn this editor into a plain widget for the Experiment tab.
+
+        Returns ``self`` so it can be added to a layout in one expression.
+
+        ``Qt.WindowType.Widget`` stops Qt giving it a window of its own; the
+        OK/Cancel pair goes because neither means anything here. *Cancel* is
+        the sharper of the two: this editor mutates the caller's
+        :class:`~glider.vision.zones.ZoneConfiguration` in place as you draw,
+        so there has never been anything to roll back -- as a modal dialog
+        Cancel merely stopped the caller from *propagating* the changes it had
+        already made. Embedded, propagation happens on
+        :attr:`zones_changed` instead, and a button labelled Cancel that
+        silently kept your edits would be a lie.
+        """
+        self.setWindowFlags(Qt.WindowType.Widget)
+        self._ok_btn.hide()
+        self._cancel_dialog_btn.hide()
+        return self
 
     def get_zone_configuration(self) -> ZoneConfiguration:
         """Get the zone configuration."""
