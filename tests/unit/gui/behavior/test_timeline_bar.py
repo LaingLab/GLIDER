@@ -208,3 +208,80 @@ def test_ethogram_only_timeline_paints_without_a_view(bar, qtbot):
     image = bar.grab().toImage()
     assert image.pixelColor(75, 20) == behavior_qcolor("groom", _ORDER)
     assert image.pixelColor(250, 20) == behavior_qcolor("locomote", _ORDER)
+
+
+def _windowed_timeline() -> Timeline:
+    """A 20s recording whose ethogram scores only frames 200-400.
+
+    The ordinary shape of a windowed apply run: the recording is long, the
+    scored stretch is a slice out of the middle of it.
+    """
+    frames = np.arange(0, 601, dtype=float)
+    return Timeline(
+        lanes=[],
+        behavior=[
+            BehaviorLane(
+                source="ethogram",
+                labels=["groom"] * 201,
+                frames=np.arange(200, 401),
+            )
+        ],
+        frame_map=FrameMap(frames=frames, ms=frames / 30.0 * 1000.0, source="tracking"),
+        flow_start_ms=0.0,
+        flow_end_ms=20000.0,
+        start_ms=0.0,
+        end_ms=20000.0,
+    )
+
+
+def test_a_lane_paints_nothing_outside_its_own_frames(bar, qtbot):
+    """Unscored stretches read as background, not as the nearest label.
+
+    The ``hi <= lo`` fallback clamps a column to the nearest row, which is
+    right for an interior column falling between two rows and wrong for a
+    column past either end: 201 scored frames inside a 600-frame recording
+    painted behaviour colour across the whole 600px bar, two thirds of it
+    invented.
+    """
+    bar.resize(600, 46)
+    bar.set_timeline(_windowed_timeline())
+    image = bar.grab().toImage()
+
+    background = QColor(colors.BASE)
+    assert image.pixelColor(50, 20) == background  # before the scored window
+    assert image.pixelColor(550, 20) == background  # after it
+    # And the scored stretch is still drawn, so this is not just a blank bar.
+    assert image.pixelColor(300, 20) == behavior_qcolor("groom", ["groom"])
+
+
+def test_many_behavior_lanes_still_leave_the_hardware_a_row(bar):
+    """``sizeHint`` has to allow for the gap ``_rows`` advances by.
+
+    It summed the lane heights alone while ``_rows`` steps by height + gap,
+    so the hardware rows were short by two pixels per behaviour lane. The
+    vertical size policy is Fixed, so at seven behaviour lanes to one device
+    — a small social assay — the raster was allotted zero height and simply
+    vanished, with nothing raised anywhere.
+    """
+    base = _timeline()
+    bar.set_timeline(
+        Timeline(
+            lanes=base.lanes,
+            behavior=[
+                BehaviorLane(
+                    source=f"tracking[{i}]",
+                    labels=["groom"] * 301,
+                    frames=np.arange(0, 301),
+                )
+                for i in range(7)
+            ],
+            frame_map=base.frame_map,
+            flow_start_ms=0.0,
+            flow_end_ms=10000.0,
+            start_ms=0.0,
+            end_ms=10000.0,
+        )
+    )
+    bar.resize(300, bar.sizeHint().height())
+    heights = [height for kind, _lane, _top, height in bar._rows() if kind == "hardware"]
+    assert heights and min(heights) > 0

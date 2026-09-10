@@ -60,7 +60,14 @@ class FrameMap:
         return float(np.interp(float(frame), self.frames, self.ms))
 
     def frame_at(self, ms: float) -> int:
-        """The frame nearest ``ms``. Clamps outside the known range."""
+        """The first frame at or after ``ms``. Clamps outside the known range.
+
+        A ceiling, not a rounding: ``searchsorted`` picks the first sample
+        whose time is >= ``ms``, so a time landing between two frames resolves
+        to the later one. Callers depend on that — the bar's column edges are
+        half-open spans, and rounding to the nearer frame would let two
+        adjacent columns claim the same one.
+        """
         if len(self.frames) == 0:
             return 0
         idx = int(np.searchsorted(self.ms, float(ms)))

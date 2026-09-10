@@ -155,13 +155,29 @@ class TimelineBar(QWidget):
             for lane in lanes
         }
 
+    def behavior_order(self) -> list[str]:
+        """The pooled order the bar coloured this session from.
+
+        The bar is the only place the pooling happens, so anything that has
+        to agree with a stripe -- the bout table's chips, the bout picker --
+        asks here rather than re-deriving an order from the ethogram alone.
+        With a tracking lane present the two differ, and a bout then wore a
+        different colour in the table than on the bar directly above it.
+        """
+        return list(self._order)
+
     # ------------------------------------------------------------------
     # geometry
 
     def sizeHint(self) -> QSize:
         n_behavior = max(1, len(self._behavior_lanes()))
         n_hardware = len(self._timeline.lanes) if self._timeline else 0
-        height = _BEHAVIOR_LANE_HEIGHT * n_behavior + _HW_LANE_HEIGHT * n_hardware
+        # The gap is what _rows() actually advances by between behaviour
+        # lanes. Leaving it out here left the hardware rows short by two
+        # pixels each, and the vertical policy is Fixed -- so past seven
+        # behaviour lanes per device the raster was allotted zero height and
+        # vanished without an error.
+        height = (_BEHAVIOR_LANE_HEIGHT + _LANE_GAP) * n_behavior + _HW_LANE_HEIGHT * n_hardware
         return QSize(super().sizeHint().width(), height)
 
     def _rows(self) -> list[tuple[str, object, float, float]]:
@@ -349,7 +365,7 @@ class TimelineBar(QWidget):
         three-frame dart without overstating it. The bout stepper is how those
         are reached.
         """
-        if height <= 0 or not lane.labels:
+        if height <= 0 or not lane.labels or not len(lane.frames):
             return
         codes = self._codes.get(lane.source)
         if codes is None:
@@ -377,11 +393,18 @@ class TimelineBar(QWidget):
             # No frame map: the axis IS frames, so equal slices of it are right.
             edges = first + np.arange(width + 1, dtype=np.int64) * span // width
         starts = np.searchsorted(frames, edges, side="left")
+        scored_first, scored_last = int(frames[0]), int(frames[-1])
 
         n_codes = len(self._order) + 1  # + the unscored bucket
         for x in range(width):
             lo, hi = int(starts[x]), int(starts[x + 1])
             if hi <= lo:
+                if not scored_first <= int(edges[x]) <= scored_last:
+                    # Past this lane's own scoring. Clamping here would hand
+                    # the column the first or last label, which invents
+                    # coverage: a 201-frame scored window inside a 600-frame
+                    # recording painted the whole bar. Leave the background.
+                    continue
                 # More pixels than rows: this column falls between two rows,
                 # so it takes the row to its left rather than a gap.
                 lo = max(0, min(lo, len(frames) - 1))

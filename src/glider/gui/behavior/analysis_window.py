@@ -44,7 +44,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.analysis.behavior.session_view import SessionView, SessionViewError
+from glider.analysis.behavior.session_view import (
+    _SEARCH_LEVELS,
+    SessionView,
+    SessionViewError,
+)
 from glider.analysis.timeline import build_timeline
 from glider.gui.styles import colors
 from glider.gui.widgets.timeline_bar import TimelineBar, behavior_order, behavior_qcolor
@@ -114,6 +118,20 @@ def _behavior_item(name: str, order: list[str]) -> QTableWidgetItem:
         painter.end()
     item.setIcon(QIcon(chip))
     return item
+
+
+def _recording_or_none(folder: Path):
+    """The GLIDER recording in *folder*, or None if there isn't one.
+
+    ``Session.load`` returns an empty session for any readable directory at
+    all, so "did it load" answers nothing — "did discovery find an artifact"
+    is the question, and an empty frame is how a missing one arrives.
+    """
+    from glider.analysis import Session
+
+    session = Session.load(folder)
+    found = any(not frame.empty for frame in (session.tracking, session.data, session.events))
+    return session if found else None
 
 
 def _dress_table(table: QTableWidget) -> None:
@@ -442,6 +460,10 @@ class AnalysisWindow(QMainWindow):
         self._cohort: list[tuple[Path, SessionView]] = []
         # (key, rows) for the cohort table — see cohort_rows.
         self._cohort_cache: tuple[tuple, list[dict]] | None = None
+        # Recording folder -> its loaded Session (None: nothing GLIDER wrote
+        # there). Clicking through a cohort re-adopts a session per click, and
+        # a recording's CSVs are megabytes parsed on the GUI thread.
+        self._recordings: dict[Path, object] = {}
 
         central = QWidget()
         central.setObjectName("ToolPage")
@@ -797,7 +819,7 @@ class AnalysisWindow(QMainWindow):
         self._bout_filter.blockSignals(True)
         self._bout_filter.clear()
         self._bout_filter.addItem("Any change", None)
-        for name in behavior_order(self._view.labels if self._view else []):
+        for name in self._bar.behavior_order():
             self._bout_filter.addItem(name, name)
         index = self._bout_filter.findData(previous)
         # A behaviour the new session does not contain falls back to "any"
@@ -860,6 +882,51 @@ class AnalysisWindow(QMainWindow):
         self._sessions.setVisible(False)
         self._adopt(Path(ethogram_csv), view)
 
+    def _recording_folders(self, ethogram_csv: Path, view: SessionView) -> list[Path]:
+        """Where this ethogram's recording might be, nearest first.
+
+        Deliberately not a fourth path resolver: every candidate is one the
+        session loader already resolved or already searches. An apply run
+        writes ``<output>/<video stem>/ethogram_raw.csv``, so the ethogram's
+        own folder is a level *below* the recording, and the canonical layout
+        buries it further under ``sessions/<id>/analysis/``. The video
+        :mod:`~glider.analysis.behavior.session_view` found — via ``run.json``
+        where there is one — sits in the recording folder itself, so it leads.
+        """
+        folders = [view.video_path.parent] if view.video_path is not None else []
+        folder = Path(ethogram_csv).parent
+        for _ in range(_SEARCH_LEVELS + 1):
+            folders.append(folder)
+            if folder == folder.parent:
+                break
+            folder = folder.parent
+        # Resolved, so the video's folder and an ancestor of the ethogram are
+        # one cache entry when they are one directory.
+        return list(dict.fromkeys(f.resolve() for f in folders))
+
+    def _timeline_for(self, ethogram_csv: Path, view: SessionView):
+        """The session's lanes, with a hardware raster if a recording is near.
+
+        The first candidate folder that actually holds a recording wins; if
+        none does, the ethogram-only timeline, which is the honest answer for
+        an apply run whose recording was never kept.
+        """
+        for folder in self._recording_folders(ethogram_csv, view):
+            try:
+                if folder not in self._recordings:
+                    self._recordings[folder] = _recording_or_none(folder)
+                session = self._recordings[folder]
+                if session is not None:
+                    return build_timeline(session, view)
+            except (OSError, ValueError, KeyError):
+                # A folder that is not a recording is the ordinary case, and
+                # an events CSV missing a column build_timeline reads is the
+                # ugly one. Neither is worth losing the behaviour lanes over,
+                # and neither may reach the GUI as a traceback.
+                self._recordings[folder] = None
+                logger.debug("no usable recording in %s", folder, exc_info=True)
+        return build_timeline(None, view)
+
     def _adopt(self, ethogram_csv: Path, view: SessionView) -> None:
         """Show an already-loaded session."""
         self._view = view
@@ -867,16 +934,7 @@ class AnalysisWindow(QMainWindow):
         self._path_label.setText(_short_path(Path(ethogram_csv)))
         self._path_label.setToolTip(str(ethogram_csv))
         self._bar.set_view(view)
-        session = None
-        try:
-            from glider.analysis import Session
-
-            session = Session.load(ethogram_csv.parent)
-        except (OSError, ValueError, NotADirectoryError):
-            # An ethogram with no recording beside it is the normal case for
-            # an apply-run output folder — behaviour lanes, no raster.
-            logger.debug("no recording beside %s", ethogram_csv, exc_info=True)
-        self._bar.set_timeline(build_timeline(session, view))
+        self._bar.set_timeline(self._timeline_for(Path(ethogram_csv), view))
         self._canvas.set_view(view)
         # The overlay belongs to the session that just left. Nothing else
         # clears it: set_view leaves _heatmap alone and bar.set_view drops the
@@ -1483,9 +1541,11 @@ class AnalysisWindow(QMainWindow):
     def _fill_bouts(self, stats) -> None:
         rows = stats.bouts
         self._bouts.setRowCount(len(rows))
-        # The shown session's own order, which is what the bar above was
-        # coloured from -- so a row's chip is that row's stripe.
-        order = behavior_order(self._view.labels if self._view else [])
+        # The bar's own pooled order, not one re-derived from the ethogram
+        # alone -- so a row's chip really is that row's stripe. With a
+        # tracking lane in the timeline the two orders differ, and the table
+        # and the bar directly above it then disagreed on every colour.
+        order = self._bar.behavior_order()
         for r, (_, row) in enumerate(rows.iterrows()):
             values = [
                 str(row["state"] or "(unscored)"),
