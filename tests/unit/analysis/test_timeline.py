@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from glider.analysis import Session
-from glider.analysis.timeline import FrameMap, build_frame_map
+from glider.analysis.timeline import build_frame_map, hardware_lanes
 
 from .conftest import RecordingSpec, write_synthetic_recording
 
@@ -64,20 +64,13 @@ def test_frame_map_survives_a_dropped_frame(tmp_path: Path):
 
 
 def test_frame_map_is_none_without_tracking(tmp_path: Path):
-    directory = write_synthetic_recording(
-        tmp_path / "rec", RecordingSpec(write_tracking=False)
-    )
+    directory = write_synthetic_recording(tmp_path / "rec", RecordingSpec(write_tracking=False))
     s = Session.load(directory)
     assert build_frame_map(s) is None
 
 
-from glider.analysis.timeline import Lane, Segment, hardware_lanes
-
-
 def _rec(tmp_path: Path, events, name="rec") -> Path:
-    return write_synthetic_recording(
-        tmp_path / name, RecordingSpec(extra_events=tuple(events))
-    )
+    return write_synthetic_recording(tmp_path / name, RecordingSpec(extra_events=tuple(events)))
 
 
 def test_hardware_lane_per_device(tmp_path: Path):
@@ -147,7 +140,9 @@ def test_analog_beyond_assumed_range_falls_back_to_observed(tmp_path: Path):
 def test_non_numeric_value_becomes_a_marker(tmp_path: Path):
     directory = _rec(
         tmp_path,
-        [(500.0, "input_change", "board0", "reader", "RFID", "2", "", "tag-A7"),],
+        [
+            (500.0, "input_change", "board0", "reader", "RFID", "2", "", "tag-A7"),
+        ],
     )
     lane = hardware_lanes(Session.load(directory))[0]
     assert lane.segments == []
@@ -166,15 +161,20 @@ def test_event_without_a_frame_still_makes_a_segment(tmp_path: Path):
     assert hardware_lanes(s)[0].segments
 
 
-def test_flow_markers_are_not_a_lane(synthetic_recording: Path):
-    lanes = hardware_lanes(Session.load(synthetic_recording))
-    assert all(lane.key != "flow_marker" for lane in lanes)
+def test_flow_markers_are_not_a_lane(tmp_path: Path):
+    """Flow boundaries are drawn as rules across every lane, not as a lane."""
+    directory = _rec(
+        tmp_path,
+        [(500.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1")],
+    )
+    lanes = hardware_lanes(Session.load(directory))
+    assert {lane.key for lane in lanes} == {"led1"}
+    labels = {m.label for lane in lanes for m in lane.markers}
+    assert not labels & {"start", "end"}
 
 
 def test_no_events_gives_no_lanes(tmp_path: Path):
-    directory = write_synthetic_recording(
-        tmp_path / "rec", RecordingSpec(write_events=False)
-    )
+    directory = write_synthetic_recording(tmp_path / "rec", RecordingSpec(write_events=False))
     assert hardware_lanes(Session.load(directory)) == []
 
 
@@ -184,3 +184,29 @@ def test_device_id_falls_back_to_board_and_pin(tmp_path: Path):
         [(500.0, "output_write", "board0", "", "", "7", "DIGITAL", "1")],
     )
     assert hardware_lanes(Session.load(directory))[0].key == "board0:pin7"
+
+
+def test_segment_never_ends_before_it_starts(tmp_path: Path):
+    """A session that ends before its last event must not make a negative span.
+
+    The camera can stop before the flow tears down, so `end_ms` legitimately
+    precedes a late event. A renderer computing `end - start` would draw an
+    inverted rect."""
+    directory = _rec(
+        tmp_path,
+        [(500.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1")],
+    )
+    lane = hardware_lanes(Session.load(directory), end_ms=0.0)[0]
+    assert all(seg.end_ms >= seg.start_ms for seg in lane.segments)
+
+
+def test_empty_value_is_neither_level_nor_marker(tmp_path: Path):
+    """The event logger writes "" when a device reports no value."""
+    directory = _rec(
+        tmp_path,
+        [(500.0, "input_change", "board0", "probe", "Probe", "3", "", "")],
+    )
+    lanes = hardware_lanes(Session.load(directory))
+    lane = next(ln for ln in lanes if ln.key == "probe")
+    assert lane.segments == []
+    assert lane.markers == []

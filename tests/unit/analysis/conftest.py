@@ -250,9 +250,16 @@ def _write_events_csv(
         )
         # Extra synthetic events (e.g., output_write at known flow times) so
         # event_triggered tests have something to bind to.
-        for flow_ms, source, board_id, device_id, device_type, pin, pin_type, value in (
-            spec.extra_events
-        ):
+        for (
+            flow_ms,
+            source,
+            board_id,
+            device_id,
+            device_type,
+            pin,
+            pin_type,
+            value,
+        ) in spec.extra_events:
             event_dt = flow_start_dt + timedelta(milliseconds=flow_ms)
             event_elapsed = (event_dt - _BASE_DATETIME).total_seconds() * 1000
             frame = spec.n_pre_flow_frames + int(flow_ms / 1000.0 * spec.fps)

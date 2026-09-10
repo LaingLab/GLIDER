@@ -221,7 +221,7 @@ def hardware_lanes(
     # A board-level write with no resolved device still deserves a row.
     rows["_key"] = [
         device or f"{board}:pin{pin}"
-        for device, board, pin in zip(rows["_device"], rows["_board"], rows["_pin"])
+        for device, board, pin in zip(rows["_device"], rows["_board"], rows["_pin"], strict=True)
     ]
     rows = rows.sort_values("_ms", kind="stable")
 
@@ -233,8 +233,12 @@ def hardware_lanes(
         markers: list[Marker] = []
         levels: list[tuple[float, float]] = []  # (ms, numeric value)
 
-        for ms, raw in zip(times, group["value"]):
+        for ms, raw in zip(times, group["value"], strict=True):
             text = _cell(raw)
+            if not text:
+                # The event logger writes "" for a None value, not a
+                # missing cell — neither a level nor a marker for that.
+                continue
             try:
                 levels.append((float(ms), float(text)))
             except ValueError:
@@ -246,7 +250,12 @@ def hardware_lanes(
         segments = [
             Segment(
                 start_ms=ms,
-                end_ms=(levels[i + 1][0] if i + 1 < len(levels) else tail),
+                # The last segment ends at `tail` unless that end would
+                # precede its own start — a session can legitimately end
+                # before its last event (camera stops before the flow
+                # tears down), and a negative span draws as an inverted
+                # or invisible rect.
+                end_ms=(levels[i + 1][0] if i + 1 < len(levels) else max(tail, ms)),
                 value=value,
                 level=max(0.0, min(1.0, value / full)),
             )

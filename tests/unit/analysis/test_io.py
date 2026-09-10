@@ -155,9 +155,7 @@ def test_extra_events_round_trip_device_columns(tmp_path: Path):
     write_synthetic_recording(
         tmp_path / "rec",
         RecordingSpec(
-            extra_events=(
-                (1500.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),
-            )
+            extra_events=((1500.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),)
         ),
     )
     s = Session.load(tmp_path / "rec")
