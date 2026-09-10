@@ -54,14 +54,27 @@ class RecordingSpec:
     state_velocities: dict[str, float] = field(
         default_factory=lambda: {"resting": 0.0, "active": 5.0, "locomotion": 8.0}
     )
-    # Extra event rows to append after the flow_marker[start] but before
-    # flow_marker[end]. Each entry is (flow_ms, source, board_id, pin, value).
-    # Example: ((1000.0, "output_write", "board0", "5", "1"),) writes an LED-on
-    # event 1s after flow start.
-    extra_events: tuple[tuple[float, str, str, str, str], ...] = ()
+    # Extra event rows appended after flow_marker[start] and before
+    # flow_marker[end]. Each entry is
+    # (flow_ms, source, board_id, device_id, device_type, pin, pin_type, value)
+    # matching the event log's column order exactly. Example:
+    #   ((1000.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),)
+    # writes an LED-on event 1s after flow start.
+    extra_events: tuple[tuple[float, str, str, str, str, str, str, str], ...] = ()
     write_tracking: bool = True
     write_data: bool = True
     write_events: bool = True
+    # Tracked objects per frame. >1 writes one tracking row per object per
+    # frame (object_id 0..n-1), matching a real multi-subject recording
+    # where every frame has one row per tracked animal.
+    n_objects: int = 1
+    # Opt-in: prepend a motion-only "heartbeat" row (object_id=-1, blank
+    # behavioral_state) to frame 1 of the tracking CSV, matching the shape
+    # tracking_logger.py writes when `_frame_count == 1` and no object has
+    # been detected yet (its most common firing, not a corner case — see
+    # tracking_logger.py around line 828). Default False keeps the default
+    # recording shape byte-identical.
+    include_heartbeat_row: bool = False
 
 
 def _iso(dt: datetime) -> str:
@@ -175,11 +188,43 @@ def _write_tracking_csv(
                 state = "unknown"
                 zone_ids = ""
                 velocity = 0.0
-            f.write(
-                f"{i + 1},{_iso(t_dt)},{elapsed_ms:.1f},{flow_cell},0,mouse,"
-                f"{bx:.1f},{by:.1f},{bbox_w:.1f},{bbox_h:.1f},0.900,"
-                f"{cx:.1f},{cy:.1f},0.00,0.00,0.00,{zone_ids},{state},{velocity:.2f}\n"
-            )
+            if spec.include_heartbeat_row and i == 0:
+                # Mirrors tracking_logger.py's heartbeat write (~line 828):
+                # object_id=-1, class="heartbeat", zeroed bbox, and every
+                # field past confidence left blank, including
+                # behavioral_state.
+                heartbeat_row = [
+                    i + 1,
+                    _iso(t_dt),
+                    f"{elapsed_ms:.1f}",
+                    flow_cell,
+                    -1,
+                    "heartbeat",
+                    0,
+                    0,
+                    0,
+                    0,
+                    "0.000",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                ]
+                f.write(",".join(str(v) for v in heartbeat_row) + "\n")
+            for obj in range(spec.n_objects):
+                # Object 0's state matches the single-object fixture
+                # exactly; other objects get a distinct label so tests
+                # can tell one object's lane from another's.
+                obj_state = state if obj == 0 else f"{state}_obj{obj}"
+                f.write(
+                    f"{i + 1},{_iso(t_dt)},{elapsed_ms:.1f},{flow_cell},{obj},mouse,"
+                    f"{bx:.1f},{by:.1f},{bbox_w:.1f},{bbox_h:.1f},0.900,"
+                    f"{cx:.1f},{cy:.1f},0.00,0.00,0.00,{zone_ids},{obj_state},{velocity:.2f}\n"
+                )
 
         f.write("\n")
         f.write(f"# End Time,{_iso(flow_end_dt)}\n")
@@ -248,13 +293,23 @@ def _write_events_csv(
         )
         # Extra synthetic events (e.g., output_write at known flow times) so
         # event_triggered tests have something to bind to.
-        for flow_ms, source, board_id, pin, value in spec.extra_events:
+        for (
+            flow_ms,
+            source,
+            board_id,
+            device_id,
+            device_type,
+            pin,
+            pin_type,
+            value,
+        ) in spec.extra_events:
             event_dt = flow_start_dt + timedelta(milliseconds=flow_ms)
             event_elapsed = (event_dt - _BASE_DATETIME).total_seconds() * 1000
             frame = spec.n_pre_flow_frames + int(flow_ms / 1000.0 * spec.fps)
             f.write(
                 f"{frame},{_iso(event_dt)},{event_elapsed:.1f},"
-                f"{source},{board_id},,{pin},,{pin},{value}\n"
+                f"{source},{board_id},{device_id},{device_type},"
+                f"{pin},{pin_type},{value}\n"
             )
         f.write(
             f"{spec.n_pre_flow_frames + spec.n_post_flow_frames},"

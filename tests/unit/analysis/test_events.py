@@ -59,7 +59,7 @@ def test_event_triggered_extracts_per_trial_window(tmp_path: Path):
     """An LED-on event at flow t=1500ms should yield a window of tracking
     frames spanning [-1000, 5000] ms around it."""
     spec = RecordingSpec(
-        extra_events=((1500.0, "output_write", "board0", "5", "1"),),
+        extra_events=((1500.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),),
     )
     write_synthetic_recording(tmp_path / "rec", spec)
     s = Session.load(tmp_path / "rec")
@@ -80,8 +80,8 @@ def test_event_triggered_extracts_per_trial_window(tmp_path: Path):
 def test_event_triggered_handles_multiple_trials(tmp_path: Path):
     spec = RecordingSpec(
         extra_events=(
-            (1000.0, "output_write", "board0", "5", "1"),
-            (2500.0, "output_write", "board0", "5", "1"),
+            (1000.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),
+            (2500.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),
         ),
     )
     write_synthetic_recording(tmp_path / "rec", spec)

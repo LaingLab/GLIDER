@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -14,10 +16,10 @@ from PyQt6.QtGui import QColor, QKeyEvent, QMouseEvent  # noqa: E402
 from glider.analysis.behavior.session_view import SessionView  # noqa: E402
 from glider.gui.behavior.analysis_window import (  # noqa: E402
     AnalysisWindow,
-    EthogramBar,
     KeypointCanvas,
     behavior_qcolor,
 )
+from glider.gui.widgets.timeline_bar import TimelineBar  # noqa: E402
 
 NAMES = ["nose", "l_ear", "r_ear", "tail_base"]
 
@@ -61,16 +63,16 @@ class TestBehaviorColours:
         assert behavior_qcolor("") == QColor(colors.BORDER)
 
 
-class TestEthogramBar:
+class TestTimelineBar:
     def _bar(self, qtbot, tmp_path, **kw):
-        bar = EthogramBar()
+        bar = TimelineBar()
         qtbot.addWidget(bar)
         bar.resize(300, 46)
         bar.set_view(SessionView.load(_session(tmp_path / "v", **kw)))
         return bar
 
     def test_an_empty_bar_does_not_crash(self, qtbot):
-        bar = EthogramBar()
+        bar = TimelineBar()
         qtbot.addWidget(bar)
         bar.set_view(None)
         bar.resize(200, 46)
@@ -207,6 +209,17 @@ class TestAnalysisWindow:
         win = self._win(qtbot, tmp_path)
         win._bar.set_selection(100, 199)
         assert win._bouts.rowCount() == 1
+        assert win._bouts.item(0, 0).text() == "locomote"
+
+    def test_selection_still_arrives_in_frames(self, qtbot, tmp_path):
+        """The swap from EthogramBar to TimelineBar must not change the
+        unit the tables receive. If it does, every window statistic is
+        computed over the wrong range and nothing raises."""
+        win = self._win(qtbot, tmp_path)
+        received: list[tuple[int, int]] = []
+        win._bar.selection_changed.connect(lambda a, b: received.append((a, b)))
+        win._bar.set_selection(100, 199)
+        assert received == [(100, 199)]
         assert win._bouts.item(0, 0).text() == "locomote"
 
     def test_a_span_across_behaviours_lists_both(self, qtbot, tmp_path):
@@ -486,7 +499,7 @@ class TestTheTimelineHasOneLane:
         return folder / "ethogram_raw.csv"
 
     def test_the_bar_paints_one_full_height_lane(self, qtbot, tmp_path):
-        bar = EthogramBar()
+        bar = TimelineBar()
         qtbot.addWidget(bar)
         bar.resize(300, 46)
         bar.set_view(SessionView.load(self._session_with_freezing(tmp_path)))
@@ -495,7 +508,7 @@ class TestTheTimelineHasOneLane:
         assert image.pixelColor(130, 8) == image.pixelColor(130, 40)
 
     def test_freezing_is_drawn_in_its_own_colour(self, qtbot, tmp_path):
-        bar = EthogramBar()
+        bar = TimelineBar()
         qtbot.addWidget(bar)
         bar.resize(300, 46)
         bar.set_view(SessionView.load(self._session_with_freezing(tmp_path)))
@@ -921,7 +934,7 @@ class TestTheTimelineCoversTheEthogram:
         assert win._frame == 3600
 
     def test_clicking_the_far_left_lands_on_the_first_frame(self, qtbot, tmp_path):
-        bar = EthogramBar()
+        bar = TimelineBar()
         qtbot.addWidget(bar)
         bar.resize(300, 46)
         bar.set_view(SessionView.load(_windowed_session(tmp_path)))
@@ -931,7 +944,7 @@ class TestTheTimelineCoversTheEthogram:
         assert 12570 <= bar._frame_at(299.9) <= 12599
 
     def test_the_scored_range_fills_the_width(self, qtbot, tmp_path):
-        bar = EthogramBar()
+        bar = TimelineBar()
         qtbot.addWidget(bar)
         bar.resize(300, 46)
         bar.set_view(SessionView.load(_windowed_session(tmp_path)))
@@ -1186,3 +1199,204 @@ class TestTheCohortTabShowsTheAppliedThresholds:
         qtbot.addWidget(window)
         window.load(_session(tmp_path / "t1"))
         assert window._threshold_text(window.cohort_rows(0, 299)[0], "dart") == "—"
+
+
+def _recording(folder, *, n=300, fps=30.0, states=("resting", "active")):
+    """A GLIDER recording directory: tracking + events, one LED on a pin.
+
+    Written here rather than imported from ``tests/unit/analysis/conftest.py``
+    — pytest runs this repository in importlib mode, which deliberately does
+    not let one test module import another. Only the columns the timeline
+    reads are present.
+    """
+    from datetime import datetime, timedelta
+
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    base = datetime(2026, 5, 25, 14, 0, 30)
+
+    def stamp(frame):
+        return (base + timedelta(seconds=frame / fps)).isoformat(timespec="milliseconds")
+
+    with open(folder / "rec_tracking.csv", "w", encoding="utf-8") as f:
+        f.write("# GLIDER Tracking Data\n\n")
+        f.write("frame,timestamp,elapsed_ms,object_id,behavioral_state\n")
+        for i in range(n):
+            state = states[0] if i < n // 2 else states[1]
+            f.write(f"{i},{stamp(i)},{i / fps * 1000:.1f},0,{state}\n")
+
+    with open(folder / "rec_events.csv", "w", encoding="utf-8") as f:
+        f.write("# GLIDER Device Event Log\n\n")
+        f.write(
+            "frame,timestamp,elapsed_ms,source,board_id,device_id,device_type,"
+            "pin,pin_type,value\n"
+        )
+        rows = [
+            (0, "flow_marker", "", "", "", "", "", "start"),
+            (30, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),
+            (150, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "0"),
+            (n - 1, "flow_marker", "", "", "", "", "", "end"),
+        ]
+        for frame, source, board, device, kind, pin, pin_type, value in rows:
+            f.write(
+                f"{frame},{stamp(frame)},{frame / fps * 1000:.1f},{source},"
+                f"{board},{device},{kind},{pin},{pin_type},{value}\n"
+            )
+    return folder
+
+
+def _ethogram(folder, labels):
+    """An ethogram CSV alone, the way an apply run writes one."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"frame": range(len(labels)), "behavior": labels}).to_csv(
+        folder / "ethogram_raw.csv", index=False
+    )
+    return folder / "ethogram_raw.csv"
+
+
+class TestFindingTheRecordingTheEthogramCameFrom:
+    """The raster is only ever seen if the recording folder is found.
+
+    An apply run writes ``<output>/<video stem>/ethogram_raw.csv``, so the
+    ethogram's own folder is one level BELOW the recording, and the canonical
+    layout buries it one level below that. Loading ``ethogram_csv.parent`` as
+    the recording therefore found nothing in either real layout: discovery saw
+    no ``# GLIDER …`` markers, ``build_timeline`` got an empty session, and no
+    hardware lane was ever drawn by any GLIDER path at all.
+    """
+
+    def _lane_keys(self, window):
+        timeline = window._bar._timeline
+        return [] if timeline is None else [lane.key for lane in timeline.lanes]
+
+    def test_an_apply_run_layout_finds_its_recording(self, qtbot, tmp_path):
+        """Ethogram in a per-video SUBFOLDER of the recording directory.
+
+        This is the shape that shipped broken; an ethogram dropped beside the
+        CSVs proves nothing, because no GLIDER path produces that.
+        """
+        recording = _recording(tmp_path / "rec")
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load(_ethogram(recording / "v", ["groom"] * 300))
+        assert self._lane_keys(window) == ["led1"]
+
+    def test_the_canonical_layout_finds_its_recording(self, qtbot, tmp_path):
+        """Ethogram under ``sessions/<id>/analysis/``, CSVs at ``sessions/<id>/``."""
+        session = _recording(tmp_path / "sessions" / "s1")
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load(_ethogram(session / "analysis", ["groom"] * 300))
+        assert self._lane_keys(window) == ["led1"]
+
+    def test_the_found_lanes_are_actually_given_room_to_draw(self, qtbot, tmp_path):
+        recording = _recording(tmp_path / "rec")
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load(_ethogram(recording / "v", ["groom"] * 300))
+        bar = window._bar
+        bar.resize(300, bar.sizeHint().height())
+        heights = [h for kind, _lane, _top, h in bar._rows() if kind == "hardware"]
+        assert heights and min(heights) > 0
+
+    def test_an_ethogram_with_no_recording_anywhere_still_loads(self, qtbot, tmp_path):
+        """Behaviour lanes, no raster — the honest answer, not an exception."""
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load(_ethogram(tmp_path / "loose" / "v", ["groom"] * 300))
+        assert self._lane_keys(window) == []
+        assert window._bar.frame_bounds() == (0, 299)
+
+    def test_a_broken_events_csv_costs_the_raster_and_nothing_else(self, qtbot, tmp_path):
+        """A KeyError out of ``build_timeline`` must not reach the GUI.
+
+        The event log is the one artifact a plugin can write, so a missing
+        column is a real failure mode — and the whole review window went down
+        with it, over a lane nobody had asked for.
+        """
+        recording = _recording(tmp_path / "rec")
+        events = recording / "rec_events.csv"
+        text = events.read_text(encoding="utf-8")
+        events.write_text(text.replace("board_id,", ""), encoding="utf-8")
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load(_ethogram(recording / "v", ["groom"] * 300))
+        assert self._lane_keys(window) == []
+
+    def test_the_recording_is_parsed_once_per_cohort_not_once_per_click(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        """Stepping through a cohort re-adopts a session on every click.
+
+        The CSVs are megabytes and they are parsed on the GUI thread, so a
+        cohort sharing one recording must read it once, not once per click.
+        """
+        import glider.gui.behavior.analysis_window as module
+
+        recording = _recording(tmp_path / "rec")
+        parsed = []
+        real = module._recording_or_none
+
+        def counting(folder):
+            parsed.append(folder)
+            return real(folder)
+
+        monkeypatch.setattr(module, "_recording_or_none", counting)
+
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load_many(
+            [
+                _ethogram(recording / "v1", ["groom"] * 300),
+                _ethogram(recording / "v2", ["locomote"] * 300),
+            ]
+        )
+        window._show_session(1)
+        window._show_session(0)
+        assert self._lane_keys(window) == ["led1"]
+        assert parsed.count(recording.resolve()) == 1
+
+
+class TestTheTableAgreesWithTheBar:
+    """One behaviour, one colour — in the bar and in the bout table.
+
+    The bar pools labels across every behaviour lane to build its order, so a
+    session with both an ethogram and a tracking lane gives a behaviour a
+    different palette slot than the ethogram's labels alone would. The table
+    recomputed the ethogram-only order, and a bout then wore one colour in the
+    legend and another in the stripe directly above it.
+    """
+
+    def _chip_colour(self, window, row=0):
+        icon = window._bouts.item(row, 0).icon()
+        return icon.pixmap(10, 10).toImage().pixelColor(5, 5)
+
+    def test_a_bouts_chip_is_the_colour_the_bar_paints(self, qtbot, tmp_path):
+        recording = _recording(tmp_path / "rec")
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load(_ethogram(recording / "v", ["dart"] * 300))
+
+        bar = window._bar
+        bar.resize(600, bar.sizeHint().height())
+        window._select_all()
+
+        assert window._bouts.item(0, 0).text() == "dart"
+        chip = self._chip_colour(window)
+        # The ethogram lane is the top row; frame 150 is well inside it.
+        painted = bar.grab().toImage().pixelColor(int(bar._x_of(150)), 20)
+        assert painted == chip
+
+        # And the tracking lane really is shifting the order, so the equality
+        # above is not two identical computations agreeing by accident.
+        assert behavior_qcolor("dart", ["dart"]) != chip
+
+    def test_the_bout_picker_offers_the_bar_s_behaviours(self, qtbot, tmp_path):
+        recording = _recording(tmp_path / "rec")
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        window.load(_ethogram(recording / "v", ["dart"] * 300))
+        offered = [window._bout_filter.itemData(i) for i in range(window._bout_filter.count())]
+        assert offered[0] is None  # "Any change"
+        assert offered[1:] == window._bar.behavior_order()
