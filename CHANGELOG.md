@@ -144,6 +144,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Experiment rail entries are the full width of the rail.** A `QToolButton`
+  sizes itself to its label, so every entry was a different width and most of
+  the rail looked clickable while being inert — you aim at *Mice* and hit
+  nothing, because the button stops where the text does.
+- **The status strip drops two things it said constantly.** The `— edited`
+  marker beside the experiment name is gone; unsaved work is now marked the way
+  the platform marks it, through `setWindowModified` — the dot in the close
+  button on macOS. That also puts the indicator on the *window*, so it survives
+  a runner-mode launch, where there is no strip at all. The **run-state pill is
+  hidden while idle** and appears the moment a run starts: idle is the state
+  GLIDER is in almost all of the time, and an indicator that is always there
+  stops being read, which is the one failure a run-state pill cannot afford.
 - **Closing the Multi-Camera window left every camera streaming.** It stopped
   its own poll timer and nothing else, so capture threads ran and camera lights
   stayed on until the app quit. Streaming is now claimed by name, because the

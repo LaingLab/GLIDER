@@ -54,6 +54,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QStackedWidget,
     QToolButton,
     QVBoxLayout,
@@ -166,6 +167,12 @@ class ExperimentPage(QWidget):
             button.setAutoExclusive(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            # Full rail width, so the hit target is the row rather than the
+            # words. A QToolButton sizes itself to its label by default, which
+            # made every entry a different width and left most of the rail
+            # looking clickable but inert -- you aim at "Mice" and hit nothing,
+            # because the button stops where the text does.
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             button.setIcon(glyph_icon(button, key, ICON_PX))
             button.setIconSize(QSize(ICON_PX, ICON_PX))
             button.clicked.connect(lambda _checked, k=key: self.show_section(k))

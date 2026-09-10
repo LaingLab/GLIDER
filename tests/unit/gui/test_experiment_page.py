@@ -276,3 +276,25 @@ def test_the_rail_offers_plugins(qtbot, counting_builders):
     assert "plugins" in page.rail_buttons()
     page.rail_buttons()["plugins"].click()
     assert calls["plugins"] == 1
+
+
+def test_every_rail_entry_is_the_full_width_of_the_rail(qtbot, counting_builders):
+    """The reported miss: a QToolButton sizes itself to its label, so each entry
+    was a different width and most of the rail looked clickable but was inert.
+    You aim at "Mice" and hit nothing, because the button stops with the text.
+    """
+    _calls, builders = counting_builders
+    page = ExperimentPage(builders)
+    qtbot.addWidget(page)
+    page.resize(600, 400)
+    page.show()
+    qtbot.waitExposed(page)
+
+    widths = {key: b.width() for key, b in page.rail_buttons().items()}
+    assert len(set(widths.values())) == 1, f"inconsistent hit targets: {widths}"
+
+    # And that one width is the rail, not the widest label.
+    rail = next(iter(page.rail_buttons().values())).parentWidget()
+    margins = rail.layout().contentsMargins()
+    expected = rail.width() - margins.left() - margins.right()
+    assert next(iter(widths.values())) == expected
