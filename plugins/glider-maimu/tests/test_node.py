@@ -180,7 +180,12 @@ def test_unknown_saved_mode_falls_back_to_the_default():
         }
     )
     assert restored.mode == "pulse"
-    assert (restored.period_ms, restored.pulse_width_ms, restored.count, restored.intensity_pct) == (
+    assert (
+        restored.period_ms,
+        restored.pulse_width_ms,
+        restored.count,
+        restored.intensity_pct,
+    ) == (
         200,
         8,
         2,

@@ -264,8 +264,7 @@ class MaimuDevice(BLEDevice):
         number = int(number)
         if number < minimum or number > maximum:
             raise ValueError(
-                f"Maimu.pulse: {field} must be between {minimum} and {maximum}, "
-                f"got {value!r}"
+                f"Maimu.pulse: {field} must be between {minimum} and {maximum}, got {value!r}"
             )
         return number
 
