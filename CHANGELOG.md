@@ -120,6 +120,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Maimu stimulation commands now carry pulse width, pulse count and
+  intensity.** The old `<period_ms>,<duration_s>` command was a fixed 50%-duty
+  toggle at full brightness, so the standard optogenetic protocol of 4 ms pulses
+  at 20 Hz — 8% duty — could not be expressed at all. The grammar is now
+  `<period_ms>,<pulse_width_ms>,<count>,<intensity_pct>`, and the **Maimu** node
+  offers Pulse width, Pulses and Intensity alongside Period.
+  - **This needs matching firmware**, which in turn needs a board respin: the
+    stimulus output moves off P2.09, a pin no PWM or GPIOTE instance on the
+    nRF54L15 can reach. See the Maimu firmware repository.
+  - A `.glider` file saved with the old grammar still opens, but it opens as a
+    *different stimulus* — so loading one now logs a warning naming the dropped
+    `duration_s` and what replaced it, rather than letting it surface later as
+    data that does not look right.
+  - `count = 0` runs until stopped and is now the only spelling of continuous
+    light; a width equal to the period with a non-zero count is rejected on both
+    sides, because it used to be accepted and then run forever.
+  - Intensity is **relative** — a percentage of whatever peak the board
+    delivers, not calibrated optical power.
+
 - **`Tools` comes off the menu bar** — File, Edit, Experiment, View, Help
   remain. This is the recorded rule being satisfied rather than bent: a menu
   leaves the bar only once its actions have another *visible* home, and every

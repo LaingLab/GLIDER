@@ -34,8 +34,11 @@ from glider.nodes.vision import register_behavior_nodes
 
 FREEZING = "freezing"
 MIN_FRAMES = 3
-PERIOD_MS = 500
-DURATION_S = 10
+PERIOD_MS = 50
+PULSE_WIDTH_MS = 5
+COUNT = 20
+INTENSITY_PCT = 100
+STIMULUS = b"50,5,20,100"
 
 
 class _FakeClient:
@@ -114,7 +117,9 @@ async def _rig(fake_bleak, behavior: str = FREEZING):
     )
     stim.mode = "pulse"
     stim.period_ms = PERIOD_MS
-    stim.duration_s = DURATION_S
+    stim.pulse_width_ms = PULSE_WIDTH_MS
+    stim.count = COUNT
+    stim.intensity_pct = INTENSITY_PCT
     assert stim.device is not None, "precondition: the Maimu node did not bind its device"
 
     # "On Enter" is output 2; the Maimu node's only input is exec.
@@ -149,7 +154,7 @@ async def test_freezing_triggers_a_maimu_pulse(fake_bleak):
 
         fired = await _wait_for(lambda: client.written)
         assert fired, "freezing never reached the stimulator"
-        assert client.written == [b"500,10"]
+        assert client.written == [STIMULUS]
     finally:
         await engine.stop()
 
@@ -178,7 +183,7 @@ async def test_a_sustained_freeze_stimulates_once_not_per_frame(fake_bleak):
 
         assert await _wait_for(lambda: client.written)
         await asyncio.sleep(0.1)
-        assert client.written == [b"500,10"], "the stimulus repeated within one bout"
+        assert client.written == [STIMULUS], "the stimulus repeated within one bout"
     finally:
         await engine.stop()
 
@@ -197,7 +202,7 @@ async def test_a_second_freeze_bout_stimulates_again(fake_bleak):
             bus.publish_behavior(_frame(FREEZING, 20 + i))
 
         assert await _wait_for(lambda: len(client.written) == 2)
-        assert client.written == [b"500,10", b"500,10"]
+        assert client.written == [STIMULUS, STIMULUS]
     finally:
         await engine.stop()
 
@@ -241,7 +246,7 @@ async def test_any_behavior_in_the_model_can_trigger(fake_bleak, behavior):
             bus.publish_behavior(_frame(behavior, i))
 
         assert await _wait_for(lambda: client.written), f"{behavior!r} never triggered"
-        assert client.written == [b"500,10"]
+        assert client.written == [STIMULUS]
     finally:
         await engine.stop()
 
@@ -279,7 +284,10 @@ async def test_two_behaviors_drive_two_different_stimuli(fake_bleak):
     register_hardware_nodes(engine)
 
     watchers = {}
-    for behavior, dev_id, period in (("darting", "dart_stim", 100), (FREEZING, "freeze_stim", 500)):
+    for behavior, dev_id, period, intensity in (
+        ("darting", "dart_stim", 100, 60),
+        (FREEZING, "freeze_stim", 50, 100),
+    ):
         watcher = engine.create_node(
             node_id=f"watch_{behavior}", node_type="BehaviorInput", position=(0.0, 0.0)
         )
@@ -292,7 +300,9 @@ async def test_two_behaviors_drive_two_different_stimuli(fake_bleak):
         )
         stim.mode = "pulse"
         stim.period_ms = period
-        stim.duration_s = DURATION_S
+        stim.pulse_width_ms = PULSE_WIDTH_MS
+        stim.count = COUNT
+        stim.intensity_pct = intensity
 
         engine.create_connection(
             connection_id=f"c_{behavior}",
@@ -315,14 +325,14 @@ async def test_two_behaviors_drive_two_different_stimuli(fake_bleak):
         assert await _wait_for(lambda: darting.written)
 
         # Only the darting stimulator fired, and with its own parameters.
-        assert darting.written == [b"100,10"]
+        assert darting.written == [b"100,5,20,60"]
         assert freezing.written == []
 
         for i in range(MIN_FRAMES):
             bus.publish_behavior(_frame(FREEZING, 10 + i))
         assert await _wait_for(lambda: freezing.written)
 
-        assert freezing.written == [b"500,10"]
-        assert darting.written == [b"100,10"], "the darting stimulus repeated"
+        assert freezing.written == [b"50,5,20,100"]
+        assert darting.written == [b"100,5,20,60"], "the darting stimulus repeated"
     finally:
         await engine.stop()
