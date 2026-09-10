@@ -18,8 +18,8 @@ draws.
 from __future__ import annotations
 
 import numpy as np
-from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap
+from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from glider.analysis.timeline import BehaviorLane, Timeline
@@ -206,17 +206,27 @@ class TimelineBar(QWidget):
     def frame_bounds(self) -> tuple[int, int]:
         """``(first, last)`` frame the bar covers.
 
-        From the frame map when there is one. Otherwise the ethogram's own
-        range, which is deliberately not zero: a windowed run scores minutes
-        two to seven, so its ethogram starts at frame 3600 and a bar drawn
-        from zero would spend its first eighth showing nothing.
+        From the frame map when there is one. Otherwise the behaviour lanes'
+        own range, which is deliberately not zero: a windowed run scores
+        minutes two to seven, so its ethogram starts at frame 3600 and a bar
+        drawn from zero would spend its first eighth showing nothing.
+
+        The lanes rather than ``self._view``, because an ethogram-only
+        ``Timeline`` has no frame map and no ms bounds either — falling back
+        to the view alone left ``set_timeline`` without ``set_view``
+        reporting ``(0, 0)``, which collapses every column onto frame 0 and
+        paints the whole ethogram one flat colour. ``_behavior_lanes``
+        already synthesises a lane from the view, so this covers both.
         """
         frame_map = self._frame_map()
         bounds = self._ms_bounds()
         if frame_map is not None and bounds is not None:
             return frame_map.frame_at(bounds[0]), frame_map.frame_at(bounds[1])
-        if self._view is not None and self._view.n_rows:
-            return int(self._view.frames[0]), int(self._view.frames[-1])
+        lanes = [ln for ln in self._behavior_lanes() if len(ln.frames)]
+        if lanes:
+            firsts = [int(np.asarray(ln.frames)[0]) for ln in lanes]
+            lasts = [int(np.asarray(ln.frames)[-1]) for ln in lanes]
+            return min(firsts), max(lasts)
         return 0, 0
 
     def _x_of_ms(self, ms: float) -> float:
@@ -351,7 +361,21 @@ class TimelineBar(QWidget):
             return
 
         frames = np.asarray(lane.frames)
-        edges = first + np.arange(width + 1, dtype=np.int64) * span // width
+        bounds = self._ms_bounds()
+        frame_map = self._frame_map()
+        if frame_map is not None and bounds is not None and len(frame_map.frames):
+            # Columns are equal slices of the TIME axis, because that is the
+            # axis every other lane and the playhead are drawn on. Slicing the
+            # frame axis instead smears the ethogram across any stretch the
+            # camera did not cover -- and the axis deliberately spans
+            # pre-flow device writes, so that stretch is routinely real.
+            start_ms, end_ms = bounds
+            edges_ms = start_ms + np.arange(width + 1, dtype=float) * (end_ms - start_ms) / width
+            idx = np.clip(np.searchsorted(frame_map.ms, edges_ms), 0, len(frame_map.frames) - 1)
+            edges = frame_map.frames[idx].astype(np.int64)
+        else:
+            # No frame map: the axis IS frames, so equal slices of it are right.
+            edges = first + np.arange(width + 1, dtype=np.int64) * span // width
         starts = np.searchsorted(frames, edges, side="left")
 
         n_codes = len(self._order) + 1  # + the unscored bucket
@@ -396,10 +420,19 @@ class TimelineBar(QWidget):
 
         if self._selection is not None:
             start, end = self._selection
-            x0, x1 = self._x_of(start), self._x_of(end)
-            overlay = QColor(colors.ACCENT)
-            overlay.setAlpha(48)
-            painter.fillRect(QRectF(x0, 0, max(1.0, x1 - x0), self.height()), overlay)
+            x0, x1 = self._x_of(start), self._x_of(end + 1)
+            # Shade what is EXCLUDED, not what is chosen. Tinting the selection
+            # blue meant every behaviour inside it was drawn 28% toward the
+            # accent — and since the usual selection is the whole session, that
+            # was every colour on the bar, all of them dragged toward the same
+            # hue. Shading the outside leaves the data at full strength and
+            # says the same thing.
+            scrim = QBrush(colors.qcolor_with_alpha(QColor(colors.BASE), 0.72))
+            painter.fillRect(QRectF(0, 0, max(0.0, x0), self.height()), scrim)
+            painter.fillRect(QRectF(x1, 0, max(0.0, self.width() - x1), self.height()), scrim)
+            painter.setPen(QPen(QColor(colors.ACCENT), 2))
+            painter.drawLine(QPointF(x0, 0), QPointF(x0, self.height()))
+            painter.drawLine(QPointF(x1, 0), QPointF(x1, self.height()))
 
         x = int(self._x_of(self._frame))
         painter.setPen(QPen(QColor(colors.TEXT_PRIMARY), 2))
