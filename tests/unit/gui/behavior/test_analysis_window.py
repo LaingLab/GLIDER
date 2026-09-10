@@ -14,10 +14,10 @@ from PyQt6.QtGui import QColor, QKeyEvent, QMouseEvent  # noqa: E402
 from glider.analysis.behavior.session_view import SessionView  # noqa: E402
 from glider.gui.behavior.analysis_window import (  # noqa: E402
     AnalysisWindow,
-    EthogramBar,
     KeypointCanvas,
     behavior_qcolor,
 )
+from glider.gui.widgets.timeline_bar import TimelineBar  # noqa: E402
 
 NAMES = ["nose", "l_ear", "r_ear", "tail_base"]
 
@@ -61,16 +61,16 @@ class TestBehaviorColours:
         assert behavior_qcolor("") == QColor(colors.BORDER)
 
 
-class TestEthogramBar:
+class TestTimelineBar:
     def _bar(self, qtbot, tmp_path, **kw):
-        bar = EthogramBar()
+        bar = TimelineBar()
         qtbot.addWidget(bar)
         bar.resize(300, 46)
         bar.set_view(SessionView.load(_session(tmp_path / "v", **kw)))
         return bar
 
     def test_an_empty_bar_does_not_crash(self, qtbot):
-        bar = EthogramBar()
+        bar = TimelineBar()
         qtbot.addWidget(bar)
         bar.set_view(None)
         bar.resize(200, 46)
@@ -207,6 +207,17 @@ class TestAnalysisWindow:
         win = self._win(qtbot, tmp_path)
         win._bar.set_selection(100, 199)
         assert win._bouts.rowCount() == 1
+        assert win._bouts.item(0, 0).text() == "locomote"
+
+    def test_selection_still_arrives_in_frames(self, qtbot, tmp_path):
+        """The swap from EthogramBar to TimelineBar must not change the
+        unit the tables receive. If it does, every window statistic is
+        computed over the wrong range and nothing raises."""
+        win = self._win(qtbot, tmp_path)
+        received: list[tuple[int, int]] = []
+        win._bar.selection_changed.connect(lambda a, b: received.append((a, b)))
+        win._bar.set_selection(100, 199)
+        assert received == [(100, 199)]
         assert win._bouts.item(0, 0).text() == "locomote"
 
     def test_a_span_across_behaviours_lists_both(self, qtbot, tmp_path):
@@ -486,7 +497,7 @@ class TestTheTimelineHasOneLane:
         return folder / "ethogram_raw.csv"
 
     def test_the_bar_paints_one_full_height_lane(self, qtbot, tmp_path):
-        bar = EthogramBar()
+        bar = TimelineBar()
         qtbot.addWidget(bar)
         bar.resize(300, 46)
         bar.set_view(SessionView.load(self._session_with_freezing(tmp_path)))
@@ -495,7 +506,7 @@ class TestTheTimelineHasOneLane:
         assert image.pixelColor(130, 8) == image.pixelColor(130, 40)
 
     def test_freezing_is_drawn_in_its_own_colour(self, qtbot, tmp_path):
-        bar = EthogramBar()
+        bar = TimelineBar()
         qtbot.addWidget(bar)
         bar.resize(300, 46)
         bar.set_view(SessionView.load(self._session_with_freezing(tmp_path)))
@@ -921,7 +932,7 @@ class TestTheTimelineCoversTheEthogram:
         assert win._frame == 3600
 
     def test_clicking_the_far_left_lands_on_the_first_frame(self, qtbot, tmp_path):
-        bar = EthogramBar()
+        bar = TimelineBar()
         qtbot.addWidget(bar)
         bar.resize(300, 46)
         bar.set_view(SessionView.load(_windowed_session(tmp_path)))
@@ -931,7 +942,7 @@ class TestTheTimelineCoversTheEthogram:
         assert 12570 <= bar._frame_at(299.9) <= 12599
 
     def test_the_scored_range_fills_the_width(self, qtbot, tmp_path):
-        bar = EthogramBar()
+        bar = TimelineBar()
         qtbot.addWidget(bar)
         bar.resize(300, 46)
         bar.set_view(SessionView.load(_windowed_session(tmp_path)))
