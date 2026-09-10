@@ -45,9 +45,11 @@ from .spec import (
     is_onnx_model,
     read_pose_model_meta,
 )
+from .tracks import PoseTracks
 
 __all__ = [
     "PoseData",
+    "PoseTracks",
     "PoseCancelledError",
     "infer_video",
     "pose_from_array",
