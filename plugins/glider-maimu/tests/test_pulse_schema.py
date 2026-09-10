@@ -1,8 +1,10 @@
 """The Maimu's pulse arguments, as the control panels will render them.
 
-period_ms is a period in milliseconds, not a frequency, and the firmware
-atoi()s both fields -- so the declared bounds are the same whole-number,
-at-least-1 contract MaimuDevice._whole_number enforces at call time.
+period_ms is a period in milliseconds, not a frequency, and the firmware's
+parser is strict -- a fractional or non-numeric field is rejected outright
+rather than coerced (no more atoi() turning "fast" into 0). The declared
+bounds are the same whole-number contract MaimuDevice._whole_number enforces
+at call time (count and intensity_pct floor at 0, the other two at 1).
 """
 
 import inspect
@@ -21,10 +23,12 @@ def _device():
     return MaimuDevice(_FakeBoard(), DeviceConfig(), name="maimu")
 
 
-def test_pulse_declares_both_arguments():
+def test_pulse_declares_every_argument():
     assert [f["key"] for f in _device().action_args_schema("pulse")] == [
         "period_ms",
-        "duration_s",
+        "pulse_width_ms",
+        "count",
+        "intensity_pct",
     ]
 
 
@@ -41,20 +45,35 @@ def test_the_declared_order_matches_the_signature():
 
 def test_the_defaults_are_the_node_s_defaults():
     """A researcher moving between the node and the panel should see one number."""
-    from glider_maimu.node import DEFAULT_DURATION_S, DEFAULT_PERIOD_MS
+    from glider_maimu.node import (
+        DEFAULT_COUNT,
+        DEFAULT_INTENSITY_PCT,
+        DEFAULT_PERIOD_MS,
+        DEFAULT_PULSE_WIDTH_MS,
+    )
 
     fields = {f["key"]: f for f in _device().action_args_schema("pulse")}
     assert fields["period_ms"]["default"] == DEFAULT_PERIOD_MS
-    assert fields["duration_s"]["default"] == DEFAULT_DURATION_S
+    assert fields["pulse_width_ms"]["default"] == DEFAULT_PULSE_WIDTH_MS
+    assert fields["count"]["default"] == DEFAULT_COUNT
+    assert fields["intensity_pct"]["default"] == DEFAULT_INTENSITY_PCT
 
 
-def test_the_bounds_reject_zero():
-    """_whole_number raises below 1; the spin box should not offer it."""
+def test_the_bounds_match_the_firmware():
+    """Every value the panel offers must be one the firmware's parser accepts.
+
+    count and intensity legitimately allow 0 -- 0 pulses means "run until
+    stopped" and 0 intensity is an armed-but-dark control condition -- so a
+    blanket floor of 1 would be wrong.
+    """
     fields = {f["key"]: f for f in _device().action_args_schema("pulse")}
-    assert fields["period_ms"]["min"] == 1
-    assert fields["duration_s"]["min"] == 1
+    assert (fields["period_ms"]["min"], fields["period_ms"]["max"]) == (1, 3_600_000)
+    assert (fields["pulse_width_ms"]["min"], fields["pulse_width_ms"]["max"]) == (1, 3_600_000)
+    assert (fields["count"]["min"], fields["count"]["max"]) == (0, 65_535)
+    assert (fields["intensity_pct"]["min"], fields["intensity_pct"]["max"]) == (0, 100)
 
 
 def test_every_field_is_a_whole_number():
-    """The firmware atoi()s both, so a float widget would silently truncate."""
+    """The firmware's parser rejects a fractional field outright, so a float
+    widget would let a researcher enter a value that silently does nothing."""
     assert all(f["type"] == "int" for f in _device().action_args_schema("pulse"))
