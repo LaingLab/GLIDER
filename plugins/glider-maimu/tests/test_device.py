@@ -194,20 +194,36 @@ async def test_off_writes_off(fake_bleak):
     assert created["client"].written == [b"off"]
 
 
-async def test_pulse_writes_period_and_duration(fake_bleak):
+async def test_pulse_writes_all_four_fields(fake_bleak):
     _module, created = fake_bleak
     device = await _initialized()
-    await device.pulse(500, 10)
-    assert created["client"].written == [b"500,10"]
+    await device.pulse(50, 4, 4, 100)
+    assert created["client"].written == [b"50,4,4,100"]
 
 
 async def test_pulse_writes_whole_numbers_from_floats(fake_bleak):
-    """Property spinboxes and math nodes deliver floats; "500.0,10.0" would be
-    atoi'd into something else entirely."""
+    """Property spinboxes and math nodes deliver floats; "50.0,4.0,..." would be
+    rejected by the firmware's strict parser."""
     _module, created = fake_bleak
     device = await _initialized()
-    await device.pulse(500.0, 10.0)
-    assert created["client"].written == [b"500,10"]
+    await device.pulse(50.0, 4.0, 4.0, 100.0)
+    assert created["client"].written == [b"50,4,4,100"]
+
+
+async def test_count_of_zero_is_allowed(fake_bleak):
+    """0 means run until stopped -- the only field with a floor of 0."""
+    _module, created = fake_bleak
+    device = await _initialized()
+    await device.pulse(50, 4, 0, 100)
+    assert created["client"].written == [b"50,4,0,100"]
+
+
+async def test_intensity_of_zero_is_allowed(fake_bleak):
+    """Armed but dark is a legitimate control condition, not an error."""
+    _module, created = fake_bleak
+    device = await _initialized()
+    await device.pulse(50, 4, 4, 0)
+    assert created["client"].written == [b"50,4,4,0"]
 
 
 async def test_command_goes_to_the_configured_characteristic(fake_bleak):
@@ -232,21 +248,51 @@ async def test_write_uses_response_for_a_write_only_characteristic(fake_bleak):
 async def test_pulse_rejects_invalid_period(fake_bleak, bad):
     device = await _initialized()
     with pytest.raises(ValueError, match="period_ms"):
-        await device.pulse(bad, 10)
+        await device.pulse(bad, 4, 4, 100)
 
 
-@pytest.mark.parametrize("bad", [0, -1, 2.5, "ages", None])
-async def test_pulse_rejects_invalid_duration(fake_bleak, bad):
+@pytest.mark.parametrize("bad", [0, -1, 2.5, "wide", None])
+async def test_pulse_rejects_invalid_width(fake_bleak, bad):
     device = await _initialized()
-    with pytest.raises(ValueError, match="duration_s"):
-        await device.pulse(500, bad)
+    with pytest.raises(ValueError, match="pulse_width_ms"):
+        await device.pulse(50, bad, 4, 100)
+
+
+@pytest.mark.parametrize("bad", [-1, 1.5, "many", None, 65536])
+async def test_pulse_rejects_invalid_count(fake_bleak, bad):
+    device = await _initialized()
+    with pytest.raises(ValueError, match="count"):
+        await device.pulse(50, 4, bad, 100)
+
+
+@pytest.mark.parametrize("bad", [-1, 0.5, "bright", None, 101])
+async def test_pulse_rejects_invalid_intensity(fake_bleak, bad):
+    device = await _initialized()
+    with pytest.raises(ValueError, match="intensity_pct"):
+        await device.pulse(50, 4, 4, bad)
+
+
+async def test_pulse_rejects_a_width_wider_than_its_period(fake_bleak):
+    """The firmware rejects it too, silently. Raising here is what makes it
+    visible to the researcher instead of a device that did nothing."""
+    device = await _initialized()
+    with pytest.raises(ValueError, match="pulse_width_ms"):
+        await device.pulse(50, 51, 4, 100)
+
+
+async def test_a_width_equal_to_its_period_is_allowed(fake_bleak):
+    """width == period is how continuous-at-intensity is spelled."""
+    _module, created = fake_bleak
+    device = await _initialized()
+    await device.pulse(100, 100, 0, 40)
+    assert created["client"].written == [b"100,100,0,40"]
 
 
 async def test_rejected_pulse_writes_nothing(fake_bleak):
     _module, created = fake_bleak
     device = await _initialized()
     with pytest.raises(ValueError):
-        await device.pulse(0, 10)
+        await device.pulse(0, 4, 4, 100)
     assert created["client"].written == []
 
 
@@ -254,24 +300,28 @@ async def test_execute_action_routes_to_pulse(fake_bleak):
     """The node calls through execute_action, not the method directly."""
     _module, created = fake_bleak
     device = await _initialized()
-    await device.execute_action("pulse", 250, 5)
-    assert created["client"].written == [b"250,5"]
+    await device.execute_action("pulse", 250, 5, 10, 80)
+    assert created["client"].written == [b"250,5,10,80"]
 
 
 # --- shutdown -----------------------------------------------------------------
 
 
 async def test_shutdown_sends_off_before_disconnecting(fake_bleak):
-    """The firmware runs a pulse autonomously -- a bare disconnect would leave
+    """The firmware runs a train autonomously -- a bare disconnect would leave
     the stimulator running."""
     _module, created = fake_bleak
     device = await _initialized()
-    await device.pulse(500, 10)
+    await device.pulse(50, 4, 0, 100)
     client = created["client"]
 
     await device.shutdown()
 
-    assert client.events == [("write", b"500,10"), ("write", b"off"), ("disconnect", None)]
+    assert client.events == [
+        ("write", b"50,4,0,100"),
+        ("write", b"off"),
+        ("disconnect", None),
+    ]
     assert not client.is_connected
     assert not device.is_initialized
 
