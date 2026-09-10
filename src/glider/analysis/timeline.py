@@ -24,14 +24,18 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
+    from glider.analysis.behavior.session_view import SessionView
     from glider.analysis.session import Session
 
 __all__ = [
+    "BehaviorLane",
     "FrameMap",
     "Lane",
     "Marker",
     "Segment",
+    "Timeline",
     "build_frame_map",
+    "build_timeline",
     "hardware_lanes",
 ]
 
@@ -275,3 +279,123 @@ def hardware_lanes(
 
     lanes.sort(key=lambda lane: (lane.board_id, lane.key))
     return lanes
+
+
+@dataclass(frozen=True)
+class BehaviorLane:
+    """Per-frame behaviour labels, and where they came from.
+
+    Deliberately not converted to :class:`Segment` runs. The bar resolves
+    behaviour per *pixel column* by majority rather than drawing one rect
+    per run, because a five-minute session holds ~9000 rows against ~2000
+    pixels and sub-pixel rects blend by coverage — which is what made
+    every colour on the old bar an average of several behaviours.
+    """
+
+    source: str  # "ethogram" | "tracking"
+    labels: list[str]
+    frames: np.ndarray
+
+
+@dataclass(frozen=True)
+class Timeline:
+    """Everything drawable about one session, on one flow-relative axis."""
+
+    lanes: list[Lane]
+    behavior: list[BehaviorLane]
+    frame_map: FrameMap | None
+    flow_start_ms: float | None
+    flow_end_ms: float | None
+    start_ms: float
+    end_ms: float
+
+
+def _flow_elapsed(session: Session, marker: str) -> float | None:
+    """Session-elapsed ms of a flow marker, or None if it never fired."""
+    events = session.events
+    if events.empty:
+        return None
+    hit = events[(events["source"] == "flow_marker") & (events["value"] == marker)]
+    if hit.empty:
+        return None
+    return float(hit["elapsed_ms"].iloc[0])
+
+
+def build_timeline(session: Session | None, view: SessionView | None = None) -> Timeline:
+    """Assemble a session into lanes on one axis.
+
+    Args:
+        session: A loaded recording, or None for an ethogram-only view.
+        view: An optional :class:`~glider.analysis.behavior.session_view.SessionView`,
+            contributing the classifier ethogram as its own behaviour lane.
+
+    A live recording carries ``behavioral_state`` in its tracking CSV and a
+    behaviour apply-run produces a classifier ethogram. These are different
+    things at different quality, so when both are present they stay two
+    lanes. Collapsing them would misrepresent provenance.
+    """
+    behavior: list[BehaviorLane] = []
+    if view is not None and len(view.labels):
+        behavior.append(
+            BehaviorLane(source="ethogram", labels=list(view.labels), frames=view.frames)
+        )
+
+    if session is None:
+        return Timeline(
+            lanes=[],
+            behavior=behavior,
+            frame_map=None,
+            flow_start_ms=None,
+            flow_end_ms=None,
+            start_ms=0.0,
+            end_ms=0.0,
+        )
+
+    flow_start_elapsed = _flow_elapsed(session, "start")
+    flow_end_elapsed = _flow_elapsed(session, "end")
+    offset = flow_start_elapsed or 0.0
+
+    frame_map = build_frame_map(session, offset)
+
+    tracking = session.tracking
+    if not tracking.empty and "behavioral_state" in tracking.columns:
+        per_frame = tracking[["frame", "behavioral_state"]].dropna()
+        per_frame = per_frame.drop_duplicates(subset="frame").sort_values("frame")
+        if len(per_frame):
+            behavior.append(
+                BehaviorLane(
+                    source="tracking",
+                    labels=[str(v) for v in per_frame["behavioral_state"]],
+                    frames=per_frame["frame"].to_numpy(dtype=int),
+                )
+            )
+
+    # The axis spans everything drawable. A session with device-init writes
+    # 30s before flow start shows those 30s: unlike a windowed ethogram's
+    # empty lead-in, a pre-flow region holds content, and it answers the
+    # most common question a hardware session raises — was a device already
+    # in the wrong state before the run began.
+    candidates_start = [0.0]
+    candidates_end = [0.0]
+    if frame_map is not None and len(frame_map.ms):
+        candidates_start.append(float(frame_map.ms[0]))
+        candidates_end.append(float(frame_map.ms[-1]))
+    if not session.events.empty:
+        event_ms = session.events["elapsed_ms"].astype(float) - offset
+        candidates_start.append(float(event_ms.min()))
+        candidates_end.append(float(event_ms.max()))
+    if flow_end_elapsed is not None:
+        candidates_end.append(flow_end_elapsed - offset)
+
+    start_ms = min(candidates_start)
+    end_ms = max(candidates_end)
+
+    return Timeline(
+        lanes=hardware_lanes(session, offset, end_ms),
+        behavior=behavior,
+        frame_map=frame_map,
+        flow_start_ms=None if flow_start_elapsed is None else 0.0,
+        flow_end_ms=None if flow_end_elapsed is None else flow_end_elapsed - offset,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )

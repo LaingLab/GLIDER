@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from glider.analysis import Session
-from glider.analysis.timeline import build_frame_map, hardware_lanes
+from glider.analysis.timeline import build_frame_map, build_timeline, hardware_lanes
 
 from .conftest import RecordingSpec, write_synthetic_recording
 
@@ -210,3 +210,42 @@ def test_empty_value_is_neither_level_nor_marker(tmp_path: Path):
     lane = next(ln for ln in lanes if ln.key == "probe")
     assert lane.segments == []
     assert lane.markers == []
+
+
+def test_flow_start_is_time_zero(synthetic_recording: Path):
+    t = build_timeline(Session.load(synthetic_recording))
+    assert t.flow_start_ms == pytest.approx(0.0, abs=1.0)
+    assert t.flow_end_ms is not None and t.flow_end_ms > 0
+
+
+def test_pre_flow_events_keep_negative_times(tmp_path: Path):
+    """Device-init writes happen before flow start and must stay visible.
+
+    The default spec has 1s of pre-flow, so an event at flow_ms=-500
+    cannot be expressed through extra_events; shift the whole axis instead
+    by asserting the timeline starts before zero because the tracking CSV
+    itself begins in the pre-flow period.
+    """
+    t = build_timeline(Session.load(write_synthetic_recording(tmp_path / "rec", RecordingSpec())))
+    assert t.start_ms < 0.0
+
+
+def test_behavior_lane_from_tracking(synthetic_recording: Path):
+    t = build_timeline(Session.load(synthetic_recording))
+    sources = [lane.source for lane in t.behavior]
+    assert "tracking" in sources
+
+
+def test_timeline_without_a_session_is_empty_but_valid(tmp_path: Path):
+    t = build_timeline(None)
+    assert t.lanes == []
+    assert t.behavior == []
+    assert t.frame_map is None
+    assert t.start_ms == 0.0 and t.end_ms == 0.0
+
+
+def test_no_flow_marker_leaves_boundaries_none(tmp_path: Path):
+    directory = write_synthetic_recording(tmp_path / "rec", RecordingSpec(write_events=False))
+    t = build_timeline(Session.load(directory))
+    assert t.flow_start_ms is None
+    assert t.flow_end_ms is None
