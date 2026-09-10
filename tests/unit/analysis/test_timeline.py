@@ -54,8 +54,13 @@ def test_frame_map_survives_a_dropped_frame(tmp_path: Path):
     s = Session.load(directory)
     fm = build_frame_map(s)
     assert 40 not in set(fm.frames.astype(int))
-    # Frame 41 keeps its real time rather than sliding into 40's slot.
-    assert fm.ms_of(41) == pytest.approx(41 / 30.0 * 1000.0, abs=5.0)
+    # The fixture writes 1-based frame numbers against 0-based elapsed time
+    # (conftest.py: `frame = i + 1`, `elapsed_ms = i / fps * 1000`), so frame
+    # 41 sits at 40/30 s. Do not "correct" this to 41/30. A nominal-fps
+    # implementation would place frame 41 at 1300.0 ms (41/30), which is
+    # 33 ms away — outside the 5 ms tolerance — so this assertion catches
+    # the regression it names.
+    assert fm.ms_of(41) == pytest.approx(40 / 30.0 * 1000.0, abs=5.0)
 
 
 def test_frame_map_is_none_without_tracking(tmp_path: Path):
