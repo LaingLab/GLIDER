@@ -113,7 +113,9 @@ def test_plot_event_triggered_smoke(tmp_path: Path):
     """Generate a recording with an LED event, slice around it, plot."""
     import matplotlib.pyplot as plt
 
-    spec = RecordingSpec(extra_events=((1500.0, "output_write", "board0", "5", "1"),))
+    spec = RecordingSpec(
+        extra_events=((1500.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),)
+    )
     write_synthetic_recording(tmp_path / "rec", spec)
     s = Session.load(tmp_path / "rec")
     eta = s.event_triggered(source="output_write", window_ms=(-500.0, 1000.0))

@@ -54,11 +54,13 @@ class RecordingSpec:
     state_velocities: dict[str, float] = field(
         default_factory=lambda: {"resting": 0.0, "active": 5.0, "locomotion": 8.0}
     )
-    # Extra event rows to append after the flow_marker[start] but before
-    # flow_marker[end]. Each entry is (flow_ms, source, board_id, pin, value).
-    # Example: ((1000.0, "output_write", "board0", "5", "1"),) writes an LED-on
-    # event 1s after flow start.
-    extra_events: tuple[tuple[float, str, str, str, str], ...] = ()
+    # Extra event rows appended after flow_marker[start] and before
+    # flow_marker[end]. Each entry is
+    # (flow_ms, source, board_id, device_id, device_type, pin, pin_type, value)
+    # matching the event log's column order exactly. Example:
+    #   ((1000.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),)
+    # writes an LED-on event 1s after flow start.
+    extra_events: tuple[tuple[float, str, str, str, str, str, str, str], ...] = ()
     write_tracking: bool = True
     write_data: bool = True
     write_events: bool = True
@@ -248,13 +250,16 @@ def _write_events_csv(
         )
         # Extra synthetic events (e.g., output_write at known flow times) so
         # event_triggered tests have something to bind to.
-        for flow_ms, source, board_id, pin, value in spec.extra_events:
+        for flow_ms, source, board_id, device_id, device_type, pin, pin_type, value in (
+            spec.extra_events
+        ):
             event_dt = flow_start_dt + timedelta(milliseconds=flow_ms)
             event_elapsed = (event_dt - _BASE_DATETIME).total_seconds() * 1000
             frame = spec.n_pre_flow_frames + int(flow_ms / 1000.0 * spec.fps)
             f.write(
                 f"{frame},{_iso(event_dt)},{event_elapsed:.1f},"
-                f"{source},{board_id},,{pin},,{pin},{value}\n"
+                f"{source},{board_id},{device_id},{device_type},"
+                f"{pin},{pin_type},{value}\n"
             )
         f.write(
             f"{spec.n_pre_flow_frames + spec.n_post_flow_frames},"

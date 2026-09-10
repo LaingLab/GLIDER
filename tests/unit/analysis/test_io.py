@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from glider.analysis import Session
 from glider.analysis._io import discover, parse_csv
 
 from .conftest import RecordingSpec, write_synthetic_recording
@@ -140,3 +141,33 @@ def test_parse_csv_returns_empty_metadata_when_no_header(tmp_path: Path):
     # row, so it becomes a key with empty value.
     assert "GLIDER Tracking Data" in metadata
     assert len(df) == 1
+
+
+def test_extra_events_round_trip_device_columns(tmp_path: Path):
+    """The fixture's event rows must land in the columns its header names.
+
+    Regression: the writer emitted seven cells against a seven-column
+    header in the wrong order, so device_type received the pin number and
+    device_id was never populated at all.
+    """
+    from .conftest import RecordingSpec, write_synthetic_recording
+
+    write_synthetic_recording(
+        tmp_path / "rec",
+        RecordingSpec(
+            extra_events=(
+                (1500.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),
+            )
+        ),
+    )
+    s = Session.load(tmp_path / "rec")
+    row = s.events[s.events["source"] == "output_write"].iloc[0]
+    assert row["board_id"] == "board0"
+    assert row["device_id"] == "led1"
+    assert row["device_type"] == "LED"
+    # The events CSV mixes this numeric-looking "5" with blank pin cells
+    # on the flow_marker rows in the same column, so pandas infers the
+    # column as float64 — it round-trips as 5.0, not the string "5".
+    assert row["pin"] == 5.0
+    assert row["pin_type"] == "DIGITAL"
+    assert str(row["value"]) == "1"
