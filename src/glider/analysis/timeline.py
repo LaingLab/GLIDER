@@ -26,7 +26,14 @@ import numpy as np
 if TYPE_CHECKING:
     from glider.analysis.session import Session
 
-__all__ = ["FrameMap", "build_frame_map"]
+__all__ = [
+    "FrameMap",
+    "Lane",
+    "Marker",
+    "Segment",
+    "build_frame_map",
+    "hardware_lanes",
+]
 
 
 @dataclass(frozen=True)
@@ -102,3 +109,160 @@ def build_frame_map(session: Session, flow_offset_ms: float = 0.0) -> FrameMap |
         )
 
     return None
+
+
+#: Full-scale value per pin type, for turning a written value into a bar
+#: height. Normalising by each lane's own observed maximum instead would be
+#: marginally cheaper and would draw a PWM that never exceeded 10 as full
+#: brightness — same amount of code, wrong picture.
+_PIN_FULL_SCALE = {
+    "DIGITAL": 1.0,
+    "PWM": 255.0,
+    "SERVO": 180.0,
+    "ANALOG": 1023.0,
+}
+
+
+@dataclass(frozen=True)
+class Segment:
+    """A device holding one value over a span of time."""
+
+    start_ms: float
+    end_ms: float
+    value: float
+    level: float  # 0.0-1.0, for bar height
+
+
+@dataclass(frozen=True)
+class Marker:
+    """An instant with no level — a non-numeric event value."""
+
+    at_ms: float
+    label: str
+
+
+@dataclass(frozen=True)
+class Lane:
+    """One row of the raster."""
+
+    key: str
+    label: str
+    board_id: str
+    segments: list[Segment]
+    markers: list[Marker]
+
+
+def _cell(value) -> str:
+    """A CSV cell as text.
+
+    Two shapes have to be flattened. Empty cells arrive as NaN rather than
+    "". And a column that mixes blanks with numbers — `pin` does, because
+    flow_marker rows leave it empty — is inferred as float64, so pin 7
+    arrives as 7.0 and would otherwise name a lane "board0:pin7.0".
+    """
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if value != value:  # NaN
+            return ""
+        if value.is_integer():
+            return str(int(value))
+    text = str(value)
+    return "" if text in ("nan", "NaN", "<NA>", "None") else text.strip()
+
+
+def _full_scale(pin_types: list[str], observed_max: float) -> float:
+    """The value that should draw as a full-height bar.
+
+    The pin type's known range when there is one, except where the lane
+    actually exceeded it — a 12-bit board reads an ANALOG pin to 4095, and
+    clipping that at the 10-bit 1023 would draw the whole session as one
+    saturated row.
+    """
+    for pin_type in pin_types:
+        full = _PIN_FULL_SCALE.get(pin_type.upper())
+        if full is not None:
+            return full if observed_max <= full else observed_max
+    return observed_max if observed_max > 0 else 1.0
+
+
+def hardware_lanes(
+    session: Session,
+    flow_offset_ms: float = 0.0,
+    end_ms: float | None = None,
+) -> list[Lane]:
+    """One lane per device, from the event log.
+
+    Each event sets its device's value and that value holds until the
+    device's next event — a zero-order hold. One rule covers digital, PWM
+    and servo: a digital pin gives full-height blocks and a PWM ramp gives
+    stepped ones, without a branch per pin type.
+
+    Args:
+        session: The loaded recording.
+        flow_offset_ms: Session-elapsed ms of flow start, subtracted from
+            every event time.
+        end_ms: Where the last held value stops. Defaults to the last
+            event's own time, which draws it as zero-width.
+    """
+    events = session.events
+    if events.empty:
+        return []
+
+    rows = events[events["source"] != "flow_marker"].copy()
+    if rows.empty:
+        return []
+
+    rows["_ms"] = rows["elapsed_ms"].astype(float) - flow_offset_ms
+    rows["_device"] = [_cell(v) for v in rows["device_id"]]
+    rows["_board"] = [_cell(v) for v in rows["board_id"]]
+    rows["_pin"] = [_cell(v) for v in rows["pin"]]
+    rows["_pin_type"] = [_cell(v) for v in rows["pin_type"]]
+    # A board-level write with no resolved device still deserves a row.
+    rows["_key"] = [
+        device or f"{board}:pin{pin}"
+        for device, board, pin in zip(rows["_device"], rows["_board"], rows["_pin"])
+    ]
+    rows = rows.sort_values("_ms", kind="stable")
+
+    tail = end_ms if end_ms is not None else float(rows["_ms"].max())
+
+    lanes: list[Lane] = []
+    for key, group in rows.groupby("_key", sort=False):
+        times = group["_ms"].to_numpy(dtype=float)
+        markers: list[Marker] = []
+        levels: list[tuple[float, float]] = []  # (ms, numeric value)
+
+        for ms, raw in zip(times, group["value"]):
+            text = _cell(raw)
+            try:
+                levels.append((float(ms), float(text)))
+            except ValueError:
+                markers.append(Marker(at_ms=float(ms), label=text))
+
+        observed_max = max((v for _, v in levels), default=0.0)
+        full = _full_scale(list(dict.fromkeys(group["_pin_type"])), observed_max)
+
+        segments = [
+            Segment(
+                start_ms=ms,
+                end_ms=(levels[i + 1][0] if i + 1 < len(levels) else tail),
+                value=value,
+                level=max(0.0, min(1.0, value / full)),
+            )
+            for i, (ms, value) in enumerate(levels)
+        ]
+
+        label = _cell(group["_device"].iloc[0]) or str(key)
+        lanes.append(
+            Lane(
+                key=str(key),
+                label=label,
+                board_id=_cell(group["_board"].iloc[0]),
+                segments=segments,
+                markers=markers,
+            )
+        )
+
+    lanes.sort(key=lambda lane: (lane.board_id, lane.key))
+    return lanes

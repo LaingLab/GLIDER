@@ -69,3 +69,118 @@ def test_frame_map_is_none_without_tracking(tmp_path: Path):
     )
     s = Session.load(directory)
     assert build_frame_map(s) is None
+
+
+from glider.analysis.timeline import Lane, Segment, hardware_lanes
+
+
+def _rec(tmp_path: Path, events, name="rec") -> Path:
+    return write_synthetic_recording(
+        tmp_path / name, RecordingSpec(extra_events=tuple(events))
+    )
+
+
+def test_hardware_lane_per_device(tmp_path: Path):
+    directory = _rec(
+        tmp_path,
+        [
+            (500.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),
+            (600.0, "output_write", "board0", "pump", "Pump", "6", "DIGITAL", "1"),
+        ],
+    )
+    lanes = hardware_lanes(Session.load(directory))
+    assert {lane.key for lane in lanes} == {"led1", "pump"}
+
+
+def test_value_holds_until_the_next_event(tmp_path: Path):
+    """A digital pin written high at 500ms and low at 1500ms is on for 1s."""
+    directory = _rec(
+        tmp_path,
+        [
+            (500.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),
+            (1500.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "0"),
+        ],
+    )
+    s = Session.load(directory)
+    # Times are flow-relative, and the fixture has a pre-flow period, so the
+    # offset has to come from the flow marker — the same value build_timeline
+    # will compute once and hand to both builders.
+    marker = s.events[(s.events["source"] == "flow_marker") & (s.events["value"] == "start")]
+    flow_offset_ms = float(marker["elapsed_ms"].iloc[0])
+    lane = hardware_lanes(s, flow_offset_ms=flow_offset_ms)[0]
+    on = [seg for seg in lane.segments if seg.value > 0]
+    assert len(on) == 1
+    assert on[0].start_ms == pytest.approx(500.0, abs=2.0)
+    assert on[0].end_ms == pytest.approx(1500.0, abs=2.0)
+    assert on[0].level == pytest.approx(1.0)
+
+
+def test_pwm_normalises_against_full_scale(tmp_path: Path):
+    """128 on a PWM pin is half height, not full — per-lane max would
+    draw a device that never exceeded 128 as though it were saturated."""
+    directory = _rec(
+        tmp_path,
+        [
+            (500.0, "output_write", "board0", "fan", "Fan", "9", "PWM", "128"),
+            (1500.0, "output_write", "board0", "fan", "Fan", "9", "PWM", "0"),
+        ],
+    )
+    lane = hardware_lanes(Session.load(directory))[0]
+    assert lane.segments[0].level == pytest.approx(128.0 / 255.0)
+
+
+def test_analog_beyond_assumed_range_falls_back_to_observed(tmp_path: Path):
+    """A 12-bit board reads to 4095. Clipping at the 10-bit 1023 would
+    draw the whole session as one saturated row."""
+    directory = _rec(
+        tmp_path,
+        [
+            (500.0, "input_change", "board0", "ldr", "Photoresistor", "0", "ANALOG", "4095"),
+            (1500.0, "input_change", "board0", "ldr", "Photoresistor", "0", "ANALOG", "2048"),
+        ],
+    )
+    lane = hardware_lanes(Session.load(directory))[0]
+    assert lane.segments[0].level == pytest.approx(1.0)
+    assert lane.segments[1].level == pytest.approx(2048.0 / 4095.0)
+
+
+def test_non_numeric_value_becomes_a_marker(tmp_path: Path):
+    directory = _rec(
+        tmp_path,
+        [(500.0, "input_change", "board0", "reader", "RFID", "2", "", "tag-A7"),],
+    )
+    lane = hardware_lanes(Session.load(directory))[0]
+    assert lane.segments == []
+    assert [m.label for m in lane.markers] == ["tag-A7"]
+
+
+def test_event_without_a_frame_still_makes_a_segment(tmp_path: Path):
+    """Device-init writes land before the first camera frame, so their
+    `frame` cell is empty. They are drawn from their timestamp."""
+    directory = _rec(
+        tmp_path,
+        [(500.0, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1")],
+    )
+    s = Session.load(directory)
+    s.events.loc[s.events["source"] == "output_write", "frame"] = np.nan
+    assert hardware_lanes(s)[0].segments
+
+
+def test_flow_markers_are_not_a_lane(synthetic_recording: Path):
+    lanes = hardware_lanes(Session.load(synthetic_recording))
+    assert all(lane.key != "flow_marker" for lane in lanes)
+
+
+def test_no_events_gives_no_lanes(tmp_path: Path):
+    directory = write_synthetic_recording(
+        tmp_path / "rec", RecordingSpec(write_events=False)
+    )
+    assert hardware_lanes(Session.load(directory)) == []
+
+
+def test_device_id_falls_back_to_board_and_pin(tmp_path: Path):
+    directory = _rec(
+        tmp_path,
+        [(500.0, "output_write", "board0", "", "", "7", "DIGITAL", "1")],
+    )
+    assert hardware_lanes(Session.load(directory))[0].key == "board0:pin7"
