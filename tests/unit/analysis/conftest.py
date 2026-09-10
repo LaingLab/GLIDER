@@ -68,6 +68,13 @@ class RecordingSpec:
     # frame (object_id 0..n-1), matching a real multi-subject recording
     # where every frame has one row per tracked animal.
     n_objects: int = 1
+    # Opt-in: prepend a motion-only "heartbeat" row (object_id=-1, blank
+    # behavioral_state) to frame 1 of the tracking CSV, matching the shape
+    # tracking_logger.py writes when `_frame_count == 1` and no object has
+    # been detected yet (its most common firing, not a corner case — see
+    # tracking_logger.py around line 828). Default False keeps the default
+    # recording shape byte-identical.
+    include_heartbeat_row: bool = False
 
 
 def _iso(dt: datetime) -> str:
@@ -181,6 +188,33 @@ def _write_tracking_csv(
                 state = "unknown"
                 zone_ids = ""
                 velocity = 0.0
+            if spec.include_heartbeat_row and i == 0:
+                # Mirrors tracking_logger.py's heartbeat write (~line 828):
+                # object_id=-1, class="heartbeat", zeroed bbox, and every
+                # field past confidence left blank, including
+                # behavioral_state.
+                heartbeat_row = [
+                    i + 1,
+                    _iso(t_dt),
+                    f"{elapsed_ms:.1f}",
+                    flow_cell,
+                    -1,
+                    "heartbeat",
+                    0,
+                    0,
+                    0,
+                    0,
+                    "0.000",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                ]
+                f.write(",".join(str(v) for v in heartbeat_row) + "\n")
             for obj in range(spec.n_objects):
                 # Object 0's state matches the single-object fixture
                 # exactly; other objects get a distinct label so tests

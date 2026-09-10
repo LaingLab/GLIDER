@@ -366,13 +366,27 @@ def build_timeline(session: Session | None, view: SessionView | None = None) -> 
         # group by object_id *before* deduping, and only dedup within one
         # object's own rows, where it is safe because a single object has
         # exactly one row per frame. An older/hand-made CSV without an
-        # object_id column at all falls back to one lane, unchanged.
+        # object_id column at all falls back to one lane, unchanged — and
+        # so does one whose object_id column is present but entirely
+        # empty, since there is then nothing to group by.
         if "object_id" in tracking.columns:
             object_ids = sorted(tracking["object_id"].dropna().unique())
         else:
+            object_ids = []
+        if not object_ids:
             object_ids = [None]
-        multi_object = len(object_ids) > 1
 
+        # "multi_object" is decided by how many objects actually produced
+        # a lane, not by how many distinct object_id values exist.
+        # tracking_logger.py writes object_id=-1 with a blank
+        # behavioral_state for motion-only/heartbeat rows; that id never
+        # survives the per-object dropna() below, but counting raw ids
+        # would still see it and wrongly rename a single real subject's
+        # lane to "tracking[0]". Counting surviving lanes instead needs no
+        # knowledge of sentinel values, so a future sentinel id — or a
+        # second object whose behavioral_state is entirely blank — can't
+        # reintroduce the same bug.
+        per_object_frames = []
         for object_id in object_ids:
             obj_tracking = (
                 tracking if object_id is None else tracking[tracking["object_id"] == object_id]
@@ -380,14 +394,18 @@ def build_timeline(session: Session | None, view: SessionView | None = None) -> 
             per_frame = obj_tracking[["frame", "behavioral_state"]].dropna()
             per_frame = per_frame.drop_duplicates(subset="frame").sort_values("frame")
             if len(per_frame):
-                source = "tracking" if not multi_object else f"tracking[{int(object_id)}]"
-                behavior.append(
-                    BehaviorLane(
-                        source=source,
-                        labels=[str(v) for v in per_frame["behavioral_state"]],
-                        frames=per_frame["frame"].to_numpy(dtype=int),
-                    )
+                per_object_frames.append((object_id, per_frame))
+
+        multi_object = len(per_object_frames) > 1
+        for object_id, per_frame in per_object_frames:
+            source = "tracking" if not multi_object else f"tracking[{int(object_id)}]"
+            behavior.append(
+                BehaviorLane(
+                    source=source,
+                    labels=[str(v) for v in per_frame["behavioral_state"]],
+                    frames=per_frame["frame"].to_numpy(dtype=int),
                 )
+            )
 
     # The axis spans everything drawable. A session with device-init writes
     # 30s before flow start shows those 30s: unlike a windowed ethogram's

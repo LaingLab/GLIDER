@@ -279,3 +279,51 @@ def test_single_object_tracking_keeps_bare_source(synthetic_recording: Path):
     tracking_lanes = [lane for lane in t.behavior if lane.source == "tracking"]
     assert len(tracking_lanes) == 1
     assert not any(lane.source.startswith("tracking[") for lane in t.behavior)
+
+
+def test_single_object_with_heartbeat_row_keeps_bare_source(tmp_path: Path):
+    """tracking_logger.py writes object_id=-1 with a blank behavioral_state
+    for its motion-only/heartbeat rows, and the frame-1 heartbeat is the
+    common case (fires whenever nothing has been detected yet), not a rare
+    corner case. A single real subject plus that sentinel row must still
+    yield exactly one behaviour lane named the bare "tracking" — counting
+    distinct object_id values instead of lanes-with-content would see two
+    ids (0 and -1) and wrongly rename it "tracking[0]"."""
+    directory = write_synthetic_recording(
+        tmp_path / "rec", RecordingSpec(include_heartbeat_row=True)
+    )
+    t = build_timeline(Session.load(directory))
+    tracking_lanes = [lane for lane in t.behavior if lane.source == "tracking"]
+    assert len(tracking_lanes) == 1
+    assert not any(lane.source.startswith("tracking[") for lane in t.behavior)
+
+
+def test_tracking_with_empty_object_id_column_falls_back_to_one_lane(tmp_path: Path):
+    """A hand-made or imported tracking CSV (this feature explicitly
+    supports those) can have an object_id column that is present but
+    entirely blank. That must fall back to the same ungrouped single lane
+    as a CSV with no object_id column at all — not silently drop the
+    behaviour lane, which is what an empty `object_ids` list would do."""
+    directory = write_synthetic_recording(tmp_path / "rec", RecordingSpec())
+    tracking_path = next(directory.glob("*_tracking.csv"))
+    lines = tracking_path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+    out = []
+    in_data = False
+    for line in lines:
+        if line.startswith("frame,timestamp,"):
+            out.append(line)
+            in_data = True
+            continue
+        if in_data and line.strip():
+            fields = line.rstrip("\n").split(",")
+            fields[4] = ""  # object_id
+            out.append(",".join(fields) + "\n")
+            continue
+        in_data = False
+        out.append(line)
+    tracking_path.write_text("".join(out), encoding="utf-8")
+
+    t = build_timeline(Session.load(directory))
+    tracking_lanes = [lane for lane in t.behavior if lane.source == "tracking"]
+    assert len(tracking_lanes) == 1
