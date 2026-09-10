@@ -56,8 +56,10 @@ class MaimuNode(HardwareNode):
     # out the pulse fields outside Pulse mode; a declared schema has no notion
     # of one field depending on another, so that cue is carried in the help
     # text instead. Every key/default/min/max below matches
-    # MaimuDevice.ACTION_ARGS_SCHEMA["pulse"] exactly -- test_pulse_schema.py
-    # asserts they agree.
+    # MaimuDevice.ACTION_ARGS_SCHEMA["pulse"] exactly --
+    # test_pulse_schema.py::test_the_node_s_pulse_fields_match_the_device_s
+    # compares the two schemas field-for-field, so drift fails the suite rather
+    # than handing a researcher a spin box whose value raises mid-experiment.
     PROPERTIES_SCHEMA = [
         {
             "key": "mode",
@@ -88,7 +90,8 @@ class MaimuNode(HardwareNode):
             "max": 3_600_000,
             "help": (
                 "Pulse mode only. On-time within each cycle; cannot exceed "
-                "the period. Equal to the period means continuous light."
+                "the period. Equal to the period means continuous light, "
+                "which needs Pulses set to 0."
             ),
         },
         {

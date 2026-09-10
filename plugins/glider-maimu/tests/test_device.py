@@ -288,6 +288,28 @@ async def test_a_width_equal_to_its_period_is_allowed(fake_bleak):
     assert created["client"].written == [b"100,100,0,40"]
 
 
+async def test_a_width_equal_to_its_period_needs_count_zero(fake_bleak):
+    """500,500,1,40 reads as one bounded 500 ms pulse and is not.
+
+    A train with no gap has nothing to end on, so the firmware would light the
+    implant for the rest of the session. Continuous light has exactly one
+    spelling -- count = 0 -- and this is the guard that enforces it.
+    """
+    _module, created = fake_bleak
+    device = await _initialized()
+    with pytest.raises(ValueError, match="pulse_width_ms"):
+        await device.pulse(500, 500, 1, 40)
+    assert created["client"].written == []
+
+
+async def test_a_bounded_single_pulse_is_still_expressible(fake_bleak):
+    """Nothing is lost: period > width with count = 1 is one bounded pulse."""
+    _module, created = fake_bleak
+    device = await _initialized()
+    await device.pulse(1000, 500, 1, 40)
+    assert created["client"].written == [b"1000,500,1,40"]
+
+
 async def test_rejected_pulse_writes_nothing(fake_bleak):
     _module, created = fake_bleak
     device = await _initialized()

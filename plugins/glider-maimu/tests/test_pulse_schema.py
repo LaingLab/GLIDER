@@ -73,6 +73,31 @@ def test_the_bounds_match_the_firmware():
     assert (fields["intensity_pct"]["min"], fields["intensity_pct"]["max"]) == (0, 100)
 
 
+def test_the_node_s_pulse_fields_match_the_device_s():
+    """The node's spin boxes and the device's guard must agree, field for field.
+
+    node.py claims this in a comment. Without this test nothing enforced it, and
+    the failure mode is a spin box that happily offers a value MaimuDevice.pulse
+    raises on -- discovered mid-experiment, with an animal on the rig.
+    """
+    from glider_maimu.node import MaimuNode
+
+    device_fields = {f["key"]: f for f in _device().action_args_schema("pulse")}
+    node_fields = {f["key"]: f for f in MaimuNode.PROPERTIES_SCHEMA}
+
+    # "mode" is the node's alone; every pulse argument must be present in both.
+    assert set(device_fields) <= set(node_fields)
+
+    for key, want in device_fields.items():
+        got = node_fields[key]
+        assert (got["min"], got["max"], got["default"], got["type"]) == (
+            want["min"],
+            want["max"],
+            want["default"],
+            want["type"],
+        ), f"node and device disagree on {key}"
+
+
 def test_every_field_is_a_whole_number():
     """The firmware's parser rejects a fractional field outright, so a float
     widget would let a researcher enter a value that silently does nothing."""

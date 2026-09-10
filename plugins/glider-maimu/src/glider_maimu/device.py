@@ -130,7 +130,8 @@ class MaimuDevice(BLEDevice):
                 "max": 3_600_000,
                 "help": (
                     "On-time within each cycle; cannot exceed the period. Equal "
-                    "to the period means continuous light."
+                    "to the period means continuous light, which needs Pulses "
+                    "set to 0."
                 ),
             },
             {
@@ -211,7 +212,8 @@ class MaimuDevice(BLEDevice):
         its own, so this returns as soon as the write lands.
 
         ``count`` of 0 runs until stopped. ``pulse_width_ms`` equal to
-        ``period_ms`` is continuous light at that intensity.
+        ``period_ms`` is continuous light at that intensity, and is legal only
+        with ``count`` of 0 -- continuous light has exactly one spelling.
         """
         period = self._whole_number(period_ms, "period_ms", 1, 3_600_000)
         width = self._whole_number(pulse_width_ms, "pulse_width_ms", 1, 3_600_000)
@@ -225,6 +227,22 @@ class MaimuDevice(BLEDevice):
             raise ValueError(
                 f"Maimu.pulse: pulse_width_ms ({width}) cannot exceed "
                 f"period_ms ({period}) -- the pulse would not fit in its cycle"
+            )
+
+        # width == period is continuous light, which must be spelled with
+        # count = 0. With a non-zero count the train has no gap to end on, so
+        # the firmware would run forever while the command reads as bounded --
+        # an implanted LED left lit for the rest of the session. Nothing is
+        # lost: a bounded single 500 ms pulse is pulse(1000, 500, 1, 40), where
+        # count = 1 ends the train at the first pulse end so the trailing gap
+        # never elapses.
+        if width >= period and pulses != 0:
+            raise ValueError(
+                f"Maimu.pulse: pulse_width_ms ({width}) equal to period_ms "
+                f"({period}) is continuous light, which must be spelled with "
+                f"count = 0, not count = {pulses} -- a train with no gap has "
+                f"nothing to end on. For one bounded pulse, make period_ms "
+                f"longer than pulse_width_ms."
             )
 
         await self.write(period, width, pulses, intensity)

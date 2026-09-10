@@ -31,7 +31,11 @@ UTF-8 commands:
 
 `50,4,4,100` is four 4 ms pulses at 20 Hz at full intensity. Note the first field is a
 **period in milliseconds, not a frequency** — 50 ms is 20 Hz. `count` of `0` runs until
-stopped; a width equal to the period is continuous light.
+stopped; a width equal to the period is continuous light, and is accepted
+**only** with a `count` of `0` — continuous light has exactly one spelling. A
+train with no gap has nothing to end on, so `500,500,1,40` would light the
+implant for the rest of the session rather than deliver the single 500 ms pulse
+it reads as; write `1000,500,1,40` for that.
 
 Intensity is **relative** — a percentage of whatever peak the board delivers, not
 calibrated optical power. Per-unit brightness is trimmed in firmware.
