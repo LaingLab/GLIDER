@@ -52,7 +52,13 @@ class PoseTracks:
 
         names = {tuple(p.keypoint_names) for p in self.tracks.values()}
         if len(names) != 1:
-            raise ValueError("every slot must carry the same keypoint_names")
+            raise ValueError(
+                f"every slot must carry the same keypoint_names; got "
+                f"{sorted(list(n) for n in names)}. Animals whose keypoints do not "
+                f"line up cannot be compared, written to one DLC CSV, or fed to one "
+                f"model -- and the columns would silently mean different body parts "
+                f"for different animals."
+            )
 
     @property
     def n_animals(self) -> int:
