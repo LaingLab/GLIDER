@@ -64,6 +64,10 @@ class RecordingSpec:
     write_tracking: bool = True
     write_data: bool = True
     write_events: bool = True
+    # Tracked objects per frame. >1 writes one tracking row per object per
+    # frame (object_id 0..n-1), matching a real multi-subject recording
+    # where every frame has one row per tracked animal.
+    n_objects: int = 1
 
 
 def _iso(dt: datetime) -> str:
@@ -177,11 +181,16 @@ def _write_tracking_csv(
                 state = "unknown"
                 zone_ids = ""
                 velocity = 0.0
-            f.write(
-                f"{i + 1},{_iso(t_dt)},{elapsed_ms:.1f},{flow_cell},0,mouse,"
-                f"{bx:.1f},{by:.1f},{bbox_w:.1f},{bbox_h:.1f},0.900,"
-                f"{cx:.1f},{cy:.1f},0.00,0.00,0.00,{zone_ids},{state},{velocity:.2f}\n"
-            )
+            for obj in range(spec.n_objects):
+                # Object 0's state matches the single-object fixture
+                # exactly; other objects get a distinct label so tests
+                # can tell one object's lane from another's.
+                obj_state = state if obj == 0 else f"{state}_obj{obj}"
+                f.write(
+                    f"{i + 1},{_iso(t_dt)},{elapsed_ms:.1f},{flow_cell},{obj},mouse,"
+                    f"{bx:.1f},{by:.1f},{bbox_w:.1f},{bbox_h:.1f},0.900,"
+                    f"{cx:.1f},{cy:.1f},0.00,0.00,0.00,{zone_ids},{obj_state},{velocity:.2f}\n"
+                )
 
         f.write("\n")
         f.write(f"# End Time,{_iso(flow_end_dt)}\n")

@@ -359,16 +359,35 @@ def build_timeline(session: Session | None, view: SessionView | None = None) -> 
 
     tracking = session.tracking
     if not tracking.empty and "behavioral_state" in tracking.columns:
-        per_frame = tracking[["frame", "behavioral_state"]].dropna()
-        per_frame = per_frame.drop_duplicates(subset="frame").sort_values("frame")
-        if len(per_frame):
-            behavior.append(
-                BehaviorLane(
-                    source="tracking",
-                    labels=[str(v) for v in per_frame["behavioral_state"]],
-                    frames=per_frame["frame"].to_numpy(dtype=int),
-                )
+        # A multi-subject recording has one tracking row per object per
+        # frame, all sharing a frame number. Deduping across objects (as a
+        # single global drop_duplicates would) silently keeps whichever
+        # object's row happens to sort first and discards the rest — so
+        # group by object_id *before* deduping, and only dedup within one
+        # object's own rows, where it is safe because a single object has
+        # exactly one row per frame. An older/hand-made CSV without an
+        # object_id column at all falls back to one lane, unchanged.
+        if "object_id" in tracking.columns:
+            object_ids = sorted(tracking["object_id"].dropna().unique())
+        else:
+            object_ids = [None]
+        multi_object = len(object_ids) > 1
+
+        for object_id in object_ids:
+            obj_tracking = (
+                tracking if object_id is None else tracking[tracking["object_id"] == object_id]
             )
+            per_frame = obj_tracking[["frame", "behavioral_state"]].dropna()
+            per_frame = per_frame.drop_duplicates(subset="frame").sort_values("frame")
+            if len(per_frame):
+                source = "tracking" if not multi_object else f"tracking[{int(object_id)}]"
+                behavior.append(
+                    BehaviorLane(
+                        source=source,
+                        labels=[str(v) for v in per_frame["behavioral_state"]],
+                        frames=per_frame["frame"].to_numpy(dtype=int),
+                    )
+                )
 
     # The axis spans everything drawable. A session with device-init writes
     # 30s before flow start shows those 30s: unlike a windowed ethogram's

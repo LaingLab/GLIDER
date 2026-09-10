@@ -249,3 +249,33 @@ def test_no_flow_marker_leaves_boundaries_none(tmp_path: Path):
     t = build_timeline(Session.load(directory))
     assert t.flow_start_ms is None
     assert t.flow_end_ms is None
+
+
+def test_multi_object_tracking_gets_one_lane_per_object(tmp_path: Path):
+    """Two tracked mice must not collapse to one object's behaviour.
+
+    A shared frame column across objects makes a naive
+    drop_duplicates(subset="frame") keep only the first object's state,
+    silently discarding the second mouse's labels entirely.
+    """
+    directory = write_synthetic_recording(tmp_path / "rec", RecordingSpec(n_objects=2))
+    t = build_timeline(Session.load(directory))
+    tracking_lanes = {
+        lane.source: lane for lane in t.behavior if lane.source.startswith("tracking")
+    }
+    assert set(tracking_lanes) == {"tracking[0]", "tracking[1]"}
+    obj0, obj1 = tracking_lanes["tracking[0]"], tracking_lanes["tracking[1]"]
+    assert len(obj0.labels) == len(obj1.labels) > 0
+    # Object 1's labels are the fixture's "<state>_obj1" — not object 0's
+    # labels repeated under a different source string.
+    assert obj0.labels != obj1.labels
+    assert all(label.endswith("_obj1") for label in obj1.labels)
+
+
+def test_single_object_tracking_keeps_bare_source(synthetic_recording: Path):
+    """Task 5 depends on the single-object source staying the bare string
+    "tracking", not "tracking[0]"."""
+    t = build_timeline(Session.load(synthetic_recording))
+    tracking_lanes = [lane for lane in t.behavior if lane.source == "tracking"]
+    assert len(tracking_lanes) == 1
+    assert not any(lane.source.startswith("tracking[") for lane in t.behavior)
