@@ -21,7 +21,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer
 from PyQt6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -44,8 +44,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.analysis.behavior.session_view import SessionView, SessionViewError
+from glider.analysis.behavior.session_view import (
+    _SEARCH_LEVELS,
+    SessionView,
+    SessionViewError,
+)
+from glider.analysis.timeline import build_timeline
 from glider.gui.styles import colors
+from glider.gui.widgets.timeline_bar import TimelineBar, behavior_order, behavior_qcolor
 from glider.gui.widgets.tool_ui import (
     CARD_GAP,
     GUTTER,
@@ -114,6 +120,20 @@ def _behavior_item(name: str, order: list[str]) -> QTableWidgetItem:
     return item
 
 
+def _recording_or_none(folder: Path):
+    """The GLIDER recording in *folder*, or None if there isn't one.
+
+    ``Session.load`` returns an empty session for any readable directory at
+    all, so "did it load" answers nothing — "did discovery find an artifact"
+    is the question, and an empty frame is how a missing one arrives.
+    """
+    from glider.analysis import Session
+
+    session = Session.load(folder)
+    found = any(not frame.empty for frame in (session.tracking, session.data, session.events))
+    return session if found else None
+
+
 def _dress_table(table: QTableWidget) -> None:
     """Make a results table read as a table rather than a grid in a box.
 
@@ -152,256 +172,6 @@ def _vrule() -> QFrame:
     # tone is invisible, and an invisible divider does no grouping at all.
     line.setStyleSheet("background-color: #2a3441; border: none;")
     return line
-
-
-def behavior_qcolor(name: str, order: list[str] | None = None) -> QColor:
-    """The colour the annotated video would have drawn this behaviour in.
-
-    Shared with the overlay so a bout looks the same wherever it is shown;
-    blank (unscored) frames read as background rather than a colour.
-
-    ``order`` is the behaviours present, which is what makes the colours
-    reliably *different*. Without it the palette slot comes from a hash of the
-    name, and a hash has no reason to avoid collisions: two behaviours in one
-    session could land on the same colour, and neighbouring ones routinely
-    landed on adjacent hues. Given the session's own label set, the first N
-    palette entries are handed out in order, and N distinct behaviours get N
-    distinct colours.
-    """
-    if not name:
-        return QColor(colors.BORDER)
-    from glider.analysis.behavior.classify.overlay import color_for_behavior
-
-    b, g, r = color_for_behavior(name, order)
-    return QColor(r, g, b)
-
-
-def behavior_order(labels) -> list[str]:
-    """The behaviours present, in a stable order.
-
-    Sorted rather than first-appearance: the same cohort scored twice must
-    colour the same behaviour the same way, and first-appearance makes that
-    depend on which animal happened to groom first.
-    """
-    return sorted({label for label in labels if label})
-
-
-class EthogramBar(QWidget):
-    """The ethogram as a timeline: bands to read, and the scrubber to drag.
-
-    Clicking or dragging with the left button scrubs; dragging with shift (or
-    the right button) selects a window. Selection and playhead are separate so
-    a chosen window survives scrubbing around inside it.
-    """
-
-    scrubbed = pyqtSignal(int)  # frame
-    selection_changed = pyqtSignal(int, int)  # start, end frame
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setMinimumHeight(_BAR_HEIGHT)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._view: SessionView | None = None
-        self._order: list[str] = []
-        self._codes: np.ndarray | None = None
-        self._lane: QPixmap | None = None
-        self._frame = 0
-        self._selection: tuple[int, int] | None = None
-        self._drag_anchor: int | None = None
-
-    def set_view(self, view: SessionView | None) -> None:
-        self._view = view
-        # Computed once per session rather than per band: the colour a
-        # behaviour gets depends on which behaviours this session contains,
-        # and the per-column majority below needs the labels as integers.
-        self._order = behavior_order(view.labels) if view is not None else []
-        if view is None:
-            self._codes = None
-        else:
-            slot = {name: i + 1 for i, name in enumerate(self._order)}  # 0 = unscored
-            self._codes = np.array([slot.get(label, 0) for label in view.labels], dtype=np.int64)
-        self._lane = None
-        self._frame = 0
-        self._selection = None
-        self.update()
-
-    def set_frame(self, frame: int) -> None:
-        self._frame = int(frame)
-        self.update()
-
-    def resizeEvent(self, event):
-        # The bands are resolved per pixel column, so a different width is a
-        # different image.
-        self._lane = None
-        super().resizeEvent(event)
-
-    def _lane_pixmap(self) -> QPixmap:
-        """The behaviour bands, drawn once per session and size."""
-        if self._lane is None:
-            self._lane = QPixmap(self.size())
-            self._lane.fill(QColor(colors.BASE))
-            lane_painter = QPainter(self._lane)
-            try:
-                self._paint_lane(lane_painter, self._view.labels, 0.0, float(self.height()))
-            finally:
-                lane_painter.end()
-        return self._lane
-
-    def selection(self) -> tuple[int, int] | None:
-        return self._selection
-
-    def set_selection(self, start: int, end: int) -> None:
-        self._selection = (int(min(start, end)), int(max(start, end)))
-        self.update()
-        self.selection_changed.emit(*self._selection)
-
-    # ------------------------------------------------------------------
-
-    def frame_bounds(self) -> tuple[int, int]:
-        """``(first, last)`` frame the ethogram actually covers.
-
-        A windowed run scores minutes two to seven, so its ethogram starts at
-        frame 3600 — and a timeline drawn from zero would spend its first
-        eighth showing nothing, with a playhead that scrubs through frames no
-        one scored. The timeline is the ethogram, so it starts where the
-        ethogram starts.
-        """
-        if self._view is None or self._view.n_rows == 0:
-            return 0, 0
-        return int(self._view.frames[0]), int(self._view.frames[-1])
-
-    def _span(self) -> int:
-        first, last = self.frame_bounds()
-        return max(0, last - first + 1)
-
-    def _frame_at(self, x: float) -> int:
-        first, last = self.frame_bounds()
-        span = self._span()
-        if span == 0 or self.width() <= 0:
-            return first
-        return max(first, min(last, first + int(x / self.width() * span)))
-
-    def _x_of(self, frame: int) -> float:
-        first, _last = self.frame_bounds()
-        span = self._span()
-        return 0.0 if span == 0 else (frame - first) / span * self.width()
-
-    def paintEvent(self, _event):
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(colors.BASE))
-        if self._view is None or self._span() == 0:
-            painter.setPen(QPen(QColor(colors.TEXT_MUTED)))
-            painter.drawText(
-                self.rect(), Qt.AlignmentFlag.AlignCenter, "Load a session to see its ethogram"
-            )
-            return
-
-        # One lane, because there is one behaviour per frame. Freezing and
-        # darting are values of it, not a parallel track: a second lane would
-        # be drawing the same frames twice.
-        #
-        # Cached: the bands only change when the session or the width does,
-        # while the playhead moves thirty times a second during playback, and
-        # resolving nine thousand rows into columns on every one of those
-        # frames is a fifth of the frame budget spent redrawing the same image.
-        painter.drawPixmap(0, 0, self._lane_pixmap())
-
-        if self._selection is not None:
-            start, end = self._selection
-            x0, x1 = self._x_of(start), self._x_of(end + 1)
-            # Shade what is EXCLUDED, not what is chosen. Tinting the selection
-            # blue meant every behaviour inside it was drawn 28% toward the
-            # accent — and since the usual selection is the whole session, that
-            # was every colour on the bar, all of them dragged toward the same
-            # hue. Shading the outside leaves the data at full strength and
-            # says the same thing.
-            scrim = QBrush(colors.qcolor_with_alpha(QColor(colors.BASE), 0.72))
-            painter.fillRect(QRectF(0, 0, max(0.0, x0), self.height()), scrim)
-            painter.fillRect(QRectF(x1, 0, max(0.0, self.width() - x1), self.height()), scrim)
-            painter.setPen(QPen(QColor(colors.ACCENT), 2))
-            painter.drawLine(QPointF(x0, 0), QPointF(x0, self.height()))
-            painter.drawLine(QPointF(x1, 0), QPointF(x1, self.height()))
-
-        painter.setPen(QPen(QColor(colors.TEXT_PRIMARY), 2))
-        x = self._x_of(self._frame)
-        painter.drawLine(QPointF(x, 0), QPointF(x, self.height()))
-
-    def _paint_lane(self, painter, labels, top: float, height: float) -> None:
-        """One band per *pixel column*, coloured by what dominates it.
-
-        Not one rect per run, which is the obvious thing and was wrong. A
-        five-minute session holds around nine thousand scored rows and the
-        timeline is at most a couple of thousand pixels wide, so a typical run
-        is a fraction of a pixel: Qt drew each as a sub-pixel rectangle and
-        blended it with its neighbours by coverage. Every colour on the bar was
-        therefore an average of several behaviours — a bright yellow, a green
-        and a blue arriving on screen as one flat olive. No palette can survive
-        that, and it is why the bar looked washed out however distinct the
-        colours themselves were.
-
-        Resolving to whole columns first makes every pixel one behaviour's
-        actual colour. It also means a run shorter than a column is not drawn,
-        which is honest — the bar shows proportions, and a pixel cannot show a
-        three-frame dart without overstating it. The bout stepper is how those
-        are reached.
-        """
-        if height <= 0 or not labels or self._codes is None:
-            return
-        width = self.width()
-        span = self._span()
-        if width <= 0 or span == 0:
-            return
-
-        first, _last = self.frame_bounds()
-        frames = self._view.frames
-        # Which row each column starts at: the columns are equal slices of the
-        # frame axis, and the rows are already sorted by frame.
-        edges = first + np.arange(width + 1, dtype=np.int64) * span // width
-        starts = np.searchsorted(frames, edges, side="left")
-
-        n_codes = len(self._order) + 1  # + the unscored bucket
-        for x in range(width):
-            lo, hi = int(starts[x]), int(starts[x + 1])
-            if hi <= lo:
-                # More pixels than rows: this column falls between two rows, so
-                # it takes the row to its left rather than a gap in the bar.
-                lo, hi = max(0, min(lo, len(frames) - 1)), max(0, min(lo, len(frames) - 1)) + 1
-            counts = np.bincount(self._codes[lo:hi], minlength=n_codes)
-            code = int(counts.argmax())
-            painter.fillRect(
-                QRectF(x, top, 1.0, height),
-                behavior_qcolor(self._order[code - 1] if code else "", self._order),
-            )
-
-    # ------------------------------------------------------------------
-
-    def mousePressEvent(self, event):
-        if self._view is None:
-            return
-        frame = self._frame_at(event.position().x())
-        selecting = (
-            event.button() == Qt.MouseButton.RightButton
-            or event.modifiers() & Qt.KeyboardModifier.ShiftModifier
-        )
-        if selecting:
-            self._drag_anchor = frame
-            self.set_selection(frame, frame)
-        else:
-            self._drag_anchor = None
-            self.scrubbed.emit(frame)
-
-    def mouseMoveEvent(self, event):
-        if self._view is None:
-            return
-        frame = self._frame_at(event.position().x())
-        if self._drag_anchor is not None:
-            self.set_selection(self._drag_anchor, frame)
-        elif event.buttons() & Qt.MouseButton.LeftButton:
-            self.scrubbed.emit(frame)
-
-    def mouseReleaseEvent(self, _event):
-        self._drag_anchor = None
 
 
 class KeypointCanvas(QWidget):
@@ -690,6 +460,10 @@ class AnalysisWindow(QMainWindow):
         self._cohort: list[tuple[Path, SessionView]] = []
         # (key, rows) for the cohort table — see cohort_rows.
         self._cohort_cache: tuple[tuple, list[dict]] | None = None
+        # Recording folder -> its loaded Session (None: nothing GLIDER wrote
+        # there). Clicking through a cohort re-adopts a session per click, and
+        # a recording's CSVs are megabytes parsed on the GUI thread.
+        self._recordings: dict[Path, object] = {}
 
         central = QWidget()
         central.setObjectName("ToolPage")
@@ -797,7 +571,7 @@ class AnalysisWindow(QMainWindow):
         self._canvas = KeypointCanvas()
         viewer_body.addWidget(self._canvas, 1)
 
-        self._bar = EthogramBar()
+        self._bar = TimelineBar()
         self._bar.scrubbed.connect(self._set_frame)
         self._bar.selection_changed.connect(self._on_selection)
         viewer_body.addWidget(self._bar)
@@ -1045,7 +819,7 @@ class AnalysisWindow(QMainWindow):
         self._bout_filter.blockSignals(True)
         self._bout_filter.clear()
         self._bout_filter.addItem("Any change", None)
-        for name in behavior_order(self._view.labels if self._view else []):
+        for name in self._bar.behavior_order():
             self._bout_filter.addItem(name, name)
         index = self._bout_filter.findData(previous)
         # A behaviour the new session does not contain falls back to "any"
@@ -1108,6 +882,51 @@ class AnalysisWindow(QMainWindow):
         self._sessions.setVisible(False)
         self._adopt(Path(ethogram_csv), view)
 
+    def _recording_folders(self, ethogram_csv: Path, view: SessionView) -> list[Path]:
+        """Where this ethogram's recording might be, nearest first.
+
+        Deliberately not a fourth path resolver: every candidate is one the
+        session loader already resolved or already searches. An apply run
+        writes ``<output>/<video stem>/ethogram_raw.csv``, so the ethogram's
+        own folder is a level *below* the recording, and the canonical layout
+        buries it further under ``sessions/<id>/analysis/``. The video
+        :mod:`~glider.analysis.behavior.session_view` found — via ``run.json``
+        where there is one — sits in the recording folder itself, so it leads.
+        """
+        folders = [view.video_path.parent] if view.video_path is not None else []
+        folder = Path(ethogram_csv).parent
+        for _ in range(_SEARCH_LEVELS + 1):
+            folders.append(folder)
+            if folder == folder.parent:
+                break
+            folder = folder.parent
+        # Resolved, so the video's folder and an ancestor of the ethogram are
+        # one cache entry when they are one directory.
+        return list(dict.fromkeys(f.resolve() for f in folders))
+
+    def _timeline_for(self, ethogram_csv: Path, view: SessionView):
+        """The session's lanes, with a hardware raster if a recording is near.
+
+        The first candidate folder that actually holds a recording wins; if
+        none does, the ethogram-only timeline, which is the honest answer for
+        an apply run whose recording was never kept.
+        """
+        for folder in self._recording_folders(ethogram_csv, view):
+            try:
+                if folder not in self._recordings:
+                    self._recordings[folder] = _recording_or_none(folder)
+                session = self._recordings[folder]
+                if session is not None:
+                    return build_timeline(session, view)
+            except (OSError, ValueError, KeyError):
+                # A folder that is not a recording is the ordinary case, and
+                # an events CSV missing a column build_timeline reads is the
+                # ugly one. Neither is worth losing the behaviour lanes over,
+                # and neither may reach the GUI as a traceback.
+                self._recordings[folder] = None
+                logger.debug("no usable recording in %s", folder, exc_info=True)
+        return build_timeline(None, view)
+
     def _adopt(self, ethogram_csv: Path, view: SessionView) -> None:
         """Show an already-loaded session."""
         self._view = view
@@ -1115,6 +934,7 @@ class AnalysisWindow(QMainWindow):
         self._path_label.setText(_short_path(Path(ethogram_csv)))
         self._path_label.setToolTip(str(ethogram_csv))
         self._bar.set_view(view)
+        self._bar.set_timeline(self._timeline_for(Path(ethogram_csv), view))
         self._canvas.set_view(view)
         # The overlay belongs to the session that just left. Nothing else
         # clears it: set_view leaves _heatmap alone and bar.set_view drops the
@@ -1721,9 +1541,11 @@ class AnalysisWindow(QMainWindow):
     def _fill_bouts(self, stats) -> None:
         rows = stats.bouts
         self._bouts.setRowCount(len(rows))
-        # The shown session's own order, which is what the bar above was
-        # coloured from -- so a row's chip is that row's stripe.
-        order = behavior_order(self._view.labels if self._view else [])
+        # The bar's own pooled order, not one re-derived from the ethogram
+        # alone -- so a row's chip really is that row's stripe. With a
+        # tracking lane in the timeline the two orders differ, and the table
+        # and the bar directly above it then disagreed on every colour.
+        order = self._bar.behavior_order()
         for r, (_, row) in enumerate(rows.iterrows()):
             values = [
                 str(row["state"] or "(unscored)"),
@@ -1745,7 +1567,6 @@ class AnalysisWindow(QMainWindow):
 
 __all__ = [
     "AnalysisWindow",
-    "EthogramBar",
     "KeypointCanvas",
     "behavior_order",
     "behavior_qcolor",

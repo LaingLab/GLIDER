@@ -27,7 +27,7 @@ From top to bottom:
 | Part | What it is |
 |---|---|
 | **Menu bar** | Five menus: **File**, **Edit**, **Experiment**, **View**, **Help**. |
-| **Chrome strip** | One row carrying the experiment name, the run-state pill, one dot per board, the centred tabs, and the ++ctrl+k++ hint. The two panel toggles appear on this tab only, since they drive the panels below. |
+| **Chrome strip** | One row carrying the experiment name, one dot per board, the centred tabs, the run-state pill once a run is under way, and the ++ctrl+k++ hint. The two panel toggles appear on this tab only, since they drive the panels below. |
 | **Left panel** | Tabs: **Nodes**, **Hardware**, **Control**, **Files**. |
 | **The canvas** | The node graph itself. Everything else gets out of its way. |
 | **Right panel** | Tabs: **Properties**, **Camera**. |
@@ -101,10 +101,12 @@ Left to right, it carries:
 - **The two panel toggles** — on the **Dashboard** only, since they drive the
   panels below. They disappear on the other tabs rather than sitting there
   collapsing something you cannot see.
-- **The experiment name**, followed by **— edited** while there are unsaved
-  changes. A brand-new session carries its default name, *Untitled
-  Experiment*, until you name it on the **Experiment** tab.
-- **The run-state pill.**
+- **The experiment name.** A brand-new session carries its default name,
+  *Untitled Experiment*, until you name it on the **Experiment** tab. Unsaved
+  work is marked the way your platform marks it — the dot in the close button
+  on macOS — rather than by text in the strip.
+- **The run-state pill**, from the moment a run starts. It is not shown while
+  idle: see below.
 - **The four tabs**, centred on the window — centred on the *window*, not on
   the space left over, so they do not shift when the experiment name changes
   length.
@@ -114,13 +116,19 @@ Left to right, it carries:
 
 ### The run-state pill
 
+**The pill appears when a run does.** Idle is the state GLIDER is in almost all
+of the time, and an indicator that is always on screen stops being read — which
+is the one failure this pill cannot afford, since its job is to be noticed when
+a run starts or a board drops out of one at 3am. So nothing is shown while
+idle, and everything else appears.
+
 The pill has four words. Some session states ride on a second word after the
 first rather than getting a colour of their own, because the failure this pill
 exists to prevent is reading "Idle" while hardware is being driven.
 
 | Session state | Pill reads | Colour |
 |---|---|---|
-| Idle | **Idle** | Grey |
+| Idle | *(not shown)* | — |
 | Ready | **Idle Ready** | Grey |
 | Initializing | **Running Starting** | Green |
 | Running | **Running** | Green |
