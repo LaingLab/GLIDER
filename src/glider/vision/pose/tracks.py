@@ -66,9 +66,11 @@ class PoseTracks:
                 f"every slot must carry the same fps; got {sorted(rates)}. Nothing "
                 f"GLIDER writes can produce this -- consolidate hands one rate to "
                 f"every slot -- so it means a per-animal CSV was replaced by hand "
-                f"with one recorded at a different rate. Left alone it would be "
-                f"silently re-stamped with another animal's rate, and every feature "
-                f"windowed in seconds would then be computed over the wrong span."
+                f"with one recorded at a different rate, or one slot's .meta.json "
+                f"sidecar was lost or corrupted and from_dlc_csv fell back to "
+                f"DEFAULT_FPS for it. Left alone it would be silently re-stamped "
+                f"with another animal's rate, and every feature windowed in "
+                f"seconds would then be computed over the wrong span."
             )
 
     @property
