@@ -34,6 +34,7 @@ import numpy as np
 import pandas as pd
 
 from glider.vision.pose.core import PoseData
+from glider.vision.pose.tracks import PoseTracks
 
 #: Fallback when a CSV predates the sidecar and the caller named no rate.
 #: Matches the historical ``from_dlc_csv`` default, so old data reads exactly
@@ -274,3 +275,81 @@ def from_dlc_csv(path: str | Path, *, fps: float | None = None) -> PoseData:
         source=scorer,
         metadata=metadata,
     )
+
+
+def _build_dataframe_multi(tracks: PoseTracks) -> pd.DataFrame:
+    """The four-row-header DLC frame: scorer / individuals / bodyparts / coords.
+
+    Built per animal and concatenated so column order is animal-major, which is
+    what DLC itself writes and what tools reading it expect.
+    """
+    blocks = []
+    for slot in tracks:
+        pose = tracks[slot]
+        flat = np.empty((tracks.n_frames, pose.n_keypoints * 3), dtype=float)
+        flat[:, 0::3] = pose.xy[:, :, 0]
+        flat[:, 1::3] = pose.xy[:, :, 1]
+        flat[:, 2::3] = pose.confidence
+        columns = pd.MultiIndex.from_product(
+            [
+                [pose.source],
+                [f"animal{slot}"],
+                pose.keypoint_names,
+                ["x", "y", "likelihood"],
+            ],
+            names=["scorer", "individuals", "bodyparts", "coords"],
+        )
+        blocks.append(pd.DataFrame(flat, columns=columns))
+    return pd.concat(blocks, axis=1)
+
+
+def write_tracks_meta(tracks: PoseTracks, csv_path: str | Path) -> Path:
+    """Sidecar for a multi-animal CSV.
+
+    Same shape as :func:`write_pose_meta` plus the animal count and names. A
+    re-run with different consolidation knobs has to be distinguishable from
+    the original after the fact, so whatever the caller recorded in
+    ``tracks.metadata['consolidation']`` is carried through.
+    """
+    path = meta_path(csv_path)
+    first = tracks[0]
+    payload = {
+        "schema_version": META_SCHEMA_VERSION,
+        "fps": float(tracks.fps),
+        "source": first.source,
+        "keypoint_names": list(tracks.keypoint_names),
+        "n_frames": int(tracks.n_frames),
+        "n_animals": int(tracks.n_animals),
+        "individuals": list(tracks.individuals),
+    }
+    resolution = (first.metadata or {}).get("resolution")
+    if resolution:
+        try:
+            width, height = (int(v) for v in resolution)
+            if width > 0 and height > 0:
+                payload["resolution"] = [width, height]
+        except (TypeError, ValueError):
+            pass
+    for key in ("consolidation", "arena_gate"):
+        value = (tracks.metadata or {}).get(key)
+        if value:
+            payload[key] = value
+    try:
+        path.write_text(json.dumps(payload, indent=2) + "\n")
+    except OSError as e:  # pragma: no cover - depends on filesystem state
+        warnings.warn(
+            f"could not write pose metadata beside {Path(csv_path).name}: {e}. "
+            f"The CSV is fine, but readers will assume {DEFAULT_FPS} fps.",
+            stacklevel=2,
+        )
+    return path
+
+
+def to_dlc_csv_multi(tracks: PoseTracks, path: str | Path, *, write_meta: bool = True) -> Path:
+    """Write N animals as one DeepLabCut CSV, plus its sidecar."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _build_dataframe_multi(tracks).to_csv(path)
+    if write_meta:
+        write_tracks_meta(tracks, path)
+    return path
