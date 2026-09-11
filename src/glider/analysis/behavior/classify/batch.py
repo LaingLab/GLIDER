@@ -49,6 +49,8 @@ import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from glider.vision.pose.tracks import PoseTracks
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,7 @@ __all__ = [
     "classify_pose_data",
     "classify_pose_tracks",
     "speed_only_pose_data",
+    "write_animal_ethograms",
 ]
 
 # The streaming extractor emits the middle row of a 5-frame history, so its
@@ -423,6 +426,55 @@ def write_ethogram_csv(path, rows: EthogramRows, *, speed_axis: bool, cm_s_per_p
             w.writerow(["frame", "behavior"])
             for i, frame in enumerate(rows.frames):
                 w.writerow([frame, rows.labels[i]])
+
+
+def write_animal_ethograms(
+    pose_csv,
+    tracks: PoseTracks,
+    model,
+    *,
+    speed_axis: bool,
+    cm_s_per_px_frame: float | None = None,
+    **kw,
+) -> dict[int, Path]:
+    """Score every animal in *tracks* and write each its own ethogram file.
+
+    One CSV per slot, beside that slot's own pose CSV:
+    ``animals_dir(pose_csv) / f"animal{slot}_ethogram.csv"``, written with the
+    same :func:`write_ethogram_csv` a single-animal run uses. **No
+    ``individual`` column, ever** — D2 spec §5: three ethogram writers exist
+    (this one, and the two streaming classifiers in ``.threads``), and
+    :class:`~glider.analysis.behavior.session_view.SessionView` reads a flat
+    ``labels`` list keyed only by row order, so a shared multi-animal file
+    would double-count every frame with no error anywhere. Per-animal files
+    are what let ``SessionView`` stay exactly as it is.
+
+    A slot that a consolidation pass never filled is entirely NaN
+    (``PoseTracks`` requires every slot to span the whole video). That is not
+    special-cased: :func:`classify_pose_data` already scores an all-NaN pose
+    the same way it scores any frame with a missing keypoint — one row per
+    scored frame, blank ``behavior`` — so this writes that slot's file like
+    every other slot's rather than omitting it. A directory listing then
+    always has one ethogram per pose CSV, and nothing reading it later has to
+    guess whether a missing file means "not scored" or "nothing to score".
+
+    ``pose_csv`` only names the directory (see :func:`animals_dir`); *tracks*
+    is the already-loaded, per-animal data classification runs against, not
+    read from ``pose_csv`` here. ``**kw`` forwards to :func:`classify_pose_tracks`
+    exactly as it does there.
+    """
+    from pathlib import Path
+
+    from glider.vision.pose.batch import animals_dir
+
+    rows_by_slot = classify_pose_tracks(tracks, model, **kw)
+    out_dir = animals_dir(Path(pose_csv))
+    paths: dict[int, Path] = {}
+    for slot, rows in rows_by_slot.items():
+        path = out_dir / f"animal{slot}_ethogram.csv"
+        write_ethogram_csv(path, rows, speed_axis=speed_axis, cm_s_per_px_frame=cm_s_per_px_frame)
+        paths[slot] = path
+    return paths
 
 
 def batch_apply(config, ethogram_csv, model, frame_range=None, pose=None) -> bool:
