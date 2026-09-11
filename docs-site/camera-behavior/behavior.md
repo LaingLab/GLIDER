@@ -267,15 +267,16 @@ it as `pose_csv_in` — that goes through the ordinary single-animal path,
 which supports all three.
 
 !!! warning "Percentile speed thresholds don't work here yet"
-    `freeze_pct` / `dart_pct` thresholds are resolved before GLIDER knows
-    whether a session is multi-animal, and that resolution still looks for a
-    single pose CSV beside the video. For a multi-animal session that search
-    always comes back empty — the pose data exists, just split across
-    `animal0.csv`, `animal1.csv`, and so on — so the run fails with *"no pose
-    CSV found"* rather than a clear explanation. The pose data is not
-    missing; percentile mode just can't find it yet. Use an absolute
-    threshold (cm/s or mm/s) for a multi-animal run instead — those don't
-    depend on finding a single file.
+    The percentile resolver still looks for a single pose CSV beside the
+    video (it calls the same `find_pose_csv` a single-animal tool would, and
+    was never taught to consult the per-animal files instead). For a
+    multi-animal session that search always comes back empty — the pose data
+    exists, just split across `animal0.csv`, `animal1.csv`, and so on — so
+    the run fails with *"no pose CSV found"* rather than a clear explanation.
+    The pose data is not missing, and GLIDER does know by this point that the
+    session is multi-animal; percentile mode's own threshold lookup just
+    can't find it yet. Use an absolute threshold (cm/s or mm/s) for a
+    multi-animal run instead — those don't depend on finding a single file.
 
 !!! note "A slot nothing was ever tracked into scores as blank, not missing"
     If consolidation never filled one of the N slots for a stretch of video,

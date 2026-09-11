@@ -241,15 +241,24 @@ single-animal CSV as multi-animal removes the old file (and its `_raw`
 companion) once the new `_animals/` directory is written, and going back the
 other way removes the stale `_animals/` directory once the fresh single file
 lands. Re-running a multi-animal video with fewer animals than last time also
-removes the extra slots' files, so a directory listing never shows an animal
-this run didn't produce.
+removes the extra slots' pose CSV and ethogram, so a directory listing never
+shows an animal this run didn't produce.
 
-Because each animal's file is the ordinary three-row format, every reader
-that already existed for a single-animal CSV opens one unmodified — behavior
-classification, the annotator, cohort speed, training, zone scoring, the
-arena gate, and the **Re-gate tracked CSVs** action all work against
-`animal0.csv` exactly as they do against a single-animal session's CSV. There
-is no second, four-row format those tools have to learn to read.
+Because each animal's file is the ordinary three-row format, any tool you
+point at one directly opens it unmodified — behavior classification, the
+annotator, cohort speed, training, zone scoring, and the arena gate all read
+`animal0.csv` exactly as they read a single-animal session's CSV. There is no
+second, four-row format any of them have to learn.
+
+That is the format, not discovery. Every one of those tools normally finds
+its input by asking `find_pose_csv(video)` for "the" pose CSV, and that
+returns `None` for a multi-animal session (see below) — so *automatic*
+discovery finds nothing, even though the file it would have opened is
+perfectly readable. **Re-gate tracked CSVs** goes through exactly that path
+and so skips multi-animal sessions outright: it has no per-animal mode, the
+button greys out for a multi-animal video, and nothing is re-gated. The other
+tools degrade more quietly — an empty state, a missing-file error, or a video
+invisible to pooling — described session by session below.
 
 Zones are still scored per animal, into the same `zone_events.csv` /
 `zone_occupancy.csv` pair described above, with `object_id` reading `animal0`,
@@ -320,12 +329,16 @@ there is nothing to name.
 !!! note "Already have four-row files from before this changed?"
     If you ran a multi-animal batch before per-animal files existed, the
     four-row CSV it wrote is still there and still reads back with
-    `from_dlc_csv(individual=...)`. It just isn't what a fresh batch run (or
-    a re-run of that same video) produces anymore — that writes the
-    per-animal layout above. If you want a four-row file for a session
-    that's already been re-tracked into per-animal CSVs, use **Export
-    multi-animal DLC CSV** rather than keeping the old one, since only the
-    export is guaranteed to match the current coordinates.
+    `from_dlc_csv(individual=...)`. It just isn't what a fresh batch run
+    produces anymore — that writes the per-animal layout above. This only
+    holds until you re-track that video: the export lands at the same path a
+    plain batch run would have used, so re-tracking it (single- or
+    multi-animal) overwrites or deletes that file as part of the same
+    reconciliation that replaces any other stale output. There's no undo. If
+    you want a four-row file for a session that's already been re-tracked
+    into per-animal CSVs, use **Export multi-animal DLC CSV** rather than
+    keeping the old one, since only the export is guaranteed to match the
+    current coordinates.
 
 ### The identity sidecar
 

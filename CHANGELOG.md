@@ -131,11 +131,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Written as one plain **three-row DeepLabCut CSV per animal**
     (`animal0.csv`, `animal1.csv`, ...) into a `<video>_animals/` directory
     beside the video — the same format a single-animal run has always
-    written, so every existing reader (behaviour classification, the
-    annotator, cohort speed, training, zone scoring, the arena gate, and
-    **Re-gate tracked CSVs**) opens one animal's file unmodified, with
-    nothing new to teach any of them. `n_animals=1` is unaffected: one file
-    at today's path, no subdirectory.
+    written, so any tool you point at `animal0.csv` directly (behaviour
+    classification, the annotator, cohort speed, training, zone scoring, the
+    arena gate) opens it unmodified, with nothing new to teach any of them.
+    `n_animals=1` is unaffected: one file at today's path, no subdirectory.
+    That's the format, not automatic discovery: every one of those tools
+    normally finds its input by asking for "the" pose CSV, and that lookup
+    returns nothing for a multi-animal session — so a multi-animal video
+    looks untracked to anything that isn't pointed at the file directly.
+    **Re-gate tracked CSVs** goes through that same lookup and so skips
+    multi-animal sessions outright; it does not work against them at all.
   - A **`_identity.csv` sidecar** records, sparsely, the frames where a
     track's identity was inferred rather than observed — a fragment joined
     across a gap on a plausible speed, or two animals close enough that a
@@ -185,8 +190,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     still read back with `from_dlc_csv(individual=...)` — the reader is
     unchanged — but they are no longer what a batch run produces, and
     re-tracking that same video now writes the per-animal layout instead of
-    updating the four-row file. Use the export action if you specifically
-    want a four-row file for a session that's already on the new layout.
+    updating the four-row file, deleting it in the process — there's no undo.
+    Use the export action if you specifically want a four-row file for a
+    session that's already on the new layout.
 
 - **`zone_occupancy.csv`'s schema changed under multi-animal tracking, in three
   ways a script reading the old file will not notice until it is already
