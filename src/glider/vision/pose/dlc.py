@@ -194,7 +194,7 @@ def _build_dataframe(pose: PoseData) -> pd.DataFrame:
 #: it and they drifted apart once already: find_pose_csv excluded _raw while
 #: the cohort collector did not, so every session was pooled twice and each
 #: animal's weight in the percentiles was silently halved.
-NOT_POSE_SUFFIXES = ("_raw", "_annotations", "_ungated")
+NOT_POSE_SUFFIXES = ("_raw", "_annotations", "_ungated", "_identity")
 
 
 def to_dlc_csv(pose: PoseData, path: str | Path, *, write_meta: bool = True) -> Path:
