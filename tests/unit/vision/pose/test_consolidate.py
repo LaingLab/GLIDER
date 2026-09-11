@@ -8,7 +8,7 @@ import math
 
 import numpy as np
 
-from glider.vision.pose.consolidate import Fragment, assignment_cost, seed_slots
+from glider.vision.pose.consolidate import Fragment, assignment_cost, consolidate, seed_slots
 
 K = 2  # two keypoints is enough to have a centroid
 
@@ -149,3 +149,89 @@ def test_a_nan_endpoint_refuses_rather_than_scoring_nan():
     blind = frag(2, start=11, length=10)
     blind.xy[:] = np.nan
     assert assignment_cost(slot, blind, max_travel_px_per_frame=40.0) == math.inf
+
+
+NAMES = ["snout", "tail"]
+
+
+def run(fragments, *, n_animals, n_frames=200, **kw):
+    return consolidate(
+        fragments,
+        n_animals=n_animals,
+        n_frames=n_frames,
+        keypoint_names=NAMES,
+        fps=30.0,
+        **kw,
+    )
+
+
+def test_two_clean_animals_become_two_slots():
+    res = run([frag(1, 0, 200, x=10, y=10), frag(2, 0, 200, x=300, y=300)], n_animals=2)
+    assert res.tracks.n_animals == 2
+    assert np.allclose(res.tracks[0].xy[0, :, 0], 10.0)
+    assert np.allclose(res.tracks[1].xy[0, :, 0], 300.0)
+    assert res.dropped == []
+
+
+def test_a_continuation_is_stitched_into_the_same_slot():
+    seed = frag(1, 0, 100, x=10, y=10)
+    tail = frag(2, 102, 98, x=12, y=10)
+    other = frag(3, 0, 200, x=400, y=400)
+    res = run([seed, tail, other], n_animals=2)
+    # The tail belongs to the animal at (10,10), not the one at (400,400).
+    assert np.allclose(res.tracks[0].xy[150, :, 0], 12.0)
+    assert res.stitched[0] == set(range(102, 200))
+
+
+def test_a_seed_fragment_is_not_marked_stitched():
+    res = run([frag(1, 0, 200, x=10, y=10)], n_animals=1)
+    assert res.stitched[0] == set()
+
+
+def test_an_overlapping_fragment_goes_to_the_free_slot():
+    a = frag(1, 0, 200, x=10, y=10)
+    b = frag(2, 0, 100, x=300, y=300)
+    c = frag(3, 100, 100, x=302, y=300)  # overlaps a, continues b
+    res = run([a, b, c], n_animals=2)
+    assert np.allclose(res.tracks[1].xy[150, :, 0], 302.0)
+    assert np.allclose(res.tracks[0].xy[150, :, 0], 10.0)
+
+
+def test_a_fragment_too_far_from_every_slot_is_dropped_and_reported():
+    a = frag(1, 0, 100, x=10, y=10)
+    b = frag(2, 0, 100, x=300, y=300)
+    stray = frag(3, 101, 20, x=9000, y=9000)
+    res = run([a, b, stray], n_animals=2)
+    assert res.dropped == [(3, 101, 120)]
+
+
+def test_frames_no_fragment_covers_are_nan():
+    res = run([frag(1, 0, 50, x=10, y=10)], n_animals=1, n_frames=200)
+    assert np.all(np.isnan(res.tracks[0].xy[60]))
+    assert res.tracks[0].confidence[60].tolist() == [0.0, 0.0]
+
+
+def test_fewer_animals_than_slots_leaves_the_surplus_all_nan():
+    # Asked for 2, found 1. The empty slot is a real answer -- one animal was
+    # never seen -- and is far better than raising after an hour of inference.
+    res = run([frag(1, 0, 200, x=10, y=10)], n_animals=2)
+    assert res.tracks.n_animals == 2
+    assert np.all(np.isnan(res.tracks[1].xy))
+
+
+def test_the_result_does_not_depend_on_input_order():
+    a, b, c = (
+        frag(1, 0, 100, x=10, y=10),
+        frag(2, 0, 100, x=300, y=300),
+        frag(3, 101, 99, x=12, y=10),
+    )
+    first = run([a, b, c], n_animals=2).tracks
+    second = run([c, b, a], n_animals=2).tracks
+    assert np.allclose(first[0].xy, second[0].xy, equal_nan=True)
+    assert np.allclose(first[1].xy, second[1].xy, equal_nan=True)
+
+
+def test_no_usable_fragments_still_returns_n_empty_slots():
+    res = run([frag(1, 0, 2)], n_animals=2, min_fragment_frames=5)
+    assert res.tracks.n_animals == 2
+    assert np.all(np.isnan(res.tracks[0].xy))

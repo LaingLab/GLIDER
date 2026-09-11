@@ -21,7 +21,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-__all__ = ["Fragment", "assignment_cost", "seed_slots"]
+from glider.vision.pose.core import PoseData
+from glider.vision.pose.tracks import PoseTracks
+
+__all__ = ["Fragment", "assignment_cost", "seed_slots", "ConsolidationResult", "consolidate"]
 
 
 @dataclass
@@ -148,3 +151,98 @@ def assignment_cost(
         return math.inf
     speed = distance / max(gap, 1)
     return speed if speed <= max_travel_px_per_frame else math.inf
+
+
+@dataclass
+class ConsolidationResult:
+    """What consolidation produced, and how much of it was inference.
+
+    ``stitched`` is per slot the set of frames whose data came from a fragment
+    *joined* to the slot rather than the one that seeded it. Those frames are
+    where an id is a guess, and Task 5 turns them into a flag an analyst can
+    filter on.
+
+    ``dropped`` records fragments no slot would accept, as
+    ``(track_id, start, end)``. Kept rather than discarded silently: a video
+    that drops a lot of them is one whose tuning is wrong, and that should be
+    visible without re-running anything.
+    """
+
+    tracks: PoseTracks
+    stitched: dict[int, set[int]]
+    dropped: list[tuple[int, int, int]]
+
+
+def consolidate(
+    fragments: list[Fragment],
+    *,
+    n_animals: int,
+    n_frames: int,
+    keypoint_names: list[str],
+    fps: float,
+    source: str = "",
+    max_travel_px_per_frame: float = 40.0,
+    min_fragment_frames: int = 5,
+) -> ConsolidationResult:
+    """Stitch tracker fragments into exactly *n_animals* lifelong slots.
+
+    Greedy, longest-first, and not a global optimum.
+
+    ponytail: greedy stitching, with a known ceiling. Assignment here is
+    order-dependent -- a slot's position changes as fragments join it -- so one
+    fixed cost matrix would be solving a different problem, and a global
+    assignment is not simply a better version of this. Upgrade path when the
+    manual check in the spec's §9 says this is not good enough: multi-hypothesis
+    linking over the whole video, or an appearance embedding once the animals
+    are marked.
+    """
+    if n_animals < 1:
+        raise ValueError(f"n_animals must be at least 1; got {n_animals}")
+
+    seeds, remaining = seed_slots(fragments, n_animals, min_fragment_frames=min_fragment_frames)
+    slots: list[list[Fragment]] = [[s] for s in seeds]
+    slots += [[] for _ in range(n_animals - len(slots))]
+    seed_ids = {s.track_id for s in seeds}
+    dropped: list[tuple[int, int, int]] = []
+
+    for fragment in remaining:
+        costs = [
+            assignment_cost(slot, fragment, max_travel_px_per_frame=max_travel_px_per_frame)
+            for slot in slots
+        ]
+        best = int(np.argmin(costs))
+        # argmin of an all-inf list is 0, which would silently donate every
+        # rejected fragment to slot 0.
+        if not math.isfinite(costs[best]):
+            dropped.append((fragment.track_id, fragment.start, fragment.end))
+            continue
+        slots[best].append(fragment)
+
+    n_kpts = len(keypoint_names)
+    tracks: dict[int, PoseData] = {}
+    stitched: dict[int, set[int]] = {}
+
+    for slot_id, slot in enumerate(slots):
+        xy = np.full((n_frames, n_kpts, 2), np.nan)
+        confidence = np.zeros((n_frames, n_kpts))
+        joined: set[int] = set()
+        for fragment in slot:
+            rows = fragment.frames
+            xy[rows] = fragment.xy
+            confidence[rows] = fragment.confidence
+            if fragment.track_id not in seed_ids:
+                joined.update(int(f) for f in rows)
+        tracks[slot_id] = PoseData(
+            xy=xy,
+            confidence=confidence,
+            keypoint_names=list(keypoint_names),
+            fps=fps,
+            source=source or "consolidated",
+        )
+        stitched[slot_id] = joined
+
+    return ConsolidationResult(
+        tracks=PoseTracks(tracks=tracks, fps=fps),
+        stitched=stitched,
+        dropped=dropped,
+    )
