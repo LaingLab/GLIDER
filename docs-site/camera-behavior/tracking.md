@@ -146,7 +146,7 @@ A batch run writes several files into the chosen folder:
 | --- | --- |
 | `<video>_tracking.csv` | Per-frame tracking, same format as above |
 | `zone_events.csv` | One row per zone enter/exit: `frame, elapsed_ms, zone_id, zone_name, object_id, event` |
-| `zone_occupancy.csv` | Time per zone: `zone_id, zone_name, frames_in_zone, seconds` |
+| `zone_occupancy.csv` | Time per zone per animal: `object_id, zone_id, zone_name, frames_in_zone, seconds` |
 | `<video>_annotated.mp4` | The video with boxes, track IDs, and zones drawn on |
 | `metadata.json` | Source path, fps, frame count, resolution, zone and CV settings |
 

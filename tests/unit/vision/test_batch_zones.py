@@ -78,8 +78,8 @@ class TestZoneOutput:
         _run(batch, [OUTSIDE] * 4 + [INSIDE] * 6, {video.resolve(): _zone_config()})
         with open(zone_output_dir(video) / "zone_occupancy.csv") as f:
             row = list(csv.reader(f))[1]
-        assert row[2] == "6"
-        assert float(row[3]) == pytest.approx(0.2)
+        assert row[3] == "6"
+        assert float(row[4]) == pytest.approx(0.2)
 
     def test_nothing_is_written_without_a_zone_for_that_video(self, batch):
         video, _ = batch
@@ -142,4 +142,4 @@ class TestKeypointChoice:
         )
         # nose sits at (0, 0) in this fixture, outside the centre zone.
         with open(zone_output_dir(video) / "zone_occupancy.csv") as f:
-            assert list(csv.reader(f))[1][2] == "0"
+            assert list(csv.reader(f))[1][3] == "0"
