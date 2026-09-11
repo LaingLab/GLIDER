@@ -771,6 +771,35 @@ def classify(
             used_batch=True,
             speed_only=False,
         )
+        # The manifest above lands in `output_dir`, but the ethograms
+        # `SessionView` will actually be opened against live in `animal_dir`
+        # (`session_view.py` reads `read_run_manifest(ethogram_csv.parent)`),
+        # which is not `output_dir` for a multi-animal session. Without a
+        # second copy there, opening `animal0_ethogram.csv` in Session Review
+        # silently loses the applied freeze/dart thresholds, the recorded
+        # `px_per_mm`, and the video association -- it still renders labels
+        # and poses, so the loss is quiet. Same payload, same best-effort
+        # semantics, just written where the reader actually looks.
+        if animal_dir != output_dir:
+            _write_run_manifest(
+                animal_dir,
+                video=video,
+                pose_csvs=[str(p) for p in animal_csvs],
+                ethograms={str(slot): str(p) for slot, p in paths.items()},
+                model_path=model_path,
+                yolo_path=yolo_path,
+                keypoint_names=keypoint_names,
+                fps=tracks.fps,
+                predict_every=config.predict_every,
+                smooth_window=config.smooth_window,
+                min_bout_s=min_bout_s,
+                freeze_threshold=_reportable(config.freeze_threshold),
+                dart_threshold=_reportable(config.dart_threshold),
+                cm_s_per_px_frame=config.cm_s_per_px_frame,
+                px_per_mm=scale,
+                used_batch=True,
+                speed_only=False,
+            )
         # No single EthogramResult exists for N animals -- per-animal bouts,
         # stats and transitions are exactly the reporting polish D2 spec §5
         # defers (run_report gains no per-animal sections either). What is

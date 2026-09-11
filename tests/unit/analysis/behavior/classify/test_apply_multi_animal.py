@@ -136,6 +136,48 @@ class TestMultiAnimalSession:
         assert not (out / "ethogram_raw.csv").exists()
         assert not (out / "bouts.csv").exists()
 
+    def test_run_manifest_is_written_beside_each_animal_dir(self, tmp_path):
+        """SessionView reads the run manifest from ethogram_csv.parent
+        (session_view.py's _load_applied_thresholds / _load_scale), which
+        for a multi-animal session is animal_dir -- not output_dir, where
+        the manifest also lands. Without a copy in animal_dir, opening
+        animal0_ethogram.csv in Session Review silently loses the applied
+        freeze/dart thresholds, px_per_mm, and video association."""
+        from glider.analysis.behavior.classify import read_run_manifest
+
+        pose0 = _pose(seed=140, base=(150.0, 120.0))
+        pose1 = _pose(seed=141, base=(400.0, 300.0))
+        model = _model(pose0, seed=142)
+
+        animal_dir = tmp_path / "clipDLC_yolo_animals"
+        animal_dir.mkdir()
+        to_dlc_csv(pose0, animal_dir / "animal0.csv")
+        to_dlc_csv(pose1, animal_dir / "animal1.csv")
+
+        out = tmp_path / "out"
+        classify(
+            video="clip.mp4",
+            model_path=None,
+            yolo_path=None,
+            keypoint_names=KP,
+            output_dir=out,
+            fps_override=30.0,
+            reuse_existing_poses=True,
+            pose_dir=tmp_path,
+            model=model,
+            predict_every=1,
+        )
+
+        # The manifest still lands where it always has...
+        at_output = read_run_manifest(out)
+        assert at_output is not None
+        # ...and now also where SessionView will actually look for it.
+        at_animal_dir = read_run_manifest(animal_dir)
+        assert at_animal_dir is not None
+        assert at_animal_dir["video"] == "clip.mp4"
+        assert at_animal_dir["fps"] == 30.0
+        assert at_animal_dir == at_output
+
     def test_speed_only_multi_animal_is_refused_not_silently_wrong(self, tmp_path):
         """classify_pose_tracks has no speed-only mode (it always needs a
         model); a multi-animal run with neither must fail loudly rather than
