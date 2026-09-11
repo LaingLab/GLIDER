@@ -143,7 +143,7 @@ class TestWriteAnimalEthograms:
         etho1 = pd.read_csv(paths[1])
         assert not etho0["behavior"].equals(etho1["behavior"])
 
-    def test_a_never_filled_slot_still_gets_an_ethogram(self, tmp_path):
+    def test_a_never_filled_slot_still_gets_an_ethogram(self, tmp_path, caplog):
         """All-NaN slot: written like every other slot, not skipped.
 
         classify_pose_data already scores an all-NaN pose the same way it
@@ -152,6 +152,11 @@ class TestWriteAnimalEthograms:
         keeps every slot's directory entries symmetric, so a reader never has
         to guess whether a missing file meant "not scored" or "nothing to
         score".
+
+        A blank ethogram written this way looks, at a glance, exactly like
+        one where scoring failed -- so it must be logged, naming the slot and
+        saying plainly that the animal was never found rather than that
+        scoring failed.
         """
         pose0 = _pose(seed=30, base=(150.0, 150.0))
         n = pose0.n_frames
@@ -165,13 +170,22 @@ class TestWriteAnimalEthograms:
         model = _model(pose0, seed=31)
         pose_csv = tmp_path / "sessionDLC_exp-6.csv"
 
-        paths = write_animal_ethograms(pose_csv, tracks, model, speed_axis=False, predict_every=1)
+        with caplog.at_level("INFO"):
+            paths = write_animal_ethograms(
+                pose_csv, tracks, model, speed_axis=False, predict_every=1
+            )
 
         assert paths[1].exists()
         df1 = pd.read_csv(paths[1])
         want1 = classify_pose_data(empty, model, predict_every=1)
         assert len(df1) == len(want1.frames)  # same cadence as a filled slot
         assert df1["behavior"].isna().all()  # every label blank
+
+        # The log names the empty slot as never found, not as a scoring
+        # failure, and says nothing of the sort about the filled slot 0.
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("animal1" in m and "never found" in m for m in messages)
+        assert not any("animal0" in m and "never found" in m for m in messages)
 
 
 def test_session_view_loads_a_per_animal_ethogram_and_pose_csv_unchanged(tmp_path):

@@ -457,6 +457,10 @@ def write_animal_ethograms(
     every other slot's rather than omitting it. A directory listing then
     always has one ethogram per pose CSV, and nothing reading it later has to
     guess whether a missing file means "not scored" or "nothing to score".
+    A blank ethogram written this way is, at a glance, indistinguishable
+    from one where scoring genuinely failed -- so an entirely-NaN slot gets
+    one ``logger.info`` naming it, saying plainly that the animal was never
+    found rather than that scoring failed.
 
     ``pose_csv`` only names the directory (see :func:`animals_dir`); *tracks*
     is the already-loaded, per-animal data classification runs against, not
@@ -471,6 +475,13 @@ def write_animal_ethograms(
     out_dir = animals_dir(Path(pose_csv))
     paths: dict[int, Path] = {}
     for slot, rows in rows_by_slot.items():
+        if np.isnan(tracks[slot].xy).all():
+            logger.info(
+                "%s: animal%d was never found (its pose is entirely NaN), not "
+                "that scoring failed -- its ethogram will be blank",
+                out_dir.name,
+                slot,
+            )
         path = out_dir / f"animal{slot}_ethogram.csv"
         write_ethogram_csv(path, rows, speed_axis=speed_axis, cm_s_per_px_frame=cm_s_per_px_frame)
         paths[slot] = path
