@@ -229,6 +229,122 @@ def raw_output_path(video: Path, model: Path) -> Path:
     return video.parent / f"{_output_stem(video, model)}_raw.csv"
 
 
+def _drop_stale_single(primary: Path, *, raw_is_current: bool) -> None:
+    """Remove a stale single-animal ``primary`` before a multi-animal write.
+
+    A video tracked single-animal and later multi-animal leaves ``primary`` on
+    disk once :func:`_process_multi` starts writing :func:`animals_dir`
+    instead -- nothing ever removes the old file. ``find_pose_csv`` globs for
+    exactly that filename and would keep handing back the superseded
+    single-animal track as *the* pose CSV for a video that has since been
+    multi-tracked, with current coordinates sitting right next to it, unread.
+
+    Removes ``primary`` and everything keyed off it that a single-animal run
+    could have left: its rate sidecar, and its own ``_raw`` (when that run
+    gated or filtered). ``raw_output_path`` is keyed by video and model alone,
+    so it names the same file regardless of ``n_animals`` -- when *this*
+    multi-animal run also gated or filtered, it has already overwritten
+    ``_raw`` with its own data by the time this runs, and ``raw_is_current``
+    must be True so that fresh file is left alone rather than deleted as if
+    it were the old run's leftover.
+
+    Never raises: by here :func:`_process_multi` has already written the new
+    animals_dir CSVs, which are the artifact that matters, and a leftover
+    primary is a warning rather than a failed video.
+    """
+    if not primary.exists():
+        return
+    from glider.vision.pose.dlc import meta_path
+
+    candidates = [primary, meta_path(primary)]
+    if not raw_is_current:
+        raw = primary.with_name(f"{primary.stem}_raw.csv")
+        candidates += [raw, meta_path(raw)]
+
+    removed = []
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            path.unlink()
+            removed.append(path.name)
+        except OSError as e:  # pragma: no cover - depends on filesystem state
+            logger.warning("could not remove the superseded %s: %s", path.name, e)
+    if removed:
+        logger.info(
+            "%s was re-tracked multi-animal, so the superseded %s was removed",
+            primary.name,
+            ", ".join(removed),
+        )
+
+
+def _drop_stale_animals_dir(primary: Path) -> None:
+    """Remove a stale ``animals_dir`` before a single-animal write of ``primary``.
+
+    The reverse of :func:`_drop_stale_single`: a video tracked multi-animal and
+    later single-animal leaves the old ``animals_dir`` sitting beside the fresh
+    ``primary``. Nothing reads ``primary`` and ``animals_dir`` together today,
+    but code that will (per-animal loading, keyed off ``animals_dir(primary)``
+    existing) must not find a stale directory next to current data and treat
+    the video as still multi-animal.
+
+    Never raises: by here ``primary`` is written and valid, which is the
+    artifact that matters, and a leftover directory is a warning rather than a
+    failed video.
+    """
+    stale = animals_dir(primary)
+    if not stale.exists():
+        return
+    import shutil
+
+    try:
+        shutil.rmtree(stale)
+    except OSError as e:  # pragma: no cover - depends on filesystem state
+        logger.warning("could not remove the superseded %s: %s", stale.name, e)
+        return
+    logger.info(
+        "%s was re-tracked single-animal, so the superseded %s was removed",
+        primary.name,
+        stale.name,
+    )
+
+
+def _drop_orphaned_animal_slots(out_dir: Path, kept_slots: set[int]) -> None:
+    """Remove per-animal files for slots the current run does not produce.
+
+    The per-slot write loop only overwrites slots present in the new tracks,
+    so rerunning a video with fewer animals than a previous run (3, then 2)
+    leaves the extra slot's CSV behind -- the session then appears to still
+    hold an animal that this run never saw. Whole-file overwrite of one
+    ``primary`` could not do this; per-animal files can.
+
+    Touches only the per-animal pose CSVs and their own rate sidecars, never
+    anything else that may legitimately live in ``out_dir``. Never raises,
+    for the same reason as every other reconciliation here: by the time this
+    matters the new run's own files are about to be written and are the
+    artifact that counts.
+    """
+    if not out_dir.is_dir():
+        return
+    from glider.vision.pose.dlc import meta_path
+
+    for path in sorted(out_dir.glob("animal*.csv")):
+        slot_id = path.stem.removeprefix("animal")
+        if not slot_id.isdigit() or int(slot_id) in kept_slots:
+            continue
+        for p in (path, meta_path(path)):
+            try:
+                p.unlink(missing_ok=True)
+            except OSError as e:  # pragma: no cover - depends on filesystem state
+                logger.warning("could not remove the orphaned %s: %s", p.name, e)
+        logger.info(
+            "%s no longer tracks animal%s, so the superseded %s was removed",
+            out_dir.name,
+            slot_id,
+            path.name,
+        )
+
+
 def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Path | None:
     """The pose CSV belonging to *video*, or ``None`` if there isn't one.
 
@@ -388,8 +504,11 @@ def run_batch(
     Parameters
     ----------
     overwrite
-        When False (the default) a video whose primary CSV already exists is
-        skipped, so an interrupted batch resumes cheaply.
+        When False (the default) a video whose output already exists is
+        skipped, so an interrupted batch resumes cheaply. "Output" means the
+        primary CSV for ``n_animals`` 1, or a non-empty ``animals_dir`` above
+        that -- so resume, and the skip itself, follow whichever shape this
+        call would actually produce.
     filtering
         When given, the unfiltered result is written to the ``_raw`` path first
         and the smoothed result becomes the primary CSV — an unhappy filter
@@ -476,9 +595,22 @@ def run_batch(
         video = Path(raw_video).resolve()
         primary = dlc_output_path(video, model_path)
 
-        if primary.exists() and not overwrite:
+        # What *this* run would produce: animals_dir for n_animals > 1,
+        # primary otherwise. Testing primary alone for n_animals > 1 never
+        # matches -- _process_multi never writes it -- so a multi-animal
+        # video always looked unfinished (resume never skipped) and, worse,
+        # switching a video from single- to multi-animal with the default
+        # overwrite=False looked finished from the first frame (primary
+        # already existed) and was skipped outright, reporting success while
+        # writing nothing.
+        this_run_output = animals_dir(primary) if n_animals > 1 else primary
+        already_done = (
+            any(this_run_output.glob("animal*.csv")) if n_animals > 1 else this_run_output.exists()
+        )
+
+        if already_done and not overwrite:
             result.skipped.append(video)
-            emit(EventKind.SKIPPED, video, index, output=primary)
+            emit(EventKind.SKIPPED, video, index, output=this_run_output)
             continue
 
         if cancel_cb is not None and cancel_cb():
@@ -577,6 +709,7 @@ def run_batch(
                 # behind.
                 to_dlc_csv(pose, primary)
                 _drop_stale_ungated(primary)
+                _drop_stale_animals_dir(primary)
                 zone_warning = _score_zones(video, pose, zones, zone_keypoint)
         except PoseCancelledError:
             result.cancelled = True
@@ -592,7 +725,7 @@ def run_batch(
             EventKind.WROTE,
             video,
             index,
-            output=primary,
+            output=this_run_output,
             message="; ".join(w for w in (zone_warning, gate_warning) if w),
         )
 
@@ -703,8 +836,10 @@ def _process_multi(
     # the naming anchor for animals_dir, the _raw companion, and the identity
     # sidecar below.
     out_dir = animals_dir(primary)
+    _drop_orphaned_animal_slots(out_dir, set(tracks))
     for slot in tracks:
         to_dlc_csv(tracks[slot], out_dir / f"animal{slot}.csv")
+    _drop_stale_single(primary, raw_is_current=gating or filtering is not None)
 
     stitched = {int(s): set(f) for s, f in (tracks.metadata.get("stitched") or {}).items()}
     write_identity_csv(

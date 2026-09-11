@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from glider.vision.pose.batch import (
+    EventKind,
     FilterSettings,
     animals_dir,
     dlc_output_path,
@@ -458,3 +459,184 @@ def test_one_animal_writes_no_animals_directory(video, tmp_path):
     primary = dlc_output_path(video, tmp_path / "m.pt")
     assert header_depth(primary) == 3
     assert not animals_dir(primary).exists()
+
+
+# --------------------------------------------------------------------------
+# Fix round: reconciling with what a *previous*, different-shaped run left
+# behind. Neither direction used to clean up after the other, so
+# find_pose_csv could hand back a superseded track as current, the
+# skip/resume check tested an artifact _process_multi never writes, and
+# shrinking n_animals orphaned a slot's file.
+# --------------------------------------------------------------------------
+
+
+def _single_pose():
+    return PoseData(
+        xy=np.zeros((20, 2, 2)),
+        confidence=np.ones((20, 2)),
+        keypoint_names=list(NAMES),
+        fps=30.0,
+    )
+
+
+def test_switching_single_to_multi_replaces_the_stale_primary(video, tmp_path):
+    """The dangerous direction: a video tracked single-animal, then rerun
+    multi-animal with the default overwrite=False. The old primary must not
+    survive next to the new animals_dir -- find_pose_csv would keep handing
+    it back as the pose CSV for a video that has since been multi-tracked."""
+    run_batch([video], tmp_path / "m.pt", NAMES, n_animals=1, infer=lambda **kw: _single_pose())
+    primary = dlc_output_path(video, tmp_path / "m.pt")
+    assert primary.exists()
+
+    result = run_batch(
+        [video],
+        tmp_path / "m.pt",
+        NAMES,
+        n_animals=2,
+        infer_tracks=lambda **kw: fake_tracks(2),
+    )
+    assert result.completed == [video]
+    assert not primary.exists()
+    d = animals_dir(primary)
+    assert sorted(p.name for p in d.glob("*.csv")) == ["animal0.csv", "animal1.csv"]
+
+
+def test_multi_animal_rerun_skips_by_default(video, tmp_path):
+    """Resume: primary.exists() is always False for n_animals > 1, so the old
+    check never skipped a multi-animal rerun. The corrected check must."""
+    calls = {"n": 0}
+
+    def infer(**kw):
+        calls["n"] += 1
+        return fake_tracks(2)
+
+    run_batch([video], tmp_path / "m.pt", NAMES, n_animals=2, infer_tracks=infer)
+    result = run_batch([video], tmp_path / "m.pt", NAMES, n_animals=2, infer_tracks=infer)
+    assert calls["n"] == 1
+    assert result.skipped == [video]
+    assert result.completed == []
+
+
+def test_switching_multi_to_single_replaces_the_stale_animals_dir(video, tmp_path):
+    """The reverse case: a fresh single-animal primary must not sit beside a
+    stale animals_dir from an earlier multi-animal run -- any future
+    per-animal loading keyed on animals_dir's presence must not mistake this
+    video for still being multi-tracked."""
+    run_batch(
+        [video],
+        tmp_path / "m.pt",
+        NAMES,
+        n_animals=2,
+        infer_tracks=lambda **kw: fake_tracks(2),
+    )
+    primary = dlc_output_path(video, tmp_path / "m.pt")
+    d = animals_dir(primary)
+    assert d.exists()
+
+    result = run_batch(
+        [video], tmp_path / "m.pt", NAMES, n_animals=1, infer=lambda **kw: _single_pose()
+    )
+    assert result.completed == [video]
+    assert primary.exists()
+    assert not d.exists()
+
+
+def test_shrinking_animal_count_orphans_no_slot(video, tmp_path):
+    """n_animals=3, then n_animals=2: animal2.csv (and its sidecar) must not
+    survive -- the per-slot write loop only overwrites slots the new run
+    produces, so a shrink used to leave the old slot behind."""
+    run_batch(
+        [video],
+        tmp_path / "m.pt",
+        NAMES,
+        n_animals=3,
+        infer_tracks=lambda **kw: fake_tracks(3),
+    )
+    primary = dlc_output_path(video, tmp_path / "m.pt")
+    d = animals_dir(primary)
+    assert sorted(p.name for p in d.glob("*.csv")) == [
+        "animal0.csv",
+        "animal1.csv",
+        "animal2.csv",
+    ]
+
+    run_batch(
+        [video],
+        tmp_path / "m.pt",
+        NAMES,
+        n_animals=2,
+        infer_tracks=lambda **kw: fake_tracks(2),
+        overwrite=True,
+    )
+    assert sorted(p.name for p in d.glob("*.csv")) == ["animal0.csv", "animal1.csv"]
+    assert not (d / "animal2.csv").exists()
+    assert not (d / "animal2.meta.json").exists()
+
+
+def test_single_animal_only_history_is_unaffected_by_any_of_this(video, tmp_path):
+    """No multi-animal history anywhere: skip/resume and reconciliation are
+    both no-ops, exactly as before this fix round."""
+    calls = {"n": 0}
+
+    def single(**kw):
+        calls["n"] += 1
+        return _single_pose()
+
+    run_batch([video], tmp_path / "m.pt", NAMES, n_animals=1, infer=single)
+    result = run_batch([video], tmp_path / "m.pt", NAMES, n_animals=1, infer=single)
+    primary = dlc_output_path(video, tmp_path / "m.pt")
+    assert calls["n"] == 1
+    assert result.skipped == [video]
+    assert header_depth(primary) == 3
+    assert not animals_dir(primary).exists()
+
+
+def test_wrote_event_names_the_animals_dir_for_multi(video, tmp_path):
+    """Fix 4: the WROTE event for a multi-animal run must not claim it wrote
+    primary -- run_batch never writes that file on this branch."""
+    events = []
+    run_batch(
+        [video],
+        tmp_path / "m.pt",
+        NAMES,
+        n_animals=2,
+        infer_tracks=lambda **kw: fake_tracks(2),
+        on_event=events.append,
+    )
+    wrote = next(e for e in events if e.kind is EventKind.WROTE)
+    assert wrote.output == animals_dir(dlc_output_path(video, tmp_path / "m.pt"))
+
+
+def test_wrote_event_still_names_primary_for_single_animal(video, tmp_path):
+    events = []
+    run_batch(
+        [video],
+        tmp_path / "m.pt",
+        NAMES,
+        n_animals=1,
+        infer=lambda **kw: _single_pose(),
+        on_event=events.append,
+    )
+    wrote = next(e for e in events if e.kind is EventKind.WROTE)
+    assert wrote.output == dlc_output_path(video, tmp_path / "m.pt")
+
+
+def test_gating_raw_survives_a_multi_animal_rerun(video, tmp_path):
+    """The stale-primary cleanup after switching to multi must not delete the
+    _raw companion the *current* multi-animal run just wrote -- raw_output_path
+    is keyed by video and model alone, so a single-animal run's _raw and this
+    run's own _raw are the same file."""
+    run_batch([video], tmp_path / "m.pt", NAMES, n_animals=1, infer=lambda **kw: _single_pose())
+
+    run_batch(
+        [video],
+        tmp_path / "m.pt",
+        NAMES,
+        n_animals=2,
+        infer_tracks=lambda **kw: fake_tracks_with_spike(2),
+        filtering=FilterSettings(),
+    )
+    raw = raw_output_path(video, tmp_path / "m.pt")
+    assert raw.exists()
+    assert header_depth(raw) == 4
+    assert list_individuals(raw) == ["animal0", "animal1"]
