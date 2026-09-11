@@ -44,6 +44,7 @@ class PoseBatchWorker(QObject):
         zones=None,
         arenas=None,
         gate=None,
+        n_animals=1,
     ):
         super().__init__()
         self._videos = list(videos)
@@ -63,6 +64,7 @@ class PoseBatchWorker(QObject):
         # video path, the way run_batch looks them up.
         self._arenas = arenas or {}
         self._gate = gate
+        self._n_animals = n_animals
         self._cancel = threading.Event()
         self._last_emit = 0.0
 
@@ -116,6 +118,7 @@ class PoseBatchWorker(QObject):
                 zones=self._zones,
                 arenas=self._arenas,
                 gate=self._gate,
+                n_animals=self._n_animals,
             )
         except Exception as e:  # surface as a UI message, never crash the thread
             self.failed.emit(str(e))

@@ -318,14 +318,28 @@ class PoseBatchWindow(QMainWindow):
         self._conf_spin.setSingleStep(0.05)
         self._conf_spin.setValue(0.25)  # matches infer_video's default
 
-        # Two short numeric settings on one line: each is narrow, and stacking
-        # them cost a full row apiece for a value four characters wide.
+        self._animals_spin = QSpinBox()
+        self._animals_spin.setRange(1, 16)
+        self._animals_spin.setValue(1)
+        self._animals_spin.setToolTip(
+            "How many animals are in each video. This is not detected -- it is "
+            "the constraint that lets tracking stitch a fragmented track back "
+            "into one animal. Too high and one mouse is split into two that "
+            "each vanish for half the video; too low and a real animal is "
+            "dropped entirely."
+        )
+
+        # Three short numeric settings on one line: each is narrow, and stacking
+        # them cost a full row apiece for a value a few characters wide.
         inference = QHBoxLayout()
         inference.setSpacing(8)
         inference.addWidget(self._device_combo)
         inference.addSpacing(8)
         inference.addWidget(set_text_role(QLabel("Confidence"), "caption"))
         inference.addWidget(self._conf_spin)
+        inference.addSpacing(8)
+        inference.addWidget(set_text_role(QLabel("Animals"), "caption"))
+        inference.addWidget(self._animals_spin)
         inference.addStretch(1)
         card.add(labelled_row("Device", inference))
 
@@ -1314,6 +1328,7 @@ class PoseBatchWindow(QMainWindow):
             filtering=self._filter_settings(),
             zones=self._zone_configs(),
             arenas=self._arena_map(),
+            n_animals=self._animals_spin.value(),
             # Defaults, and no UI to tune them: gating is not optional here.
             # Zones below are scored from the gated pose — centre time computed
             # from bench-floor detections is meaningless — and the arena also
