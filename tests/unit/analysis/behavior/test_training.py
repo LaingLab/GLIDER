@@ -710,6 +710,147 @@ def test_train_model_emits_per_class_metrics(tmp_path, three_regime_pose):
 
 
 # ---------------------------------------------------------------------------
+# _assemble_sessions: one session per animal, sharing an annotations CSV
+# ---------------------------------------------------------------------------
+
+
+def test_mirror_augment_with_social_features_raises(tmp_path):
+    """_mirror_pose flips the subject only.
+
+    The other animal is not in that call and is not flipped, so every social
+    column would measure the subject against a partner now on the wrong side
+    of the arena. Same failure mode as motion features, three lines up.
+    """
+    from glider.analysis.behavior.features import FeatureSpec
+    from glider.analysis.behavior.pipeline import _assemble_sessions
+
+    with pytest.raises(ValueError) as e:
+        _assemble_sessions(
+            sessions=[(tmp_path / "pose.csv", tmp_path / "ann.csv")],
+            spec=FeatureSpec(include_social=True),
+            fps=30.0,
+            window=30,
+            stats=("mean", "std"),
+            merge_map=None,
+            exclude=None,
+            mirror_augment=True,
+        )
+    assert "mirror" in str(e.value).lower()
+    assert "social" in str(e.value).lower()
+
+
+def test_each_session_loads_only_its_own_animals_annotations(tmp_path):
+    """Two entries, one shared annotations CSV, different labels each.
+
+    Build the real files -- a store saved to disk and read back -- rather than
+    stubbing load_csv. A stub would pass whether or not the individual is
+    actually threaded through.
+    """
+    from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
+
+    store = AnnotationStore()
+    store.add(BehaviorZone("grooming", 10, 40, individual=0))
+    store.add(BehaviorZone("rearing", 10, 40, individual=1))
+    ann = store.save_csv(tmp_path / "clip_annotations.csv")
+
+    assert {z.behavior for z in AnnotationStore.load_csv(ann, individual=0)} == {"grooming"}
+    assert {z.behavior for z in AnnotationStore.load_csv(ann, individual=1)} == {"rearing"}
+
+
+def test_assemble_sessions_labels_each_session_from_its_own_animal(tmp_path, three_regime_pose):
+    """Two sessions, ONE shared annotations CSV, different animals.
+
+    Both sessions get a real pose CSV and the same annotations file; only
+    `individuals` differs. If the individual is not threaded through, both
+    sessions see all four zones and the label counts come out equal -- which
+    is the assertion below.
+    """
+    from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
+    from glider.analysis.behavior.features import FeatureSpec
+    from glider.analysis.behavior.pipeline import _assemble_sessions
+
+    pose_a = tmp_path / "animal0.csv"
+    pose_b = tmp_path / "animal1.csv"
+    _write_dlc_csv(three_regime_pose, pose_a)
+    _write_dlc_csv(three_regime_pose, pose_b)
+
+    store = AnnotationStore()
+    store.add(BehaviorZone("walking", 10, 150, individual=0))
+    store.add(BehaviorZone("grooming", 220, 380, individual=0))
+    store.add(BehaviorZone("freezing", 420, 560, individual=1))
+    ann = store.save_csv(tmp_path / "clip_annotations.csv")
+
+    _x, y, _groups, per_session = _assemble_sessions(
+        sessions=[(pose_a, ann), (pose_b, ann)],
+        spec=FeatureSpec(),
+        fps=30.0,
+        window=30,
+        stats=("mean", "std"),
+        merge_map=None,
+        exclude=None,
+        mirror_augment=False,
+        individuals=[0, 1],
+    )
+
+    # split_label_counts always adds "__unannotated__" for uncovered frames
+    # (see labels.py); strip it to isolate which *behaviors* each session saw.
+    housekeeping = {"__unannotated__", "__ambiguous__"}
+    assert set(per_session[0]) - housekeeping == {"walking", "grooming"}
+    assert set(per_session[1]) - housekeeping == {"freezing"}
+
+
+def test_without_individuals_every_session_sees_every_zone(tmp_path, three_regime_pose):
+    """The default must be unchanged: existing callers pass no `individuals`."""
+    from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
+    from glider.analysis.behavior.features import FeatureSpec
+    from glider.analysis.behavior.pipeline import _assemble_sessions
+
+    pose = tmp_path / "flat.csv"
+    _write_dlc_csv(three_regime_pose, pose)
+    store = AnnotationStore()
+    store.add(BehaviorZone("walking", 10, 150, individual=0))
+    store.add(BehaviorZone("freezing", 420, 560, individual=1))
+    ann = store.save_csv(tmp_path / "flat_annotations.csv")
+
+    _x, _y, _groups, per_session = _assemble_sessions(
+        sessions=[(pose, ann)],
+        spec=FeatureSpec(),
+        fps=30.0,
+        window=30,
+        stats=("mean", "std"),
+        merge_map=None,
+        exclude=None,
+        mirror_augment=False,
+    )
+    housekeeping = {"__unannotated__", "__ambiguous__"}
+    assert set(per_session[0]) - housekeeping == {"walking", "freezing"}
+
+
+def test_individuals_length_must_match_sessions(tmp_path, three_regime_pose):
+    """A length mismatch is a programming error -- fail loudly, don't zip short."""
+    from glider.analysis.behavior.features import FeatureSpec
+    from glider.analysis.behavior.pipeline import _assemble_sessions
+
+    pose = tmp_path / "flat.csv"
+    ann = tmp_path / "flat_annotations.csv"
+    _write_dlc_csv(three_regime_pose, pose)
+    _write_annotations(ann, [("walking", 10, 150)])
+
+    with pytest.raises(ValueError, match="individuals"):
+        _assemble_sessions(
+            sessions=[(pose, ann)],
+            spec=FeatureSpec(),
+            fps=30.0,
+            window=30,
+            stats=("mean", "std"),
+            merge_map=None,
+            exclude=None,
+            mirror_augment=False,
+            individuals=[0, 1],
+        )
+
+
+# ---------------------------------------------------------------------------
 # End-to-end train_model + save/load
 # ---------------------------------------------------------------------------
 

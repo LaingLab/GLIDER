@@ -218,6 +218,7 @@ def train_model(
     freq_features: bool = False,
     traj_features: bool = False,
     motion_features: bool = False,
+    individuals: list[int | None] | None = None,
 ) -> TrainResult:
     """Fit a behavior classifier from one or more (pose, annotations) pairs.
 
@@ -306,6 +307,14 @@ def train_model(
         for the live "galaxy" view. ``"none"`` (default) skips it;
         ``"umap"`` (falls back to PCA if umap-learn is missing) or
         ``"pca"`` fits on the kept training rows.
+    individuals
+        Positionally aligned with ``sessions`` (and, when set, also with
+        ``holdout_sessions``): entry *i* selects which animal's zones
+        session *i* trains on, or ``None`` for every zone in that
+        session's annotations CSV. ``None`` (default) preserves the
+        single-animal behaviour — every session sees every zone. A
+        two-animal video becomes two sessions sharing one annotations
+        CSV, differing only in this list.
 
     Returns
     -------
@@ -337,6 +346,7 @@ def train_model(
         background_class_name=background_class_name,
         background_subsample_ratio=background_subsample_ratio,
         random_state=random_state,
+        individuals=individuals,
     )
     x_kept, y_kept, g_kept = assembled.x_kept, assembled.y_kept, assembled.g_kept
     n_total = assembled.n_total
@@ -370,6 +380,7 @@ def train_model(
             freq_features=freq_features,
             traj_features=traj_features,
             motion_features=motion_features,
+            individuals=individuals,
         )
         # Apply the same drop logic as training.
         test_keep = (y_test_all != "") & (y_test_all != AMBIGUOUS) & ~x_test_all.isna().any(axis=1)
@@ -552,6 +563,7 @@ def train_hybrid_model(
     freq_features: bool = False,
     traj_features: bool = False,
     motion_features: bool = False,
+    individuals: list[int | None] | None = None,
 ) -> HybridTrainResult:
     """Train a hybrid (LightGBM base + kinematic prior) model with λ tuning.
 
@@ -607,6 +619,7 @@ def train_hybrid_model(
         background_class_name="background",
         background_subsample_ratio=0.0,
         random_state=random_state,
+        individuals=individuals,
     )
     x_kept, y_kept, g_kept = assembled.x_kept, assembled.y_kept, assembled.g_kept
 
@@ -701,6 +714,7 @@ def _assemble_sessions(
     freq_features: bool = False,
     traj_features: bool = False,
     motion_features: bool = False,
+    individuals: list[int | None] | None = None,
 ) -> tuple[pd.DataFrame, pd.Series, pd.Series, list[dict[str, int]]]:
     """Load each (pose, annotations) pair, extract features + label series.
 
@@ -710,18 +724,37 @@ def _assemble_sessions(
     the training set and teaches the model left/right invariance for
     free — useful when behaviors look the same from either side but
     your annotations skew to one direction.
+
+    ``individuals`` is positionally aligned with ``sessions``: entry *i* is
+    the animal whose zones session *i* should train on, or ``None`` for every
+    zone in the file. A two-animal video appears as TWO sessions sharing one
+    annotations CSV and differing only in this list — which is why the loop
+    body needs no notion of multiple animals at all.
     """
     if motion_features and mirror_augment:
         raise ValueError(
             "motion features are not supported with mirror augmentation yet "
             "(the source video isn't mirrored)"
         )
+    if spec.include_social and mirror_augment:
+        raise ValueError(
+            "social features are not supported with mirror augmentation "
+            "(_mirror_pose flips the subject, but the other animals in "
+            "`others` are not flipped, so every social column would measure "
+            "the subject against a partner on the wrong side of the arena)"
+        )
+    if individuals is not None and len(individuals) != len(sessions):
+        raise ValueError(
+            f"individuals has {len(individuals)} entries but sessions has "
+            f"{len(sessions)}; individuals must be positionally aligned "
+            f"with sessions, one entry per session"
+        )
     xs: list[pd.DataFrame] = []
     ys: list[pd.Series] = []
     groups_per_session: list[pd.Series] = []
     per_session_counts: list[dict[str, int]] = []
     group_offset = 0
-    for pose_csv, ann_csv in sessions:
+    for i, (pose_csv, ann_csv) in enumerate(sessions):
         try:
             pose = from_dlc_csv(Path(pose_csv), fps=fps)
         except UnicodeDecodeError as e:
@@ -732,7 +765,8 @@ def _assemble_sessions(
             ) from e
         except Exception as e:
             raise ValueError(f"failed to read DLC pose CSV {pose_csv}: {e}") from e
-        store = AnnotationStore.load_csv(Path(ann_csv))
+        individual = individuals[i] if individuals is not None else None
+        store = AnnotationStore.load_csv(Path(ann_csv), individual=individual)
 
         # Bundle the original + optionally the mirrored copy.
         pose_variants = [pose]
@@ -810,6 +844,7 @@ def _assemble_and_filter(
     background_class_name: str,
     background_subsample_ratio: float,
     random_state: int,
+    individuals: list[int | None] | None = None,
 ) -> _AssembledData:
     """Assemble sessions, drop unusable rows, and subsample background.
 
@@ -833,6 +868,7 @@ def _assemble_and_filter(
         freq_features=freq_features,
         traj_features=traj_features,
         motion_features=motion_features,
+        individuals=individuals,
     )
 
     # ---- 2. Optionally promote unannotated frames to a background class ----
