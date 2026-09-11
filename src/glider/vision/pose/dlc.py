@@ -13,6 +13,13 @@ HDF5 file, which is what DLC saves natively (``*_DLC_resnet50_*.h5``) — some
 downstream tools (notably DLC's own ``analyze_videos`` post-processors) prefer
 this form.
 
+Multi-animal tracking adds a fourth header row -- DLC's own convention
+inserts ``individuals`` between ``scorer`` and ``bodyparts`` -- so
+:func:`to_dlc_csv_multi` and :func:`write_tracks_meta` write that shape from
+a :class:`~glider.vision.pose.tracks.PoseTracks` instead of a single
+:class:`PoseData`, one column block per animal in the same CSV. Same sidecar,
+same rate-and-resolution provenance as the single-animal path below.
+
 The DLC header has exactly three rows and no room for a frame rate, but every
 downstream feature is windowed in *seconds*, so losing the rate silently
 rescales the science: a 60 fps recording read back at the old 30.0 default
@@ -50,6 +57,42 @@ def meta_path(csv_path: str | Path) -> Path:
     return csv_path.parent / f"{csv_path.stem}.meta.json"
 
 
+def _validated_resolution(metadata: dict[str, Any] | None) -> list[int] | None:
+    """``[width, height]`` from a metadata dict's ``resolution``, or ``None``.
+
+    Shared by :func:`write_pose_meta` and :func:`write_tracks_meta`: a
+    malformed resolution (wrong arity, non-numeric, zero or negative) is
+    silently ignored rather than written to a sidecar a reader would trust.
+    """
+    resolution = metadata.get("resolution") if metadata else None
+    if not resolution:
+        return None
+    try:
+        width, height = (int(v) for v in resolution)
+    except (TypeError, ValueError):
+        return None
+    return [width, height] if width > 0 and height > 0 else None
+
+
+def _write_meta_payload(payload: dict[str, Any], csv_path: str | Path) -> Path:
+    """Write *payload* to the sidecar path beside *csv_path*.
+
+    Best-effort by design: the CSV is the artifact that matters, so a
+    read-only directory or a full disk must not fail a finished inference
+    run. A missing sidecar degrades to :data:`DEFAULT_FPS` on read.
+    """
+    path = meta_path(csv_path)
+    try:
+        path.write_text(json.dumps(payload, indent=2) + "\n")
+    except OSError as e:  # pragma: no cover - depends on filesystem state
+        warnings.warn(
+            f"could not write pose metadata beside {Path(csv_path).name}: {e}. "
+            f"The CSV is fine, but readers will assume {DEFAULT_FPS} fps.",
+            stacklevel=3,
+        )
+    return path
+
+
 def write_pose_meta(pose: PoseData, csv_path: str | Path) -> Path:
     """Write the sidecar describing *pose* beside its CSV.
 
@@ -57,7 +100,6 @@ def write_pose_meta(pose: PoseData, csv_path: str | Path) -> Path:
     read-only directory or a full disk must not fail a finished inference
     run. A missing sidecar degrades to :data:`DEFAULT_FPS` on read.
     """
-    path = meta_path(csv_path)
     payload = {
         "schema_version": META_SCHEMA_VERSION,
         "fps": float(pose.fps),
@@ -70,14 +112,9 @@ def write_pose_meta(pose: PoseData, csv_path: str | Path) -> Path:
     # the canvas they were measured on. Omitted rather than guessed when
     # unknown: inferring it from the coordinate range would silently shrink
     # the arena to whatever the animal happened to visit.
-    resolution = pose.metadata.get("resolution") if pose.metadata else None
+    resolution = _validated_resolution(pose.metadata)
     if resolution:
-        try:
-            width, height = (int(v) for v in resolution)
-            if width > 0 and height > 0:
-                payload["resolution"] = [width, height]
-        except (TypeError, ValueError):
-            pass
+        payload["resolution"] = resolution
     # Provenance, not decoration: scoring refuses thresholds derived under a
     # different gate, so this block is what makes that check possible. Absent
     # means ungated, which is true of every file written before the gate
@@ -85,15 +122,7 @@ def write_pose_meta(pose: PoseData, csv_path: str | Path) -> Path:
     gate = pose.metadata.get("arena_gate") if pose.metadata else None
     if gate:
         payload["arena_gate"] = gate
-    try:
-        path.write_text(json.dumps(payload, indent=2) + "\n")
-    except OSError as e:  # pragma: no cover - depends on filesystem state
-        warnings.warn(
-            f"could not write pose metadata beside {Path(csv_path).name}: {e}. "
-            f"The CSV is fine, but readers will assume {DEFAULT_FPS} fps.",
-            stacklevel=2,
-        )
-    return path
+    return _write_meta_payload(payload, csv_path)
 
 
 def read_pose_meta(csv_path: str | Path) -> dict[str, Any] | None:
@@ -170,17 +199,19 @@ def fps_for_csv(csv_path: str | Path) -> float | None:
     return fps if fps > 0 else None
 
 
-def _build_dataframe(pose: PoseData) -> pd.DataFrame:
-    """Build the DLC multi-index DataFrame (no I/O)."""
-    n_frames = pose.n_frames
-    n_kpts = pose.n_keypoints
-
-    # Interleave x, y, likelihood per body part.
-    flat = np.empty((n_frames, n_kpts * 3), dtype=float)
+def _interleave_xyc(pose: PoseData) -> np.ndarray:
+    """``(n_frames, n_keypoints * 3)`` array of x, y, likelihood interleaved
+    per body part -- the column layout both DLC builders share."""
+    flat = np.empty((pose.n_frames, pose.n_keypoints * 3), dtype=float)
     flat[:, 0::3] = pose.xy[:, :, 0]
     flat[:, 1::3] = pose.xy[:, :, 1]
     flat[:, 2::3] = pose.confidence
+    return flat
 
+
+def _build_dataframe(pose: PoseData) -> pd.DataFrame:
+    """Build the DLC multi-index DataFrame (no I/O)."""
+    flat = _interleave_xyc(pose)
     columns = pd.MultiIndex.from_product(
         [[pose.source], pose.keypoint_names, ["x", "y", "likelihood"]],
         names=["scorer", "bodyparts", "coords"],
@@ -286,10 +317,7 @@ def _build_dataframe_multi(tracks: PoseTracks) -> pd.DataFrame:
     blocks = []
     for slot in tracks:
         pose = tracks[slot]
-        flat = np.empty((tracks.n_frames, pose.n_keypoints * 3), dtype=float)
-        flat[:, 0::3] = pose.xy[:, :, 0]
-        flat[:, 1::3] = pose.xy[:, :, 1]
-        flat[:, 2::3] = pose.confidence
+        flat = _interleave_xyc(pose)
         columns = pd.MultiIndex.from_product(
             [
                 [pose.source],
@@ -309,9 +337,14 @@ def write_tracks_meta(tracks: PoseTracks, csv_path: str | Path) -> Path:
     Same shape as :func:`write_pose_meta` plus the animal count and names. A
     re-run with different consolidation knobs has to be distinguishable from
     the original after the fact, so whatever the caller recorded in
-    ``tracks.metadata['consolidation']`` is carried through.
+    ``tracks.metadata['consolidation']`` is carried through -- that one is
+    genuinely container-level, set once for the whole video.
+
+    ``arena_gate`` is not: every producer sets it on the first animal's
+    ``PoseData.metadata`` (never on ``tracks.metadata``), because one arena
+    and one gate config are shared by every animal in the video -- it is read
+    from there, exactly like ``resolution`` one block above.
     """
-    path = meta_path(csv_path)
     first = tracks[0]
     payload = {
         "schema_version": META_SCHEMA_VERSION,
@@ -322,27 +355,16 @@ def write_tracks_meta(tracks: PoseTracks, csv_path: str | Path) -> Path:
         "n_animals": int(tracks.n_animals),
         "individuals": list(tracks.individuals),
     }
-    resolution = (first.metadata or {}).get("resolution")
+    resolution = _validated_resolution(first.metadata)
     if resolution:
-        try:
-            width, height = (int(v) for v in resolution)
-            if width > 0 and height > 0:
-                payload["resolution"] = [width, height]
-        except (TypeError, ValueError):
-            pass
-    for key in ("consolidation", "arena_gate"):
-        value = (tracks.metadata or {}).get(key)
-        if value:
-            payload[key] = value
-    try:
-        path.write_text(json.dumps(payload, indent=2) + "\n")
-    except OSError as e:  # pragma: no cover - depends on filesystem state
-        warnings.warn(
-            f"could not write pose metadata beside {Path(csv_path).name}: {e}. "
-            f"The CSV is fine, but readers will assume {DEFAULT_FPS} fps.",
-            stacklevel=2,
-        )
-    return path
+        payload["resolution"] = resolution
+    consolidation = (tracks.metadata or {}).get("consolidation")
+    if consolidation:
+        payload["consolidation"] = consolidation
+    gate = first.metadata.get("arena_gate") if first.metadata else None
+    if gate:
+        payload["arena_gate"] = gate
+    return _write_meta_payload(payload, csv_path)
 
 
 def to_dlc_csv_multi(tracks: PoseTracks, path: str | Path, *, write_meta: bool = True) -> Path:
