@@ -441,7 +441,48 @@ def test_the_log_names_the_session_and_the_count(tmp_path, caplog):
 
     with caplog.at_level("INFO"):
         batch.find_pose_csv(video)
-    assert "2" in caplog.text and "s1" in caplog.text
+
+    # Each element checked with text only it could produce -- "2" alone is
+    # any digit anywhere, and "s1" alone is a substring of both the video
+    # name and the directory name, so a dropped or wrong element could still
+    # satisfy the old, combined assertion.
+    assert "s1.mp4" in caplog.text  # the video
+    assert "(2 animals)" in caplog.text  # the count, as a count
+    assert str(d) in caplog.text  # the directory
+
+
+def test_find_pose_csvs_picks_the_newest_animals_dir_not_the_first_alphabetically(tmp_path, caplog):
+    """Two models can each leave their own _animals dir beside one video --
+    dlc_output_path is keyed on (video, model), so nothing stops both from
+    existing at once. The older, alphabetically-first directory must not
+    silently win over a newer model's output; mtimes are set explicitly so
+    the ordering doesn't depend on which directory happened to be created
+    first."""
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+
+    old = tmp_path / "s1DLC_expA_animals"
+    old.mkdir()
+    (old / "animal0.csv").write_text("x")
+
+    new = tmp_path / "s1DLC_expB_animals"
+    new.mkdir()
+    (new / "animal0.csv").write_text("x")
+    (new / "animal1.csv").write_text("x")
+
+    os.utime(old, (1_000_000, 1_000_000))
+    os.utime(new, (2_000_000, 2_000_000))
+
+    found = batch.find_pose_csvs(video)
+    assert len(found) == 2  # expB's two animals, not expA's one
+    assert all(p.parent == new for p in found)
+
+    # find_pose_csv has no file to return either, but its log must name the
+    # same directory find_pose_csvs actually used -- otherwise the two
+    # functions describe different sessions to whoever reads the log.
+    with caplog.at_level("INFO"):
+        assert batch.find_pose_csv(video) is None
+    assert str(new) in caplog.text
 
 
 def test_find_pose_csvs_returns_every_animal_in_slot_order(tmp_path):
@@ -453,6 +494,22 @@ def test_find_pose_csvs_returns_every_animal_in_slot_order(tmp_path):
         (d / f"{n}.csv").write_text("x")
 
     assert [p.stem for p in batch.find_pose_csvs(video)] == ["animal0", "animal2", "animal10"]
+
+
+def test_find_pose_csvs_ignores_a_non_slot_file(tmp_path):
+    """``animal0_identity.csv``'s stem-after-prefix is "0_identity", not
+    all-digits, so the loose animal*.csv glob must not mistake it for a slot
+    -- exactly the failure the isdigit() guard in _animal_csvs exists to
+    catch (see its docstring)."""
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+    d = tmp_path / "s1DLC_m_animals"
+    d.mkdir()
+    (d / "animal0.csv").write_text("x")
+    (d / "animal1.csv").write_text("x")
+    (d / "animal0_identity.csv").write_text("x")
+
+    assert [p.name for p in batch.find_pose_csvs(video)] == ["animal0.csv", "animal1.csv"]
 
 
 def test_find_pose_csvs_is_empty_for_a_single_animal_session(tmp_path):

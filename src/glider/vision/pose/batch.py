@@ -382,8 +382,11 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     scan built on a comprehension over this function (several exist, across
     seven files), for the sake of one session among many. The log line is
     the only place the reason surfaces, so it names the video, the animal
-    count, and the directory. Callers that want the per-animal set should
-    use :func:`find_pose_csvs`.
+    count, and the directory. When several models have each left their own
+    ``_animals`` directory beside one video -- ``dlc_output_path`` is keyed
+    on (video, model), so nothing stops that -- the same most-recent rule
+    used for flat CSVs below picks between them. Callers that want the
+    per-animal set should use :func:`find_pose_csvs`.
     """
     # Imported here, not at module scope: dlc imports pandas, and this module
     # stays cheap to import because the GUI does so while building menus.
@@ -398,18 +401,17 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     if exact.exists():
         return exact
 
-    for animal_dir in sorted(directory.glob(f"{video.stem}DLC_*_animals")):
-        animals = _animal_csvs(animal_dir)
-        if animals:
-            logger.info(
-                "%s is a multi-animal session (%d animals) tracked in %s; "
-                "find_pose_csv has no single file to return -- use "
-                "find_pose_csvs for the per-animal paths",
-                video.name,
-                len(animals),
-                animal_dir,
-            )
-            return None
+    animal_dir = _pick_animals_dir(directory, video)
+    if animal_dir is not None:
+        logger.info(
+            "%s is a multi-animal session (%d animals) tracked in %s; "
+            "find_pose_csv has no single file to return -- use "
+            "find_pose_csvs for the per-animal paths",
+            video.name,
+            len(_animal_csvs(animal_dir)),
+            animal_dir,
+        )
+        return None
 
     matches = [
         p
@@ -421,14 +423,6 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     if len(matches) == 1:
         return matches[0]
 
-    # Newest wins. mtime can be unreadable on a share mid-copy; those sort
-    # last rather than raising, so a transient stat error cannot pick the file.
-    def _mtime(path: Path) -> float:
-        try:
-            return path.stat().st_mtime
-        except OSError:
-            return float("-inf")
-
     chosen = max(matches, key=_mtime)
     logger.info(
         "%s has %d pose CSVs (%s); using the most recent, %s",
@@ -438,6 +432,17 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
         chosen.name,
     )
     return chosen
+
+
+# Newest wins. mtime can be unreadable on a share mid-copy; those sort last
+# rather than raising, so a transient stat error cannot pick the file. Shared
+# by the flat-CSV tie-break above and the _animals-directory tie-break below,
+# so both branches age off the same clock.
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return float("-inf")
 
 
 def _animal_csvs(animal_dir: Path) -> list[Path]:
@@ -454,23 +459,53 @@ def _animal_csvs(animal_dir: Path) -> list[Path]:
     return [path for _, path in sorted(slots)]
 
 
+def _pick_animals_dir(directory: Path, video: Path) -> Path | None:
+    """The ``_animals`` directory for *video* in *directory*, or ``None``.
+
+    Mirrors :func:`find_pose_csv`'s flat-CSV tie-break: several models can
+    each leave their own ``_animals`` directory beside the same video (see
+    the note on :func:`find_pose_csv`), and picking the alphabetically first
+    one would silently prefer an older, superseded model's animals over a
+    newer model's -- the same failure the flat-CSV tie-break exists to avoid.
+    The most recently modified directory wins, logged the same way, only
+    when there is more than one candidate to choose between.
+    """
+    candidates = [
+        d for d in sorted(directory.glob(f"{video.stem}DLC_*_animals")) if _animal_csvs(d)
+    ]
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    chosen = max(candidates, key=_mtime)
+    logger.info(
+        "%s has %d multi-animal directories (%s); using the most recent, %s",
+        video.name,
+        len(candidates),
+        ", ".join(d.name for d in candidates),
+        chosen.name,
+    )
+    return chosen
+
+
 def find_pose_csvs(video: Path | str, search_dir: Path | str | None = None) -> list[Path]:
     """Every animal's pose CSV for *video*, in numeric slot order.
 
     The counterpart to :func:`find_pose_csv` for callers that want the whole
     set rather than one file: empty for a single-animal session (or no
-    session at all), since those have no :func:`animals_dir` to list.
+    session at all), since those have no :func:`animals_dir` to list. When
+    more than one model has left an ``_animals`` directory beside *video*,
+    the same most-recently-modified tie-break :func:`find_pose_csv` uses
+    applies here too -- see :func:`_pick_animals_dir`.
     """
     video = Path(video)
     directory = Path(search_dir) if search_dir is not None else video.parent
     if not directory.is_dir():
         return []
 
-    for animal_dir in sorted(directory.glob(f"{video.stem}DLC_*_animals")):
-        animals = _animal_csvs(animal_dir)
-        if animals:
-            return animals
-    return []
+    animal_dir = _pick_animals_dir(directory, video)
+    return _animal_csvs(animal_dir) if animal_dir is not None else []
 
 
 class EventKind(StrEnum):
