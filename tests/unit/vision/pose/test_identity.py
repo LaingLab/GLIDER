@@ -5,6 +5,7 @@ import numpy as np
 
 from glider.vision.pose.core import PoseData
 from glider.vision.pose.identity import (
+    _centroids,
     identity_flags,
     identity_output_path,
     write_identity_csv,
@@ -75,3 +76,37 @@ def test_the_sidecar_is_not_mistaken_for_a_pose_csv():
     from glider.vision.pose.dlc import NOT_POSE_SUFFIXES
 
     assert "_identity" in NOT_POSE_SUFFIXES
+
+
+def test_centroids_with_one_finite_one_nan_keypoint():
+    """When one keypoint is detected and one is NaN, centroid must equal the detected one.
+
+    This catches bugs that divide by a fixed keypoint count instead of the per-frame finite count,
+    or that get the axis wrong.
+    """
+    # 1 frame, 2 keypoints: [10, 20] (finite), [NaN, NaN]
+    xy = np.array([[[10.0, 20.0], [np.nan, np.nan]]])
+    confidence = np.array([[1.0, 0.0]])
+    pose = PoseData(xy=xy, confidence=confidence, keypoint_names=["a", "b"], fps=30.0)
+
+    result = _centroids(pose)
+    assert result.shape == (1, 2)
+    # Centroid must equal the single finite keypoint, not half of it
+    np.testing.assert_array_equal(result[0], [10.0, 20.0])
+
+
+def test_centroids_with_multiple_different_finite_keypoints_and_nans():
+    """When multiple keypoints are detected at different positions with some NaN, centroid must be the mean.
+
+    This catches sum-vs-mean errors that test 1 cannot detect.
+    """
+    # 1 frame, 3 keypoints: [5, 5], [NaN, NaN], [15, 15]
+    xy = np.array([[[5.0, 5.0], [np.nan, np.nan], [15.0, 15.0]]])
+    confidence = np.array([[1.0, 0.0, 1.0]])
+    pose = PoseData(xy=xy, confidence=confidence, keypoint_names=["a", "b", "c"], fps=30.0)
+
+    result = _centroids(pose)
+    assert result.shape == (1, 2)
+    # Centroid must be the mean of the two finite keypoints
+    expected = np.array([[10.0, 10.0]])
+    np.testing.assert_array_equal(result[0], expected[0])

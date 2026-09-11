@@ -10,9 +10,10 @@ measured and unambiguous, so a left join from the pose CSV fills NaN and should
 be read as ``""``. Writing every frame for every animal would be a hundred
 thousand rows of mostly nothing for a half-hour recording of two mice.
 
-The column is called ``identity_flag`` to match the live tracking CSV's column
-of the same name. The same word should not mean two things across two files an
-analyst joins.
+The column is called ``identity_flag`` after the live tracking CSV column in the
+shelved top-down work, so that if that is ever revived the two files join on one
+vocabulary. Nothing else writes that column today -- the name is forward-looking,
+not a consistency that already exists.
 """
 
 from __future__ import annotations
