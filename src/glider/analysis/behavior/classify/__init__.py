@@ -456,7 +456,7 @@ def classify(
     end_s=None,
     model=None,
     **opts,
-) -> EthogramResult:
+) -> EthogramResult | dict[int, Path]:
     """Run the headless apply pipeline over a recorded video and write outputs.
 
     Drives :class:`LiveInferencePipeline` with ``display=False`` to produce
@@ -475,6 +475,17 @@ def classify(
     ``output_dir`` (created if missing), alongside the pipeline's own
     ``annotated.mp4`` / ``ethogram_raw.csv``. Returns the
     :class:`EthogramResult`.
+
+    A **multi-animal** session (more than one pose CSV under
+    :func:`~glider.vision.pose.batch.animals_dir`, found only when
+    ``reuse_existing_poses`` is set -- fresh tracking here is always
+    single-animal) takes a different path: there is no single pose CSV or
+    ethogram for ``LiveInferenceConfig``/``batch_apply`` to work with, so
+    this loops :func:`~glider.analysis.behavior.classify.batch.write_animal_ethograms`
+    over every slot instead and returns ``{slot: ethogram_path}``. Per-animal
+    bouts/stats/transitions are deferred (D2 spec §5), and an annotated video
+    or a speed-only run (no model) are refused rather than silently scoring
+    one animal or none.
 
     ``model`` accepts an already-loaded bundle. Scoring many videos in one
     process otherwise re-reads it per video, which is both slow (seconds each)
@@ -539,11 +550,27 @@ def classify(
     # a default is a chore that invites mistakes.
     if pose_csv_in is None and reuse_existing_poses:
         pose_csv_in = find_pose_csv(video, pose_dir)
+    # A multi-animal session has no single file for `find_pose_csv` to
+    # return (D2 spec §2.1) -- `find_pose_csvs` returning more than one path
+    # is the only signal that one exists. Looked up only alongside the same
+    # `reuse_existing_poses` gate `find_pose_csv` uses above: tracking fresh
+    # keypoints in this function is always single-animal
+    # (`LiveInferencePipeline` / `_track_poses`), so a multi-animal session
+    # can only be *found* here, never produced.
+    animal_csvs: list[Path] = []
+    if pose_csv_in is None and reuse_existing_poses:
+        from glider.vision.pose.batch import find_pose_csvs
+
+        animal_csvs = find_pose_csvs(video, pose_dir)
     if pose_csv_in is not None:
         pose_csv_in = Path(pose_csv_in)
         if not pose_csv_in.exists():
             raise ValueError(f"pose CSV not found: {pose_csv_in}")
         # Nothing new was tracked, so there is nothing new to write.
+        pose_csv_out = None
+    elif animal_csvs:
+        # Every slot's poses already exist under animals_dir(); nothing new
+        # to track and nothing to write back either.
         pose_csv_out = None
     elif yolo_path is None:
         # The weights track keypoints and nothing else. Without them and
@@ -606,12 +633,18 @@ def classify(
     # no cut-off derived under any gate reaches this run -- but the absent
     # provenance reads as "ungated", which refused every gated CSV over
     # thresholds that were never used.
+    # A multi-animal session has no `pose_csv_in`, but every slot came from
+    # the same `run_batch` call and therefore the same gate, so checking the
+    # first slot's provenance covers all of them.
+    gate_check_csv = (
+        pose_csv_in if pose_csv_in is not None else (animal_csvs[0] if animal_csvs else None)
+    )
     if (
-        pose_csv_in is not None
+        gate_check_csv is not None
         and cohort_thresholds is not None
         and (score_freezing or score_darting)
     ):
-        _refuse_gate_mismatch(pose_csv_in, opts.get("gate_provenance"))
+        _refuse_gate_mismatch(gate_check_csv, opts.get("gate_provenance"))
     if speed_only and opts.get("freeze_threshold") is None:
         # Checked before anything expensive: with no classifier and no
         # thresholds there is nothing left to score, and finding that out
@@ -645,6 +678,92 @@ def classify(
     # own rate, so one setting means the same clock time on a 30 fps and a
     # 60 fps recording.
     frame_range = _frame_range(start_s, end_s, rate, Path(video).name)
+
+    if animal_csvs:
+        # The multi-animal door (D2 spec §5.4): classify_pose_tracks /
+        # write_animal_ethograms already do the scoring -- exported, tested,
+        # and unreachable until this branch. LiveInferenceConfig and
+        # batch_apply are both built around one pose CSV and one ethogram
+        # file, neither of which exists for a multi-animal session, so this
+        # reads the per-animal CSVs into one PoseTracks and writes one
+        # ethogram per slot instead of joining the single-animal dispatch
+        # below.
+        if speed_only:
+            # classify_pose_tracks has no speed-only mode -- it always scores
+            # with a model -- so there is nothing correct this run could
+            # fall back to; the streaming pipeline is single-animal.
+            raise NotImplementedError(
+                "speed-only scoring is not implemented per animal yet; pass "
+                "a trained model, or score one animal's pose CSV at a time "
+                "with pose_csv_in"
+            )
+        if output_video is not None:
+            raise ValueError(
+                "an annotated video is not supported for a multi-animal "
+                "session; unset write_annotated"
+            )
+        from glider.analysis.behavior.classify import batch as _batch
+        from glider.analysis.behavior.classify.pipeline import _load_behavior_model
+        from glider.vision.pose.dlc import from_dlc_csv
+        from glider.vision.pose.tracks import PoseTracks
+
+        if model is None:
+            model = _load_behavior_model(model_path)
+        # Every per-animal file was written from one shared video fps
+        # (`_process_multi` passes the same `tracks.fps` to every slot), so
+        # any one of them names it -- the same reasoning
+        # `gui/pose_batch/export_actions.py` uses to rebuild a `PoseTracks`
+        # from these files.
+        slots = {int(p.stem.removeprefix("animal")): from_dlc_csv(p) for p in animal_csvs}
+        tracks = PoseTracks(tracks=slots, fps=slots[min(slots)].fps)
+        speed_axis = config.freeze_threshold is not None and config.dart_threshold is not None
+        # write_animal_ethograms only uses this to name the directory (see
+        # animals_dir): it wants the never-written "primary" path back, not
+        # a per-animal file -- inverting the `<stem>_animals` naming the same
+        # way `gui/pose_batch/export_actions.py`'s `export_target` does.
+        animal_dir = animal_csvs[0].parent
+        primary = animal_dir.with_name(animal_dir.name.removesuffix("_animals") + ".csv")
+        paths = _batch.write_animal_ethograms(
+            primary,
+            tracks,
+            model,
+            speed_axis=speed_axis,
+            cm_s_per_px_frame=config.cm_s_per_px_frame,
+            predict_every=config.predict_every,
+            confidence_threshold=config.behavior_confidence_threshold,
+            class_thresholds=config.behavior_class_thresholds,
+            smooth_window=config.smooth_window,
+            offline_smooth_window=config.offline_smooth_window,
+            freeze_threshold=config.freeze_threshold,
+            dart_threshold=config.dart_threshold,
+            freeze_min_frames=config.freeze_min_frames,
+            dart_min_frames=config.dart_min_frames,
+            frame_range=frame_range,
+        )
+        _write_run_manifest(
+            output_dir,
+            video=video,
+            pose_csvs=[str(p) for p in animal_csvs],
+            ethograms={str(slot): str(p) for slot, p in paths.items()},
+            model_path=model_path,
+            yolo_path=yolo_path,
+            keypoint_names=keypoint_names,
+            fps=tracks.fps,
+            predict_every=config.predict_every,
+            smooth_window=config.smooth_window,
+            min_bout_s=min_bout_s,
+            freeze_threshold=_reportable(config.freeze_threshold),
+            dart_threshold=_reportable(config.dart_threshold),
+            cm_s_per_px_frame=config.cm_s_per_px_frame,
+            px_per_mm=scale,
+            used_batch=True,
+            speed_only=False,
+        )
+        # No single EthogramResult exists for N animals -- per-animal bouts,
+        # stats and transitions are exactly the reporting polish D2 spec §5
+        # defers (run_report gains no per-animal sections either). What is
+        # returned is where each animal's ethogram landed.
+        return paths
 
     pipeline = None
     used_batch = False
@@ -796,7 +915,9 @@ def classify(
     return result
 
 
-def classify_session(session, model_path, yolo_path, keypoint_names, **opts) -> EthogramResult:
+def classify_session(
+    session, model_path, yolo_path, keypoint_names, **opts
+) -> EthogramResult | dict[int, Path]:
     """Run :func:`classify` over a :class:`~glider.core.session.Session`.
 
     The recording, the pose track and the output folder all come from one
