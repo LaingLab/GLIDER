@@ -1,5 +1,7 @@
 """run_batch with more than one animal. The single-animal path must not move."""
 
+import csv
+
 import numpy as np
 import pytest
 
@@ -8,6 +10,8 @@ from glider.vision.pose.core import PoseData
 from glider.vision.pose.dlc import from_dlc_csv, header_depth, list_individuals, read_pose_meta
 from glider.vision.pose.identity import identity_output_path
 from glider.vision.pose.tracks import PoseTracks
+from glider.vision.zone_scoring import zone_output_dir
+from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape
 
 NAMES = ["snout", "tail"]
 
@@ -304,3 +308,69 @@ def test_identity_min_separation_px_reaches_identity_flags(video, tmp_path):
 
     assert "close" not in identity_text(60.0)
     assert "close" in identity_text(200.0)
+
+
+# --------------------------------------------------------------------------
+# Zone scoring, per animal. This is the branch's per-animal zone deliverable
+# and, before this test, nothing exercised _score_zones_multi through
+# run_batch. Mirrors test_batch_zones.py's single-animal idiom.
+# --------------------------------------------------------------------------
+
+ZONE_NAMES = ["nose", "body_center", "tail_base"]
+ZONE_RESOLUTION = (640, 480)
+ZONE_INSIDE = (320.0, 240.0)
+
+
+def _zone_config() -> ZoneConfiguration:
+    config = ZoneConfiguration()
+    config.config_width, config.config_height = ZONE_RESOLUTION
+    config.add_zone(
+        Zone(
+            id="z1",
+            name="Zone 1",
+            shape=ZoneShape.POLYGON,
+            vertices=[(0.4, 0.4), (0.6, 0.4), (0.6, 0.6), (0.4, 0.6)],
+        )
+    )
+    return config
+
+
+def _zone_tracks(n_frames=6):
+    """Both animals sit inside the zone for every frame.
+
+    Resolution lives only on slot 0's ``PoseData.metadata``, the way a real
+    ``infer_video_tracks`` run sets it -- ``_score_zones_multi`` reads
+    ``tracks[0].metadata``, not ``tracks.metadata``, so a test that put
+    resolution at the container level wouldn't catch a regression back to
+    the wrong one.
+    """
+    tracks = {}
+    for slot in range(2):
+        xy = np.zeros((n_frames, 3, 2), dtype=float)
+        xy[:, 1, :] = ZONE_INSIDE  # body_center, the default zone keypoint
+        meta = {"resolution": list(ZONE_RESOLUTION)} if slot == 0 else {}
+        tracks[slot] = PoseData(
+            xy=xy,
+            confidence=np.ones((n_frames, 3)),
+            keypoint_names=ZONE_NAMES,
+            fps=30.0,
+            source="yolo_test",
+            metadata=meta,
+        )
+    t = PoseTracks(tracks=tracks, fps=30.0)
+    t.metadata["stitched"] = {0: [], 1: []}
+    return t
+
+
+def test_zone_occupancy_carries_rows_for_every_animal(video, tmp_path):
+    run_batch(
+        [video],
+        tmp_path / "m.pt",
+        ZONE_NAMES,
+        n_animals=2,
+        infer_tracks=lambda **kw: _zone_tracks(),
+        zones={video.resolve(): _zone_config()},
+    )
+    with open(zone_output_dir(video) / "zone_occupancy.csv") as f:
+        rows = list(csv.reader(f))[1:]
+    assert {row[0] for row in rows} == {"animal0", "animal1"}

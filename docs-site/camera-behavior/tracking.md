@@ -211,9 +211,10 @@ under a threshold. A fragment nothing will take is dropped rather than
 mis-joined; how many of *those* were dropped is recorded in the pose CSV's
 `.meta.json` sidecar, under `consolidation`, and a video dropping a lot of
 them is one whose tuning is wrong. Fragments discarded for falling under the
-length floor are not counted there, or anywhere else — a video that quietly
-loses short tracker output to the floor still looks clean in its own
-metadata.
+length floor are counted too, in the same block, as `consolidation.below_floor`
+— a count, not the spans, so it says how many, not which. Without it, a
+re-run that only changed `min_fragment_frames` produced metadata identical in
+every other field; now the two runs are distinguishable after the fact.
 
 ### The multi-animal DLC CSV
 
@@ -238,6 +239,16 @@ single-animal read, and silently analysing one arbitrary mouse out of a social
 recording is the exact failure this feature exists to end. A pre-existing
 three-row pose CSV from before this shipped reads exactly as it always has —
 the format is unchanged, and there is nothing to name.
+
+**Most of the rest of GLIDER does not read a four-row file yet, and that is
+expected, not a bug.** Behavior classification, the annotator, cohort speed,
+and the **Re-gate tracked CSVs** action all call the same reader with no
+animal named, so all of them refuse a multi-animal pose CSV exactly the way
+described above — the refusal is what stops them from silently scoring one
+arbitrary mouse out of a social recording. Per-animal support for those tools
+is planned work that has not landed yet. Today, tracking more than one animal
+gets you the pose CSV, zone scoring, and the identity sidecar; everything
+downstream of the pose CSV still expects one animal.
 
 Zones are scored per animal too, into the same `zone_events.csv` /
 `zone_occupancy.csv` pair described above, with `object_id` reading `animal0`,

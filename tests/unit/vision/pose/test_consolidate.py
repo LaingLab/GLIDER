@@ -235,3 +235,15 @@ def test_no_usable_fragments_still_returns_n_empty_slots():
     res = run([frag(1, 0, 2)], n_animals=2, min_fragment_frames=5)
     assert res.tracks.n_animals == 2
     assert np.all(np.isnan(res.tracks[0].xy))
+
+
+def test_flicker_below_the_floor_is_counted_but_not_reported_as_dropped():
+    """Fragments shorter than min_fragment_frames never reach seed_slots'
+    seeds or remaining, so they never become a `dropped` entry either --
+    below_floor is the only place that count survives."""
+    a = frag(1, 0, 100, x=10, y=10)
+    b = frag(2, 0, 100, x=300, y=300)
+    flicker = frag(3, 50, 2, x=9000, y=9000)
+    res = run([a, b, flicker], n_animals=2, min_fragment_frames=5)
+    assert res.below_floor == 1
+    assert res.dropped == []

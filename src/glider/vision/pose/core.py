@@ -148,6 +148,32 @@ def _video_fps(video_path: str | Path) -> float:
     return fps
 
 
+def _probe_frame_count(
+    video_path: str | Path,
+    *,
+    progress: bool,
+    progress_cb: Callable[[int, int], None] | None,
+) -> int:
+    """Frame count for a tqdm bar / ``progress_cb`` total, or ``0`` if unknown.
+
+    Only opens a second capture when someone will use the number — neither a
+    bar nor a callback means nothing reads it. ``0`` means "unknown": some
+    containers don't carry a reliable count, and callers must render that as
+    indeterminate rather than as "zero frames".
+    """
+    if not progress and progress_cb is None:
+        return 0
+    try:
+        import cv2
+
+        cap = cv2.VideoCapture(str(video_path))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        cap.release()
+        return total_frames
+    except Exception:
+        return 0
+
+
 def _infer_video_backend(
     spec,
     video_path: Path,
@@ -408,14 +434,25 @@ def infer_video_tracks(
     raw: dict[int, list[tuple[int, np.ndarray, np.ndarray]]] = {}
     n_frames = 0
 
-    for frame_index, r in enumerate(
-        _track_stream(model_path, video_path, conf=conf, device=resolved_device, verbose=verbose)
-    ):
+    total_frames = _probe_frame_count(video_path, progress=progress, progress_cb=progress_cb)
+
+    results_iter = _track_stream(
+        model_path, video_path, conf=conf, device=resolved_device, verbose=verbose
+    )
+    if progress:
+        try:
+            from tqdm import tqdm
+
+            results_iter = tqdm(results_iter, total=total_frames or None, desc="YOLO tracking")
+        except Exception:
+            pass
+
+    for frame_index, r in enumerate(results_iter):
         if cancel_cb is not None and cancel_cb():
             raise PoseCancelledError(f"inference cancelled after {frame_index} frames")
         n_frames = frame_index + 1
         if progress_cb is not None:
-            progress_cb(n_frames, 0)
+            progress_cb(n_frames, total_frames)
 
         kp = getattr(r, "keypoints", None)
         if kp is None or kp.xy is None or kp.xy.shape[0] == 0 or r.boxes is None:
@@ -470,6 +507,7 @@ def infer_video_tracks(
                 "min_fragment_frames": min_fragment_frames,
                 "raw_fragments": len(fragments),
                 "dropped": [list(d) for d in result.dropped],
+                "below_floor": result.below_floor,
             },
         }
     )
@@ -661,18 +699,7 @@ def infer_video(
         verbose=verbose,
     )
 
-    # Probe the frame count once; both the tqdm bar and progress_cb need it.
-    # 0 means "unknown" — some containers don't carry a reliable count.
-    total_frames = 0
-    if progress or progress_cb is not None:
-        try:
-            import cv2
-
-            cap = cv2.VideoCapture(str(video_path))
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-            cap.release()
-        except Exception:
-            total_frames = 0
+    total_frames = _probe_frame_count(video_path, progress=progress, progress_cb=progress_cb)
 
     if progress:
         try:

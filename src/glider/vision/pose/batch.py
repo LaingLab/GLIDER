@@ -131,7 +131,8 @@ def _score_zones_multi(video: Path, tracks: PoseTracks, zones, keypoint: str) ->
         from glider.vision.zone_scoring import score_pose, write_zone_csvs_multi, zone_output_dir
 
         resolution = None
-        raw = tracks.metadata.get("resolution") if tracks.metadata else None
+        first_meta = tracks[0].metadata
+        raw = first_meta.get("resolution") if first_meta else None
         if raw:
             resolution = (int(raw[0]), int(raw[1]))
 

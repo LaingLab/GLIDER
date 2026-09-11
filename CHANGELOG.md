@@ -141,6 +141,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`zone_occupancy.csv`'s schema changed under multi-animal tracking, in three
+  ways a script reading the old file will not notice until it is already
+  wrong.** `object_id` is now the *first* column, not the last — anything
+  reading by index reads the wrong field; the branch's own tests needed the
+  same edit. A row is now per `(zone, track)` rather than per zone: two
+  animals sharing a zone for 100 frames used to write one row of 100 and now
+  writes two rows of 100, so summing `frames_in_zone` no longer answers "how
+  long was this zone occupied" — it answers "how many animal-frames," which
+  double-counts. And a zone nobody ever entered still writes its required
+  zero row, but with `object_id` empty; pandas reads that as `NaN`, so
+  `groupby("object_id")` silently drops exactly the zero rows this format
+  deliberately keeps. `zone_events.csv` is unchanged.
+
 - **`Tools` comes off the menu bar** — File, Edit, Experiment, View, Help
   remain. This is the recorded rule being satisfied rather than bent: a menu
   leaves the bar only once its actions have another *visible* home, and every

@@ -166,11 +166,19 @@ class ConsolidationResult:
     ``(track_id, start, end)``. Kept rather than discarded silently: a video
     that drops a lot of them is one whose tuning is wrong, and that should be
     visible without re-running anything.
+
+    ``below_floor`` is how many fragments ``seed_slots`` filtered out for
+    being shorter than ``min_fragment_frames``, before seeding or joining was
+    even considered -- they reach neither ``seeds`` nor ``remaining``, so
+    without this count a run is indistinguishable from one where nothing was
+    ever that short. A count, not the spans: which specific fragments is a
+    question for the annotated video, not this metadata.
     """
 
     tracks: PoseTracks
     stitched: dict[int, set[int]]
     dropped: list[tuple[int, int, int]]
+    below_floor: int
 
 
 def consolidate(
@@ -200,6 +208,7 @@ def consolidate(
         raise ValueError(f"n_animals must be at least 1; got {n_animals}")
 
     seeds, remaining = seed_slots(fragments, n_animals, min_fragment_frames=min_fragment_frames)
+    below_floor = len(fragments) - len(seeds) - len(remaining)
     slots: list[list[Fragment]] = [[s] for s in seeds]
     slots += [[] for _ in range(n_animals - len(slots))]
     seed_ids = {s.track_id for s in seeds}
@@ -245,4 +254,5 @@ def consolidate(
         tracks=PoseTracks(tracks=tracks, fps=fps),
         stitched=stitched,
         dropped=dropped,
+        below_floor=below_floor,
     )

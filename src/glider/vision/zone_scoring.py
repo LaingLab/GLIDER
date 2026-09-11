@@ -240,41 +240,12 @@ def write_zone_csvs(scoring: ZoneScoring, output_dir: Path | str) -> list[Path]:
     """Write ``zone_events.csv`` and ``zone_occupancy.csv`` into *output_dir*.
 
     Schema matches :class:`~glider.vision.video_tracking_runner.VideoTrackingRunner`
-    exactly, so existing readers do not need to know which produced a file.
+    exactly, so existing readers do not need to know which produced a file. A
+    one-animal call into :func:`write_zone_csvs_multi`: every event already
+    carries its own ``object_id`` and the occupancy loop keys off the dict, so
+    a single-entry mapping reproduces this function's output byte for byte.
     """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    events_path = output_dir / "zone_events.csv"
-    with open(events_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["frame", "elapsed_ms", "zone_id", "zone_name", "object_id", "event"])
-        for event in scoring.events:
-            writer.writerow(
-                [
-                    event.frame,
-                    f"{event.elapsed_ms:.1f}",
-                    event.zone_id,
-                    event.zone_name,
-                    event.object_id,
-                    event.event,
-                ]
-            )
-
-    occupancy_path = output_dir / "zone_occupancy.csv"
-    with open(occupancy_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["object_id", "zone_id", "zone_name", "frames_in_zone", "seconds"])
-        for zone_id, frames in scoring.frames_in_zone.items():
-            writer.writerow(
-                [
-                    scoring.object_id,
-                    zone_id,
-                    scoring.zone_names.get(zone_id, ""),
-                    frames,
-                    f"{frames / scoring.fps:.3f}" if scoring.fps else "",
-                ]
-            )
+    paths = write_zone_csvs_multi({scoring.object_id: scoring}, output_dir)
 
     if not math.isclose(scoring.coverage, 1.0):
         logger.info(
@@ -284,7 +255,7 @@ def write_zone_csvs(scoring: ZoneScoring, output_dir: Path | str) -> list[Path]:
             scoring.frames_total,
             scoring.keypoint,
         )
-    return [events_path, occupancy_path]
+    return paths
 
 
 def write_zone_csvs_multi(scorings: dict[str, ZoneScoring], output_dir: Path | str) -> list[Path]:
