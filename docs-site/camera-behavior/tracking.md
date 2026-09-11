@@ -179,6 +179,131 @@ Pose results can be exported in **DeepLabCut (DLC)** CSV/HDF5 format so they can
 used with downstream tools that expect that layout. (DLC here is an interchange
 format — the pose inference itself is done by YOLO.)
 
+## Multiple animals
+
+YOLO pose models can track more than one animal through a video. In the
+**Batch Pose Tracking** window (Analyze tab), set **Animals** to how many are
+actually in the recording — it is not detected, it is the constraint you
+supply, and it is what lets tracking stitch a tracker id that gets lost and
+reassigned all night back into one lifelong animal. Too high and one real
+animal is split into two that each vanish for half the video; too low and a
+real animal is dropped entirely. DeepLabCut and SLEAP models cannot do this —
+see [Pose models](pose-models.md#what-glider-supports) for why.
+
+### Fragments into slots
+
+ByteTrack answers "is this the same blob as last frame", and over a long
+recording of animals crossing and occluding each other it answers that dozens
+of times, handing out far more track ids than there are animals. Offline,
+GLIDER has the whole video and the animal count up front, and uses both:
+tracker fragments are stitched into exactly N lifelong slots — `animal0`,
+`animal1`, and so on.
+
+The longest fragments (above a minimum length) seed the N slots; slot numbers
+are then assigned by which of those seeding fragments appears earliest in the
+video, so `animal0` means the same thing on every re-run with the same
+settings. Every other fragment is offered to whichever slot it could
+plausibly continue — "plausibly" meaning the speed implied by the gap and the
+jump between them is under a threshold. A fragment nothing will take is
+dropped rather than mis-joined; how many were dropped is recorded in the pose
+CSV's `.meta.json` sidecar, under `consolidation`, and a video dropping a lot
+of them is one whose tuning is wrong.
+
+### The multi-animal DLC CSV
+
+A run with more than one animal still writes one DeepLabCut-format CSV, not
+one per animal, with a fourth header row DLC's own convention adds for this
+case — `individuals` — inserted between `scorer` and `bodyparts`:
+
+```text
+scorer,my_yolo,my_yolo,...,my_yolo,my_yolo,...
+individuals,animal0,animal0,...,animal1,animal1,...
+bodyparts,snout,snout,...,snout,snout,...
+coords,x,y,...,x,y,...
+0,412.3,288.1,...,55.0,301.2,...
+```
+
+Reading one back requires saying which animal you want. `from_dlc_csv` inspects
+the second row to tell a three-row single-animal file from a four-row
+multi-animal one automatically, but for a multi-animal file it **raises**
+unless you pass `individual=` — by name (`"animal1"`) or by slot (`1`). Handing
+back the first animal by default would be indistinguishable from a
+single-animal read, and silently analysing one arbitrary mouse out of a social
+recording is the exact failure this feature exists to end. A pre-existing
+three-row pose CSV from before this shipped reads exactly as it always has —
+the format is unchanged, and there is nothing to name.
+
+Zones are scored per animal too, into the same `zone_events.csv` /
+`zone_occupancy.csv` pair described above, with `object_id` reading `animal0`,
+`animal1`, and so on.
+
+### The identity sidecar
+
+Consolidation does not only observe identity, it *infers* it — a fragment is
+joined across a gap on the strength of a plausible speed, not a certainty.
+Every run of more than one animal writes a `_identity.csv` beside the pose CSV
+recording exactly where that happened, so an analyst does not have to take the
+stitching on faith.
+
+The file is **sparse**: a row exists only where an animal's identity at that
+frame is in some doubt. A frame with no row for an animal is unambiguous —
+measured, not inferred — so join it to the pose data with a left join on
+`(frame, individual)` and read a missing `identity_flag` as empty, not as an
+error:
+
+```text
+frame,individual,identity_flag
+118,animal0,close
+118,animal1,close
+340,animal0,stitched
+502,animal1,gap
+```
+
+| Flag | Means |
+| --- | --- |
+| `close` | Another animal's centroid was within 60 px (configurable) of this one on this frame — a real near-contact, or the moment two ids could have swapped. |
+| `stitched` | This frame's data came from a fragment consolidation *joined* onto the slot, not the fragment that originally seeded it — an inferred link, not an observation. |
+| `gap` | No detection at all for this animal on this frame — there is no position, so there is nothing for the id to be standing on either. |
+
+`close` and `stitched` can both apply to one frame (written as `close+stitched`,
+in that order); `gap` never combines with either, because a frame with no
+position cannot also be measured near something.
+
+### Tuning it
+
+**Animals**, in the Batch Pose Tracking window, is the only one of these
+exposed in the GUI. Three more knobs shape consolidation and the identity
+sidecar; they take their defaults below unless you are driving `run_batch`
+yourself from a script:
+
+| Knob | Default | What it does |
+| --- | --- | --- |
+| `max_travel_px_per_frame` | 40.0 px/frame | The speed cap: a fragment joins a slot only if the implied speed to close the gap is at or under this. Raise it for a fast animal in a big arena; lower it to stop distant fragments from getting joined together. |
+| `min_fragment_frames` | 5 frames | Fragments shorter than this can still be *joined onto* a slot, but never *seed* one — too short a fragment is not good evidence of where an animal started. |
+| `identity_min_separation_px` | 60.0 px | The distance below which two animals' centroids mark each other `close` in the identity sidecar. |
+
+### How much to trust it
+
+!!! warning "Identity is a guess in places, and the guess is greedy"
+    Consolidation is a greedy, longest-first heuristic — not a globally optimal
+    assignment. It processes fragments one at a time, longest first, and joins
+    each to whichever slot it could plausibly continue; it never goes back to
+    reconsider a join once made. That is a real improvement over dropping
+    every fragment shorter than the whole video, and it is also exactly where
+    a swap gets baked in: two animals that cross, occlude, and separate can
+    resume as fragments a plausible speed apart in the *wrong* order, and
+    nothing after that point would look wrong. The CSV would still show two
+    complete, sensible-looking tracks — just with the labels swapped from the
+    crossing on.
+
+    The identity sidecar tells you where to look, not that it is safe
+    everywhere else. `stitched` frames are where a link was inferred rather
+    than observed; `close` frames are where two animals were near enough that
+    a mix-up was possible whether or not one happened. Treat conclusions that
+    hinge on *which* animal did something — not just how many did — with
+    suspicion through any `close` or `stitched` stretch, and check the
+    annotated video at those frames before trusting the labels past them.
+
 ## Checking your GPU
 
 Tracking and pose models run much faster on a GPU. To see what GLIDER will use,
@@ -197,3 +322,4 @@ reports what's missing, which makes it a good first stop when tracking is slow.
 
 - Learn what the tracking data lines up with: [Camera & Recording](camera.md).
 - Turn pose data into scored behavior: [Behavior Analysis](behavior.md).
+- See which pose model formats support more than one animal: [Pose Models](pose-models.md).

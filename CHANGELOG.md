@@ -117,6 +117,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and deliberately not part of the converter Protocol, so adding it cannot make
   an existing converter stop satisfying the check. It is what keeps a
   multi-gigabyte first run from starting silently behind a wait cursor.
+- **YOLO pose tracking can follow more than one animal through a video.**
+  Batch inference used to write one track per video no matter how many
+  animals were in frame — GLIDER's pose container held one animal and there
+  was nowhere to put a second. Set **Animals** in the Batch Pose Tracking
+  window and it now stitches ByteTrack's fragments, which fork into a fresh id
+  every time two animals cross or occlude, into exactly that many lifelong
+  tracks. DeepLabCut and SLEAP stay single-instance and are refused by name
+  for more than one animal, as they always were; tracking one animal through
+  either is unchanged.
+  - Written as one **four-row DeepLabCut CSV** — DLC's own `individuals` row
+    inserted between `scorer` and `bodyparts` — rather than the usual three,
+    so every existing single-animal file and every tool that reads one keeps
+    working exactly as before.
+  - A **`_identity.csv` sidecar** records, sparsely, the frames where a
+    track's identity was inferred rather than observed — a fragment joined
+    across a gap on a plausible speed, or two animals close enough that a
+    swap was possible. Consolidation is greedy and longest-first, not a
+    global optimum, so this file is what tells an analyst which stretches of
+    a crossing to double-check rather than take on faith.
 
 ### Changed
 
