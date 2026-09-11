@@ -160,3 +160,19 @@ def test_ranking_first_matches_argmax_including_on_a_tie():
     result = FakeResult([(1, 0, 0, 0.5), (2, 9, 9, 0.5), (3, 4, 4, 0.1)])
     confidences = np.array([0.5, 0.5, 0.1])
     assert _rank_candidates(result, confidences, None, None, None)[0] == int(confidences.argmax())
+
+
+def test_non_yolo_model_with_empty_keypoint_names_gets_the_yolo_only_message(monkeypatch):
+    """The empty-``keypoint_names`` check used to run before
+    ``identify_pose_model``, so a DLC/SLEAP spec with no names supplied got the
+    (false) "is a YOLO checkpoint" message instead of the real refusal:
+    multi-animal tracking is YOLO-only."""
+    from glider.vision.pose.spec import PoseModelError
+
+    class FakeDLCSpec:
+        kind = "dlc"
+
+    monkeypatch.setattr("glider.vision.pose.spec.identify_pose_model", lambda p: FakeDLCSpec())
+    with pytest.raises(PoseModelError, match="YOLO-only") as exc_info:
+        infer_video_tracks("model.pt", "video.mp4", [], n_animals=1)
+    assert "does not record" not in str(exc_info.value)

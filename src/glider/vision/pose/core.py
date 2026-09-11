@@ -9,9 +9,12 @@ It holds:
     source        — string label propagated to "scorer" in DLC output
     metadata      — free-form dict for provenance (model path, video path, ...)
 
-Single animal in v1. The shape leaves room for a future
-(n_individuals, n_frames, n_keypoints, 3) layout, but every public function
-in this module operates on one mouse per video.
+``PoseData`` itself stays single-animal: the shape leaves room for a future
+(n_individuals, n_frames, n_keypoints, 3) layout, but each instance still
+holds one mouse. :func:`infer_video` returns one ``PoseData`` per video, as
+it always has. :func:`infer_video_tracks` is the multi-animal entry point --
+it returns a :class:`~glider.vision.pose.tracks.PoseTracks`, ``N`` of these
+containers keyed by slot, one per tracked animal.
 """
 
 from __future__ import annotations
@@ -284,6 +287,30 @@ def _pick_candidate(result, confidences, arena, settings, resolution) -> int:
     return _rank_candidates(result, confidences, arena, settings, resolution)[0]
 
 
+def _resolve_arena_for_video(arena, video_path: Path):
+    """Validate ``arena``'s homography once for this video; ``None`` on failure.
+
+    Shared by :func:`infer_video` and :func:`infer_video_tracks`: an arena
+    whose corners do not describe a usable quad is reported once and ignored,
+    leaving plain confidence ranking -- a calibration problem must not cost a
+    run of inference. See :func:`_pick_candidate` for the fuller rationale.
+    """
+    if arena is None:
+        return None
+    try:
+        arena.homography()
+    except ValueError as e:
+        logger.warning(
+            "%s: the arena is unusable (%s), so detections are ranked by "
+            "confidence alone for this video; fix the calibration and "
+            "re-run to gate it",
+            video_path.name,
+            e,
+        )
+        return None
+    return arena
+
+
 def _track_stream(model_path, video_path, *, conf, device, verbose):
     """Ultralytics ByteTrack, streaming one Results per frame.
 
@@ -349,11 +376,6 @@ def infer_video_tracks(
     model_path, video_path = Path(model_path), Path(video_path)
     keypoint_names = list(keypoint_names)
     n_kpts = len(keypoint_names)
-    if not keypoint_names:
-        raise PoseModelError(
-            f"{model_path.name} is a YOLO checkpoint, which does not record "
-            "body-part names. Pass keypoint_names in the model's training order."
-        )
     if n_animals < 1:
         raise ValueError(f"n_animals must be at least 1; got {n_animals}")
 
@@ -365,6 +387,11 @@ def infer_video_tracks(
             f"nowhere to put a second animal. Track it with n_animals=1, or use "
             f"a YOLO-pose checkpoint."
         )
+    if not keypoint_names:
+        raise PoseModelError(
+            f"{model_path.name} is a YOLO checkpoint, which does not record "
+            "body-part names. Pass keypoint_names in the model's training order."
+        )
 
     resolved_device = resolve_device(device, require_gpu=require_gpu)
     if fps is None:
@@ -373,18 +400,7 @@ def infer_video_tracks(
         source = f"yolo_{model_path.stem}"
     resolution = video_resolution(video_path)
 
-    if arena is not None:
-        try:
-            arena.homography()
-        except ValueError as e:
-            logger.warning(
-                "%s: the arena is unusable (%s), so detections are ranked by "
-                "confidence alone for this video; fix the calibration and "
-                "re-run to gate it",
-                video_path.name,
-                e,
-            )
-            arena = None
+    arena = _resolve_arena_for_video(arena, video_path)
 
     if echo_device:
         print(f"[glider.pose] device = {resolved_device}  ({n_animals} animals)")
@@ -619,18 +635,7 @@ def infer_video(
     #
     # A successful call caches the matrix on the object, so the per-frame calls
     # below are attribute reads rather than 8x8 solves.
-    if arena is not None:
-        try:
-            arena.homography()
-        except ValueError as e:
-            logger.warning(
-                "%s: the arena is unusable (%s), so detections are picked by "
-                "confidence alone for this video; fix the calibration and "
-                "re-run to gate it",
-                video_path.name,
-                e,
-            )
-            arena = None
+    arena = _resolve_arena_for_video(arena, video_path)
 
     if echo_device:
         if resolved_device.startswith("cuda"):
