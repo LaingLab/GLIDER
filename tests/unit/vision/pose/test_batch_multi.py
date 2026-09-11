@@ -5,7 +5,13 @@ import csv
 import numpy as np
 import pytest
 
-from glider.vision.pose.batch import FilterSettings, dlc_output_path, raw_output_path, run_batch
+from glider.vision.pose.batch import (
+    FilterSettings,
+    animals_dir,
+    dlc_output_path,
+    raw_output_path,
+    run_batch,
+)
 from glider.vision.pose.core import PoseData
 from glider.vision.pose.dlc import from_dlc_csv, header_depth, list_individuals, read_pose_meta
 from glider.vision.pose.identity import identity_output_path
@@ -63,7 +69,9 @@ def video(tmp_path):
     return path
 
 
-def test_two_animals_write_one_four_row_csv(video, tmp_path):
+def test_two_animals_complete_and_write_per_animal_files(video, tmp_path):
+    """Batch completion is still reported, and output is now one three-row
+    file per slot under animals_dir -- the primary is never written."""
     result = run_batch(
         [video],
         tmp_path / "m.pt",
@@ -72,9 +80,12 @@ def test_two_animals_write_one_four_row_csv(video, tmp_path):
         infer_tracks=lambda **kw: fake_tracks(2),
     )
     assert result.completed == [video]
-    out = dlc_output_path(video, tmp_path / "m.pt")
-    assert header_depth(out) == 4
-    assert list_individuals(out) == ["animal0", "animal1"]
+    primary = dlc_output_path(video, tmp_path / "m.pt")
+    assert not primary.exists()
+    out = animals_dir(primary)
+    assert sorted(p.name for p in out.glob("*.csv")) == ["animal0.csv", "animal1.csv"]
+    for p in out.glob("*.csv"):
+        assert header_depth(p) == 3
 
 
 def test_the_identity_sidecar_is_written_beside_it(video, tmp_path):
@@ -205,11 +216,18 @@ def fake_tracks_with_spike(n_animals=2, n_frames=20, spike_frame=10, spike_delta
     return t
 
 
-def test_gating_lands_on_slot_zero_and_reaches_the_sidecar(video, tmp_path):
-    """write_tracks_meta reads arena_gate off tracks[0] only -- see its
-    docstring. Slot 0 is the relocated (blanked) track here and slot 1 is
-    clean, so a sidecar reporting slot 1's report by mistake (frames_blanked
-    == 0) is caught, not just an absent block."""
+def test_gating_lands_on_each_animals_own_sidecar(video, tmp_path):
+    """Each animal's own sidecar carries its own gate report.
+
+    D1 wrote one aggregate sidecar via write_tracks_meta, which reads
+    arena_gate off tracks[0] only -- see its docstring -- so this test used
+    to check that slot 0's report, not slot 1's, landed there. D2 no longer
+    writes that aggregate file at all: each animal's file gets its gate
+    report straight from its own PoseData.metadata via write_pose_meta, so
+    the thing worth pinning is that neither slot's report leaks into the
+    other's file. Slot 0 is the relocated (blanked) track here and slot 1 is
+    clean, so a swap (frames_blanked == 0 on animal0, or == 5 on animal1) is
+    caught, not just an absent block."""
     run_batch(
         [video],
         tmp_path / "m.pt",
@@ -219,9 +237,13 @@ def test_gating_lands_on_slot_zero_and_reaches_the_sidecar(video, tmp_path):
         arenas={video: _arena()},
         gate=_gate_settings(),
     )
-    meta = read_pose_meta(dlc_output_path(video, tmp_path / "m.pt"))
-    assert meta["arena_gate"]["gated"] is True
-    assert meta["arena_gate"]["frames_blanked"] == 5
+    d = animals_dir(dlc_output_path(video, tmp_path / "m.pt"))
+    meta0 = read_pose_meta(d / "animal0.csv")
+    meta1 = read_pose_meta(d / "animal1.csv")
+    assert meta0["arena_gate"]["gated"] is True
+    assert meta0["arena_gate"]["frames_blanked"] == 5
+    assert meta1["arena_gate"]["gated"] is True
+    assert meta1["arena_gate"]["frames_blanked"] == 0
 
 
 def test_raw_is_written_when_gating_without_filtering(video, tmp_path):
@@ -260,8 +282,8 @@ def test_raw_is_written_when_filtering_without_gating(video, tmp_path):
 
 
 def test_filtering_rebuilds_every_slot(video, tmp_path):
-    """Both slots are smoothed, not just one -- the primary must differ from
-    _raw for animal0 *and* animal1, at the individual each name actually
+    """Both slots are smoothed, not just one -- each animal's own file must
+    differ from its own _raw slot, at the individual each name actually
     belongs to."""
     run_batch(
         [video],
@@ -271,17 +293,17 @@ def test_filtering_rebuilds_every_slot(video, tmp_path):
         infer_tracks=lambda **kw: fake_tracks_with_spike(2),
         filtering=FilterSettings(),
     )
-    primary = dlc_output_path(video, tmp_path / "m.pt")
+    out = animals_dir(dlc_output_path(video, tmp_path / "m.pt"))
     raw = raw_output_path(video, tmp_path / "m.pt")
-    assert list_individuals(primary) == ["animal0", "animal1"]
+    assert sorted(p.name for p in out.glob("*.csv")) == ["animal0.csv", "animal1.csv"]
 
     for slot, baseline in ((0, 100.0), (1, 200.0)):
-        smoothed = from_dlc_csv(primary, individual=slot)
+        smoothed = from_dlc_csv(out / f"animal{slot}.csv")
         unsmoothed = from_dlc_csv(raw, individual=slot)
         assert not np.array_equal(smoothed.xy, unsmoothed.xy)
-        # The spike is real in _raw, and the median filter erased it in the
-        # primary -- so each animal is verified against its own baseline,
-        # not just "some difference happened somewhere".
+        # The spike is real in _raw, and the median filter erased it in this
+        # animal's own file -- so each animal is verified against its own
+        # baseline, not just "some difference happened somewhere".
         assert np.allclose(unsmoothed.xy[10], baseline + 500.0)
         assert np.allclose(smoothed.xy[10], baseline)
 
@@ -374,3 +396,65 @@ def test_zone_occupancy_carries_rows_for_every_animal(video, tmp_path):
     with open(zone_output_dir(video) / "zone_occupancy.csv") as f:
         rows = list(csv.reader(f))[1:]
     assert {row[0] for row in rows} == {"animal0", "animal1"}
+
+
+# --------------------------------------------------------------------------
+# D2: one three-row CSV per animal, not one four-row primary. The primary is
+# no longer written by run_batch at all -- it survives only as a naming
+# anchor for animals_dir, _raw and the identity sidecar.
+# --------------------------------------------------------------------------
+
+
+def test_two_animals_write_one_three_row_csv_each(video, tmp_path):
+    run_batch(
+        [video],
+        tmp_path / "m.pt",
+        NAMES,
+        n_animals=2,
+        infer_tracks=lambda **kw: fake_tracks(2),
+    )
+    d = animals_dir(dlc_output_path(video, tmp_path / "m.pt"))
+    assert sorted(p.name for p in d.glob("*.csv")) == ["animal0.csv", "animal1.csv"]
+    for p in d.glob("*.csv"):
+        assert header_depth(p) == 3
+
+
+def test_no_four_row_file_is_written(video, tmp_path):
+    # The four-row CSV is an export now, never a batch product.
+    run_batch(
+        [video],
+        tmp_path / "m.pt",
+        NAMES,
+        n_animals=2,
+        infer_tracks=lambda **kw: fake_tracks(2),
+    )
+    assert not dlc_output_path(video, tmp_path / "m.pt").exists()
+
+
+def test_each_animal_carries_its_own_coordinates(video, tmp_path):
+    run_batch(
+        [video],
+        tmp_path / "m.pt",
+        NAMES,
+        n_animals=2,
+        infer_tracks=lambda **kw: fake_tracks(2),
+    )
+    d = animals_dir(dlc_output_path(video, tmp_path / "m.pt"))
+    assert np.allclose(from_dlc_csv(d / "animal0.csv").xy, 100.0)
+    assert np.allclose(from_dlc_csv(d / "animal1.csv").xy, 200.0)
+
+
+def test_one_animal_writes_no_animals_directory(video, tmp_path):
+    # The byte-identity constraint. n_animals=1 is exactly today.
+    def single(**kw):
+        return PoseData(
+            xy=np.zeros((20, 2, 2)),
+            confidence=np.ones((20, 2)),
+            keypoint_names=list(NAMES),
+            fps=30.0,
+        )
+
+    run_batch([video], tmp_path / "m.pt", NAMES, n_animals=1, infer=single)
+    primary = dlc_output_path(video, tmp_path / "m.pt")
+    assert header_depth(primary) == 3
+    assert not animals_dir(primary).exists()

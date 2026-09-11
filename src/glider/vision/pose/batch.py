@@ -53,6 +53,7 @@ __all__ = [
     "BatchResult",
     "EventKind",
     "FilterSettings",
+    "animals_dir",
     "discover_videos",
     "dlc_output_path",
     "find_pose_csv",
@@ -201,6 +202,20 @@ def dlc_output_path(video: Path, model: Path) -> Path:
     """Primary DLC CSV path, written beside the video."""
     video = Path(video)
     return video.parent / f"{_output_stem(video, model)}.csv"
+
+
+def animals_dir(pose_csv: Path | str) -> Path:
+    """Where a multi-animal session's per-animal CSVs live.
+
+    A subdirectory rather than a suffix, because both discovery paths must miss
+    it: ``find_pose_csv`` globs the video's own directory flat, and the cohort
+    collector (``gui/behavior/window.py``) rglobs but requires ``DLC_`` in the
+    stem, which ``animal0.csv`` does not have. Those are two independent
+    conditions in two files, and the tests pin both -- the comment on
+    NOT_POSE_SUFFIXES records what happened last time they disagreed.
+    """
+    pose_csv = Path(pose_csv)
+    return pose_csv.with_name(f"{pose_csv.stem}_animals")
 
 
 def raw_output_path(video: Path, model: Path) -> Path:
@@ -613,7 +628,7 @@ def _process_multi(
     single-animal: gating, filtering and zone scoring are already correct for
     one animal and are reused rather than re-derived.
     """
-    from glider.vision.pose.dlc import to_dlc_csv_multi
+    from glider.vision.pose.dlc import to_dlc_csv, to_dlc_csv_multi
     from glider.vision.pose.identity import (
         identity_flags,
         identity_output_path,
@@ -682,8 +697,14 @@ def _process_multi(
             metadata=tracks.metadata,
         )
 
-    to_dlc_csv_multi(tracks, primary)
-    _drop_stale_ungated(primary)
+    # One three-row file per slot, via the same writer the single-animal path
+    # uses -- no new format, and every existing from_dlc_csv caller can open
+    # one animal unmodified. `primary` is never written; it survives only as
+    # the naming anchor for animals_dir, the _raw companion, and the identity
+    # sidecar below.
+    out_dir = animals_dir(primary)
+    for slot in tracks:
+        to_dlc_csv(tracks[slot], out_dir / f"animal{slot}.csv")
 
     stitched = {int(s): set(f) for s, f in (tracks.metadata.get("stitched") or {}).items()}
     write_identity_csv(
