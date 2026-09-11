@@ -216,11 +216,73 @@ length floor are counted too, in the same block, as `consolidation.below_floor`
 re-run that only changed `min_fragment_frames` produced metadata identical in
 every other field; now the two runs are distinguishable after the fact.
 
-### The multi-animal DLC CSV
+### One pose CSV per animal
 
-A run with more than one animal still writes one DeepLabCut-format CSV, not
-one per animal, with a fourth header row DLC's own convention adds for this
-case — `individuals` — inserted between `scorer` and `bodyparts`:
+A run with more than one animal writes one plain, three-row DeepLabCut CSV
+**per animal** — the same format a single-animal run has always written —
+into a `<video's pose stem>_animals/` directory beside the video:
+
+```text
+session01DLC_exp-6.csv                  # n_animals == 1. Exactly as before.
+
+session01DLC_exp-6_animals/             # n_animals > 1
+    animal0.csv                         # plain three-row DLC CSV
+    animal1.csv
+    animal0_ethogram.csv                # see Behavior Analysis, below
+    animal1_ethogram.csv
+
+session01DLC_exp-6_identity.csv         # one shared sidecar -- see below
+```
+
+`n_animals=1` is unaffected in the strongest sense: one three-row CSV at
+today's path, no subdirectory, byte-identical to a run from before this
+existed. There is no in-between shape — tracking a video that already has a
+single-animal CSV as multi-animal removes the old file (and its `_raw`
+companion) once the new `_animals/` directory is written, and going back the
+other way removes the stale `_animals/` directory once the fresh single file
+lands. Re-running a multi-animal video with fewer animals than last time also
+removes the extra slots' files, so a directory listing never shows an animal
+this run didn't produce.
+
+Because each animal's file is the ordinary three-row format, every reader
+that already existed for a single-animal CSV opens one unmodified — behavior
+classification, the annotator, cohort speed, training, zone scoring, the
+arena gate, and the **Re-gate tracked CSVs** action all work against
+`animal0.csv` exactly as they do against a single-animal session's CSV. There
+is no second, four-row format those tools have to learn to read.
+
+Zones are still scored per animal, into the same `zone_events.csv` /
+`zone_occupancy.csv` pair described above, with `object_id` reading `animal0`,
+`animal1`, and so on.
+
+### Finding a multi-animal session's pose data
+
+`find_pose_csv(video)` — what every single-animal tool asks to get "the" pose
+CSV for a video — has no single file to hand back for a multi-animal session,
+so it returns `None`, exactly as if the video had never been tracked. It
+logs, at info level, the video, how many animals it found, and which
+directory — that log line is the only place the reason surfaces. This is
+deliberate rather than an oversight: raising instead would abort every scan
+built over a folder of videos (several exist) for the sake of one
+multi-animal session among many.
+
+**What this means in practice:** if you point a single-animal-only tool — or
+`reuse_existing_poses` in a workflow that expects one file — at a video that
+was tracked multi-animal, the video looks untracked. There's no error, no
+dialog; the session is just missing from whatever list or scan you're
+looking at. If a video you know you tracked isn't showing up somewhere,
+check whether it was tracked with **Animals** set above 1, and check the log
+for the "is a multi-animal session" line naming it.
+
+Code that wants the whole set uses `find_pose_csvs(video)` instead, which
+returns every animal's CSV in slot order (`animal0.csv`, `animal1.csv`, ...).
+It's empty for a single-animal or untracked video, since those have no
+`_animals/` directory to list.
+
+### The four-row DLC CSV is an opt-in export
+
+DLC's own convention for holding several animals in one file adds a fourth
+header row, `individuals`, between `scorer` and `bodyparts`:
 
 ```text
 scorer,my_yolo,my_yolo,my_yolo,...,my_yolo,my_yolo,my_yolo,...
@@ -230,37 +292,52 @@ coords,x,y,likelihood,...,x,y,likelihood,...
 0,412.3,288.1,0.98,...,55.0,301.2,0.95,...
 ```
 
-Reading one back requires saying which animal you want. `from_dlc_csv` inspects
-the second row to tell a three-row single-animal file from a four-row
-multi-animal one automatically, but for a multi-animal file it **raises**
-unless you pass `individual=` — by name (`"animal1"`) or by slot (`1`). Handing
-back the first animal by default would be indistinguishable from a
-single-animal read, and silently analysing one arbitrary mouse out of a social
-recording is the exact failure this feature exists to end. A pre-existing
-three-row pose CSV from before this shipped reads exactly as it always has —
-the format is unchanged, and there is nothing to name.
+GLIDER no longer writes this as part of a batch run — the per-animal files
+above are the only artifact `run_batch` produces for a multi-animal session.
+The four-row file is now something you ask for: the **Export multi-animal
+DLC CSV** button in the Batch Pose Tracking window (beside **Re-gate tracked
+CSVs**) reads a session's per-animal files and writes the combined file
+fresh, every time you click it. Because it's rebuilt from the per-animal CSVs
+rather than kept in sync with them by hand, it cannot drift from what those
+files actually hold — there's exactly one place the coordinates live, and
+this is a view onto it, not a second copy.
 
-**Most of the rest of GLIDER does not read a four-row file yet, and that is
-expected, not a bug.** Behavior classification, the annotator, cohort speed,
-and the **Re-gate tracked CSVs** action all call the same reader with no
-animal named, so all of them refuse a multi-animal pose CSV exactly the way
-described above — the refusal is what stops them from silently scoring one
-arbitrary mouse out of a social recording. Per-animal support for those tools
-is planned work that has not landed yet. Today, tracking more than one animal
-gets you the pose CSV, zone scoring, and the identity sidecar; everything
-downstream of the pose CSV still expects one animal.
+Use the export when you need to hand a session to a tool outside GLIDER that
+expects DeepLabCut's own multi-animal layout. Nothing inside GLIDER reads it
+back except as an interchange format.
 
-Zones are scored per animal too, into the same `zone_events.csv` /
-`zone_occupancy.csv` pair described above, with `object_id` reading `animal0`,
-`animal1`, and so on.
+Reading a four-row file back requires saying which animal you want.
+`from_dlc_csv` inspects the second row to tell a three-row single-animal file
+from a four-row multi-animal one automatically, but for a multi-animal file
+it **raises** unless you pass `individual=` — by name (`"animal1"`) or by
+slot (`1`). Handing back the first animal by default would be
+indistinguishable from a single-animal read, and silently analysing one
+arbitrary mouse out of a social recording is the exact failure this feature
+exists to end. A pre-existing three-row pose CSV — including each per-animal
+file above — reads exactly as it always has; the format is unchanged, and
+there is nothing to name.
+
+!!! note "Already have four-row files from before this changed?"
+    If you ran a multi-animal batch before per-animal files existed, the
+    four-row CSV it wrote is still there and still reads back with
+    `from_dlc_csv(individual=...)`. It just isn't what a fresh batch run (or
+    a re-run of that same video) produces anymore — that writes the
+    per-animal layout above. If you want a four-row file for a session
+    that's already been re-tracked into per-animal CSVs, use **Export
+    multi-animal DLC CSV** rather than keeping the old one, since only the
+    export is guaranteed to match the current coordinates.
 
 ### The identity sidecar
 
 Consolidation does not only observe identity, it *infers* it — a fragment is
 joined across a gap on the strength of a plausible speed, not a certainty.
-Every run of more than one animal writes a `_identity.csv` beside the pose CSV
-recording exactly where that happened, so an analyst does not have to take the
-stitching on faith.
+Every run of more than one animal writes one shared `_identity.csv`, recording
+exactly where that happened for every animal in the session. It sits beside
+the `_animals/` directory rather than inside it — `<stem>_identity.csv`, using
+the same stem the directory's own name is built from — so an analyst does not
+have to take the stitching on faith. Its `individual` column (`animal0`,
+`animal1`, ...) is what tells rows for different animals apart within the one
+file.
 
 The file is **sparse**: a row exists only where an animal's identity at that
 frame is in some doubt. A frame with no row for an animal is unambiguous —

@@ -213,6 +213,82 @@ For each video, GLIDER writes:
 These files give you both the moment-to-moment ethogram and the summary statistics
 most behavioral analyses report.
 
+### Multiple animals
+
+A trained model applies to a [multi-animal](tracking.md#multiple-animals)
+session too — no retraining needed, since the per-animal geometric features it
+was trained on don't change when a video holds more than one animal. GLIDER
+scores every animal in the session with the same model and writes each its
+own ethogram, `animal{slot}_ethogram.csv`, beside that animal's own pose CSV
+under `<video>_animals/` — same three-row layout as a single-animal ethogram,
+same `write_ethogram_csv`. There is deliberately no `individual` column: the
+tools that read an ethogram (Session Review among them) read a flat list of
+rows keyed only by position, and a shared multi-animal file would silently
+double-count every frame rather than error.
+
+To reach this path, check **Reuse already-tracked pose CSVs** (on by default)
+and add a video that was already run through Batch Pose Tracking with
+**Animals** above 1. This matters because it's the *only* way in: tracking a
+video fresh from inside the Apply tab is always single-animal, so a
+multi-animal video with `reuse_existing_poses` off, or with no per-animal
+files on disk yet, tracks and scores one animal, not the ones you tracked
+earlier. Track it with Batch Pose Tracking first.
+
+The result box reports which animals were scored and where each ethogram
+landed, rather than the usual frame count and file list — there is no
+`annotated.mp4`, `bouts.csv`, `stats.csv`, or `transitions.csv` for a
+multi-animal run. Per-animal bouts, stats, and transitions are deliberately
+not produced yet: the reporting layer (`run_report`, and the review tab that
+reads it) has no notion of per-animal identity today, and building that is
+more than this feature needed to be useful. The per-animal ethograms
+themselves are complete and readable — open one directly in **Session
+Review** (its file picker isn't specific to single-animal sessions; point it
+at `animal0_ethogram.csv` and, if you want the keypoint view too,
+`animal0.csv` as the pose CSV) — bouts and stats just aren't computed for you
+automatically per animal the way they are for a single-animal run.
+
+A multi-animal apply refuses three things outright, rather than scoring
+something misleading:
+
+- **A speed-only run** (no model — freezing/darting from the speed trace
+  alone). The per-animal scoring path always goes through a model; there is
+  no per-animal equivalent of the speed-only mode yet.
+- **An annotated video.** The renderer that draws predicted labels onto the
+  video is part of the single-animal streaming pipeline the multi-animal path
+  doesn't use.
+- **A CNN sequence model.** Per-animal scoring only knows the tabular,
+  feature-based scoring path; a sequence model has no per-animal equivalent
+  to fall back to yet.
+
+Each of these fails fast with an error naming what's missing, rather than
+silently scoring one animal or skipping a step. If you need one of them for a
+multi-animal session today, score one animal's pose CSV at a time by passing
+it as `pose_csv_in` — that goes through the ordinary single-animal path,
+which supports all three.
+
+!!! warning "Percentile speed thresholds don't work here yet"
+    `freeze_pct` / `dart_pct` thresholds are resolved before GLIDER knows
+    whether a session is multi-animal, and that resolution still looks for a
+    single pose CSV beside the video. For a multi-animal session that search
+    always comes back empty — the pose data exists, just split across
+    `animal0.csv`, `animal1.csv`, and so on — so the run fails with *"no pose
+    CSV found"* rather than a clear explanation. The pose data is not
+    missing; percentile mode just can't find it yet. Use an absolute
+    threshold (cm/s or mm/s) for a multi-animal run instead — those don't
+    depend on finding a single file.
+
+!!! note "A slot nothing was ever tracked into scores as blank, not missing"
+    If consolidation never filled one of the N slots for a stretch of video,
+    that slot's pose CSV holds no position for those frames — `PoseTracks`
+    still requires every slot to span the whole video, so there is no way to
+    omit them — and the ethogram scores those frames with an empty
+    `behavior`, the same way any frame with missing keypoints scores blank.
+    A slot that is blank throughout usually means consolidation never found a
+    long enough fragment to seed it; check that animal's row in the
+    `_identity.csv` sidecar (described in [Tracking](tracking.md#the-identity-sidecar))
+    — a slot like that carries the `gap` flag on every frame, which is the
+    tell that nothing was ever tracked there, not that scoring failed.
+
 ## The workflow at a glance
 
 ```text

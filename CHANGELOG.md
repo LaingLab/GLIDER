@@ -128,18 +128,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `infer_video_tracks` entry point refuses them by name for more than one
   animal instead of silently tracking one; tracking a single animal through
   either is unchanged.
-  - Written as one **four-row DeepLabCut CSV** — DLC's own `individuals` row
-    inserted between `scorer` and `bodyparts` — rather than the usual three,
-    so every existing single-animal file and every tool that reads one keeps
-    working exactly as before.
+  - Written as one plain **three-row DeepLabCut CSV per animal**
+    (`animal0.csv`, `animal1.csv`, ...) into a `<video>_animals/` directory
+    beside the video — the same format a single-animal run has always
+    written, so every existing reader (behaviour classification, the
+    annotator, cohort speed, training, zone scoring, the arena gate, and
+    **Re-gate tracked CSVs**) opens one animal's file unmodified, with
+    nothing new to teach any of them. `n_animals=1` is unaffected: one file
+    at today's path, no subdirectory.
   - A **`_identity.csv` sidecar** records, sparsely, the frames where a
     track's identity was inferred rather than observed — a fragment joined
     across a gap on a plausible speed, or two animals close enough that a
     swap was possible. Consolidation is greedy and longest-first, not a
     global optimum, so this file is what tells an analyst which stretches of
     a crossing to double-check rather than take on faith.
+- **A trained behavior model scores a multi-animal session, one ethogram per
+  animal.** `classify_pose_tracks` runs the same per-animal scoring a
+  single-animal apply always used, once per slot — no retraining, since the
+  geometric features it was trained on are unchanged by tracking more than
+  one animal. Each animal's ethogram lands beside its own pose CSV
+  (`animal0_ethogram.csv`, next to `animal0.csv`), in the same format a
+  single-animal ethogram has always used, with no `individual` column:
+  Session Review reads an ethogram as a flat list keyed by row position, and
+  a shared multi-animal file would silently double-count every frame instead
+  of erroring. The **Apply** tab in Behavior Analysis reaches this path
+  automatically for a video already tracked multi-animal (with **Reuse
+  already-tracked pose CSVs** on, which is the default) and reports which
+  animals were scored and where each ethogram landed. It refuses three
+  things a multi-animal run cannot yet produce, by name rather than
+  silently: a speed-only run, an annotated video, and a CNN sequence model —
+  score one animal's CSV at a time via `pose_csv_in` for any of those today.
+  Per-animal bouts, stats, and transitions are deliberately not part of this:
+  `run_report` has no notion of per-animal identity yet, and that is
+  reporting polish deferred rather than forgotten — the ethograms themselves
+  are complete and open in Session Review like any other.
 
 ### Changed
+
+- **Multi-animal batch tracking no longer writes the four-row DeepLabCut CSV
+  — it writes one plain three-row CSV per animal instead, and the four-row
+  file is now an opt-in export.** The four-row file was the one place this
+  feature didn't match the rest of GLIDER: `PoseData` stayed single-animal
+  everywhere else, and every one of the seventeen call sites that read pose
+  data — behaviour classification, the annotator, cohort speed, training,
+  zone scoring, the arena gate — refused it outright, correctly, because
+  scoring one arbitrary animal out of a social recording is the exact
+  failure multi-animal tracking exists to end. That refusal also meant those
+  tools could not work with a multi-animal session *at all*, four-row file
+  or not. Against a three-row file per animal, all seventeen work unchanged.
+  Reach the four-row layout, when something outside GLIDER needs it, with
+  the new **Export multi-animal DLC CSV** button in Batch Pose Tracking,
+  which rebuilds it fresh from the per-animal files so it can't drift from
+  them.
+  - **This branch already shipped the four-row format once.** Anyone who ran
+    a multi-animal batch before this changed has four-row CSVs on disk. They
+    still read back with `from_dlc_csv(individual=...)` — the reader is
+    unchanged — but they are no longer what a batch run produces, and
+    re-tracking that same video now writes the per-animal layout instead of
+    updating the four-row file. Use the export action if you specifically
+    want a four-row file for a session that's already on the new layout.
 
 - **`zone_occupancy.csv`'s schema changed under multi-animal tracking, in three
   ways a script reading the old file will not notice until it is already
