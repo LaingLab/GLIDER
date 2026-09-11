@@ -123,8 +123,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was nowhere to put a second. Set **Animals** in the Batch Pose Tracking
   window and it now stitches ByteTrack's fragments, which fork into a fresh id
   every time two animals cross or occlude, into exactly that many lifelong
-  tracks. DeepLabCut and SLEAP stay single-instance and are refused by name
-  for more than one animal, as they always were; tracking one animal through
+  tracks. DeepLabCut and SLEAP are single-instance architectures, so
+  multi-animal tracking has nowhere to put a second animal — the new
+  `infer_video_tracks` entry point refuses them by name for more than one
+  animal instead of silently tracking one; tracking a single animal through
   either is unchanged.
   - Written as one **four-row DeepLabCut CSV** — DLC's own `individuals` row
     inserted between `scorer` and `bodyparts` — rather than the usual three,

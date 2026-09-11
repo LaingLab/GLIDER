@@ -202,12 +202,18 @@ tracker fragments are stitched into exactly N lifelong slots — `animal0`,
 The longest fragments (above a minimum length) seed the N slots; slot numbers
 are then assigned by which of those seeding fragments appears earliest in the
 video, so `animal0` means the same thing on every re-run with the same
-settings. Every other fragment is offered to whichever slot it could
-plausibly continue — "plausibly" meaning the speed implied by the gap and the
-jump between them is under a threshold. A fragment nothing will take is
-dropped rather than mis-joined; how many were dropped is recorded in the pose
-CSV's `.meta.json` sidecar, under `consolidation`, and a video dropping a lot
-of them is one whose tuning is wrong.
+settings. Fragments below that minimum length are discarded outright, before
+seeding or joining is considered — they never anchor a slot and are never
+offered to one. Every fragment that cleared the length floor but was not
+picked as a seed is offered to whichever slot it could plausibly continue —
+"plausibly" meaning the speed implied by the gap and the jump between them is
+under a threshold. A fragment nothing will take is dropped rather than
+mis-joined; how many of *those* were dropped is recorded in the pose CSV's
+`.meta.json` sidecar, under `consolidation`, and a video dropping a lot of
+them is one whose tuning is wrong. Fragments discarded for falling under the
+length floor are not counted there, or anywhere else — a video that quietly
+loses short tracker output to the floor still looks clean in its own
+metadata.
 
 ### The multi-animal DLC CSV
 
@@ -216,11 +222,11 @@ one per animal, with a fourth header row DLC's own convention adds for this
 case — `individuals` — inserted between `scorer` and `bodyparts`:
 
 ```text
-scorer,my_yolo,my_yolo,...,my_yolo,my_yolo,...
-individuals,animal0,animal0,...,animal1,animal1,...
-bodyparts,snout,snout,...,snout,snout,...
-coords,x,y,...,x,y,...
-0,412.3,288.1,...,55.0,301.2,...
+scorer,my_yolo,my_yolo,my_yolo,...,my_yolo,my_yolo,my_yolo,...
+individuals,animal0,animal0,animal0,...,animal1,animal1,animal1,...
+bodyparts,snout,snout,snout,...,snout,snout,snout,...
+coords,x,y,likelihood,...,x,y,likelihood,...
+0,412.3,288.1,0.98,...,55.0,301.2,0.95,...
 ```
 
 Reading one back requires saying which animal you want. `from_dlc_csv` inspects
@@ -279,7 +285,7 @@ yourself from a script:
 | Knob | Default | What it does |
 | --- | --- | --- |
 | `max_travel_px_per_frame` | 40.0 px/frame | The speed cap: a fragment joins a slot only if the implied speed to close the gap is at or under this. Raise it for a fast animal in a big arena; lower it to stop distant fragments from getting joined together. |
-| `min_fragment_frames` | 5 frames | Fragments shorter than this can still be *joined onto* a slot, but never *seed* one — too short a fragment is not good evidence of where an animal started. |
+| `min_fragment_frames` | 5 frames | The length floor: a fragment shorter than this is discarded entirely, before seeding or joining is even considered — it never anchors a slot and is never offered to join one. Raising it does not just make seeding stricter; it silently removes more short tracker output from the result. |
 | `identity_min_separation_px` | 60.0 px | The distance below which two animals' centroids mark each other `close` in the identity sidecar. |
 
 ### How much to trust it
