@@ -614,6 +614,28 @@ def test_single_animal_resume_is_not_fooled_by_an_export(video, tmp_path):
     assert not d.exists()
 
 
+def test_single_animal_resume_is_not_fooled_by_an_empty_animals_dir(video, tmp_path):
+    """A raw `.exists()` on animals_dir would treat a leftover *empty*
+    `_animals/` -- a failed cleanup, or a folder a user made by hand -- as
+    proof the session is still unfinished multi-animal work, so a genuinely
+    complete single-animal session would never resume-skip: overwrite=False
+    would re-run inference on it every time."""
+    calls = {"n": 0}
+
+    def single(**kw):
+        calls["n"] += 1
+        return _single_pose()
+
+    run_batch([video], tmp_path / "m.pt", NAMES, n_animals=1, infer=single)
+    primary = dlc_output_path(video, tmp_path / "m.pt")
+    assert primary.exists()
+    animals_dir(primary).mkdir()  # empty -- no per-animal CSVs inside
+
+    result = run_batch([video], tmp_path / "m.pt", NAMES, n_animals=1, infer=single)
+    assert calls["n"] == 1  # not called a second time
+    assert result.skipped == [video]
+
+
 def test_switching_multi_to_single_replaces_the_stale_animals_dir(video, tmp_path):
     """The reverse case: a fresh single-animal primary must not sit beside a
     stale animals_dir from an earlier multi-animal run -- any future

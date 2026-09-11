@@ -426,19 +426,26 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     # reconciliation is keyed on (video, model), so a newer single-animal
     # run of a *different* model can legitimately sit beside an older
     # _animals directory. Only the newer of the two wins.
+    #
+    # The directory's own mtime is not that measure: on APFS a directory's
+    # mtime only moves when an entry is added or removed, not when a file
+    # already inside it is overwritten in place -- which is exactly what a
+    # same-model re-track does to animal0.csv, animal1.csv, etc. Rank by the
+    # newest file inside the directory instead.
     animal_dir = _pick_animals_dir(directory, video)
-    if animal_dir is not None and (
-        not matches or _mtime(animal_dir) > _mtime(max(matches, key=_mtime))
-    ):
-        logger.info(
-            "%s is a multi-animal session (%d animals) tracked in %s; "
-            "find_pose_csv has no single file to return -- use "
-            "find_pose_csvs for the per-animal paths",
-            video.name,
-            len(_animal_csvs(animal_dir)),
-            animal_dir,
-        )
-        return None
+    if animal_dir is not None:
+        animal_csvs = _animal_csvs(animal_dir)
+        animal_mtime = max(_mtime(p) for p in animal_csvs)
+        if not matches or animal_mtime > _mtime(max(matches, key=_mtime)):
+            logger.info(
+                "%s is a multi-animal session (%d animals) tracked in %s; "
+                "find_pose_csv has no single file to return -- use "
+                "find_pose_csvs for the per-animal paths",
+                video.name,
+                len(animal_csvs),
+                animal_dir,
+            )
+            return None
 
     if not matches:
         return None
@@ -730,14 +737,18 @@ def run_batch(
         #
         # Single: `primary.exists()` alone is satisfied by the four-row
         # export, which deliberately reclaims that path (see
-        # `export_actions.export_target`). `not animals_dir(primary).exists()`
+        # `export_actions.export_target`). `not _animal_csvs(animals_dir(primary))`
         # excludes that case, so re-tracking single-animal after an export
         # still runs rather than treating the export as this run's output.
+        # A raw `.exists()` on the directory would also be defeated by a
+        # leftover *empty* `_animals/` (failed cleanup, or a folder a user
+        # made) -- same reason `_pick_animals_dir` requires actual per-animal
+        # CSVs rather than just a directory.
         this_run_output = animals_dir(primary) if n_animals > 1 else primary
         already_done = (
             len(_animal_csvs(this_run_output)) == n_animals
             if n_animals > 1
-            else primary.exists() and not animals_dir(primary).exists()
+            else primary.exists() and not _animal_csvs(animals_dir(primary))
         )
 
         if already_done and not overwrite:
