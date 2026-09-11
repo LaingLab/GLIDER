@@ -850,6 +850,59 @@ def test_individuals_length_must_match_sessions(tmp_path, three_regime_pose):
         )
 
 
+def test_holdout_individuals_is_independent_of_individuals_length(tmp_path, three_regime_pose):
+    """`individuals` (len == len(sessions)) must not leak into the holdout call.
+
+    Training set: two sessions, two animals, one shared annotations CSV
+    (`individuals` has 2 entries). Holdout: a single session for a different
+    recording (1 entry). This is a legal, real-world shape -- train on both
+    animals of video A, hold out one single-animal session of video B -- and
+    the two lists have different lengths on purpose.
+
+    Before `holdout_individuals` existed, `train_model` forwarded the
+    training `individuals` list into the holdout `_assemble_sessions` call,
+    where it was checked against `len(holdout_sessions)` (1) instead of
+    `len(sessions)` (2) and raised. This must now succeed.
+    """
+    from glider.analysis.behavior import FeatureSpec, train_model
+
+    pose_a0 = tmp_path / "a_animal0.csv"
+    pose_a1 = tmp_path / "a_animal1.csv"
+    _write_dlc_csv(three_regime_pose, pose_a0)
+    _write_dlc_csv(three_regime_pose, pose_a1)
+
+    from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
+
+    store = AnnotationStore()
+    store.add(BehaviorZone("locomote", 0, 150, individual=0))
+    store.add(BehaviorZone("groom", 200, 350, individual=0))
+    store.add(BehaviorZone("rest", 450, 600, individual=1))
+    a_ann = store.save_csv(tmp_path / "a_annotations.csv")
+
+    b_csv = tmp_path / "b.csv"
+    b_ann = tmp_path / "b_annotations.csv"
+    rng = np.random.default_rng(7)
+    _write_dlc_csv(_make_b_session(rng), b_csv)
+    _write_annotations(
+        b_ann,
+        [("locomote", 0, 150), ("groom", 200, 350), ("rest", 450, 600)],
+    )
+
+    result = train_model(
+        sessions=[(pose_a0, a_ann), (pose_a1, a_ann)],
+        individuals=[0, 1],
+        holdout_sessions=[(b_csv, b_ann)],
+        holdout_individuals=None,
+        spec=FeatureSpec(body_axis=(0, three_regime_pose.n_keypoints - 1)),
+        window=10,
+        fps=30.0,
+        n_estimators=10,
+    )
+    assert result.summary["split_strategy"] == "cross_session"
+    assert result.summary["n_holdout_sessions"] == 1
+    assert result.summary["test_size"] > 0
+
+
 # ---------------------------------------------------------------------------
 # End-to-end train_model + save/load
 # ---------------------------------------------------------------------------

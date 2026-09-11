@@ -219,6 +219,7 @@ def train_model(
     traj_features: bool = False,
     motion_features: bool = False,
     individuals: list[int | None] | None = None,
+    holdout_individuals: list[int | None] | None = None,
 ) -> TrainResult:
     """Fit a behavior classifier from one or more (pose, annotations) pairs.
 
@@ -308,13 +309,22 @@ def train_model(
         ``"umap"`` (falls back to PCA if umap-learn is missing) or
         ``"pca"`` fits on the kept training rows.
     individuals
-        Positionally aligned with ``sessions`` (and, when set, also with
-        ``holdout_sessions``): entry *i* selects which animal's zones
-        session *i* trains on, or ``None`` for every zone in that
-        session's annotations CSV. ``None`` (default) preserves the
+        Positionally aligned with ``sessions``: entry *i* selects which
+        animal's zones session *i* trains on, or ``None`` for every zone in
+        that session's annotations CSV. ``None`` (default) preserves the
         single-animal behaviour — every session sees every zone. A
         two-animal video becomes two sessions sharing one annotations
-        CSV, differing only in this list.
+        CSV, differing only in this list. Does NOT apply to
+        ``holdout_sessions`` — see ``holdout_individuals`` below;
+        ``holdout_sessions`` can have a different length than ``sessions``
+        (e.g. train on both animals of video A, hold out only one session
+        of video B), so the two lists must never be conflated.
+    holdout_individuals
+        The ``individuals`` counterpart for ``holdout_sessions``: entry *i*
+        selects the animal for holdout session *i*, positionally aligned
+        with ``holdout_sessions`` and independent of ``individuals`` and its
+        length. ``None`` (default) is today's behaviour — every holdout
+        session sees every zone.
 
     Returns
     -------
@@ -380,7 +390,7 @@ def train_model(
             freq_features=freq_features,
             traj_features=traj_features,
             motion_features=motion_features,
-            individuals=individuals,
+            individuals=holdout_individuals,
         )
         # Apply the same drop logic as training.
         test_keep = (y_test_all != "") & (y_test_all != AMBIGUOUS) & ~x_test_all.isna().any(axis=1)
@@ -587,6 +597,11 @@ def train_hybrid_model(
     LightGBM is hard-required (``require=True``); the prior needs the graded
     freeze/dart kinematics that the RandomForest fallback would not change, but
     the hybrid design commits to the gradient-boosted base.
+
+    ``individuals``, when given, is positionally aligned with ``sessions``:
+    entry *i* selects which animal's zones session *i* trains on (``None``
+    per entry, or the whole list ``None``, means every zone). There is no
+    holdout here — ``train_hybrid_model`` has no ``holdout_sessions``.
     """
     from glider.analysis.behavior.hybrid import HybridModel
     from glider.analysis.behavior.prior import KinematicPrior
@@ -854,6 +869,9 @@ def _assemble_and_filter(
     ``include_background`` is set, unannotated frames are first promoted to
     ``background_class_name`` and (optionally) subsampled to
     ``background_subsample_ratio`` × the largest behavior class.
+
+    ``individuals``, when given, is forwarded as-is to :func:`_assemble_sessions`
+    — positionally aligned with ``sessions``, one entry per session.
     """
     # ---- 1. Per-session feature + label assembly ----
     x_all, y_all, g_all, per_session_counts = _assemble_sessions(
