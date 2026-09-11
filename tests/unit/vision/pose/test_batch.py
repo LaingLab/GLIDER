@@ -404,6 +404,83 @@ def test_multiple_models_resolve_deterministically(tmp_path):
     assert batch.find_pose_csv(video) == tmp_path / "session01DLC_alpha.csv"
 
 
+def test_a_multi_animal_session_is_not_returned_as_one_pose_csv(tmp_path):
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+    d = tmp_path / "s1DLC_m_animals"
+    d.mkdir()
+    (d / "animal0.csv").write_text("scorer\n")
+    (d / "animal1.csv").write_text("scorer\n")
+
+    assert batch.find_pose_csv(video) is None
+
+
+def test_a_scan_over_a_mixed_folder_still_finds_the_single_animal_session(tmp_path):
+    """The failure this design replaced: a raise here aborted the
+    comprehension for every other video in the folder."""
+    solo = tmp_path / "solo.mp4"
+    solo.write_bytes(b"x")
+    (tmp_path / "soloDLC_m.csv").write_text("scorer\n")
+    pair = tmp_path / "pair.mp4"
+    pair.write_bytes(b"x")
+    d = tmp_path / "pairDLC_m_animals"
+    d.mkdir()
+    (d / "animal0.csv").write_text("scorer\n")
+
+    found = [v for v in (solo, pair) if batch.find_pose_csv(v) is not None]
+    assert found == [solo]
+
+
+def test_the_log_names_the_session_and_the_count(tmp_path, caplog):
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+    d = tmp_path / "s1DLC_m_animals"
+    d.mkdir()
+    (d / "animal0.csv").write_text("x")
+    (d / "animal1.csv").write_text("x")
+
+    with caplog.at_level("INFO"):
+        batch.find_pose_csv(video)
+    assert "2" in caplog.text and "s1" in caplog.text
+
+
+def test_find_pose_csvs_returns_every_animal_in_slot_order(tmp_path):
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+    d = tmp_path / "s1DLC_m_animals"
+    d.mkdir()
+    for n in ("animal10", "animal2", "animal0"):
+        (d / f"{n}.csv").write_text("x")
+
+    assert [p.stem for p in batch.find_pose_csvs(video)] == ["animal0", "animal2", "animal10"]
+
+
+def test_find_pose_csvs_is_empty_for_a_single_animal_session(tmp_path):
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+    (tmp_path / "s1DLC_m.csv").write_text("scorer\n")
+
+    assert batch.find_pose_csvs(video) == []
+
+
+def test_the_cohort_collector_skips_the_animals_subdirectory(tmp_path):
+    """animal0.csv carries no "DLC_" in its stem, so the rglob-based cohort
+    collector in gui/behavior/window.py already skips it -- pinned here
+    rather than assumed, since the two discovery paths were never written to
+    cooperate (see the comment on NOT_POSE_SUFFIXES)."""
+    from glider.gui.behavior.window import _unique_pose_csvs
+
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+    d = tmp_path / "s1DLC_m_animals"
+    d.mkdir()
+    (d / "animal0.csv").write_text("x")
+    (d / "animal1.csv").write_text("x")
+
+    assert batch.find_pose_csvs(video) != []  # sanity: the session is multi-animal
+    assert _unique_pose_csvs(tmp_path) == []
+
+
 def test_the_two_pipelines_agree_on_what_counts_as_a_video():
     """Both containers used to be accepted by only one half of the pipeline."""
     assert {".wmv", ".webm"} <= batch.VIDEO_EXTS

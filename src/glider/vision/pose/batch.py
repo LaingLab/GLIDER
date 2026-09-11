@@ -57,6 +57,7 @@ __all__ = [
     "discover_videos",
     "dlc_output_path",
     "find_pose_csv",
+    "find_pose_csvs",
     "raw_output_path",
     "run_batch",
 ]
@@ -373,6 +374,16 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     logged: alphabetical order would silently prefer ``exp-5`` over ``exp-7``,
     quietly scoring a cohort with a superseded pose model. Naming the file
     explicitly is still the only way to be certain.
+
+    A multi-animal session -- :func:`animals_dir` full of per-animal CSVs
+    instead of one primary -- has no single file to hand back, so this
+    returns ``None`` for it too, exactly as if nothing had been tracked.
+    That is deliberate, not an oversight: raising here would abort every
+    scan built on a comprehension over this function (several exist, across
+    seven files), for the sake of one session among many. The log line is
+    the only place the reason surfaces, so it names the video, the animal
+    count, and the directory. Callers that want the per-animal set should
+    use :func:`find_pose_csvs`.
     """
     # Imported here, not at module scope: dlc imports pandas, and this module
     # stays cheap to import because the GUI does so while building menus.
@@ -386,6 +397,19 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     exact = directory / f"{video.stem}.csv"
     if exact.exists():
         return exact
+
+    for animal_dir in sorted(directory.glob(f"{video.stem}DLC_*_animals")):
+        animals = _animal_csvs(animal_dir)
+        if animals:
+            logger.info(
+                "%s is a multi-animal session (%d animals) tracked in %s; "
+                "find_pose_csv has no single file to return -- use "
+                "find_pose_csvs for the per-animal paths",
+                video.name,
+                len(animals),
+                animal_dir,
+            )
+            return None
 
     matches = [
         p
@@ -414,6 +438,39 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
         chosen.name,
     )
     return chosen
+
+
+def _animal_csvs(animal_dir: Path) -> list[Path]:
+    """Per-animal CSVs in *animal_dir*, in numeric slot order.
+
+    ``sorted()`` on the filenames would put ``animal10`` before ``animal2``
+    -- the slot is an integer, not a string, so it is sorted as one.
+    """
+    slots = []
+    for path in animal_dir.glob("animal*.csv"):
+        slot_id = path.stem.removeprefix("animal")
+        if slot_id.isdigit():
+            slots.append((int(slot_id), path))
+    return [path for _, path in sorted(slots)]
+
+
+def find_pose_csvs(video: Path | str, search_dir: Path | str | None = None) -> list[Path]:
+    """Every animal's pose CSV for *video*, in numeric slot order.
+
+    The counterpart to :func:`find_pose_csv` for callers that want the whole
+    set rather than one file: empty for a single-animal session (or no
+    session at all), since those have no :func:`animals_dir` to list.
+    """
+    video = Path(video)
+    directory = Path(search_dir) if search_dir is not None else video.parent
+    if not directory.is_dir():
+        return []
+
+    for animal_dir in sorted(directory.glob(f"{video.stem}DLC_*_animals")):
+        animals = _animal_csvs(animal_dir)
+        if animals:
+            return animals
+    return []
 
 
 class EventKind(StrEnum):
