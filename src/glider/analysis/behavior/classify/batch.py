@@ -43,13 +43,22 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
+if TYPE_CHECKING:
+    from glider.vision.pose.tracks import PoseTracks
+
 logger = logging.getLogger(__name__)
 
-__all__ = ["EthogramRows", "classify_pose_data", "speed_only_pose_data"]
+__all__ = [
+    "EthogramRows",
+    "classify_pose_data",
+    "classify_pose_tracks",
+    "speed_only_pose_data",
+]
 
 # The streaming extractor emits the middle row of a 5-frame history, so its
 # output trails the current frame by this much. Imported rather than repeated
@@ -344,6 +353,30 @@ def classify_pose_data(
         speed_px=speed_px_out,
         n_source_frames=n_frames,
     )
+
+
+def classify_pose_tracks(tracks: PoseTracks, model, **kw) -> dict[int, EthogramRows]:
+    """Score every animal in *tracks* with *model* — one slot, one call.
+
+    Per-animal geometric features are unchanged by the move to N tracks (D2
+    §4), so a model trained on a single animal applies to each slot exactly
+    as it did before; this is a loop over :func:`classify_pose_data`, nothing
+    more.
+
+    Every tuning keyword (``predict_every``, ``confidence_threshold``,
+    ``class_thresholds``, ``smooth_window``, ``offline_smooth_window``,
+    ``freeze_threshold``, ``dart_threshold``, ``freeze_min_frames``,
+    ``dart_min_frames``, ``frame_range``) is forwarded through ``**kw``
+    rather than re-declared here. Naming them explicitly would mean two
+    signatures carrying the same defaults, and a change to one of
+    ``classify_pose_data``'s defaults would silently stop reaching the
+    tracks path until this list was updated by hand to match. Forwarding
+    instead means a keyword ``classify_pose_data`` renames or drops fails
+    loudly — a ``TypeError`` raised from ``classify_pose_data`` itself, on
+    the first slot scored — rather than the two signatures quietly drifting
+    apart.
+    """
+    return {slot: classify_pose_data(tracks[slot], model, **kw) for slot in tracks}
 
 
 def resolve_labels(postural: list[str], speed: list[str]) -> list[str]:
