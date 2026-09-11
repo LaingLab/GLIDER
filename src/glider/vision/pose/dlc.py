@@ -258,21 +258,78 @@ def to_dlc_h5(pose: PoseData, path: str | Path, *, key: str = "df_with_missing")
     return path
 
 
-def from_dlc_csv(path: str | Path, *, fps: float | None = None) -> PoseData:
+def header_depth(path: str | Path) -> int:
+    """3 for a single-animal DLC CSV, 4 for a multi-animal one.
+
+    Decided from the second line's first cell rather than by counting, because
+    the two formats are otherwise indistinguishable without parsing the whole
+    file -- and a three-row file misread as four silently shifts every column.
+    """
+    with open(path, encoding="utf-8") as f:
+        second = f.readline() and f.readline()
+    return 4 if second.split(",", 1)[0].strip() == "individuals" else 3
+
+
+def list_individuals(path: str | Path) -> list[str]:
+    """Individual names in a multi-animal CSV; ``[]`` for a single-animal one."""
+    if header_depth(path) != 4:
+        return []
+    with open(path, encoding="utf-8") as f:
+        f.readline()
+        cells = f.readline().rstrip("\n").split(",")[1:]
+    seen: list[str] = []
+    for cell in cells:
+        name = cell.strip()
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def from_dlc_csv(
+    path: str | Path,
+    *,
+    fps: float | None = None,
+    individual: str | int | None = None,
+) -> PoseData:
     """Read a DLC-format CSV back into a PoseData.
 
-    Useful for round-trip tests and for chaining with downstream filters.
+    Three-row files read exactly as they always have. For a four-row file,
+    ``individual`` names which animal to return -- by name (``"animal1"``) or
+    by slot (``1``).
 
-    ``fps=None`` (the default) takes the rate from the sidecar
-    :func:`to_dlc_csv` wrote, falling back to :data:`DEFAULT_FPS` for CSVs
-    that predate it. Pass a number to override both.
+    A multi-animal file with no ``individual`` **raises**. Handing back the
+    first animal would be indistinguishable from a single-animal read, and
+    silently analysing one arbitrary mouse from a social recording is the exact
+    failure this whole feature exists to end.
     """
     if fps is None:
         fps = fps_for_csv(path)
         if fps is None:
             fps = DEFAULT_FPS
-    df = pd.read_csv(path, header=[0, 1, 2], index_col=0)
-    # Header shape: (scorer, bodyparts, coords)
+
+    depth = header_depth(path)
+    if depth == 3:
+        if individual is not None:
+            raise ValueError(
+                f"{Path(path).name} carries no individuals -- it is a "
+                f"single-animal DLC CSV. Drop the individual= argument."
+            )
+        df = pd.read_csv(path, header=[0, 1, 2], index_col=0)
+    else:
+        names = list_individuals(path)
+        if individual is None:
+            raise ValueError(
+                f"{Path(path).name} holds {len(names)} animals "
+                f"({', '.join(names)}); pass individual= to say which one."
+            )
+        wanted = f"animal{individual}" if isinstance(individual, int) else str(individual)
+        if wanted not in names:
+            raise ValueError(
+                f"{wanted!r} is not in {Path(path).name}; it holds " f"{', '.join(names)}."
+            )
+        df = pd.read_csv(path, header=[0, 1, 2, 3], index_col=0)
+        df = df.xs(wanted, axis=1, level="individuals")
+
     scorer_levels = df.columns.get_level_values("scorer").unique().tolist()
     if len(scorer_levels) != 1:
         raise ValueError(f"expected a single scorer column, got: {scorer_levels}")
