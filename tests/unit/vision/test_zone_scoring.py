@@ -270,6 +270,8 @@ def test_animals_are_written_in_slot_order(tmp_path):
 
 
 def test_a_track_that_entered_no_zone_still_gets_occupancy_rows(tmp_path):
-    outside = _pose([(0.05, 0.05)] * 20)
-    write_zone_csvs_multi({"animal0": score_pose(outside, _centre_zone())}, tmp_path)
-    assert (tmp_path / "zone_occupancy.csv").exists()
+    outside = _pose([OUTSIDE] * 20)
+    scoring = score_pose(outside, _centre_zone(), object_id="animal0")
+    write_zone_csvs(scoring, tmp_path)
+    rows = (tmp_path / "zone_occupancy.csv").read_text().splitlines()
+    assert rows[1].split(",")[:4] == ["animal0", "z1", "Zone 1", "0"]

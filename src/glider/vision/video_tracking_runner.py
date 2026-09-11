@@ -271,8 +271,16 @@ class VideoTrackingRunner:
             w = csv.writer(f)
             w.writerow(["object_id", "zone_id", "zone_name", "frames_in_zone", "seconds"])
             for zone in zones:
-                for tid in sorted(frames_in_zone[zone.id]):
-                    fz = frames_in_zone[zone.id][tid]
+                counts = frames_in_zone[zone.id]
+                if not counts:
+                    # Nobody ever entered - that is a result (a zero), not the
+                    # absence of one. Keep the "one row per configured zone
+                    # minimum" guarantee; object_id is empty because there was
+                    # no animal to name, not because we dropped its id.
+                    w.writerow(["", zone.id, zone.name, 0, "0.000"])
+                    continue
+                for tid in sorted(counts):
+                    fz = counts[tid]
                     w.writerow([tid, zone.id, zone.name, fz, f"{fz / fps:.3f}"])
 
     def _write_metadata(self, fps: float, frame_count: int, resolution: tuple[int, int]) -> None:

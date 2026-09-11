@@ -89,6 +89,7 @@ class ZoneScoring:
     frames_total: int
     frames_scored: int
     fps: float
+    object_id: str = "subject"
     keypoint: str = DEFAULT_KEYPOINT
     metadata: dict = field(default_factory=dict)
 
@@ -189,6 +190,7 @@ def score_pose(
         frames_total=len(xy),
         frames_scored=scored,
         fps=fps,
+        object_id=object_id,
         keypoint=keypoint,
     )
 
@@ -234,17 +236,6 @@ def score_csv(
     return scoring
 
 
-def _scoring_object_id(scoring: ZoneScoring) -> str:
-    """Which animal a scoring describes.
-
-    Read off its events rather than stored twice: ZoneEvent already carries it,
-    and a second copy on ZoneScoring is a second thing that can disagree. A
-    track that never entered a zone has no events and no name to read, which is
-    what the default covers.
-    """
-    return scoring.events[0].object_id if scoring.events else "subject"
-
-
 def write_zone_csvs(scoring: ZoneScoring, output_dir: Path | str) -> list[Path]:
     """Write ``zone_events.csv`` and ``zone_occupancy.csv`` into *output_dir*.
 
@@ -277,7 +268,7 @@ def write_zone_csvs(scoring: ZoneScoring, output_dir: Path | str) -> list[Path]:
         for zone_id, frames in scoring.frames_in_zone.items():
             writer.writerow(
                 [
-                    _scoring_object_id(scoring),
+                    scoring.object_id,
                     zone_id,
                     scoring.zone_names.get(zone_id, ""),
                     frames,
