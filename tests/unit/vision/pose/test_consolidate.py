@@ -4,9 +4,11 @@ Everything here is arithmetic on frame spans and centroids, which is why it is
 in its own module: the algorithm that decides which animal is which should be
 testable without a GPU."""
 
+import math
+
 import numpy as np
 
-from glider.vision.pose.consolidate import Fragment, seed_slots
+from glider.vision.pose.consolidate import Fragment, assignment_cost, seed_slots
 
 K = 2  # two keypoints is enough to have a centroid
 
@@ -81,3 +83,69 @@ def test_ties_break_deterministically():
 def test_fewer_fragments_than_animals_seeds_what_there_is():
     seeds, rest = seed_slots([frag(1, 0, 100)], n_animals=3, min_fragment_frames=5)
     assert len(seeds) == 1 and rest == []
+
+
+def test_a_fragment_overlapping_the_slot_is_refused():
+    # One animal cannot be in two places. This is the whole value of knowing N.
+    slot = [frag(1, start=0, length=100, x=0, y=0)]
+    overlapping = frag(2, start=50, length=10, x=1, y=1)
+    assert assignment_cost(slot, overlapping, max_travel_px_per_frame=40.0) == math.inf
+
+
+def test_a_fragment_that_continues_the_slot_costs_little():
+    slot = [frag(1, start=0, length=10, x=100, y=100)]
+    # Resumes 2 frames later, 10 px away -> 5 px/frame.
+    nearby = frag(2, start=11, length=10, x=110, y=100)
+    cost = assignment_cost(slot, nearby, max_travel_px_per_frame=40.0)
+    assert math.isclose(cost, 5.0)
+
+
+def test_a_fragment_beyond_the_travel_limit_is_refused():
+    slot = [frag(1, start=0, length=10, x=0, y=0)]
+    teleport = frag(2, start=10, length=10, x=5000, y=0)
+    assert assignment_cost(slot, teleport, max_travel_px_per_frame=40.0) == math.inf
+
+
+def test_a_longer_gap_forgives_a_longer_distance():
+    # The limit is a speed, not a distance: an animal out of view for a second
+    # is legitimately further away than one out of view for a frame.
+    slot = [frag(1, start=0, length=10, x=0, y=0)]
+    far_but_late = frag(2, start=39, length=5, x=600, y=0)  # 600px / 30 frames = 20
+    assert math.isfinite(assignment_cost(slot, far_but_late, max_travel_px_per_frame=40.0))
+
+
+def test_a_fragment_preceding_everything_in_the_slot_is_measured_forwards():
+    # Measuring only backwards would strand a fragment that starts before the
+    # seed does, and it would be dropped despite being the same animal.
+    slot = [frag(1, start=100, length=10, x=0, y=0)]
+    earlier = frag(2, start=88, length=10, x=10, y=0)  # ends 97, gap 3, dist 10
+    cost = assignment_cost(slot, earlier, max_travel_px_per_frame=40.0)
+    assert math.isfinite(cost)
+    assert math.isclose(cost, 10.0 / 3.0)
+
+
+def test_the_nearest_fragment_in_time_is_the_one_measured_from():
+    slot = [
+        frag(1, start=0, length=10, x=0, y=0),
+        frag(2, start=100, length=10, x=500, y=0),
+    ]
+    # Starts at 112 -> nearest is the fragment ending at 109, not the one at 9.
+    candidate = frag(3, start=112, length=5, x=510, y=0)
+    cost = assignment_cost(slot, candidate, max_travel_px_per_frame=40.0)
+    assert math.isclose(cost, 10.0 / 3.0)
+
+
+def test_an_empty_slot_is_refused():
+    # Unreachable from consolidate() -- an empty slot only exists when there
+    # were fewer usable fragments than animals, in which case there is nothing
+    # left to assign. Refusing is the safe answer: a slot with no evidence for
+    # it should stay all-NaN rather than be handed someone else's fragment.
+    assert assignment_cost([], frag(1, 0, 10), max_travel_px_per_frame=40.0) == math.inf
+
+
+def test_a_nan_endpoint_refuses_rather_than_scoring_nan():
+    # A NaN cost would sort unpredictably against real ones.
+    slot = [frag(1, start=0, length=10, x=0, y=0)]
+    blind = frag(2, start=11, length=10)
+    blind.xy[:] = np.nan
+    assert assignment_cost(slot, blind, max_travel_px_per_frame=40.0) == math.inf

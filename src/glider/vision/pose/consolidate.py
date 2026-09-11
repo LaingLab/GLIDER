@@ -16,11 +16,12 @@ GPU to test.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
 
-__all__ = ["Fragment", "seed_slots"]
+__all__ = ["Fragment", "assignment_cost", "seed_slots"]
 
 
 @dataclass
@@ -95,3 +96,55 @@ def seed_slots(
     remaining = usable[n_animals:]
     seeds.sort(key=lambda f: (f.start, f.track_id))
     return seeds, remaining
+
+
+def _gap_and_distance(a: Fragment, b: Fragment) -> tuple[int, float]:
+    """Temporal gap and spatial jump between two non-overlapping fragments.
+
+    Measured in whichever direction they actually sit: *b* may precede *a*, and
+    measuring only backwards would strand a fragment that starts before the
+    seed does -- it would be dropped despite being the same animal.
+    """
+    if a.end < b.start:
+        gap = b.start - a.end
+        here, there = a.last_centroid(), b.first_centroid()
+    else:
+        gap = a.start - b.end
+        here, there = a.first_centroid(), b.last_centroid()
+    return gap, float(np.linalg.norm(there - here))
+
+
+def assignment_cost(
+    slot: list[Fragment],
+    fragment: Fragment,
+    *,
+    max_travel_px_per_frame: float,
+) -> float:
+    """What it would cost to call *fragment* the same animal as *slot*.
+
+    ``math.inf`` means refused, and there are three ways to earn it:
+
+    * the fragment's frames overlap frames the slot already holds -- one animal
+      cannot be in two places, and this constraint is the entire value of
+      knowing the animal count up front;
+    * the jump needed to get there exceeds ``max_travel_px_per_frame``;
+    * either endpoint is NaN, so there is no evidence either way. Scoring that
+      as NaN instead would sort unpredictably against real costs.
+
+    Otherwise the cost is the **implied speed** in pixels per frame. A speed
+    rather than a distance because an animal out of view for a second is
+    legitimately further away than one out of view for a single frame.
+    """
+    if not slot:
+        return math.inf
+
+    for other in slot:
+        if fragment.start <= other.end and other.start <= fragment.end:
+            return math.inf
+
+    nearest = min(slot, key=lambda o: _gap_and_distance(o, fragment)[0])
+    gap, distance = _gap_and_distance(nearest, fragment)
+    if not math.isfinite(distance):
+        return math.inf
+    speed = distance / max(gap, 1)
+    return speed if speed <= max_travel_px_per_frame else math.inf
