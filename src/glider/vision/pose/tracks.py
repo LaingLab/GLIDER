@@ -60,6 +60,17 @@ class PoseTracks:
                 f"for different animals."
             )
 
+        rates = {p.fps for p in self.tracks.values()}
+        if len(rates) != 1:
+            raise ValueError(
+                f"every slot must carry the same fps; got {sorted(rates)}. Nothing "
+                f"GLIDER writes can produce this -- consolidate hands one rate to "
+                f"every slot -- so it means a per-animal CSV was replaced by hand "
+                f"with one recorded at a different rate. Left alone it would be "
+                f"silently re-stamped with another animal's rate, and every feature "
+                f"windowed in seconds would then be computed over the wrong span."
+            )
+
     @property
     def n_animals(self) -> int:
         return len(self.tracks)

@@ -62,3 +62,17 @@ def test_fps_must_be_positive():
 def test_getitem_returns_the_slot_pose():
     p = _pose()
     assert PoseTracks(tracks={0: p}, fps=30.0)[0] is p
+
+
+def test_slots_recorded_at_different_rates_are_refused():
+    # Unreachable from GLIDER's own writer -- consolidate hands one rate to
+    # every slot -- but per-animal CSVs are plain three-row files in the format
+    # everything reads, so a hand-substituted animalN.csv can carry another
+    # rate. Without this, PoseTracks would take one slot's fps for the whole
+    # session and every feature windowed in seconds would be computed over the
+    # wrong span, with nothing on screen saying so.
+    slow = _pose()
+    fast = _pose()
+    fast.fps = 60.0
+    with pytest.raises(ValueError, match="same fps"):
+        PoseTracks(tracks={0: slow, 1: fast}, fps=30.0)
