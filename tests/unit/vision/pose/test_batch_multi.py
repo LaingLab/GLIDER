@@ -517,6 +517,103 @@ def test_multi_animal_rerun_skips_by_default(video, tmp_path):
     assert result.completed == []
 
 
+def test_resume_does_not_accept_a_half_written_directory(video, tmp_path):
+    """A batch killed between slot writes leaves _animals/ holding only some
+    of the slots. `any(...)` was satisfied by one file; the resume check
+    must require every slot this run wants, or a resumed batch "finishes"
+    having tracked only one animal of two."""
+    primary = dlc_output_path(video, tmp_path / "m.pt")
+    d = animals_dir(primary)
+    d.mkdir(parents=True)
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    to_dlc_csv(_single_pose(), d / "animal0.csv")
+    # animal1.csv never got written -- the batch died mid-loop.
+
+    calls = {"n": 0}
+
+    def infer(**kw):
+        calls["n"] += 1
+        return fake_tracks(2)
+
+    result = run_batch([video], tmp_path / "m.pt", NAMES, n_animals=2, infer_tracks=infer)
+    assert calls["n"] == 1
+    assert result.completed == [video]
+    assert sorted(p.name for p in d.glob("animal*.csv")) == ["animal0.csv", "animal1.csv"]
+
+
+def test_resume_is_not_fooled_by_an_ethogram_only_directory(video, tmp_path):
+    """`animal*.csv` also matches `animal0_ethogram.csv` -- a directory
+    holding only ethograms (no pose CSVs at all) must not read as "already
+    tracked"."""
+    primary = dlc_output_path(video, tmp_path / "m.pt")
+    d = animals_dir(primary)
+    d.mkdir(parents=True)
+    (d / "animal0_ethogram.csv").write_text("frame,behavior\n0,still\n")
+
+    result = run_batch(
+        [video], tmp_path / "m.pt", NAMES, n_animals=2, infer_tracks=lambda **kw: fake_tracks(2)
+    )
+    assert result.completed == [video]
+    assert sorted(p.name for p in d.glob("animal*.csv") if p.stem[len("animal") :].isdigit()) == [
+        "animal0.csv",
+        "animal1.csv",
+    ]
+
+
+def test_shrinking_animal_count_reruns_by_default(video, tmp_path):
+    """3 animals, then a plain rerun (default overwrite=False) at 2: the old
+    `any(...)` check saw the 3 leftover files and skipped, so a shrink never
+    took effect unless the caller remembered to pass overwrite=True. The
+    fixed check must see that only 2 of the 2 wanted slots exist -- no,
+    that all 3 old slots don't equal the 2 now wanted -- and rerun."""
+    run_batch(
+        [video], tmp_path / "m.pt", NAMES, n_animals=3, infer_tracks=lambda **kw: fake_tracks(3)
+    )
+    primary = dlc_output_path(video, tmp_path / "m.pt")
+    d = animals_dir(primary)
+    assert sorted(p.name for p in d.glob("animal*.csv")) == [
+        "animal0.csv",
+        "animal1.csv",
+        "animal2.csv",
+    ]
+
+    result = run_batch(
+        [video], tmp_path / "m.pt", NAMES, n_animals=2, infer_tracks=lambda **kw: fake_tracks(2)
+    )
+    assert result.completed == [video]
+    assert sorted(p.name for p in d.glob("animal*.csv")) == ["animal0.csv", "animal1.csv"]
+
+
+def test_single_animal_resume_is_not_fooled_by_an_export(video, tmp_path):
+    """The four-row export deliberately reclaims the primary path
+    (export_target), so `primary.exists()` alone is satisfied by an export
+    left over from a multi-animal session that hasn't actually been
+    re-tracked single-animal. Re-tracking single-animal must still run --
+    skipping would leave the video multi-animal on disk with no inference."""
+    run_batch(
+        [video], tmp_path / "m.pt", NAMES, n_animals=2, infer_tracks=lambda **kw: fake_tracks(2)
+    )
+    primary = dlc_output_path(video, tmp_path / "m.pt")
+    d = animals_dir(primary)
+    assert d.exists()
+    # Simulate "Export multi-animal DLC CSV": it writes to `primary` without
+    # touching `animals_dir`, so both exist at once.
+    primary.write_text("scorer,x\n")
+
+    calls = {"n": 0}
+
+    def single(**kw):
+        calls["n"] += 1
+        return _single_pose()
+
+    result = run_batch([video], tmp_path / "m.pt", NAMES, n_animals=1, infer=single)
+    assert calls["n"] == 1
+    assert result.completed == [video]
+    assert header_depth(primary) == 3
+    assert not d.exists()
+
+
 def test_switching_multi_to_single_replaces_the_stale_animals_dir(video, tmp_path):
     """The reverse case: a fresh single-animal primary must not sit beside a
     stale animals_dir from an earlier multi-animal run -- any future
@@ -571,6 +668,32 @@ def test_shrinking_animal_count_orphans_no_slot(video, tmp_path):
     assert sorted(p.name for p in d.glob("*.csv")) == ["animal0.csv", "animal1.csv"]
     assert not (d / "animal2.csv").exists()
     assert not (d / "animal2.meta.json").exists()
+
+
+def test_dropping_an_orphaned_slot_also_drops_its_ethogram(tmp_path):
+    """animal2's ethogram is behaviour scored from pose data that no longer
+    exists once the slot is orphaned -- leaving it behind is indistinguishable
+    from a live animal's scores to anything globbing *_ethogram.csv. A kept
+    slot's ethogram (animal0's) is untouched: it goes stale too, but deleting
+    a user's analysis output is a bigger call than deleting the pose file it
+    came from."""
+    from glider.vision.pose.batch import _drop_orphaned_animal_slots
+
+    d = tmp_path / "s1DLC_m_animals"
+    d.mkdir()
+    for n in ("animal0.csv", "animal1.csv", "animal2.csv"):
+        (d / n).write_text("x")
+    for n in ("animal0_ethogram.csv", "animal1_ethogram.csv", "animal2_ethogram.csv"):
+        (d / n).write_text("frame,behavior\n0,still\n")
+
+    _drop_orphaned_animal_slots(d, kept_slots={0, 1})
+
+    assert not (d / "animal2.csv").exists()
+    assert not (d / "animal2_ethogram.csv").exists()
+    assert (d / "animal0_ethogram.csv").exists()
+    assert (d / "animal1_ethogram.csv").exists()
+    assert (d / "animal0.csv").exists()
+    assert (d / "animal1.csv").exists()
 
 
 def test_single_animal_only_history_is_unaffected_by_any_of_this(video, tmp_path):

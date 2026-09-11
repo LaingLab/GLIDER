@@ -319,11 +319,17 @@ def _drop_orphaned_animal_slots(out_dir: Path, kept_slots: set[int]) -> None:
     hold an animal that this run never saw. Whole-file overwrite of one
     ``primary`` could not do this; per-animal files can.
 
-    Touches only the per-animal pose CSVs and their own rate sidecars, never
-    anything else that may legitimately live in ``out_dir``. Never raises,
-    for the same reason as every other reconciliation here: by the time this
-    matters the new run's own files are about to be written and are the
-    artifact that counts.
+    Touches the per-animal pose CSVs, their own rate sidecars, and their own
+    ``_ethogram.csv`` -- an orphaned slot's ethogram is behaviour scored from
+    pose data that no longer exists, and leaving it behind is indistinguishable
+    from a live animal's scores to anything that globs
+    ``_animals/*_ethogram.csv``. A *kept* slot's ethogram is left alone even
+    though it is now stale too: deleting a user's analysis output on a
+    tracking run is a bigger call than deleting the pose file it was scored
+    from, so that is on the user, not this cleanup. Never raises, for the
+    same reason as every other reconciliation here: by the time this matters
+    the new run's own files are about to be written and are the artifact
+    that counts.
     """
     if not out_dir.is_dir():
         return
@@ -333,7 +339,8 @@ def _drop_orphaned_animal_slots(out_dir: Path, kept_slots: set[int]) -> None:
         slot_id = path.stem.removeprefix("animal")
         if not slot_id.isdigit() or int(slot_id) in kept_slots:
             continue
-        for p in (path, meta_path(path)):
+        ethogram = out_dir / f"animal{slot_id}_ethogram.csv"
+        for p in (path, meta_path(path), ethogram):
             try:
                 p.unlink(missing_ok=True)
             except OSError as e:  # pragma: no cover - depends on filesystem state
@@ -387,6 +394,14 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     on (video, model), so nothing stops that -- the same most-recent rule
     used for flat CSVs below picks between them. Callers that want the
     per-animal set should use :func:`find_pose_csvs`.
+
+    Reconciliation (``_drop_stale_single``, ``_drop_stale_animals_dir``) is
+    keyed on (video, model), not on video alone, so an ``_animals`` directory
+    from one model and a flat CSV from another can legitimately coexist --
+    one does not supersede the other just because it exists. So the
+    directory does not win outright: it is compared against the newest flat
+    match by the same "newest wins" rule as everything else here, and only
+    returns ``None`` when it is actually the newer of the two.
     """
     # Imported here, not at module scope: dlc imports pandas, and this module
     # stays cheap to import because the GUI does so while building menus.
@@ -401,8 +416,20 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
     if exact.exists():
         return exact
 
+    matches = [
+        p
+        for p in sorted(directory.glob(f"{video.stem}DLC_*.csv"))
+        if not p.stem.endswith(NOT_POSE_SUFFIXES)
+    ]
+
+    # A multi-animal directory does not automatically outrank a flat CSV:
+    # reconciliation is keyed on (video, model), so a newer single-animal
+    # run of a *different* model can legitimately sit beside an older
+    # _animals directory. Only the newer of the two wins.
     animal_dir = _pick_animals_dir(directory, video)
-    if animal_dir is not None:
+    if animal_dir is not None and (
+        not matches or _mtime(animal_dir) > _mtime(max(matches, key=_mtime))
+    ):
         logger.info(
             "%s is a multi-animal session (%d animals) tracked in %s; "
             "find_pose_csv has no single file to return -- use "
@@ -413,11 +440,6 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
         )
         return None
 
-    matches = [
-        p
-        for p in sorted(directory.glob(f"{video.stem}DLC_*.csv"))
-        if not p.stem.endswith(NOT_POSE_SUFFIXES)
-    ]
     if not matches:
         return None
     if len(matches) == 1:
@@ -698,9 +720,24 @@ def run_batch(
         # overwrite=False looked finished from the first frame (primary
         # already existed) and was skipped outright, reporting success while
         # writing nothing.
+        #
+        # Multi: `any(...)` is satisfied by one file, so a batch killed
+        # between slot writes leaves resume calling a half-written directory
+        # done. `== n_animals` via `_animal_csvs` (which already excludes
+        # `*_ethogram.csv` and other non-slot names) requires every slot this
+        # run wants, and also makes a 3-animal-then-2 rerun re-run rather
+        # than resume-skip on the two leftover slots.
+        #
+        # Single: `primary.exists()` alone is satisfied by the four-row
+        # export, which deliberately reclaims that path (see
+        # `export_actions.export_target`). `not animals_dir(primary).exists()`
+        # excludes that case, so re-tracking single-animal after an export
+        # still runs rather than treating the export as this run's output.
         this_run_output = animals_dir(primary) if n_animals > 1 else primary
         already_done = (
-            any(this_run_output.glob("animal*.csv")) if n_animals > 1 else this_run_output.exists()
+            len(_animal_csvs(this_run_output)) == n_animals
+            if n_animals > 1
+            else primary.exists() and not animals_dir(primary).exists()
         )
 
         if already_done and not overwrite:

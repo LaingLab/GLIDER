@@ -415,6 +415,47 @@ def test_a_multi_animal_session_is_not_returned_as_one_pose_csv(tmp_path):
     assert batch.find_pose_csv(video) is None
 
 
+def test_a_newer_flat_csv_from_another_model_outranks_an_older_animals_dir(tmp_path):
+    """Reconciliation is per (video, model): _drop_stale_animals_dir only
+    removes *that model's* directory, so a January multi-animal run and a
+    June single-animal run of a *different* model legitimately coexist. The
+    _animals dir must not win just by existing -- only when it is actually
+    newer than the flat CSV, matching the newest-wins rule the flat-CSV
+    tie-break already uses."""
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+
+    old_dir = tmp_path / "s1DLC_expA_animals"
+    old_dir.mkdir()
+    (old_dir / "animal0.csv").write_text("x")
+    os.utime(old_dir, (1_000_000, 1_000_000))
+
+    newer_flat = tmp_path / "s1DLC_expB.csv"
+    newer_flat.write_text("x")
+    os.utime(newer_flat, (2_000_000, 2_000_000))
+
+    assert batch.find_pose_csv(video) == newer_flat
+
+
+def test_an_animals_dir_still_wins_when_it_is_actually_the_newer_one(tmp_path):
+    """The reverse of the above: when the _animals directory postdates every
+    flat CSV, it is current data and must still shadow the stale flat file."""
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+
+    older_flat = tmp_path / "s1DLC_expA.csv"
+    older_flat.write_text("x")
+    os.utime(older_flat, (1_000_000, 1_000_000))
+
+    new_dir = tmp_path / "s1DLC_expB_animals"
+    new_dir.mkdir()
+    (new_dir / "animal0.csv").write_text("x")
+    (new_dir / "animal1.csv").write_text("x")
+    os.utime(new_dir, (2_000_000, 2_000_000))
+
+    assert batch.find_pose_csv(video) is None
+
+
 def test_a_scan_over_a_mixed_folder_still_finds_the_single_animal_session(tmp_path):
     """The failure this design replaced: a raise here aborted the
     comprehension for every other video in the folder."""
