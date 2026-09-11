@@ -155,6 +155,15 @@ class FeatureSpec:
     # jitter, an order of magnitude below a locomotion step.
     trajectory_min_step: float = 0.02
 
+    # When True, compute_features requires an `others` argument and emits the
+    # five social_* columns (see §3.3 of the D3 spec). Default off so every
+    # existing model's feature frame stays bit-identical -- the same guarantee
+    # include_body_length and include_trajectory already carry.
+    #
+    # A model trained with this on CANNOT run on the live path, which tracks
+    # one animal. That refusal lives in classify/pipeline.py, not here.
+    include_social: bool = False
+
     def with_resolved_body_axis(self, n_keypoints: int) -> FeatureSpec:
         """Replace negative body_axis indices with absolute ones."""
         head, tail = self.body_axis
@@ -174,6 +183,7 @@ class FeatureSpec:
             # and resolving the body axis must not be where that model dies.
             include_trajectory=getattr(self, "include_trajectory", True),
             trajectory_min_step=getattr(self, "trajectory_min_step", 0.02),
+            include_social=getattr(self, "include_social", False),
         )
 
     def resolve_angle_triplets(
@@ -224,6 +234,12 @@ class FeatureSpec:
             "angle_triplets": [[name, list(triplet)] for name, triplet in self.angle_triplets],
             "auto_angles": bool(self.auto_angles),
             "min_confidence": float(self.min_confidence),
+            # These two were missing until D3. A model saved with
+            # include_trajectory=False reloaded with it True and then asked for
+            # three columns it had never been trained on.
+            "include_trajectory": bool(self.include_trajectory),
+            "trajectory_min_step": float(self.trajectory_min_step),
+            "include_social": bool(self.include_social),
         }
 
     @classmethod
@@ -242,6 +258,11 @@ class FeatureSpec:
             # have this key get the old behaviour (no auto angles).
             auto_angles=bool(d.get("auto_angles", False)),
             min_confidence=float(d.get("min_confidence", 0.0)),
+            # Defaults are what a bundle written before these keys existed was
+            # actually TRAINED with -- not what a fresh spec would choose.
+            include_trajectory=bool(d.get("include_trajectory", True)),
+            trajectory_min_step=float(d.get("trajectory_min_step", 0.02)),
+            include_social=bool(d.get("include_social", False)),
         )
 
 
