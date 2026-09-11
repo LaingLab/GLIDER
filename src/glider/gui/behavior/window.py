@@ -2882,6 +2882,18 @@ class ApplyTab(QWidget):
     def _on_apply_finished(self, result: object, video: Path, output_dir: Path) -> None:
         self._teardown_apply_thread()
         lines = [f"{video.name}:"]
+        if isinstance(result, dict):
+            # A multi-animal session: classify() returns {slot: ethogram_path}
+            # instead of an EthogramResult, and those ethograms live beside
+            # the per-animal pose CSVs under animals_dir, not under
+            # output_dir -- none of the single-animal artifacts below exist
+            # for this run, so report the paths this result actually carries.
+            lines.append(f"  animals scored: {len(result)}")
+            for slot in sorted(result):
+                lines.append(f"  animal {slot} ethogram: {result[slot]}")
+            self._results.append("\n".join(lines))
+            self._run_next()
+            return
         n_frames = getattr(getattr(result, "ethogram", None), "__len__", lambda: None)()
         if n_frames is not None:
             lines.append(f"  frames classified: {n_frames}")

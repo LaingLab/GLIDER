@@ -709,6 +709,18 @@ def classify(
 
         if model is None:
             model = _load_behavior_model(model_path)
+        if not all(hasattr(model, a) for a in ("spec", "window", "stats", "feature_names")):
+            # classify_pose_tracks only knows the tabular scoring path
+            # (batch.classify_pose_data) -- there is no per-animal streaming
+            # pipeline to decline into the way batch_apply's single-animal
+            # check does, so a CNN sequence model has nothing correct to run
+            # here and must be refused before derive_stream_columns crashes
+            # on the missing `stats` attribute.
+            raise NotImplementedError(
+                "a CNN sequence model is not supported for a multi-animal "
+                "session yet; score one animal's pose CSV at a time with "
+                "pose_csv_in instead"
+            )
         # Every per-animal file was written from one shared video fps
         # (`_process_multi` passes the same `tracks.fps` to every slot), so
         # any one of them names it -- the same reasoning

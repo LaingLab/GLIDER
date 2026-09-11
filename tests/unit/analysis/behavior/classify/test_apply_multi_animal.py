@@ -69,6 +69,11 @@ def _model(pose: PoseData, seed: int) -> BehaviorModel:
     )
 
 
+class _CnnSequenceModel:
+    """Stands in for a sequence bundle: none of the tabular-model attributes
+    the multi-animal path checks for, which is exactly how it declines one."""
+
+
 @pytest.fixture(autouse=True)
 def no_streaming(monkeypatch):
     """Neither branch under test may reach the streaming pipeline."""
@@ -154,6 +159,61 @@ class TestMultiAnimalSession:
                 pose_dir=tmp_path,
                 freeze_threshold=1.0,
                 dart_threshold=50.0,
+            )
+
+    def test_cnn_model_multi_animal_is_refused_not_crashed(self, tmp_path):
+        """classify_pose_tracks only knows the tabular scoring path
+        (batch.classify_pose_data); there is no per-animal streaming
+        fallback to decline into the way batch_apply's single-animal check
+        has. Without this guard a CNN bundle reaches
+        derive_stream_columns's `model.stats[0]` and dies with a bare
+        AttributeError instead of a named refusal."""
+        pose0 = _pose(seed=120, base=(150.0, 120.0))
+        pose1 = _pose(seed=121, base=(400.0, 300.0))
+        animal_dir = tmp_path / "clipDLC_yolo_animals"
+        animal_dir.mkdir()
+        to_dlc_csv(pose0, animal_dir / "animal0.csv")
+        to_dlc_csv(pose1, animal_dir / "animal1.csv")
+
+        with pytest.raises(NotImplementedError, match="CNN sequence model"):
+            classify(
+                video="clip.mp4",
+                model_path=None,
+                yolo_path=None,
+                keypoint_names=KP,
+                output_dir=tmp_path / "out",
+                fps_override=30.0,
+                reuse_existing_poses=True,
+                pose_dir=tmp_path,
+                model=_CnnSequenceModel(),
+                predict_every=1,
+            )
+
+    def test_output_video_multi_animal_is_refused(self, tmp_path):
+        """An annotated video is single-animal-only (LiveInferenceConfig /
+        batch_apply territory); a multi-animal run must refuse rather than
+        silently drop the request."""
+        pose0 = _pose(seed=130, base=(150.0, 120.0))
+        pose1 = _pose(seed=131, base=(400.0, 300.0))
+        model = _model(pose0, seed=132)
+        animal_dir = tmp_path / "clipDLC_yolo_animals"
+        animal_dir.mkdir()
+        to_dlc_csv(pose0, animal_dir / "animal0.csv")
+        to_dlc_csv(pose1, animal_dir / "animal1.csv")
+
+        with pytest.raises(ValueError, match="annotated video"):
+            classify(
+                video="clip.mp4",
+                model_path=None,
+                yolo_path=None,
+                keypoint_names=KP,
+                output_dir=tmp_path / "out",
+                fps_override=30.0,
+                reuse_existing_poses=True,
+                pose_dir=tmp_path,
+                model=model,
+                predict_every=1,
+                write_annotated=True,
             )
 
 
