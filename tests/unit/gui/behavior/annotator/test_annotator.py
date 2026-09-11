@@ -733,6 +733,32 @@ def test_merge_behavior_zones_multi_source():
     assert not any(z.behavior in ("rearing", "dig") for z in out)
 
 
+def test_merge_behavior_zones_keeps_individual_and_does_not_fuse_across_animals():
+    """Two animals' overlapping zones are a live case, not an edge case.
+
+    `merge_behavior_zones` is reachable from the "merge behaviors" GUI
+    action, which writes its output straight back to disk. Before this
+    fix it silently reassigned every zone to animal 0 (the clone dropped
+    `individual`), and separately, its coalesce step fused two different
+    animals' overlapping zones into one -- both are checked here with the
+    real overlap the bug required, not a length check that would pass
+    against either defect.
+    """
+    from glider.analysis.behavior.annotations import (
+        BehaviorZone,
+        merge_behavior_zones,
+    )
+
+    zones = [
+        BehaviorZone("grooming", 100, 120, individual=0),
+        BehaviorZone("flank groom", 110, 140, individual=1),  # overlaps animal 0's zone
+    ]
+    out = merge_behavior_zones(zones, ["flank groom"], "grooming")
+    groom = sorted((z for z in out if z.behavior == "grooming"), key=lambda z: z.individual)
+    assert [z.individual for z in groom] == [0, 1]
+    assert [(z.start_frame, z.end_frame) for z in groom] == [(100, 120), (110, 140)]
+
+
 def test_zones_to_clips_maps_bounds_center_seconds():
     from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
     from glider.gui.behavior.annotator.sampler import zones_to_clips

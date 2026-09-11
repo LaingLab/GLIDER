@@ -57,8 +57,12 @@ def test_same_animal_same_behavior_still_rejected():
     with pytest.raises(OverlapError) as e:
         store.add(BehaviorZone("grooming", 140, 195, individual=1))
     # The message must name the animal, or a real double-label on animal 1
-    # reads identically to the legitimate two-animal case.
-    assert "1" in str(e.value)
+    # reads identically to the legitimate two-animal case. Assert on the
+    # full phrase, not a bare "1" -- the frame numbers below (140, 195,
+    # 120, 180) all contain the digit "1" too, so a bare "1" in str(e.value)
+    # would stay green even if "for animal {individual}" were deleted from
+    # the message entirely.
+    assert "animal 1" in str(e.value)
 
 
 def test_a_csv_with_no_individual_column_loads_as_animal_zero(tmp_path):

@@ -10,13 +10,16 @@ CSV schema
 One annotations CSV per video, conventionally named
 ``<video_stem>_annotations.csv``. Columns::
 
-    behavior, start_frame, end_frame, created_at, note
+    behavior, start_frame, end_frame, created_at, note, individual
 
 * ``behavior`` — string, must exist in the vocabulary
 * ``start_frame`` — int, inclusive
 * ``end_frame`` — int, exclusive (Python-range convention)
 * ``created_at`` — ISO 8601 timestamp, written at zone creation
 * ``note`` — free-text, optional
+* ``individual`` — int slot id, which animal the zone belongs to (default
+  0). Missing or blank on read for backward compatibility with every
+  annotations CSV written before multi-animal support.
 
 Frame semantics
 ---------------
@@ -28,10 +31,13 @@ present. So a zone of length 1 (only frame N) is ``(N, N+1)``.
 Overlap rule
 ------------
 
-Two zones of the **same** behavior overlap if their frame ranges
-intersect. Two zones of **different** behaviors are allowed to overlap
-(a mouse can locomote and rear simultaneously). :meth:`AnnotationStore.add`
-raises :class:`OverlapError` when a same-behavior overlap is detected.
+Two zones of the **same** behavior **for the same individual** overlap if
+their frame ranges intersect. Two zones of **different** behaviors are
+allowed to overlap (a mouse can locomote and rear simultaneously), and so
+are two zones of the same behavior belonging to **different** individuals
+— two animals grooming at once is not an edge case in a social assay, it
+is the assay. :meth:`AnnotationStore.add` raises :class:`OverlapError`
+only when a same-behavior, same-individual overlap is detected.
 
 This module has no Qt dependency — it's testable in isolation.
 """
@@ -132,13 +138,16 @@ def merge_behavior_zones(
     sources: Iterable[str],
     target: str,
 ) -> list[BehaviorZone]:
-    """Fold ``sources`` into ``target``, unioning overlaps.
+    """Fold ``sources`` into ``target``, unioning overlaps per individual.
 
     Every zone whose behavior is in ``sources`` is renamed to ``target``.
     Renaming can leave two ``target`` zones overlapping (which the store
-    forbids), so strictly-overlapping ``target`` zones are coalesced into
-    one (earliest start, latest end). Adjacent/touching zones stay
-    separate. Zones of other behaviors are returned unchanged.
+    forbids), so strictly-overlapping ``target`` zones **belonging to the
+    same individual** are coalesced into one (earliest start, latest end).
+    Two different individuals' zones overlapping is legal (that's the
+    two-animals-groom-at-once case) and they are never fused, even when
+    their frame ranges intersect. Adjacent/touching zones stay separate.
+    Zones of other behaviors are returned unchanged.
 
     Pure function — does not mutate the input zones or any store.
     """
@@ -153,13 +162,18 @@ def merge_behavior_zones(
             end_frame=z.end_frame,
             created_at=z.created_at,
             note=z.note,
+            individual=z.individual,
         )
         (targets if behavior == target else others).append(clone)
 
-    targets.sort(key=lambda z: (z.start_frame, z.end_frame))
+    targets.sort(key=lambda z: (z.individual, z.start_frame, z.end_frame))
     unioned: list[BehaviorZone] = []
     for z in targets:
-        if unioned and z.start_frame < unioned[-1].end_frame:  # strict overlap
+        if (
+            unioned
+            and unioned[-1].individual == z.individual
+            and z.start_frame < unioned[-1].end_frame  # strict overlap
+        ):
             prev = unioned[-1]
             prev.end_frame = max(prev.end_frame, z.end_frame)
             notes = [n for n in (prev.note, z.note) if n]
