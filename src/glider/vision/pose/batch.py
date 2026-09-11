@@ -616,8 +616,11 @@ def run_batch(
     n_animals
         1 (the default) takes the original single-animal path unchanged, so
         every project already on disk keeps reading exactly as it did. Above
-        1, each video is tracked into N animals and written as one four-row
-        DLC CSV plus an identity sidecar.
+        1, each video is tracked into N animals and written as one three-row
+        DLC CSV *per animal* under :func:`animals_dir`, plus one identity
+        sidecar for the session. No four-row file: that is an opt-in export
+        now, regenerated from the per-animal files so it cannot drift from
+        them.
     max_travel_px_per_frame, min_fragment_frames
         Consolidation knobs, forwarded to
         :func:`glider.vision.pose.core.infer_video_tracks`. Unused when
