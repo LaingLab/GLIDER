@@ -836,9 +836,15 @@ def _process_multi(
     # the naming anchor for animals_dir, the _raw companion, and the identity
     # sidecar below.
     out_dir = animals_dir(primary)
-    _drop_orphaned_animal_slots(out_dir, set(tracks))
     for slot in tracks:
         to_dlc_csv(tracks[slot], out_dir / f"animal{slot}.csv")
+    # After the writes, not before, matching _drop_stale_ungated and the two
+    # cleanups beside it: write the replacement, then delete what it supersedes.
+    # The slots removed here are disjoint from the slots just written, so the
+    # order is free -- and cleaning first would mean a write that died partway
+    # left the orphan already deleted and the kept slots still holding the
+    # previous run's data, which is worse than leaving the video untouched.
+    _drop_orphaned_animal_slots(out_dir, set(tracks))
     _drop_stale_single(primary, raw_is_current=gating or filtering is not None)
 
     stitched = {int(s): set(f) for s, f in (tracks.metadata.get("stitched") or {}).items()}
