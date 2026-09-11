@@ -26,6 +26,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from glider.vision.arena import ArenaCalibration
     from glider.vision.arena_gate import ArenaGateSettings
     from glider.vision.pose.core import PoseData
+    from glider.vision.pose.tracks import PoseTracks
     from glider.vision.zones import ZoneConfiguration
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,51 @@ def _score_zones(video: Path, pose, zones, keypoint: str) -> str:
     except Exception as e:
         logger.warning("could not score zones for %s: %s", video.name, e)
         return f"zones not scored: {e}"
+    return ""
+
+
+def _score_zones_multi(video: Path, tracks: PoseTracks, zones, keypoint: str) -> str:
+    """Score every slot in *tracks* against this video's zones.
+
+    Mirrors :func:`_score_zones` deliberately, one animal at a time: same
+    guard clauses, same resolution lookup, same never-raises contract. By the
+    time this runs, inference is done and the pose CSV is already written and
+    valid -- a zone-config problem here is a warning about the zone, not a
+    reason to fail a video that just cost an hour of GPU time.
+    """
+    if not zones:
+        return ""
+    config = zones.get(video) or zones.get(Path(video))
+    if config is None:
+        return ""
+    try:
+        from glider.vision.zone_scoring import score_pose, write_zone_csvs_multi, zone_output_dir
+
+        resolution = None
+        raw = tracks.metadata.get("resolution") if tracks.metadata else None
+        if raw:
+            resolution = (int(raw[0]), int(raw[1]))
+
+        scorings = {
+            f"animal{slot}": score_pose(
+                tracks[slot],
+                config,
+                resolution=resolution,
+                keypoint=keypoint,
+                object_id=f"animal{slot}",
+            )
+            for slot in tracks
+        }
+        write_zone_csvs_multi(scorings, zone_output_dir(video))
+    except Exception as e:
+        logger.warning("could not score zones for %s: %s", video.name, e)
+        return f"zones not scored: {e}"
+
+    # One animal's tracking being far worse than the rest is worth saying out
+    # loud: it usually means a slot that consolidation never really filled.
+    worst = min(s.coverage for s in scorings.values())
+    if worst < 0.5:
+        return f"one animal carried a usable point on only {worst:.0%} of frames"
     return ""
 
 
@@ -312,6 +358,11 @@ def run_batch(
     zone_keypoint: str = "body_center",
     arenas: Mapping[Path, ArenaCalibration] | None = None,
     gate: ArenaGateSettings | None = None,
+    n_animals: int = 1,
+    max_travel_px_per_frame: float = 40.0,
+    min_fragment_frames: int = 5,
+    identity_min_separation_px: float = 60.0,
+    infer_tracks: Callable[..., PoseTracks] | None = None,
 ) -> BatchResult:
     """Run a pose model over ``videos``, writing a DLC CSV beside each one.
 
@@ -335,6 +386,22 @@ def run_batch(
     infer
         Injection point for tests; defaults to
         :func:`glider.vision.pose.core.infer_video`.
+    n_animals
+        1 (the default) takes the original single-animal path unchanged, so
+        every project already on disk keeps reading exactly as it did. Above
+        1, each video is tracked into N animals and written as one four-row
+        DLC CSV plus an identity sidecar.
+    max_travel_px_per_frame, min_fragment_frames
+        Consolidation knobs, forwarded to
+        :func:`glider.vision.pose.core.infer_video_tracks`. Unused when
+        ``n_animals`` is 1.
+    identity_min_separation_px
+        Forwarded to :func:`glider.vision.pose.identity.identity_flags`.
+        Unused when ``n_animals`` is 1.
+    infer_tracks
+        Injection point for tests; defaults to
+        :func:`glider.vision.pose.core.infer_video_tracks`. Unused when
+        ``n_animals`` is 1.
 
     Raises
     ------
@@ -366,6 +433,11 @@ def run_batch(
         from glider.vision.pose.core import infer_video
 
         infer = infer_video
+
+    if infer_tracks is None:
+        from glider.vision.pose.core import infer_video_tracks
+
+        infer_tracks = infer_video_tracks
 
     # Fail fast: a misconfigured CUDA install or a missing GPU under
     # require_gpu should abort before video one, not after an hour of work.
@@ -410,60 +482,86 @@ def run_batch(
             # multi-detection frames inside infer_video, and a detection
             # discarded there can never be recovered by the post-hoc gate.
             arena = (arenas or {}).get(video)
-            pose = infer(
-                model_path=str(model_path),
-                video_path=str(video),
-                keypoint_names=names,
-                conf=conf,
-                device=device,
-                require_gpu=require_gpu,
-                progress=False,
-                echo_device=False,
-                progress_cb=progress_cb,
-                cancel_cb=cancel_cb,
-                arena=arena,
-                gate_settings=gate,
-            )
-            gating = gate is not None and arena is not None
-
-            # _raw is the "what did the model actually say" file, so it must be
-            # pre-gate as well as pre-filter — and it must exist whenever
-            # either is active, or gating discards data with no companion.
-            if gating or filtering is not None:
-                to_dlc_csv(pose, raw_output_path(video, model_path))
-
-            if gating:
-                from glider.vision.arena_gate import gate_to_arena
-
-                try:
-                    pose, report = gate_to_arena(pose, arena, settings=gate)
-                except ValueError as e:
-                    # DegenerateArenaError subclasses ValueError, so this
-                    # covers both. Mirrors _score_zones: by here the inference
-                    # is done and valid, and that is what matters.
-                    logger.warning("could not gate %s: %s", video.name, e)
-                else:
-                    pose.metadata["arena_gate"] = {**asdict(report), "gated": True}
-                    if report.blanked_fraction > _GATE_WARN:
-                        gate_warning = (
-                            f"gate blanked {report.blanked_fraction:.1%} of "
-                            f"{report.frames_considered} tracked frames"
-                        )
-
-            if filtering is not None:
-                from glider.vision.pose.filtering import smooth
-
-                pose = smooth(
-                    pose,
-                    confidence_threshold=filtering.confidence_threshold,
-                    max_gap=filtering.max_gap,
-                    median_window=filtering.median_window,
+            if n_animals > 1:
+                zone_warning = _process_multi(
+                    video=video,
+                    model_path=model_path,
+                    names=names,
+                    primary=primary,
+                    infer_tracks=infer_tracks,
+                    conf=conf,
+                    device=device,
+                    require_gpu=require_gpu,
+                    progress_cb=progress_cb,
+                    cancel_cb=cancel_cb,
+                    arena=arena,
+                    gate=gate,
+                    filtering=filtering,
+                    zones=zones,
+                    zone_keypoint=zone_keypoint,
+                    n_animals=n_animals,
+                    max_travel_px_per_frame=max_travel_px_per_frame,
+                    min_fragment_frames=min_fragment_frames,
+                    identity_min_separation_px=identity_min_separation_px,
                 )
-            # Written only after inference returns a complete PoseData, so a
-            # cancelled or failed video never leaves a partial CSV behind.
-            to_dlc_csv(pose, primary)
-            _drop_stale_ungated(primary)
-            zone_warning = _score_zones(video, pose, zones, zone_keypoint)
+            else:
+                pose = infer(
+                    model_path=str(model_path),
+                    video_path=str(video),
+                    keypoint_names=names,
+                    conf=conf,
+                    device=device,
+                    require_gpu=require_gpu,
+                    progress=False,
+                    echo_device=False,
+                    progress_cb=progress_cb,
+                    cancel_cb=cancel_cb,
+                    arena=arena,
+                    gate_settings=gate,
+                )
+                gating = gate is not None and arena is not None
+
+                # _raw is the "what did the model actually say" file, so it
+                # must be pre-gate as well as pre-filter — and it must exist
+                # whenever either is active, or gating discards data with no
+                # companion.
+                if gating or filtering is not None:
+                    to_dlc_csv(pose, raw_output_path(video, model_path))
+
+                if gating:
+                    from glider.vision.arena_gate import gate_to_arena
+
+                    try:
+                        pose, report = gate_to_arena(pose, arena, settings=gate)
+                    except ValueError as e:
+                        # DegenerateArenaError subclasses ValueError, so this
+                        # covers both. Mirrors _score_zones: by here the
+                        # inference is done and valid, and that is what
+                        # matters.
+                        logger.warning("could not gate %s: %s", video.name, e)
+                    else:
+                        pose.metadata["arena_gate"] = {**asdict(report), "gated": True}
+                        if report.blanked_fraction > _GATE_WARN:
+                            gate_warning = (
+                                f"gate blanked {report.blanked_fraction:.1%} of "
+                                f"{report.frames_considered} tracked frames"
+                            )
+
+                if filtering is not None:
+                    from glider.vision.pose.filtering import smooth
+
+                    pose = smooth(
+                        pose,
+                        confidence_threshold=filtering.confidence_threshold,
+                        max_gap=filtering.max_gap,
+                        median_window=filtering.median_window,
+                    )
+                # Written only after inference returns a complete PoseData,
+                # so a cancelled or failed video never leaves a partial CSV
+                # behind.
+                to_dlc_csv(pose, primary)
+                _drop_stale_ungated(primary)
+                zone_warning = _score_zones(video, pose, zones, zone_keypoint)
         except PoseCancelledError:
             result.cancelled = True
             emit(EventKind.CANCELLED, video, index)
@@ -483,3 +581,116 @@ def run_batch(
         )
 
     return result
+
+
+def _process_multi(
+    *,
+    video: Path,
+    model_path: Path,
+    names: list[str],
+    primary: Path,
+    infer_tracks,
+    conf: float,
+    device: str | None,
+    require_gpu: bool,
+    progress_cb,
+    cancel_cb,
+    arena,
+    gate,
+    filtering: FilterSettings | None,
+    zones,
+    zone_keypoint: str,
+    n_animals: int,
+    max_travel_px_per_frame: float,
+    min_fragment_frames: int,
+    identity_min_separation_px: float,
+) -> str:
+    """The multi-animal half of one video. Returns a warning string, or "".
+
+    Every per-animal stage is the *same* function the single-animal path
+    calls, once per slot. That is the whole point of keeping ``PoseData``
+    single-animal: gating, filtering and zone scoring are already correct for
+    one animal and are reused rather than re-derived.
+    """
+    from glider.vision.pose.dlc import to_dlc_csv_multi
+    from glider.vision.pose.identity import (
+        identity_flags,
+        identity_output_path,
+        write_identity_csv,
+    )
+    from glider.vision.pose.tracks import PoseTracks
+
+    tracks = infer_tracks(
+        model_path=str(model_path),
+        video_path=str(video),
+        keypoint_names=names,
+        n_animals=n_animals,
+        conf=conf,
+        device=device,
+        require_gpu=require_gpu,
+        progress=False,
+        echo_device=False,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+        arena=arena,
+        gate_settings=gate,
+        max_travel_px_per_frame=max_travel_px_per_frame,
+        min_fragment_frames=min_fragment_frames,
+    )
+    gating = gate is not None and arena is not None
+
+    # _raw is the "what did the model actually say" file, so it must be
+    # pre-gate as well as pre-filter, mirroring the single-animal path.
+    if gating or filtering is not None:
+        to_dlc_csv_multi(tracks, raw_output_path(video, model_path))
+
+    warnings_out: list[str] = []
+    if gating:
+        from glider.vision.arena_gate import gate_to_arena
+
+        gated = {}
+        worst = 0.0
+        for slot in tracks:
+            try:
+                pose, report = gate_to_arena(tracks[slot], arena, settings=gate)
+            except ValueError as e:
+                logger.warning("could not gate %s animal%d: %s", video.name, slot, e)
+                gated[slot] = tracks[slot]
+                continue
+            pose.metadata["arena_gate"] = {**asdict(report), "gated": True}
+            gated[slot] = pose
+            worst = max(worst, report.blanked_fraction)
+        tracks = PoseTracks(tracks=gated, fps=tracks.fps, metadata=tracks.metadata)
+        if worst > _GATE_WARN:
+            warnings_out.append(f"gate blanked up to {worst:.1%} of one animal's tracked frames")
+
+    if filtering is not None:
+        from glider.vision.pose.filtering import smooth
+
+        tracks = PoseTracks(
+            tracks={
+                slot: smooth(
+                    tracks[slot],
+                    confidence_threshold=filtering.confidence_threshold,
+                    max_gap=filtering.max_gap,
+                    median_window=filtering.median_window,
+                )
+                for slot in tracks
+            },
+            fps=tracks.fps,
+            metadata=tracks.metadata,
+        )
+
+    to_dlc_csv_multi(tracks, primary)
+    _drop_stale_ungated(primary)
+
+    stitched = {int(s): set(f) for s, f in (tracks.metadata.get("stitched") or {}).items()}
+    write_identity_csv(
+        identity_output_path(primary),
+        identity_flags(tracks, stitched=stitched, min_separation_px=identity_min_separation_px),
+    )
+
+    zone_warning = _score_zones_multi(video, tracks, zones, zone_keypoint)
+    if zone_warning:
+        warnings_out.append(zone_warning)
+    return "; ".join(warnings_out)
