@@ -77,6 +77,8 @@ def draw_skeleton(
     keypoint_radius: int = 4,
     edge_thickness: int = 2,
     min_confidence: float = 0.3,
+    color: tuple[int, int, int] | None = None,
+    edge_color: tuple[int, int, int] | None = None,
 ) -> np.ndarray:
     """Draw keypoints + edges on ``frame``.
 
@@ -93,6 +95,10 @@ def draw_skeleton(
     edges
         Pairs of keypoint indices to connect with a line. Defaults to
         the consecutive chain.
+    color
+        Keypoint dot colour (BGR). Defaults to the module's green.
+    edge_color
+        Skeleton line colour (BGR). Defaults to the module's cyan.
     """
     import cv2
 
@@ -108,7 +114,7 @@ def draw_skeleton(
         edges = [(i, i + 1) for i in range(k - 1)]
 
     # Edges first so the keypoint dots sit on top.
-    cyan = (220, 180, 30)
+    cyan = edge_color if edge_color is not None else (220, 180, 30)
     for a, b in edges:
         if a < 0 or b < 0 or a >= k or b >= k:
             continue
@@ -120,7 +126,7 @@ def draw_skeleton(
             continue
         cv2.line(frame, pa, pb, cyan, edge_thickness, cv2.LINE_AA)
 
-    green = (40, 200, 80)
+    green = color if color is not None else (40, 200, 80)
     for i in range(k):
         if confidences[i] < min_confidence:
             continue

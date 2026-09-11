@@ -29,6 +29,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QFont, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
@@ -54,6 +55,7 @@ from glider.analysis.behavior.annotations import (
     OverlapError,
     merge_behavior_zones,
 )
+from glider.analysis.behavior.classify.overlay import draw_skeleton
 from glider.analysis.behavior.vocabulary import (
     Behavior,
     Vocabulary,
@@ -66,6 +68,8 @@ from glider.gui.behavior.annotator.speed_trace import SpeedTrace
 from glider.gui.behavior.annotator.trim_bar import TrimBar, compute_window
 from glider.gui.styles import colors, radius
 from glider.gui.widgets.tool_ui import apply_tool_theme, readable_text_on
+from glider.vision.pose.core import PoseData
+from glider.vision.pose.dlc import from_dlc_csv
 
 if TYPE_CHECKING:
     from glider.analysis.behavior.cohort_speed import CohortSpeedThresholds
@@ -161,6 +165,7 @@ class AnnotatorWindow(QMainWindow):
         capture_cache: VideoCaptureCache | None = None,
         clip_sampler: Callable[[int], list[ProposedClip]] | None = None,
         pose_csvs: dict[Path, Path] | None = None,
+        pose_tracks: dict[Path, list[Path]] | None = None,
         cohort: CohortSpeedThresholds | None = None,
         px_per_mm: dict[Path, float] | None = None,
     ):
@@ -203,6 +208,14 @@ class AnnotatorWindow(QMainWindow):
         # hidden and nothing else about the window changes, which is what
         # every caller predating this feature relies on.
         self.pose_csvs: dict[Path, Path] = {Path(v): Path(p) for v, p in (pose_csvs or {}).items()}
+        # Per video, every animal's pose CSV in slot order -- what
+        # find_pose_csvs returns. Empty for a single-animal session, which is
+        # supported: no overlay, labelling unaffected.
+        self.pose_tracks: dict[Path, list[Path]] = {
+            Path(v): [Path(p) for p in paths] for v, paths in (pose_tracks or {}).items()
+        }
+        #: Lazily decoded from pose_tracks, cached per video.
+        self._tracks: dict[Path, list[PoseData]] = {}
         self.cohort = cohort
         self.px_per_mm: dict[Path, float] = {
             Path(v): float(s) for v, s in (px_per_mm or {}).items()
@@ -269,6 +282,7 @@ class AnnotatorWindow(QMainWindow):
         main.addLayout(title_row)
 
         self.clip = ClipPlayer(capture_cache=self._capture_cache)
+        self.clip.frame_overlay = self._draw_pose
         main.addWidget(self.clip, 1)
 
         # Trim editor: drag IN/OUT handles to tighten the saved zone to the
@@ -713,6 +727,7 @@ class AnnotatorWindow(QMainWindow):
                 behavior=label,
                 start_frame=int(in_frame),
                 end_frame=int(out_frame),
+                individual=self.clips[self.current].individual,
             )
             store.add(zone)
         except (OverlapError, ValueError) as e:
@@ -756,6 +771,7 @@ class AnnotatorWindow(QMainWindow):
                 behavior=prior.behavior,
                 start_frame=int(in_frame),
                 end_frame=int(out_frame),
+                individual=prior.individual,
             )
             store.add(zone)
         except (OverlapError, ValueError):
@@ -854,6 +870,54 @@ class AnnotatorWindow(QMainWindow):
         """Move the playhead to the frame the viewer is actually looking at."""
         if self._speed_enabled:
             self.speed_trace.set_playhead(int(frame))
+
+    # ------------------------------------------------------------------
+    # Pose overlay
+    # ------------------------------------------------------------------
+    def _tracks_for(self, video: Path) -> list[PoseData]:
+        """Decode this video's per-animal CSVs once, then serve from cache.
+
+        A CSV that will not parse costs the overlay for that video, never the
+        labelling session — the same policy _load_speed_now already applies to
+        the speed trace.
+        """
+        video = Path(video)
+        if video not in self._tracks:
+            loaded: list[PoseData] = []
+            for path in self.pose_tracks.get(video, []):
+                try:
+                    loaded.append(from_dlc_csv(path, fps=self.fps))
+                except Exception:  # noqa: BLE001 - costs the overlay, not the session
+                    loaded = []
+                    break
+            self._tracks[video] = loaded
+        return self._tracks[video]
+
+    def _draw_pose(self, frame_bgr: np.ndarray, index: int) -> np.ndarray:
+        """Draw every animal, subject highlighted. Never raises.
+
+        The animals in a social assay are visually identical, so this is the
+        only thing telling the labeller which one is the subject. A failure
+        here costs the overlay, never the labelling session.
+        """
+        try:
+            clip = self.clips[self.current]
+            poses = self._tracks_for(Path(clip.video_path))
+            for slot, pose in enumerate(poses):
+                if index >= pose.n_frames:
+                    continue
+                is_subject = slot == clip.individual
+                draw_skeleton(
+                    frame_bgr,
+                    pose.xy[index],
+                    confidences=(pose.confidence[index] if pose.confidence is not None else None),
+                    color=(60, 220, 60) if is_subject else (140, 140, 140),
+                    edge_color=(60, 220, 60) if is_subject else (110, 110, 110),
+                    keypoint_radius=5 if is_subject else 3,
+                )
+        except Exception:  # noqa: BLE001 - the overlay is never worth the session
+            return frame_bgr
+        return frame_bgr
 
     def _load_speed_now(self, video: Path) -> None:
         """Compute one video's speed trace and file the result. Blocking.
