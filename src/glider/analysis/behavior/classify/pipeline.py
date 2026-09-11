@@ -87,18 +87,20 @@ def _load_behavior_model(path):
 def _unstreamable_feature_families(feature_names) -> list[str]:
     """Feature-name stems the live FeatureEngine can't reproduce in real time.
 
-    ``motion_*`` needs the source video (egocentric frame differencing) and
-    ``traj_*``'s live path isn't wired. A model trained with either emits NaN
-    for those columns on every frame, so :meth:`BehaviorModel.predict_one`
-    returns ``""`` every frame and the overlay sticks on "(waiting...)".
-    Returning the offending stems lets the pipeline fail loudly at startup
-    instead of silently producing blank predictions forever.
+    ``motion_*`` needs the source video (egocentric frame differencing),
+    ``traj_*``'s live path isn't wired, and ``social_*`` needs a second
+    animal's track — the live path follows one animal, so there is nothing
+    to measure against. A model trained with any of them emits NaN for those
+    columns on every frame, so :meth:`BehaviorModel.predict_one` returns
+    ``""`` every frame and the overlay sticks on "(waiting...)". Returning
+    the offending stems lets the pipeline fail loudly at startup instead of
+    silently producing blank predictions forever.
     """
     return sorted(
         {
             c.split("__")[0]
             for c in feature_names
-            if c.startswith("motion_") or c.startswith("traj_")
+            if c.startswith("motion_") or c.startswith("traj_") or c.startswith("social_")
         }
     )
 

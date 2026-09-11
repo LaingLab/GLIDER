@@ -59,6 +59,23 @@ def test_unstreamable_feature_families_empty_for_pose_and_freq_model():
     )
 
 
+def test_unstreamable_feature_families_flags_social():
+    """A social model cannot run live: the live path tracks one animal.
+
+    Caught here rather than at the first frame, because
+    StreamingFeatureExtractor.push calls compute_features with no `others`
+    and would raise on every single frame forever.
+    """
+    from glider.analysis.behavior.classify.pipeline import _unstreamable_feature_families
+
+    names = [
+        "dist_snout_tail_base__mean",
+        "social_distance__mean",
+        "social_bearing__std",
+    ]
+    assert _unstreamable_feature_families(names) == ["social_bearing", "social_distance"]
+
+
 # ---------------------------------------------------------------------------
 # SlidingFeatureBuffer
 # ---------------------------------------------------------------------------
