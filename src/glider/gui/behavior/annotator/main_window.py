@@ -216,6 +216,10 @@ class AnnotatorWindow(QMainWindow):
         }
         #: Lazily decoded from pose_tracks, cached per video.
         self._tracks: dict[Path, list[PoseData]] = {}
+        #: Why a video has no overlay, per video. Filled by _tracks_for when
+        #: a per-animal CSV will not parse; read by the operator off the
+        #: status bar. Never empties a session -- see _tracks_for.
+        self.track_errors: dict[Path, str] = {}
         self.cohort = cohort
         self.px_per_mm: dict[Path, float] = {
             Path(v): float(s) for v, s in (px_per_mm or {}).items()
@@ -889,7 +893,16 @@ class AnnotatorWindow(QMainWindow):
 
         A CSV that will not parse costs the overlay for that video, never the
         labelling session — the same policy _load_speed_now already applies to
-        the speed trace.
+        the speed trace. Unlike the speed trace, the loss is not obvious: the
+        animals in this assay are visually identical, so the overlay is the
+        only thing saying which one the clip is about, and a labeller left
+        with two unmarked mice and no explanation labels whichever they guess.
+        So the reason is recorded and said out loud rather than swallowed.
+
+        All or nothing on failure, deliberately: skipping the unreadable file
+        would shift every later animal's index, and the subject is picked BY
+        index -- an overlay that highlights the wrong animal is worse than no
+        overlay at all.
         """
         video = Path(video)
         if video not in self._tracks:
@@ -897,10 +910,26 @@ class AnnotatorWindow(QMainWindow):
             for path in self.pose_tracks.get(video, []):
                 try:
                     loaded.append(from_dlc_csv(path, fps=self.fps))
-                except Exception:  # noqa: BLE001 - costs the overlay, not the session
+                except Exception as e:  # noqa: BLE001 - costs the overlay, not the session
                     loaded = []
+                    self.track_errors[video] = f"{path.name}: {type(e).__name__}: {e}"
                     break
             self._tracks[video] = loaded
+            if video in self.track_errors:
+                # No timeout: guessing which animal a clip is about costs the
+                # whole pass, so this is not a message to let scroll away.
+                # Said here rather than through warn_about_load_errors, which
+                # fires once at startup -- these CSVs are decoded lazily, on
+                # the first frame drawn, long after that dialog has gone.
+                status = self.statusBar()
+                if status is not None:
+                    status.showMessage(
+                        f"no subject overlay for {video.name} — "
+                        f"{self.track_errors[video]}. Every animal is drawn "
+                        f"the same, so check which one this clip is about "
+                        f"before labelling.",
+                        0,
+                    )
         return self._tracks[video]
 
     def _draw_pose(self, frame_bgr: np.ndarray, index: int) -> np.ndarray:

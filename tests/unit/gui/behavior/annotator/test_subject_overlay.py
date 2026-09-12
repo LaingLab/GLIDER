@@ -183,3 +183,31 @@ def test_labelling_one_animal_never_touches_the_other_animals_zone(tmp_path, qtb
         ("grooming", 1),
         ("rearing", 0),
     ]
+
+
+def test_a_broken_track_says_why_the_overlay_vanished(tmp_path, qtbot):
+    """The failure branch, previously deferred.
+
+    The animals in this assay are visually identical, so the overlay is the
+    only thing telling the labeller which one the clip is about. Dropping it
+    in silence leaves two indistinguishable mice, no markers and no reason
+    why -- and every zone the pass then writes carries a guess.
+    """
+    video = tmp_path / "a.mp4"
+    good = _write_pose_csv(tmp_path, "animal0.csv", x0=5.0)
+    bad = tmp_path / "animal1.csv"
+    bad.write_bytes(b"\x00\x01 not a pose csv at all\n")
+    w, video = _window(tmp_path, qtbot, individual=1, pose_tracks={video: [good, bad]})
+
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    out = w._draw_pose(frame, 10)
+
+    # Nothing drawn: an overlay missing one animal would shift every later
+    # slot and highlight the wrong mouse, which is worse than none.
+    assert not out.any()
+    assert w._tracks_for(video) == []
+    # And the reason is on screen, naming the file that would not parse.
+    assert video in w.track_errors
+    assert "animal1.csv" in w.track_errors[video]
+    message = w.statusBar().currentMessage()
+    assert "animal1.csv" in message and "a.mp4" in message
