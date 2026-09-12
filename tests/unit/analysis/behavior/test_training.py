@@ -113,6 +113,28 @@ def _write_annotations(path: Path, zones: list[tuple[str, int, int]]) -> None:
     store.save_csv(path)
 
 
+def _orbiting_pose(n_frames: int) -> PoseData:
+    """A second animal circling a point far from the three-regime subject.
+
+    Deliberately a DIFFERENT trajectory shape (continuous circling, never
+    still, never travelling in a line) rather than a copy of the subject's:
+    a test that fed the subject its own trajectory as `others` would still
+    pass even if the pipeline accidentally measured the subject against
+    itself.
+    """
+    names = ["snout", "left_ear", "right_ear", "neck", "tail_base"]
+    offsets = np.array([[0, -20], [-10, -10], [10, -10], [0, 0], [0, 30]], dtype=float)
+    t = np.arange(n_frames, dtype=float)
+    cx = 700.0 + 60.0 * np.cos(t / 40.0)
+    cy = 500.0 + 60.0 * np.sin(t / 40.0)
+    xy = np.empty((n_frames, len(names), 2))
+    for k in range(len(names)):
+        xy[:, k, 0] = cx + offsets[k, 0]
+        xy[:, k, 1] = cy + offsets[k, 1]
+    confidence = np.full((n_frames, len(names)), 0.95)
+    return PoseData(xy=xy, confidence=confidence, keypoint_names=names, fps=30.0)
+
+
 # ---------------------------------------------------------------------------
 # train_model tests
 # ---------------------------------------------------------------------------
@@ -960,6 +982,81 @@ def test_train_model_end_to_end_and_save_load(tmp_path, three_regime_pose):
     np.testing.assert_array_equal(preds_a, preds_b)
     # NaN rows (the start of the rolling window) should come out as "".
     assert "" in set(preds_a.tolist())
+
+
+def test_train_model_with_social_features_end_to_end(tmp_path, three_regime_pose):
+    """The regression test for the gap this task exists to close.
+
+    Two REAL per-animal pose CSVs on disk, laid out as
+    ``<video>_animals/animal<N>.csv``, the animals moving DIFFERENTLY (see
+    `_orbiting_pose`) rather than the same trajectory twice -- a test that
+    fed the subject its own trajectory as `others` would pass even if the
+    pipeline measured the subject against itself. Before this fix,
+    train_model(spec=FeatureSpec(include_social=True), ...) raised
+    unconditionally on every multi-animal session, because _assemble_sessions
+    never gathered `others` at all -- so reaching the assertion below, on a
+    real fitted model, is the check that catches that whole gap.
+    """
+    from glider.analysis.behavior import FeatureSpec, train_model
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    animals_dir = tmp_path / "video_animals"
+    animals_dir.mkdir()
+    pose_subject = animals_dir / "animal0.csv"
+    pose_other = animals_dir / "animal1.csv"
+    to_dlc_csv(three_regime_pose, pose_subject)
+    to_dlc_csv(_orbiting_pose(three_regime_pose.n_frames), pose_other)
+
+    ann_csv = tmp_path / "video_annotations.csv"
+    _write_annotations(
+        ann_csv,
+        [("locomote", 0, 200), ("groom", 200, 400), ("rest", 400, 600)],
+    )
+
+    result = train_model(
+        sessions=[(pose_subject, ann_csv)],
+        spec=FeatureSpec(body_axis=(0, three_regime_pose.n_keypoints - 1), include_social=True),
+        window=10,
+        fps=30.0,
+        n_estimators=20,
+    )
+
+    social_columns = [name for name in result.model.feature_names if "social" in name]
+    assert social_columns, "no social_* columns reached the trained model"
+    for expected in (
+        "social_distance",
+        "social_approach",
+        "social_bearing",
+        "social_nose_to_nose",
+        "social_nose_to_tail",
+    ):
+        assert any(
+            expected in name for name in social_columns
+        ), f"{expected} missing from {social_columns}"
+
+
+def test_train_model_with_social_features_on_a_flat_csv_raises_by_name(tmp_path, three_regime_pose):
+    """A flat pose CSV (no `_animals/` directory) has no other animal to
+    measure against. Must fail naming the offending session -- not with
+    compute_features' generic "no others were given", which cannot say
+    which of possibly dozens of sessions was at fault."""
+    from glider.analysis.behavior import FeatureSpec, train_model
+
+    pose_csv = tmp_path / "flat_session.csv"
+    ann_csv = tmp_path / "flat_session_annotations.csv"
+    _write_dlc_csv(three_regime_pose, pose_csv)
+    _write_annotations(ann_csv, [("locomote", 0, 200)])
+
+    with pytest.raises(ValueError) as excinfo:
+        train_model(
+            sessions=[(pose_csv, ann_csv)],
+            spec=FeatureSpec(body_axis=(0, three_regime_pose.n_keypoints - 1), include_social=True),
+            window=10,
+            fps=30.0,
+            n_estimators=5,
+        )
+    assert str(pose_csv) in str(excinfo.value)
+    assert "_animals" in str(excinfo.value)
 
 
 def test_train_model_fits_and_attaches_embedding(tmp_path, three_regime_pose):

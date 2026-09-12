@@ -44,6 +44,7 @@ import pandas as pd
 
 if TYPE_CHECKING:
     from glider.analysis.behavior.hybrid import HybridModel
+    from glider.vision.pose.core import PoseData
 
 from glider.analysis.behavior.annotations import AnnotationStore
 from glider.analysis.behavior.benchmarks.metrics import macro_frame_f1
@@ -60,6 +61,7 @@ from glider.analysis.behavior.windowing import (
     apply_rolling,
     apply_spectral_rolling,
 )
+from glider.vision.pose.batch import _animal_csvs
 from glider.vision.pose.dlc import DEFAULT_FPS, fps_for_csv, from_dlc_csv
 
 SessionPair = tuple[Path, Path]
@@ -783,13 +785,21 @@ def _assemble_sessions(
         individual = individuals[i] if individuals is not None else None
         store = AnnotationStore.load_csv(Path(ann_csv), individual=individual)
 
+        # Social features are measured against the OTHER animals in this
+        # same session. mirror_augment is refused above when include_social
+        # is set, so there is exactly one pose_variant below when `others`
+        # is non-None -- it never needs mirroring itself.
+        others: list[PoseData] | None = None
+        if spec.include_social:
+            others = _other_animal_poses(Path(pose_csv), fps=fps)
+
         # Bundle the original + optionally the mirrored copy.
         pose_variants = [pose]
         if mirror_augment:
             pose_variants.append(_mirror_pose(pose))
 
         for variant in pose_variants:
-            feats = compute_features(variant, spec=spec)
+            feats = compute_features(variant, spec=spec, others=others)
             if motion_features:
                 feats = _append_motion(feats, pose_csv, variant, spec)
             windowed = apply_rolling(feats, window=window, stats=stats)
@@ -947,6 +957,42 @@ def _assemble_and_filter(
         per_session_counts=per_session_counts,
         background_subsampled_to=background_subsampled_to,
     )
+
+
+def _other_animal_poses(pose_csv: Path, *, fps: float) -> list[PoseData]:
+    """Load every OTHER animal's pose beside *pose_csv*, for social features.
+
+    Mirrors the layout :func:`glider.gui.behavior.window._individual_for_pose_csv`
+    already reads: a per-animal pose CSV lives at
+    ``<video_stem>_animals/animal<N>.csv``, and its siblings in that same
+    directory (via :func:`glider.vision.pose.batch._animal_csvs`, in slot
+    order) are the other animals tracked in the same session.
+
+    Raises by NAME when *pose_csv* can't support this, rather than handing
+    ``compute_features`` an empty/missing ``others`` and letting its generic
+    "no others were given" fire -- that error has no session path to point
+    at, and training can run over dozens of sessions at once.
+    """
+    animals_dir = pose_csv.parent
+    if not animals_dir.name.endswith("_animals"):
+        raise ValueError(
+            f"spec.include_social is set, but {pose_csv} is not laid out as "
+            f"a per-animal pose CSV -- its directory ({animals_dir}) does "
+            f'not end in "_animals". Social features are measured against '
+            f"another animal tracked in the SAME session, so this session "
+            f"needs the multi-animal layout batch pose tracking writes for "
+            f"a multi-animal video: <video_stem>_animals/animal<N>.csv."
+        )
+    siblings = _animal_csvs(animals_dir)
+    resolved = pose_csv.resolve()
+    others = [from_dlc_csv(p, fps=fps) for p in siblings if p.resolve() != resolved]
+    if not others:
+        raise ValueError(
+            f"spec.include_social is set, but {animals_dir} has no OTHER "
+            f"animal*.csv beside {pose_csv.name} -- social features need at "
+            f"least one other animal in the session to measure against."
+        )
+    return others
 
 
 def _append_motion(feats: pd.DataFrame, pose_csv: Path, pose, spec: FeatureSpec):
@@ -1320,6 +1366,15 @@ def _assemble_for_cv(
         raise ValueError(
             "motion features are not supported with mirror augmentation yet "
             "(the source video isn't mirrored)"
+        )
+    if spec.include_social:
+        raise ValueError(
+            "spec.include_social is not supported by cross-validation yet -- "
+            "this assembly path never gathers the other animals a session "
+            "needs `others` from, unlike train_model's _assemble_sessions. "
+            "Train with train_model(spec=FeatureSpec(include_social=True), "
+            "...) on a multi-animal session instead of cross_validate_sessions "
+            "or cross_validate_and_train."
         )
 
     xs: list[pd.DataFrame] = []

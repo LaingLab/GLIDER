@@ -175,3 +175,15 @@ def test_motion_and_mirror_are_refused_here_too(sessions):
 def test_one_session_is_refused(sessions):
     with pytest.raises(ValueError):
         cross_validate_and_train(sessions[:1], spec=SPEC, **COMMON)
+
+
+def test_social_features_are_refused_here_too(sessions):
+    """_assemble_for_cv never gathers `others` -- unlike train_model's
+    _assemble_sessions, it has no way to derive the other animals for any
+    of these sessions. Refusing explicitly beats silently training on
+    columns that were never actually social."""
+    social_spec = FeatureSpec(body_axis=(0, 4), include_social=True)
+    with pytest.raises(ValueError, match="social"):
+        cross_validate_and_train(sessions, spec=social_spec, **COMMON)
+    with pytest.raises(ValueError, match="social"):
+        cross_validate_sessions(sessions, spec=social_spec, **COMMON)

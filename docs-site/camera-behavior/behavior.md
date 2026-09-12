@@ -226,9 +226,13 @@ it adds five columns:
 
 This is off by default, so it changes nothing about a model trained before
 it existed, and there is no control for it anywhere in this window today —
-the Train tab has nothing that turns it on, so nothing you do here produces
-a model that uses it. It exists at the level GLIDER extracts features from
-pose data, ahead of the Train tab growing a way to reach it.
+the Train tab has nothing that turns it on. It is trainable, though: call
+`train_model(spec=FeatureSpec(include_social=True), ...)` yourself on a
+multi-animal session — each session's pose CSV living in the same
+`animal0.csv` / `animal1.csv` / ... layout **Add sessions…** already reads
+above — and the pipeline gathers that session's other animals itself and
+trains on the columns above. What's missing is only a way to reach that
+knob from this window, ahead of the Train tab growing one.
 
 Two things about it are worth knowing anyway, because they explain behavior
 you may see elsewhere in GLIDER: a model that *does* use these columns can

@@ -198,10 +198,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a stuck "(waiting...)" overlay. It also can't be combined with
   mirror-augmented training, since mirroring flips the subject but not the
   partner it's measured against, which would put a real animal on the wrong
-  side of a mirrored arena. There is no Train-tab control for any of this —
-  the training pipeline doesn't forward another animal's pose into feature
-  extraction either, so this exists in the feature-extraction layer alone,
-  ahead of training catching up to it.
+  side of a mirrored arena. Training gathers the other animals itself — a
+  session's other `animal<N>.csv` siblings, the same multi-animal layout the
+  Train tab already reads — so
+  `train_model(spec=FeatureSpec(include_social=True), ...)` works end to
+  end on a multi-animal session; there is just no Train-tab control that
+  turns it on yet.
 
 ### Changed
 
