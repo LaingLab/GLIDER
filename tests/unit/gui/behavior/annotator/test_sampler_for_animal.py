@@ -85,7 +85,28 @@ def test_a_subject_outside_the_slot_range_raises(tmp_path):
 
 
 def test_proposed_clip_defaults_to_animal_zero():
-    """Positional construction is used across the test suite and in
-    zones_to_clips; a non-defaulted field would break every one of them."""
+    """Positional construction is used across the test suite; a
+    non-defaulted field would break every one of them.
+
+    This pins the DATACLASS default only. It is not a statement about what
+    any producer of clips should stamp -- ``zones_to_clips`` carries each
+    zone's own individual, see test_zones_to_clips_carries_the_zones_animal.
+    """
     clip = ProposedClip(0, 50, 40, 60, 0.7, "x.mp4")
     assert clip.individual == 0
+
+
+def test_zones_to_clips_carries_the_zones_animal():
+    """Review mode and resume both go through this. Flattening to 0 would
+    highlight the wrong animal, and would re-bind the clip to animal 0's
+    zones when the annotator seeds a resumed session."""
+    from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
+    from glider.gui.behavior.annotator.sampler import zones_to_clips
+
+    store = AnnotationStore()
+    store.add(BehaviorZone("grooming", 10, 20, individual=0))
+    store.add(BehaviorZone("grooming", 30, 40, individual=1))
+    store.add(BehaviorZone("rearing", 50, 60, individual=2))
+
+    clips = zones_to_clips(store, "x.mp4", fps=30.0)
+    assert [c.individual for c in clips] == [0, 1, 2]

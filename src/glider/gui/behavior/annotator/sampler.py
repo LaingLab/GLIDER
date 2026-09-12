@@ -79,6 +79,10 @@ def zones_to_clips(store, video_path: str | Path, fps: float) -> list[ProposedCl
     :class:`ProposedClip` the annotator can replay/re-trim/re-label,
     spanning exactly the zone's frames. Sorted by start frame. The pose
     CSV and sampler are not involved — this is a pure mapping.
+
+    Each clip carries the zone's own ``individual``: flattening it to 0
+    would highlight the wrong animal in review, and would re-bind the clip
+    to animal 0's zones when the annotator seeds a resumed session.
     """
     video_path = str(video_path)
     fps = float(max(fps, 1e-3))
@@ -94,6 +98,7 @@ def zones_to_clips(store, video_path: str | Path, fps: float) -> list[ProposedCl
                 end_frame=int(z.end_frame),
                 clip_seconds=float(z.end_frame - z.start_frame) / fps,
                 video_path=video_path,
+                individual=int(z.individual),
             )
         )
     return clips
