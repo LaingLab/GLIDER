@@ -1088,6 +1088,118 @@ def test_skip_labelled_filters_to_the_chosen_animal(qtbot, tmp_path, monkeypatch
     assert captured["for_animal_kwargs"]["exclude_zones"] == [(20, 30)]
 
 
+def test_a_mixed_folder_samples_both_paths_with_the_right_individuals(qtbot, tmp_path, monkeypatch):
+    """A folder holding BOTH a flat single-animal session and a multi-animal
+    one is a realistic lab layout, and it is the one path where the quota
+    split, the two separate sampler calls, and the ``individual`` stamping
+    all have to agree with each other. Every other multi-animal test here
+    builds a folder with only the multi-animal video in it.
+
+    The single-animal video must go through the ordinary
+    ``propose_clips_multi`` batch and come back ``individual=0`` (its
+    default, and correct -- there is only one animal); the multi-animal
+    video must go through ``propose_clips_for_animal`` and come back
+    stamped with the chosen subject; and the two quotas must add up to the
+    requested total, neither double-counted nor dropped.
+    """
+    from glider.gui.behavior import window as win_mod
+    from glider.gui.behavior.annotator import main_window as annot_mod
+    from glider.gui.behavior.annotator import sampler as sampler_mod
+    from glider.gui.behavior.annotator.sampler import ProposedClip
+
+    single_video = _pose_batch_output(tmp_path, "singleA")
+    multi_video, animal_csvs = _pose_batch_output_multi(tmp_path, "multiB", n_animals=2)
+
+    captured: dict = {}
+
+    def fake_multi(sessions, n_clips_total, fps=30.0, **kw):
+        captured["multi_sessions"] = list(sessions)
+        captured["multi_n_clips_total"] = n_clips_total
+        # Mirrors the real propose_clips_multi for a single-animal session:
+        # it never passes `individual`, so every clip keeps the dataclass
+        # default of 0.
+        return [
+            ProposedClip(
+                window_index=i,
+                center_frame=i,
+                start_frame=i,
+                end_frame=i + 1,
+                clip_seconds=1.0,
+                video_path=str(single_video),
+            )
+            for i in range(n_clips_total)
+        ]
+
+    def fake_for_animal(pose_csvs, video_path, *, subject, n_clips, **kw):
+        captured["for_animal_pose_csvs"] = list(pose_csvs)
+        captured["for_animal_video"] = video_path
+        captured["for_animal_subject"] = subject
+        captured["for_animal_n_clips"] = n_clips
+        # Mirrors the real propose_clips_for_animal: every clip is stamped
+        # with the chosen subject.
+        return [
+            ProposedClip(
+                window_index=i,
+                center_frame=i,
+                start_frame=i,
+                end_frame=i + 1,
+                clip_seconds=1.0,
+                video_path=str(video_path),
+                individual=subject,
+            )
+            for i in range(n_clips)
+        ]
+
+    def fake_get_int(*_a, **kw):
+        return 1, True  # two animals tracked -> subject 1
+
+    class FakeAnnotator:
+        def __init__(self, **kw):
+            captured["annotator_kwargs"] = kw
+
+        def show(self):
+            pass
+
+        def warn_about_load_errors(self):
+            return False
+
+    monkeypatch.setattr(sampler_mod, "propose_clips_multi", fake_multi)
+    monkeypatch.setattr(sampler_mod, "propose_clips_for_animal", fake_for_animal)
+    monkeypatch.setattr(annot_mod, "AnnotatorWindow", FakeAnnotator)
+    monkeypatch.setattr(win_mod.QInputDialog, "getInt", staticmethod(fake_get_int))
+    for kind in ("warning", "critical"):
+        monkeypatch.setattr(win_mod.QMessageBox, kind, lambda *a, **k: None)
+
+    tab = win_mod.AnnotateTab(tmp_path)
+    qtbot.addWidget(tab)
+    tab._videos_dir = tmp_path
+    tab._on_launch()
+
+    # Two sessions (one flat, one multi-animal), the default 50-clip target
+    # divides evenly -- 25 apiece -- and the two quotas must add back up to
+    # it: not double-counted, not dropped.
+    assert (
+        captured["multi_n_clips_total"] + captured["for_animal_n_clips"] == tab.DEFAULT_CLIP_COUNT
+    )
+    assert captured["multi_n_clips_total"] == 25
+    assert captured["for_animal_n_clips"] == 25
+    assert captured["for_animal_subject"] == 1
+    assert captured["for_animal_pose_csvs"] == animal_csvs
+    assert captured["for_animal_video"] == multi_video
+
+    clips = captured["annotator_kwargs"]["clips"]
+    single_clips = [c for c in clips if c.video_path == str(single_video)]
+    multi_clips = [c for c in clips if c.video_path == str(multi_video)]
+    assert len(single_clips) == 25
+    assert len(multi_clips) == 25
+    assert all(c.individual == 0 for c in single_clips)
+    assert all(c.individual == 1 for c in multi_clips)
+
+    # pose_tracks carries only the multi-animal video -- the overlay has
+    # nothing extra to draw for the single-animal one.
+    assert captured["annotator_kwargs"]["pose_tracks"] == {multi_video: animal_csvs}
+
+
 # --------------------------------------------------------------------------
 # _annotations_beside / _individual_for_pose_csv: the multi-animal layout
 #

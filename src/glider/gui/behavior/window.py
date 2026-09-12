@@ -1032,7 +1032,11 @@ class AnnotateTab(QWidget):
                                 n_clips_total=sum(quotas[video] for _p, video in single_pairs),
                                 fps=fps,
                                 exclude_zones_by_session=(
-                                    [_exclude_zones_for(video) or [] for _p, video in single_pairs]
+                                    [
+                                        zones
+                                        for _p, video in single_pairs
+                                        if (zones := _exclude_zones_for(video)) is not None
+                                    ]
                                     if exclude_labeled
                                     else None
                                 ),
