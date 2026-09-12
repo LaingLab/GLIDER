@@ -290,6 +290,12 @@ def compute_features(
     when ``spec.include_social`` is set. It is ignored entirely when that
     flag is off, so an existing caller that passes it by accident gets
     today's columns unchanged.
+
+    The social columns measure the subject against the nearest *tracked*
+    other animal, chosen frame by frame. ``social_approach`` is blank on any
+    frame whose derivative would be taken across a change of which animal
+    that is -- a dropout makes the nearest animal switch, and differencing
+    across the switch reports a movement that never happened.
     """
     spec = (spec or FeatureSpec()).with_resolved_body_axis(pose.n_keypoints)
     if spec.include_social and not others:
@@ -414,10 +420,10 @@ def compute_features(
             axis=0,
         )  # (M, F, 2)
 
-        # Nearest OTHER animal, recomputed every frame. An animal that is NaN
-        # this frame is not a candidate -- np.nanargmin would raise on an
-        # all-NaN column, so np.where the distances to +inf first and detect
-        # the all-absent case by the inf surviving.
+        # Nearest TRACKED other animal, recomputed every frame. An animal
+        # that is NaN this frame is not a candidate -- np.nanargmin would
+        # raise on an all-NaN column, so np.where the distances to +inf first
+        # and detect the all-absent case by the inf surviving.
         deltas = other_c - subj_c[None, :, :]  # (M, F, 2)
         gaps = np.linalg.norm(deltas, axis=2)  # (M, F)
         finite = np.where(np.isnan(gaps), np.inf, gaps)
@@ -433,10 +439,32 @@ def compute_features(
 
         # Per-frame derivative. Negative is closing. np.gradient needs >= 2
         # frames; a 1-frame call has no derivative to take.
+        #
+        # NaN wherever the stencil spans a change of WHICH animal is nearest.
+        # `nearest` switches the moment a closer animal drops out of tracking
+        # (it is made ineligible by the +inf above), and differencing across
+        # that switch subtracts one animal's distance from another's: on a
+        # real two-mouse recording with dropouts that manufactures a violent
+        # approach and an equally violent retreat on frames where nobody
+        # moved. No value is defensible there, so there is none -- the same
+        # rule social_distance already follows when nobody is tracked.
         dist = columns["social_distance"]
-        columns["social_approach"] = (
-            np.gradient(dist) if dist.shape[0] >= 2 else np.full_like(dist, np.nan)
-        )
+        if dist.shape[0] >= 2:
+            approach = np.gradient(dist)
+            # Identity, with "nobody tracked" as its own value: argmin over
+            # an all-inf column returns slot 0, which is not a sighting.
+            ident = np.where(np.isnan(gap), -1, nearest)
+            seam = np.zeros(dist.shape[0], dtype=bool)
+            seam[1:] = ident[1:] != ident[:-1]
+            # gradient[j] reads j-1 and j+1, so it spans the seam at j and
+            # the one at j+1. The same expression covers both one-sided
+            # edges, whose stencils are strictly narrower.
+            invalid = seam.copy()
+            invalid[:-1] |= seam[1:]
+            approach[invalid] = np.nan
+            columns["social_approach"] = approach
+        else:
+            columns["social_approach"] = np.full_like(dist, np.nan)
 
         # Angle between the subject's body axis (tail -> head) and the vector
         # to the other animal. 0 = facing them, pi = facing directly away.

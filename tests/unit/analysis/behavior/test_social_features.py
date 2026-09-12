@@ -176,3 +176,41 @@ def test_nose_to_nose_appears_only_when_the_keypoints_exist():
     df2 = compute_features(bare, spec=SOCIAL, others=[bare_other])
     assert "social_distance" in df2.columns
     assert "social_nose_to_nose" not in df2.columns
+
+
+def test_a_dropout_does_not_manufacture_an_approach():
+    """The nearest animal changing is not the subject moving.
+
+    A closer animal that stops being tracked is made ineligible, so
+    `nearest` silently switches to a farther one -- and a plain
+    np.gradient over social_distance then differences one animal's
+    distance against another's. On a real two-mouse recording with
+    dropouts that is a violent approach and retreat on frames where
+    nothing moved: a wrong answer that looks plausible.
+
+    Everything here is stationary, so every defensible approach value is
+    exactly 0 and any non-zero number is fiction.
+    """
+    n = 12
+    subject = _walker(n, x0=0.0, dx=0.0)  # centroid at -5
+    near_xy = _walker(n, x0=60.0, dx=0.0).xy.copy()
+    near_xy[6:] = np.nan  # the NEARER animal drops out halfway
+    near = _pose(near_xy)
+    far = _walker(n, x0=400.0, dx=0.0)  # still there, much farther
+
+    df = compute_features(subject, spec=SOCIAL, others=[near, far])
+    dist = df["social_distance"].to_numpy()
+    approach = df["social_approach"].to_numpy()
+
+    # Fixture sanity: the switch really happened and really is a big jump.
+    assert dist[5] < dist[6]
+    assert dist[6] - dist[5] > 10.0  # body lengths, not pixels
+
+    # Nothing moved, so every reported approach must be 0 -- the frames
+    # whose derivative would span the switch report nothing at all.
+    reported = approach[~np.isnan(approach)]
+    assert np.allclose(reported, 0.0), f"fictional approach: {approach.tolist()}"
+    assert np.isnan(approach[5]) and np.isnan(approach[6])
+    # And it stays a measurement everywhere else -- blanking the whole
+    # column would also pass the assertion above.
+    assert not np.isnan(approach[0]) and not np.isnan(approach[-1])
