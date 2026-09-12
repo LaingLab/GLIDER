@@ -232,7 +232,14 @@ session01DLC_exp-6_animals/             # n_animals > 1
     animal1_ethogram.csv
 
 session01DLC_exp-6_identity.csv         # one shared sidecar -- see below
+session01DLC_exp-6_annotations.csv      # written by the annotator; shared across every animal
 ```
+
+If you go on to label this session in [Behavior Analysis](behavior.md), the
+annotations file it writes lands here too, beside the video rather than
+inside `_animals/` — one file shared by every animal, not one per slot. See
+[Labelling a multi-animal session](behavior.md#labelling-a-multi-animal-session)
+for what that sharing means when you annotate and train on it.
 
 `n_animals=1` is unaffected in the strongest sense: one three-row CSV at
 today's path, no subdirectory, byte-identical to a run from before this

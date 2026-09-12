@@ -167,6 +167,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `run_report` has no notion of per-animal identity yet, and that is
   reporting polish deferred rather than forgotten — the ethograms themselves
   are complete and open in Session Review like any other.
+- **The behavior annotator labels a multi-animal session one animal at a
+  time, and training reads that back per animal too.** Launching the
+  annotator on a video tracked with more than one animal asks which slot
+  you're labelling this pass; every zone you create is stamped with it, and
+  the clip view draws every tracked animal with the one you picked
+  highlighted, since two mice in a social assay usually look identical
+  otherwise. Re-trimming a zone never moves it to a different animal, even
+  when **Resume** brings back a mix of animals into one sitting by replaying
+  every zone already saved. The annotations CSV gains an `individual` column
+  (missing, or blank, reads as animal 0 — every file written before this
+  exists still loads), and the same-behavior overlap check that used to
+  forbid a repeated label now also checks *which* animal, so two animals
+  grooming at once no longer trips it. On the **Train** tab, add each
+  animal's own pose CSV as its own session — GLIDER resolves the one
+  annotations file the video's animals share and filters it to that
+  session's own animal, so a two-animal video becomes two training sessions
+  off one shared file rather than two copies of it.
+- **Feature extraction can measure a subject against the nearest other
+  animal, though nothing in the Behavior Analysis window turns it on yet.**
+  `FeatureSpec.include_social` adds five columns — distance to whichever
+  other animal is nearest *that frame* (so it isn't wired to there being
+  exactly two), whether that distance is closing or opening, the subject's
+  heading toward or away from them, and, for skeletons that name a `snout`
+  and a `tail_base`, nose-to-nose and nose-to-tail distance. Off by default,
+  so it changes nothing about a model trained before it existed. A model
+  that does use it can only ever run offline: the live camera path tracks
+  one animal and has nothing to measure a social column against, so GLIDER
+  refuses to start live inference with such a model instead of running it
+  with a stuck "(waiting...)" overlay. It also can't be combined with
+  mirror-augmented training, since mirroring flips the subject but not the
+  partner it's measured against, which would put a real animal on the wrong
+  side of a mirrored arena. There is no Train-tab control for any of this —
+  the training pipeline doesn't forward another animal's pose into feature
+  extraction either, so this exists in the feature-extraction layer alone,
+  ahead of training catching up to it.
 
 ### Changed
 

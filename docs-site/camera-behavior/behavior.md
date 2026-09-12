@@ -78,11 +78,44 @@ Your labels are saved next to each pose CSV as an annotations file (for example
     each behavior before you start, and use `unclear` rather than guessing on
     ambiguous clips — those are dropped from training instead of adding noise.
 
+### Labelling a multi-animal session
+
+If a video was tracked with more than one animal (see
+[Multiple animals](tracking.md#multiple-animals) in Tracking), the annotator
+labels **one animal per pass**. Clicking **Launch annotator** asks, once for
+each such video, which animal (numbered from 0) you want to label this time:
+
+> Label one animal per pass: every zone you create is stamped with this
+> slot. All animals are drawn; the subject is highlighted.
+
+Cancelling that prompt cancels the whole launch rather than guessing. Every
+zone you create afterward is stamped with the animal you picked, and the
+clip view draws **every** tracked animal in the frame — your subject in
+bright green with a larger keypoint marker, the rest dimmed grey — because
+two animals in a social assay usually look identical on camera, and the
+highlight is the only thing telling you which one you're scoring.
+
+Trimming a clip's in/out points never changes which animal the zone belongs
+to, even when you're re-trimming a zone rather than creating one fresh —
+only its bounds move. This matters most after **Resume**, which can bring
+back a mix of animals into one sitting (it replays every zone already saved
+for that video, not only the animal you most recently chose): re-trimming
+any of those keeps each zone's own original animal.
+
+Your annotations CSV gains an `individual` column recording which animal
+each zone belongs to. Two animals can be labelled with the *same* behavior
+at overlapping frames — two mice grooming at once is the assay, not a
+conflict — so the check that stops you double-labelling a clip now also
+checks *which* animal, and only rejects a repeat for the same one. An
+annotations file saved before multi-animal support existed, or a
+spreadsheet-edited one with a blank cell in that column, still loads —
+those zones read as animal 0.
+
 ## Stage 2 — Train
 
 On the **Train** tab you fit a classifier from your labeled sessions:
 
-1. Under **Training sessions**, click **Add session…** and pick a matching pose
+1. Under **Training sessions**, click **Add sessions…** and pick a matching pose
    CSV and its annotations CSV. Add as many sessions as you have.
 2. Optionally add **Holdout sessions** — recordings kept aside to test how well
    the model generalizes to data it never trained on.
@@ -158,6 +191,54 @@ For the full mechanical account — what each feature column is, which rows get
 dropped before training, what LightGBM actually does with the table, and how the
 same numbers are reproduced at apply time — see
 [Behavior Classifier Internals](../reference/behavior-model.md).
+
+### Training on a multi-animal session
+
+A multi-animal recording gives you one pose CSV per animal (`animal0.csv`,
+`animal1.csv`, ... — see [Multiple animals](tracking.md#multiple-animals) in
+Tracking) but only one annotations file shared by the whole video. **Add
+sessions…** lets you pick several pose CSVs in one dialog, so select every
+animal's CSV from that session together — GLIDER resolves the annotations
+file for each one against the video, not the `_animals` folder, so
+`animal0.csv` and `animal1.csv` both find the same shared file
+automatically.
+
+Each per-animal CSV becomes its own training session, filtered to that
+animal's own zones out of the shared annotations file — animal 0's session
+trains only on the behaviors labelled for animal 0, animal 1's only on
+animal 1's, even though both live in the same CSV. A **Holdout sessions**
+entry built from a per-animal CSV is filtered the same way.
+
+### Social features
+
+Underneath, GLIDER's feature extractor can measure a subject against
+whichever *other* animal is nearest it, recomputed every frame — so it
+isn't tied to there being exactly two animals in the video. When turned on,
+it adds five columns:
+
+| Column | Meaning |
+| --- | --- |
+| `social_distance` | Distance to the nearest other animal, in body lengths |
+| `social_approach` | How fast that distance is changing: negative while closing, positive while separating |
+| `social_bearing` | Angle between the subject's own heading and the other animal, in radians — `0` facing them, `π` facing directly away |
+| `social_nose_to_nose` | Nose-to-nose distance, in body lengths — present only when the skeleton names a `snout` keypoint |
+| `social_nose_to_tail` | The subject's nose to the other animal's tail base, in body lengths — present only alongside `social_nose_to_nose`, when the skeleton also names a `tail_base` keypoint |
+
+This is off by default, so it changes nothing about a model trained before
+it existed, and there is no control for it anywhere in this window today —
+the Train tab has nothing that turns it on, so nothing you do here produces
+a model that uses it. It exists at the level GLIDER extracts features from
+pose data, ahead of the Train tab growing a way to reach it.
+
+Two things about it are worth knowing anyway, because they explain behavior
+you may see elsewhere in GLIDER: a model that *does* use these columns can
+only ever be scored offline, never on the live camera feed — the live path
+tracks one animal and has nothing to measure a social column against, so
+GLIDER refuses to start live inference with such a model rather than run it
+and leave the overlay stuck on "(waiting...)". And it cannot be combined
+with mirror-augmented training, because mirroring flips only the subject,
+which would put a real partner animal on the wrong side of a mirrored
+arena.
 
 ## Stage 3 — Apply
 
