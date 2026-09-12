@@ -927,6 +927,213 @@ def test_turning_the_trace_off_sends_no_pose_csvs(qtbot, tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# Annotate tab: opening the door on a multi-animal session
+#
+# find_pose_csv returns None for a multi-animal session by design (there is
+# no single file to hand back), which used to mean the video was reported as
+# "no pose CSV found" and the whole folder was refused. find_pose_csvs is the
+# fallback: with more than one animal it asks which one this pass is about,
+# then proposes clips for just that animal and hands the annotator every
+# track so its overlay (built in an earlier task) has something to draw.
+# --------------------------------------------------------------------------
+
+
+def _pose_batch_output_multi(tmp_path, stem, n_animals=2, fps=30.0):
+    """A video plus a real DLC-style ``<stem>DLC_exp-6_animals/`` directory,
+    one CSV per animal -- what a multi-animal tracking run leaves behind."""
+    import numpy as np
+
+    from glider.vision.pose.core import PoseData
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    names = ["snout", "neck", "tail_base"]
+    video = tmp_path / f"{stem}.mp4"
+    video.touch()
+    animals_dir = tmp_path / f"{stem}DLC_exp-6_animals"
+    animals_dir.mkdir()
+    paths = []
+    for i in range(n_animals):
+        pose = PoseData(
+            xy=np.zeros((60, len(names), 2)),
+            confidence=np.ones((60, len(names))),
+            keypoint_names=names,
+            fps=fps,
+        )
+        path = animals_dir / f"animal{i}.csv"
+        to_dlc_csv(pose, path)
+        paths.append(path)
+    return video, paths
+
+
+def _launch_multi_animal(qtbot, tmp_path, monkeypatch, *, subject=0, accept=True, configure=None):
+    """Drive _on_launch over a folder holding one multi-animal session.
+
+    Stubs the subject dialog (returning ``(subject, accept)``), the two
+    sampler entry points, and the annotator window -- everything past
+    pose-CSV discovery and the dialog itself, which is what this is testing.
+    ``configure(tab)`` runs just before launch, e.g. to tick a checkbox.
+    """
+    from glider.gui.behavior import window as win_mod
+    from glider.gui.behavior.annotator import main_window as annot_mod
+    from glider.gui.behavior.annotator import sampler as sampler_mod
+
+    captured: dict = {}
+
+    def fake_for_animal(pose_csvs, video_path, *, subject, **kw):
+        captured["for_animal_pose_csvs"] = list(pose_csvs)
+        captured["for_animal_video"] = video_path
+        captured["for_animal_subject"] = subject
+        captured["for_animal_kwargs"] = kw
+        return []
+
+    def fake_multi(sessions, n_clips_total, fps=30.0, **kw):
+        captured["multi_sessions"] = list(sessions)
+        return []
+
+    def fake_get_int(*_a, **kw):
+        captured["dialog_max"] = kw.get("max")
+        return subject, accept
+
+    class FakeAnnotator:
+        def __init__(self, **kw):
+            captured["annotator_kwargs"] = kw
+
+        def show(self):
+            pass
+
+        def warn_about_load_errors(self):
+            return False
+
+    monkeypatch.setattr(sampler_mod, "propose_clips_for_animal", fake_for_animal)
+    monkeypatch.setattr(sampler_mod, "propose_clips_multi", fake_multi)
+    monkeypatch.setattr(annot_mod, "AnnotatorWindow", FakeAnnotator)
+    monkeypatch.setattr(win_mod.QInputDialog, "getInt", staticmethod(fake_get_int))
+    for kind in ("warning", "critical"):
+        monkeypatch.setattr(win_mod.QMessageBox, kind, lambda *a, **k: None)
+
+    tab = win_mod.AnnotateTab(tmp_path)
+    qtbot.addWidget(tab)
+    tab._videos_dir = tmp_path
+    if configure is not None:
+        configure(tab)
+    tab._on_launch()
+    return tab, captured
+
+
+def test_a_multi_animal_session_asks_which_animal(qtbot, tmp_path, monkeypatch):
+    video, paths = _pose_batch_output_multi(tmp_path, "session01", n_animals=3)
+
+    _tab, captured = _launch_multi_animal(qtbot, tmp_path, monkeypatch, subject=1)
+
+    assert captured["dialog_max"] == 2  # three animals -> slots 0..2
+    assert captured["for_animal_pose_csvs"] == paths
+    assert captured["for_animal_video"] == video
+    assert captured["for_animal_subject"] == 1
+    # multi_sessions would only be set if the batch sampler ran -- with the
+    # folder's one video fully multi-animal there is nothing left for it.
+    assert "multi_sessions" not in captured
+
+
+def test_every_animal_reaches_the_annotator_for_the_overlay(qtbot, tmp_path, monkeypatch):
+    """Without pose_tracks the per-animal overlay built in an earlier task
+    has nothing to draw -- this is the only thing that reaches it."""
+    video, paths = _pose_batch_output_multi(tmp_path, "session01", n_animals=2)
+
+    _tab, captured = _launch_multi_animal(qtbot, tmp_path, monkeypatch, subject=0)
+
+    assert captured["annotator_kwargs"]["pose_tracks"] == {video: paths}
+
+
+def test_the_multi_animal_annotations_path_is_beside_the_video(qtbot, tmp_path, monkeypatch):
+    """Every animal shares one annotations CSV, one directory up from the
+    per-animal CSVs -- not inside the _animals/ directory itself."""
+    video, _paths = _pose_batch_output_multi(tmp_path, "session01", n_animals=2)
+
+    _tab, captured = _launch_multi_animal(qtbot, tmp_path, monkeypatch, subject=0)
+
+    ann_path = captured["annotator_kwargs"]["videos_meta"][video]
+    assert ann_path == tmp_path / "session01DLC_exp-6_annotations.csv"
+
+
+def test_declining_the_animal_prompt_launches_nothing(qtbot, tmp_path, monkeypatch):
+    _pose_batch_output_multi(tmp_path, "session01", n_animals=2)
+
+    _tab, captured = _launch_multi_animal(qtbot, tmp_path, monkeypatch, accept=False)
+
+    assert "annotator_kwargs" not in captured
+    assert "for_animal_kwargs" not in captured
+
+
+def test_skip_labelled_filters_to_the_chosen_animal(qtbot, tmp_path, monkeypatch):
+    """The shared annotations file holds every animal's zones. Excluding
+    another animal's zones from this animal's sampling would treat frames
+    that are still unlabelled for THIS pass as already done."""
+    from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
+    from glider.gui.behavior.window import _annotations_beside
+
+    _video, paths = _pose_batch_output_multi(tmp_path, "session01", n_animals=2)
+    store = AnnotationStore()
+    store.add(BehaviorZone(behavior="walking", start_frame=0, end_frame=10, individual=0))
+    store.add(BehaviorZone(behavior="walking", start_frame=20, end_frame=30, individual=1))
+    store.save_csv(_annotations_beside(paths[0]))
+
+    _tab, captured = _launch_multi_animal(
+        qtbot,
+        tmp_path,
+        monkeypatch,
+        subject=1,
+        configure=lambda t: t._skip_labelled_check.setChecked(True),
+    )
+
+    assert captured["for_animal_kwargs"]["exclude_zones"] == [(20, 30)]
+
+
+# --------------------------------------------------------------------------
+# _annotations_beside / _individual_for_pose_csv: the multi-animal layout
+#
+# _annotations_beside used to resolve a per-animal CSV's annotations to
+# "<stem>_animals/animal0_annotations.csv" -- a path that does not exist and
+# never will, because every animal in a video shares one annotations CSV,
+# written one directory up beside the video. Selecting a per-animal CSV for
+# training was therefore silently SKIPPED with "no ..._annotations.csv beside
+# it". _individual_for_pose_csv recovers which animal a per-animal CSV
+# belongs to from its path alone, so training can filter to just that animal.
+# --------------------------------------------------------------------------
+
+
+def test_a_per_animal_pose_csv_finds_the_primary_annotations(tmp_path):
+    """_annotations_beside(animals_dir/animal0.csv) resolves to
+    animals_dir/animal0_annotations.csv today -- a path that does not exist and
+    never will, because annotations live one directory up beside the video.
+    So picking a per-animal CSV for training is silently SKIPPED.
+    """
+    from glider.gui.behavior.window import _annotations_beside
+
+    animals = tmp_path / "clip_animals"
+    animals.mkdir()
+    (animals / "animal0.csv").write_text("x\n")
+    (tmp_path / "clip_annotations.csv").write_text("behavior,start_frame,end_frame\n")
+
+    assert _annotations_beside(animals / "animal0.csv") == tmp_path / "clip_annotations.csv"
+
+
+def test_a_flat_pose_csv_is_unaffected(tmp_path):
+    from glider.gui.behavior.window import _annotations_beside
+
+    assert _annotations_beside(tmp_path / "clip.csv") == tmp_path / "clip_annotations.csv"
+
+
+def test_the_individual_is_parsed_from_the_per_animal_filename(tmp_path):
+    from glider.gui.behavior.window import _individual_for_pose_csv
+
+    animals = tmp_path / "clip_animals"
+    animals.mkdir()
+    assert _individual_for_pose_csv(animals / "animal0.csv") == 0
+    assert _individual_for_pose_csv(animals / "animal11.csv") == 11
+    assert _individual_for_pose_csv(tmp_path / "clip.csv") is None
+
+
+# --------------------------------------------------------------------------
 # Train tab: adding sessions in bulk
 #
 # "Add session..." opened TWO single-file dialogs per session. A 30-video
@@ -982,6 +1189,26 @@ def test_add_sessions_pairs_every_selected_pose_csv(qtbot, tmp_path, monkeypatch
     for pose, (got_pose, got_ann) in zip(poses, tab._sessions, strict=True):
         assert got_pose == pose
         assert got_ann.name == f"{pose.stem}_annotations.csv"
+
+
+def test_add_sessions_resolves_a_per_animal_csvs_annotations(qtbot, tmp_path, monkeypatch):
+    """The bug: a per-animal CSV used to look for its own name +
+    "_annotations.csv" inside the _animals/ directory, which never exists --
+    every animal in a video shares one annotations CSV, one directory up
+    beside the video."""
+    animals = tmp_path / "clipDLC_exp-6_animals"
+    animals.mkdir()
+    pose = animals / "animal0.csv"
+    pose.write_text("pose\n", encoding="utf-8")
+    (tmp_path / "clipDLC_exp-6_annotations.csv").write_text(
+        "behavior,start_frame,end_frame,created_at,note\n", encoding="utf-8"
+    )
+
+    tab, notes = _train_tab(qtbot, monkeypatch, [pose])
+    tab._on_add_session()
+
+    assert notes == []
+    assert tab._sessions == [(pose, tmp_path / "clipDLC_exp-6_annotations.csv")]
 
 
 def test_add_sessions_skips_pose_csvs_with_no_annotations(qtbot, tmp_path, monkeypatch):
@@ -1144,6 +1371,44 @@ def _fit_options(qtbot, tmp_path, monkeypatch, configure=None):
     except Exception:  # noqa: BLE001 - thread wiring past the capture point
         pass
     return tab, captured.get("options", {})
+
+
+def test_fit_sends_each_sessions_individual(qtbot, tmp_path, monkeypatch):
+    """A per-animal session must train on just that animal, not the whole
+    file -- individuals is positionally aligned with the sessions list."""
+    animals = tmp_path / "clipDLC_exp-6_animals"
+    animals.mkdir()
+    per_animal = animals / "animal2.csv"
+    flat = tmp_path / "other.csv"
+
+    def configure(tab):
+        tab._sessions = [
+            (per_animal, tmp_path / "clipDLC_exp-6_annotations.csv"),
+            (flat, tmp_path / "other_annotations.csv"),
+        ]
+
+    _tab, options = _fit_options(qtbot, tmp_path, monkeypatch, configure=configure)
+
+    assert options["individuals"] == [2, None]
+
+
+def test_fit_sends_the_holdouts_individuals_too(qtbot, tmp_path, monkeypatch):
+    """holdout_individuals is its own list, positionally aligned with
+    holdout_sessions -- not the training sessions' individuals."""
+    animals = tmp_path / "heldDLC_exp-6_animals"
+    animals.mkdir()
+    per_animal = animals / "animal5.csv"
+    ann = tmp_path / "heldDLC_exp-6_annotations.csv"
+
+    def configure(tab):
+        tab._holdout = [(per_animal, ann)]
+
+    _tab, options = _fit_options(qtbot, tmp_path, monkeypatch, configure=configure)
+
+    assert options["holdout_sessions"] == [(per_animal, ann)]
+    assert options["holdout_individuals"] == [5]
+    # The training sessions' own individual, untouched by the holdout's.
+    assert options["individuals"] == [None]
 
 
 def test_window_defaults_to_thirty_and_is_sent(qtbot, tmp_path, monkeypatch):
@@ -1853,6 +2118,28 @@ def test_resume_works_from_annotations_alone(qtbot, tmp_path, monkeypatch):
     captured, _ = _resume(qtbot, tmp_path, monkeypatch)
 
     assert len(captured["annotator_kwargs"]["clips"]) == 2
+
+
+def test_resume_finds_a_multi_animal_sessions_annotations_with_no_prompt(
+    qtbot, tmp_path, monkeypatch
+):
+    """Resume proposes no new clips, so unlike Launch it needs no subject --
+    any one animal's CSV resolves the same fps and annotations path. A stray
+    QInputDialog call here would hang: _resume patches no dialog, so nothing
+    would answer it. pose_tracks still carries every animal for the overlay.
+    """
+    from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
+    from glider.gui.behavior.window import _annotations_beside
+
+    video, paths = _pose_batch_output_multi(tmp_path, "session01", n_animals=2)
+    store = AnnotationStore()
+    store.add(BehaviorZone(behavior="walking", start_frame=0, end_frame=10))
+    store.save_csv(_annotations_beside(paths[0]))
+
+    captured, _warnings = _resume(qtbot, tmp_path, monkeypatch)
+
+    assert len(captured["annotator_kwargs"]["clips"]) == 1
+    assert captured["annotator_kwargs"]["pose_tracks"] == {video: paths}
 
 
 def test_resume_with_nothing_to_resume_says_so(qtbot, tmp_path, monkeypatch):
