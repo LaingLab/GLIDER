@@ -1115,8 +1115,19 @@ class AnnotatorWindow(QMainWindow):
         self.clip.setFocus()
 
     def _center_in_labelled_zone(self, clip: ProposedClip) -> bool:
+        """Is this clip's centre already labelled *for this clip's animal*?
+
+        Only the clip's own animal counts. The annotations file holds every
+        animal's zones, and on a multi-animal session they legitimately
+        overlap -- animal 1's unlabelled frames are frequently frames where
+        animal 0 is already labelled. Counting those would reject nearly
+        every clip of the second animal's pass. Same rule window.py applies
+        when it builds the launch exclusion list.
+        """
         store = self.stores.get(Path(clip.video_path))
-        return bool(store and store.zones_at_frame(clip.center_frame))
+        return store is not None and any(
+            z.individual == clip.individual for z in store.zones_at_frame(clip.center_frame)
+        )
 
     # ------------------------------------------------------------------
     # Persistence

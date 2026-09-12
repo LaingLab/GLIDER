@@ -914,6 +914,50 @@ def test_render_more_appends_new_and_filters_labelled_regions(tmp_path):
     assert w.current == before  # jumped to the first new clip
 
 
+def test_render_more_only_filters_the_clips_own_animals_labels(tmp_path):
+    """A clip for animal 1 is not "already labelled" because animal 0 is.
+
+    The annotations file holds every animal's zones, and the whole premise of
+    a multi-animal session is that they overlap. Filtering on all of them
+    made "render more" return nothing on the second animal's pass -- the
+    exact workflow this branch ships -- and blamed it on already-labelled
+    regions. Both clips centre on the SAME frame inside animal 0's zone, so
+    only the individual can distinguish them.
+    """
+    try:
+        from PyQt6.QtWidgets import QApplication
+    except ImportError:
+        pytest.skip("PyQt6 required")
+    from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
+    from glider.gui.behavior.annotator.main_window import AnnotatorWindow
+    from glider.gui.behavior.annotator.sampler import ProposedClip, zones_to_clips
+
+    a = tmp_path / "a.mp4"
+    a_csv = tmp_path / "a_annotations.csv"
+    store = AnnotationStore([BehaviorZone("groom", 100, 120, individual=0)])
+    store.save_csv(a_csv)
+    videos_meta = {a: a_csv}
+
+    def fake_sampler(n):
+        return [
+            # Animal 1, centred inside animal 0's zone -> still unlabelled.
+            ProposedClip(0, 110, 105, 115, 0.3, str(a), individual=1),
+            # Animal 0, same centre -> its own zone, correctly dropped.
+            ProposedClip(1, 110, 106, 116, 0.3, str(a), individual=0),
+        ]
+
+    app = QApplication.instance() or QApplication([])  # noqa: F841
+    w = AnnotatorWindow(
+        clips=zones_to_clips(store, a, fps=30.0),
+        videos_meta=videos_meta,
+        clip_sampler=fake_sampler,
+    )
+    before = len(w.clips)
+    w._render_more_clips(2)
+
+    assert [(c.center_frame, c.individual) for c in w.clips[before:]] == [(110, 1)]
+
+
 def test_render_more_disabled_without_sampler(tmp_path):
     """No sampler injected → no render button (review-only)."""
     try:
