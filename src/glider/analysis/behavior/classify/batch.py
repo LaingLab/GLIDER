@@ -209,6 +209,7 @@ def classify_pose_data(
     pose,
     model,
     *,
+    others: list | None = None,
     predict_every: int = 3,
     confidence_threshold: float = 0.0,
     class_thresholds: dict[str, float] | None = None,
@@ -238,6 +239,14 @@ def classify_pose_data(
     session, so a windowed run's labels are exactly the rows a whole-session
     run would have produced for those frames — only the classifier's work is
     skipped, which is where the time goes anyway.
+
+    ``others`` is every OTHER animal's :class:`PoseData` from the same video,
+    and is what makes a model trained with ``spec.include_social`` scoreable:
+    without it ``compute_features`` refuses, so training social features
+    produced a model nothing could apply. Optional and ignored for a
+    non-social model, so every single-animal caller is untouched.
+    :func:`classify_pose_tracks` supplies it; it is the only caller that
+    holds every animal's track.
     """
     from glider.analysis.behavior.classify.features_stream import derive_stream_columns
     from glider.analysis.behavior.classify.smoothing import (
@@ -261,7 +270,7 @@ def classify_pose_data(
             "the batch path does not compute; use the streaming pipeline"
         )
 
-    features = compute_features(pose, model.spec)
+    features = compute_features(pose, model.spec, others=others)
     # Column order is fixed by the model, not by whatever compute_features
     # happened to emit, so a reordering upstream cannot silently shuffle
     # values into the wrong feature.
@@ -378,8 +387,22 @@ def classify_pose_tracks(tracks: PoseTracks, model, **kw) -> dict[int, EthogramR
     loudly — a ``TypeError`` raised from ``classify_pose_data`` itself, on
     the first slot scored — rather than the two signatures quietly drifting
     apart.
+
+    Each slot is scored against every OTHER slot as ``others``, which is what
+    a model trained with ``spec.include_social`` needs and what nothing else
+    offline can supply -- this is the only place every animal's track is in
+    hand at once. For a non-social model ``compute_features`` ignores it, so
+    the numbers are unchanged.
     """
-    return {slot: classify_pose_data(tracks[slot], model, **kw) for slot in tracks}
+    return {
+        slot: classify_pose_data(
+            tracks[slot],
+            model,
+            others=[tracks[s] for s in tracks if s != slot],
+            **kw,
+        )
+        for slot in tracks
+    }
 
 
 def resolve_labels(postural: list[str], speed: list[str]) -> list[str]:

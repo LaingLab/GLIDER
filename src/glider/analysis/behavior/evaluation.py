@@ -121,7 +121,15 @@ def _windowed_for(model: BehaviorModel, pose_csv: Path, fps: float) -> pd.DataFr
     """Rebuild the exact feature frame *model* was trained on, for one session."""
     freq, traj = _families_in(model.feature_names)
     pose = from_dlc_csv(Path(pose_csv), fps=fps)
-    feats = compute_features(pose, spec=model.spec)
+    # A social model measures the subject against the other animals tracked
+    # in the same session. Deferred import: pipeline pulls in lightgbm, and
+    # evaluating a non-social bundle should not pay for it.
+    others = None
+    if model.spec.include_social:
+        from glider.analysis.behavior.pipeline import _other_animal_poses
+
+        others = _other_animal_poses(Path(pose_csv), fps=fps)
+    feats = compute_features(pose, spec=model.spec, others=others)
     windowed = apply_rolling(feats, window=model.window, stats=model.stats)
     if freq:
         windowed = pd.concat([windowed, apply_spectral_rolling(feats, window=model.window)], axis=1)

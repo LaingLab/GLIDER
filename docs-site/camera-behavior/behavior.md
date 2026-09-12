@@ -218,8 +218,8 @@ it adds five columns:
 
 | Column | Meaning |
 | --- | --- |
-| `social_distance` | Distance to the nearest other animal, in body lengths |
-| `social_approach` | How fast that distance is changing: negative while closing, positive while separating |
+| `social_distance` | Distance to the nearest *tracked* other animal, in body lengths — blank on frames where no other animal is tracked |
+| `social_approach` | How fast that distance is changing: negative while closing, positive while separating. Blank on any frame where the *nearest* animal changed from the frame before — that step measures a swap of identity, not movement |
 | `social_bearing` | Angle between the subject's own heading and the other animal, in radians — `0` facing them, `π` facing directly away |
 | `social_nose_to_nose` | Nose-to-nose distance, in body lengths — present only when the skeleton names a `snout` keypoint |
 | `social_nose_to_tail` | The subject's nose to the other animal's tail base, in body lengths — present only alongside `social_nose_to_nose`, when the skeleton also names a `tail_base` keypoint |
@@ -235,14 +235,19 @@ trains on the columns above. What's missing is only a way to reach that
 knob from this window, ahead of the Train tab growing one.
 
 Two things about it are worth knowing anyway, because they explain behavior
-you may see elsewhere in GLIDER: a model that *does* use these columns can
-only ever be scored offline, never on the live camera feed — the live path
-tracks one animal and has nothing to measure a social column against, so
-GLIDER refuses to start live inference with such a model rather than run it
-and leave the overlay stuck on "(waiting...)". And it cannot be combined
-with mirror-augmented training, because mirroring flips only the subject,
-which would put a real partner animal on the wrong side of a mirrored
-arena.
+you may see elsewhere in GLIDER. First, a model that *does* use these
+columns is scored by classifying the whole recording offline, where every
+animal's track is on disk and each animal can be measured against the rest —
+never on the live camera feed, because the live path tracks one animal and
+has nothing to measure a social column against, so GLIDER refuses to start
+live inference with such a model rather than run it and leave the overlay
+stuck on "(waiting...)". The offline half has two corners: cross-validation
+refuses a multi-animal session (use `train_model(individuals=...)`), and a
+CNN sequence model cannot use these columns at all, because a sequence model
+cannot be applied to a multi-animal session in the first place. Second, it
+cannot be combined with mirror-augmented training, because mirroring flips
+only the subject, which would put a real partner animal on the wrong side of
+a mirrored arena.
 
 ## Stage 3 — Apply
 

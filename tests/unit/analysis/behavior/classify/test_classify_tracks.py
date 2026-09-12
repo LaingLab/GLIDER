@@ -48,12 +48,23 @@ def _pose(seed: int, base: tuple[float, float], n: int = 120) -> PoseData:
     return PoseData(xy=xy, confidence=conf, keypoint_names=KP, fps=30.0)
 
 
-def _model(pose: PoseData, seed: int) -> BehaviorModel:
-    """A real fitted BehaviorModel over this pose's own feature space."""
+def _model(
+    pose: PoseData,
+    seed: int,
+    *,
+    spec: FeatureSpec | None = None,
+    others: list[PoseData] | None = None,
+) -> BehaviorModel:
+    """A real fitted BehaviorModel over this pose's own feature space.
+
+    ``spec``/``others`` build a real SOCIAL bundle -- fitted on the five
+    social_* columns -- rather than a single-animal one with the flag
+    flipped after the fact, which would carry feature names nothing emits.
+    """
     from sklearn.tree import DecisionTreeClassifier
 
-    spec = FeatureSpec()
-    feats = compute_features(pose, spec)
+    spec = spec or FeatureSpec()
+    feats = compute_features(pose, spec, others=others)
     rolled = apply_rolling(feats, window=WINDOW, stats=STATS, min_periods=1)
     rolled = rolled.dropna()
     rng = np.random.default_rng(seed)
@@ -222,3 +233,73 @@ def test_session_view_loads_a_per_animal_ethogram_and_pose_csv_unchanged(tmp_pat
 
     # The two animals differ -- this is not two loads of the same file.
     assert view0.labels != view1.labels
+
+
+def test_a_social_model_can_be_scored_offline():
+    """Training social features produced a bundle nothing could apply: every
+    offline path called compute_features with no ``others``, so it raised --
+    and the message told the operator to "classify the recording offline
+    where every animal's track is available", which is what they were doing.
+
+    classify_pose_tracks is the one place every animal's track is in hand.
+    """
+    pose0 = _pose(seed=50, base=(150.0, 120.0))
+    pose1 = _pose(seed=51, base=(320.0, 240.0))
+    tracks = PoseTracks(tracks={0: pose0, 1: pose1}, fps=30.0)
+    model = _model(pose0, seed=52, spec=FeatureSpec(include_social=True), others=[pose1])
+    assert model.spec.include_social
+    assert any(c.startswith("social_") for c in model.feature_names)
+
+    got = classify_pose_tracks(tracks, model, predict_every=2)
+
+    assert set(got) == {0, 1}
+    assert got[0].frames  # rows actually came back rather than an exception
+
+
+def _proximity_model(pose: PoseData, others: list[PoseData], seed: int) -> BehaviorModel:
+    """A bundle whose labels ARE the social distance, binned.
+
+    A model fitted on random labels can ignore the social columns entirely,
+    and then a test that swapped the partner would see identical rows and
+    call the plumbing correct. Here the label cannot be reproduced without
+    reading the partner, so the partner is observable in the output.
+    """
+    from sklearn.tree import DecisionTreeClassifier
+
+    spec = FeatureSpec(include_social=True)
+    feats = compute_features(pose, spec, others=others)
+    rolled = apply_rolling(feats, window=WINDOW, stats=STATS, min_periods=1).dropna()
+    dist_col = next(c for c in rolled.columns if c.startswith("social_distance"))
+    d = rolled[dist_col].to_numpy(dtype=float)
+    y = np.where(d < np.median(d), "near", "far")
+    clf = DecisionTreeClassifier(random_state=seed, max_depth=4).fit(rolled, y)
+    return BehaviorModel(
+        classifier=clf,
+        feature_names=list(rolled.columns),
+        spec=spec,
+        window=WINDOW,
+        stats=STATS,
+        fps=30.0,
+        classes=["far", "near"],
+    )
+
+
+def test_each_slot_is_scored_against_the_OTHER_animals():
+    """Not just "it no longer raises": the partner has to be the real one.
+
+    Scoring slot 0 against an animal on the far side of the arena instead of
+    the one beside it must change its rows, or the social columns are being
+    filled with something that is not this session's other animal.
+    """
+    pose0 = _pose(seed=60, base=(150.0, 120.0))
+    pose1 = _pose(seed=61, base=(320.0, 240.0))
+    far = _pose(seed=62, base=(9000.0, 8000.0))
+    tracks = PoseTracks(tracks={0: pose0, 1: pose1}, fps=30.0)
+    model = _proximity_model(pose0, [pose1], seed=63)
+
+    got = classify_pose_tracks(tracks, model, predict_every=1)
+
+    assert got[0] == classify_pose_data(pose0, model, others=[pose1], predict_every=1)
+    assert got[1] == classify_pose_data(pose1, model, others=[pose0], predict_every=1)
+    # The property: the partner is an input, not decoration.
+    assert got[0] != classify_pose_data(pose0, model, others=[far], predict_every=1)

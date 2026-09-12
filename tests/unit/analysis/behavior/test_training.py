@@ -1035,6 +1035,46 @@ def test_train_model_with_social_features_end_to_end(tmp_path, three_regime_pose
         ), f"{expected} missing from {social_columns}"
 
 
+def test_a_social_model_can_be_evaluated_against_its_sessions(tmp_path, three_regime_pose):
+    """Training a social model worked; nothing could score one.
+
+    evaluate_model rebuilds the bundle's own feature frame, and it called
+    compute_features with no `others` -- so every social bundle raised there
+    too, with the message telling the operator to score it offline. Same
+    on-disk layout as the training test above, because that is the only
+    layout a social model can come from.
+    """
+    from glider.analysis.behavior import FeatureSpec, train_model
+    from glider.analysis.behavior.evaluation import evaluate_model
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    animals_dir = tmp_path / "video_animals"
+    animals_dir.mkdir()
+    pose_subject = animals_dir / "animal0.csv"
+    to_dlc_csv(three_regime_pose, pose_subject)
+    to_dlc_csv(_orbiting_pose(three_regime_pose.n_frames), animals_dir / "animal1.csv")
+
+    ann_csv = tmp_path / "video_annotations.csv"
+    _write_annotations(
+        ann_csv,
+        [("locomote", 0, 200), ("groom", 200, 400), ("rest", 400, 600)],
+    )
+    sessions = [(pose_subject, ann_csv)]
+
+    result = train_model(
+        sessions=sessions,
+        spec=FeatureSpec(body_axis=(0, three_regime_pose.n_keypoints - 1), include_social=True),
+        window=10,
+        fps=30.0,
+        n_estimators=20,
+    )
+    model_path = tmp_path / "social_model.pkl"
+    result.model.save(model_path)
+
+    scored = evaluate_model(model_path, sessions, support_floor=1)
+    assert scored["n_scored"] > 0
+
+
 def test_train_model_with_social_features_on_a_flat_csv_raises_by_name(tmp_path, three_regime_pose):
     """A flat pose CSV (no `_animals/` directory) has no other animal to
     measure against. Must fail naming the offending session -- not with
