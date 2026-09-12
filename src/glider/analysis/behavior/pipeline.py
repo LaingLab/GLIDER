@@ -1376,6 +1376,24 @@ def _assemble_for_cv(
             "...) on a multi-animal session instead of cross_validate_sessions "
             "or cross_validate_and_train."
         )
+    multi = [str(p) for p, _a in sessions if Path(p).parent.name.endswith("_animals")]
+    if multi:
+        # The annotations CSV for a multi-animal session holds EVERY animal's
+        # zones, and this path loads it with no `individual` filter -- unlike
+        # _assemble_sessions, which takes `individuals` and filters. So each
+        # animal would be trained and scored against both animals' labels,
+        # and with "fit a model on all sessions" ticked CrossValidateWorker
+        # writes that mislabelled bundle to disk. A loud refusal beats a
+        # silent wrong number.
+        raise ValueError(
+            "cross-validation does not support a multi-animal session yet: "
+            f"{multi[0]} is a per-animal pose CSV, and the annotations beside "
+            "it hold every animal's zones. This path has no way to say which "
+            "animal is the subject, so it would train and score on both "
+            "animals' labels at once. Use train_model(sessions=..., "
+            "individuals=[...]), which filters each session's annotations to "
+            "its own animal."
+        )
 
     xs: list[pd.DataFrame] = []
     ys: list[pd.Series] = []

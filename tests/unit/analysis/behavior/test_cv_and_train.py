@@ -187,3 +187,51 @@ def test_social_features_are_refused_here_too(sessions):
         cross_validate_and_train(sessions, spec=social_spec, **COMMON)
     with pytest.raises(ValueError, match="social"):
         cross_validate_sessions(sessions, spec=social_spec, **COMMON)
+
+
+def test_cross_validation_refuses_a_multi_animal_session(tmp_path):
+    """A per-animal pose CSV's annotations hold EVERY animal's zones.
+
+    This path loads them with no `individual` filter -- unlike train_model's
+    _assemble_sessions, which takes `individuals` and filters. So the same
+    session list, reached through the other GUI button, would train and score
+    each animal on both animals' labels, and with "fit a model on all
+    sessions" ticked CrossValidateWorker writes that bundle to disk.
+
+    The condition is produced, not forced: three real `_animals/`
+    directories, two animals' CSVs in each, and one shared annotations file
+    per session holding a zone for each animal -- the layout multi-animal
+    pose tracking actually writes. Three sessions, not one, so the run is
+    otherwise perfectly foldable and the only thing that can stop it is the
+    guard under test.
+    """
+    from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    sessions = []
+    for i in range(3):
+        animals = tmp_path / f"video{i}DLC_exp-6_animals"
+        animals.mkdir()
+        pose = _pose(seed=i)
+        subject = animals / "animal0.csv"
+        to_dlc_csv(pose, subject)
+        to_dlc_csv(_pose(seed=i + 10), animals / "animal1.csv")
+
+        store = AnnotationStore()
+        third = pose.n_frames // 3
+        store.add(BehaviorZone("walk", 0, third, individual=0))
+        store.add(BehaviorZone("mill", third, 2 * third, individual=0))
+        store.add(BehaviorZone("still", 2 * third, pose.n_frames, individual=0))
+        # The OTHER animal's labels, in the same file, contradicting all three.
+        store.add(BehaviorZone("still", 0, third, individual=1))
+        store.add(BehaviorZone("walk", third, 2 * third, individual=1))
+        ann = tmp_path / f"video{i}DLC_exp-6_annotations.csv"
+        store.save_csv(ann)
+        sessions.append((subject, ann))
+
+    for call in (cross_validate_sessions, cross_validate_and_train):
+        with pytest.raises(ValueError) as e:
+            call(sessions, spec=SPEC, **COMMON)
+        message = str(e.value)
+        assert "animal0.csv" in message, message
+        assert "individuals" in message, message
