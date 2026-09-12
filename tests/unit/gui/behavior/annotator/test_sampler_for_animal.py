@@ -110,3 +110,41 @@ def test_zones_to_clips_carries_the_zones_animal():
 
     clips = zones_to_clips(store, "x.mp4", fps=30.0)
     assert [c.individual for c in clips] == [0, 1, 2]
+
+
+def test_render_more_stays_on_the_animal_the_pass_is_labelling(tmp_path):
+    """ "Render more" used to route through propose_clips_multi, which always
+    returns individual=0: a labeller mid-pass on animal 1 pressed the button
+    and was silently labelling animal 0 -- and every zone they then created
+    was stamped with the wrong animal.
+
+    The session's own CSV is animal 0's on purpose: that is what window.py's
+    Resume path holds for a multi-animal video, so a sampler that trusts it
+    samples the wrong animal's pose as well as mis-stamping the clip.
+    """
+    from glider.gui.behavior.annotator.app import make_more_sampler
+
+    pose_csvs, video = _two_animal_session(tmp_path)
+    kwargs = {"tracks": {video: pose_csvs}, "window": 10, "fps": 30.0}
+
+    for_one = make_more_sampler([(video, pose_csvs[0])], subjects={video: 1}, **kwargs)
+    for_zero = make_more_sampler([(video, pose_csvs[0])], subjects={video: 0}, **kwargs)
+    clips_one = for_one(6)
+    clips_zero = for_zero(6)
+
+    assert clips_one
+    assert {c.individual for c in clips_one} == {1}
+    # Not just the stamp: the two animals move completely differently, so
+    # sampling the right one must change which frames come back.
+    assert sorted(c.center_frame for c in clips_one) != sorted(c.center_frame for c in clips_zero)
+
+
+def test_render_more_without_per_animal_tracks_is_unchanged(tmp_path):
+    """Single-animal sessions must keep working with neither argument."""
+    from glider.gui.behavior.annotator.app import make_more_sampler
+
+    pose_csvs, video = _two_animal_session(tmp_path)
+    sampler = make_more_sampler([(video, pose_csvs[0])], window=10, fps=30.0)
+    clips = sampler(4)
+    assert clips
+    assert {c.individual for c in clips} == {0}

@@ -1044,6 +1044,57 @@ def test_every_animal_reaches_the_annotator_for_the_overlay(qtbot, tmp_path, mon
     assert captured["annotator_kwargs"]["pose_tracks"] == {video: paths}
 
 
+def test_render_more_keeps_the_pass_on_its_subject(qtbot, tmp_path, monkeypatch):
+    """The sidebar's "render more" button used to route through
+    propose_clips_multi, which always returns individual=0: a labeller
+    mid-pass on animal 1 pressed it and was silently labelling animal 0.
+
+    The subject is derived from the queue, so Launch and Resume behave the
+    same -- Resume never asks for one and its sessions list holds slot 0's
+    CSV for every multi-animal video.
+    """
+    from glider.gui.behavior import window as win_mod
+    from glider.gui.behavior.annotator import app as app_mod
+    from glider.gui.behavior.annotator import main_window as annot_mod
+    from glider.gui.behavior.annotator import sampler as sampler_mod
+    from glider.gui.behavior.annotator.sampler import ProposedClip
+
+    video, paths = _pose_batch_output_multi(tmp_path, "session01", n_animals=2)
+    captured: dict = {}
+
+    def fake_for_animal(pose_csvs, video_path, *, subject, n_clips=1, **kw):
+        return [ProposedClip(0, 30, 20, 40, 0.7, str(video_path), subject)]
+
+    def fake_more_sampler(sessions, **kw):
+        captured["more_kwargs"] = kw
+        return lambda n: []
+
+    class FakeAnnotator:
+        def __init__(self, **kw):
+            captured["annotator_kwargs"] = kw
+
+        def show(self):
+            pass
+
+        def warn_about_load_errors(self):
+            return False
+
+    monkeypatch.setattr(sampler_mod, "propose_clips_for_animal", fake_for_animal)
+    monkeypatch.setattr(app_mod, "make_more_sampler", fake_more_sampler)
+    monkeypatch.setattr(annot_mod, "AnnotatorWindow", FakeAnnotator)
+    monkeypatch.setattr(win_mod.QInputDialog, "getInt", staticmethod(lambda *a, **k: (1, True)))
+    for kind in ("warning", "critical"):
+        monkeypatch.setattr(win_mod.QMessageBox, kind, lambda *a, **k: None)
+
+    tab = win_mod.AnnotateTab(tmp_path)
+    qtbot.addWidget(tab)
+    tab._videos_dir = tmp_path
+    tab._on_launch()
+
+    assert captured["more_kwargs"]["subjects"] == {video: 1}
+    assert captured["more_kwargs"]["tracks"] == {video: paths}
+
+
 def test_the_multi_animal_annotations_path_is_beside_the_video(qtbot, tmp_path, monkeypatch):
     """Every animal shares one annotations CSV, one directory up from the
     per-animal CSVs -- not inside the _animals/ directory itself."""

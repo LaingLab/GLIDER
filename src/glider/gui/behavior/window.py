@@ -711,7 +711,17 @@ class AnnotateTab(QWidget):
         # The window's "render more" button only exists when it is given a
         # sampler; without one, a review session is a dead end and a sampled
         # session can never be extended.
-        clip_sampler = make_more_sampler(sessions, fps=fps)
+        #
+        # The subject comes from the queue itself: a pass labels one animal
+        # per video, so the first clip for a video says which. Deriving it
+        # here rather than taking a parameter keeps Launch and Resume on the
+        # same rule -- Resume never asks for a subject, and its sessions list
+        # holds slot 0's CSV for every multi-animal video, so without this
+        # "render more" would quietly switch the labeller to animal 0.
+        subjects: dict[Path, int] = {}
+        for clip in clips:
+            subjects.setdefault(Path(clip.video_path), int(clip.individual))
+        clip_sampler = make_more_sampler(sessions, tracks=pose_tracks, subjects=subjects, fps=fps)
 
         # Speed trace inputs. All three are optional and independent: no pose
         # CSVs means no trace, no cohort file means no reference lines, no
