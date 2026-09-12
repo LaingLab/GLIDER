@@ -42,11 +42,20 @@ def _pose(n_frames: int, x0: float) -> PoseData:
     )
 
 
-def _window(tmp_path, qtbot, *, individual=0, **kwargs):
+def _window(tmp_path, qtbot, *, individual=0, zones=None, **kwargs):
     """kwargs go straight to AnnotatorWindow -- including pose_tracks, which
-    must be keyed by the same video path the window builds below."""
+    must be keyed by the same video path the window builds below.
+
+    ``zones`` are written to the annotations CSV *before* construction, so
+    the window seeds its clip->zone map from real on-disk state the way a
+    resumed session does. Assigning ``_clip_zone`` by hand instead would
+    skip ``_seed_clip_zones``, which is where the binding is decided.
+    """
     ann = tmp_path / "a_annotations.csv"
-    AnnotationStore().save_csv(ann)
+    store = AnnotationStore()
+    for z in zones or ():
+        store.add(z)
+    store.save_csv(ann)
     video = tmp_path / "a.mp4"
     clips = [ProposedClip(0, 50, 40, 60, 0.7, str(video), individual)]
     w = AnnotatorWindow(clips=clips, videos_meta={video: ann}, **kwargs)
@@ -131,14 +140,46 @@ def test_a_zone_created_in_the_annotator_carries_the_clip_subject(tmp_path, qtbo
 
 
 def test_re_trimming_a_zone_keeps_its_original_individual(tmp_path, qtbot):
-    """A labeller who switches subject and then re-trims an earlier zone must
-    not silently reassign that zone to the new animal."""
-    w, video = _window(tmp_path, qtbot, individual=1)
-    store = w.stores[video]
-    prior = BehaviorZone("grooming", 40, 60, individual=0)
-    store.add(prior)
-    w._clip_zone[w.current] = prior
+    """Re-trimming must rewrite the zone in place, subject and all.
+
+    The binding is left to ``_seed_clip_zones`` on purpose: forcing
+    ``_clip_zone`` by hand skips the step that decides which zone a keypress
+    rewrites, so the test would pass no matter what seeding did.
+    """
+    w, video = _window(
+        tmp_path,
+        qtbot,
+        individual=1,
+        zones=[BehaviorZone("grooming", 40, 60, individual=1)],
+    )
+    assert w._clip_zone[w.current].individual == 1, "seeding must bind the subject's own zone"
 
     w.trim_bar.set_bounds(45, 55)  # however this file's other tests set the trim
     w._persist_current_trim()  # main_window.py:734
-    assert [z.individual for z in store] == [0]
+    store = w.stores[video]
+    assert [(z.start_frame, z.end_frame, z.individual) for z in store] == [(45, 55, 1)]
+
+
+def test_labelling_one_animal_never_touches_the_other_animals_zone(tmp_path, qtbot):
+    """The sampler proposes animal 1 clips over frames animal 0 is already
+    labelled on -- by design (window.py excludes only the subject's zones).
+    Binding a clip to whichever zone overlaps most, regardless of individual,
+    makes the very first keypress ``store.remove`` the other animal's work.
+    """
+    w, video = _window(
+        tmp_path,
+        qtbot,
+        individual=1,
+        zones=[BehaviorZone("rearing", 40, 60, individual=0)],
+    )
+    # Animal 0's zone is not this clip's, so the clip is not "already done".
+    assert w._clip_zone == {}
+
+    w.vocab.add(Behavior(name="grooming", hotkey="g", color="#ff0000"))
+    w._apply_label("grooming")
+
+    store = w.stores[video]
+    assert sorted((z.behavior, z.individual) for z in store) == [
+        ("grooming", 1),
+        ("rearing", 0),
+    ]

@@ -850,12 +850,22 @@ class AnnotatorWindow(QMainWindow):
         """Associate each proposed clip with the existing zone (if any) that
         overlaps its frame range the most, so resuming a session shows
         already-labeled clips as done. Reserved markers count too — a clip
-        previously flagged multi-behavior/unclear shouldn't be re-proposed."""
+        previously flagged multi-behavior/unclear shouldn't be re-proposed.
+
+        Only zones belonging to the clip's own ``individual`` are eligible.
+        Two animals' zones legitimately overlap — the sampler deliberately
+        proposes animal 1's clips over frames where animal 0 is already
+        labelled — and binding across animals would make the next keypress
+        ``store.remove`` the other animal's annotation. Legacy single-animal
+        zones and clips are both 0, so nothing changes for them.
+        """
         for i, clip in enumerate(self.clips):
             store = self._store_for(clip)
             best: BehaviorZone | None = None
             best_overlap = 0
             for z in store:
+                if z.individual != clip.individual:
+                    continue
                 overlap = min(z.end_frame, clip.end_frame) - max(z.start_frame, clip.start_frame)
                 if overlap > best_overlap:
                     best_overlap = overlap
