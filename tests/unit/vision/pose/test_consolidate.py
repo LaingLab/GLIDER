@@ -247,3 +247,77 @@ def test_flicker_below_the_floor_is_counted_but_not_reported_as_dropped():
     res = run([a, b, flicker], n_animals=2, min_fragment_frames=5)
     assert res.below_floor == 1
     assert res.dropped == []
+
+
+# ---------------------------------------------------------------------------
+# Shapes observed on real footage
+#
+# Both of these came out of running a real YOLO pose model over a two-mouse
+# recording (CalMS21 mouse001). Neither is hypothetical, and neither was
+# pinned by anything above.
+# ---------------------------------------------------------------------------
+
+
+def test_two_boxes_on_one_animal_fill_both_slots_but_are_flagged_close():
+    """A duplicate detection is indistinguishable from a second animal here.
+
+    Observed on a frame where the detector put two overlapping boxes on the
+    same mouse. Consolidation has no way to know -- two fragments, two slots,
+    and nothing in the geometry says one of them is a ghost. What saves the
+    analyst is the identity sidecar: the pair never separates, so EVERY frame
+    is flagged ``close`` and the whole session reads as untrustworthy rather
+    than as two animals that happened to stay together.
+    """
+    from collections import Counter
+
+    from glider.vision.pose.identity import identity_flags
+
+    real = frag(1, 0, 200, x=100, y=100)
+    ghost = frag(2, 0, 200, x=108, y=100)  # 8 px away: the same mouse, twice
+    res = run([real, ghost], n_animals=2)
+
+    assert res.tracks.n_animals == 2
+    assert res.dropped == []
+
+    flags = identity_flags(res.tracks, stitched=res.stitched, min_separation_px=60.0)
+    counts = Counter(flag for _frame, _slot, flag in flags)
+    # Both slots, every frame -- no frame of this session is presented as clean.
+    assert counts["close"] == 2 * res.tracks.n_frames
+    assert set(counts) == {"close"}
+
+
+def test_a_persistent_false_positive_outsits_an_intermittent_animal():
+    """A fixture the detector likes beats a mouse that keeps being occluded.
+
+    Observed on a frame where the detector fired on the cage's metal water
+    spout. Hardware is in EVERY frame, so its fragment is long; a real animal
+    that keeps disappearing behind its cage-mate yields many short ones. Seeding
+    takes the longest fragments, so the spout wins a slot and the animal's
+    fragments are all refused.
+
+    This is pinned rather than fixed on purpose. The only signal separating
+    "stationary hardware" from "frozen mouse" is motion, and freezing is a
+    behaviour these recordings exist to measure -- a motion heuristic here would
+    discard real data. Arena gating upstream is the defence: the spout sits
+    outside the bedding, and ``infer_video_tracks`` drops out-of-arena
+    candidates before consolidation ever sees them.
+
+    What consolidation owes the analyst is evidence, and it pays: every refused
+    fragment lands in ``dropped``, so a session that lost an animal this way
+    says so without re-running anything.
+    """
+    spout = frag(9, 0, 200, x=900, y=500)  # hardware: present every frame
+    tracked = frag(1, 0, 200, x=100, y=100)  # one mouse, cleanly followed
+    # The other mouse: seen in bursts, never for long.
+    occluded = [frag(20 + i, i * 20, 8, x=300, y=300) for i in range(10)]
+
+    res = run([spout, tracked, *occluded], n_animals=2)
+
+    slot_x = [res.tracks[s].xy[0, 0, 0] for s in res.tracks]
+    assert 100.0 in slot_x, "the well-tracked animal keeps its slot"
+    assert 900.0 in slot_x, "the false positive takes the other one"
+    assert 300.0 not in slot_x, "the intermittent animal gets no slot at all"
+
+    # The loss is recorded, not silent: every burst is accounted for.
+    assert len(res.dropped) == len(occluded)
+    assert {t for t, _s, _e in res.dropped} == {20 + i for i in range(10)}
