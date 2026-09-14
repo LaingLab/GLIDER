@@ -117,8 +117,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and deliberately not part of the converter Protocol, so adding it cannot make
   an existing converter stop satisfying the check. It is what keeps a
   multi-gigabyte first run from starting silently behind a wait cursor.
+- **YOLO pose tracking can follow more than one animal through a video.**
+  Batch inference used to write one track per video no matter how many
+  animals were in frame — GLIDER's pose container held one animal and there
+  was nowhere to put a second. Set **Animals** in the Batch Pose Tracking
+  window and it now stitches ByteTrack's fragments, which fork into a fresh id
+  every time two animals cross or occlude, into exactly that many lifelong
+  tracks. DeepLabCut and SLEAP are single-instance architectures, so
+  multi-animal tracking has nowhere to put a second animal — the new
+  `infer_video_tracks` entry point refuses them by name for more than one
+  animal instead of silently tracking one; tracking a single animal through
+  either is unchanged.
+  - Written as one plain **three-row DeepLabCut CSV per animal**
+    (`animal0.csv`, `animal1.csv`, ...) into a `<video>_animals/` directory
+    beside the video — the same format a single-animal run has always
+    written, so any tool you point at `animal0.csv` directly (behaviour
+    classification, the annotator, cohort speed, training, zone scoring, the
+    arena gate) opens it unmodified, with nothing new to teach any of them.
+    `n_animals=1` is unaffected: one file at today's path, no subdirectory.
+    That's the format, not automatic discovery: every one of those tools
+    normally finds its input by asking for "the" pose CSV, and that lookup
+    returns nothing for a multi-animal session — so a multi-animal video
+    looks untracked to anything that isn't pointed at the file directly.
+    **Re-gate tracked CSVs** goes through that same lookup and so skips
+    multi-animal sessions outright; it does not work against them at all.
+  - A **`_identity.csv` sidecar** records, sparsely, the frames where a
+    track's identity was inferred rather than observed — a fragment joined
+    across a gap on a plausible speed, or two animals close enough that a
+    swap was possible. Consolidation is greedy and longest-first, not a
+    global optimum, so this file is what tells an analyst which stretches of
+    a crossing to double-check rather than take on faith.
+- **A trained behavior model scores a multi-animal session, one ethogram per
+  animal.** `classify_pose_tracks` runs the same per-animal scoring a
+  single-animal apply always used, once per slot — no retraining, since the
+  geometric features it was trained on are unchanged by tracking more than
+  one animal. Each animal's ethogram lands beside its own pose CSV
+  (`animal0_ethogram.csv`, next to `animal0.csv`), in the same format a
+  single-animal ethogram has always used, with no `individual` column:
+  Session Review reads an ethogram as a flat list keyed by row position, and
+  a shared multi-animal file would silently double-count every frame instead
+  of erroring. The **Apply** tab in Behavior Analysis reaches this path
+  automatically for a video already tracked multi-animal (with **Reuse
+  already-tracked pose CSVs** on, which is the default) and reports which
+  animals were scored and where each ethogram landed. It refuses three
+  things a multi-animal run cannot yet produce, by name rather than
+  silently: a speed-only run, an annotated video, and a CNN sequence model —
+  score one animal's CSV at a time via `pose_csv_in` for any of those today.
+  Per-animal bouts, stats, and transitions are deliberately not part of this:
+  `run_report` has no notion of per-animal identity yet, and that is
+  reporting polish deferred rather than forgotten — the ethograms themselves
+  are complete and open in Session Review like any other.
+- **The behavior annotator labels a multi-animal session one animal at a
+  time, and training reads that back per animal too.** Launching the
+  annotator on a video tracked with more than one animal asks which slot
+  you're labelling this pass; every zone you create is stamped with it, and
+  the clip view draws every tracked animal with the one you picked
+  highlighted, since two mice in a social assay usually look identical
+  otherwise. Re-trimming a zone never moves it to a different animal, even
+  when **Resume** brings back a mix of animals into one sitting by replaying
+  every zone already saved. The annotations CSV gains an `individual` column
+  (missing, or blank, reads as animal 0 — every file written before this
+  exists still loads), and the same-behavior overlap check that used to
+  forbid a repeated label now also checks *which* animal, so two animals
+  grooming at once no longer trips it. On the **Train** tab, add each
+  animal's own pose CSV as its own session — GLIDER resolves the one
+  annotations file the video's animals share and filters it to that
+  session's own animal, so a two-animal video becomes two training sessions
+  off one shared file rather than two copies of it.
+- **Feature extraction can measure a subject against the nearest other
+  animal, though nothing in the Behavior Analysis window turns it on yet.**
+  `FeatureSpec.include_social` adds five columns — distance to whichever
+  other animal is nearest *that frame* (so it isn't wired to there being
+  exactly two), whether that distance is closing or opening, the subject's
+  heading toward or away from them, and, for skeletons that name a `snout`
+  and a `tail_base`, nose-to-nose and nose-to-tail distance. Off by default,
+  so it changes nothing about a model trained before it existed. A model
+  that does use it can only ever run offline: the live camera path tracks
+  one animal and has nothing to measure a social column against, so GLIDER
+  refuses to start live inference with such a model instead of running it
+  with a stuck "(waiting...)" overlay. It also can't be combined with
+  mirror-augmented training, since mirroring flips the subject but not the
+  partner it's measured against, which would put a real animal on the wrong
+  side of a mirrored arena. Training gathers the other animals itself — a
+  session's other `animal<N>.csv` siblings, the same multi-animal layout the
+  Train tab already reads — so
+  `train_model(spec=FeatureSpec(include_social=True), ...)` works end to
+  end on a multi-animal session; there is just no Train-tab control that
+  turns it on yet.
 
 ### Changed
+
+- **Multi-animal batch tracking no longer writes the four-row DeepLabCut CSV
+  — it writes one plain three-row CSV per animal instead, and the four-row
+  file is now an opt-in export.** The four-row file was the one place this
+  feature didn't match the rest of GLIDER: `PoseData` stayed single-animal
+  everywhere else, and every one of the seventeen call sites that read pose
+  data — behaviour classification, the annotator, cohort speed, training,
+  zone scoring, the arena gate — refused it outright, correctly, because
+  scoring one arbitrary animal out of a social recording is the exact
+  failure multi-animal tracking exists to end. That refusal also meant those
+  tools could not work with a multi-animal session *at all*, four-row file
+  or not. Against a three-row file per animal, all seventeen work unchanged.
+  Reach the four-row layout, when something outside GLIDER needs it, with
+  the new **Export multi-animal DLC CSV** button in Batch Pose Tracking,
+  which rebuilds it fresh from the per-animal files so it can't drift from
+  them.
+  - **This branch already shipped the four-row format once.** Anyone who ran
+    a multi-animal batch before this changed has four-row CSVs on disk. They
+    still read back with `from_dlc_csv(individual=...)` — the reader is
+    unchanged — but they are no longer what a batch run produces, and
+    re-tracking that same video now writes the per-animal layout instead of
+    updating the four-row file, deleting it in the process — there's no undo.
+    Use the export action if you specifically want a four-row file for a
+    session that's already on the new layout.
+
+- **`zone_occupancy.csv`'s schema changed under multi-animal tracking, in three
+  ways a script reading the old file will not notice until it is already
+  wrong.** `object_id` is now the *first* column, not the last — anything
+  reading by index reads the wrong field; the branch's own tests needed the
+  same edit. A row is now per `(zone, track)` rather than per zone: two
+  animals sharing a zone for 100 frames used to write one row of 100 and now
+  writes two rows of 100, so summing `frames_in_zone` no longer answers "how
+  long was this zone occupied" — it answers "how many animal-frames," which
+  double-counts. And a zone nobody ever entered still writes its required
+  zero row, but with `object_id` empty; pandas reads that as `NaN`, so
+  `groupby("object_id")` silently drops exactly the zero rows this format
+  deliberately keeps. `zone_events.csv` is unchanged.
 
 - **`Tools` comes off the menu bar** — File, Edit, Experiment, View, Help
   remain. This is the recorded rule being satisfied rather than bent: a menu

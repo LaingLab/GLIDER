@@ -9,9 +9,12 @@ It holds:
     source        — string label propagated to "scorer" in DLC output
     metadata      — free-form dict for provenance (model path, video path, ...)
 
-Single animal in v1. The shape leaves room for a future
-(n_individuals, n_frames, n_keypoints, 3) layout, but every public function
-in this module operates on one mouse per video.
+``PoseData`` itself stays single-animal: the shape leaves room for a future
+(n_individuals, n_frames, n_keypoints, 3) layout, but each instance still
+holds one mouse. :func:`infer_video` returns one ``PoseData`` per video, as
+it always has. :func:`infer_video_tracks` is the multi-animal entry point --
+it returns a :class:`~glider.vision.pose.tracks.PoseTracks`, ``N`` of these
+containers keyed by slot, one per tracked animal.
 """
 
 from __future__ import annotations
@@ -145,6 +148,32 @@ def _video_fps(video_path: str | Path) -> float:
     return fps
 
 
+def _probe_frame_count(
+    video_path: str | Path,
+    *,
+    progress: bool,
+    progress_cb: Callable[[int, int], None] | None,
+) -> int:
+    """Frame count for a tqdm bar / ``progress_cb`` total, or ``0`` if unknown.
+
+    Only opens a second capture when someone will use the number — neither a
+    bar nor a callback means nothing reads it. ``0`` means "unknown": some
+    containers don't carry a reliable count, and callers must render that as
+    indeterminate rather than as "zero frames".
+    """
+    if not progress and progress_cb is None:
+        return 0
+    try:
+        import cv2
+
+        cap = cv2.VideoCapture(str(video_path))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        cap.release()
+        return total_frames
+    except Exception:
+        return 0
+
+
 def _infer_video_backend(
     spec,
     video_path: Path,
@@ -239,44 +268,253 @@ def _infer_video_backend(
     )
 
 
-def _pick_candidate(result, confidences, arena, settings, resolution) -> int:
-    """Index of the detection to keep.
+def _rank_candidates(result, confidences, arena, settings, resolution) -> list[int]:
+    """Detection indices, best first: in-arena by confidence, then the rest.
 
-    Plain ``argmax`` when there is no arena, so that path stays exactly what it
-    was. With one, the highest-confidence candidate whose keypoints clear
-    ``min_inside_fraction`` wins -- and if none do, ``argmax`` again.
-
-    That fallback is what makes this a re-ranking rather than a filter: it can
-    replace a bad pick with a good one but can never turn a frame that had a
-    usable detection into a dropout. Blanking is the gate's job, downstream.
-
-    Keypoint confidences are passed to :func:`inside_fraction`, not just ``xy``,
-    for the reason its docstring gives: raw Ultralytics output pads unlocalized
-    keypoints with ``(0, 0)`` at confidence 0, a finite pixel in the frame's
-    top-left corner that is outside every arena. Judging on ``xy`` alone would
-    score a correct detection with a few pads below quorum and hand the frame
-    back to the bench-floor blob -- the exact trap this exists to close.
+    ``np.argsort(-confidences, kind="stable")`` rather than
+    ``np.argsort(confidences)[::-1]``: the reversed form puts the *last* of two
+    tied confidences first, where ``argmax`` -- what the single-animal path used
+    for years -- takes the first. On a tie those disagree, and this function has
+    to be able to stand in for argmax exactly.
     """
+    order = [int(i) for i in np.argsort(-np.asarray(confidences), kind="stable")]
     if arena is None:
-        return int(confidences.argmax())
+        return order
 
     from glider.vision.arena_gate import ArenaGateSettings, inside_fraction
 
-    # run_batch gates on `gate is not None and arena is not None`, so an arena
-    # can arrive here with no settings.
     settings = settings or ArenaGateSettings()
-    # video_resolution returns None for a header it cannot read. Fall back to
-    # the frame the corners were clicked on -- the same last resort
-    # arena_gate._resolve_resolution uses. Re-ranking one candidate must never
-    # be the thing that kills a multi-hour batch.
     resolution = resolution or arena.frame_size
     keypoint_conf = result.keypoints.conf
-    for index in np.argsort(confidences)[::-1]:
+
+    inside: list[int] = []
+    outside: list[int] = []
+    for index in order:
         xy = result.keypoints.xy[index].cpu().numpy()
         cf = keypoint_conf[index].cpu().numpy() if keypoint_conf is not None else np.ones(len(xy))
-        if inside_fraction(arena, xy, cf, resolution, settings) >= settings.min_inside_fraction:
-            return int(index)
-    return int(confidences.argmax())
+        target = (
+            inside
+            if (
+                inside_fraction(arena, xy, cf, resolution, settings) >= settings.min_inside_fraction
+            )
+            else outside
+        )
+        target.append(index)
+    return inside + outside
+
+
+def _pick_candidate(result, confidences, arena, settings, resolution) -> int:
+    """Index of the detection to keep. See :func:`_rank_candidates`.
+
+    Kept as its own function because the single-animal path is unchanged and
+    should stay obviously unchanged: this is a re-ranking, never a filter, so
+    a frame that had a usable detection can never become a dropout.
+    """
+    return _rank_candidates(result, confidences, arena, settings, resolution)[0]
+
+
+def _resolve_arena_for_video(arena, video_path: Path):
+    """Validate ``arena``'s homography once for this video; ``None`` on failure.
+
+    Shared by :func:`infer_video` and :func:`infer_video_tracks`: an arena
+    whose corners do not describe a usable quad is reported once and ignored,
+    leaving plain confidence ranking -- a calibration problem must not cost a
+    run of inference. See :func:`_pick_candidate` for the fuller rationale.
+    """
+    if arena is None:
+        return None
+    try:
+        arena.homography()
+    except ValueError as e:
+        logger.warning(
+            "%s: the arena is unusable (%s), so detections are ranked by "
+            "confidence alone for this video; fix the calibration and "
+            "re-run to gate it",
+            video_path.name,
+            e,
+        )
+        return None
+    return arena
+
+
+def _track_stream(model_path, video_path, *, conf, device, verbose):
+    """Ultralytics ByteTrack, streaming one Results per frame.
+
+    A module-level seam so tests can substitute a stub, exactly as
+    ``backend.py`` isolates ``_load_yolo``. ``persist=True`` is what makes ids
+    survive between frames rather than restarting each call.
+    """
+    from ultralytics import YOLO
+
+    model = YOLO(str(model_path))
+    model.to(device)
+    return model.track(
+        source=str(video_path),
+        stream=True,
+        persist=True,
+        tracker="bytetrack.yaml",
+        conf=conf,
+        device=device,
+        verbose=verbose,
+    )
+
+
+def infer_video_tracks(
+    model_path,
+    video_path,
+    keypoint_names,
+    *,
+    n_animals: int,
+    conf: float = 0.25,
+    fps: float | None = None,
+    source: str | None = None,
+    device=None,
+    require_gpu: bool = False,
+    verbose: bool = False,
+    progress: bool = True,
+    echo_device: bool = True,
+    progress_cb=None,
+    cancel_cb=None,
+    arena=None,
+    gate_settings=None,
+    max_travel_px_per_frame: float = 40.0,
+    min_fragment_frames: int = 5,
+):
+    """Track ``n_animals`` through a video and return a :class:`PoseTracks`.
+
+    YOLO only. DeepLabCut and SLEAP models reach here as single-instance
+    architectures with nowhere to put a second animal, and are refused by name
+    rather than silently returning one arbitrary mouse in slot 0.
+
+    ``arena`` re-ranks candidates in-arena-first and then keeps the best
+    ``n_animals`` of them, which is the faithful generalisation of what
+    :func:`_pick_candidate` does for one: a confident bench-floor blob loses to
+    real animals, but a frame that had a usable detection never becomes a
+    dropout. Blanking stays the gate's job, downstream.
+    """
+    from pathlib import Path
+
+    from glider.vision.pose.consolidate import Fragment, consolidate
+    from glider.vision.pose.device import resolve_device
+    from glider.vision.pose.spec import PoseModelError, identify_pose_model
+    from glider.vision.video_source import video_resolution
+
+    model_path, video_path = Path(model_path), Path(video_path)
+    keypoint_names = list(keypoint_names)
+    n_kpts = len(keypoint_names)
+    if n_animals < 1:
+        raise ValueError(f"n_animals must be at least 1; got {n_animals}")
+
+    spec = identify_pose_model(model_path)
+    if spec.kind != "yolo":
+        raise PoseModelError(
+            f"{model_path.name} is a {spec.kind} model. Multi-animal tracking is "
+            f"YOLO-only: {spec.kind} models here are single-instance and have "
+            f"nowhere to put a second animal. Track it with n_animals=1, or use "
+            f"a YOLO-pose checkpoint."
+        )
+    if not keypoint_names:
+        raise PoseModelError(
+            f"{model_path.name} is a YOLO checkpoint, which does not record "
+            "body-part names. Pass keypoint_names in the model's training order."
+        )
+
+    resolved_device = resolve_device(device, require_gpu=require_gpu)
+    if fps is None:
+        fps = _video_fps(video_path)
+    if source is None:
+        source = f"yolo_{model_path.stem}"
+    resolution = video_resolution(video_path)
+
+    arena = _resolve_arena_for_video(arena, video_path)
+
+    if echo_device:
+        print(f"[glider.pose] device = {resolved_device}  ({n_animals} animals)")
+
+    raw: dict[int, list[tuple[int, np.ndarray, np.ndarray]]] = {}
+    n_frames = 0
+
+    total_frames = _probe_frame_count(video_path, progress=progress, progress_cb=progress_cb)
+
+    results_iter = _track_stream(
+        model_path, video_path, conf=conf, device=resolved_device, verbose=verbose
+    )
+    if progress:
+        try:
+            from tqdm import tqdm
+
+            results_iter = tqdm(results_iter, total=total_frames or None, desc="YOLO tracking")
+        except Exception:
+            pass
+
+    for frame_index, r in enumerate(results_iter):
+        if cancel_cb is not None and cancel_cb():
+            raise PoseCancelledError(f"inference cancelled after {frame_index} frames")
+        n_frames = frame_index + 1
+        if progress_cb is not None:
+            progress_cb(n_frames, total_frames)
+
+        kp = getattr(r, "keypoints", None)
+        if kp is None or kp.xy is None or kp.xy.shape[0] == 0 or r.boxes is None:
+            continue
+        if r.boxes.conf is None or r.boxes.id is None:
+            # ByteTrack leaves id None until a detection is confirmed. Inventing
+            # one would make a fresh fragment on every frame.
+            continue
+
+        confidences = r.boxes.conf.cpu().numpy()
+        ids = r.boxes.id.cpu().numpy()
+        for index in _rank_candidates(r, confidences, arena, gate_settings, resolution)[:n_animals]:
+            xy = kp.xy[index].cpu().numpy()
+            if xy.shape[0] != n_kpts:
+                raise ValueError(
+                    f"model emitted {xy.shape[0]} keypoints but {n_kpts} names "
+                    f"were supplied — check `keypoint_names` ordering against "
+                    f"the training data.yaml"
+                )
+            cf = kp.conf[index].cpu().numpy() if kp.conf is not None else np.ones(n_kpts)
+            raw.setdefault(int(ids[index]), []).append((frame_index, xy, cf))
+
+    fragments = [
+        Fragment(
+            track_id=track_id,
+            frames=np.array([f for f, _, _ in rows], dtype=int),
+            xy=np.stack([x for _, x, _ in rows]),
+            confidence=np.stack([c for _, _, c in rows]),
+        )
+        for track_id, rows in sorted(raw.items())
+    ]
+
+    result = consolidate(
+        fragments,
+        n_animals=n_animals,
+        n_frames=n_frames,
+        keypoint_names=keypoint_names,
+        fps=fps,
+        source=source,
+        max_travel_px_per_frame=max_travel_px_per_frame,
+        min_fragment_frames=min_fragment_frames,
+    )
+    tracks = result.tracks
+    tracks.metadata.update(
+        {
+            "model_path": str(model_path),
+            "video_path": str(video_path),
+            "resolution": resolution,
+            "consolidation": {
+                "n_animals": n_animals,
+                "max_travel_px_per_frame": max_travel_px_per_frame,
+                "min_fragment_frames": min_fragment_frames,
+                "raw_fragments": len(fragments),
+                "dropped": [list(d) for d in result.dropped],
+                "below_floor": result.below_floor,
+            },
+        }
+    )
+    for slot in tracks:
+        tracks[slot].metadata["resolution"] = resolution
+    tracks.metadata["stitched"] = {s: sorted(f) for s, f in result.stitched.items()}
+    return tracks
 
 
 def infer_video(
@@ -435,18 +673,7 @@ def infer_video(
     #
     # A successful call caches the matrix on the object, so the per-frame calls
     # below are attribute reads rather than 8x8 solves.
-    if arena is not None:
-        try:
-            arena.homography()
-        except ValueError as e:
-            logger.warning(
-                "%s: the arena is unusable (%s), so detections are picked by "
-                "confidence alone for this video; fix the calibration and "
-                "re-run to gate it",
-                video_path.name,
-                e,
-            )
-            arena = None
+    arena = _resolve_arena_for_video(arena, video_path)
 
     if echo_device:
         if resolved_device.startswith("cuda"):
@@ -472,18 +699,7 @@ def infer_video(
         verbose=verbose,
     )
 
-    # Probe the frame count once; both the tqdm bar and progress_cb need it.
-    # 0 means "unknown" — some containers don't carry a reliable count.
-    total_frames = 0
-    if progress or progress_cb is not None:
-        try:
-            import cv2
-
-            cap = cv2.VideoCapture(str(video_path))
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-            cap.release()
-        except Exception:
-            total_frames = 0
+    total_frames = _probe_frame_count(video_path, progress=progress, progress_cb=progress_cb)
 
     if progress:
         try:

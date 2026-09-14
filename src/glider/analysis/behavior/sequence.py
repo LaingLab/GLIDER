@@ -353,6 +353,22 @@ def assemble_sequences(
     from glider.analysis.behavior.pipeline import _mirror_pose
     from glider.vision.pose.dlc import from_dlc_csv
 
+    if getattr(spec, "include_social", False):
+        # Refused by name rather than left to compute_features' generic "no
+        # `others` were given": the other animals COULD be loaded here, but
+        # the resulting model could never be applied. A CNN sequence model is
+        # refused for a multi-animal session by
+        # glider.analysis.behavior.classify.apply_behavior_model, so training
+        # one on social features spends an afternoon producing a bundle with
+        # nothing to score it.
+        raise ValueError(
+            "social features are not supported for CNN sequence models: a "
+            "sequence model cannot be applied to a multi-animal session (see "
+            "apply_behavior_model), so a bundle trained with them could never "
+            "be scored. Train the LightGBM model for social features, or set "
+            "include_social=False."
+        )
+
     xs, ys, sess_ids, mirror_flags = [], [], [], []
     for sidx, (pose_csv, ann_csv) in enumerate(sessions):
         pose = from_dlc_csv(Path(pose_csv), fps=fps)

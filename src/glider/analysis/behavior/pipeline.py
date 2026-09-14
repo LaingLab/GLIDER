@@ -44,6 +44,7 @@ import pandas as pd
 
 if TYPE_CHECKING:
     from glider.analysis.behavior.hybrid import HybridModel
+    from glider.vision.pose.core import PoseData
 
 from glider.analysis.behavior.annotations import AnnotationStore
 from glider.analysis.behavior.benchmarks.metrics import macro_frame_f1
@@ -60,6 +61,7 @@ from glider.analysis.behavior.windowing import (
     apply_rolling,
     apply_spectral_rolling,
 )
+from glider.vision.pose.batch import _animal_csvs
 from glider.vision.pose.dlc import DEFAULT_FPS, fps_for_csv, from_dlc_csv
 
 SessionPair = tuple[Path, Path]
@@ -218,6 +220,8 @@ def train_model(
     freq_features: bool = False,
     traj_features: bool = False,
     motion_features: bool = False,
+    individuals: list[int | None] | None = None,
+    holdout_individuals: list[int | None] | None = None,
 ) -> TrainResult:
     """Fit a behavior classifier from one or more (pose, annotations) pairs.
 
@@ -306,6 +310,23 @@ def train_model(
         for the live "galaxy" view. ``"none"`` (default) skips it;
         ``"umap"`` (falls back to PCA if umap-learn is missing) or
         ``"pca"`` fits on the kept training rows.
+    individuals
+        Positionally aligned with ``sessions``: entry *i* selects which
+        animal's zones session *i* trains on, or ``None`` for every zone in
+        that session's annotations CSV. ``None`` (default) preserves the
+        single-animal behaviour — every session sees every zone. A
+        two-animal video becomes two sessions sharing one annotations
+        CSV, differing only in this list. Does NOT apply to
+        ``holdout_sessions`` — see ``holdout_individuals`` below;
+        ``holdout_sessions`` can have a different length than ``sessions``
+        (e.g. train on both animals of video A, hold out only one session
+        of video B), so the two lists must never be conflated.
+    holdout_individuals
+        The ``individuals`` counterpart for ``holdout_sessions``: entry *i*
+        selects the animal for holdout session *i*, positionally aligned
+        with ``holdout_sessions`` and independent of ``individuals`` and its
+        length. ``None`` (default) is today's behaviour — every holdout
+        session sees every zone.
 
     Returns
     -------
@@ -337,6 +358,7 @@ def train_model(
         background_class_name=background_class_name,
         background_subsample_ratio=background_subsample_ratio,
         random_state=random_state,
+        individuals=individuals,
     )
     x_kept, y_kept, g_kept = assembled.x_kept, assembled.y_kept, assembled.g_kept
     n_total = assembled.n_total
@@ -370,6 +392,7 @@ def train_model(
             freq_features=freq_features,
             traj_features=traj_features,
             motion_features=motion_features,
+            individuals=holdout_individuals,
         )
         # Apply the same drop logic as training.
         test_keep = (y_test_all != "") & (y_test_all != AMBIGUOUS) & ~x_test_all.isna().any(axis=1)
@@ -552,6 +575,7 @@ def train_hybrid_model(
     freq_features: bool = False,
     traj_features: bool = False,
     motion_features: bool = False,
+    individuals: list[int | None] | None = None,
 ) -> HybridTrainResult:
     """Train a hybrid (LightGBM base + kinematic prior) model with λ tuning.
 
@@ -575,6 +599,11 @@ def train_hybrid_model(
     LightGBM is hard-required (``require=True``); the prior needs the graded
     freeze/dart kinematics that the RandomForest fallback would not change, but
     the hybrid design commits to the gradient-boosted base.
+
+    ``individuals``, when given, is positionally aligned with ``sessions``:
+    entry *i* selects which animal's zones session *i* trains on (``None``
+    per entry, or the whole list ``None``, means every zone). There is no
+    holdout here — ``train_hybrid_model`` has no ``holdout_sessions``.
     """
     from glider.analysis.behavior.hybrid import HybridModel
     from glider.analysis.behavior.prior import KinematicPrior
@@ -607,6 +636,7 @@ def train_hybrid_model(
         background_class_name="background",
         background_subsample_ratio=0.0,
         random_state=random_state,
+        individuals=individuals,
     )
     x_kept, y_kept, g_kept = assembled.x_kept, assembled.y_kept, assembled.g_kept
 
@@ -701,6 +731,7 @@ def _assemble_sessions(
     freq_features: bool = False,
     traj_features: bool = False,
     motion_features: bool = False,
+    individuals: list[int | None] | None = None,
 ) -> tuple[pd.DataFrame, pd.Series, pd.Series, list[dict[str, int]]]:
     """Load each (pose, annotations) pair, extract features + label series.
 
@@ -710,18 +741,37 @@ def _assemble_sessions(
     the training set and teaches the model left/right invariance for
     free — useful when behaviors look the same from either side but
     your annotations skew to one direction.
+
+    ``individuals`` is positionally aligned with ``sessions``: entry *i* is
+    the animal whose zones session *i* should train on, or ``None`` for every
+    zone in the file. A two-animal video appears as TWO sessions sharing one
+    annotations CSV and differing only in this list — which is why the loop
+    body needs no notion of multiple animals at all.
     """
     if motion_features and mirror_augment:
         raise ValueError(
             "motion features are not supported with mirror augmentation yet "
             "(the source video isn't mirrored)"
         )
+    if spec.include_social and mirror_augment:
+        raise ValueError(
+            "social features are not supported with mirror augmentation "
+            "(_mirror_pose flips the subject, but the other animals in "
+            "`others` are not flipped, so every social column would measure "
+            "the subject against a partner on the wrong side of the arena)"
+        )
+    if individuals is not None and len(individuals) != len(sessions):
+        raise ValueError(
+            f"individuals has {len(individuals)} entries but sessions has "
+            f"{len(sessions)}; individuals must be positionally aligned "
+            f"with sessions, one entry per session"
+        )
     xs: list[pd.DataFrame] = []
     ys: list[pd.Series] = []
     groups_per_session: list[pd.Series] = []
     per_session_counts: list[dict[str, int]] = []
     group_offset = 0
-    for pose_csv, ann_csv in sessions:
+    for i, (pose_csv, ann_csv) in enumerate(sessions):
         try:
             pose = from_dlc_csv(Path(pose_csv), fps=fps)
         except UnicodeDecodeError as e:
@@ -732,7 +782,16 @@ def _assemble_sessions(
             ) from e
         except Exception as e:
             raise ValueError(f"failed to read DLC pose CSV {pose_csv}: {e}") from e
-        store = AnnotationStore.load_csv(Path(ann_csv))
+        individual = individuals[i] if individuals is not None else None
+        store = AnnotationStore.load_csv(Path(ann_csv), individual=individual)
+
+        # Social features are measured against the OTHER animals in this
+        # same session. mirror_augment is refused above when include_social
+        # is set, so there is exactly one pose_variant below when `others`
+        # is non-None -- it never needs mirroring itself.
+        others: list[PoseData] | None = None
+        if spec.include_social:
+            others = _other_animal_poses(Path(pose_csv), fps=fps)
 
         # Bundle the original + optionally the mirrored copy.
         pose_variants = [pose]
@@ -740,7 +799,7 @@ def _assemble_sessions(
             pose_variants.append(_mirror_pose(pose))
 
         for variant in pose_variants:
-            feats = compute_features(variant, spec=spec)
+            feats = compute_features(variant, spec=spec, others=others)
             if motion_features:
                 feats = _append_motion(feats, pose_csv, variant, spec)
             windowed = apply_rolling(feats, window=window, stats=stats)
@@ -810,6 +869,7 @@ def _assemble_and_filter(
     background_class_name: str,
     background_subsample_ratio: float,
     random_state: int,
+    individuals: list[int | None] | None = None,
 ) -> _AssembledData:
     """Assemble sessions, drop unusable rows, and subsample background.
 
@@ -819,6 +879,9 @@ def _assemble_and_filter(
     ``include_background`` is set, unannotated frames are first promoted to
     ``background_class_name`` and (optionally) subsampled to
     ``background_subsample_ratio`` × the largest behavior class.
+
+    ``individuals``, when given, is forwarded as-is to :func:`_assemble_sessions`
+    — positionally aligned with ``sessions``, one entry per session.
     """
     # ---- 1. Per-session feature + label assembly ----
     x_all, y_all, g_all, per_session_counts = _assemble_sessions(
@@ -833,6 +896,7 @@ def _assemble_and_filter(
         freq_features=freq_features,
         traj_features=traj_features,
         motion_features=motion_features,
+        individuals=individuals,
     )
 
     # ---- 2. Optionally promote unannotated frames to a background class ----
@@ -893,6 +957,42 @@ def _assemble_and_filter(
         per_session_counts=per_session_counts,
         background_subsampled_to=background_subsampled_to,
     )
+
+
+def _other_animal_poses(pose_csv: Path, *, fps: float) -> list[PoseData]:
+    """Load every OTHER animal's pose beside *pose_csv*, for social features.
+
+    Mirrors the layout :func:`glider.gui.behavior.window._individual_for_pose_csv`
+    already reads: a per-animal pose CSV lives at
+    ``<video_stem>_animals/animal<N>.csv``, and its siblings in that same
+    directory (via :func:`glider.vision.pose.batch._animal_csvs`, in slot
+    order) are the other animals tracked in the same session.
+
+    Raises by NAME when *pose_csv* can't support this, rather than handing
+    ``compute_features`` an empty/missing ``others`` and letting its generic
+    "no others were given" fire -- that error has no session path to point
+    at, and training can run over dozens of sessions at once.
+    """
+    animals_dir = pose_csv.parent
+    if not animals_dir.name.endswith("_animals"):
+        raise ValueError(
+            f"spec.include_social is set, but {pose_csv} is not laid out as "
+            f"a per-animal pose CSV -- its directory ({animals_dir}) does "
+            f'not end in "_animals". Social features are measured against '
+            f"another animal tracked in the SAME session, so this session "
+            f"needs the multi-animal layout batch pose tracking writes for "
+            f"a multi-animal video: <video_stem>_animals/animal<N>.csv."
+        )
+    siblings = _animal_csvs(animals_dir)
+    resolved = pose_csv.resolve()
+    others = [from_dlc_csv(p, fps=fps) for p in siblings if p.resolve() != resolved]
+    if not others:
+        raise ValueError(
+            f"spec.include_social is set, but {animals_dir} has no OTHER "
+            f"animal*.csv beside {pose_csv.name} -- social features need at "
+            f"least one other animal in the session to measure against."
+        )
+    return others
 
 
 def _append_motion(feats: pd.DataFrame, pose_csv: Path, pose, spec: FeatureSpec):
@@ -1266,6 +1366,33 @@ def _assemble_for_cv(
         raise ValueError(
             "motion features are not supported with mirror augmentation yet "
             "(the source video isn't mirrored)"
+        )
+    if spec.include_social:
+        raise ValueError(
+            "spec.include_social is not supported by cross-validation yet -- "
+            "this assembly path never gathers the other animals a session "
+            "needs `others` from, unlike train_model's _assemble_sessions. "
+            "Train with train_model(spec=FeatureSpec(include_social=True), "
+            "...) on a multi-animal session instead of cross_validate_sessions "
+            "or cross_validate_and_train."
+        )
+    multi = [str(p) for p, _a in sessions if Path(p).parent.name.endswith("_animals")]
+    if multi:
+        # The annotations CSV for a multi-animal session holds EVERY animal's
+        # zones, and this path loads it with no `individual` filter -- unlike
+        # _assemble_sessions, which takes `individuals` and filters. So each
+        # animal would be trained and scored against both animals' labels,
+        # and with "fit a model on all sessions" ticked CrossValidateWorker
+        # writes that mislabelled bundle to disk. A loud refusal beats a
+        # silent wrong number.
+        raise ValueError(
+            "cross-validation does not support a multi-animal session yet: "
+            f"{multi[0]} is a per-animal pose CSV, and the annotations beside "
+            "it hold every animal's zones. This path has no way to say which "
+            "animal is the subject, so it would train and score on both "
+            "animals' labels at once. Use train_model(sessions=..., "
+            "individuals=[...]), which filters each session's annotations to "
+            "its own animal."
         )
 
     xs: list[pd.DataFrame] = []

@@ -24,6 +24,7 @@ and apply size policies without an extra wrapping container.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -74,6 +75,10 @@ class ClipPlayer(QLabel):
         self._fps: float = 30.0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
+
+        #: Called with (bgr_frame, frame_index) just before display; returns the
+        #: frame to show. Set by the annotator to draw pose. None = draw nothing.
+        self.frame_overlay: Callable[[np.ndarray, int], np.ndarray] | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -196,6 +201,8 @@ class ClipPlayer(QLabel):
         frame_bgr = self._reader.read(self._start_frame)
         self._current_frame = self._start_frame
         if frame_bgr is not None:
+            if self.frame_overlay is not None:
+                frame_bgr = self.frame_overlay(frame_bgr, self._start_frame)
             self._display_bgr(frame_bgr)
             self._current_frame = self._start_frame + 1
             self.frame_changed.emit(self._start_frame)
@@ -215,6 +222,8 @@ class ClipPlayer(QLabel):
             return
         shown = self._current_frame
         self._current_frame += 1
+        if self.frame_overlay is not None:
+            frame_bgr = self.frame_overlay(frame_bgr, shown)
         self._display_bgr(frame_bgr)
         self.frame_changed.emit(shown)
 

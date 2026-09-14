@@ -325,7 +325,14 @@ def gate_pose_csv(csv_path, arena, *, settings=None) -> GateReport:
     legitimate re-gate. Only a build predating the ``run_batch`` cleanup can
     produce it.
     """
-    from glider.vision.pose.dlc import from_dlc_csv, meta_path, read_pose_meta, to_dlc_csv
+    from glider.vision.pose.dlc import (
+        from_dlc_csv,
+        header_depth,
+        list_individuals,
+        meta_path,
+        read_pose_meta,
+        to_dlc_csv,
+    )
 
     csv_path = Path(csv_path)
     settings = settings or ArenaGateSettings()
@@ -351,6 +358,18 @@ def gate_pose_csv(csv_path, arena, *, settings=None) -> GateReport:
             f"original of the run before it. Gating that would silently restore "
             f"the older track. Delete {ungated.name} to gate what is there now, "
             f"or put it back over {csv_path.name} to keep the older run."
+        )
+
+    # A multi-animal track needs from_dlc_csv's `individual=` to read -- a
+    # Python keyword argument, which is meaningless surfaced in a GUI log.
+    # Caught here, ahead of that call, so regate_videos can report something a
+    # lab user can act on: gating per animal isn't built yet, not "read the
+    # docstring".
+    if header_depth(source) == 4:
+        names = list_individuals(source)
+        raise ValueError(
+            f"{source.name} holds {len(names)} animals ({', '.join(names)}); "
+            f"re-gating a multi-animal track isn't supported yet."
         )
 
     # Read before renaming: from_dlc_csv reads fps from the sidecar.

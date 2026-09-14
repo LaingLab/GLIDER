@@ -404,6 +404,226 @@ def test_multiple_models_resolve_deterministically(tmp_path):
     assert batch.find_pose_csv(video) == tmp_path / "session01DLC_alpha.csv"
 
 
+def test_a_multi_animal_session_is_not_returned_as_one_pose_csv(tmp_path):
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+    d = tmp_path / "s1DLC_m_animals"
+    d.mkdir()
+    (d / "animal0.csv").write_text("scorer\n")
+    (d / "animal1.csv").write_text("scorer\n")
+
+    assert batch.find_pose_csv(video) is None
+
+
+def test_a_newer_flat_csv_from_another_model_outranks_an_older_animals_dir(tmp_path):
+    """Reconciliation is per (video, model): _drop_stale_animals_dir only
+    removes *that model's* directory, so a January multi-animal run and a
+    June single-animal run of a *different* model legitimately coexist. The
+    _animals dir must not win just by existing -- only when it is actually
+    newer than the flat CSV, matching the newest-wins rule the flat-CSV
+    tie-break already uses."""
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+
+    old_dir = tmp_path / "s1DLC_expA_animals"
+    old_dir.mkdir()
+    old_animal = old_dir / "animal0.csv"
+    old_animal.write_text("x")
+    # The file's mtime, not the directory's: on APFS a directory's own mtime
+    # does not move when a file already inside it is rewritten, so ranking
+    # by directory mtime would silently ignore a same-model re-track.
+    os.utime(old_animal, (1_000_000, 1_000_000))
+
+    newer_flat = tmp_path / "s1DLC_expB.csv"
+    newer_flat.write_text("x")
+    os.utime(newer_flat, (2_000_000, 2_000_000))
+
+    assert batch.find_pose_csv(video) == newer_flat
+
+
+def test_an_animals_dir_still_wins_when_it_is_actually_the_newer_one(tmp_path):
+    """The reverse of the above: when the _animals directory postdates every
+    flat CSV, it is current data and must still shadow the stale flat file."""
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+
+    older_flat = tmp_path / "s1DLC_expA.csv"
+    older_flat.write_text("x")
+    os.utime(older_flat, (1_000_000, 1_000_000))
+
+    new_dir = tmp_path / "s1DLC_expB_animals"
+    new_dir.mkdir()
+    (new_dir / "animal0.csv").write_text("x")
+    animal1 = new_dir / "animal1.csv"
+    animal1.write_text("x")
+    # The file's mtime, not the directory's -- see the sibling test above.
+    os.utime(animal1, (2_000_000, 2_000_000))
+
+    assert batch.find_pose_csv(video) is None
+
+
+def test_a_same_model_retrack_outranks_an_older_flat_csv_after_a_real_overwrite(tmp_path):
+    """Regression for the APFS gap: a same-model re-track overwrites
+    animal0.csv/animal1.csv in place at their original names, which on APFS
+    does not bump the _animals directory's own mtime (verified empirically:
+    a directory's mtime moves only when an entry is added or removed, not
+    when a file already inside it is rewritten). Ranking by the directory's
+    mtime would therefore leave a stale flat CSV from a different model
+    looking newer than a just-retracked multi-animal session. This test
+    performs genuine in-place overwrites -- no os.utime -- so it fails
+    against that bug and only that bug."""
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+
+    animals_dir = tmp_path / "s1DLC_expA_animals"
+    animals_dir.mkdir()
+    animal0 = animals_dir / "animal0.csv"
+    animal1 = animals_dir / "animal1.csv"
+    animal0.write_text("v1")
+    animal1.write_text("v1")
+    dir_mtime_after_creation = animals_dir.stat().st_mtime
+
+    time.sleep(0.2)  # give the next writes a distinguishable mtime
+
+    # A different model's flat CSV, written after the directory was created.
+    flat = tmp_path / "s1DLC_expB.csv"
+    flat.write_text("x")
+
+    time.sleep(0.2)
+
+    # Re-track expA: same filenames, overwritten in place -- no entry added
+    # or removed, so the directory's own mtime should not move.
+    animal0.write_text("v2, longer content than v1")
+    animal1.write_text("v2, longer content than v1")
+
+    assert animals_dir.stat().st_mtime == dir_mtime_after_creation  # sanity: the APFS premise
+
+    assert batch.find_pose_csv(video) is None  # the re-tracked animals dir wins, not the flat CSV
+
+
+def test_a_scan_over_a_mixed_folder_still_finds_the_single_animal_session(tmp_path):
+    """The failure this design replaced: a raise here aborted the
+    comprehension for every other video in the folder."""
+    solo = tmp_path / "solo.mp4"
+    solo.write_bytes(b"x")
+    (tmp_path / "soloDLC_m.csv").write_text("scorer\n")
+    pair = tmp_path / "pair.mp4"
+    pair.write_bytes(b"x")
+    d = tmp_path / "pairDLC_m_animals"
+    d.mkdir()
+    (d / "animal0.csv").write_text("scorer\n")
+
+    found = [v for v in (solo, pair) if batch.find_pose_csv(v) is not None]
+    assert found == [solo]
+
+
+def test_the_log_names_the_session_and_the_count(tmp_path, caplog):
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+    d = tmp_path / "s1DLC_m_animals"
+    d.mkdir()
+    (d / "animal0.csv").write_text("x")
+    (d / "animal1.csv").write_text("x")
+
+    with caplog.at_level("INFO"):
+        batch.find_pose_csv(video)
+
+    # Each element checked with text only it could produce -- "2" alone is
+    # any digit anywhere, and "s1" alone is a substring of both the video
+    # name and the directory name, so a dropped or wrong element could still
+    # satisfy the old, combined assertion.
+    assert "s1.mp4" in caplog.text  # the video
+    assert "(2 animals)" in caplog.text  # the count, as a count
+    assert str(d) in caplog.text  # the directory
+
+
+def test_find_pose_csvs_picks_the_newest_animals_dir_not_the_first_alphabetically(tmp_path, caplog):
+    """Two models can each leave their own _animals dir beside one video --
+    dlc_output_path is keyed on (video, model), so nothing stops both from
+    existing at once. The older, alphabetically-first directory must not
+    silently win over a newer model's output; mtimes are set explicitly so
+    the ordering doesn't depend on which directory happened to be created
+    first."""
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+
+    old = tmp_path / "s1DLC_expA_animals"
+    old.mkdir()
+    (old / "animal0.csv").write_text("x")
+
+    new = tmp_path / "s1DLC_expB_animals"
+    new.mkdir()
+    (new / "animal0.csv").write_text("x")
+    (new / "animal1.csv").write_text("x")
+
+    os.utime(old, (1_000_000, 1_000_000))
+    os.utime(new, (2_000_000, 2_000_000))
+
+    found = batch.find_pose_csvs(video)
+    assert len(found) == 2  # expB's two animals, not expA's one
+    assert all(p.parent == new for p in found)
+
+    # find_pose_csv has no file to return either, but its log must name the
+    # same directory find_pose_csvs actually used -- otherwise the two
+    # functions describe different sessions to whoever reads the log.
+    with caplog.at_level("INFO"):
+        assert batch.find_pose_csv(video) is None
+    assert str(new) in caplog.text
+
+
+def test_find_pose_csvs_returns_every_animal_in_slot_order(tmp_path):
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+    d = tmp_path / "s1DLC_m_animals"
+    d.mkdir()
+    for n in ("animal10", "animal2", "animal0"):
+        (d / f"{n}.csv").write_text("x")
+
+    assert [p.stem for p in batch.find_pose_csvs(video)] == ["animal0", "animal2", "animal10"]
+
+
+def test_find_pose_csvs_ignores_a_non_slot_file(tmp_path):
+    """``animal0_identity.csv``'s stem-after-prefix is "0_identity", not
+    all-digits, so the loose animal*.csv glob must not mistake it for a slot
+    -- exactly the failure the isdigit() guard in _animal_csvs exists to
+    catch (see its docstring)."""
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+    d = tmp_path / "s1DLC_m_animals"
+    d.mkdir()
+    (d / "animal0.csv").write_text("x")
+    (d / "animal1.csv").write_text("x")
+    (d / "animal0_identity.csv").write_text("x")
+
+    assert [p.name for p in batch.find_pose_csvs(video)] == ["animal0.csv", "animal1.csv"]
+
+
+def test_find_pose_csvs_is_empty_for_a_single_animal_session(tmp_path):
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+    (tmp_path / "s1DLC_m.csv").write_text("scorer\n")
+
+    assert batch.find_pose_csvs(video) == []
+
+
+def test_the_cohort_collector_skips_the_animals_subdirectory(tmp_path):
+    """animal0.csv carries no "DLC_" in its stem, so the rglob-based cohort
+    collector in gui/behavior/window.py already skips it -- pinned here
+    rather than assumed, since the two discovery paths were never written to
+    cooperate (see the comment on NOT_POSE_SUFFIXES)."""
+    from glider.gui.behavior.window import _unique_pose_csvs
+
+    video = tmp_path / "s1.mp4"
+    video.write_bytes(b"x")
+    d = tmp_path / "s1DLC_m_animals"
+    d.mkdir()
+    (d / "animal0.csv").write_text("x")
+    (d / "animal1.csv").write_text("x")
+
+    assert batch.find_pose_csvs(video) != []  # sanity: the session is multi-animal
+    assert _unique_pose_csvs(tmp_path) == []
+
+
 def test_the_two_pipelines_agree_on_what_counts_as_a_video():
     """Both containers used to be accepted by only one half of the pipeline."""
     assert {".wmv", ".webm"} <= batch.VIDEO_EXTS

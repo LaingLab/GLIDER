@@ -589,6 +589,66 @@ def test_regate_is_enabled_with_a_confirmed_arena_and_a_csv(window, tmp_path):
     assert window._regate_button.isEnabled()
 
 
+def _write_multi_animal(video, model="exp-7"):
+    """A two-animal ``_animals`` directory beside *video*, real per-animal CSVs."""
+    import numpy as np
+
+    from glider.vision.pose.core import PoseData
+    from glider.vision.pose.dlc import to_dlc_csv
+
+    animal_dir = video.parent / f"{video.stem}DLC_{model}_animals"
+    for slot in range(2):
+        pose = PoseData(
+            xy=np.full((5, 2, 2), float(slot)),
+            confidence=np.full((5, 2), 0.9),
+            keypoint_names=["a", "b"],
+            fps=30.0,
+            source="yolo_test",
+        )
+        to_dlc_csv(pose, animal_dir / f"animal{slot}.csv")
+    return animal_dir
+
+
+def test_export_is_disabled_without_a_multi_animal_session(window, tmp_path):
+    _ready_window(window, tmp_path, with_csv=True)  # single-animal CSV only
+    window._validate()
+    assert not window._export_button.isEnabled()
+
+
+def test_export_is_disabled_with_no_pose_csvs_at_all(window, tmp_path):
+    _ready_window(window, tmp_path)
+    window._validate()
+    assert not window._export_button.isEnabled()
+
+
+def test_export_is_enabled_with_a_multi_animal_session(window, tmp_path):
+    video = _ready_window(window, tmp_path)
+    _write_multi_animal(video)
+    window._validate()
+    assert window._export_button.isEnabled()
+
+
+def test_export_worker_writes_the_four_row_file_and_reports_it(qtbot, tmp_path):
+    """Mirrors how the other QThread workers in this app are tested
+    (e.g. test_workers.py, test_camera_panel_video.py): ``run()`` is called
+    directly, off any real thread, and the emitted signals are asserted on."""
+    from glider.gui.pose_batch.export_worker import ExportWorker
+
+    video = _video(tmp_path, "multi.mp4")
+    animal_dir = _write_multi_animal(video)
+
+    logged = []
+    worker = ExportWorker([video])
+    worker.log.connect(logged.append)
+    with qtbot.waitSignal(worker.finished, timeout=1000) as blocker:
+        worker.run()
+
+    assert blocker.args == [1, 0]  # exported, skipped
+    assert any("wrote" in m for m in logged)
+    target = animal_dir.with_name(animal_dir.name.removesuffix("_animals") + ".csv")
+    assert target.exists()
+
+
 def test_one_bad_video_does_not_end_the_pass(tmp_path, monkeypatch):
     """A refusal or an unreadable file is a skip, not a stop -- the whole point
     of a batch operation is that it finishes."""

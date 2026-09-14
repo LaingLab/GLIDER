@@ -250,3 +250,84 @@ def test_apply_rolling_invalid_stat_raises():
     df = pd.DataFrame({"a": [1, 2, 3]})
     with pytest.raises(ValueError):
         apply_rolling(df, window=2, stats=("not_a_real_stat",))
+
+
+def test_feature_spec_round_trips_every_field():
+    """Every field, not a sampled few.
+
+    A round-trip test that checks three fields out of eight is how
+    include_trajectory and trajectory_min_step silently stopped being
+    persisted. Build the spec with NON-DEFAULT values throughout, so a
+    field the serializer forgets shows up as its default rather than
+    matching by luck.
+    """
+    from dataclasses import fields
+
+    from glider.analysis.behavior import FeatureSpec
+
+    spec = FeatureSpec(
+        body_axis=(1, 3),
+        normalize_by_body_length=False,
+        include_body_length=False,
+        angle_triplets=(("custom", (0, 1, 2)),),
+        auto_angles=False,
+        min_confidence=0.25,
+        include_trajectory=False,
+        trajectory_min_step=0.5,
+        include_social=True,
+    )
+    restored = FeatureSpec.from_dict(spec.to_dict())
+
+    for f in fields(FeatureSpec):
+        assert getattr(restored, f.name) == getattr(spec, f.name), (
+            f"{f.name} did not survive to_dict/from_dict: "
+            f"{getattr(spec, f.name)!r} -> {getattr(restored, f.name)!r}"
+        )
+
+
+def test_resolving_the_body_axis_preserves_every_other_field():
+    """with_resolved_body_axis rebuilds the spec by hand, field by field.
+
+    A field added to the dataclass but forgotten there is silently reset
+    to its default on the way into compute_features.
+    """
+    from dataclasses import fields
+
+    from glider.analysis.behavior import FeatureSpec
+
+    spec = FeatureSpec(
+        body_axis=(0, -1),
+        normalize_by_body_length=False,
+        include_body_length=False,
+        auto_angles=False,
+        min_confidence=0.25,
+        include_trajectory=False,
+        trajectory_min_step=0.5,
+        include_social=True,
+    )
+    resolved = spec.with_resolved_body_axis(n_keypoints=5)
+    assert resolved.body_axis == (0, 4)
+    for f in fields(FeatureSpec):
+        if f.name == "body_axis":
+            continue
+        assert getattr(resolved, f.name) == getattr(
+            spec, f.name
+        ), f"{f.name} was reset by with_resolved_body_axis"
+
+
+def test_a_bundle_written_before_these_fields_existed_keeps_its_behaviour():
+    """Defaults in from_dict must be what such a model was TRAINED with."""
+    from glider.analysis.behavior import FeatureSpec
+
+    legacy = {
+        "body_axis": [0, -1],
+        "normalize_by_body_length": True,
+        "include_body_length": True,
+        "angle_triplets": [],
+        "auto_angles": True,
+        "min_confidence": 0.0,
+    }
+    spec = FeatureSpec.from_dict(legacy)
+    assert spec.include_trajectory is True
+    assert spec.trajectory_min_step == 0.02
+    assert spec.include_social is False

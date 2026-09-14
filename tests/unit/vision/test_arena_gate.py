@@ -304,6 +304,26 @@ class TestInsideFraction:
 
 
 class TestPostHoc:
+    def test_a_multi_animal_track_refuses_in_plain_english(self, tmp_path):
+        """gate_pose_csv reads via from_dlc_csv, whose refusal for a
+        multi-animal file names `individual=` -- a Python keyword argument
+        that means nothing surfaced in a GUI log. The message here must still
+        name the animals, just not the kwarg."""
+        from glider.vision.pose.dlc import to_dlc_csv_multi
+        from glider.vision.pose.tracks import PoseTracks
+
+        pose0 = _pose(np.repeat(_one_frame(), 10, axis=0))
+        pose1 = _pose(np.repeat(_one_frame(pad=(200.0, 200.0)), 10, axis=0))
+        tracks = PoseTracks(tracks={0: pose0, 1: pose1}, fps=30.0)
+        csv = tmp_path / "t1_d1DLC_exp-7.csv"
+        to_dlc_csv_multi(tracks, csv)
+
+        with pytest.raises(ValueError) as exc_info:
+            gate_pose_csv(csv, _arena())
+        message = str(exc_info.value)
+        assert "animal0" in message and "animal1" in message
+        assert "individual=" not in message
+
     def test_it_preserves_the_original_and_its_sidecar(self, tmp_path):
         csv = _write_track(tmp_path, outside=True)
         gate_pose_csv(csv, _arena())

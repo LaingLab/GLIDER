@@ -48,6 +48,7 @@ __all__ = [
     "score_csv",
     "score_pose",
     "write_zone_csvs",
+    "write_zone_csvs_multi",
     "zone_output_dir",
 ]
 
@@ -88,6 +89,7 @@ class ZoneScoring:
     frames_total: int
     frames_scored: int
     fps: float
+    object_id: str = "subject"
     keypoint: str = DEFAULT_KEYPOINT
     metadata: dict = field(default_factory=dict)
 
@@ -113,6 +115,7 @@ def score_pose(
     resolution: tuple[int, int] | None = None,
     keypoint: str = DEFAULT_KEYPOINT,
     min_confidence: float = DEFAULT_MIN_CONFIDENCE,
+    object_id: str = "subject",
 ) -> ZoneScoring:
     """Score *pose* against *zone_config*.
 
@@ -124,6 +127,8 @@ def score_pose(
             config's own recorded size.
         keypoint: Which tracked point decides occupancy.
         min_confidence: Frames below this are treated as dropouts.
+        object_id: Which animal *pose* belongs to, stamped onto every
+            :class:`ZoneEvent` this produces.
 
     Raises:
         KeypointMissingError: *keypoint* is not in the track.
@@ -173,6 +178,7 @@ def score_pose(
                         zone_id=zone.id,
                         zone_name=zone.name,
                         event="enter" if contains else "exit",
+                        object_id=object_id,
                     )
                 )
 
@@ -184,6 +190,7 @@ def score_pose(
         frames_total=len(xy),
         frames_scored=scored,
         fps=fps,
+        object_id=object_id,
         keypoint=keypoint,
     )
 
@@ -233,40 +240,12 @@ def write_zone_csvs(scoring: ZoneScoring, output_dir: Path | str) -> list[Path]:
     """Write ``zone_events.csv`` and ``zone_occupancy.csv`` into *output_dir*.
 
     Schema matches :class:`~glider.vision.video_tracking_runner.VideoTrackingRunner`
-    exactly, so existing readers do not need to know which produced a file.
+    exactly, so existing readers do not need to know which produced a file. A
+    one-animal call into :func:`write_zone_csvs_multi`: every event already
+    carries its own ``object_id`` and the occupancy loop keys off the dict, so
+    a single-entry mapping reproduces this function's output byte for byte.
     """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    events_path = output_dir / "zone_events.csv"
-    with open(events_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["frame", "elapsed_ms", "zone_id", "zone_name", "object_id", "event"])
-        for event in scoring.events:
-            writer.writerow(
-                [
-                    event.frame,
-                    f"{event.elapsed_ms:.1f}",
-                    event.zone_id,
-                    event.zone_name,
-                    event.object_id,
-                    event.event,
-                ]
-            )
-
-    occupancy_path = output_dir / "zone_occupancy.csv"
-    with open(occupancy_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["zone_id", "zone_name", "frames_in_zone", "seconds"])
-        for zone_id, frames in scoring.frames_in_zone.items():
-            writer.writerow(
-                [
-                    zone_id,
-                    scoring.zone_names.get(zone_id, ""),
-                    frames,
-                    f"{frames / scoring.fps:.3f}" if scoring.fps else "",
-                ]
-            )
+    paths = write_zone_csvs_multi({scoring.object_id: scoring}, output_dir)
 
     if not math.isclose(scoring.coverage, 1.0):
         logger.info(
@@ -276,6 +255,53 @@ def write_zone_csvs(scoring: ZoneScoring, output_dir: Path | str) -> list[Path]:
             scoring.frames_total,
             scoring.keypoint,
         )
+    return paths
+
+
+def write_zone_csvs_multi(scorings: dict[str, ZoneScoring], output_dir: Path | str) -> list[Path]:
+    """One pair of zone CSVs covering several animals.
+
+    Rows are written in animal-name order, not dict order: two runs of the same
+    batch must produce the same file, and a caller building the mapping from a
+    PoseTracks has no reason to think about ordering.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    events_path = output_dir / "zone_events.csv"
+    with open(events_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["frame", "elapsed_ms", "zone_id", "zone_name", "object_id", "event"])
+        for name in sorted(scorings):
+            for event in scorings[name].events:
+                writer.writerow(
+                    [
+                        event.frame,
+                        f"{event.elapsed_ms:.1f}",
+                        event.zone_id,
+                        event.zone_name,
+                        event.object_id,
+                        event.event,
+                    ]
+                )
+
+    occupancy_path = output_dir / "zone_occupancy.csv"
+    with open(occupancy_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["object_id", "zone_id", "zone_name", "frames_in_zone", "seconds"])
+        for name in sorted(scorings):
+            scoring = scorings[name]
+            for zone_id, frames in scoring.frames_in_zone.items():
+                writer.writerow(
+                    [
+                        name,
+                        zone_id,
+                        scoring.zone_names.get(zone_id, ""),
+                        frames,
+                        f"{frames / scoring.fps:.3f}" if scoring.fps else "",
+                    ]
+                )
+
     return [events_path, occupancy_path]
 
 

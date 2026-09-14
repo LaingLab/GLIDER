@@ -151,7 +151,11 @@ class VideoTrackingRunner:
         )
         zone_file, zone_writer = self._open_zone_writer()
         prev_members: dict[str, set[int]] = {z.id: set() for z in zones}
-        frames_in_zone: dict[str, int] = {z.id: 0 for z in zones}
+        # Per (zone, track): a frame with two animals in one zone is two
+        # animals' worth of occupancy, not one - counting the zone alone, as
+        # the enter/exit events already do per-track, would undercount whenever
+        # more than one animal shares a zone.
+        frames_in_zone: dict[str, dict[int, int]] = {z.id: {} for z in zones}
 
         annotated_writer = None
         if cfg.write_annotated:
@@ -179,8 +183,9 @@ class VideoTrackingRunner:
                             cx, cy = obj.centroid
                             if zone.contains_point_pixels(int(cx), int(cy), width, height):
                                 current.add(obj.track_id)
-                        if current:
-                            frames_in_zone[zone.id] += 1
+                        zone_counts = frames_in_zone[zone.id]
+                        for tid in current:
+                            zone_counts[tid] = zone_counts.get(tid, 0) + 1
                         for tid in current - prev_members[zone.id]:
                             zone_writer.writerow(
                                 [n + 1, f"{elapsed_ms:.1f}", zone.id, zone.name, tid, "enter"]
@@ -258,16 +263,25 @@ class VideoTrackingRunner:
         return f, w
 
     def _write_occupancy(
-        self, zones: list[Zone], frames_in_zone: dict[str, int], fps: float
+        self, zones: list[Zone], frames_in_zone: dict[str, dict[int, int]], fps: float
     ) -> None:
         with open(
             self._cfg.output_dir / "zone_occupancy.csv", "w", newline="", encoding="utf-8"
         ) as f:
             w = csv.writer(f)
-            w.writerow(["zone_id", "zone_name", "frames_in_zone", "seconds"])
+            w.writerow(["object_id", "zone_id", "zone_name", "frames_in_zone", "seconds"])
             for zone in zones:
-                fz = frames_in_zone[zone.id]
-                w.writerow([zone.id, zone.name, fz, f"{fz / fps:.3f}"])
+                counts = frames_in_zone[zone.id]
+                if not counts:
+                    # Nobody ever entered - that is a result (a zero), not the
+                    # absence of one. Keep the "one row per configured zone
+                    # minimum" guarantee; object_id is empty because there was
+                    # no animal to name, not because we dropped its id.
+                    w.writerow(["", zone.id, zone.name, 0, "0.000"])
+                    continue
+                for tid in sorted(counts):
+                    fz = counts[tid]
+                    w.writerow([tid, zone.id, zone.name, fz, f"{fz / fps:.3f}"])
 
     def _write_metadata(self, fps: float, frame_count: int, resolution: tuple[int, int]) -> None:
         cfg = self._cfg

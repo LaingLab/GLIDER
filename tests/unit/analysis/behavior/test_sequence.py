@@ -146,3 +146,17 @@ def test_train_cnn_overfits_a_tiny_separable_set():
     preds = model.predict(x)
     acc = (preds == y).mean()
     assert acc > 0.9
+
+
+def test_assemble_sequences_refuses_social_features():
+    """A CNN sequence model cannot be applied to a multi-animal session at
+    all (apply_behavior_model refuses one), so a bundle trained on social
+    columns could never be scored. Refused here by name and up front --
+    before any session is read -- rather than via compute_features' generic
+    "no `others` were given" after an afternoon of training.
+    """
+    from glider.analysis.behavior.features import FeatureSpec
+    from glider.analysis.behavior.sequence import assemble_sequences
+
+    with pytest.raises(ValueError, match="social features are not supported"):
+        assemble_sequences([], spec=FeatureSpec(include_social=True), window=8)

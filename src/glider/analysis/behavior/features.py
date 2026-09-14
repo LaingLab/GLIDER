@@ -155,6 +155,15 @@ class FeatureSpec:
     # jitter, an order of magnitude below a locomotion step.
     trajectory_min_step: float = 0.02
 
+    # When True, compute_features requires an `others` argument and emits the
+    # five social_* columns (see §3.3 of the D3 spec). Default off so every
+    # existing model's feature frame stays bit-identical -- the same guarantee
+    # include_body_length and include_trajectory already carry.
+    #
+    # A model trained with this on CANNOT run on the live path, which tracks
+    # one animal. That refusal lives in classify/pipeline.py, not here.
+    include_social: bool = False
+
     def with_resolved_body_axis(self, n_keypoints: int) -> FeatureSpec:
         """Replace negative body_axis indices with absolute ones."""
         head, tail = self.body_axis
@@ -174,6 +183,7 @@ class FeatureSpec:
             # and resolving the body axis must not be where that model dies.
             include_trajectory=getattr(self, "include_trajectory", True),
             trajectory_min_step=getattr(self, "trajectory_min_step", 0.02),
+            include_social=getattr(self, "include_social", False),
         )
 
     def resolve_angle_triplets(
@@ -224,6 +234,12 @@ class FeatureSpec:
             "angle_triplets": [[name, list(triplet)] for name, triplet in self.angle_triplets],
             "auto_angles": bool(self.auto_angles),
             "min_confidence": float(self.min_confidence),
+            # These two were missing until D3. A model saved with
+            # include_trajectory=False reloaded with it True and then asked for
+            # three columns it had never been trained on.
+            "include_trajectory": bool(self.include_trajectory),
+            "trajectory_min_step": float(self.trajectory_min_step),
+            "include_social": bool(self.include_social),
         }
 
     @classmethod
@@ -242,15 +258,57 @@ class FeatureSpec:
             # have this key get the old behaviour (no auto angles).
             auto_angles=bool(d.get("auto_angles", False)),
             min_confidence=float(d.get("min_confidence", 0.0)),
+            # Defaults are what a bundle written before these keys existed was
+            # actually TRAINED with -- not what a fresh spec would choose.
+            include_trajectory=bool(d.get("include_trajectory", True)),
+            trajectory_min_step=float(d.get("trajectory_min_step", 0.02)),
+            include_social=bool(d.get("include_social", False)),
         )
+
+
+def _nanmean_centroids(xy: np.ndarray) -> np.ndarray:
+    """(F, K, 2) -> (F, 2) NaN-safe mean over keypoints.
+
+    np.nanmean warns "Mean of empty slice" and returns NaN for a frame where
+    EVERY keypoint is missing. NaN is the right answer -- the animal was not
+    found -- so the warning is noise, not news.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return np.asarray(np.nanmean(xy, axis=1))
 
 
 def compute_features(
     pose: PoseData,
     spec: FeatureSpec | None = None,
+    *,
+    others: list[PoseData] | None = None,
 ) -> pd.DataFrame:
-    """Extract per-frame features. Returns a DataFrame indexed 0..n_frames-1."""
+    """Extract per-frame features. Returns a DataFrame indexed 0..n_frames-1.
+
+    ``others`` is every OTHER animal in the same video, and is required
+    when ``spec.include_social`` is set. It is ignored entirely when that
+    flag is off, so an existing caller that passes it by accident gets
+    today's columns unchanged.
+
+    The social columns measure the subject against the nearest *tracked*
+    other animal, chosen frame by frame. ``social_approach`` is blank on any
+    frame whose derivative would be taken across a change of which animal
+    that is -- a dropout makes the nearest animal switch, and differencing
+    across the switch reports a movement that never happened.
+    """
     spec = (spec or FeatureSpec()).with_resolved_body_axis(pose.n_keypoints)
+    if spec.include_social and not others:
+        raise ValueError(
+            "spec.include_social is set but no `others` were given. Social "
+            "features are measured against another animal, so there is no "
+            "defensible value to emit without one -- an empty list is the "
+            "N=1 case and fails here for the same reason.\n\n"
+            "If this came from the LIVE path: that path tracks one animal and "
+            "cannot supply `others`. A model trained with social features "
+            "cannot run live; retrain with include_social=False, or classify "
+            "the recording offline where every animal's track is available."
+        )
     xy = pose.xy.astype(np.float64, copy=True)  # (F, K, 2)
 
     # Mask low-confidence keypoints to NaN.
@@ -352,6 +410,84 @@ def compute_features(
         columns.update(
             _trajectory_columns(xy, safe_body_length, getattr(spec, "trajectory_min_step", 0.02))
         )
+
+    # ----- Social features -----
+    if spec.include_social:
+        assert others  # guarded at the top; this is for the type checker
+        subj_c = _nanmean_centroids(xy)  # (F, 2)
+        other_c = np.stack(
+            [_nanmean_centroids(o.xy.astype(np.float64, copy=False)) for o in others],
+            axis=0,
+        )  # (M, F, 2)
+
+        # Nearest TRACKED other animal, recomputed every frame. An animal
+        # that is NaN this frame is not a candidate -- np.nanargmin would
+        # raise on an all-NaN column, so np.where the distances to +inf first
+        # and detect the all-absent case by the inf surviving.
+        deltas = other_c - subj_c[None, :, :]  # (M, F, 2)
+        gaps = np.linalg.norm(deltas, axis=2)  # (M, F)
+        finite = np.where(np.isnan(gaps), np.inf, gaps)
+        nearest = np.argmin(finite, axis=0)  # (F,)
+        frames = np.arange(xy.shape[0])
+        gap = finite[nearest, frames]
+        gap = np.where(np.isinf(gap), np.nan, gap)  # nobody present
+        delta = deltas[nearest, frames, :]  # (F, 2)
+
+        # Same normalizer the pairwise distances use, so social distance is
+        # scale-invariant on exactly the same terms as everything else.
+        columns["social_distance"] = gap / safe_body_length
+
+        # Per-frame derivative. Negative is closing. np.gradient needs >= 2
+        # frames; a 1-frame call has no derivative to take.
+        #
+        # NaN wherever the stencil spans a change of WHICH animal is nearest.
+        # `nearest` switches the moment a closer animal drops out of tracking
+        # (it is made ineligible by the +inf above), and differencing across
+        # that switch subtracts one animal's distance from another's: on a
+        # real two-mouse recording with dropouts that manufactures a violent
+        # approach and an equally violent retreat on frames where nobody
+        # moved. No value is defensible there, so there is none -- the same
+        # rule social_distance already follows when nobody is tracked.
+        dist = columns["social_distance"]
+        if dist.shape[0] >= 2:
+            approach = np.gradient(dist)
+            # Identity, with "nobody tracked" as its own value: argmin over
+            # an all-inf column returns slot 0, which is not a sighting.
+            ident = np.where(np.isnan(gap), -1, nearest)
+            seam = np.zeros(dist.shape[0], dtype=bool)
+            seam[1:] = ident[1:] != ident[:-1]
+            # gradient[j] reads j-1 and j+1, so it spans the seam at j and
+            # the one at j+1. The same expression covers both one-sided
+            # edges, whose stencils are strictly narrower.
+            invalid = seam.copy()
+            invalid[:-1] |= seam[1:]
+            approach[invalid] = np.nan
+            columns["social_approach"] = approach
+        else:
+            columns["social_approach"] = np.full_like(dist, np.nan)
+
+        # Angle between the subject's body axis (tail -> head) and the vector
+        # to the other animal. 0 = facing them, pi = facing directly away.
+        # body_vec is head -> tail, so negate it.
+        heading = -body_vec  # (F, 2)
+        dot = (heading * delta).sum(axis=1)
+        denom = np.linalg.norm(heading, axis=1) * np.linalg.norm(delta, axis=1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cosine = np.where(denom > 1e-12, dot / denom, np.nan)
+        columns["social_bearing"] = np.arccos(np.clip(cosine, -1.0, 1.0))
+
+        # Keypoint-conditional pairs, the same pattern the curated angles use:
+        # present only when the skeleton actually names these parts.
+        nose_i = names.index("snout") if "snout" in names else None
+        tail_i = names.index("tail_base") if "tail_base" in names else None
+        other_xy = np.stack([o.xy.astype(np.float64, copy=False) for o in others], axis=0)
+        picked = other_xy[nearest, frames, :, :]  # (F, K, 2)
+        if nose_i is not None:
+            d_nn = np.linalg.norm(xy[:, nose_i, :] - picked[:, nose_i, :], axis=1)
+            columns["social_nose_to_nose"] = d_nn / safe_body_length
+            if tail_i is not None:
+                d_nt = np.linalg.norm(xy[:, nose_i, :] - picked[:, tail_i, :], axis=1)
+                columns["social_nose_to_tail"] = d_nt / safe_body_length
 
     df = pd.DataFrame(columns)
     df.index.name = "frame"

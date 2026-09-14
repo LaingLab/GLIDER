@@ -21,6 +21,8 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+import numpy as np
+
 from glider.analysis.behavior.annotations import AnnotationStore
 from glider.analysis.behavior.features import FeatureSpec
 from glider.analysis.behavior.vocabulary import Vocabulary
@@ -28,6 +30,7 @@ from glider.gui.behavior.annotator.capture_cache import VideoCaptureCache
 from glider.gui.behavior.annotator.resume_cache import ResumeCache, resolve_cache_dir
 from glider.gui.behavior.annotator.sampler import (
     ProposedClip,
+    propose_clips_for_animal,
     propose_clips_multi,
     zones_to_clips,
 )
@@ -99,6 +102,8 @@ def merge_queue_with_labelled(
 def make_more_sampler(
     pose_sessions: list[tuple[Path, Path]],  # (video, pose_csv) pairs
     *,
+    tracks: dict[Path, list[Path]] | None = None,
+    subjects: dict[Path, int] | None = None,
     spec: FeatureSpec | None = None,
     window: int = 30,
     fps: float = 30.0,
@@ -112,23 +117,57 @@ def make_more_sampler(
 
     Defaults match the annotator's own, so a caller that exposes none of the
     sampling knobs (the Behavior Analysis window's Annotate tab) still gets
-    the button rather than having to restate them."""
-    pairs = [(p, v) for v, p in pose_sessions]  # (pose_csv, video) for sampler
+    the button rather than having to restate them.
+
+    ``tracks`` maps a multi-animal video to every animal's pose CSV in slot
+    order and ``subjects`` to the slot this pass is labelling. A labeller who
+    launched a pass for animal 1 and pressed "render more" used to be handed
+    animal-0 clips, unannounced -- and every zone they then created was
+    stamped animal 0. A video absent from ``tracks`` is single-animal: its
+    own CSV, subject 0, exactly as before.
+    """
+    tracks = {Path(v): [Path(p) for p in paths] for v, paths in (tracks or {}).items()}
+    subjects = {Path(v): int(s) for v, s in (subjects or {}).items()}
+    # (video, every animal's CSV in slot order, the subject slot) per session.
+    # A video with no entry in ``tracks`` has no per-animal CSVs to sample a
+    # second animal from, so it is slot 0 whatever ``subjects`` says.
+    jobs: list[tuple[Path, list[Path], int]] = []
+    for v, pose_csv in pose_sessions:
+        video = Path(v)
+        animal_csvs = tracks.get(video)
+        if animal_csvs:
+            jobs.append((video, animal_csvs, subjects.get(video, 0)))
+        else:
+            jobs.append((video, [Path(pose_csv)], 0))
     state = {"seed": int(base_seed)}
 
     def sample(n: int) -> list[ProposedClip]:
         state["seed"] += 1
-        n_total = max(int(n), len(pairs))
-        return propose_clips_multi(
-            sessions=pairs,
-            n_clips_total=n_total,
-            spec=spec,
-            window=window,
-            fps=fps,
-            random_state=state["seed"],
-            spatial_weight=spatial_weight,
-            min_frame_gap=min_frame_gap,
-        )
+        # Same divmod quota and per-video seed offset propose_clips_multi
+        # uses internally, so a folder with no multi-animal video reduces to
+        # exactly the numbers this returned before.
+        n_total = max(int(n), len(jobs))
+        base, remainder = divmod(n_total, len(jobs))
+        clips: list[ProposedClip] = []
+        for i, (video, csvs, subject) in enumerate(jobs):
+            clips.extend(
+                propose_clips_for_animal(
+                    csvs,
+                    video,
+                    subject=subject,
+                    n_clips=base + (1 if i < remainder else 0),
+                    spec=spec,
+                    window=window,
+                    fps=fps,
+                    random_state=state["seed"] + i,
+                    spatial_weight=spatial_weight,
+                    min_frame_gap=min_frame_gap,
+                )
+            )
+        # Shuffled cross-video for the same reason propose_clips_multi does
+        # it: a labeller shouldn't sit on one video before switching.
+        np.random.default_rng(state["seed"]).shuffle(clips)
+        return clips
 
     return sample
 

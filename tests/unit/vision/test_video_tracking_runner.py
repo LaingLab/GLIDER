@@ -36,6 +36,47 @@ class FakeCV:
         return [], [obj], MotionResult(False, 0.0)
 
 
+class FakeCVTwoTracks:
+    """Stand-in CVProcessor: two objects share one spot, but track 2 leaves
+    after 5 frames while track 1 stays for all of them - so a correct
+    per-track tally must not sum or dedupe the two.
+    """
+
+    is_initialized = True
+
+    def __init__(self):
+        self._n = -1
+
+    def initialize(self):  # pragma: no cover - trivial
+        return True
+
+    def reset(self):  # pragma: no cover - trivial
+        pass
+
+    def process_frame(self, frame, timestamp):
+        self._n += 1
+        objs = [
+            TrackedObject(
+                track_id=1,
+                class_name="subject",
+                bbox=(10, 10, 4, 4),
+                confidence=0.9,
+                centroid=(12, 12),
+            )
+        ]
+        if self._n < 5:
+            objs.append(
+                TrackedObject(
+                    track_id=2,
+                    class_name="subject",
+                    bbox=(10, 10, 4, 4),
+                    confidence=0.9,
+                    centroid=(12, 12),
+                )
+            )
+        return [], objs, MotionResult(False, 0.0)
+
+
 class FakeCVKeypoints:
     """CVProcessor stand-in that reports one object with a keypoint at (40, 30)."""
 
@@ -278,6 +319,79 @@ def test_zone_events_enter_and_occupancy(synthetic_clip: Path, tmp_path: Path):
     row = occ[occ["zone_id"] == "z1"].iloc[0]
     assert int(row["frames_in_zone"]) >= 1
     assert abs(row["seconds"] - row["frames_in_zone"] / 10.0) < 1e-6
+
+
+def _corner_zone() -> ZoneConfiguration:
+    cfg = ZoneConfiguration()
+    cfg.add_zone(
+        Zone(
+            id="z1",
+            name="corner",
+            shape=ZoneShape.RECTANGLE,
+            vertices=[(0.0, 0.0), (0.5, 0.5)],
+        )
+    )
+    return cfg
+
+
+def test_a_zone_never_entered_still_gets_a_zero_row(synthetic_clip: Path, tmp_path: Path):
+    """Before this task the writer emitted one row per configured zone, even
+    ones nobody entered. Nesting the loop under frames_in_zone[zone.id] made
+    that row vanish for an empty zone - but "never entered" is a result (a
+    zero), not the absence of one, so the row must still be written.
+    """
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = VideoTrackingConfig(
+        source_path=synthetic_clip,
+        output_dir=out,
+        # FakeCV's object stays around y=24 on a 48px-tall frame; a zone
+        # confined to the bottom strip is never reached.
+        zone_config=ZoneConfiguration(
+            zones=[
+                Zone(
+                    id="floor",
+                    name="floor",
+                    shape=ZoneShape.RECTANGLE,
+                    vertices=[(0.0, 0.9), (1.0, 1.0)],
+                )
+            ]
+        ),
+        write_tracking=False,
+        write_zone_events=True,
+        write_annotated=False,
+    )
+    VideoTrackingRunner(cfg, cv_processor=FakeCV()).run()
+
+    occ = pd.read_csv(out / "zone_occupancy.csv")
+    row = occ[occ["zone_id"] == "floor"].iloc[0]
+    assert row["frames_in_zone"] == 0
+    assert row["seconds"] == 0.0
+    assert pd.isna(row["object_id"])
+
+
+def test_two_simultaneous_tracks_get_distinct_occupancy_rows(synthetic_clip: Path, tmp_path: Path):
+    """Two animals sharing a zone must each get their own row with their own
+    count - not summed together, not deduplicated to one track. This is the
+    exact path multi-animal occupancy tallying exists to cover.
+    """
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = VideoTrackingConfig(
+        source_path=synthetic_clip,
+        output_dir=out,
+        zone_config=_corner_zone(),
+        write_tracking=False,
+        write_zone_events=True,
+        write_annotated=False,
+    )
+    VideoTrackingRunner(cfg, cv_processor=FakeCVTwoTracks()).run()
+
+    occ = pd.read_csv(out / "zone_occupancy.csv")
+    rows = occ[occ["zone_id"] == "z1"].set_index("object_id")
+    assert set(rows.index) == {1, 2}
+    assert rows.loc[1, "frames_in_zone"] == 12
+    assert rows.loc[2, "frames_in_zone"] == 5
 
 
 def test_zone_files_absent_when_disabled(synthetic_clip: Path, tmp_path: Path):

@@ -183,6 +183,12 @@ class PoseBatchWindow(QMainWindow):
         # two would otherwise share a teardown that means different things.
         self._regate_thread: QThread | None = None
         self._regate_worker = None
+        # The export is derived and read-only over the source CSVs, so it
+        # shares no half-written-primary hazard with Run or the re-gate --
+        # but it still gets its own thread rather than blocking the GUI, on
+        # the same reasoning as the re-gate: I/O over a handful of CSVs.
+        self._export_thread: QThread | None = None
+        self._export_worker = None
 
         self._build_ui()
         self._refresh_videos()
@@ -255,6 +261,15 @@ class PoseBatchWindow(QMainWindow):
         self._regate_button.clicked.connect(self._start_regate)
         rail.card.add(self._regate_button)
 
+        # Opt-in, and never part of a batch: the four-row file is derived
+        # fresh from the per-animal CSVs every time this runs, so it can
+        # never drift from them the way a parallel primary could.
+        self._export_button = QPushButton("Export multi-animal DLC CSV")
+        set_button_role(self._export_button, "ghost")
+        self._export_button.setEnabled(False)
+        self._export_button.clicked.connect(self._start_export)
+        rail.card.add(self._export_button)
+
         # Hidden until a batch starts: two empty bars sitting at zero read as
         # a run that has stalled rather than one that has not begun.
         self._overall_bar = QProgressBar()
@@ -318,14 +333,28 @@ class PoseBatchWindow(QMainWindow):
         self._conf_spin.setSingleStep(0.05)
         self._conf_spin.setValue(0.25)  # matches infer_video's default
 
-        # Two short numeric settings on one line: each is narrow, and stacking
-        # them cost a full row apiece for a value four characters wide.
+        self._animals_spin = QSpinBox()
+        self._animals_spin.setRange(1, 16)
+        self._animals_spin.setValue(1)
+        self._animals_spin.setToolTip(
+            "How many animals are in each video. This is not detected -- it is "
+            "the constraint that lets tracking stitch a fragmented track back "
+            "into one animal. Too high and one mouse is split into two that "
+            "each vanish for half the video; too low and a real animal is "
+            "dropped entirely."
+        )
+
+        # Three short numeric settings on one line: each is narrow, and stacking
+        # them cost a full row apiece for a value a few characters wide.
         inference = QHBoxLayout()
         inference.setSpacing(8)
         inference.addWidget(self._device_combo)
         inference.addSpacing(8)
         inference.addWidget(set_text_role(QLabel("Confidence"), "caption"))
         inference.addWidget(self._conf_spin)
+        inference.addSpacing(8)
+        inference.addWidget(set_text_role(QLabel("Animals"), "caption"))
+        inference.addWidget(self._animals_spin)
         inference.addStretch(1)
         card.add(labelled_row("Device", inference))
 
@@ -1186,7 +1215,11 @@ class PoseBatchWindow(QMainWindow):
         Run gate and the button-disabling in ``_start_regate`` from drifting
         apart the way they already did once.
         """
-        return self._thread is not None or self._regate_thread is not None
+        return (
+            self._thread is not None
+            or self._regate_thread is not None
+            or self._export_thread is not None
+        )
 
     def _validate(self) -> None:
         """Disable Run — and say why — rather than failing an overnight batch."""
@@ -1258,6 +1291,27 @@ class PoseBatchWindow(QMainWindow):
             if ready
             else "Needs a confirmed arena on every video and a pose CSV to re-gate."
         )
+        self._validate_export()
+
+    def _validate_export(self) -> None:
+        """Export needs multi-animal sessions -- not a model, not an arena.
+
+        Deliberately not gated on ``problem`` for the same reason as the
+        re-gate: this reads per-animal CSVs already on disk, so demanding the
+        weights that produced them would make the button unavailable on
+        exactly the archived cohort it is for.
+        """
+        from glider.gui.pose_batch.export_actions import exportable
+
+        ready = not self._busy() and bool(exportable(self._videos))
+        self._export_button.setEnabled(ready)
+        self._export_button.setToolTip(
+            "Rebuild the four-row DLC CSV that SimBA, DeepLabCut and "
+            "Keypoint-MoSeq read as a multi-animal session, from the "
+            "per-animal CSVs already beside these videos."
+            if ready
+            else "Needs at least one video with more than one animal tracked."
+        )
 
     # ------------------------------------------------------------------
     # running
@@ -1314,6 +1368,7 @@ class PoseBatchWindow(QMainWindow):
             filtering=self._filter_settings(),
             zones=self._zone_configs(),
             arenas=self._arena_map(),
+            n_animals=self._animals_spin.value(),
             # Defaults, and no UI to tune them: gating is not optional here.
             # Zones below are scored from the gated pose — centre time computed
             # from bench-floor detections is meaningless — and the arena also
@@ -1332,6 +1387,7 @@ class PoseBatchWindow(QMainWindow):
 
         self._run_button.setEnabled(False)
         self._regate_button.setEnabled(False)  # _validate returns early mid-run
+        self._export_button.setEnabled(False)
         self._cancel_button.setEnabled(True)
         self._overall_bar.setVisible(True)
         self._video_bar.setVisible(True)
@@ -1430,6 +1486,7 @@ class PoseBatchWindow(QMainWindow):
 
         self._run_button.setEnabled(False)
         self._regate_button.setEnabled(False)
+        self._export_button.setEnabled(False)
         self._rail.status.set_state("running", "Re-gating")
         self._regate_thread.start()
 
@@ -1454,6 +1511,64 @@ class PoseBatchWindow(QMainWindow):
         self._regate_worker = None
         self._validate()
 
+    # ------------------------------------------------------------------
+    # multi-animal export
+    # ------------------------------------------------------------------
+
+    def _start_export(self) -> None:
+        from glider.gui.pose_batch.export_actions import exportable
+        from glider.gui.pose_batch.export_worker import ExportWorker
+
+        if self._busy():
+            return
+        videos = exportable(self._videos)
+        if not videos:
+            return
+
+        # No confirmation prompt: unlike the re-gate, this never touches the
+        # per-animal CSVs it reads from -- it only (re)writes the derived
+        # four-row file, which is exactly what running it again is for.
+        self._log.appendPlainText(f"Exporting {len(videos)} multi-animal session(s)…")
+        self._overall_bar.setRange(0, len(videos))
+        self._overall_bar.setValue(0)
+        self._overall_bar.setVisible(True)
+
+        self._export_worker = ExportWorker(videos)
+        self._export_thread = QThread(self)
+        self._export_worker.moveToThread(self._export_thread)
+        self._export_thread.started.connect(self._export_worker.run)
+        self._export_worker.progress.connect(self._on_progress)
+        self._export_worker.log.connect(self._log.appendPlainText)
+        self._export_worker.finished.connect(self._on_export_finished)
+        self._export_worker.failed.connect(self._on_export_failed)
+
+        self._run_button.setEnabled(False)
+        self._regate_button.setEnabled(False)
+        self._export_button.setEnabled(False)
+        self._rail.status.set_state("running", "Exporting")
+        self._export_thread.start()
+
+    def _on_export_finished(self, exported: int, skipped: int) -> None:
+        self._overall_bar.setValue(self._overall_bar.maximum())
+        self._log.appendPlainText(f"Exported {exported}, skipped {skipped}.")
+        self._rail.status.set_state("warn" if skipped else "ok", "Done")
+        self._teardown_export()
+
+    def _on_export_failed(self, message: str) -> None:
+        self._rail.status.set_state("error", "Failed")
+        self._log.appendPlainText(f"Export could not run: {message}")
+        QMessageBox.critical(self, "Export multi-animal DLC CSV", message)
+        self._teardown_export()
+
+    def _teardown_export(self) -> None:
+        if self._export_thread is not None:
+            self._export_thread.quit()
+            self._export_thread.wait(5000)
+            self._export_thread.deleteLater()
+            self._export_thread = None
+        self._export_worker = None
+        self._validate()
+
     def closeEvent(self, event):
         """Never let a running batch outlive its window."""
         if self._thread is not None and self._worker is not None:
@@ -1469,5 +1584,10 @@ class PoseBatchWindow(QMainWindow):
             self._regate_thread.wait(5000)
             self._regate_thread = None
             self._regate_worker = None
+        if self._export_thread is not None:
+            self._export_thread.quit()
+            self._export_thread.wait(5000)
+            self._export_thread = None
+            self._export_worker = None
         self._stop_meta_thread()
         super().closeEvent(event)

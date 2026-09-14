@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -63,7 +64,7 @@ from glider.gui.widgets.tool_ui import (
     set_path_text,
     set_text_role,
 )
-from glider.vision.pose.batch import VIDEO_EXTS, VIDEO_FILTER, find_pose_csv
+from glider.vision.pose.batch import VIDEO_EXTS, VIDEO_FILTER, find_pose_csv, find_pose_csvs
 
 logger = logging.getLogger(__name__)
 
@@ -673,12 +674,25 @@ class AnnotateTab(QWidget):
         set_path_text(self._poses_label, _short_path(self._poses_dir), filled=True)
         self._poses_label.setToolTip(path)
 
-    def _open_annotator(self, sessions, videos_meta, fps, clips, *, origin: str) -> None:
+    def _open_annotator(
+        self,
+        sessions,
+        videos_meta,
+        fps,
+        clips,
+        *,
+        origin: str,
+        pose_tracks: dict[Path, list[Path]] | None = None,
+    ) -> None:
         """Open the annotator on ``clips``. Shared by Launch and Resume.
 
         Extracted so the two entry points cannot drift on the speed
         trace, the vocabulary, or whether 'render more' is available —
         a resumed session needs all three exactly as a fresh one does.
+
+        ``pose_tracks`` is every animal's pose CSV per multi-animal video, in
+        slot order — without it the annotator's per-animal overlay (see
+        ``AnnotatorWindow._draw_pose``) is dead code with nothing to draw.
         """
         # Deferred here rather than at module scope: AnnotatorWindow pulls in
         # cv2 via the clip player, and building menus must stay cheap.
@@ -697,7 +711,17 @@ class AnnotateTab(QWidget):
         # The window's "render more" button only exists when it is given a
         # sampler; without one, a review session is a dead end and a sampled
         # session can never be extended.
-        clip_sampler = make_more_sampler(sessions, fps=fps)
+        #
+        # The subject comes from the queue itself: a pass labels one animal
+        # per video, so the first clip for a video says which. Deriving it
+        # here rather than taking a parameter keeps Launch and Resume on the
+        # same rule -- Resume never asks for a subject, and its sessions list
+        # holds slot 0's CSV for every multi-animal video, so without this
+        # "render more" would quietly switch the labeller to animal 0.
+        subjects: dict[Path, int] = {}
+        for clip in clips:
+            subjects.setdefault(Path(clip.video_path), int(clip.individual))
+        clip_sampler = make_more_sampler(sessions, tracks=pose_tracks, subjects=subjects, fps=fps)
 
         # Speed trace inputs. All three are optional and independent: no pose
         # CSVs means no trace, no cohort file means no reference lines, no
@@ -747,6 +771,7 @@ class AnnotateTab(QWidget):
             capture_cache=capture_cache,
             clip_sampler=clip_sampler,
             pose_csvs=pose_csvs,
+            pose_tracks=pose_tracks,
             cohort=cohort,
             px_per_mm=scales,
         )
@@ -754,11 +779,18 @@ class AnnotateTab(QWidget):
         self._annotator_window.warn_about_load_errors()
 
     def _resolve_sessions(self):
-        """``(sessions, poses_dir)`` for the chosen folders, or ``None``.
+        """``(sessions, poses_dir, pose_tracks)`` for the chosen folders, or ``None``.
 
         Shared by Launch and Resume so the two cannot disagree about which
         videos are in play or how their pose CSVs are found. Reports its own
         problems and returns None when there is nothing to work with.
+
+        ``find_pose_csv`` returns ``None`` for a multi-animal session by
+        design (there is no single file to hand back); ``find_pose_csvs`` is
+        the fallback for those. No subject dialog here — unlike Launch, Resume
+        proposes no new clips, so any animal's CSV resolves the same fps and
+        annotations path. ``pose_tracks`` carries every animal's CSV so the
+        overlay can still draw them all.
         """
         if self._videos_dir is None:
             QMessageBox.warning(self, "Annotate", "Choose a videos folder first.")
@@ -770,7 +802,9 @@ class AnnotateTab(QWidget):
             QMessageBox.warning(self, "Annotate", f"No videos found in {self._videos_dir}")
             return None
         located = [(v, find_pose_csv(v, poses_dir)) for v in videos]
-        missing = [v.name for v, csv in located if csv is None]
+        missing_videos = [v for v, csv in located if csv is None]
+        animal_csvs_by_video = {v: find_pose_csvs(v, poses_dir) for v in missing_videos}
+        missing = [v.name for v in missing_videos if not animal_csvs_by_video[v]]
         if missing:
             QMessageBox.warning(
                 self,
@@ -783,7 +817,11 @@ class AnnotateTab(QWidget):
                 "videos first, then come back here.",
             )
             return None
-        return [(v, csv) for v, csv in located if csv is not None], poses_dir
+        sessions = [
+            (v, csv if csv is not None else animal_csvs_by_video[v][0]) for v, csv in located
+        ]
+        pose_tracks = {v: csvs for v, csvs in animal_csvs_by_video.items() if len(csvs) > 1}
+        return sessions, poses_dir, pose_tracks
 
     def _on_resume(self) -> None:
         """Reopen the saved queue together with everything already labelled.
@@ -796,12 +834,9 @@ class AnnotateTab(QWidget):
         resolved = self._resolve_sessions()
         if resolved is None:
             return
-        sessions, _poses_dir = resolved
+        sessions, _poses_dir, pose_tracks = resolved
 
-        from glider.gui.behavior.annotator.app import (
-            annotation_path_for,
-            merge_queue_with_labelled,
-        )
+        from glider.gui.behavior.annotator.app import merge_queue_with_labelled
         from glider.gui.behavior.annotator.resume_cache import ResumeCache
         from glider.gui.behavior.annotator.sampler import ProposedClip
         from glider.vision.pose.dlc import DEFAULT_FPS, fps_for_csv
@@ -809,7 +844,11 @@ class AnnotateTab(QWidget):
         rates = {fps_for_csv(csv) for _v, csv in sessions}
         rates.discard(None)
         fps = float(next(iter(rates))) if len(rates) == 1 else DEFAULT_FPS
-        videos_meta = {v: annotation_path_for(p) for v, p in sessions}
+        # _annotations_beside, not annotation_path_for: a per-animal CSV's
+        # annotations live one directory up, beside the video (see
+        # _annotations_beside's docstring) -- annotation_path_for does not
+        # know that layout.
+        videos_meta = {v: _annotations_beside(p) for v, p in sessions}
 
         record = ResumeCache(self._videos_dir).load_any()
         queue = [ProposedClip(**c) for c in (record or {}).get("clips", [])]
@@ -824,7 +863,9 @@ class AnnotateTab(QWidget):
             )
             return
 
-        self._open_annotator(sessions, videos_meta, fps, clips, origin="resumed")
+        self._open_annotator(
+            sessions, videos_meta, fps, clips, origin="resumed", pose_tracks=pose_tracks
+        )
 
     def _on_launch(self) -> None:
         if self._videos_dir is None:
@@ -837,9 +878,13 @@ class AnnotateTab(QWidget):
             QMessageBox.warning(self, "Annotate", f"No videos found in {self._videos_dir}")
             return
         # find_pose_csv accepts both namings, so a folder Batch Pose Tracking
-        # just filled works here without the operator renaming anything.
+        # just filled works here without the operator renaming anything. A
+        # multi-animal session has no single file to hand back -- find_pose_csv
+        # returns None for it by design -- so find_pose_csvs is the fallback.
         located = [(v, find_pose_csv(v, poses_dir)) for v in videos]
-        missing = [v.name for v, csv in located if csv is None]
+        missing_videos = [v for v, csv in located if csv is None]
+        animal_csvs_by_video = {v: find_pose_csvs(v, poses_dir) for v in missing_videos}
+        missing = [v.name for v in missing_videos if not animal_csvs_by_video[v]]
         if missing:
             QMessageBox.warning(
                 self,
@@ -852,17 +897,50 @@ class AnnotateTab(QWidget):
                 "videos first, then come back here.",
             )
             return
-        sessions = [(v, csv) for v, csv in located if csv is not None]
+
+        # A multi-animal video needs a subject before anything can be
+        # sampled: every zone created in this pass is stamped with the
+        # chosen slot, and every animal is drawn with it highlighted (the
+        # overlay AnnotatorWindow builds from pose_tracks below). A video
+        # whose "_animals" directory holds exactly one CSV needs no prompt
+        # -- it behaves exactly like a flat, single-animal session.
+        subjects: dict[Path, int] = {}
+        for video, animal_csvs in animal_csvs_by_video.items():
+            if len(animal_csvs) <= 1:
+                continue
+            subject, ok = QInputDialog.getInt(
+                self,
+                "Which animal?",
+                f"{video.name} has {len(animal_csvs)} tracked animals.\n\n"
+                "Label one animal per pass: every zone you create is stamped with "
+                "this slot. All animals are drawn; the subject is highlighted.",
+                value=0,
+                min=0,
+                max=len(animal_csvs) - 1,
+            )
+            if not ok:
+                return
+            subjects[video] = subject
+
+        sessions = [
+            (v, csv if csv is not None else animal_csvs_by_video[v][subjects.get(v, 0)])
+            for v, csv in located
+        ]
+        # Multi-animal videos only -- these are the ones the overlay needs
+        # every track for, and the ones that get sampled through
+        # propose_clips_for_animal below instead of the ordinary batch.
+        pose_tracks = {v: csvs for v, csvs in animal_csvs_by_video.items() if len(csvs) > 1}
 
         # Deferred: propose_clips_multi pulls in sklearn; AnnotatorWindow
         # pulls in cv2 via the clip player.
         from glider.analysis.behavior.annotations import AnnotationStore
-        from glider.gui.behavior.annotator.app import (
-            annotation_path_for,
-            build_review_clips,
-        )
+        from glider.gui.behavior.annotator.app import build_review_clips
         from glider.gui.behavior.annotator.resume_cache import ResumeCache
-        from glider.gui.behavior.annotator.sampler import ProposedClip, propose_clips_multi
+        from glider.gui.behavior.annotator.sampler import (
+            ProposedClip,
+            propose_clips_for_animal,
+            propose_clips_multi,
+        )
         from glider.vision.pose.dlc import DEFAULT_FPS, fps_for_csv
 
         # Clip lengths and the trim window are specified in seconds, so the
@@ -874,9 +952,13 @@ class AnnotateTab(QWidget):
         fps = float(next(iter(rates))) if len(rates) == 1 else DEFAULT_FPS
 
         # Annotations live next to the POSE CSV — same place training reads
-        # them from (mirrors annotator/app.py's run()).
-        videos_meta = {v: annotation_path_for(p) for v, p in sessions}
-        pairs = [(p, v) for v, p in sessions]  # (pose_csv, video) for the sampler
+        # them from (mirrors annotator/app.py's run()). _annotations_beside,
+        # not annotation_path_for: a per-animal CSV's annotations live one
+        # directory up, beside the video.
+        videos_meta = {v: _annotations_beside(p) for v, p in sessions}
+        # (pose_csv, video) for the sampler -- multi-animal videos are
+        # sampled separately below, through propose_clips_for_animal.
+        single_pairs = [(p, v) for v, p in sessions if v not in pose_tracks]
         try:
             if self._review_check.isChecked():
                 # Every saved zone becomes a replayable clip. Nothing is
@@ -899,25 +981,43 @@ class AnnotateTab(QWidget):
             else:
                 # propose_clips_multi refuses a total below the video count,
                 # and a labeller asking for "10 clips" across 30 videos means
-                # "a few", not "crash".
-                n_total = max(int(self._clip_count.value()), len(pairs))
+                # "a few", not "crash". Quotas are split evenly across every
+                # video -- single- and multi-animal alike -- by the same
+                # divmod propose_clips_multi itself uses internally, so a
+                # folder with no multi-animal video reduces to exactly
+                # today's numbers.
+                n_total = max(int(self._clip_count.value()), len(sessions))
+                base, remainder = divmod(n_total, len(sessions))
+                quotas = {
+                    video: base + (1 if i < remainder else 0)
+                    for i, (video, _csv) in enumerate(sessions)
+                }
                 exclude_labeled = self._skip_labelled_check.isChecked()
-                exclude_zones = None
-                if exclude_labeled:
-                    exclude_zones = [
-                        [
-                            (z.start_frame, z.end_frame)
-                            for z in AnnotationStore.load_csv(videos_meta[video])
-                        ]
-                        for _pose_csv, video in pairs
+
+                def _exclude_zones_for(
+                    video: Path, individual: int | None = None
+                ) -> list[tuple[int, int]] | None:
+                    # individual=None for a single-animal video: every zone
+                    # in its file is this session's. For a multi-animal one,
+                    # filter to the chosen subject's own zones -- the shared
+                    # file also holds every OTHER animal's, and those are not
+                    # yet-unlabelled frames for this pass.
+                    if not exclude_labeled:
+                        return None
+                    return [
+                        (z.start_frame, z.end_frame)
+                        for z in AnnotationStore.load_csv(videos_meta[video], individual=individual)
                     ]
 
                 # Record the sampled queue, exactly as the CLI path does. The
                 # annotations CSV only ever holds the clips that got LABELLED,
                 # so without this the other two hundred are gone the moment the
                 # window closes and the next launch starts somewhere else.
+                # Subjects are part of the key: relaunching with the same
+                # settings but a different chosen animal must not silently
+                # hand back the previous animal's clips.
                 cache_inputs = {
-                    "videos": sorted(str(v) for _p, v in pairs),
+                    "videos": sorted(str(v) for v, _p in sessions),
                     "n_clips": int(n_total),
                     "window": 30,
                     "fps": float(fps),
@@ -925,6 +1025,7 @@ class AnnotateTab(QWidget):
                     "spatial_weight": 1.0,
                     "min_frame_gap": None,
                     "exclude_labeled": bool(exclude_labeled),
+                    "subjects": {str(v): s for v, s in sorted(subjects.items())},
                 }
                 resume = ResumeCache(self._videos_dir)
                 cached = resume.load(inputs=cache_inputs)
@@ -933,12 +1034,36 @@ class AnnotateTab(QWidget):
                     origin = "resumed"
                 else:
                     origin = "sampled"
-                    clips = propose_clips_multi(
-                        sessions=pairs,
-                        n_clips_total=n_total,
-                        fps=fps,
-                        exclude_zones_by_session=exclude_zones,
-                    )
+                    clips = []
+                    if single_pairs:
+                        clips.extend(
+                            propose_clips_multi(
+                                sessions=single_pairs,
+                                n_clips_total=sum(quotas[video] for _p, video in single_pairs),
+                                fps=fps,
+                                exclude_zones_by_session=(
+                                    [
+                                        zones
+                                        for _p, video in single_pairs
+                                        if (zones := _exclude_zones_for(video)) is not None
+                                    ]
+                                    if exclude_labeled
+                                    else None
+                                ),
+                            )
+                        )
+                    for i, (video, animal_csvs) in enumerate(pose_tracks.items()):
+                        clips.extend(
+                            propose_clips_for_animal(
+                                animal_csvs,
+                                video,
+                                subject=subjects[video],
+                                n_clips=quotas[video],
+                                fps=fps,
+                                random_state=42 + i,
+                                exclude_zones=_exclude_zones_for(video, subjects[video]),
+                            )
+                        )
                     try:
                         resume.save(inputs=cache_inputs, clip_payload=[c.__dict__ for c in clips])
                     except OSError as e:
@@ -954,7 +1079,9 @@ class AnnotateTab(QWidget):
         # saved queue or thrown it away and sampled a new one — and on a
         # 250-clip job spread over several sittings that is the one thing
         # worth knowing at launch.
-        self._open_annotator(sessions, videos_meta, fps, clips, origin=origin)
+        self._open_annotator(
+            sessions, videos_meta, fps, clips, origin=origin, pose_tracks=pose_tracks
+        )
 
 
 class TrainTab(QWidget):
@@ -1357,7 +1484,11 @@ class TrainTab(QWidget):
         getting twenty-eight rows is invisible unless the two missing ones are
         named.
         """
-        pairs, skipped = _pick_session_pairs(self, kind)
+        # The individual each pose CSV belongs to is not stored on ``backing``
+        # -- _individual_for_pose_csv is a pure function of the path, so
+        # _on_fit derives it again from the pose CSV at train time instead of
+        # threading a third element through every session row here.
+        pairs, _individuals, skipped = _pick_session_pairs(self, kind)
         if not pairs and not skipped:
             return  # cancelled
 
@@ -1493,8 +1624,14 @@ class TrainTab(QWidget):
 
         options = self._shared_options()
         options["test_split"] = float(self._test_split_spin.value())
+        # Positionally aligned with the sessions list below, per session:
+        # None for an ordinary pose CSV, the slot for a per-animal one.
+        options["individuals"] = [_individual_for_pose_csv(pose) for pose, _ann in self._sessions]
         if self._holdout:
             options["holdout_sessions"] = list(self._holdout)
+            options["holdout_individuals"] = [
+                _individual_for_pose_csv(pose) for pose, _ann in self._holdout
+            ]
 
         self._train_thread = QThread()
         self._train_worker = TrainWorker(list(self._sessions), self._output_path, options)
@@ -2882,6 +3019,18 @@ class ApplyTab(QWidget):
     def _on_apply_finished(self, result: object, video: Path, output_dir: Path) -> None:
         self._teardown_apply_thread()
         lines = [f"{video.name}:"]
+        if isinstance(result, dict):
+            # A multi-animal session: classify() returns {slot: ethogram_path}
+            # instead of an EthogramResult, and those ethograms live beside
+            # the per-animal pose CSVs under animals_dir, not under
+            # output_dir -- none of the single-animal artifacts below exist
+            # for this run, so report the paths this result actually carries.
+            lines.append(f"  animals scored: {len(result)}")
+            for slot in sorted(result):
+                lines.append(f"  animal {slot} ethogram: {result[slot]}")
+            self._results.append("\n".join(lines))
+            self._run_next()
+            return
         n_frames = getattr(getattr(result, "ethogram", None), "__len__", lambda: None)()
         if n_frames is not None:
             lines.append(f"  frames classified: {n_frames}")
@@ -3001,16 +3150,41 @@ def _annotations_beside(pose_csv: Path) -> Path:
 
     Same rule as the annotator's ``annotation_path_for`` and the training
     pipeline, so a session added here is one training can actually read.
+
+    A per-animal CSV is the exception: it lives in ``<stem>_animals/``, and its
+    annotations are the PRIMARY session's, one directory up. Every animal in a
+    video shares one annotations CSV, distinguished by the ``individual``
+    column, so there is nothing per-animal to find beside the per-animal file.
     """
-    return pose_csv.parent / f"{pose_csv.stem}_annotations.csv"
+    parent = pose_csv.parent
+    if parent.name.endswith("_animals"):
+        stem = parent.name.removesuffix("_animals")
+        return parent.parent / f"{stem}_annotations.csv"
+    return parent / f"{pose_csv.stem}_annotations.csv"
 
 
-def _pick_session_pairs(parent: QWidget, kind: str) -> tuple[list[tuple[Path, Path]], list[str]]:
+def _individual_for_pose_csv(pose_csv: Path) -> int | None:
+    """The animal slot a pose CSV describes, or None if it is not per-animal.
+
+    The naming is D1's: ``animals_dir`` is ``<stem>_animals`` and the files
+    inside are ``animal<N>.csv``. Both halves are checked -- a file literally
+    named ``animal3.csv`` sitting somewhere else is not a slot.
+    """
+    if not pose_csv.parent.name.endswith("_animals"):
+        return None
+    slot = pose_csv.stem.removeprefix("animal")
+    return int(slot) if slot.isdigit() and pose_csv.stem.startswith("animal") else None
+
+
+def _pick_session_pairs(
+    parent: QWidget, kind: str
+) -> tuple[list[tuple[Path, Path]], list[int | None], list[str]]:
     """Prompt for pose CSVs and pair each with its annotations.
 
-    Returns ``(pairs, skipped)``. One multi-select dialog: pairing a whole
-    cohort by hand cost two dialogs per session, which is sixty for thirty
-    animals.
+    Returns ``(pairs, individuals, skipped)``. ``individuals`` is positionally
+    aligned with ``pairs`` -- see :func:`_individual_for_pose_csv`. One
+    multi-select dialog: pairing a whole cohort by hand cost two dialogs per
+    session, which is sixty for thirty animals.
 
     Selecting exactly one pose CSV with no annotations beside it falls back to
     asking for the annotations explicitly, so a layout that keeps them
@@ -3022,10 +3196,11 @@ def _pick_session_pairs(parent: QWidget, kind: str) -> tuple[list[tuple[Path, Pa
         parent, f"Choose {kind} pose CSVs", "", "CSV files (*.csv);;All files (*)"
     )
     if not chosen:
-        return [], []
+        return [], [], []
 
     poses = [Path(p) for p in chosen]
     pairs: list[tuple[Path, Path]] = []
+    individuals: list[int | None] = []
     skipped: list[str] = []
     for pose in poses:
         # These folders hold pose and annotation CSVs side by side, and the
@@ -3038,6 +3213,7 @@ def _pick_session_pairs(parent: QWidget, kind: str) -> tuple[list[tuple[Path, Pa
         ann_path = _annotations_beside(pose)
         if ann_path.exists():
             pairs.append((pose, ann_path))
+            individuals.append(_individual_for_pose_csv(pose))
             continue
         if len(poses) == 1:
             picked, _ = QFileDialog.getOpenFileName(
@@ -3048,7 +3224,8 @@ def _pick_session_pairs(parent: QWidget, kind: str) -> tuple[list[tuple[Path, Pa
             )
             if picked:
                 pairs.append((pose, Path(picked)))
+                individuals.append(_individual_for_pose_csv(pose))
                 continue
-            return [], []
+            return [], [], []
         skipped.append(f"{pose.name} (no {ann_path.name} beside it)")
-    return pairs, skipped
+    return pairs, individuals, skipped
