@@ -105,6 +105,27 @@ class TestScaleWarning:
         assert "px nose-to-tail" in message
         assert "retrain" in message  # says what to do, not just what is wrong
 
+    def test_a_social_model_still_gets_its_scale_warning(self, model):
+        """The check reads body_length only, which is computed from the
+        subject alone -- but it asked compute_features for the model's whole
+        spec, so a social bundle raised inside the diagnostic's own
+        except-and-return-None and lost the warning silently."""
+        from dataclasses import replace
+
+        from glider.analysis.behavior.model import BehaviorModel
+
+        social = BehaviorModel(
+            model.classifier,
+            model.feature_names,
+            replace(model.spec, include_social=True),
+            model.window,
+            model.stats,
+            model.fps,
+            model.classes,
+        )
+        message = scale_warning(social, _pose(scale=0.3, seed=9))
+        assert message and "smaller" in message
+
     def test_an_empty_pose_is_not_an_error(self, model):
         empty = PoseData(
             xy=np.full((5, len(KP), 2), np.nan),

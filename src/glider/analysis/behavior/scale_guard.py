@@ -104,10 +104,18 @@ def scale_warning(model, pose, *, edge: float = _EDGE_QUANTILE) -> str | None:
     splits = body_length_splits(model)
     if splits is None:
         return None
+    from dataclasses import replace
+
     from glider.analysis.behavior.features import compute_features
 
     try:
-        lengths = compute_features(pose, model.spec)["body_length"].to_numpy(dtype=float)
+        # body_length is the only column this reads, and it is computed from
+        # the subject alone. Asking for the social columns too would make the
+        # check need every other animal's track -- which nothing hands it --
+        # and a social model would silently lose its scale warning to the
+        # except below.
+        spec = replace(model.spec, include_social=False)
+        lengths = compute_features(pose, spec)["body_length"].to_numpy(dtype=float)
     except Exception:  # noqa: BLE001 - diagnostic only
         logger.debug("could not measure body length for the scale check", exc_info=True)
         return None

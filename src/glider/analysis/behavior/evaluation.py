@@ -121,7 +121,15 @@ def _windowed_for(model: BehaviorModel, pose_csv: Path, fps: float) -> pd.DataFr
     """Rebuild the exact feature frame *model* was trained on, for one session."""
     freq, traj = _families_in(model.feature_names)
     pose = from_dlc_csv(Path(pose_csv), fps=fps)
-    feats = compute_features(pose, spec=model.spec)
+    # A social model measures the subject against the other animals tracked
+    # in the same session. Deferred import: pipeline pulls in lightgbm, and
+    # evaluating a non-social bundle should not pay for it.
+    others = None
+    if model.spec.include_social:
+        from glider.analysis.behavior.pipeline import _other_animal_poses
+
+        others = _other_animal_poses(Path(pose_csv), fps=fps)
+    feats = compute_features(pose, spec=model.spec, others=others)
     windowed = apply_rolling(feats, window=model.window, stats=model.stats)
     if freq:
         windowed = pd.concat([windowed, apply_spectral_rolling(feats, window=model.window)], axis=1)
@@ -137,6 +145,7 @@ def evaluate_model(
     model_path: str | Path,
     sessions: list[SessionPair],
     *,
+    individuals: list[int | None] | None = None,
     support_floor: int = DEFAULT_SUPPORT_FLOOR,
     fps: float | None = None,
     smooth_window: int = 1,
@@ -159,9 +168,21 @@ def evaluate_model(
     raw per-frame output. It defaults to off: an unsmoothed number is the one
     comparable to cross-validation, and silently changing what an existing
     call measures would be worse than making callers ask.
+
+    ``individuals`` mirrors ``train_model(individuals=...)``: positionally
+    aligned with *sessions*, entry *i* is the animal whose zones session *i*
+    is scored against, or ``None`` for every zone in the file. A session
+    whose annotations hold more than one animal and that was given no
+    individual is refused rather than scored against both animals' labels.
     """
     if not sessions:
         raise ValueError("evaluation needs at least one session")
+    if individuals is not None and len(individuals) != len(sessions):
+        raise ValueError(
+            f"individuals has {len(individuals)} entries but sessions has "
+            f"{len(sessions)}; individuals must be positionally aligned "
+            f"with sessions, one entry per session"
+        )
 
     model = BehaviorModel.load(model_path)
     rate = float(fps) if fps is not None else float(model.fps)
@@ -171,8 +192,28 @@ def evaluate_model(
     sess_ids: list[np.ndarray] = []
     frame_ids: list[np.ndarray] = []
     for index, (pose_csv, ann_csv) in enumerate(sessions):
+        individual = individuals[index] if individuals is not None else None
+        store = AnnotationStore.load_csv(Path(ann_csv), individual=individual)
+        if individual is None:
+            # The annotations CSV for a multi-animal session holds EVERY
+            # animal's zones. Scoring a model against both animals' labels
+            # returns a plausible number that is wrong, which is worse than
+            # no number at all -- and every social bundle comes from such a
+            # session by definition. Refuse instead of guessing, the way
+            # _assemble_for_cv does.
+            slots = sorted({z.individual for z in store})
+            if len(slots) > 1:
+                raise ValueError(
+                    f"{ann_csv} holds zones for more than one animal "
+                    f"(individuals {slots}), and no `individuals` was given "
+                    f"to say which one this model is scored against. Scoring "
+                    f"against every animal's labels at once would mix the "
+                    f"partner's behavior into ground truth. Pass "
+                    f"evaluate_model(..., individuals=[...]), positionally "
+                    f"aligned with sessions, exactly as "
+                    f"train_model(sessions=..., individuals=[...]) takes it."
+                )
         windowed = _windowed_for(model, Path(pose_csv), rate)
-        store = AnnotationStore.load_csv(Path(ann_csv))
         labels, _groups = build_label_and_group_series(
             store, n_frames=len(windowed), merge_map=None, exclude=None
         )

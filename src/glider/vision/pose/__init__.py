@@ -22,7 +22,7 @@ from .batch import (
     raw_output_path,
     run_batch,
 )
-from .core import PoseCancelledError, PoseData, infer_video, pose_from_array
+from .core import PoseCancelledError, PoseData, infer_video, infer_video_tracks, pose_from_array
 from .decode import decode_dlc_locref, decode_sleap_confmaps
 from .device import (
     format_gpu_info,
@@ -45,11 +45,14 @@ from .spec import (
     is_onnx_model,
     read_pose_model_meta,
 )
+from .tracks import PoseTracks
 
 __all__ = [
     "PoseData",
+    "PoseTracks",
     "PoseCancelledError",
     "infer_video",
+    "infer_video_tracks",
     "pose_from_array",
     "batch",
     "BatchEvent",

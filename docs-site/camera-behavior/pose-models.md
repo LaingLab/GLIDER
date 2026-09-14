@@ -43,17 +43,35 @@ would install at all.
 
 | Format | Architecture | Status |
 | --- | --- | --- |
-| Ultralytics YOLO | pose `.pt` | Loads directly |
+| Ultralytics YOLO | pose `.pt`, one animal | Loads directly |
+| Ultralytics YOLO | pose `.pt`, several animals | Loads directly, tracked as N lifelong animals ([details](tracking.md#multiple-animals)) |
 | DeepLabCut 3.x | single-animal (heatmaps + location refinement) | Converted on selection, with `glider-dlc` |
 | DeepLabCut 2.x | TensorFlow checkpoints | Hand export only |
 | SLEAP | single-instance (confidence maps) | Converted on selection, with `glider-sleap` |
 | SLEAP | top-down, bottom-up | **Not supported** |
-| Any | multi-animal | **Not supported** |
+| DeepLabCut, SLEAP | more than one animal | **Not supported** |
 
-GLIDER's pose container is single-animal throughout, so multi-animal
-architectures have nowhere to put a second subject. A SLEAP model with a
-`centered_instance` or bottom-up head is rejected by name at load time rather
-than silently producing one arbitrary animal's keypoints.
+Multi-animal tracking is YOLO-only. `PoseData`, GLIDER's pose container, still
+holds one animal's keypoints — a video with several animals is represented as
+N of them, one per slot, rather than as a container that grew a second axis.
+Tracking N animals through a video and writing them out is covered in
+[Tracking](tracking.md#multiple-animals).
+
+DeepLabCut and SLEAP reach GLIDER as single-instance architectures — one
+heatmap or confidence map per body part, with nowhere in that representation to
+say which peak belongs to which animal — so asking either for more than one
+animal is refused by name rather than silently returning one arbitrary mouse in
+slot 0:
+
+> `<model>` is a dlc model. Multi-animal tracking is YOLO-only: dlc models here
+> are single-instance and have nowhere to put a second animal. Track it with
+> `n_animals=1`, or use a YOLO-pose checkpoint.
+
+(SLEAP gets the identical message with `sleap` in place of `dlc`.) Tracking one
+animal from a DeepLabCut or SLEAP model is unaffected — that path is unchanged.
+A SLEAP model with a `centered_instance` or bottom-up head is a different,
+earlier refusal: those are genuinely multi-animal architectures, rejected by
+name at conversion time, before GLIDER ever tries to run them.
 
 ## Exporting by hand
 

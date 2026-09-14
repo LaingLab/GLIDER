@@ -48,6 +48,7 @@ import pandas as pd
 
 from glider.analysis.behavior.features import FeatureSpec, compute_features
 from glider.analysis.behavior.windowing import apply_rolling
+from glider.vision.pose.core import PoseData
 from glider.vision.pose.dlc import from_dlc_csv
 
 # Default clip-playback durations the UI cycles through.
@@ -64,6 +65,7 @@ class ProposedClip:
     end_frame: int  # exclusive
     clip_seconds: float  # one of the configured durations
     video_path: str
+    individual: int = 0  # which animal this clip is about; 0 for single-animal
 
     @property
     def duration_frames(self) -> int:
@@ -77,6 +79,10 @@ def zones_to_clips(store, video_path: str | Path, fps: float) -> list[ProposedCl
     :class:`ProposedClip` the annotator can replay/re-trim/re-label,
     spanning exactly the zone's frames. Sorted by start frame. The pose
     CSV and sampler are not involved — this is a pure mapping.
+
+    Each clip carries the zone's own ``individual``: flattening it to 0
+    would highlight the wrong animal in review, and would re-bind the clip
+    to animal 0's zones when the annotator seeds a resumed session.
     """
     video_path = str(video_path)
     fps = float(max(fps, 1e-3))
@@ -92,6 +98,7 @@ def zones_to_clips(store, video_path: str | Path, fps: float) -> list[ProposedCl
                 end_frame=int(z.end_frame),
                 clip_seconds=float(z.end_frame - z.start_frame) / fps,
                 video_path=video_path,
+                individual=int(z.individual),
             )
         )
     return clips
@@ -134,6 +141,8 @@ def propose_clips(
     min_frame_gap: int | None = None,
     exclude_zones: Iterable[tuple[int, int]] | None = None,
     exclude_margin: int | None = None,
+    others: list[PoseData] | None = None,
+    individual: int = 0,
 ) -> list[ProposedClip]:
     """Propose ``n_clips`` diverse clips for the labelling UI.
 
@@ -150,6 +159,13 @@ def propose_clips(
         (n_clips * 4)``, clamped to at least one ``window``. Forces the
         sampler to spread picks across the full recording instead of
         clustering them.
+    others
+        Every OTHER animal in the same video, forwarded to
+        :func:`compute_features`. Required when ``spec.include_social``
+        is set.
+    individual
+        Which animal ``pose_csv`` belongs to. Stamped onto every
+        returned :class:`ProposedClip`.
     """
     pose_csv = Path(pose_csv)
     video_path = str(video_path)
@@ -164,7 +180,7 @@ def propose_clips(
         raise ValueError("clip_lengths_seconds must be non-empty")
 
     # ---- 1. Behavioral features (the same set the trainer uses) ----
-    features = compute_features(pose, spec=spec)
+    features = compute_features(pose, spec=spec, others=others)
     windowed = apply_rolling(features, window=window)
 
     # ---- 2. Spatial features (sampler-only) ----
@@ -280,11 +296,53 @@ def propose_clips(
                 end_frame=int(end),
                 clip_seconds=clip_seconds,
                 video_path=video_path,
+                individual=individual,
             )
         )
 
     clips.sort(key=lambda c: c.center_frame)
     return clips
+
+
+def propose_clips_for_animal(
+    pose_csvs: list[Path],
+    video_path: str | Path,
+    *,
+    subject: int,
+    **kwargs,
+) -> list[ProposedClip]:
+    """Propose clips for ONE animal of a multi-animal session.
+
+    ``pose_csvs`` is what :func:`find_pose_csvs` returns: every animal's CSV
+    in numeric slot order, which D1 guarantees is contiguous from 0. So
+    ``subject`` is both the slot id and the index — ``pose_csvs[subject]`` is
+    the subject's pose and the rest are the others.
+
+    Named ``for_animal`` and not ``propose_clips_multi`` because that name is
+    taken, and taken by something else: it samples across multiple SESSIONS
+    with a divmod quota. Two axes, two names.
+
+    With ``spec.include_social`` set, the k-means++ sampler diversifies over
+    the social columns too, so it starts surfacing the frames where the
+    animals interact — which are the frames a social assay needs labelled and
+    the ones a behavior-only sampler has no reason to find.
+    """
+    paths = [Path(p) for p in pose_csvs]
+    if not 0 <= subject < len(paths):
+        raise ValueError(
+            f"subject {subject} is not a slot in this session; it has "
+            f"{len(paths)} animal(s), so valid subjects are 0..{len(paths) - 1}. "
+            f"Clamping would silently label the wrong animal."
+        )
+    fps = float(kwargs.get("fps", 30.0))
+    others = [from_dlc_csv(p, fps=fps) for i, p in enumerate(paths) if i != subject]
+    return propose_clips(
+        paths[subject],
+        video_path,
+        others=others or None,
+        individual=subject,
+        **kwargs,
+    )
 
 
 def propose_clips_multi(

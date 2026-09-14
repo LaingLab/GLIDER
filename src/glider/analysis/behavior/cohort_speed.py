@@ -475,7 +475,17 @@ def compute_cohort_thresholds(
         # causal speed is the expensive part, so nothing may re-open them.
         from glider.vision.pose.dlc import from_dlc_csv
 
-        pose = from_dlc_csv(path)
+        try:
+            pose = from_dlc_csv(path)
+        except ValueError as e:
+            # A four-row multi-animal export sits in the same folder and
+            # matches this collector's `DLC_`-in-stem filter (it's the export
+            # target `export_actions.export_target` reclaims), and
+            # `from_dlc_csv` refuses to guess which animal to read from one.
+            # One unreadable CSV must not kill the whole pool -- same
+            # skip-and-continue idiom as the empty-speeds case below.
+            logger.warning("could not read %s; skipping: %s", path, e)
+            continue
         rate = fps if fps is not None else getattr(pose, "fps", None)
         # Windowed per session at that session's own rate, so "minutes two to
         # seven" is the same stretch of every animal's recording.

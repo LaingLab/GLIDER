@@ -130,6 +130,47 @@ class TestPooling:
         cohort = compute_cohort_thresholds([a])
         assert cohort.freeze < cohort.dart
 
+    def test_an_unreadable_csv_is_skipped_not_fatal(self, tmp_path, caplog):
+        """A four-row multi-animal export can sit in the same folder this
+        collector scans -- it's the export target, and it matches the
+        `DLC_`-in-stem filter the cohort collector uses -- and
+        `from_dlc_csv` refuses to guess which animal to read from one. One
+        unreadable CSV must not abort pooling for every other session,
+        matching the skip-and-continue idiom already used for a session with
+        no usable speed samples."""
+        from glider.vision.pose.core import PoseData
+        from glider.vision.pose.dlc import to_dlc_csv_multi
+        from glider.vision.pose.tracks import PoseTracks
+
+        good = _pose_csv(tmp_path / "goodDLC_m.csv")
+
+        n = 50
+        tracks = PoseTracks(
+            tracks={
+                slot: PoseData(
+                    xy=np.zeros((n, 2, 2)),
+                    confidence=np.ones((n, 2)),
+                    keypoint_names=["a", "b"],
+                    fps=30.0,
+                )
+                for slot in (0, 1)
+            },
+            fps=30.0,
+        )
+        four_row = tmp_path / "pairDLC_m.csv"
+        to_dlc_csv_multi(tracks, four_row)
+
+        with caplog.at_level("WARNING"):
+            cohort = compute_cohort_thresholds([good, four_row])
+
+        # Only the readable session actually contributed samples; `sources`
+        # records what was asked for, same as the pre-existing
+        # no-usable-speed-samples skip below it -- the warning is what says
+        # which one was dropped and why.
+        assert cohort.n_sessions == 1
+        assert "pairDLC_m.csv" in caplog.text
+        assert "could not read" in caplog.text
+
 
 class TestPersistence:
     def _built(self, tmp_path):

@@ -13,6 +13,7 @@ from glider.vision.zone_scoring import (
     KeypointMissingError,
     score_pose,
     write_zone_csvs,
+    write_zone_csvs_multi,
 )
 from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape
 
@@ -164,8 +165,8 @@ class TestCsvOutput:
 
         with open(tmp_path / "zone_occupancy.csv") as f:
             rows = list(csv.reader(f))
-        assert rows[0] == ["zone_id", "zone_name", "frames_in_zone", "seconds"]
-        assert rows[1][:3] == ["z1", "Zone 1", "3"]
+        assert rows[0] == ["object_id", "zone_id", "zone_name", "frames_in_zone", "seconds"]
+        assert rows[1][:4] == ["subject", "z1", "Zone 1", "3"]
 
     def test_elapsed_ms_follows_the_fps(self, tmp_path):
         result = score_pose(_pose([OUTSIDE] * 30 + [INSIDE]), _centre_zone(), resolution=RESOLUTION)
@@ -223,3 +224,54 @@ class TestFromCsv:
         to_dlc_csv(_pose([INSIDE]), csv_path, write_meta=False)
         with pytest.raises(ValueError, match="resolution"):
             score_csv(csv_path, config)
+
+
+def _walk():
+    """A track that crosses the centre zone, using this module's own helper."""
+    return _pose([INSIDE] * 10 + [OUTSIDE] * 10)
+
+
+def test_scored_events_carry_the_object_id_they_were_given():
+    scoring = score_pose(_walk(), _centre_zone(), object_id="animal1")
+    assert {e.object_id for e in scoring.events} == {"animal1"}
+
+
+def test_events_still_default_to_subject_when_no_id_is_given():
+    assert {e.object_id for e in score_pose(_walk(), _centre_zone()).events} == {"subject"}
+
+
+def test_occupancy_now_names_the_animal(tmp_path):
+    write_zone_csvs(score_pose(_walk(), _centre_zone()), tmp_path)
+    header = (tmp_path / "zone_occupancy.csv").read_text().splitlines()[0]
+    assert header == "object_id,zone_id,zone_name,frames_in_zone,seconds"
+
+
+def test_two_animals_write_into_one_pair_of_files(tmp_path):
+    scorings = {
+        "animal0": score_pose(_walk(), _centre_zone(), object_id="animal0"),
+        "animal1": score_pose(_walk(), _centre_zone(), object_id="animal1"),
+    }
+    write_zone_csvs_multi(scorings, tmp_path)
+    occupancy = (tmp_path / "zone_occupancy.csv").read_text()
+    assert "animal0" in occupancy and "animal1" in occupancy
+    events = (tmp_path / "zone_events.csv").read_text()
+    assert "animal0" in events and "animal1" in events
+
+
+def test_animals_are_written_in_slot_order(tmp_path):
+    # Given out of order on purpose: file order must not depend on dict order.
+    scorings = {
+        "animal1": score_pose(_walk(), _centre_zone(), object_id="animal1"),
+        "animal0": score_pose(_walk(), _centre_zone(), object_id="animal0"),
+    }
+    write_zone_csvs_multi(scorings, tmp_path)
+    rows = (tmp_path / "zone_occupancy.csv").read_text().splitlines()[1:]
+    assert rows[0].startswith("animal0")
+
+
+def test_a_track_that_entered_no_zone_still_gets_occupancy_rows(tmp_path):
+    outside = _pose([OUTSIDE] * 20)
+    scoring = score_pose(outside, _centre_zone(), object_id="animal0")
+    write_zone_csvs(scoring, tmp_path)
+    rows = (tmp_path / "zone_occupancy.csv").read_text().splitlines()
+    assert rows[1].split(",")[:4] == ["animal0", "z1", "Zone 1", "0"]

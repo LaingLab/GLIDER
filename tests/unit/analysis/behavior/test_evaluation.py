@@ -204,3 +204,53 @@ class TestEvaluateModel:
         path, _sessions = trained_model
         with pytest.raises(ValueError, match="at least one session"):
             evaluate_model(path, [], support_floor=1)
+
+    def test_a_two_animal_session_is_refused_unless_told_which_animal(
+        self, tmp_path, trained_model
+    ):
+        """Ground truth for a multi-animal session is ambiguous without it.
+
+        The annotations CSV beside a multi-animal video holds EVERY animal's
+        zones, and every social bundle comes from such a session. Scoring one
+        animal's model against both animals' labels returns a plausible wrong
+        number -- so refuse, the way cross-validation does, and give callers
+        the same `individuals=` they already pass to train_model.
+
+        Animal 1's zones contradict animal 0's frame for frame, so a filter
+        that silently did nothing would be visible in the numbers rather than
+        hidden in a rounding difference.
+        """
+        from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
+
+        path, sessions = trained_model
+        pose_csv, ann_csv = sessions[0]
+        AnnotationStore(
+            [
+                BehaviorZone("walk", 20, 199, individual=0),
+                BehaviorZone("rear", 200, 399, individual=0),
+                BehaviorZone("rear", 20, 199, individual=1),
+                BehaviorZone("walk", 200, 399, individual=1),
+                # Frames animal 0 never labelled. Unfiltered, the partner's
+                # label becomes the subject's ground truth here with nothing
+                # to flag it -- the silent half of the bug, as opposed to the
+                # contradicting spans above which merely go AMBIGUOUS.
+                BehaviorZone("walk", 0, 19, individual=1),
+            ]
+        ).save_csv(ann_csv)
+        pair = (pose_csv, ann_csv)
+
+        with pytest.raises(ValueError, match="more than one animal"):
+            evaluate_model(path, [pair], support_floor=1)
+
+        subject = evaluate_model(path, [pair], individuals=[0], support_floor=1)
+        partner = evaluate_model(path, [pair], individuals=[1], support_floor=1)
+        assert subject["accuracy"] > 0.8, "animal 0's labels are what the bundle learnt"
+        assert partner["accuracy"] < 0.2, "animal 1's contradict them"
+
+        # And a single-animal session still needs no `individuals` at all.
+        assert evaluate_model(path, [sessions[1]], support_floor=1)["n_scored"] > 0
+
+    def test_individuals_must_be_aligned_with_sessions(self, trained_model):
+        path, sessions = trained_model
+        with pytest.raises(ValueError, match="positionally aligned"):
+            evaluate_model(path, sessions, individuals=[0], support_floor=1)

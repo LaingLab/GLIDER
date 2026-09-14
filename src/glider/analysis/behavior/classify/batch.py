@@ -43,13 +43,25 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from glider.vision.pose.tracks import PoseTracks
+
 logger = logging.getLogger(__name__)
 
-__all__ = ["EthogramRows", "classify_pose_data", "speed_only_pose_data"]
+__all__ = [
+    "EthogramRows",
+    "classify_pose_data",
+    "classify_pose_tracks",
+    "speed_only_pose_data",
+    "write_animal_ethograms",
+]
 
 # The streaming extractor emits the middle row of a 5-frame history, so its
 # output trails the current frame by this much. Imported rather than repeated
@@ -197,6 +209,7 @@ def classify_pose_data(
     pose,
     model,
     *,
+    others: list | None = None,
     predict_every: int = 3,
     confidence_threshold: float = 0.0,
     class_thresholds: dict[str, float] | None = None,
@@ -226,6 +239,14 @@ def classify_pose_data(
     session, so a windowed run's labels are exactly the rows a whole-session
     run would have produced for those frames — only the classifier's work is
     skipped, which is where the time goes anyway.
+
+    ``others`` is every OTHER animal's :class:`PoseData` from the same video,
+    and is what makes a model trained with ``spec.include_social`` scoreable:
+    without it ``compute_features`` refuses, so training social features
+    produced a model nothing could apply. Optional and ignored for a
+    non-social model, so every single-animal caller is untouched.
+    :func:`classify_pose_tracks` supplies it; it is the only caller that
+    holds every animal's track.
     """
     from glider.analysis.behavior.classify.features_stream import derive_stream_columns
     from glider.analysis.behavior.classify.smoothing import (
@@ -249,7 +270,7 @@ def classify_pose_data(
             "the batch path does not compute; use the streaming pipeline"
         )
 
-    features = compute_features(pose, model.spec)
+    features = compute_features(pose, model.spec, others=others)
     # Column order is fixed by the model, not by whatever compute_features
     # happened to emit, so a reordering upstream cannot silently shuffle
     # values into the wrong feature.
@@ -346,6 +367,44 @@ def classify_pose_data(
     )
 
 
+def classify_pose_tracks(tracks: PoseTracks, model, **kw) -> dict[int, EthogramRows]:
+    """Score every animal in *tracks* with *model* — one slot, one call.
+
+    Per-animal geometric features are unchanged by the move to N tracks (D2
+    §4), so a model trained on a single animal applies to each slot exactly
+    as it did before; this is a loop over :func:`classify_pose_data`, nothing
+    more.
+
+    Every tuning keyword (``predict_every``, ``confidence_threshold``,
+    ``class_thresholds``, ``smooth_window``, ``offline_smooth_window``,
+    ``freeze_threshold``, ``dart_threshold``, ``freeze_min_frames``,
+    ``dart_min_frames``, ``frame_range``) is forwarded through ``**kw``
+    rather than re-declared here. Naming them explicitly would mean two
+    signatures carrying the same defaults, and a change to one of
+    ``classify_pose_data``'s defaults would silently stop reaching the
+    tracks path until this list was updated by hand to match. Forwarding
+    instead means a keyword ``classify_pose_data`` renames or drops fails
+    loudly — a ``TypeError`` raised from ``classify_pose_data`` itself, on
+    the first slot scored — rather than the two signatures quietly drifting
+    apart.
+
+    Each slot is scored against every OTHER slot as ``others``, which is what
+    a model trained with ``spec.include_social`` needs and what nothing else
+    offline can supply -- this is the only place every animal's track is in
+    hand at once. For a non-social model ``compute_features`` ignores it, so
+    the numbers are unchanged.
+    """
+    return {
+        slot: classify_pose_data(
+            tracks[slot],
+            model,
+            others=[tracks[s] for s in tracks if s != slot],
+            **kw,
+        )
+        for slot in tracks
+    }
+
+
 def resolve_labels(postural: list[str], speed: list[str]) -> list[str]:
     """One label per frame, with the speed axis winning where it fired.
 
@@ -390,6 +449,66 @@ def write_ethogram_csv(path, rows: EthogramRows, *, speed_axis: bool, cm_s_per_p
             w.writerow(["frame", "behavior"])
             for i, frame in enumerate(rows.frames):
                 w.writerow([frame, rows.labels[i]])
+
+
+def write_animal_ethograms(
+    pose_csv,
+    tracks: PoseTracks,
+    model,
+    *,
+    speed_axis: bool,
+    cm_s_per_px_frame: float | None = None,
+    **kw,
+) -> dict[int, Path]:
+    """Score every animal in *tracks* and write each its own ethogram file.
+
+    One CSV per slot, beside that slot's own pose CSV:
+    ``animals_dir(pose_csv) / f"animal{slot}_ethogram.csv"``, written with the
+    same :func:`write_ethogram_csv` a single-animal run uses. **No
+    ``individual`` column, ever** — D2 spec §5: three ethogram writers exist
+    (this one, and the two streaming classifiers in ``.threads``), and
+    :class:`~glider.analysis.behavior.session_view.SessionView` reads a flat
+    ``labels`` list keyed only by row order, so a shared multi-animal file
+    would double-count every frame with no error anywhere. Per-animal files
+    are what let ``SessionView`` stay exactly as it is.
+
+    A slot that a consolidation pass never filled is entirely NaN
+    (``PoseTracks`` requires every slot to span the whole video). That is not
+    special-cased: :func:`classify_pose_data` already scores an all-NaN pose
+    the same way it scores any frame with a missing keypoint — one row per
+    scored frame, blank ``behavior`` — so this writes that slot's file like
+    every other slot's rather than omitting it. A directory listing then
+    always has one ethogram per pose CSV, and nothing reading it later has to
+    guess whether a missing file means "not scored" or "nothing to score".
+    A blank ethogram written this way is, at a glance, indistinguishable
+    from one where scoring genuinely failed -- so an entirely-NaN slot gets
+    one ``logger.info`` naming it, saying plainly that the animal was never
+    found rather than that scoring failed.
+
+    ``pose_csv`` only names the directory (see :func:`animals_dir`); *tracks*
+    is the already-loaded, per-animal data classification runs against, not
+    read from ``pose_csv`` here. ``**kw`` forwards to :func:`classify_pose_tracks`
+    exactly as it does there.
+    """
+    from pathlib import Path
+
+    from glider.vision.pose.batch import animals_dir
+
+    rows_by_slot = classify_pose_tracks(tracks, model, **kw)
+    out_dir = animals_dir(Path(pose_csv))
+    paths: dict[int, Path] = {}
+    for slot, rows in rows_by_slot.items():
+        if np.isnan(tracks[slot].xy).all():
+            logger.info(
+                "%s: animal%d was never found (its pose is entirely NaN), not "
+                "that scoring failed -- its ethogram will be blank",
+                out_dir.name,
+                slot,
+            )
+        path = out_dir / f"animal{slot}_ethogram.csv"
+        write_ethogram_csv(path, rows, speed_axis=speed_axis, cm_s_per_px_frame=cm_s_per_px_frame)
+        paths[slot] = path
+    return paths
 
 
 def batch_apply(config, ethogram_csv, model, frame_range=None, pose=None) -> bool:

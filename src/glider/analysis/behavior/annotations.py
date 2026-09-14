@@ -10,13 +10,16 @@ CSV schema
 One annotations CSV per video, conventionally named
 ``<video_stem>_annotations.csv``. Columns::
 
-    behavior, start_frame, end_frame, created_at, note
+    behavior, start_frame, end_frame, created_at, note, individual
 
 * ``behavior`` — string, must exist in the vocabulary
 * ``start_frame`` — int, inclusive
 * ``end_frame`` — int, exclusive (Python-range convention)
 * ``created_at`` — ISO 8601 timestamp, written at zone creation
 * ``note`` — free-text, optional
+* ``individual`` — int slot id, which animal the zone belongs to (default
+  0). Missing or blank on read for backward compatibility with every
+  annotations CSV written before multi-animal support.
 
 Frame semantics
 ---------------
@@ -28,10 +31,13 @@ present. So a zone of length 1 (only frame N) is ``(N, N+1)``.
 Overlap rule
 ------------
 
-Two zones of the **same** behavior overlap if their frame ranges
-intersect. Two zones of **different** behaviors are allowed to overlap
-(a mouse can locomote and rear simultaneously). :meth:`AnnotationStore.add`
-raises :class:`OverlapError` when a same-behavior overlap is detected.
+Two zones of the **same** behavior **for the same individual** overlap if
+their frame ranges intersect. Two zones of **different** behaviors are
+allowed to overlap (a mouse can locomote and rear simultaneously), and so
+are two zones of the same behavior belonging to **different** individuals
+— two animals grooming at once is not an edge case in a social assay, it
+is the assay. :meth:`AnnotationStore.add` raises :class:`OverlapError`
+only when a same-behavior, same-individual overlap is detected.
 
 This module has no Qt dependency — it's testable in isolation.
 """
@@ -58,6 +64,7 @@ class BehaviorZone:
     end_frame: int
     created_at: str = ""
     note: str = ""
+    individual: int = 0
 
     def __post_init__(self) -> None:
         if not self.behavior or not self.behavior.strip():
@@ -74,6 +81,12 @@ class BehaviorZone:
                 f"end_frame ({self.end_frame}) must be > start_frame "
                 f"({self.start_frame}); zones are half-open intervals"
             )
+        if not isinstance(self.individual, int) or isinstance(self.individual, bool):
+            raise TypeError(
+                f"individual must be an int slot id; got " f"{type(self.individual).__name__}"
+            )
+        if self.individual < 0:
+            raise ValueError(f"individual must be >= 0, got {self.individual}")
         if not self.created_at:
             self.created_at = datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -101,6 +114,7 @@ class BehaviorZone:
             "end_frame": str(self.end_frame),
             "created_at": self.created_at,
             "note": self.note,
+            "individual": str(self.individual),
         }
 
     @classmethod
@@ -111,6 +125,11 @@ class BehaviorZone:
             end_frame=int(row["end_frame"]),
             created_at=row.get("created_at", ""),
             note=row.get("note", ""),
+            # .get handles a file with no such column -- every annotations CSV
+            # written before today. The `or 0` handles a file that HAS the
+            # column with an empty cell, which is what a spreadsheet round-trip
+            # produces and what int("") would raise on.
+            individual=int(row.get("individual", 0) or 0),
         )
 
 
@@ -119,13 +138,16 @@ def merge_behavior_zones(
     sources: Iterable[str],
     target: str,
 ) -> list[BehaviorZone]:
-    """Fold ``sources`` into ``target``, unioning overlaps.
+    """Fold ``sources`` into ``target``, unioning overlaps per individual.
 
     Every zone whose behavior is in ``sources`` is renamed to ``target``.
     Renaming can leave two ``target`` zones overlapping (which the store
-    forbids), so strictly-overlapping ``target`` zones are coalesced into
-    one (earliest start, latest end). Adjacent/touching zones stay
-    separate. Zones of other behaviors are returned unchanged.
+    forbids), so strictly-overlapping ``target`` zones **belonging to the
+    same individual** are coalesced into one (earliest start, latest end).
+    Two different individuals' zones overlapping is legal (that's the
+    two-animals-groom-at-once case) and they are never fused, even when
+    their frame ranges intersect. Adjacent/touching zones stay separate.
+    Zones of other behaviors are returned unchanged.
 
     Pure function — does not mutate the input zones or any store.
     """
@@ -140,13 +162,18 @@ def merge_behavior_zones(
             end_frame=z.end_frame,
             created_at=z.created_at,
             note=z.note,
+            individual=z.individual,
         )
         (targets if behavior == target else others).append(clone)
 
-    targets.sort(key=lambda z: (z.start_frame, z.end_frame))
+    targets.sort(key=lambda z: (z.individual, z.start_frame, z.end_frame))
     unioned: list[BehaviorZone] = []
     for z in targets:
-        if unioned and z.start_frame < unioned[-1].end_frame:  # strict overlap
+        if (
+            unioned
+            and unioned[-1].individual == z.individual
+            and z.start_frame < unioned[-1].end_frame  # strict overlap
+        ):
             prev = unioned[-1]
             prev.end_frame = max(prev.end_frame, z.end_frame)
             notes = [n for n in (prev.note, z.note) if n]
@@ -170,7 +197,7 @@ class AnnotationStore:
     * :meth:`save_csv` / :meth:`load_csv` — disk round-trip
     """
 
-    FIELDNAMES = ("behavior", "start_frame", "end_frame", "created_at", "note")
+    FIELDNAMES = ("behavior", "start_frame", "end_frame", "created_at", "note", "individual")
 
     def __init__(self, zones: Iterable[BehaviorZone] | None = None):
         self._zones: list[BehaviorZone] = []
@@ -182,16 +209,23 @@ class AnnotationStore:
     # CRUD
     # ------------------------------------------------------------------
     def add(self, zone: BehaviorZone) -> None:
-        """Append a zone. Raises :class:`OverlapError` on same-behavior overlap.
+        """Append a zone. Raises :class:`OverlapError` on same-behavior overlap
+        **for the same individual**.
 
         Different behaviors may overlap freely — that's a deliberate design
         choice; many lab behaviors aren't mutually exclusive (locomoting
-        while rearing, sniffing while grooming).
+        while rearing, sniffing while grooming). Different individuals may
+        overlap on the same behavior too: two animals grooming at once is
+        not an edge case in a social assay, it is the assay.
         """
         for existing in self._zones:
-            if existing.behavior == zone.behavior and existing.overlaps(zone):
+            if (
+                existing.behavior == zone.behavior
+                and existing.individual == zone.individual
+                and existing.overlaps(zone)
+            ):
                 raise OverlapError(
-                    f"new {zone.behavior!r} zone "
+                    f"new {zone.behavior!r} zone for animal {zone.individual} "
                     f"[{zone.start_frame}, {zone.end_frame}) overlaps with "
                     f"existing zone [{existing.start_frame}, {existing.end_frame})"
                 )
@@ -215,10 +249,10 @@ class AnnotationStore:
         seen: list[BehaviorZone] = []
         for z in new:
             for s in seen:
-                if s.behavior == z.behavior and s.overlaps(z):
+                if s.behavior == z.behavior and s.individual == z.individual and s.overlaps(z):
                     raise OverlapError(
-                        f"replace() rejected: {z.behavior!r} zones "
-                        f"[{s.start_frame},{s.end_frame}) and "
+                        f"replace() rejected: {z.behavior!r} zones for animal "
+                        f"{z.individual} [{s.start_frame},{s.end_frame}) and "
                         f"[{z.start_frame},{z.end_frame}) overlap"
                     )
             seen.append(z)
@@ -281,11 +315,17 @@ class AnnotationStore:
         return path
 
     @classmethod
-    def load_csv(cls, path: str | Path) -> AnnotationStore:
+    def load_csv(cls, path: str | Path, individual: int | None = None) -> AnnotationStore:
         """Read a CSV produced by :meth:`save_csv`.
 
         Missing files yield an empty store (the convention for opening a
         new annotation session on a video that hasn't been touched yet).
+
+        ``individual=None`` (the default) returns every zone — what the
+        annotator wants, since it draws and edits all of them. An int
+        returns only that animal's — what training wants. The signature
+        deliberately mirrors ``from_dlc_csv(path, individual=N)``: the two
+        files that describe one animal are opened the same way.
         """
         path = Path(path)
         store = cls()
@@ -300,5 +340,7 @@ class AnnotationStore:
                     f"found {reader.fieldnames}"
                 )
             zones = [BehaviorZone.from_row(row) for row in reader]
+        if individual is not None:
+            zones = [z for z in zones if z.individual == int(individual)]
         store.replace(zones)
         return store
