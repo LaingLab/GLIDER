@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from glider.hal.base_board import BoardConnectionState, PinMode, PinType
-from glider.hal.boards.telemetrix_board import TelemetrixBoard
+from glider.hal.boards.telemetrix_board import TelemetrixBoard, TelemetrixThread
 
 
 @pytest.fixture
@@ -160,6 +160,8 @@ async def test_dead_thread_triggers_auto_reconnect():
     board = TelemetrixBoard(port="COM3", auto_reconnect=True)
 
     class DeadThread:
+        link_error = None
+
         @property
         def is_running(self):
             return False
@@ -193,6 +195,31 @@ async def test_dead_thread_triggers_auto_reconnect():
                 await task
             except asyncio.CancelledError:
                 pass
+
+
+@pytest.mark.asyncio
+async def test_dropped_serial_link_reads_as_disconnected():
+    """A live worker thread is not a live board.
+
+    Once the USB link drops, telemetrix-aio's serial write swallows the
+    SerialException and returns None, so every later write "succeeds" and the
+    rig just stops. The one thing that does die is its report reader task.
+    """
+    reader = asyncio.get_running_loop().create_future()
+    thread = TelemetrixThread()
+    thread._thread = types.SimpleNamespace(is_alive=lambda: True)
+    thread._telemetrix = types.SimpleNamespace(the_task=reader, shutdown_flag=False)
+    board = TelemetrixBoard(port="COM3")
+    board._telemetrix_thread = thread
+    board._state = BoardConnectionState.CONNECTED
+
+    assert board.is_connected is True
+
+    reader.set_exception(OSError(6, "Device not configured"))
+
+    assert board.is_connected is False
+    with pytest.raises(RuntimeError, match="not connected"):
+        await board.write_digital(13, True)
 
 
 @pytest.mark.asyncio
