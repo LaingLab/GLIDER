@@ -173,7 +173,23 @@ class TelemetrixThread:
 
     @property
     def is_running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+        return self._thread is not None and self._thread.is_alive() and self.link_error is None
+
+    @property
+    def link_error(self) -> str | None:
+        """Why the serial link died under a live thread, or None if it hasn't.
+
+        Once the port drops, telemetrix-aio's serial write swallows the
+        SerialException and returns None, so the thread outlives its board and
+        every later write "succeeds" in silence. What does die with the port is
+        its report reader task. A deliberate shutdown() ends the reader too, so
+        that is not counted.
+        """
+        tmx = self._telemetrix
+        task = getattr(tmx, "the_task", None)
+        if task is None or not task.done() or getattr(tmx, "shutdown_flag", False):
+            return None
+        return "serial write failed" if task.cancelled() else repr(task.exception())
 
 
 # Standard Arduino Uno pin capabilities
@@ -317,10 +333,11 @@ class TelemetrixBoard(BaseBoard):
             return False
 
         if not self._telemetrix_thread.is_running:
-            # Thread died but state wasn't updated - fix it now
+            # Thread or its serial link died but state wasn't updated - fix it now
             # Only log once by checking if we're transitioning state
             if self._state == BoardConnectionState.CONNECTED:
-                logger.warning("Telemetrix thread died unexpectedly - marking as disconnected")
+                reason = self._telemetrix_thread.link_error or "worker thread died"
+                logger.warning(f"Telemetrix link lost ({reason}) - marking as disconnected")
                 self._set_state(BoardConnectionState.DISCONNECTED)
                 # The cached pin state is stale the moment the link drops
                 # (the Arduino resets on the next serial open); clear it so
