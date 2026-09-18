@@ -25,12 +25,20 @@ UTF-8 commands:
 
 | Command | Meaning |
 | --- | --- |
-| `on` | Turn on and stay on |
-| `off` | Turn off |
-| `<period_ms>,<duration_s>` | Toggle every `period_ms` ms, for `duration_s` seconds |
+| `on` | Full intensity, continuous |
+| `off` | Stop the train, output dark |
+| `<period_ms>,<width_ms>,<count>,<intensity_pct>` | Run a pulse train |
 
-Note the first field is a **period in milliseconds, not a frequency** — `500,10`
-toggles about once a second for ten seconds.
+`50,4,4,100` is four 4 ms pulses at 20 Hz at full intensity. Note the first field is a
+**period in milliseconds, not a frequency** — 50 ms is 20 Hz. `count` of `0` runs until
+stopped; a width equal to the period is continuous light, and is accepted
+**only** with a `count` of `0` — continuous light has exactly one spelling. A
+train with no gap has nothing to end on, so `500,500,1,40` would light the
+implant for the rest of the session rather than deliver the single 500 ms pulse
+it reads as; write `1000,500,1,40` for that.
+
+Intensity is **relative** — a percentage of whatever peak the board delivers, not
+calibrated optical power. Per-unit brightness is trimmed in firmware.
 
 ### Settings
 
@@ -47,23 +55,25 @@ is what makes it portable.
 
 ### Actions
 
-`on`, `off`, `pulse(period_ms, duration_s)`, and the inherited `write` as an
-escape hatch for anything a future firmware adds. There is no `read`: the
-peripheral has no read characteristic, so offering one would only allow
-selecting an action that fails at runtime.
+`on`, `off`, `pulse(period_ms, pulse_width_ms, count, intensity_pct)`, and the
+inherited `write` as an escape hatch for anything a future firmware adds.
+There is no `read`: the peripheral has no read characteristic, so offering one
+would only allow selecting an action that fails at runtime.
 
-`pulse` rejects zero, negative and fractional values rather than writing a
-command the firmware would `atoi` into something else.
+`pulse` rejects zero (except where 0 is legitimate — see below), negative and
+fractional values with a legible error rather than writing a command the
+firmware's strict parser would silently reject.
 
-`period_ms` and `duration_s` are declared in `ACTION_ARGS_SCHEMA`, which is
-what lets `pulse` render as two number fields beside its button — in the
-Builder's Device Control panel and the Runner's manual controls alike —
-instead of needing a Device Action node with hand-typed arguments.
+`period_ms`, `pulse_width_ms`, `count` and `intensity_pct` are declared in
+`ACTION_ARGS_SCHEMA`, which is what lets `pulse` render as four number fields
+beside its button — in the Builder's Device Control panel and the Runner's
+manual controls alike — instead of needing a Device Action node with
+hand-typed arguments.
 
 ## The node
 
-One `exec` in, one `exec` out, with **Mode** (On / Off / Pulse), **Period** and
-**Duration** in its properties.
+One `exec` in, one `exec` out, with **Mode** (On / Off / Pulse), **Period**,
+**Pulse width**, **Pulses** and **Intensity** in its properties.
 
 **Pulse is fire-and-continue.** `exec` out fires as soon as the write lands and
 the stimulator runs the pattern itself — which is what `exec` out means
@@ -77,7 +87,7 @@ The node's `exec` input accepts anything that fires execution, including the
 animal is doing:
 
 ```
-Behavior Input (freezing) ──On Enter──▶ Maimu (Pulse 500 ms / 10 s)
+Behavior Input (freezing) ──On Enter──▶ Maimu (4 ms @ 20 Hz, 20 pulses, 100%)
 ```
 
 Any behavior the loaded model recognises works — darting, grooming, whatever it
