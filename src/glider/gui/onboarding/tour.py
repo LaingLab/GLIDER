@@ -271,14 +271,15 @@ def session_review_steps() -> list[TourStep]:
         TourStep(
             "open",
             "1 · Load a session",
-            "Opens one scored ethogram along with its poses and video, if they " "sit beside it.",
+            "Opens one scored ethogram or a live recording folder, with its poses "
+            "and video if they sit beside it.",
         ),
         TourStep(
             "open_folder",
             "Or the whole cohort",
-            "Loads every ethogram beneath a folder. Worth preferring: the "
-            "question is usually what thirty animals did between minutes two and "
-            "seven, and answering it a file at a time lets the window drift.",
+            "Or load every session beneath a folder as a cohort, grouped by "
+            "glider_project.json. Worth preferring: the question is usually what "
+            "thirty animals did between minutes two and seven.",
         ),
         TourStep(
             "canvas",
@@ -288,37 +289,37 @@ def session_review_steps() -> list[TourStep]:
         ),
         TourStep(
             "ethogram",
-            "3 · Select a window",
-            "Every scored frame as a colored band. Click to scrub — and "
-            "shift-drag (or right-drag) to select a stretch of time. That "
-            "selection is what every number in the panel below is computed over.",
+            "3 · Select a range",
+            "Behaviour and hardware as tracks under one playhead. Click the ruler "
+            "to scrub, click a track to move the playhead, and drag across the "
+            "tracks to select a range -- every number in the inspector is "
+            "computed over it. ⌘-scroll zooms.",
         ),
         TourStep(
             "cohort_table",
             "4 · One row per animal",
-            "The same window applied to every loaded session. Freeze and Dart "
-            "are the cut-offs each session was actually scored with, in cm/s — "
-            "this is the only place the number a methods section quotes exists.",
+            "The Cohort tab under the timeline applies the same range to every "
+            "loaded session. Freeze and Dart are the cut-offs each session was "
+            "actually scored with, in cm/s.",
         ),
         TourStep(
             "zones",
             "Zones (optional)",
-            "Load or draw regions of interest and the Zones tab reports time "
-            "in zone, entries and latency — for the selected window, across "
-            "every loaded session.",
+            "Load or draw regions of interest and the Range tab reports time in "
+            "zone, entries and latency for the selected range.",
         ),
         TourStep(
             "export",
             "5 · Export",
-            "Writes the per-session numbers for the selected window to CSV, so "
-            "the table on screen and the table in your analysis are the same "
-            "table.",
+            "Export writes the per-session numbers for the selected range to "
+            "CSV, so the table on screen and the table in your analysis are the "
+            "same table.",
         ),
         TourStep(
             None,
             "That's the window",
-            "Load a cohort, drag a stretch of time, read it or export it. Replay "
-            "this anytime from the Tutorial button.",
+            "Load a cohort, drag a range, read it or export it. Replay this "
+            "anytime from the ? menu.",
         ),
     ]
 

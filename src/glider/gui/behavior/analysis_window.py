@@ -20,6 +20,7 @@ import numpy as np
 from PyQt6.QtCore import QSettings, Qt, QTimer
 from PyQt6.QtGui import QBrush, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -39,13 +40,20 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.analysis.behavior.session_view import SessionView, SessionViewError
-from glider.analysis.cohort import recording_candidates, session_id_for
-from glider.analysis.timeline import build_timeline
+from glider.analysis.cohort import discover_sessions, recording_candidates, session_id_for
+from glider.analysis.timeline import (
+    build_timeline,
+    describe_summary,
+    describe_value,
+    hardware_in_range,
+    is_binary,
+    lane_role,
+)
 from glider.gui.review.inspector import Inspector
 from glider.gui.review.pool import PoolEntry, SessionPool, ethogram_strip
-from glider.gui.review.timeline import TimelinePanel, behavior_order, behavior_qcolor
+from glider.gui.review.timeline import TimelinePanel, behavior_order, behavior_qcolor, lane_colour
 from glider.gui.review.viewer import KeypointCanvas, Transport
-from glider.gui.review.viewport import format_timecode
+from glider.gui.review.viewport import format_seconds, format_timecode
 from glider.gui.widgets.tool_ui import (
     StatusPill,
     apply_tool_theme,
@@ -149,6 +157,18 @@ def _dress_table(table: QTableWidget) -> None:
     table.verticalHeader().setDefaultSectionSize(28)
 
 
+_EDIT_KEYS = {
+    Qt.Key.Key_I,
+    Qt.Key.Key_O,
+    Qt.Key.Key_X,
+    Qt.Key.Key_Z,
+    Qt.Key.Key_Escape,
+    Qt.Key.Key_J,
+    Qt.Key.Key_K,
+    Qt.Key.Key_L,
+}
+
+
 class AnalysisWindow(QMainWindow):
     """Scrub a session, select a range, and read what is in it."""
 
@@ -174,6 +194,7 @@ class AnalysisWindow(QMainWindow):
         self._recordings: dict[Path, object] = {}
         self._zones = None
         self._tour = None
+        self._cohort_root: Path | None = None
 
         central = QWidget()
         central.setObjectName("ToolPage")
@@ -183,6 +204,9 @@ class AnalysisWindow(QMainWindow):
         page.addWidget(self._build_top_bar())
 
         self._pool = SessionPool()
+        # The tree must not steal J/K/L/arrow-key frame stepping when it has
+        # focus after a click -- those keys are the whole point of the window.
+        self._pool.tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._pool.session_picked.connect(self._on_session_picked)
         self._canvas = KeypointCanvas()
         self._transport = Transport()
@@ -232,6 +256,8 @@ class AnalysisWindow(QMainWindow):
         self._bar.scrubbed.connect(self._set_frame)
         self._bar.selection_changed.connect(self._on_selection)
         self._bar.selection_cleared.connect(self._on_selection_cleared)
+        self._bar.context_menu_requested.connect(self._show_timeline_menu)
+        self._bar.hidden_changed.connect(self._remember_hidden)
         self._wire_transport()
         self._build_cohort_table()
         self._build_bout_stepper()
@@ -279,7 +305,11 @@ class AnalysisWindow(QMainWindow):
         row.addStretch(1)
         self._open_btn, _ = self._menu_button(
             "Open",
-            [("Open ethogram…", self._open), ("Open folder as cohort…", self._open_folder)],
+            [
+                ("Open ethogram…", self._open),
+                ("Open recording folder…", self._open_recording),
+                ("Open folder as cohort…", self._open_folder),
+            ],
             role="primary",
         )
         self._zones_btn, _ = self._menu_button(
@@ -301,7 +331,9 @@ class AnalysisWindow(QMainWindow):
         )
         self._export_window_action.setEnabled(False)
         self._export_heatmap_btn.setEnabled(False)
-        self._tour_btn, _ = self._menu_button("?", [("Tutorial", self.start_tour)])
+        self._tour_btn, _ = self._menu_button(
+            "?", [("Tutorial", self.start_tour), ("Keyboard shortcuts", self._show_shortcuts)]
+        )
         set_button_role(self._tour_btn, "ghost")
         for button in (self._open_btn, self._zones_btn, self._export_menu_btn, self._tour_btn):
             row.addWidget(button)
@@ -514,6 +546,43 @@ class AnalysisWindow(QMainWindow):
         if path:
             self.load(Path(path))
 
+    def _open_recording(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Recording folder")
+        if folder:
+            self.open_path(Path(folder))
+
+    def open_path(self, path: Path) -> None:
+        """Open an ethogram CSV, or a recording folder."""
+        path = Path(path)
+        if path.is_file():
+            self.load(path)
+            return
+        session = self._recording(path)
+        if session is not None:
+            try:
+                view = SessionView.from_recording(session)
+            except SessionViewError as e:
+                QMessageBox.critical(self, "Open session", str(e))
+                return
+            self._cohort_root = None
+            # A different session: the range (and its heatmap) belonged to
+            # the one that just left, exactly as a single ethogram does.
+            self._bar.clear_selection()
+            self._set_cohort([(path, view)])
+            return
+        ethograms = sorted(path.rglob("ethogram_raw.csv"))
+        if len(ethograms) == 1:
+            self.load(ethograms[0])
+            return
+        found = "no ethogram_raw.csv" if not ethograms else f"{len(ethograms)} ethograms"
+        more = "  Use Open folder as cohort to load them all." if ethograms else ""
+        QMessageBox.critical(
+            self,
+            "Open session",
+            f"{path.name} holds no GLIDER recording (no tracking, events or data CSV) "
+            f"and {found}.{more}",
+        )
+
     def load(self, ethogram_csv: Path, *, pose_csv: Path | None = None) -> None:
         """Load a single session, replacing whatever was open."""
         try:
@@ -527,21 +596,48 @@ class AnalysisWindow(QMainWindow):
         self._set_cohort([(Path(ethogram_csv), view)])
 
     def _open_folder(self) -> None:
-        """Load every ethogram beneath a folder as one cohort."""
-        folder = QFileDialog.getExistingDirectory(self, "Folder of apply-run outputs")
-        if not folder:
-            return
-        found = sorted(Path(folder).rglob("ethogram_raw.csv"))
-        if not found:
+        folder = QFileDialog.getExistingDirectory(self, "Folder of sessions")
+        if folder:
+            self.load_folder(Path(folder))
+
+    def load_folder(self, root: Path) -> None:
+        """Every ethogram and recording beneath ``root``, as one grouped cohort."""
+        root = Path(root)
+        sources, warning = discover_sessions(root)
+        if not sources:
             QMessageBox.warning(
                 self,
                 "Open cohort",
-                f"No ethogram_raw.csv found under {folder}.\n\n"
-                "Pick the output folder an apply run wrote to — each session "
-                "lives in its own subfolder there.",
+                f"No sessions found under {root}.\n\nLooked for ethogram_raw.csv files "
+                "and folders of GLIDER recording CSVs.",
             )
             return
-        self.load_many(found)
+        loaded, ids, groups, failed = [], [], [], []
+        for source in sources:
+            try:
+                if source.path.is_dir():
+                    session = self._recording(source.path)
+                    if session is None:
+                        raise SessionViewError("not a readable recording")
+                    view = SessionView.from_recording(session)
+                else:
+                    view = SessionView.load(source.path)
+            except SessionViewError as e:  # one bad session must not lose the rest
+                failed.append(f"{source.session_id}: {e}")
+                continue
+            loaded.append((source.path, view))
+            ids.append(source.session_id)
+            groups.append(source.group)
+        if not loaded:
+            QMessageBox.critical(self, "Open cohort", "\n".join(failed) or "nothing loaded")
+            return
+        self._cohort_root = root
+        self._set_cohort(loaded, ids=ids, groups=groups)
+        problems = ([warning] if warning else []) + (
+            [f"{len(failed)} could not be read:\n" + "\n".join(failed[:8])] if failed else []
+        )
+        if problems:
+            QMessageBox.warning(self, "Open cohort", "\n\n".join(problems))
 
     def load_many(self, ethograms: list[Path]) -> None:
         """Load a cohort. The first becomes the shown session."""
@@ -611,12 +707,21 @@ class AnalysisWindow(QMainWindow):
         return self._recordings[folder]
 
     def _timeline_for(self, path: Path, view: SessionView):
-        """``(timeline, recording)``: lanes with a hardware raster if a recording is near.
+        """``(timeline, recording)`` for a session.
 
-        The first candidate folder that holds a recording whose timeline builds
-        wins. A KeyError out of ``build_timeline`` (an events CSV missing a
-        column) costs the raster, never the behaviour lanes.
+        A recording folder is its own recording, and its behaviour lanes come
+        from its tracking (passing ``view`` too would draw them twice). An
+        ethogram looks for the recording it was scored from, nearest first.
         """
+        path = Path(path)
+        if path.is_dir():
+            session = self._recording(path)
+            if session is not None:
+                try:
+                    return build_timeline(session, None), session
+                except (OSError, ValueError, KeyError):
+                    logger.debug("unusable events in %s", path, exc_info=True)
+            return build_timeline(None, view), None
         for folder in recording_candidates(path, view.video_path):
             session = self._recording(folder)
             if session is None:
@@ -650,6 +755,7 @@ class AnalysisWindow(QMainWindow):
         self._path_label.setText(_short_path(Path(path)))
         self._path_label.setToolTip(str(path))
         self._bar.set_session(view, timeline)
+        self._bar.set_hidden(_settings().value(self._hidden_key(), [], type=list) or [])
         self._canvas.set_view(view)
         # The overlay belongs to the session that just left.
         self._canvas.set_heatmap(None)
@@ -658,8 +764,13 @@ class AnalysisWindow(QMainWindow):
         self._apply_trail()
         self._inspector.clear_range()
         self._set_frame(self._bar.frame_bounds()[0])
-        self._pick_poses.setVisible(view.xy is None)
-        self._fix_resolution.setVisible(view.xy is not None and view.resolution is None)
+        # A recording has no pose sidecar to repair -- its poses are the
+        # tracked centroid, and its resolution comes from the rig, not a CSV.
+        is_recording = Path(path).is_dir()
+        self._pick_poses.setVisible(view.xy is None and not is_recording)
+        self._fix_resolution.setVisible(
+            view.xy is not None and view.resolution is None and not is_recording
+        )
 
         has_video = view.video_path is not None
         self._video_on.setEnabled(has_video)
@@ -684,6 +795,11 @@ class AnalysisWindow(QMainWindow):
 
         # Body of the old summary text, unchanged, but set on the Session tab:
         found = f"  Poses: {view.pose_path.name}." if view.pose_path else "  No poses found."
+        if is_recording:
+            found = (
+                "  Live recording: labels are the rig's behavioral_state; "
+                "position is the tracked centroid." + found
+            )
         if has_video:
             found += f"  Video: {view.video_path.name}."
             if not view.video_is_aligned:
@@ -721,6 +837,14 @@ class AnalysisWindow(QMainWindow):
         self._status_path.setText(_short_path(self._ethogram_csv, keep=4))
         self._status_path.setToolTip(str(self._ethogram_csv))
 
+    def _hidden_key(self) -> str:
+        sid = self._ids[self._shown] if 0 <= self._shown < len(self._ids) else "session"
+        return f"review/hidden/{sid}"
+
+    def _remember_hidden(self, keys: list) -> None:
+        if self._cohort:
+            _settings().setValue(self._hidden_key(), list(keys))
+
     # ------------------------------------------------------------------
     # playback
 
@@ -738,6 +862,16 @@ class AnalysisWindow(QMainWindow):
         """
         if self._view is None:
             super().keyPressEvent(event)
+            return
+
+        if event.key() == Qt.Key.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self._select_all()
+            event.accept()
+            return
+
+        if event.key() in _EDIT_KEYS:
+            self._edit_key(event.key(), event.modifiers())
+            event.accept()
             return
 
         key = event.key()
@@ -792,6 +926,55 @@ class AnalysisWindow(QMainWindow):
         self._play.setText("▶  Play")
         self._transport.rate.setText("1×")
 
+    def _edit_key(self, key, modifiers) -> None:
+        if key == Qt.Key.Key_I:
+            self._set_in(self._frame)
+        elif key == Qt.Key.Key_O:
+            self._set_out(self._frame)
+        elif key == Qt.Key.Key_X:
+            self._select_bout(self._frame)
+        elif key == Qt.Key.Key_Z:
+            if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                self._bar.fit()
+            else:
+                self._bar.zoom_to_selection()
+        elif key == Qt.Key.Key_Escape:
+            self._bar.clear_selection()
+        elif key == Qt.Key.Key_K:
+            self._stop()
+        else:
+            self._shuttle(-1 if key == Qt.Key.Key_J else 1)
+
+    def _set_in(self, frame: int) -> None:
+        _first, last = self._bar.frame_bounds()
+        selection = self._bar.selection()
+        out = selection[1] if selection is not None and selection[1] >= frame else last
+        self._bar.set_selection(frame, out)
+
+    def _set_out(self, frame: int) -> None:
+        first, _last = self._bar.frame_bounds()
+        selection = self._bar.selection()
+        start = selection[0] if selection is not None and selection[0] <= frame else first
+        self._bar.set_selection(start, frame)
+
+    def _select_bout(self, frame: int) -> None:
+        bout = self._view.bout_at(frame) if self._view else None
+        if bout is not None:
+            self._bar.set_selection(bout[0], bout[1])
+
+    def _shuttle(self, direction: int) -> None:
+        """J and L: play backward or forward, doubling on each repeat, up to 8x."""
+        if self._view is None:
+            return
+        if self._timer.isActive() and (self._rate > 0) == (direction > 0):
+            self._rate = max(-8, min(8, self._rate * 2))
+        else:
+            self._rate = direction
+        self._transport.rate.setText(f"{self._rate}×")
+        if not self._timer.isActive():
+            self._timer.start(int(1000 / max(1.0, self._view.fps)))
+            self._play.setText("❚❚  Pause")
+
     def _step_frames(self, step: int) -> None:
         if self._view is None:
             return
@@ -806,10 +989,85 @@ class AnalysisWindow(QMainWindow):
         self._stop()
         self._set_frame(first if start else last)
 
+    def _range_title(self) -> str:
+        selection = self._bar.selection()
+        if selection is None or self._view is None:
+            return "No range"
+        start, end = selection
+        t_in = self._bar.seconds_of_axis(self._bar.axis_of_frame(start))
+        t_out = self._bar.seconds_of_axis(self._bar.axis_of_frame(end + 1))
+        return f"Range · {format_seconds(t_in)} → {format_seconds(t_out)} · {t_out - t_in:.1f} s"
+
+    def _timeline_menu(self, frame: int) -> QMenu:
+        """What right-clicking the lanes offers. Built separately so tests can read it."""
+        has_range = self._bar.selection() is not None
+        menu = QMenu(self)
+        menu.addAction(self._range_title()).setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("Select whole session\t⌘A", self._select_all).setEnabled(
+            self._view is not None
+        )
+        menu.addAction("Set In here\tI", lambda: self._set_in(frame))
+        menu.addAction("Set Out here\tO", lambda: self._set_out(frame))
+        menu.addAction("Select bout under cursor\tX", lambda: self._select_bout(frame))
+        menu.addSeparator()
+        for text, slot in (
+            ("Zoom to range\tZ", self._bar.zoom_to_selection),
+            ("Loop range", self._loop_range),
+            ("Export range stats…", self._export_window),
+            ("Copy range timecode", self._copy_range),
+        ):
+            menu.addAction(text, slot).setEnabled(has_range)
+        menu.addSeparator()
+        menu.addAction("Clear range\tEsc", self._bar.clear_selection).setEnabled(has_range)
+        return menu
+
+    def _show_timeline_menu(self, global_pos, frame: int) -> None:
+        self._timeline_menu(frame).exec(global_pos)
+
+    def _loop_range(self) -> None:
+        selection = self._bar.selection()
+        if selection is None:
+            return
+        self._timeline_panel.loop.setChecked(True)
+        self._set_frame(selection[0])
+        if not self._timer.isActive():
+            self._toggle_play()
+
+    def _copy_range(self) -> None:
+        selection = self._bar.selection()
+        if selection is None or self._view is None:
+            return
+        fps = self._view.fps or 30.0
+        t_in = self._bar.seconds_of_axis(self._bar.axis_of_frame(selection[0]))
+        t_out = self._bar.seconds_of_axis(self._bar.axis_of_frame(selection[1] + 1))
+        QApplication.clipboard().setText(
+            f"{format_timecode(t_in, fps)} - {format_timecode(t_out, fps)}"
+        )
+
+    def _show_shortcuts(self) -> None:
+        QMessageBox.information(
+            self,
+            "Keyboard shortcuts",
+            "Space  play / pause\n"
+            "J  K  L  shuttle back / stop / forward (repeat for 2×, 4×, 8×)\n"
+            "← →  one frame   ⇧ ten   ⌘/Ctrl one second\n"
+            "Home  End  session start / end\n"
+            "[  ]  previous / next bout\n"
+            "I  O  set In / Out at the playhead\n"
+            "X  select the bout under the playhead\n"
+            "⌘/Ctrl-A  select the whole session\n"
+            "Z  zoom to range    ⇧Z  fit the session\n"
+            "Esc  clear the range\n"
+            "⌘/Ctrl-scroll or pinch  zoom    scroll  pan\n"
+            "Drag the lanes to select; drag the ruler to scrub.",
+        )
+
     def _set_frame(self, frame: int) -> None:
         self._frame = int(frame)
         self._bar.set_frame(self._frame, follow=self._timer.isActive())
         self._canvas.set_frame(self._frame)
+        self._canvas.set_hud(self._hud_behavior(), self._hud_chips())
         self._bout_label.setText(self._describe_bout())
         if self._view and self._view.fps:
             seconds = self._bar.seconds_of_axis(self._bar.axis_of_frame(self._frame))
@@ -830,11 +1088,42 @@ class AnalysisWindow(QMainWindow):
     def _advance(self) -> None:
         if self._view is None:
             return
-        _first, last = self._bar.frame_bounds()
-        if self._frame + 1 > last:
+        lo, hi = self._bar.frame_bounds()
+        selection = self._bar.selection()
+        looping = self._timeline_panel.loop.isChecked() and selection is not None
+        if looping:
+            lo, hi = selection
+        target = self._frame + self._rate
+        if lo <= target <= hi:
+            self._set_frame(target)
+        elif looping:
+            self._set_frame(lo if self._rate > 0 else hi)
+        else:
             self._stop()
-            return
-        self._set_frame(self._frame + 1)
+
+    def _hud_behavior(self):
+        bout = self._view.bout_at(self._frame) if self._view else None
+        if bout is None or not bout[2]:
+            return None
+        start, _end, label = bout
+        seconds_in = (self._frame - start) / (self._view.fps or 30.0)
+        return f"{label}  {seconds_in:.2f} s in", behavior_qcolor(label, self._bar.behavior_order())
+
+    def _hud_chips(self) -> list:
+        """Every output the rig is driving on this frame. Inputs are not a HUD's job."""
+        timeline = self._bar.timeline()
+        if timeline is None or not self._bar.uses_ms():
+            return []
+        ms = self._bar.axis_of_frame(self._frame)
+        chips = []
+        for lane in timeline.lanes:
+            if lane_role(lane) == "input":
+                continue
+            text, active = describe_value(lane, ms)
+            if active:
+                label = lane.label if is_binary(lane) else f"{lane.label} {text}"
+                chips.append((label, lane_colour(lane)))
+        return chips
 
     def _choose_pose_csv(self) -> None:
         """Point the session at its poses when discovery could not."""
@@ -931,6 +1220,7 @@ class AnalysisWindow(QMainWindow):
         self._summary.setText(self._describe(stats))
         self._fill_cohort(start, end)
         self._fill_zones(start, end)
+        self._fill_hardware(start, end)
         self._apply_heatmap()
         self._export_btn.setEnabled(True)
         self._export_window_action.setEnabled(True)
@@ -960,6 +1250,19 @@ class AnalysisWindow(QMainWindow):
                 f"{stats.mean_speed_cm_s:.2f}",
                 f"{stats.peak_speed_cm_s:.2f}",
             )
+
+    def _fill_hardware(self, start: int, end: int) -> None:
+        timeline = self._bar.timeline()
+        if timeline is None or not timeline.lanes or not self._bar.uses_ms():
+            self._inspector.set_hardware([])
+            return
+        by_key = {lane.key: lane for lane in timeline.lanes}
+        summaries = hardware_in_range(
+            timeline.lanes, self._bar.axis_of_frame(start), self._bar.axis_of_frame(end + 1)
+        )
+        self._inspector.set_hardware(
+            [(s.label, describe_summary(s), lane_colour(by_key[s.key])) for s in summaries]
+        )
 
     def _draw_zones(self) -> None:
         """Open the zone editor on the frame currently on screen.

@@ -1342,3 +1342,226 @@ class TestTheTableAgreesWithTheBar:
         offered = [window._bout_filter.itemData(i) for i in range(window._bout_filter.count())]
         assert offered[0] is None  # "Any change"
         assert offered[1:] == window._bar.behavior_order()
+
+
+class TestOpeningARecording:
+    """A rig run opens without anyone having scored it."""
+
+    def test_a_recording_folder_opens_with_its_lanes(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_recording(tmp_path / "rec"))
+        assert win._pool.count() == 1
+        assert [lane.key for lane in win._bar.timeline().lanes] == ["led1"]
+        assert win._view.labels[0] == "resting"
+
+    def test_selecting_a_range_reports_the_hardware(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_recording(tmp_path / "rec"))
+        win._select_all()
+        assert win._inspector.hardware.rowCount() == 1
+        assert win._inspector.hardware.item(0, 1).text() == "4.0 s on"
+
+    def test_a_folder_with_one_ethogram_opens_it(self, qtbot, tmp_path):
+        ethogram = _ethogram(tmp_path / "out" / "v", ["groom"] * 300)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(tmp_path / "out")
+        assert win._ethogram_csv == ethogram
+
+    def test_a_folder_with_nothing_says_what_it_looked_for(self, qtbot, tmp_path, monkeypatch):
+        said = []
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QMessageBox.critical",
+            lambda *a, **k: said.append(a[-1]),
+        )
+        (tmp_path / "empty").mkdir()
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(tmp_path / "empty")
+        assert said and "no GLIDER recording" in said[0]
+
+
+class TestOpeningACohortFolder:
+    def _cohort(self, tmp_path):
+        for sid in ("s1", "s2"):
+            _ethogram(tmp_path / "sessions" / sid / "analysis", ["groom"] * 300)
+        (tmp_path / "glider_project.json").write_text(
+            '{"sessions": {"s1": {"group": "ChR2"}, "s2": {"group": "eYFP"}}}',
+            encoding="utf-8",
+        )
+
+    def test_sessions_are_grouped_by_the_manifest(self, qtbot, tmp_path):
+        self._cohort(tmp_path)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        assert win._ids == ["s1", "s2"]
+        assert win._groups == ["ChR2", "eYFP"]
+        assert win._pool.tree.topLevelItemCount() == 2
+
+    def test_a_broken_manifest_warns_and_still_loads(self, qtbot, tmp_path, monkeypatch):
+        self._cohort(tmp_path)
+        (tmp_path / "glider_project.json").write_text("{not json", encoding="utf-8")
+        warned = []
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QMessageBox.warning",
+            lambda *a, **k: warned.append(a[-1]),
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        assert win._pool.count() == 2
+        assert warned and "ungrouped" in warned[0]
+
+
+class TestEditingKeys:
+    def _win(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        return win
+
+    def test_i_and_o_set_the_range(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._set_frame(50)
+        _key(win, Qt.Key.Key_I)
+        win._set_frame(120)
+        _key(win, Qt.Key.Key_O)
+        assert win._bar.selection() == (50, 120)
+
+    def test_x_selects_the_bout_under_the_playhead(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)  # groom 0-99, locomote 100-199, groom 200-299
+        win._set_frame(150)
+        _key(win, Qt.Key.Key_X)
+        assert win._bar.selection() == (100, 199)
+
+    def test_z_zooms_to_the_range_and_shift_z_fits(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(100, 199)
+        _key(win, Qt.Key.Key_Z)
+        assert win._bar.viewport.span == pytest.approx(100.0)
+        _key(win, Qt.Key.Key_Z, Qt.KeyboardModifier.ShiftModifier)
+        assert win._bar.viewport.span == pytest.approx(300.0)
+
+    def test_escape_clears_the_range(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(100, 199)
+        _key(win, Qt.Key.Key_Escape)
+        assert win._bar.selection() is None
+        assert win._export_btn.isEnabled() is False
+
+    def test_l_plays_and_doubles(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_L)
+        assert win._timer.isActive() and win._rate == 1
+        _key(win, Qt.Key.Key_L)
+        assert win._rate == 2
+        _key(win, Qt.Key.Key_K)
+        assert not win._timer.isActive()
+
+    def test_j_plays_backward(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._set_frame(150)
+        _key(win, Qt.Key.Key_J)
+        win._advance()
+        assert win._frame == 149
+
+    def test_cmd_a_selects_the_whole_session(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+        assert win._bar.selection() == (0, 299)
+
+    def test_the_sessions_list_does_not_take_keyboard_focus(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        assert win._pool.tree.focusPolicy() == Qt.FocusPolicy.NoFocus
+
+
+class TestLoopAndFollow:
+    def _win(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        return win
+
+    def test_loop_wraps_inside_the_range(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(100, 120)
+        win._timeline_panel.loop.setChecked(True)
+        win._set_frame(120)
+        win._toggle_play()
+        win._advance()
+        assert win._frame == 100
+        assert win._timer.isActive()
+
+    def test_playback_pages_the_timeline(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.viewport.show(0, 50)
+        win._set_frame(50)
+        win._toggle_play()
+        win._advance()
+        assert win._bar.viewport.start == pytest.approx(51.0)
+
+
+class TestTheRangeMenu:
+    def test_set_in_here_uses_the_cursor_frame(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        menu = win._timeline_menu(120)
+        texts = [a.text() for a in menu.actions() if a.text()]
+        assert "Set In here\tI" in texts and "Zoom to range\tZ" in texts
+        next(a for a in menu.actions() if a.text() == "Set In here\tI").trigger()
+        assert win._bar.selection() == (120, 299)
+
+    def test_range_actions_are_off_without_a_range(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        menu = win._timeline_menu(120)
+        zoom = next(a for a in menu.actions() if a.text() == "Zoom to range\tZ")
+        assert zoom.isEnabled() is False
+
+    def test_the_select_whole_session_item_is_offered(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        menu = win._timeline_menu(120)
+        texts = [a.text() for a in menu.actions() if a.text()]
+        assert "Select whole session\t⌘A" in texts
+        select_all = next(a for a in menu.actions() if a.text() == "Select whole session\t⌘A")
+        assert select_all.isEnabled() is True
+        select_all.trigger()
+        assert win._bar.selection() == (0, 299)
+
+
+class TestTheHud:
+    def test_the_hud_names_the_behaviour(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        win._set_frame(150)
+        behavior, _chips = win._canvas._hud
+        assert behavior[0].startswith("locomote")
+
+    def test_the_hud_lists_active_outputs(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_recording(tmp_path / "rec"))
+        win._set_frame(60)  # the LED is on from frame 30 to 150
+        _behavior, chips = win._canvas._hud
+        assert [text for text, _colour in chips] == ["led1"]
+
+
+class TestHiddenLanesAreRemembered:
+    def test_a_hidden_lane_stays_hidden_on_reopen(self, qtbot, tmp_path):
+        folder = _recording(tmp_path / "rec")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(folder)
+        win._bar.set_hidden({"led1"})
+        again = AnalysisWindow()
+        qtbot.addWidget(again)
+        again.open_path(folder)
+        assert again._bar.hidden() == {"led1"}
