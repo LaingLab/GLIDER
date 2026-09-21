@@ -187,6 +187,11 @@ class Inspector(QTabWidget):
         self.set_kpis("—", "—", "—")
         self.range_text.setText("")
         self.set_hardware([])
+        for table in (self.bouts, self.zones):
+            table.setRowCount(0)
+            table.updateGeometry()
+            table.setMaximumHeight(table.sizeHint().height())
+        self.set_zone_count(0)
 
     def set_kpis(self, distance: str, mean: str, peak: str) -> None:
         self.distance.setText(distance)

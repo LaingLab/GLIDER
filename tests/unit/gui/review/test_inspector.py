@@ -45,6 +45,16 @@ def test_kpis_and_clearing(inspector):
     assert inspector.range_title.text() == "No range selected"
 
 
+def test_clearing_empties_the_bout_and_zone_tables(inspector):
+    inspector.bouts.setRowCount(1)
+    inspector.zones.setRowCount(1)
+    inspector.set_zone_count(1)
+    inspector.clear_range()
+    assert inspector.bouts.rowCount() == 0
+    assert inspector.zones.rowCount() == 0
+    assert inspector.zones_title.text() == "ZONES"
+
+
 def test_hardware_rows(inspector):
     inspector.set_hardware([("LED 470 nm", "20.0 s on · 200 pulses", QColor(colors.LANE_OUTPUT))])
     assert inspector.hardware.rowCount() == 1

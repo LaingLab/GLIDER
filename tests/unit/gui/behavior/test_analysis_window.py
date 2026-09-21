@@ -588,6 +588,28 @@ class TestACohortOfSessions:
         assert win._export_btn.isEnabled() is True
 
 
+class TestClearingTheRangeClearsItsNumbers:
+    def test_clearing_empties_every_range_table(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        win._bar.set_selection(100, 199)
+        assert win._bouts.rowCount() == 1
+        win._bar.clear_selection()
+        assert win._bouts.rowCount() == 0
+        assert win._zone_table.rowCount() == 0
+        assert win._cohort_table.rowCount() == 0
+        assert win._tables.tabText(win._tables.indexOf(win._cohort_table)) == "Cohort"
+
+    def test_a_new_file_does_not_show_the_old_files_bouts(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "a"))
+        win._bar.set_selection(100, 199)
+        win.load(_session(tmp_path / "b"))
+        assert win._bouts.rowCount() == 0
+
+
 class TestZonesInTheWindow:
     """The spatial suite existed but could not be reached from a video-derived
     session at all — no time in zone, no entries, no heatmap."""

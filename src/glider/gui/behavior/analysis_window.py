@@ -937,6 +937,8 @@ class AnalysisWindow(QMainWindow):
 
     def _on_selection_cleared(self) -> None:
         self._inspector.clear_range()
+        self._cohort_table.setRowCount(0)
+        self._tables.setTabText(self._tables.indexOf(self._cohort_table), "Cohort")
         self._export_btn.setEnabled(False)
         self._export_window_action.setEnabled(False)
         self._apply_heatmap()
