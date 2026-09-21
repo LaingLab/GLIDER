@@ -27,10 +27,17 @@ pytestmark = [
 ]
 
 
-def test_a_real_recording_opens_and_measures(qtbot):
+def test_a_real_recording_opens_and_measures(qtbot, tmp_path, monkeypatch):
+    from PyQt6.QtCore import QSettings
+
+    import glider.gui.behavior.analysis_window as review
     from glider.analysis import Session
     from glider.analysis.behavior.session_view import SessionView
     from glider.gui.behavior.analysis_window import AnalysisWindow
+
+    # The window saves its layout on close; never into the developer's settings.
+    path = str(tmp_path / "session_review.ini")
+    monkeypatch.setattr(review, "_settings", lambda: QSettings(path, QSettings.Format.IniFormat))
 
     folder = Path(RECORDING)
     session = Session.load(folder)
