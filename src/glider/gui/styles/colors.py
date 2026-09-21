@@ -200,3 +200,14 @@ Q_PASTEL_PEACH = QColor(PASTEL_PEACH)
 Q_PASTEL_PEACH_DEEP = QColor(PASTEL_PEACH_DEEP)
 Q_PASTEL_SKY = QColor(PASTEL_SKY)
 Q_PASTEL_SKY_DEEP = QColor(PASTEL_SKY_DEEP)
+
+# === Session Review timeline ===
+#
+# Red playhead, as in every NLE: it is the one line that must never be
+# mistaken for data. Lanes are coloured by what the device *is*, so an
+# output the rig drove and an input it sensed never read as the same kind
+# of thing.
+PLAYHEAD = "#ff5252"
+LANE_OUTPUT = ACCENT
+LANE_MOTOR = "#a78bfa"
+LANE_INPUT = "#34d399"
