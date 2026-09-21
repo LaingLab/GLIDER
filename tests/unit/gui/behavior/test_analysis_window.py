@@ -10,8 +10,8 @@ import pytest
 
 pytest.importorskip("PyQt6")
 
-from PyQt6.QtCore import QPointF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QKeyEvent, QMouseEvent  # noqa: E402
+from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6.QtGui import QColor, QKeyEvent  # noqa: E402
 
 from glider.analysis.behavior.session_view import SessionView  # noqa: E402
 from glider.gui.behavior.analysis_window import (  # noqa: E402
@@ -19,7 +19,7 @@ from glider.gui.behavior.analysis_window import (  # noqa: E402
     KeypointCanvas,
     behavior_qcolor,
 )
-from glider.gui.widgets.timeline_bar import TimelineBar  # noqa: E402
+from glider.gui.review.timeline import HEADER_W, TimelineView  # noqa: E402
 
 NAMES = ["nose", "l_ear", "r_ear", "tail_base"]
 
@@ -61,88 +61,6 @@ class TestBehaviorColours:
         from glider.gui.styles import colors
 
         assert behavior_qcolor("") == QColor(colors.BORDER)
-
-
-class TestTimelineBar:
-    def _bar(self, qtbot, tmp_path, **kw):
-        bar = TimelineBar()
-        qtbot.addWidget(bar)
-        bar.resize(300, 46)
-        bar.set_view(SessionView.load(_session(tmp_path / "v", **kw)))
-        return bar
-
-    def test_an_empty_bar_does_not_crash(self, qtbot):
-        bar = TimelineBar()
-        qtbot.addWidget(bar)
-        bar.set_view(None)
-        bar.resize(200, 46)
-        bar.grab()  # forces a paint
-
-    def test_it_paints_a_loaded_session(self, qtbot, tmp_path):
-        bar = self._bar(qtbot, tmp_path)
-        image = bar.grab().toImage()
-        assert image.width() == 300
-
-    def test_clicking_scrubs_to_that_frame(self, qtbot, tmp_path):
-        bar = self._bar(qtbot, tmp_path)
-        seen = []
-        bar.scrubbed.connect(seen.append)
-        event = QMouseEvent(
-            QMouseEvent.Type.MouseButtonPress,
-            QPointF(150, 20),
-            Qt.MouseButton.LeftButton,
-            Qt.MouseButton.LeftButton,
-            Qt.KeyboardModifier.NoModifier,
-        )
-        bar.mousePressEvent(event)
-        # Half way along a 300-frame session.
-        assert seen and 140 <= seen[0] <= 160
-
-    def test_a_selection_is_reported_and_kept(self, qtbot, tmp_path):
-        bar = self._bar(qtbot, tmp_path)
-        seen = []
-        bar.selection_changed.connect(lambda a, b: seen.append((a, b)))
-        bar.set_selection(200, 50)
-        # Reversed input is normalised rather than refused.
-        assert bar.selection() == (50, 200)
-        assert seen == [(50, 200)]
-
-    def test_the_selection_shades_what_it_excludes_and_nothing_else(self, qtbot, tmp_path):
-        """Two failures at once, and the scrim has to avoid both.
-
-        The old form tinted the *inside* of the selection, so the usual
-        whole-session selection dragged every behaviour on the bar toward one
-        hue — no palette could look distinct through it. And the scrim must
-        still be drawn with ``qcolor_with_alpha``: ``colors.with_alpha``
-        returns a QSS string, which QPainter reads as opaque black and which
-        blanked the bar outright.
-        """
-        bar = self._bar(qtbot, tmp_path)
-        inside_before = bar.grab().toImage().pixelColor(150, 23)
-        outside_before = bar.grab().toImage().pixelColor(250, 23)
-        bar.set_selection(100, 199)  # 1 px per frame, so x=150 is in, x=250 out
-        image = bar.grab().toImage()
-        assert image.pixelColor(150, 23) == inside_before  # data at full strength
-        assert image.pixelColor(250, 23) != outside_before  # excluded, and visibly so
-        assert image.pixelColor(250, 23) != QColor(0, 0, 0)
-
-    def test_selecting_everything_changes_nothing_about_the_colours(self, qtbot, tmp_path):
-        bar = self._bar(qtbot, tmp_path)
-        before = bar.grab().toImage()
-        bar.set_selection(0, 299)
-        after = bar.grab().toImage()
-        assert [after.pixelColor(x, 23) == before.pixelColor(x, 23) for x in (20, 150, 280)] == [
-            True,
-            True,
-            True,
-        ]
-
-    def test_scrubbing_does_not_clear_the_selection(self, qtbot, tmp_path):
-        """A window survives looking around inside it."""
-        bar = self._bar(qtbot, tmp_path)
-        bar.set_selection(50, 200)
-        bar.set_frame(120)
-        assert bar.selection() == (50, 200)
 
 
 class TestKeypointCanvas:
@@ -203,7 +121,7 @@ class TestAnalysisWindow:
     def test_loading_populates_the_widgets(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         assert win._view is not None
-        assert "300" in win._summary.text()
+        assert "300" in win._session_text.text()
 
     def test_selecting_a_window_fills_the_bout_table(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
@@ -247,7 +165,7 @@ class TestAnalysisWindow:
     def test_scrubbing_moves_the_clock(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._set_frame(90)  # 3 s at 30 fps
-        assert "3.00" in win._clock.text()
+        assert win._clock.text() == "00:00:03:00"
 
     def test_playback_stops_at_the_end(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
@@ -260,12 +178,12 @@ class TestAnalysisWindow:
 
     def test_the_repair_button_is_hidden_when_nothing_needs_repairing(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
-        assert win._fix_resolution.isVisibleTo(win) is False
+        assert win._fix_resolution.isHidden() is True
 
     def test_the_repair_button_appears_for_a_sidecar_without_a_resolution(self, qtbot, tmp_path):
         """Runs from before the field existed must still be viewable."""
         win = self._win(qtbot, tmp_path, with_resolution=False)
-        assert win._fix_resolution.isVisibleTo(win) is True
+        assert win._fix_resolution.isHidden() is False
 
     def test_repairing_writes_the_resolution_and_reloads(self, qtbot, tmp_path, monkeypatch):
         win = self._win(qtbot, tmp_path, with_resolution=False)
@@ -278,7 +196,7 @@ class TestAnalysisWindow:
         monkeypatch.setattr("glider.vision.video_source.video_resolution", lambda _p: (800, 600))
         win._resolution_from_video()
         assert win._view.resolution == (800, 600)
-        assert win._fix_resolution.isVisibleTo(win) is False
+        assert win._fix_resolution.isHidden() is True
 
     def test_an_unreadable_video_is_reported_and_changes_nothing(
         self, qtbot, tmp_path, monkeypatch
@@ -336,10 +254,10 @@ class TestWhenPosesAreElsewhere:
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load(self._session_without_poses(tmp_path))
-        assert win._pick_poses.isVisibleTo(win) is True
+        assert win._pick_poses.isHidden() is False
 
         win.load(_session(tmp_path / "with_poses"))
-        assert win._pick_poses.isVisibleTo(win) is False
+        assert win._pick_poses.isHidden() is True
 
     def test_the_blank_canvas_points_at_the_button(self, qtbot, tmp_path):
         win = AnalysisWindow()
@@ -379,13 +297,13 @@ class TestWhenPosesAreElsewhere:
         win._choose_pose_csv()
         assert win._view.xy is not None
         assert win._view.pose_path == chosen
-        assert win._pick_poses.isVisibleTo(win) is False
+        assert win._pick_poses.isHidden() is True
 
     def test_the_summary_names_the_pose_file_that_was_used(self, qtbot, tmp_path):
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load(_session(tmp_path / "v"))
-        assert "vDLC_exp-7.csv" in win._summary.text()
+        assert "vDLC_exp-7.csv" in win._session_text.text()
 
     def test_cancelling_the_picker_changes_nothing(self, qtbot, tmp_path, monkeypatch):
         win = AnalysisWindow()
@@ -498,23 +416,24 @@ class TestTheTimelineHasOneLane:
         ).to_csv(folder / "ethogram_raw.csv", index=False)
         return folder / "ethogram_raw.csv"
 
-    def test_the_bar_paints_one_full_height_lane(self, qtbot, tmp_path):
-        bar = TimelineBar()
-        qtbot.addWidget(bar)
-        bar.resize(300, 46)
-        bar.set_view(SessionView.load(self._session_with_freezing(tmp_path)))
-        image = bar.grab().toImage()
-        # Same column top and bottom: one behaviour, one band.
-        assert image.pixelColor(130, 8) == image.pixelColor(130, 40)
+    def _timeline_view(self, qtbot, tmp_path):
+        view = TimelineView()
+        qtbot.addWidget(view)
+        view.resize(HEADER_W + 300, 120)
+        view.set_view(SessionView.load(self._session_with_freezing(tmp_path)))
+        return view
+
+    def test_the_ethogram_is_one_lane(self, qtbot, tmp_path):
+        view = self._timeline_view(qtbot, tmp_path)
+        assert [row.kind for row in view._rows()] == ["group", "behavior"]
 
     def test_freezing_is_drawn_in_its_own_colour(self, qtbot, tmp_path):
-        bar = TimelineBar()
-        qtbot.addWidget(bar)
-        bar.resize(300, 46)
-        bar.set_view(SessionView.load(self._session_with_freezing(tmp_path)))
-        image = bar.grab().toImage()
-        # frames 100-159 of 300 sit around x=130; grooming is elsewhere.
-        assert image.pixelColor(130, 20) != image.pixelColor(20, 20)
+        view = self._timeline_view(qtbot, tmp_path)
+        y = int(view.lane_rect("ethogram").top() + 5)
+        image = view.grab().toImage()
+        assert image.pixelColor(int(view.x_of_frame(130)), y) != image.pixelColor(
+            int(view.x_of_frame(20)), y
+        )
 
     def test_freeze_bouts_reach_the_one_table(self, qtbot, tmp_path):
         win = AnalysisWindow()
@@ -548,7 +467,7 @@ class TestVideoPlayback:
         win.load(etho)
         assert win._view.video_path == clip
         assert win._video_on.isEnabled() is True
-        assert "v.mp4" in win._summary.text()
+        assert "v.mp4" in win._session_text.text()
         # And it actually decodes.
         assert win._canvas._frame_image(10) is not None
         win._canvas._close_reader()
@@ -583,13 +502,13 @@ class TestACohortOfSessions:
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
         assert len(win._cohort) == 4
-        assert win._sessions.count() == 4
+        assert win._pool.count() == 4
 
-    def test_the_picker_hides_for_a_single_session(self, qtbot, tmp_path):
+    def test_a_single_session_is_one_row(self, qtbot, tmp_path):
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load(_session(tmp_path / "v"))
-        assert win._sessions.isVisibleTo(win) is False
+        assert win._pool.count() == 1
 
     def test_switching_session_keeps_the_window(self, qtbot, tmp_path):
         """The window is the question; changing which animal answers it must
@@ -598,7 +517,7 @@ class TestACohortOfSessions:
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
         win._bar.set_selection(100, 199)
-        win._sessions.setCurrentIndex(2)
+        win._pool.select(2)
         assert win._bar.selection() == (100, 199)
         assert win._view is win._cohort[2][1]
 
@@ -700,13 +619,13 @@ class TestZonesInTheWindow:
         win = self._win(qtbot, tmp_path)
         win._bar.set_selection(0, 299)
         assert win._zone_table.rowCount() >= 1
-        assert "Zones (" in win._tables.tabText(2)
+        assert "ZONES (" in win._inspector.zones_title.text()
 
     def test_without_zones_the_table_stays_empty(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path, with_zones=False)
         win._bar.set_selection(0, 299)
         assert win._zone_table.rowCount() == 0
-        assert win._tables.tabText(2) == "Zones"
+        assert win._inspector.zones_title.text() == "ZONES"
 
     def test_zone_columns_reach_the_cohort_export(self, qtbot, tmp_path, monkeypatch):
         win = self._win(qtbot, tmp_path)
@@ -933,23 +852,23 @@ class TestTheTimelineCoversTheEthogram:
         win.load(_windowed_session(tmp_path))
         assert win._frame == 3600
 
+    def _timeline_view(self, qtbot, tmp_path):
+        view = TimelineView()
+        qtbot.addWidget(view)
+        view.resize(HEADER_W + 300, 120)
+        view.set_view(SessionView.load(_windowed_session(tmp_path)))
+        return view
+
     def test_clicking_the_far_left_lands_on_the_first_frame(self, qtbot, tmp_path):
-        bar = TimelineBar()
-        qtbot.addWidget(bar)
-        bar.resize(300, 46)
-        bar.set_view(SessionView.load(_windowed_session(tmp_path)))
-        assert bar._frame_at(0.0) == 3600
-        # 9000 frames across 300 px is 30 frames per pixel, so the rightmost
-        # pixel lands inside the final 30 rather than exactly on the last.
-        assert 12570 <= bar._frame_at(299.9) <= 12599
+        view = self._timeline_view(qtbot, tmp_path)
+        assert view.frame_at_x(HEADER_W) == 3600
+        # 9000 frames across 300 px is 30 frames per pixel.
+        assert 12570 <= view.frame_at_x(HEADER_W + 299.9) <= 12599
 
     def test_the_scored_range_fills_the_width(self, qtbot, tmp_path):
-        bar = TimelineBar()
-        qtbot.addWidget(bar)
-        bar.resize(300, 46)
-        bar.set_view(SessionView.load(_windowed_session(tmp_path)))
-        assert bar._x_of(3600) == pytest.approx(0.0)
-        assert bar._x_of(12599) == pytest.approx(300.0, abs=0.5)
+        view = self._timeline_view(qtbot, tmp_path)
+        assert view.x_of_frame(3600) == pytest.approx(HEADER_W)
+        assert view.x_of_frame(12599) == pytest.approx(HEADER_W + 300.0, abs=0.5)
 
     def test_stepping_left_holds_at_the_first_scored_frame(self, qtbot, tmp_path):
         win = AnalysisWindow()
@@ -1004,8 +923,8 @@ class TestSwitchingSessionsIsCheap:
         )
         win._bar.set_selection(0, 299)
         after_first = len(calls)
-        win._sessions.setCurrentIndex(2)
-        win._sessions.setCurrentIndex(3)
+        win._pool.select(2)
+        win._pool.select(3)
         # Switching costs the shown session only, not the cohort again.
         assert len(calls) - after_first <= 2
 
@@ -1296,8 +1215,8 @@ class TestFindingTheRecordingTheEthogramCameFrom:
         qtbot.addWidget(window)
         window.load(_ethogram(recording / "v", ["groom"] * 300))
         bar = window._bar
-        bar.resize(300, bar.sizeHint().height())
-        heights = [h for kind, _lane, _top, h in bar._rows() if kind == "hardware"]
+        bar.resize(HEADER_W + 300, bar.sizeHint().height())
+        heights = [row.height for row in bar._rows() if row.kind == "hardware"]
         assert heights and min(heights) > 0
 
     def test_an_ethogram_with_no_recording_anywhere_still_loads(self, qtbot, tmp_path):
@@ -1385,7 +1304,8 @@ class TestTheTableAgreesWithTheBar:
         assert window._bouts.item(0, 0).text() == "dart"
         chip = self._chip_colour(window)
         # The ethogram lane is the top row; frame 150 is well inside it.
-        painted = bar.grab().toImage().pixelColor(int(bar._x_of(150)), 20)
+        y = int(bar.lane_rect("ethogram").top() + 5)
+        painted = bar.grab().toImage().pixelColor(int(bar.x_of_frame(150)), y)
         assert painted == chip
 
         # And the tracking lane really is shifting the order, so the equality

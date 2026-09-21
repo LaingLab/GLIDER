@@ -1,18 +1,14 @@
-"""Scrub an analyzed session, select a window, and ask what is in it.
+"""Session Review: a Resolve-style editor for one recording or a whole cohort.
 
-Built around two things the outputs already contain but nothing yet showed.
+Sessions down the left (the media pool), the video in the middle, what the
+selected range contains on the right, and the timeline full width below:
+behaviour and hardware as tracks under one playhead. Selecting a range *is* the
+analysis -- the inspector fills as soon as the drag ends.
 
-The ethogram *is* the timeline. Rendering it as a coloured bar makes the
-session's structure legible at a glance and doubles as the scrubber, so
-picking a window and seeing what is in it are the same gesture.
-
-The poses stand in for the video. Annotated video is expensive and usually not
-kept; the pose CSV is small and almost always survives, so a session can be
-replayed as moving keypoints long after the pixels are gone.
-
-Everything computed here lives in
-:mod:`glider.analysis.behavior.session_view`, which is Qt-free and tested
-without a display. This module only draws.
+Everything computed lives in Qt-free modules
+(:mod:`glider.analysis.behavior.session_view`, :mod:`glider.analysis.timeline`,
+:mod:`glider.analysis.cohort`), and the widgets in :mod:`glider.gui.review` only
+draw. This module wires them together.
 """
 
 from __future__ import annotations
@@ -21,42 +17,37 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QSettings, Qt, QTimer
 from PyQt6.QtGui import QBrush, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
-    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from glider.analysis.behavior.session_view import (
-    _SEARCH_LEVELS,
-    SessionView,
-    SessionViewError,
-)
+from glider.analysis.behavior.session_view import SessionView, SessionViewError
+from glider.analysis.cohort import recording_candidates, session_id_for
 from glider.analysis.timeline import build_timeline
-from glider.gui.review.viewer import TRAIL_DEFAULT_S, KeypointCanvas
-from glider.gui.widgets.timeline_bar import TimelineBar, behavior_order, behavior_qcolor
+from glider.gui.review.inspector import Inspector
+from glider.gui.review.pool import PoolEntry, SessionPool, ethogram_strip
+from glider.gui.review.timeline import TimelinePanel, behavior_order, behavior_qcolor
+from glider.gui.review.viewer import KeypointCanvas, Transport
+from glider.gui.review.viewport import format_timecode
 from glider.gui.widgets.tool_ui import (
-    CARD_GAP,
-    GUTTER,
-    Card,
     StatusPill,
-    ToolHeader,
     apply_tool_theme,
     caption,
     data_font,
@@ -66,7 +57,10 @@ from glider.gui.widgets.tool_ui import (
 
 logger = logging.getLogger(__name__)
 
-_BAR_HEIGHT = 46
+
+def _settings() -> QSettings:
+    """Where the window keeps its layout. Tests point this at a temp file."""
+    return QSettings()
 
 
 def _short_path(path: Path, keep: int = 3) -> str:
@@ -155,173 +149,199 @@ def _dress_table(table: QTableWidget) -> None:
     table.verticalHeader().setDefaultSectionSize(28)
 
 
-def _vrule() -> QFrame:
-    """A short vertical hairline grouping the transport strip into clusters.
-
-    The strip holds playback, overlay toggles, selection and bout stepping --
-    four unrelated jobs that previously ran together as one undifferentiated
-    row of controls.
-    """
-    line = QFrame()
-    line.setFrameShape(QFrame.Shape.VLine)
-    line.setFixedWidth(1)
-    line.setFixedHeight(22)
-    # A touch lighter than BORDER: at 1px against the card surface the border
-    # tone is invisible, and an invisible divider does no grouping at all.
-    line.setStyleSheet("background-color: #2a3441; border: none;")
-    return line
-
-
 class AnalysisWindow(QMainWindow):
-    """Scrub a session, select a window, and read what is in it."""
+    """Scrub a session, select a range, and read what is in it."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Behavior Analysis — session review")
-        self.resize(1020, 720)
+        self.setWindowTitle("Session Review")
+        self.resize(1440, 900)
         self._view: SessionView | None = None
+        # The shown session: an ethogram CSV, or a recording folder.
         self._ethogram_csv: Path | None = None
         self._frame = 0
-        # The grid the overlay on screen was drawn from, so an export writes
-        # that picture rather than computing a second one.
+        self._rate = 1
         self._heatmap_grid: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
-        # Every loaded session, in the order they were found. The canvas shows
-        # one of them; the window applies to all of them.
         self._cohort: list[tuple[Path, SessionView]] = []
-        # (key, rows) for the cohort table — see cohort_rows.
+        self._ids: list[str] = []
+        self._groups: list[str] = []
+        self._timelines: list = []
+        self._recordings_of: list = []
+        self._shown = -1
         self._cohort_cache: tuple[tuple, list[dict]] | None = None
         # Recording folder -> its loaded Session (None: nothing GLIDER wrote
-        # there). Clicking through a cohort re-adopts a session per click, and
-        # a recording's CSVs are megabytes parsed on the GUI thread.
+        # there). A recording's CSVs are megabytes parsed on the GUI thread.
         self._recordings: dict[Path, object] = {}
+        self._zones = None
+        self._tour = None
 
         central = QWidget()
         central.setObjectName("ToolPage")
         page = QVBoxLayout(central)
         page.setContentsMargins(0, 0, 0, 0)
         page.setSpacing(0)
+        page.addWidget(self._build_top_bar())
 
-        self._header = ToolHeader(
-            "Session Review",
-            "Scrub an analyzed session, select a window, and read what is in it",
-        )
-        page.addWidget(self._header)
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
-        layout.setSpacing(CARD_GAP)
-        page.addLayout(layout, 1)
-
-        self._path_label = QLabel("No session loaded")
-        self._path_label.setWordWrap(False)
-        set_text_role(self._path_label, "muted")
-        open_btn = QPushButton("Open ethogram…")
-        set_button_role(open_btn, "primary")
-        open_btn.clicked.connect(self._open)
-        self._open_btn = open_btn
-        # A cohort is the unit of analysis, not a session: the question is
-        # almost always "what did these thirty animals do between minutes two
-        # and seven", and answering it one file at a time invites the window
-        # to drift between them.
-        self._zones = None
-        draw_zones_btn = QPushButton("Draw zones…")
-        draw_zones_btn.setToolTip(
-            "Draw zones on the frame currently shown, using the same editor "
-            "the live rig uses. Needs a video for this session."
-        )
-        draw_zones_btn.clicked.connect(self._draw_zones)
-
-        zones_btn = QPushButton("Load zones…")
-        zones_btn.setToolTip(
-            "A zone configuration from the zone editor. Time in zone, entries "
-            "and latency are then reported for the selected window, for every "
-            "loaded session."
-        )
-        zones_btn.clicked.connect(self._load_zones)
-        self._zones_btn = zones_btn
-
-        open_folder_btn = QPushButton("Open cohort folder…")
-        open_folder_btn.setToolTip(
-            "Load every ethogram beneath a folder. The selected window then "
-            "applies to all of them at once."
-        )
-        open_folder_btn.clicked.connect(self._open_folder)
-        self._open_folder_btn = open_folder_btn
-
-        self._sessions = QComboBox()
-        self._sessions.setMinimumWidth(180)
-        self._sessions.setToolTip("Which loaded session the canvas and timeline show")
-        self._sessions.currentIndexChanged.connect(self._on_session_picked)
-        self._sessions.setVisible(False)
-        # Runs made before the sidecar carried a resolution can still be
-        # viewed: the video knows the number, so offer to read it from there
-        # rather than make the operator re-run hours of inference.
-        # Poses are looked for automatically, but a cohort can be laid out in
-        # ways no search should guess at. This is the escape hatch.
-        self._pick_poses = QPushButton("Choose pose CSV…")
-        self._pick_poses.clicked.connect(self._choose_pose_csv)
-        self._pick_poses.setVisible(False)
-
-        self._fix_resolution = QPushButton("Set arena size from video…")
-        self._fix_resolution.clicked.connect(self._resolution_from_video)
-        self._fix_resolution.setVisible(False)
-
-        # Loading and zone actions live in the window header: they apply to the
-        # whole window, unlike the playback controls under the timeline, and
-        # mixing the two in one strip was most of why the old top row read as
-        # an undifferentiated bank of seven buttons.
-        self._header.add_action(self._sessions)
-        self._header.add_action(self._pick_poses)
-        self._header.add_action(self._fix_resolution)
-        self._header.add_action(open_btn)
-        self._header.add_action(open_folder_btn)
-        self._header.add_action(draw_zones_btn)
-        self._header.add_action(zones_btn)
-
-        self._tour = None
-        self._tour_btn = QPushButton("Tutorial")
-        self._tour_btn.setToolTip("Walk through reading a scored session.")
-        set_button_role(self._tour_btn, "ghost")
-        self._tour_btn.clicked.connect(self.start_tour)
-        self._header.add_action(self._tour_btn)
-
-        # --- viewer -----------------------------------------------------
-        viewer = Card()
-        viewer_body = viewer.body
-        viewer_body.setSpacing(CARD_GAP)
-
-        session_row = QHBoxLayout()
-        session_row.setSpacing(8)
-        session_row.addWidget(caption("Session"))
-        session_row.addWidget(self._path_label, 1)
-        self._session_state = StatusPill("None loaded")
-        session_row.addWidget(self._session_state)
-        viewer_body.addLayout(session_row)
-
+        self._pool = SessionPool()
+        self._pool.session_picked.connect(self._on_session_picked)
         self._canvas = KeypointCanvas()
-        viewer_body.addWidget(self._canvas, 1)
+        self._transport = Transport()
+        viewer = QFrame()
+        viewer.setObjectName("ReviewPanel")
+        viewer_column = QVBoxLayout(viewer)
+        viewer_column.setContentsMargins(0, 0, 0, 0)
+        viewer_column.setSpacing(0)
+        viewer_column.addWidget(self._canvas, 1)
+        viewer_column.addWidget(self._transport)
+        self._inspector = Inspector()
 
-        self._bar = TimelineBar()
+        self._top_split = QSplitter(Qt.Orientation.Horizontal)
+        for widget in (self._pool, viewer, self._inspector):
+            self._top_split.addWidget(widget)
+        self._top_split.setCollapsible(1, False)
+        self._top_split.setStretchFactor(1, 1)
+        self._top_split.setSizes([250, 860, 330])
+
+        self._timeline_panel = TimelinePanel()
+        self._split = QSplitter(Qt.Orientation.Vertical)
+        self._split.addWidget(self._top_split)
+        self._split.addWidget(self._timeline_panel)
+        self._split.setCollapsible(0, False)
+        self._split.setCollapsible(1, False)
+        self._split.setSizes([520, 380])
+        page.addWidget(self._split, 1)
+        self.setCentralWidget(central)
+        self._build_status_bar()
+
+        # The names below are what the rest of this module -- and its tests --
+        # reach for. They point into the new panels.
+        self._bar = self._timeline_panel.view
+        self._tables = self._timeline_panel
+        self._bouts = self._inspector.bouts
+        self._zone_table = self._inspector.zones
+        self._summary = self._inspector.range_text
+        self._session_text = self._inspector.summary
+        self._export_btn = self._inspector.export_btn
+        self._trail_s = self._inspector.trail_s
+        transport = self._transport
+        self._play, self._clock, self._bout_label = transport.play, transport.clock, transport.bout
+        self._video_on = transport.video_on
+        self._heatmap_on = transport.heatmap_on
+        self._trail_on = transport.trail_on
+
         self._bar.scrubbed.connect(self._set_frame)
         self._bar.selection_changed.connect(self._on_selection)
-        viewer_body.addWidget(self._bar)
+        self._bar.selection_cleared.connect(self._on_selection_cleared)
+        self._wire_transport()
+        self._build_cohort_table()
+        self._build_bout_stepper()
+        self._build_fixes()
+        self._export_btn.clicked.connect(self._export_window)
+        self._trail_s.valueChanged.connect(self._apply_trail)
 
-        viewer_body.addLayout(self._build_controls())
-        layout.addWidget(viewer, 3)
+        self._restore_layout()
+        # Opened with parent=None, so nothing hands it the app theme.
+        apply_tool_theme(self)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._advance)
 
-        self._summary = QLabel("Shift-drag (or right-drag) the ethogram to select a window.")
-        self._summary.setWordWrap(True)
-        set_text_role(self._summary, "hint")
+    # ------------------------------------------------------------------
+    # construction
 
-        self._bouts = QTableWidget(0, 6)
-        self._bouts.setHorizontalHeaderLabels(
-            ["Behavior", "Bouts", "Total (s)", "Fraction", "Mean (s)", "Median (s)"]
+    def _menu_button(self, text: str, items, *, role: str | None = None):
+        button = QPushButton(text)
+        if role is not None:
+            set_button_role(button, role)
+        menu = QMenu(button)
+        actions = [menu.addAction(label, slot) for label, slot in items]
+        button.setMenu(menu)
+        return button, actions
+
+    def _build_top_bar(self) -> QFrame:
+        bar = QFrame()
+        bar.setObjectName("ReviewTopBar")
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(14, 6, 10, 6)
+        row.setSpacing(10)
+        title = QLabel("Session Review")
+        title.setObjectName("ReviewTitle")
+        row.addWidget(title)
+        self._path_label = QLabel("No session loaded")
+        set_text_role(self._path_label, "muted")
+        row.addWidget(self._path_label)
+        self._session_state = StatusPill("None loaded")
+        self._hw_pill = StatusPill("")
+        self._hw_pill.setVisible(False)
+        self._scale_pill = StatusPill("")
+        self._scale_pill.setVisible(False)
+        for pill in (self._session_state, self._hw_pill, self._scale_pill):
+            row.addWidget(pill)
+        row.addStretch(1)
+        self._open_btn, _ = self._menu_button(
+            "Open",
+            [("Open ethogram…", self._open), ("Open folder as cohort…", self._open_folder)],
+            role="primary",
         )
-        self._bouts.verticalHeader().setVisible(False)
+        self._zones_btn, _ = self._menu_button(
+            "Zones",
+            [
+                ("Draw zones…", self._draw_zones),
+                ("Load zones…", self._load_zones),
+                ("Clear zones", self._clear_zones),
+            ],
+        )
+        self._export_menu_btn, (self._export_window_action, self._export_heatmap_btn) = (
+            self._menu_button(
+                "Export",
+                [
+                    ("Range stats (CSV)…", self._export_window),
+                    ("Heatmap (PNG + CSV)…", self._export_heatmap),
+                ],
+            )
+        )
+        self._export_window_action.setEnabled(False)
+        self._export_heatmap_btn.setEnabled(False)
+        self._tour_btn, _ = self._menu_button("?", [("Tutorial", self.start_tour)])
+        set_button_role(self._tour_btn, "ghost")
+        for button in (self._open_btn, self._zones_btn, self._export_menu_btn, self._tour_btn):
+            row.addWidget(button)
+        return bar
 
-        # Per-session rows for the same window. The cohort is the unit of
-        # analysis, and a per-animal breakdown is what gets exported — so it
-        # sits beside the shown session rather than replacing it.
+    def _build_status_bar(self) -> None:
+        bar = self.statusBar()
+        bar.setObjectName("ReviewStatus")
+        bar.setSizeGripEnabled(False)
+        self._status = QLabel("")
+        self._status.setFont(data_font(9))
+        set_text_role(self._status, "muted")
+        self._status_path = QLabel("")
+        self._status_path.setFont(data_font(9))
+        set_text_role(self._status_path, "muted")
+        bar.addWidget(self._status, 1)
+        bar.addPermanentWidget(self._status_path)
+
+    def _wire_transport(self) -> None:
+        t = self._transport
+        t.play.clicked.connect(self._toggle_play)
+        t.back.clicked.connect(lambda: self._step_frames(-1))
+        t.forward.clicked.connect(lambda: self._step_frames(+1))
+        t.to_start.clicked.connect(lambda: self._jump(start=True))
+        t.to_end.clicked.connect(lambda: self._jump(start=False))
+        t.video_on.setEnabled(False)
+        t.video_on.setToolTip(
+            "Draw the session's video behind the keypoints. Enabled when a "
+            "video for this session can be found."
+        )
+        t.video_on.toggled.connect(self._canvas.set_show_video)
+        t.poses_on.toggled.connect(self._canvas.set_show_poses)
+        t.trail_on.toggled.connect(self._apply_trail)
+        t.heatmap_on.toggled.connect(self._apply_heatmap)
+        t.zones_on.toggled.connect(self._canvas.set_show_zones)
+        t.hud_on.toggled.connect(self._canvas.set_show_hud)
+
+    def _build_cohort_table(self) -> None:
+        # Per-session rows for the same range. The cohort is the unit of
+        # analysis, and a per-animal breakdown is what gets exported.
         self._cohort_table = QTableWidget(0, 9)
         self._cohort_table.setHorizontalHeaderLabels(
             [
@@ -331,11 +351,9 @@ class AnalysisWindow(QMainWindow):
                 "Mean (cm/s)",
                 "Freezing (s)",
                 "Darting (s)",
-                # The cut-offs that produced those two columns, per session,
-                # in the unit they were chosen in. A cohort file is pooled in
-                # px/frame and only becomes cm/s through each video's own
-                # scale, so this is the only place the number a methods
-                # section has to quote actually exists.
+                # The cut-offs that produced those two columns, per session, in
+                # the unit they were chosen in: the only place the number a
+                # methods section has to quote actually exists.
                 "Freeze < (cm/s)",
                 "Dart > (cm/s)",
                 "Top behavior",
@@ -346,67 +364,71 @@ class AnalysisWindow(QMainWindow):
             "from its run.json — not thresholds recomputed from the selection."
         )
         self._cohort_table.verticalHeader().setVisible(False)
-
-        self._zone_table = QTableWidget(0, 6)
-        self._zone_table.setHorizontalHeaderLabels(
-            ["Zone", "Time (s)", "Fraction", "Entries", "Mean bout (s)", "Latency (s)"]
-        )
-        self._zone_table.verticalHeader().setVisible(False)
-
-        for table in (self._bouts, self._cohort_table, self._zone_table):
+        for table in (self._cohort_table, self._bouts, self._zone_table):
             _dress_table(table)
+        self._timeline_panel.addTab(self._cohort_table, "Cohort")
 
-        self._tables = QTabWidget()
-        self._tables.setDocumentMode(True)
-        self._tables.addTab(self._bouts, "This session")
-        self._tables.addTab(self._cohort_table, "Cohort")
-        self._tables.addTab(self._zone_table, "Zones")
-
-        # Numbers card: what the selected window contains, plus the one action
-        # that acts on it. Export sat alone at the very bottom of the window
-        # before, a full panel away from the table it exports.
-        numbers = Card("Selected window")
-        self._numbers_card = numbers
-        self._export_btn = QPushButton("Export window…")
-        self._export_btn.setToolTip(
-            "Write the selected window's per-session numbers to a CSV, so the "
-            "table on screen and the one in the analysis are the same table."
+    def _build_bout_stepper(self) -> None:
+        # Jumping between bouts, which is what reviewing an ethogram actually
+        # consists of. (Controls unchanged from the old transport strip.)
+        slot = self._timeline_panel.bout_slot
+        slot.addWidget(caption("Bouts"))
+        self._bout_filter = QComboBox()
+        self._bout_filter.setToolTip(
+            "Which bouts the [ and ] keys step between. 'Any change' stops at "
+            "every boundary; a behaviour stops only at the starts of that one."
         )
-        self._export_btn.clicked.connect(self._export_window)
-        self._export_btn.setEnabled(False)
-        numbers.add_header_widget(self._export_btn)
-        numbers.add(self._summary)
-        numbers.add(self._tables, 1)
-        layout.addWidget(numbers, 2)
+        self._bout_filter.setMinimumWidth(140)
+        slot.addWidget(self._bout_filter)
+        self._prev_bout = QPushButton("◀")
+        self._prev_bout.setToolTip("Previous bout  ( [ )")
+        self._prev_bout.setMaximumWidth(34)
+        set_button_role(self._prev_bout, "icon")
+        self._prev_bout.clicked.connect(lambda: self._step_bout(-1))
+        self._next_bout = QPushButton("▶")
+        self._next_bout.setToolTip("Next bout  ( ] )")
+        self._next_bout.setMaximumWidth(34)
+        set_button_role(self._next_bout, "icon")
+        self._next_bout.clicked.connect(lambda: self._step_bout(+1))
+        slot.addWidget(self._prev_bout)
+        slot.addWidget(self._next_bout)
 
-        self.setCentralWidget(central)
-        # Opened with parent=None, so nothing hands it the app theme -- and
-        # this window suffered worst for it: a near-black canvas and ethogram
-        # inside a light-grey chrome with a white table under them.
-        apply_tool_theme(self)
+    def _build_fixes(self) -> None:
+        self._pick_poses = QPushButton("Choose pose CSV…")
+        self._pick_poses.clicked.connect(self._choose_pose_csv)
+        self._pick_poses.setVisible(False)
+        self._fix_resolution = QPushButton("Set arena size from video…")
+        self._fix_resolution.clicked.connect(self._resolution_from_video)
+        self._fix_resolution.setVisible(False)
+        self._inspector.fixes.addWidget(self._pick_poses)
+        self._inspector.fixes.addWidget(self._fix_resolution)
+        self._inspector.fixes.addStretch(1)
 
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._advance)
+    def _restore_layout(self) -> None:
+        settings = _settings()
+        for key, splitter in (("review/split", self._split), ("review/top", self._top_split)):
+            state = settings.value(key)
+            if state is not None:
+                splitter.restoreState(state)
+
+    def _save_layout(self) -> None:
+        settings = _settings()
+        settings.setValue("review/split", self._split.saveState())
+        settings.setValue("review/top", self._top_split.saveState())
 
     # ------------------------------------------------------------------
     # walkthrough
-    # ------------------------------------------------------------------
 
     def tour_targets(self) -> dict[str, QWidget | None]:
-        """Widgets the Session Review walkthrough spotlights, by step key.
-
-        ``cohort_table`` is the table itself rather than the tab strip holding
-        it: the tour walks up from the target and brings its tab forward, so
-        naming the table is what actually puts Cohort on screen.
-        """
+        """Widgets the Session Review walkthrough spotlights, by step key."""
         return {
             "open": self._open_btn,
-            "open_folder": self._open_folder_btn,
+            "open_folder": self._open_btn,
             "canvas": self._canvas,
             "ethogram": self._bar,
             "cohort_table": self._cohort_table,
             "zones": self._zones_btn,
-            "export": self._export_btn,
+            "export": self._export_menu_btn,
         }
 
     def start_tour(self) -> None:
@@ -436,112 +458,6 @@ class AnalysisWindow(QMainWindow):
         )
 
         offer_tour_once(self, session_review_steps(), SESSION_REVIEW_TOUR_COMPLETE_KEY)
-
-    def _build_controls(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        self._play = QPushButton("▶  Play")
-        self._play.setMinimumWidth(88)
-        set_button_role(self._play, "primary")
-        self._play.clicked.connect(self._toggle_play)
-        row.addWidget(self._play)
-        row.addWidget(_vrule())
-
-        self._video_on = QCheckBox("Video")
-        self._video_on.setChecked(True)
-        self._video_on.setEnabled(False)
-        self._video_on.setToolTip(
-            "Draw the session's video behind the keypoints. Enabled when a "
-            "video for this session can be found."
-        )
-        self._video_on.toggled.connect(self._canvas.set_show_video)
-        row.addWidget(self._video_on)
-
-        self._heatmap_on = QCheckBox("Heatmap")
-        self._heatmap_on.setToolTip(
-            "Where the animal spent the selected window, binned over the arena."
-        )
-        self._heatmap_on.toggled.connect(self._apply_heatmap)
-        row.addWidget(self._heatmap_on)
-
-        self._export_heatmap_btn = QPushButton("Export heatmap…")
-        self._export_heatmap_btn.setToolTip(
-            "Write the heatmap on screen as a PNG figure and a CSV of the grid "
-            "behind it, for the animal and window currently shown."
-        )
-        self._export_heatmap_btn.setEnabled(False)
-        self._export_heatmap_btn.clicked.connect(self._export_heatmap)
-        row.addWidget(self._export_heatmap_btn)
-
-        self._trail_on = QCheckBox("Centroid trail")
-        self._trail_on.setChecked(True)
-        self._trail_on.toggled.connect(self._apply_trail)
-        row.addWidget(self._trail_on)
-
-        self._trail_s = QDoubleSpinBox()
-        self._trail_s.setRange(0.5, 60.0)
-        self._trail_s.setValue(TRAIL_DEFAULT_S)
-        self._trail_s.setSuffix(" s")
-        self._trail_s.setFixedWidth(84)
-        self._trail_s.valueChanged.connect(self._apply_trail)
-        row.addWidget(self._trail_s)
-        row.addWidget(_vrule())
-
-        select_all = QPushButton("Select all")
-        select_all.setToolTip("Select the whole session as the analysis window")
-        select_all.clicked.connect(self._select_all)
-        row.addWidget(select_all)
-
-        # Jumping between bouts, which is what reviewing an ethogram actually
-        # consists of. Stepping frames finds a boundary only if you already
-        # know roughly where it is, and on a 45,000-frame session one pixel of
-        # timeline is tens of frames — so the boundaries themselves are the
-        # only sensible thing to move between.
-        row.addWidget(_vrule())
-        row.addWidget(caption("Bouts"))
-        self._bout_filter = QComboBox()
-        self._bout_filter.setToolTip(
-            "Which bouts the [ and ] keys step between. 'Any change' stops at "
-            "every boundary; a behaviour stops only at the starts of that one."
-        )
-        self._bout_filter.setMinimumWidth(140)
-        row.addWidget(self._bout_filter)
-
-        self._prev_bout = QPushButton("◀")
-        self._prev_bout.setToolTip("Previous bout  ( [ )")
-        self._prev_bout.setMaximumWidth(34)
-        set_button_role(self._prev_bout, "icon")
-        self._prev_bout.clicked.connect(lambda: self._step_bout(-1))
-        row.addWidget(self._prev_bout)
-
-        self._next_bout = QPushButton("▶")
-        self._next_bout.setToolTip("Next bout  ( ] )")
-        self._next_bout.setMaximumWidth(34)
-        set_button_role(self._next_bout, "icon")
-        self._next_bout.clicked.connect(lambda: self._step_bout(+1))
-        row.addWidget(self._next_bout)
-
-        row.addStretch(1)
-
-        # What is under the playhead, and how far into it. A frame number on
-        # its own cannot answer either. Right-aligned as a readout, away from
-        # the controls, so the strip separates what you press from what you read.
-        self._bout_label = QLabel("—")
-        self._bout_label.setMinimumWidth(230)
-        self._bout_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        # Monospace: these numbers change thirty times a second during
-        # playback, and proportional digits make the readout jitter sideways.
-        self._bout_label.setFont(data_font())
-        set_text_role(self._bout_label, "value")
-        row.addWidget(self._bout_label)
-
-        self._clock = QLabel("—")
-        self._clock.setMinimumWidth(96)
-        self._clock.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._clock.setFont(data_font())
-        set_text_role(self._clock, "caption")
-        row.addWidget(self._clock)
-        return row
 
     def _refresh_bout_filter(self) -> None:
         """Repopulate the picker for the shown session, keeping the choice."""
@@ -589,6 +505,7 @@ class AnalysisWindow(QMainWindow):
         )
 
     # ------------------------------------------------------------------
+    # loading
 
     def _open(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -604,77 +521,142 @@ class AnalysisWindow(QMainWindow):
         except SessionViewError as e:
             QMessageBox.critical(self, "Open session", str(e))
             return
-        self._cohort = [(Path(ethogram_csv), view)]
-        self._sessions.blockSignals(True)
-        self._sessions.clear()
-        self._sessions.addItem(Path(ethogram_csv).parent.name)
-        self._sessions.blockSignals(False)
-        self._sessions.setVisible(False)
-        self._adopt(Path(ethogram_csv), view)
+        # A different recording: the range (and its heatmap) belonged to the
+        # one that just left. Only switching within a cohort keeps it.
+        self._bar.clear_selection()
+        self._set_cohort([(Path(ethogram_csv), view)])
 
-    def _recording_folders(self, ethogram_csv: Path, view: SessionView) -> list[Path]:
-        """Where this ethogram's recording might be, nearest first.
+    def _open_folder(self) -> None:
+        """Load every ethogram beneath a folder as one cohort."""
+        folder = QFileDialog.getExistingDirectory(self, "Folder of apply-run outputs")
+        if not folder:
+            return
+        found = sorted(Path(folder).rglob("ethogram_raw.csv"))
+        if not found:
+            QMessageBox.warning(
+                self,
+                "Open cohort",
+                f"No ethogram_raw.csv found under {folder}.\n\n"
+                "Pick the output folder an apply run wrote to — each session "
+                "lives in its own subfolder there.",
+            )
+            return
+        self.load_many(found)
 
-        Deliberately not a fourth path resolver: every candidate is one the
-        session loader already resolved or already searches. An apply run
-        writes ``<output>/<video stem>/ethogram_raw.csv``, so the ethogram's
-        own folder is a level *below* the recording, and the canonical layout
-        buries it further under ``sessions/<id>/analysis/``. The video
-        :mod:`~glider.analysis.behavior.session_view` found — via ``run.json``
-        where there is one — sits in the recording folder itself, so it leads.
-        """
-        folders = [view.video_path.parent] if view.video_path is not None else []
-        folder = Path(ethogram_csv).parent
-        for _ in range(_SEARCH_LEVELS + 1):
-            folders.append(folder)
-            if folder == folder.parent:
-                break
-            folder = folder.parent
-        # Resolved, so the video's folder and an ancestor of the ethogram are
-        # one cache entry when they are one directory.
-        return list(dict.fromkeys(f.resolve() for f in folders))
-
-    def _timeline_for(self, ethogram_csv: Path, view: SessionView):
-        """The session's lanes, with a hardware raster if a recording is near.
-
-        The first candidate folder that actually holds a recording wins; if
-        none does, the ethogram-only timeline, which is the honest answer for
-        an apply run whose recording was never kept.
-        """
-        for folder in self._recording_folders(ethogram_csv, view):
+    def load_many(self, ethograms: list[Path]) -> None:
+        """Load a cohort. The first becomes the shown session."""
+        loaded: list[tuple[Path, SessionView]] = []
+        failed: list[str] = []
+        for path in ethograms:
             try:
-                if folder not in self._recordings:
-                    self._recordings[folder] = _recording_or_none(folder)
-                session = self._recordings[folder]
-                if session is not None:
-                    return build_timeline(session, view)
-            except (OSError, ValueError, KeyError):
-                # A folder that is not a recording is the ordinary case, and
-                # an events CSV missing a column build_timeline reads is the
-                # ugly one. Neither is worth losing the behaviour lanes over,
-                # and neither may reach the GUI as a traceback.
-                self._recordings[folder] = None
-                logger.debug("no usable recording in %s", folder, exc_info=True)
-        return build_timeline(None, view)
+                loaded.append((path, SessionView.load(path)))
+            except SessionViewError as e:  # one bad file must not lose the rest
+                failed.append(f"{path.parent.name}: {e}")
+        if not loaded:
+            QMessageBox.critical(self, "Open cohort", "\n".join(failed) or "nothing loaded")
+            return
+        self._set_cohort(loaded)
+        if failed:
+            QMessageBox.warning(
+                self,
+                "Open cohort",
+                f"Loaded {len(loaded)}; {len(failed)} could not be read:\n\n"
+                + "\n".join(failed[:8]),
+            )
 
-    def _adopt(self, ethogram_csv: Path, view: SessionView) -> None:
+    def _set_cohort(self, loaded, *, ids=None, groups=None) -> None:
+        """Make ``loaded`` the cohort and show its first session.
+
+        Timelines are built up front: the sessions panel badges which sessions
+        have hardware, and a recording is parsed once per cohort either way.
+        """
+        self._cohort = list(loaded)
+        self._ids = list(ids) if ids is not None else [session_id_for(p) for p, _ in loaded]
+        self._groups = list(groups) if groups is not None else [""] * len(loaded)
+        self._invalidate_cohort_cache()
+        built = [self._timeline_for(path, view) for path, view in self._cohort]
+        self._timelines = [timeline for timeline, _ in built]
+        self._recordings_of = [recording for _, recording in built]
+        order = behavior_order(label for _, view in self._cohort for label in view.labels)
+        self._pool.set_entries(
+            [
+                PoolEntry(
+                    name=sid,
+                    group=group,
+                    duration_s=view.duration_s,
+                    has_video=view.video_path is not None,
+                    has_poses=view.pose_path is not None,
+                    has_hardware=bool(timeline.lanes),
+                    strip=ethogram_strip(view.labels, order),
+                )
+                for (_path, view), sid, group, timeline in zip(
+                    self._cohort, self._ids, self._groups, self._timelines, strict=True
+                )
+            ]
+        )
+        self._pool.blockSignals(True)
+        self._pool.select(0)
+        self._pool.blockSignals(False)
+        self._show_session(0)
+
+    def _recording(self, folder: Path):
+        """The recording in ``folder`` (cached), or None."""
+        folder = Path(folder).resolve()
+        if folder not in self._recordings:
+            try:
+                self._recordings[folder] = _recording_or_none(folder)
+            except (OSError, ValueError, KeyError):
+                logger.debug("no usable recording in %s", folder, exc_info=True)
+                self._recordings[folder] = None
+        return self._recordings[folder]
+
+    def _timeline_for(self, path: Path, view: SessionView):
+        """``(timeline, recording)``: lanes with a hardware raster if a recording is near.
+
+        The first candidate folder that holds a recording whose timeline builds
+        wins. A KeyError out of ``build_timeline`` (an events CSV missing a
+        column) costs the raster, never the behaviour lanes.
+        """
+        for folder in recording_candidates(path, view.video_path):
+            session = self._recording(folder)
+            if session is None:
+                continue
+            try:
+                return build_timeline(session, view), session
+            except (OSError, ValueError, KeyError):
+                logger.debug("unusable events in %s", folder, exc_info=True)
+                self._recordings[folder] = None
+        return build_timeline(None, view), None
+
+    def _on_session_picked(self, index: int) -> None:
+        if 0 <= index < len(self._cohort):
+            self._show_session(index)
+
+    def _show_session(self, index: int) -> None:
+        """Put one of the loaded sessions on screen, keeping the selected range."""
+        path, view = self._cohort[index]
+        selection = self._bar.selection()
+        self._shown = index
+        self._adopt(path, view, self._timelines[index])
+        if selection is not None:
+            # The range is the question being asked; switching which animal
+            # answers it must not silently reset it.
+            self._bar.set_selection(*selection)
+
+    def _adopt(self, path: Path, view: SessionView, timeline) -> None:
         """Show an already-loaded session."""
         self._view = view
-        self._ethogram_csv = Path(ethogram_csv)
-        self._path_label.setText(_short_path(Path(ethogram_csv)))
-        self._path_label.setToolTip(str(ethogram_csv))
-        self._bar.set_view(view)
-        self._bar.set_timeline(self._timeline_for(Path(ethogram_csv), view))
+        self._ethogram_csv = Path(path)
+        self._path_label.setText(_short_path(Path(path)))
+        self._path_label.setToolTip(str(path))
+        self._bar.set_session(view, timeline)
         self._canvas.set_view(view)
-        # The overlay belongs to the session that just left. Nothing else
-        # clears it: set_view leaves _heatmap alone and bar.set_view drops the
-        # selection without emitting, so without this the next session's arena
-        # wears the previous animal's heatmap and the export button stays live
-        # over a grid that is no longer on screen.
+        # The overlay belongs to the session that just left.
         self._canvas.set_heatmap(None)
         self._refresh_heatmap_export_state()
         self._refresh_bout_filter()
         self._apply_trail()
+        self._inspector.clear_range()
         self._set_frame(self._bar.frame_bounds()[0])
         self._pick_poses.setVisible(view.xy is None)
         self._fix_resolution.setVisible(view.xy is not None and view.resolution is None)
@@ -683,9 +665,6 @@ class AnalysisWindow(QMainWindow):
         self._video_on.setEnabled(has_video)
         self._canvas.set_show_video(has_video and self._video_on.isChecked())
 
-        # One pill saying how complete this session's evidence is, so the
-        # degraded cases (no poses, no video) are visible before you wonder why
-        # the canvas is empty.
         if view.xy is None:
             self._session_state.set_state("warn", "No poses")
         elif not has_video:
@@ -694,26 +673,58 @@ class AnalysisWindow(QMainWindow):
             self._session_state.set_state("warn", "Video may not align")
         else:
             self._session_state.set_state("ok", "Video + poses")
+        lanes = timeline.lanes if timeline is not None else []
+        self._hw_pill.setVisible(bool(lanes))
+        self._hw_pill.set_state("ok", f"Hardware · {len(lanes)} lanes")
+        self._scale_pill.setVisible(True)
+        if view.px_per_mm:
+            self._scale_pill.set_state("idle", f"{view.px_per_mm:.2f} px/mm")
+        else:
+            self._scale_pill.set_state("warn", "Uncalibrated")
 
+        # Body of the old summary text, unchanged, but set on the Session tab:
         found = f"  Poses: {view.pose_path.name}." if view.pose_path else "  No poses found."
         if has_video:
             found += f"  Video: {view.video_path.name}."
             if not view.video_is_aligned:
-                # The annotated video is written from a queue that drops
-                # frames, so a short file means every later frame is offset by
-                # an unknown amount. Say so rather than scrub it confidently.
                 found += (
                     f"  ⚠ It has {view.video_frames:,} frames against the session's "
                     f"{int(view.frames[-1]) + 1:,}, so frames may not line up."
                 )
-        self._summary.setText(
+        self._session_text.setText(
             f"{view.n_rows:,} scored rows at {view.fps:.2f} fps "
             f"({view.duration_s / 60:.1f} min)."
             + found
             + ("" if view.px_per_mm else "  No calibration found: distances unavailable.")
         )
+        self._update_status()
 
-    def keyPressEvent(self, event):
+    def _update_status(self) -> None:
+        view = self._view
+        if view is None:
+            self._status.setText("")
+            return
+        parts = [f"{view.fps:.2f} fps", f"{view.n_rows:,} rows"]
+        if view.pose_path is not None:
+            parts.append(f"poses {view.pose_path.name}")
+        if view.video_path is not None:
+            parts.append(f"video {view.video_path.name}")
+        timeline = self._bar.timeline()
+        if timeline is not None and timeline.lanes:
+            parts.append(f"{len(timeline.lanes)} hardware lanes")
+        shown = 0 <= self._shown < len(self._recordings_of)
+        recording = self._recordings_of[self._shown] if shown else None
+        if recording is not None:
+            parts.append(f"events {len(recording.events):,} rows")
+            parts.append(f"tracking {len(recording.tracking):,} rows")
+        self._status.setText("   ·   ".join(parts))
+        self._status_path.setText(_short_path(self._ethogram_csv, keep=4))
+        self._status_path.setToolTip(str(self._ethogram_csv))
+
+    # ------------------------------------------------------------------
+    # playback
+
+    def keyPressEvent(self, event):  # noqa: N802 - Qt override
         """Frame-accurate scrubbing from the keyboard.
 
         Dragging the ethogram is fast but coarse — on a 45,000-frame session
@@ -771,69 +782,59 @@ class AnalysisWindow(QMainWindow):
 
         # Stepping past either end holds there rather than wrapping: a scrub
         # that jumps from the last frame to the first reads as a glitch.
-        self._timer.stop()
-        self._play.setText("▶  Play")
+        self._stop()
         self._set_frame(max(first, min(last, target)))
         event.accept()
 
-    def _open_folder(self) -> None:
-        """Load every ethogram beneath a folder as one cohort."""
-        folder = QFileDialog.getExistingDirectory(self, "Folder of apply-run outputs")
-        if not folder:
+    def _stop(self) -> None:
+        self._timer.stop()
+        self._rate = 1
+        self._play.setText("▶  Play")
+        self._transport.rate.setText("1×")
+
+    def _step_frames(self, step: int) -> None:
+        if self._view is None:
             return
-        found = sorted(Path(folder).rglob("ethogram_raw.csv"))
-        if not found:
-            QMessageBox.warning(
-                self,
-                "Open cohort",
-                f"No ethogram_raw.csv found under {folder}.\n\n"
-                "Pick the output folder an apply run wrote to — each session "
-                "lives in its own subfolder there.",
-            )
+        first, last = self._bar.frame_bounds()
+        self._stop()
+        self._set_frame(max(first, min(last, self._frame + step)))
+
+    def _jump(self, *, start: bool) -> None:
+        if self._view is None:
             return
-        self.load_many(found)
+        first, last = self._bar.frame_bounds()
+        self._stop()
+        self._set_frame(first if start else last)
 
-    def load_many(self, ethograms: list[Path]) -> None:
-        """Load a cohort. The first becomes the shown session."""
-        loaded: list[tuple[Path, SessionView]] = []
-        failed: list[str] = []
-        for path in ethograms:
-            try:
-                loaded.append((path, SessionView.load(path)))
-            except SessionViewError as e:  # one bad file must not lose the rest
-                failed.append(f"{path.parent.name}: {e}")
-        if not loaded:
-            QMessageBox.critical(self, "Open cohort", "\n".join(failed) or "nothing loaded")
+    def _set_frame(self, frame: int) -> None:
+        self._frame = int(frame)
+        self._bar.set_frame(self._frame, follow=self._timer.isActive())
+        self._canvas.set_frame(self._frame)
+        self._bout_label.setText(self._describe_bout())
+        if self._view and self._view.fps:
+            seconds = self._bar.seconds_of_axis(self._bar.axis_of_frame(self._frame))
+            self._clock.setText(format_timecode(seconds, self._view.fps))
+            first, last = self._bar.frame_bounds()
+            self._transport.position.setText(f"{self._frame - first:,} / {last - first:,}")
+
+    def _toggle_play(self) -> None:
+        if self._timer.isActive():
+            self._stop()
+        elif self._view is not None:
+            # Wall-clock, not frame-locked: a smooth approximate rate reads
+            # better in review than a stuttering exact one.
+            self._rate = 1
+            self._timer.start(int(1000 / max(1.0, self._view.fps)))
+            self._play.setText("❚❚  Pause")
+
+    def _advance(self) -> None:
+        if self._view is None:
             return
-
-        self._cohort = loaded
-        self._sessions.blockSignals(True)
-        self._sessions.clear()
-        self._sessions.addItems([p.parent.name for p, _ in loaded])
-        self._sessions.blockSignals(False)
-        self._sessions.setVisible(len(loaded) > 1)
-        self._show_session(0)
-        if failed:
-            QMessageBox.warning(
-                self,
-                "Open cohort",
-                f"Loaded {len(loaded)}; {len(failed)} could not be read:\n\n"
-                + "\n".join(failed[:8]),
-            )
-
-    def _on_session_picked(self, index: int) -> None:
-        if 0 <= index < len(self._cohort):
-            self._show_session(index)
-
-    def _show_session(self, index: int) -> None:
-        """Put one of the loaded sessions on screen, keeping the window."""
-        path, view = self._cohort[index]
-        selection = self._bar.selection()
-        self._adopt(path, view)
-        if selection is not None:
-            # The window is the question being asked; switching which animal
-            # answers it must not silently reset it.
-            self._bar.set_selection(*selection)
+        _first, last = self._bar.frame_bounds()
+        if self._frame + 1 > last:
+            self._stop()
+            return
+        self._set_frame(self._frame + 1)
 
     def _choose_pose_csv(self) -> None:
         """Point the session at its poses when discovery could not."""
@@ -879,15 +880,6 @@ class AnalysisWindow(QMainWindow):
             return
         self.load(self._view.source)
 
-    def _set_frame(self, frame: int) -> None:
-        self._frame = int(frame)
-        self._bar.set_frame(self._frame)
-        self._canvas.set_frame(self._frame)
-        self._bout_label.setText(self._describe_bout())
-        if self._view and self._view.fps:
-            seconds = self._frame / self._view.fps
-            self._clock.setText(f"{int(seconds) // 60:d}:{seconds % 60:05.2f}")
-
     def _refresh_heatmap_export_state(
         self, grid_tuple: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
     ) -> None:
@@ -923,41 +915,49 @@ class AnalysisWindow(QMainWindow):
     def _apply_trail(self, *_args) -> None:
         self._canvas.set_trail(self._trail_s.value(), self._trail_on.isChecked())
 
-    def _toggle_play(self) -> None:
-        if self._timer.isActive():
-            self._timer.stop()
-            self._play.setText("▶  Play")
-        elif self._view is not None:
-            # Playback is deliberately wall-clock, not frame-locked: this is a
-            # review tool, and a smooth approximate rate reads better than a
-            # stuttering exact one.
-            self._timer.start(int(1000 / max(1.0, self._view.fps)))
-            self._play.setText("❚❚  Pause")
-
-    def _advance(self) -> None:
-        if self._view is None:
-            return
-        _first, last = self._bar.frame_bounds()
-        if self._frame + 1 > last:
-            self._timer.stop()
-            self._play.setText("▶  Play")
-            return
-        self._set_frame(self._frame + 1)
-
     def _select_all(self) -> None:
         if self._view is not None and self._view.n_rows:
             self._bar.set_selection(int(self._view.frames[0]), int(self._view.frames[-1]))
+
+    # ------------------------------------------------------------------
+    # the selected range
 
     def _on_selection(self, start: int, end: int) -> None:
         if self._view is None:
             return
         stats = self._view.segment_stats(start, end)
         self._fill_bouts(stats)
+        self._fill_movement(stats)
         self._summary.setText(self._describe(stats))
         self._fill_cohort(start, end)
         self._fill_zones(start, end)
         self._apply_heatmap()
         self._export_btn.setEnabled(True)
+        self._export_window_action.setEnabled(True)
+
+    def _on_selection_cleared(self) -> None:
+        self._inspector.clear_range()
+        self._export_btn.setEnabled(False)
+        self._export_window_action.setEnabled(False)
+        self._apply_heatmap()
+
+    def _fill_movement(self, stats) -> None:
+        fps = self._view.fps or 30.0
+        t_in = self._bar.seconds_of_axis(self._bar.axis_of_frame(stats.start_frame))
+        t_out = self._bar.seconds_of_axis(self._bar.axis_of_frame(stats.end_frame + 1))
+        frames = stats.end_frame - stats.start_frame + 1
+        self._inspector.set_range(
+            f"IN  {format_timecode(t_in, fps)}    OUT  {format_timecode(t_out, fps)}",
+            f"{stats.duration_s:.2f} s · {frames:,} frames",
+        )
+        if stats.distance_cm is None:
+            self._inspector.set_kpis("—", "—", "—")
+        else:
+            self._inspector.set_kpis(
+                f"{stats.distance_cm:.1f}",
+                f"{stats.mean_speed_cm_s:.2f}",
+                f"{stats.peak_speed_cm_s:.2f}",
+            )
 
     def _draw_zones(self) -> None:
         """Open the zone editor on the frame currently on screen.
@@ -991,16 +991,18 @@ class AnalysisWindow(QMainWindow):
         self._adopt_zones()
 
     def _adopt_zones(self) -> None:
-        """Show the current zones and re-report the selected window."""
+        """Show the current zones and re-report the selected range."""
         names = [z.name for z in getattr(self._zones, "zones", [])]
         self._canvas.set_zones(self._zones)
         self._invalidate_cohort_cache()
-        self._summary.setText(
-            f"{self._summary.text()}\nZones: {', '.join(names) or '(none defined)'}"
-        )
+        self.statusBar().showMessage(f"Zones: {', '.join(names) or '(none defined)'}", 8000)
         selection = self._bar.selection()
         if selection is not None:
             self._on_selection(*selection)
+
+    def _clear_zones(self) -> None:
+        self._zones = None
+        self._adopt_zones()
 
     def _load_zones(self) -> None:
         """Load a zone configuration and re-report the current window."""
@@ -1049,7 +1051,9 @@ class AnalysisWindow(QMainWindow):
             for c, value in enumerate(values):
                 item = QTableWidgetItem(value) if c == 0 else _measure_item(value)
                 self._zone_table.setItem(r, c, item)
-        self._tables.setTabText(2, f"Zones ({len(rows)})" if len(rows) else "Zones")
+        # The inspector's tables are Fixed-height and must track their rows.
+        self._zone_table.setMaximumHeight(self._zone_table.sizeHint().height())
+        self._inspector.set_zone_count(len(rows))
 
     def _invalidate_cohort_cache(self) -> None:
         self._cohort_cache = None
@@ -1072,7 +1076,7 @@ class AnalysisWindow(QMainWindow):
             return self._cohort_cache[1]
 
         rows = []
-        for path, view in self._cohort:
+        for sid, (_path, view) in zip(self._ids, self._cohort, strict=True):
             stats = view.segment_stats(start, end)
             scored = [lab for lab in view.labels if lab]
             top = ""
@@ -1089,7 +1093,7 @@ class AnalysisWindow(QMainWindow):
 
             rows.append(
                 {
-                    "session": path.parent.name,
+                    "session": sid,
                     "scored_rows": len(scored),
                     "duration_s": stats.duration_s,
                     "distance_cm": stats.distance_cm,
@@ -1209,7 +1213,7 @@ class AnalysisWindow(QMainWindow):
         except OSError as e:
             QMessageBox.critical(self, "Export window", f"Could not write {path}: {e}")
             return
-        self._summary.setText(f"{self._summary.text()}\nWrote {path}")
+        self.statusBar().showMessage(f"Wrote {path}", 10000)
 
     def _export_heatmap(self) -> None:
         """Write the heatmap on screen as a PNG figure plus a CSV of its grid."""
@@ -1220,7 +1224,9 @@ class AnalysisWindow(QMainWindow):
         # Named from the session on screen, not the cohort root: _export_window
         # uses self._cohort[0][0], which is the *first* session and the wrong
         # answer whenever a later one is displayed.
-        session_dir = self._ethogram_csv.parent
+        session_dir = (
+            self._ethogram_csv if self._ethogram_csv.is_dir() else self._ethogram_csv.parent
+        )
         default = session_dir / f"{session_dir.name}_heatmap_{start}-{end}.png"
         path, _ = QFileDialog.getSaveFileName(
             self, "Export heatmap", str(default), "PNG Files (*.png)"
@@ -1244,7 +1250,7 @@ class AnalysisWindow(QMainWindow):
             return
         wrote = str(csv_path) if png_path is None else f"{png_path} and {csv_path.name}"
         note = "" if png_path is not None else " (no figure: matplotlib is not installed)"
-        self._summary.setText(f"{self._summary.text()}\nWrote {wrote}{note}")
+        self.statusBar().showMessage(f"Wrote {wrote}{note}", 10000)
 
     def _describe(self, stats) -> str:
         span = (
@@ -1288,8 +1294,11 @@ class AnalysisWindow(QMainWindow):
             for c, value in enumerate(values):
                 item = _behavior_item(value, order) if c == 0 else _measure_item(value)
                 self._bouts.setItem(r, c, item)
+        # The inspector's tables are Fixed-height and must track their rows.
+        self._bouts.setMaximumHeight(self._bouts.sizeHint().height())
 
-    def closeEvent(self, event):
+    def closeEvent(self, event):  # noqa: N802 - Qt override
+        self._save_layout()
         self._timer.stop()
         self._canvas._close_reader()
         super().closeEvent(event)

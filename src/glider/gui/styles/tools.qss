@@ -793,3 +793,19 @@ QLabel#PoolBadge {
 QLabel#PoolBadge[present="false"] {
     color: #334155;
 }
+
+/* ---- Session Review: shell ----------------------------------------- */
+QFrame#ReviewTopBar {
+    background-color: #0b0f14;
+    border-bottom: 1px solid #1e2530;
+}
+QLabel#ReviewTitle {
+    font-weight: 600;
+}
+QFrame#ReviewPanel {
+    background-color: #030507;
+}
+QStatusBar#ReviewStatus {
+    background-color: #0b0f14;
+    border-top: 1px solid #1e2530;
+}

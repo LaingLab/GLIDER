@@ -91,3 +91,16 @@ def main_window_factory(qtbot, tmp_path):
         finally:
             loop.close()
             asyncio.set_event_loop(None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_session_review_settings(tmp_path, monkeypatch):
+    """Session Review remembers its layout; never in the developer's real settings."""
+    from PyQt6.QtCore import QSettings
+
+    import glider.gui.behavior.analysis_window as review
+
+    path = str(tmp_path / "session_review.ini")
+    monkeypatch.setattr(
+        review, "_settings", lambda: QSettings(path, QSettings.Format.IniFormat), raising=False
+    )
