@@ -9,6 +9,7 @@ annotations on.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, Qt
@@ -300,21 +301,38 @@ class KeypointCanvas(QWidget):
                 painter.drawPolygon(*points)
 
     def _why_blank(self) -> str:
-        if self._view is None:
+        view = self._view
+        if view is None:
             return "Load a session"
-        if self._view.xy is None:
+        # A recording's position is its tracked centroid: there is no pose
+        # CSV to choose and no sidecar to repair, so neither button is shown.
+        recording = view.keypoint_names == ["centroid"] or (
+            view.source is not None and Path(view.source).is_dir()
+        )
+        if view.xy is None and recording:
+            return (
+                "This recording's tracking CSV has no centroid (center_x, "
+                "center_y), so there is no position to draw."
+            )
+        if view.xy is None:
             return (
                 "No pose CSV could be found for this session.\n\n"
                 "Looked at the path recorded in run.json, then beside the "
                 "ethogram, then for a CSV named after this session in the "
                 "folders above.\n\n"
-                "Use “Choose pose CSV…” above to point at it."
+                "Use “Choose pose CSV…” on the inspector's Session tab to point at it."
+            )
+        if recording:
+            return (
+                "This recording's frame size is unknown: no calibration header "
+                "records it and no readable video was found, so the arena cannot "
+                "be sized."
             )
         return (
             "This session's pose sidecar records no resolution, so the arena "
             "cannot be sized.\n\n"
-            "Use “Set arena size from video…” above to read it from the "
-            "source video — it is stored, so this is a one-off."
+            "Use “Set arena size from video…” on the inspector's Session tab to "
+            "read it from the source video — it is stored, so this is a one-off."
         )
 
     def set_show_poses(self, enabled: bool) -> None:

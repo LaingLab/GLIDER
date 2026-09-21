@@ -61,9 +61,15 @@ class Viewport:
         self._place(self.start + float(delta), self.span)
 
     def follow(self, t: float) -> None:
-        """Page so ``t`` is on screen, making it the left edge -- Resolve's page-follow."""
-        if not self.start <= t <= self.end:
+        """Page so ``t`` is on screen -- Resolve's page-follow.
+
+        Past the right edge ``t`` becomes the left edge; before the left edge
+        it becomes the right, so reverse playback pages too, not every tick.
+        """
+        if t > self.end:
             self.pan(float(t) - self.start)
+        elif t < self.start:
+            self.pan(float(t) - self.end)
 
     def x_of(self, t: float, width: float) -> float:
         return 0.0 if self.span <= 0 else (float(t) - self.start) / self.span * width

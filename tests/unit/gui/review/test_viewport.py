@@ -62,6 +62,14 @@ def test_follow_pages_rather_than_scrolls():
     assert (vp.start, vp.end) == (120.0, 220.0)
 
 
+def test_following_backward_pages_to_the_right_edge():
+    """Reverse playback must page too: as the left edge it would page every tick."""
+    vp = Viewport(lo=0.0, hi=1000.0, min_span=10.0)
+    vp.show(500.0, 600.0)
+    vp.follow(450.0)
+    assert (vp.start, vp.end) == (350.0, 450.0)
+
+
 def test_x_and_t_round_trip():
     vp = _vp()
     vp.show(200.0, 400.0)

@@ -73,3 +73,23 @@ def test_reloading_releases_the_old_rows(qtbot):
     pool.set_entries(_entries())
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     assert all(sip.isdeleted(widget) for widget in old)
+
+
+def test_a_narrow_pool_shows_every_badge_whole(qtbot):
+    """At the default width the badges were clipped to 'VI', 'PO', 'H'."""
+    from PyQt6.QtWidgets import QLabel
+
+    pool = SessionPool()
+    qtbot.addWidget(pool)
+    strip = ethogram_strip(["a"] * 10, ["a"])
+    pool.set_entries(
+        [PoolEntry("a_rather_long_session_name_2026-05-25", "", 300.0, True, True, True, strip)]
+    )
+    pool.resize(200, 400)
+    pool.show()
+    qtbot.waitExposed(pool)
+    badges = [b for b in pool.findChildren(QLabel) if b.objectName() == "PoolBadge"]
+    assert [b.text() for b in badges] == ["VID", "POSE", "HW"]
+    for badge in badges:
+        assert badge.isVisible()
+        assert badge.sizeHint().width() <= badge.width(), badge.text()

@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QSizePolicy,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -71,6 +72,21 @@ def _badge(text: str, present: bool) -> QLabel:
     return label
 
 
+class _ElidedLabel(QLabel):
+    """A label that gives up width to its neighbours and elides, rather than clipping."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self._full = text
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        metrics = self.fontMetrics()
+        self.setText(metrics.elidedText(self._full, Qt.TextElideMode.ElideRight, self.width()))
+
+
 class _Row(QWidget):
     def __init__(self, entry: PoolEntry, parent=None):
         super().__init__(parent)
@@ -78,10 +94,13 @@ class _Row(QWidget):
         grid.setContentsMargins(8, 5, 8, 5)
         grid.setHorizontalSpacing(6)
         grid.setVerticalSpacing(3)
-        name = QLabel(entry.name)
+        # Name and length, then the badges on a row of their own: all three on
+        # one line clipped the badges to "VI", "PO", "H" at the default width.
+        name = _ElidedLabel(entry.name)
         font = name.font()
         font.setBold(True)
         name.setFont(font)
+        name.setToolTip(entry.name)
         seconds = int(round(entry.duration_s))
         length = QLabel(f"{seconds // 60}:{seconds % 60:02d}")
         set_text_role(length, "muted")
@@ -93,16 +112,17 @@ class _Row(QWidget):
             ("HW", entry.has_hardware),
         ):
             badges.addWidget(_badge(text, present))
+        badges.addStretch(1)
         grid.addWidget(name, 0, 0)
         grid.addWidget(length, 0, 1)
-        grid.addLayout(badges, 0, 2)
+        grid.addLayout(badges, 1, 0, 1, 2)
         grid.setColumnStretch(0, 1)
         if entry.strip is not None:
             strip = QLabel()
             strip.setFixedHeight(5)
             strip.setScaledContents(True)
             strip.setPixmap(QPixmap.fromImage(entry.strip))
-            grid.addWidget(strip, 1, 0, 1, 3)
+            grid.addWidget(strip, 2, 0, 1, 2)
 
 
 class SessionPool(QFrame):
@@ -167,7 +187,7 @@ class SessionPool(QFrame):
                 parent = headers[name]
             item = QTreeWidgetItem(parent)
             item.setData(0, _INDEX, index)
-            item.setSizeHint(0, QSize(0, 46 if entry.strip is not None else 34))
+            item.setSizeHint(0, QSize(0, 58 if entry.strip is not None else 40))
             self.tree.setItemWidget(item, 0, _Row(entry))
             self._items.append(item)
             self._names.append(entry.name)

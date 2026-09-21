@@ -292,7 +292,7 @@ def session_review_steps() -> list[TourStep]:
             "3 · Select a range",
             "Behaviour and hardware as tracks under one playhead. Click the ruler "
             "to scrub, click a track to move the playhead, and drag across the "
-            "tracks to select a range -- every number in the inspector is "
+            "tracks to select a range — every number in the inspector is "
             "computed over it. ⌘-scroll zooms.",
         ),
         TourStep(
