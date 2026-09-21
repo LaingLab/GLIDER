@@ -15,9 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from PyQt6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
-from PyQt6.QtWidgets import QSizePolicy, QWidget
+from PyQt6.QtWidgets import QMenu, QSizePolicy, QWidget
 
 from glider.analysis.timeline import (
     BehaviorLane,
@@ -27,7 +27,7 @@ from glider.analysis.timeline import (
     is_binary,
     lane_role,
 )
-from glider.gui.review.viewport import Viewport, format_timecode, tick_spacing
+from glider.gui.review.viewport import Viewport, format_timecode, snap, tick_spacing
 from glider.gui.styles import colors
 from glider.gui.widgets.tool_ui import data_font, readable_text_on
 
@@ -56,6 +56,9 @@ HW_H = 22
 HW_MIN_H = 10
 MIN_SPAN_FRAMES = 30
 CLIP_MIN_PX = 2.0
+SNAP_PX = 8  # how close an edge pulls
+EDGE_PX = 4  # how close counts as grabbing a selection edge
+DRAG_PX = 3  # movement that turns a click into a drag
 
 
 def behavior_qcolor(name: str, order: list[str] | None = None) -> QColor:
@@ -931,3 +934,133 @@ class TimelineView(QWidget):
         head.closeSubpath()
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.fillPath(head, colour)
+
+    # ------------------------------------------------------------------
+    # input
+
+    def _row_at(self, y: float) -> Row | None:
+        return next((r for r in self._rows() if r.top <= y < r.top + r.height), None)
+
+    def _edge_at(self, x: float) -> str | None:
+        if self._selection is None:
+            return None
+        if abs(x - self.x_of_frame(self._selection[0])) <= EDGE_PX:
+            return "trim-in"
+        if abs(x - self.x_of_frame(self._selection[1] + 1)) <= EDGE_PX:
+            return "trim-out"
+        return None
+
+    def _snapped(self, x: float, *, end: bool = False) -> int:
+        """The frame under ``x``, pulled onto a nearby bout edge or hardware switch.
+
+        Edges are first frames; a range's *end* is inclusive, so it snaps to the
+        frame before an edge.
+        """
+        frame = self.frame_at_x(x)
+        if not self._snap_on or self._snap_frames.size == 0:
+            return frame
+        tolerance = max(1, abs(self.frame_at_x(x + SNAP_PX) - frame))
+        candidates = self._snap_frames - 1 if end else self._snap_frames
+        first, last = self.frame_bounds()
+        return max(first, min(last, int(round(snap(frame, candidates, tolerance)))))
+
+    def mousePressEvent(self, event):  # noqa: N802 - Qt override
+        if self._vp is None or event.button() != Qt.MouseButton.LeftButton:
+            return
+        x, y = event.position().x(), event.position().y()
+        if x < HEADER_W:
+            row = self._row_at(y)
+            if row is not None and row.kind == "group":
+                self._toggle_group(row.key)
+            return
+        if y < TOP_H:
+            self._drag = "scrub"
+            self.scrubbed.emit(self.frame_at_x(x))
+            return
+        edge = self._edge_at(x)
+        if edge is not None:
+            self._drag = edge
+            return
+        self._drag = "press"
+        self._press_x = x
+        self._anchor = self._snapped(x)
+
+    def mouseMoveEvent(self, event):  # noqa: N802 - Qt override
+        x = event.position().x()
+        if self._drag is None:
+            grab = event.position().y() >= TOP_H and self._edge_at(x) is not None
+            self.setCursor(Qt.CursorShape.SizeHorCursor if grab else Qt.CursorShape.ArrowCursor)
+            return
+        if self._drag == "scrub":
+            self.scrubbed.emit(self.frame_at_x(x))
+            return
+        if self._drag == "press":
+            if abs(x - self._press_x) < DRAG_PX:
+                return
+            self._drag = "select"
+        if self._drag == "select":
+            forward = self.frame_at_x(x) >= self._anchor
+            self.set_selection(self._anchor, self._snapped(x, end=forward))
+        elif self._drag == "trim-in":
+            self.set_selection(self._snapped(x), self._selection[1])
+        elif self._drag == "trim-out":
+            self.set_selection(self._selection[0], self._snapped(x, end=True))
+
+    def mouseReleaseEvent(self, _event):  # noqa: N802 - Qt override
+        if self._drag == "press":
+            # A click, not a drag: move the playhead, keep any selection.
+            self.scrubbed.emit(self.frame_at_x(self._press_x))
+        self._drag = None
+
+    def wheelEvent(self, event):  # noqa: N802 - Qt override
+        if self._vp is None:
+            return
+        modifiers = event.modifiers()
+        dx, dy = event.angleDelta().x(), event.angleDelta().y()
+        zooming = modifiers & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier
+        )
+        if zooming:
+            about = self._vp.t_at(event.position().x() - HEADER_W, self._lane_width())
+            self._vp.zoom(0.85 ** (dy / 120.0), about)
+        else:
+            steps = (dx or dy) / 120.0
+            self._vp.pan(-steps * 0.1 * self._vp.span)
+        self._static = None
+        self.refresh_viewport()
+        event.accept()
+
+    def event(self, event):  # noqa: D401 - Qt override
+        # Trackpad pinch arrives as a native gesture, not a wheel event.
+        if event.type() == QEvent.Type.NativeGesture and self._vp is not None:
+            if event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
+                about = self._vp.t_at(event.position().x() - HEADER_W, self._lane_width())
+                self._vp.zoom(max(0.1, 1.0 - event.value()), about)
+                self.refresh_viewport()
+                return True
+        return super().event(event)
+
+    def contextMenuEvent(self, event):  # noqa: N802 - Qt override
+        pos = event.pos()
+        if pos.x() < HEADER_W:
+            row = self._row_at(pos.y())
+            if row is not None:
+                menu = self._header_menu(row)
+                if not menu.isEmpty():
+                    menu.exec(event.globalPos())
+            return
+        if self._vp is not None and pos.y() >= RULER_H:
+            self.context_menu_requested.emit(event.globalPos(), self.frame_at_x(pos.x()))
+
+    def _header_menu(self, row: Row) -> QMenu:
+        menu = QMenu(self)
+        if row.kind == "hardware":
+            menu.addAction(f"Hide {row.label}", lambda: self.set_hidden(self._hidden | {row.key}))
+        if row.kind == "group":
+            label = "Expand group" if row.key in self._collapsed else "Collapse group"
+            menu.addAction(label, lambda: self._toggle_group(row.key))
+        if self._hidden:
+            menu.addAction(
+                f"Show hidden lanes ({len(self._hidden)})", lambda: self.set_hidden(set())
+            )
+        return menu

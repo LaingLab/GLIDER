@@ -240,3 +240,145 @@ def test_the_cached_image_follows_the_device_pixel_ratio(view):
     assert view._static_pixmap(rows).devicePixelRatio() == pytest.approx(view.devicePixelRatioF())
     view.devicePixelRatioF = lambda: 2.0  # a move to a Retina screen, no resize
     assert view._static_pixmap(rows).devicePixelRatio() == pytest.approx(2.0)
+
+
+from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PyQt6.QtGui import QContextMenuEvent, QMouseEvent, QWheelEvent  # noqa: E402
+
+_HANDLERS = {
+    "press": (QEvent.Type.MouseButtonPress, "mousePressEvent"),
+    "move": (QEvent.Type.MouseMove, "mouseMoveEvent"),
+    "release": (QEvent.Type.MouseButtonRelease, "mouseReleaseEvent"),
+}
+
+
+def _mouse(widget, kind, x, y):
+    event_type, handler = _HANDLERS[kind]
+    button = Qt.MouseButton.NoButton if kind == "move" else Qt.MouseButton.LeftButton
+    buttons = Qt.MouseButton.NoButton if kind == "release" else Qt.MouseButton.LeftButton
+    event = QMouseEvent(event_type, QPointF(x, y), button, buttons, Qt.KeyboardModifier.NoModifier)
+    getattr(widget, handler)(event)
+
+
+def _drag(widget, x0, x1, y):
+    _mouse(widget, "press", x0, y)
+    _mouse(widget, "move", (x0 + x1) / 2, y)
+    _mouse(widget, "move", x1, y)
+    _mouse(widget, "release", x1, y)
+
+
+def _wheel(widget, x, dy, modifiers=Qt.KeyboardModifier.NoModifier):
+    widget.wheelEvent(
+        QWheelEvent(
+            QPointF(x, 100),
+            QPointF(x, 100),
+            QPoint(0, 0),
+            QPoint(0, dy),
+            Qt.MouseButton.NoButton,
+            modifiers,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
+        )
+    )
+
+
+def _lane_y(view):
+    return view.lane_rect("tracking").center().y()
+
+
+def test_the_ruler_scrubs_on_press(view):
+    view.set_timeline(_timeline())
+    seen = []
+    view.scrubbed.connect(seen.append)
+    _mouse(view, "press", view.x_of_frame(150), 10)
+    assert seen and abs(seen[0] - 150) <= 1
+
+
+def test_a_click_in_the_lanes_moves_the_playhead_without_selecting(view):
+    view.set_timeline(_timeline())
+    seen = []
+    view.scrubbed.connect(seen.append)
+    x = view.x_of_frame(90)
+    _mouse(view, "press", x, _lane_y(view))
+    assert seen == []
+    _mouse(view, "release", x, _lane_y(view))
+    assert seen and abs(seen[0] - 90) <= 1
+    assert view.selection() is None
+
+
+def test_dragging_in_the_lanes_selects_frames(view):
+    view.set_timeline(_timeline())
+    view.set_snap(False)
+    _drag(view, view.x_of_frame(50), view.x_of_frame(200), _lane_y(view))
+    start, end = view.selection()
+    assert abs(start - 50) <= 1 and abs(end - 200) <= 1
+
+
+def test_snap_lands_the_end_on_a_bout_edge(view):
+    """groom → locomote at frame 150, so a drag ending at 153 means 'to the edge'."""
+    view.set_timeline(_timeline())
+    _drag(view, view.x_of_frame(20), view.x_of_frame(153), _lane_y(view))
+    assert view.selection()[1] == 149
+
+
+def test_without_snap_the_end_lands_where_dropped(view):
+    view.set_timeline(_timeline())
+    view.set_snap(False)
+    _drag(view, view.x_of_frame(20), view.x_of_frame(153), _lane_y(view))
+    assert abs(view.selection()[1] - 153) <= 1
+
+
+def test_dragging_an_edge_trims_the_range(view):
+    view.set_timeline(_timeline())
+    view.set_snap(False)
+    view.set_selection(50, 200)
+    y = _lane_y(view)
+    _mouse(view, "press", view.x_of_frame(50), y)
+    _mouse(view, "move", view.x_of_frame(80), y)
+    _mouse(view, "release", view.x_of_frame(80), y)
+    start, end = view.selection()
+    assert abs(start - 80) <= 1 and end == 200
+
+
+def test_ctrl_scroll_zooms_about_the_cursor(view):
+    view.set_timeline(_timeline())
+    x = view.x_of_frame(150)
+    before = view.viewport.t_at(x - HEADER_W, 400)
+    _wheel(view, x, 120, Qt.KeyboardModifier.ControlModifier)
+    assert view.viewport.span < 10000.0
+    assert view.viewport.t_at(x - HEADER_W, 400) == pytest.approx(before)
+
+
+def test_plain_scroll_pans(view):
+    view.set_timeline(_timeline())
+    view.viewport.show(0.0, 2000.0)
+    view.refresh_viewport()
+    _wheel(view, view.x_of_frame(30), -120)
+    assert view.viewport.start > 0.0
+
+
+def test_a_group_header_collapses_its_lanes(view):
+    view.set_timeline(_timeline())
+    group = next(r for r in view._rows() if r.key == "board:board0")
+    _mouse(view, "press", 20, group.top + 5)
+    assert not [r for r in view._rows() if r.kind == "hardware"]
+
+
+def test_hidden_lanes_are_reported_and_dropped(view):
+    view.set_timeline(_timeline())
+    seen = []
+    view.hidden_changed.connect(seen.append)
+    view.set_hidden({"led1"})
+    assert seen == [["led1"]]
+    assert view.lane_rect("led1") is None
+
+
+def test_right_click_asks_for_the_range_menu(view):
+    view.set_timeline(_timeline())
+    seen = []
+    view.context_menu_requested.connect(lambda _pos, frame: seen.append(frame))
+    x, y = int(view.x_of_frame(120)), int(_lane_y(view))
+    view.contextMenuEvent(
+        QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(x, y), QPoint(x, y))
+    )
+    assert seen and abs(seen[0] - 120) <= 1
