@@ -714,3 +714,35 @@ QLabel#TimelineReadout {
     color: #c0c8d4;
     padding: 0px 4px;
 }
+
+/* ---- Session Review: transport ------------------------------------- */
+QFrame#Transport {
+    background-color: #111820;
+    border-top: 1px solid #1e2530;
+}
+QLabel#TransportClock {
+    color: #f1f5f9;
+    padding: 0px 6px;
+}
+QCheckBox#ToggleChip {
+    spacing: 0px;
+    padding: 3px 9px;
+    border: 1px solid #243040;
+    border-radius: @RADIUS_SMALL@;
+    color: #8391a5;
+    background-color: transparent;
+}
+QCheckBox#ToggleChip:checked {
+    color: #e2e8f0;
+    background-color: #172230;
+    border-color: #2f4a60;
+}
+QCheckBox#ToggleChip:disabled {
+    color: #475569;
+    border-color: #1e2530;
+}
+QCheckBox#ToggleChip::indicator {
+    width: 0px;
+    height: 0px;
+    border: none;
+}

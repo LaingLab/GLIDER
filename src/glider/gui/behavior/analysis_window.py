@@ -21,8 +21,8 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer
-from PyQt6.QtGui import QBrush, QColor, QIcon, QImage, QPainter, QPen, QPixmap
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QBrush, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -36,7 +36,6 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -50,7 +49,7 @@ from glider.analysis.behavior.session_view import (
     SessionViewError,
 )
 from glider.analysis.timeline import build_timeline
-from glider.gui.styles import colors
+from glider.gui.review.viewer import TRAIL_DEFAULT_S, KeypointCanvas
 from glider.gui.widgets.timeline_bar import TimelineBar, behavior_order, behavior_qcolor
 from glider.gui.widgets.tool_ui import (
     CARD_GAP,
@@ -68,7 +67,6 @@ from glider.gui.widgets.tool_ui import (
 logger = logging.getLogger(__name__)
 
 _BAR_HEIGHT = 46
-_TRAIL_DEFAULT_S = 5.0
 
 
 def _short_path(path: Path, keep: int = 3) -> str:
@@ -172,274 +170,6 @@ def _vrule() -> QFrame:
     # tone is invisible, and an invisible divider does no grouping at all.
     line.setStyleSheet("background-color: #2a3441; border: none;")
     return line
-
-
-class KeypointCanvas(QWidget):
-    """The animal drawn from its poses, with a trailing centroid track.
-
-    Coordinates are pixels in the source video, so the canvas needs that
-    video's resolution to place them. Without it the arena's true extent is
-    unknown, and stretching the points to fit their own range would silently
-    redraw the enclosure as whatever the animal happened to visit.
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setMinimumSize(360, 280)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._view: SessionView | None = None
-        self._frame = 0
-        self._trail_s = _TRAIL_DEFAULT_S
-        self._show_trail = True
-        self._show_video = True
-        self._zones = None
-        self._heatmap = None
-        self._reader = None  # VideoFileSource, opened lazily
-        self._cached: tuple[int, QImage] | None = None
-
-    def set_view(self, view: SessionView | None) -> None:
-        self._close_reader()
-        self._view = view
-        self._frame = 0
-        self.update()
-
-    # ------------------------------------------------------------------
-    # video
-    # ------------------------------------------------------------------
-
-    def set_show_video(self, enabled: bool) -> None:
-        self._show_video = bool(enabled)
-        self.update()
-
-    def set_zones(self, zones) -> None:
-        """Outline a zone configuration over the arena."""
-        self._zones = zones
-        self.update()
-
-    def current_frame(self):
-        """The decoded BGR frame on screen, or None without a video.
-
-        Decoded regardless of the video toggle: the zone editor wants the
-        arena whether or not the operator is looking at it right now.
-        """
-        if self._view is None or self._view.video_path is None:
-            return None
-        was_showing, self._show_video = self._show_video, True
-        try:
-            self._frame_image(self._frame)  # populates the cache and the reader
-            if self._reader is None:
-                return None
-            return self._reader.read_frame(self._frame)
-        finally:
-            self._show_video = was_showing
-
-    def set_heatmap(self, grid) -> None:
-        """Show (or clear, with None) an occupancy histogram over the arena.
-
-        ``grid`` is the ``(nx, ny)`` array ``compute_occupancy`` returns, in
-        the same pixel space the arena is drawn in.
-        """
-        self._heatmap = None
-        if grid is None or not getattr(grid, "size", 0) or not np.isfinite(grid).any():
-            self.update()
-            return
-        peak = float(grid.max())
-        if peak <= 0:
-            self.update()
-            return
-        # Normalised to its own peak, so a short window is still readable;
-        # this is a picture of where time went, not an absolute count.
-        normalised = np.clip(grid / peak, 0.0, 1.0)
-        nx, ny = normalised.shape
-        rgba = np.zeros((ny, nx, 4), dtype=np.uint8)
-        accent = QColor(colors.ACCENT)
-        rgba[..., 0] = accent.red()
-        rgba[..., 1] = accent.green()
-        rgba[..., 2] = accent.blue()
-        # Transposed because histogram2d's first axis is x and an image's is y.
-        alpha = (np.sqrt(normalised.T) * 210).astype(np.uint8)
-        alpha[normalised.T <= 0] = 0  # never-visited cells stay clear
-        rgba[..., 3] = alpha
-        self._heatmap = QImage(rgba.tobytes(), nx, ny, 4 * nx, QImage.Format.Format_RGBA8888).copy()
-        self.update()
-
-    def has_video(self) -> bool:
-        return self._view is not None and self._view.video_path is not None
-
-    def has_heatmap(self) -> bool:
-        """Whether an overlay is actually on screen.
-
-        Not the same as "the checkbox is on": set_heatmap refuses a grid whose
-        peak is <= 0 or that is all-NaN, so the checkbox can be checked with
-        nothing drawn.
-        """
-        return self._heatmap is not None
-
-    def _close_reader(self) -> None:
-        if self._reader is not None:
-            self._reader.release()
-            self._reader = None
-        self._cached = None
-
-    def _frame_image(self, index: int) -> QImage | None:
-        """The video frame for *index*, as a QImage, or None.
-
-        Decoded on demand and cached by index: a repaint from resizing or a
-        selection change must not cost another decode, and scrubbing one frame
-        at a time is a sequential read rather than a seek.
-        """
-        if not self._show_video or self._view is None or self._view.video_path is None:
-            return None
-        if self._cached is not None and self._cached[0] == index:
-            return self._cached[1]
-        if self._reader is None:
-            from glider.vision.video_source import VideoFileSource
-
-            reader = VideoFileSource()
-            if not reader.load(self._view.video_path):
-                logger.info("could not open %s for playback", self._view.video_path)
-                self._view.video_path = None  # stop retrying every repaint
-                return None
-            self._reader = reader
-        frame = self._reader.read_frame(index)
-        if frame is None:
-            return None
-        # cv2 gives BGR; copy because the QImage must own its buffer once the
-        # numpy array goes out of scope.
-        height, width = frame.shape[:2]
-        image = QImage(frame.data, width, height, 3 * width, QImage.Format.Format_BGR888).copy()
-        self._cached = (index, image)
-        return image
-
-    def set_frame(self, frame: int) -> None:
-        self._frame = int(frame)
-        self.update()
-
-    def set_trail(self, seconds: float, enabled: bool) -> None:
-        self._trail_s, self._show_trail = float(seconds), bool(enabled)
-        self.update()
-
-    def _transform(self):
-        """Scale and offset mapping video pixels onto the widget, or None."""
-        if self._view is None or not self._view.resolution:
-            return None
-        width, height = self._view.resolution
-        scale = min(self.width() / width, self.height() / height)
-        return scale, (self.width() - width * scale) / 2, (self.height() - height * scale) / 2
-
-    def paintEvent(self, _event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor(colors.CANVAS))
-
-        transform = self._transform()
-        if (
-            self._view is None
-            or transform is None
-            or (self._view.xy is None and not self.has_video())
-        ):
-            painter.setPen(QPen(QColor(colors.TEXT_MUTED)))
-            painter.drawText(
-                self.rect(),
-                Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
-                self._why_blank(),
-            )
-            return
-
-        scale, dx, dy = transform
-        width, height = self._view.resolution
-        arena = QRectF(dx, dy, width * scale, height * scale)
-
-        image = self._frame_image(self._frame)
-        if image is not None:
-            painter.drawImage(arena, image)
-        if self._heatmap is not None:
-            painter.drawImage(arena, self._heatmap)
-        painter.setPen(QPen(QColor(colors.BORDER), 1))
-        painter.drawRect(arena)
-        self._paint_zones(painter, arena)
-
-        def to_widget(point):
-            return QPointF(point[0] * scale + dx, point[1] * scale + dy)
-
-        if self._show_trail and self._view.xy is not None:
-            trail = self._view.trail(self._frame, self._trail_s)
-            if trail is not None and len(trail) > 1:
-                # Fade the tail so recent travel reads as the leading edge.
-                for i in range(1, len(trail)):
-                    alpha = 0.15 + 0.65 * (i / len(trail))
-                    painter.setPen(QPen(colors.qcolor_with_alpha(QColor(colors.ACCENT), alpha), 2))
-                    painter.drawLine(to_widget(trail[i - 1]), to_widget(trail[i]))
-
-        if self._view.xy is not None and 0 <= self._frame < len(self._view.xy):
-            points = self._view.xy[self._frame]
-            names = self._view.keypoint_names
-            for i, point in enumerate(points):
-                if not np.isfinite(point).all():
-                    continue
-                # Keyed on the keypoint list, so seven body parts get seven
-                # different colours rather than whatever a hash of each name
-                # happened to pick.
-                painter.setBrush(
-                    QBrush(behavior_qcolor(names[i] if i < len(names) else str(i), names))
-                )
-                painter.setPen(QPen(QColor(colors.CANVAS), 1))
-                painter.drawEllipse(to_widget(point), 5, 5)
-
-        label = self._view.label_at(self._frame)
-        painter.setPen(QPen(QColor(colors.TEXT_PRIMARY)))
-        painter.drawText(
-            QRectF(8, 6, self.width() - 16, 20),
-            Qt.AlignmentFlag.AlignLeft,
-            f"frame {self._frame}   {label or '(unscored)'}",
-        )
-
-    def _paint_zones(self, painter, arena: QRectF) -> None:
-        """Outline each zone in the colour the live overlay draws it in.
-
-        Zone geometry is normalised, so it maps onto whatever rectangle the
-        arena occupies on screen without knowing the resolution.
-        """
-        if self._zones is None:
-            return
-        for zone in getattr(self._zones, "zones", []):
-            if not zone.vertices:
-                continue
-            b, g, r = zone.color
-            painter.setPen(QPen(QColor(r, g, b), 2))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            points = [
-                QPointF(arena.x() + vx * arena.width(), arena.y() + vy * arena.height())
-                for vx, vy in zone.vertices
-            ]
-            name = str(getattr(zone.shape, "value", zone.shape)).lower()
-            if name == "rectangle" and len(points) >= 2:
-                painter.drawRect(QRectF(points[0], points[1]).normalized())
-            elif name == "circle" and len(points) >= 2:
-                radius = (
-                    (points[1].x() - points[0].x()) ** 2 + (points[1].y() - points[0].y()) ** 2
-                ) ** 0.5
-                painter.drawEllipse(points[0], radius, radius)
-            elif len(points) >= 3:
-                painter.drawPolygon(*points)
-
-    def _why_blank(self) -> str:
-        if self._view is None:
-            return "Load a session"
-        if self._view.xy is None:
-            return (
-                "No pose CSV could be found for this session.\n\n"
-                "Looked at the path recorded in run.json, then beside the "
-                "ethogram, then for a CSV named after this session in the "
-                "folders above.\n\n"
-                "Use “Choose pose CSV…” above to point at it."
-            )
-        return (
-            "This session's pose sidecar records no resolution, so the arena "
-            "cannot be sized.\n\n"
-            "Use “Set arena size from video…” above to read it from the "
-            "source video — it is stored, so this is a one-off."
-        )
 
 
 class AnalysisWindow(QMainWindow):
@@ -750,7 +480,7 @@ class AnalysisWindow(QMainWindow):
 
         self._trail_s = QDoubleSpinBox()
         self._trail_s.setRange(0.5, 60.0)
-        self._trail_s.setValue(_TRAIL_DEFAULT_S)
+        self._trail_s.setValue(TRAIL_DEFAULT_S)
         self._trail_s.setSuffix(" s")
         self._trail_s.setFixedWidth(84)
         self._trail_s.valueChanged.connect(self._apply_trail)
