@@ -113,21 +113,29 @@ def _recording_scale(metadata: dict, resolution: tuple[int, int] | None) -> floa
 def _subject_rows(tracking: pd.DataFrame) -> pd.DataFrame:
     """One tracked animal's rows, one per frame, in frame order.
 
-    The lowest non-negative ``object_id`` that has any behaviour state -- the
+    Ids only mean different animals when two of them are tracked in the same
+    frame. The live tracker issues a new ``object_id`` after a detection loss
+    (about 50 missed frames), so one animal is ids 0, 1, 2... over a session;
+    with no frame holding two ids, every row with an id >= 0 is that animal.
+    Otherwise it is the lowest id >= 0 that has any behaviour state -- the
     object behind ``build_timeline``'s first tracking lane. The logger's ``-1``
-    heartbeat rows never qualify.
+    heartbeat rows never count.
     """
     rows = tracking
     if "object_id" in rows.columns:
         ids = pd.to_numeric(rows["object_id"], errors="coerce")
-        if "behavioral_state" in rows.columns:
-            scored = rows["behavioral_state"].astype("string").fillna("").str.len() > 0
+        real = ids >= 0
+        frames = pd.to_numeric(rows["frame"], errors="coerce")
+        pairs = pd.DataFrame({"frame": frames, "id": ids})[real].dropna().drop_duplicates()
+        if not pairs["frame"].duplicated().any():
+            if real.any():
+                rows = rows[real]
         else:
-            scored = pd.Series(True, index=rows.index)
-        candidates = sorted(ids[(ids >= 0) & scored].dropna().unique())
-        if not candidates:
-            candidates = sorted(ids[ids >= 0].dropna().unique())
-        if candidates:
+            if "behavioral_state" in rows.columns:
+                scored = rows["behavioral_state"].astype("string").fillna("").str.len() > 0
+            else:
+                scored = pd.Series(True, index=rows.index)
+            candidates = sorted(ids[real & scored].unique()) or sorted(ids[real].unique())
             rows = rows[ids == candidates[0]]
     rows = rows.assign(frame=pd.to_numeric(rows["frame"], errors="coerce")).dropna(subset=["frame"])
     return rows.drop_duplicates(subset="frame").sort_values("frame")
@@ -393,6 +401,13 @@ class SessionView:
         every_frame = pd.to_numeric(tracking["frame"], errors="coerce").dropna()
         rows = _subject_rows(tracking)
         frames = rows["frame"].to_numpy(dtype=int)
+        if len(frames) and frames.min() < 0:
+            # The logger counts from 0 or 1. Positions are indexed by frame, so
+            # a negative one would raise, or silently land at the far end.
+            raise SessionViewError(
+                f"{Path(session.directory).name}'s tracking CSV has negative frame "
+                f"numbers (from {frames.min()}), so its frames cannot be placed"
+            )
         if "behavioral_state" in rows.columns:
             labels = [("" if pd.isna(v) else str(v)) for v in rows["behavioral_state"]]
         else:

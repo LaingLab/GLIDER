@@ -648,6 +648,20 @@ class TestFromRecording:
         view = _open(_recording(tmp_path / "r", rows))
         assert set(view.labels) == {"a"}
 
+    @pytest.mark.parametrize("start", [-10, -5, -3])
+    def test_negative_frames_are_refused_with_a_reason(self, tmp_path, start):
+        """-10..-1 raised IndexError, -5..-3 ValueError; -3..6 silently wrapped."""
+        with pytest.raises(SessionViewError, match="negative frame"):
+            _open(_recording(tmp_path / "r", _walk(10, start=start)))
+
+    def test_a_new_tracker_id_is_still_the_same_animal(self, tmp_path):
+        """The tracker re-issues an id after ~50 missed frames; one animal is 0, 1, 2..."""
+        rows = _walk(10, obj=0, state="a") + _walk(10, start=11, obj=1, state="b")
+        view = _open(_recording(tmp_path / "r", rows))
+        assert len(view.labels) == 20
+        assert view.labels[0] == "a" and view.labels[-1] == "b"
+        assert np.isfinite(view.xy[5]).all() and np.isfinite(view.xy[15]).all()
+
     def test_no_tracking_is_refused_with_a_reason(self, tmp_path):
         folder = tmp_path / "r"
         folder.mkdir()
