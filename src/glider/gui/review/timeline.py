@@ -181,7 +181,7 @@ class TimelineView(QWidget):
         self._frame = 0
         self._selection: tuple[int, int] | None = None
         self._drag: str | None = None
-        self._anchor = 0
+        self._fixed: int | None = None  # trim's opposite edge, fixed for the drag
         self._press_x = 0.0
         self._snap_on = True
         self._collapsed: set[str] = set()
@@ -979,14 +979,20 @@ class TimelineView(QWidget):
             return
         edge = self._edge_at(x)
         if edge is not None:
-            self._drag = edge
+            self._fixed = self._selection[1] if edge == "trim-in" else self._selection[0]
+            self._drag = "select"
             return
         self._drag = "press"
         self._press_x = x
-        self._anchor = self._snapped(x)
+        self._fixed = None
 
     def mouseMoveEvent(self, event):  # noqa: N802 - Qt override
         x = event.position().x()
+        if self._drag is not None and not (event.buttons() & Qt.MouseButton.LeftButton):
+            # The release was missed (e.g. it happened outside the widget).
+            self._drag = None
+            self._fixed = None
+            return
         if self._drag is None:
             grab = event.position().y() >= TOP_H and self._edge_at(x) is not None
             self.setCursor(Qt.CursorShape.SizeHorCursor if grab else Qt.CursorShape.ArrowCursor)
@@ -999,18 +1005,21 @@ class TimelineView(QWidget):
                 return
             self._drag = "select"
         if self._drag == "select":
-            forward = self.frame_at_x(x) >= self._anchor
-            self.set_selection(self._anchor, self._snapped(x, end=forward))
-        elif self._drag == "trim-in":
-            self.set_selection(self._snapped(x), self._selection[1])
-        elif self._drag == "trim-out":
-            self.set_selection(self._selection[0], self._snapped(x, end=True))
+            if self._fixed is not None:  # trimming: the other edge stays put
+                edge = self._snapped(x, end=self.frame_at_x(x) >= self._fixed)
+                self.set_selection(self._fixed, edge)
+            else:  # a fresh range: snap each end by the role it ends up playing
+                lo, hi = sorted((x, self._press_x))
+                self.set_selection(self._snapped(lo), self._snapped(hi, end=True))
 
-    def mouseReleaseEvent(self, _event):  # noqa: N802 - Qt override
+    def mouseReleaseEvent(self, event):  # noqa: N802 - Qt override
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
         if self._drag == "press":
             # A click, not a drag: move the playhead, keep any selection.
             self.scrubbed.emit(self.frame_at_x(self._press_x))
         self._drag = None
+        self._fixed = None
 
     def wheelEvent(self, event):  # noqa: N802 - Qt override
         if self._vp is None:

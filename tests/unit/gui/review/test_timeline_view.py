@@ -382,3 +382,56 @@ def test_right_click_asks_for_the_range_menu(view):
         QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(x, y), QPoint(x, y))
     )
     assert seen and abs(seen[0] - 120) <= 1
+
+
+def test_a_backward_drag_snaps_like_a_forward_one(view):
+    view.set_timeline(_timeline())
+    _drag(view, view.x_of_frame(153), view.x_of_frame(20), _lane_y(view))
+    assert view.selection() == (20, 149)
+
+
+def test_trimming_past_the_other_edge_keeps_that_edge(view):
+    view.set_timeline(_timeline())
+    view.set_snap(False)
+    view.set_selection(50, 200)
+    y = _lane_y(view)
+    _mouse(view, "press", view.x_of_frame(50), y)
+    for frame in (250, 280):
+        _mouse(view, "move", view.x_of_frame(frame), y)
+    _mouse(view, "release", view.x_of_frame(280), y)
+    start, end = view.selection()
+    assert start == 200 and abs(end - 280) <= 1
+
+
+def test_a_move_without_the_button_ends_a_stale_drag(view):
+    view.set_timeline(_timeline())
+    y = _lane_y(view)
+    _mouse(view, "press", view.x_of_frame(50), y)
+    stale = QMouseEvent(
+        QEvent.Type.MouseMove,
+        QPointF(view.x_of_frame(150), y),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    view.mouseMoveEvent(stale)
+    assert view.selection() is None
+    assert view._drag is None
+
+
+def test_a_right_release_does_not_end_a_left_drag(view):
+    view.set_timeline(_timeline())
+    view.set_snap(False)
+    y = _lane_y(view)
+    _mouse(view, "press", view.x_of_frame(50), y)
+    _mouse(view, "move", view.x_of_frame(100), y)
+    right = QMouseEvent(
+        QEvent.Type.MouseButtonRelease,
+        QPointF(view.x_of_frame(100), y),
+        Qt.MouseButton.RightButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    view.mouseReleaseEvent(right)
+    _mouse(view, "move", view.x_of_frame(150), y)
+    assert abs(view.selection()[1] - 150) <= 1
