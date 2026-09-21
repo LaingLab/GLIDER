@@ -114,7 +114,7 @@ def _classify_csv(path: Path) -> ArtifactType | None:
                 if not stripped:
                     continue
                 return _HEADER_MARKERS.get(stripped)
-    except OSError:
+    except (OSError, UnicodeDecodeError):  # a lab's own cp1252 notes.csv is not ours
         return None
     return None
 

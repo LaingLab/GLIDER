@@ -117,7 +117,9 @@ class Provenance:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> Provenance:
-        data = data or {}
+        # Tolerated like a malformed treatment: it annotates a session, and a
+        # hand-edited string here must not refuse the whole manifest.
+        data = data if isinstance(data, dict) else {}
         thresholds = data.get("thresholds")
         return cls(
             pose_model=str(data.get("pose_model", "") or ""),
@@ -223,9 +225,11 @@ class Project:
         root = Path(root)
         path = root / MANIFEST_NAME
         try:
-            raw = path.read_text()
+            raw = path.read_text(encoding="utf-8")
         except OSError:
             return cls(root=root)
+        except UnicodeDecodeError as e:
+            raise ProjectError(f"{path} is not UTF-8 text: {e}") from e
         try:
             data = json.loads(raw)
         except ValueError as e:
@@ -241,6 +245,12 @@ class Project:
                 f"drop whatever that version added."
             )
 
+        # A hand-edited manifest can hold any JSON at all. Every wrong shape is
+        # a ProjectError, the one exception callers catch to load ungrouped.
+        for section in ("subjects", "sessions"):
+            if not isinstance(data.get(section) or {}, dict):
+                raise ProjectError(f"{path}: {section!r} must be a JSON object")
+
         subjects: dict[str, Subject] = {}
         for key, value in (data.get("subjects") or {}).items():
             if not isinstance(value, dict):
@@ -251,6 +261,8 @@ class Project:
 
         sessions: dict[str, SessionRecord] = {}
         for key, value in (data.get("sessions") or {}).items():
+            if value is not None and not isinstance(value, dict):
+                raise ProjectError(f"{path}: session {key!r} must be a JSON object")
             sessions[str(key)] = SessionRecord.from_dict(str(key), value)
 
         return cls(

@@ -130,6 +130,28 @@ class TestNoManifest:
         with pytest.raises(ProjectError):
             Project.load(tmp_path)
 
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            b'{"sessions": ["a"]}',
+            b'{"sessions": {"a": "ctrl"}}',
+            b'{"subjects": ["x"]}',
+            '{"name": "\u00b5g"}'.encode("cp1252"),
+        ],
+        ids=["sessions-list", "session-string", "subjects-list", "not-utf8"],
+    )
+    def test_a_misshapen_manifest_is_a_project_error(self, tmp_path, raw):
+        """Callers catch ProjectError to load ungrouped; anything else aborts GLIDER."""
+        (tmp_path / MANIFEST_NAME).write_bytes(raw)
+        with pytest.raises(ProjectError, match=MANIFEST_NAME):
+            Project.load(tmp_path)
+
+    def test_a_malformed_provenance_is_tolerated(self, tmp_path):
+        (tmp_path / MANIFEST_NAME).write_text(
+            json.dumps({"sessions": {"a": {"group": "ctrl", "provenance": "x"}}})
+        )
+        assert Project.load(tmp_path).group_for("a") == "ctrl"
+
     def test_a_newer_schema_is_refused(self, tmp_path):
         # Reading it would silently drop whatever the newer version added,
         # and the operator would never know which fields went missing.

@@ -72,3 +72,48 @@ def test_a_broken_manifest_warns_and_loads_ungrouped(tmp_path):
     sources, warning = discover_sessions(tmp_path)
     assert [s.group for s in sources] == [""]
     assert warning and "ungrouped" in warning
+
+
+def _not_utf8(folder: Path) -> Path:
+    """A lab's own CSV saved from Excel on Windows: cp1252, not UTF-8."""
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "notes.csv"
+    path.write_bytes("dose,µg\n".encode("cp1252"))
+    return path
+
+
+def test_a_non_utf8_csv_beside_a_recording_is_ignored(tmp_path):
+    from glider.analysis._io import discover
+
+    recording = _tracking(tmp_path / "rec")
+    _not_utf8(recording)
+    assert discover(recording).tracking == recording / "rec_tracking.csv"
+
+
+def test_a_non_utf8_csv_does_not_stop_discovery(tmp_path):
+    recording = _tracking(tmp_path / "rec")
+    _not_utf8(recording)
+    _not_utf8(tmp_path / "notes_only")
+    sources, _ = discover_sessions(tmp_path)
+    assert [s.path for s in sources] == [recording.resolve()]
+
+
+def _manifest(root: Path, raw: bytes) -> None:
+    _ethogram(root / "sessions" / "s1" / "analysis")
+    (root / "glider_project.json").write_bytes(raw)
+
+
+def test_a_misshapen_manifest_warns_and_loads_ungrouped(tmp_path):
+    for i, raw in enumerate(
+        [
+            b'{"sessions": ["a"]}',
+            b'{"sessions": {"a": "ctrl"}}',
+            b'{"subjects": ["x"]}',
+            '{"name": "µg"}'.encode("cp1252"),
+        ]
+    ):
+        root = tmp_path / str(i)
+        _manifest(root, raw)
+        sources, warning = discover_sessions(root)
+        assert [s.group for s in sources] == [""], raw
+        assert warning and "ungrouped" in warning, raw
