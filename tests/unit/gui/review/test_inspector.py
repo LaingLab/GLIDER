@@ -75,11 +75,10 @@ def test_tables_are_as_tall_as_their_rows(qtbot):
 
 def test_session_review_qss_uses_only_token_colours():
     import re
-    from pathlib import Path
 
-    from glider.gui import styles
+    from glider.gui.styles import load_stylesheet
 
-    qss = (Path(styles.__file__).parent / "tools.qss").read_text(encoding="utf-8")
+    qss = load_stylesheet("tools")
     review = qss[qss.index("Session Review: timeline panel") :]
     tokens = {
         v.lower()

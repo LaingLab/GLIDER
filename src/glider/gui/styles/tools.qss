@@ -786,7 +786,7 @@ QTreeWidget#SessionTree::item:selected {
 QLabel#PoolBadge {
     font-size: 8pt;
     padding: 0px 4px;
-    border-radius: 3px;
+    border-radius: @RADIUS_SMALL@;
     background-color: #1a222d;
     color: #8391a5;
 }
