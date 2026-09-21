@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from glider.analysis import Session  # noqa: E402
 from glider.analysis.behavior.session_view import (
     SessionView,
     SessionViewError,
@@ -547,3 +548,114 @@ class TestTheThresholdsThatProducedTheLabels:
         view = SessionView.load(_write_session(tmp_path / "s"))
         assert view.applied_freeze_px is None
         assert view.applied_dart_cm_s is None
+
+
+def _recording(folder, rows, *, calibrated=True, fps=30.0):
+    """A GLIDER tracking CSV. rows: (frame, object_id, state, cx, cy, distance_mm).
+
+    Written here rather than imported: pytest runs in importlib mode, which does
+    not let one test module import another.
+    """
+    from datetime import datetime, timedelta
+
+    folder.mkdir(parents=True, exist_ok=True)
+    base = datetime(2026, 5, 25, 14, 0, 30)
+    with open(folder / "rec_tracking.csv", "w", encoding="utf-8") as f:
+        f.write("# GLIDER Tracking Data\n")
+        if calibrated:
+            f.write("# Pixels/mm,4.0000\n# Calibration Resolution,640x480\n")
+        f.write("\n")
+        f.write(
+            "frame,timestamp,elapsed_ms,object_id,center_x,center_y,"
+            "distance_px,distance_mm,behavioral_state\n"
+        )
+        for frame, obj, state, cx, cy, dmm in rows:
+            stamp = (base + timedelta(seconds=frame / fps)).isoformat(timespec="milliseconds")
+            px = dmm if not calibrated else dmm * 4
+            f.write(
+                f"{frame},{stamp},{frame / fps * 1000:.1f},{obj},{cx},{cy},{px},{dmm},{state}\n"
+            )
+    return folder
+
+
+def _walk(n, *, start=1, obj=0, state="walk"):
+    return [(f, obj, state, 100.0 + f, 200.0, 0.5) for f in range(start, start + n)]
+
+
+def _open(folder):
+    return SessionView.from_recording(Session.load(folder))
+
+
+class TestFromRecording:
+    def test_labels_and_frames_come_from_tracking(self, tmp_path):
+        rows = _walk(10, state="rest") + _walk(10, start=11, state="walk")
+        view = _open(_recording(tmp_path / "r", rows))
+        assert list(view.frames[:2]) == [1, 2]
+        assert view.labels[0] == "rest" and view.labels[-1] == "walk"
+        assert view.fps == pytest.approx(30.0, rel=0.01)
+
+    def test_the_logger_counts_frames_from_one(self, tmp_path):
+        assert _open(_recording(tmp_path / "r", _walk(10))).first_video_frame == 1
+
+    def test_a_zero_based_csv_is_taken_at_its_word(self, tmp_path):
+        assert _open(_recording(tmp_path / "r", _walk(10, start=0))).first_video_frame == 0
+
+    def test_the_centroid_is_a_one_keypoint_pose(self, tmp_path):
+        view = _open(_recording(tmp_path / "r", _walk(10)))
+        assert view.xy.shape == (11, 1, 2)
+        assert np.isnan(view.xy[0]).all()
+        assert view.xy[1, 0].tolist() == [101.0, 200.0]
+        assert view.keypoint_names == ["centroid"]
+
+    def test_a_dropped_frame_is_nan_not_shifted(self, tmp_path):
+        rows = [r for r in _walk(10) if r[0] != 5]
+        view = _open(_recording(tmp_path / "r", rows))
+        assert np.isnan(view.xy[5]).all()
+        assert view.xy[6, 0, 0] == 106.0
+
+    def test_scale_comes_from_the_calibration_header(self, tmp_path):
+        view = _open(_recording(tmp_path / "r", _walk(10)))
+        assert view.px_per_mm == pytest.approx(4.0)
+        # 0.5 mm per frame at 30 fps is 1.5 cm/s.
+        assert np.nanmean(view.speed_cm_s) == pytest.approx(1.5)
+
+    def test_scale_follows_the_viewing_resolution(self):
+        from glider.analysis.behavior.session_view import _recording_scale
+
+        meta = {"Pixels/mm": "4.0000", "Calibration Resolution": "640x480"}
+        assert _recording_scale(meta, (1280, 960)) == pytest.approx(8.0)
+        assert _recording_scale(meta, None) == pytest.approx(4.0)
+        assert _recording_scale({}, (640, 480)) is None
+
+    def test_an_uncalibrated_recording_claims_no_scale(self, tmp_path):
+        """Uncalibrated, the logger writes distance_mm == distance_px, so
+        their ratio would claim 1.00 px/mm for every uncalibrated run."""
+        view = _open(_recording(tmp_path / "r", _walk(10), calibrated=False))
+        assert view.px_per_mm is None
+        assert view.speed_cm_s is None
+
+    def test_segment_stats_reports_travel_in_cm(self, tmp_path):
+        view = _open(_recording(tmp_path / "r", _walk(30)))
+        assert view.segment_stats(1, 30).distance_cm == pytest.approx(1.5, rel=0.05)
+
+    def test_multi_object_opens_the_first_real_subject(self, tmp_path):
+        heartbeat = [(1, -1, "", "", "", 0.0)]
+        rows = heartbeat + _walk(10, obj=1, state="b") + _walk(10, obj=0, state="a")
+        view = _open(_recording(tmp_path / "r", rows))
+        assert set(view.labels) == {"a"}
+
+    def test_no_tracking_is_refused_with_a_reason(self, tmp_path):
+        folder = tmp_path / "r"
+        folder.mkdir()
+        with pytest.raises(SessionViewError, match="no tracking"):
+            _open(folder)
+
+    def test_alignment_counts_from_the_first_video_frame(self):
+        view = SessionView(
+            labels=["a"] * 10,
+            frames=np.arange(1, 11),
+            fps=30.0,
+            video_frames=10,
+            first_video_frame=1,
+        )
+        assert view.video_is_aligned
