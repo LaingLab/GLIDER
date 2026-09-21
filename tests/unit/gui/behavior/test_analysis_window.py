@@ -543,6 +543,7 @@ class TestACohortOfSessions:
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
+        win._tables.setCurrentWidget(win._cohort_table)  # filled only while shown
         win._bar.set_selection(0, 299)
         assert win._cohort_table.rowCount() == 4
         assert "Cohort (4)" == win._tables.tabText(1)
@@ -1116,6 +1117,7 @@ class TestTheCohortTabShowsTheAppliedThresholds:
                 {"freeze_threshold": 0.25, "dart_threshold": 12.0, "cm_s_per_px_frame": 2.0},
             )
         )
+        window._tables.setCurrentWidget(window._cohort_table)  # filled only while shown
         window._select_all()
         headers = [
             window._cohort_table.horizontalHeaderItem(c).text()
@@ -1527,10 +1529,18 @@ class TestTheRangeMenu:
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load(_session(tmp_path / "v"))
+        from PyQt6.QtGui import QKeySequence
+
+        # ⌘A on macOS, Ctrl+A elsewhere: the platform's own text for Select All.
+        native = QKeySequence(QKeySequence.StandardKey.SelectAll).toString(
+            QKeySequence.SequenceFormat.NativeText
+        )
         menu = win._timeline_menu(120)
         texts = [a.text() for a in menu.actions() if a.text()]
-        assert "Select whole session\t⌘A" in texts
-        select_all = next(a for a in menu.actions() if a.text() == "Select whole session\t⌘A")
+        assert f"Select whole session\t{native}" in texts
+        select_all = next(
+            a for a in menu.actions() if a.text() == f"Select whole session\t{native}"
+        )
         assert select_all.isEnabled() is True
         select_all.trigger()
         assert win._bar.selection() == (0, 299)
@@ -1577,3 +1587,232 @@ class TestHiddenLanesAreRemembered:
         qtbot.addWidget(other)
         other.open_path(b)
         assert other._bar.hidden() == set()
+
+
+def _centroid_recording(folder, frames, *, with_state=True):
+    """A tracking CSV with a centroid, for the paths ``_recording`` does not reach."""
+    from datetime import datetime, timedelta
+
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    base = datetime(2026, 5, 25, 14, 0, 30)
+    state = ",behavioral_state" if with_state else ""
+    with open(folder / "rec_tracking.csv", "w", encoding="utf-8") as f:
+        f.write("# GLIDER Tracking Data\n\n")
+        f.write(f"frame,timestamp,elapsed_ms,object_id,center_x,center_y{state}\n")
+        for i, frame in enumerate(frames):
+            stamp = (base + timedelta(seconds=i / 30.0)).isoformat(timespec="milliseconds")
+            tail = ",rest" if with_state else ""
+            f.write(f"{frame},{stamp},{i / 30.0 * 1000:.1f},0,{100 + i},200{tail}\n")
+    return folder
+
+
+def _said(monkeypatch, kind):
+    said = []
+    monkeypatch.setattr(
+        f"glider.gui.behavior.analysis_window.QMessageBox.{kind}",
+        lambda *a, **k: said.append(a[-1]),
+    )
+    return said
+
+
+class TestNothingOnDiskAbortsTheWindow:
+    """GLIDER installs no excepthook: an exception out of a menu action kills
+    the process, and a running experiment with it."""
+
+    def test_negative_frames_are_reported_when_opened(self, qtbot, tmp_path, monkeypatch):
+        said = _said(monkeypatch, "critical")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_centroid_recording(tmp_path / "rec", range(-10, 0)))
+        assert said and "could not be opened" in said[0]
+        assert win._view is None
+
+    def test_negative_frames_cost_one_session_of_a_cohort(self, qtbot, tmp_path, monkeypatch):
+        warned = _said(monkeypatch, "warning")
+        _recording(tmp_path / "good")
+        _centroid_recording(tmp_path / "bad", range(-10, 0))
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        assert win._ids == ["good"]
+        assert warned and "bad" in warned[0]
+
+    def test_an_unreadable_folder_is_reported(self, qtbot, tmp_path, monkeypatch):
+        said = _said(monkeypatch, "critical")
+
+        def boom(_root):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr("glider.gui.behavior.analysis_window.discover_sessions", boom)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        assert said and "denied" in said[0]
+
+
+class TestAFolderWithoutTracking:
+    """CV off writes no tracking CSV: the folder is an offline apply run's source."""
+
+    def test_its_one_ethogram_opens(self, qtbot, tmp_path, monkeypatch):
+        said = _said(monkeypatch, "critical")
+        folder = _recording(tmp_path / "rec")
+        (folder / "rec_tracking.csv").unlink()
+        ethogram = _ethogram(folder / "v", ["groom"] * 300)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(folder)
+        assert said == []
+        assert win._ethogram_csv == ethogram
+
+    def test_without_one_it_names_both_problems(self, qtbot, tmp_path, monkeypatch):
+        said = _said(monkeypatch, "critical")
+        folder = _recording(tmp_path / "rec")
+        (folder / "rec_tracking.csv").unlink()
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(folder)
+        assert said and "no tracking CSV" in said[0] and "ethogram_raw.csv" in said[0]
+
+
+class TestReopeningReadsTheDiskAgain:
+    def test_a_growing_recording_shows_its_new_rows(self, qtbot, tmp_path):
+        folder = _recording(tmp_path / "rec")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(folder)
+        assert win._view.n_rows == 300
+        with open(folder / "rec_tracking.csv", "a", encoding="utf-8") as f:
+            for i in range(300, 400):
+                f.write(f"{i},2026-05-25T14:00:40.000,{i / 30.0 * 1000:.1f},0,active\n")
+        win.open_path(folder)
+        assert win._view.n_rows == 400
+
+
+class TestTheCohortTableFillsWhenShown:
+    """Filling it costs a pass per animal; a drag must not pay that per mouse move."""
+
+    def _cohort(self, tmp_path):
+        return [_ethogram(tmp_path / f"t{i}", ["groom"] * 300) for i in range(3)]
+
+    def test_a_hidden_tab_is_not_filled(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        win._bar.set_selection(0, 99)
+        assert win._cohort_table.rowCount() == 0
+
+    def test_showing_the_tab_fills_it(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        win._bar.set_selection(0, 99)
+        win._tables.setCurrentWidget(win._cohort_table)
+        assert win._cohort_table.rowCount() == 3
+        assert win._tables.tabText(1) == "Cohort (3)"
+
+    def test_a_new_range_refills_the_shown_tab(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        win._tables.setCurrentWidget(win._cohort_table)
+        asked = []
+        real = win.cohort_rows
+        monkeypatch.setattr(win, "cohort_rows", lambda s, e: asked.append((s, e)) or real(s, e))
+        win._bar.set_selection(10, 20)
+        assert asked == [(10, 20)]
+
+
+class TestPlaybackAtSpeed:
+    def test_eight_x_lands_on_the_last_frame(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        win._set_frame(295)
+        win._toggle_play()
+        win._rate = 8
+        win._advance()
+        assert win._frame == 299
+        assert win._timer.isActive() is False
+
+
+class TestEditKeysLeaveShortcutsAlone:
+    def _win(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        return win
+
+    def test_cmd_z_does_not_zoom(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(100, 199)
+        _key(win, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+        assert win._bar.viewport.span == pytest.approx(300.0)
+
+    def test_an_auto_repeated_l_does_not_double_the_rate(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_L)
+        win.keyPressEvent(
+            QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_L, Qt.KeyboardModifier.NoModifier, "", True
+            )
+        )
+        assert win._rate == 1
+
+
+class TestSwitchingCohortsIsAllOrNothing:
+    def test_a_failed_build_keeps_the_old_cohort(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "a"))
+        before = (list(win._cohort), list(win._ids), list(win._groups))
+
+        def boom(*_a):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(win, "_timeline_for", boom)
+        view = SessionView.load(_session(tmp_path / "b"))
+        with pytest.raises(RuntimeError):
+            win._set_cohort([(tmp_path / "b" / "ethogram_raw.csv", view)])
+        assert (win._cohort, win._ids, win._groups) == before
+
+
+class TestARecordingIsHonestAboutItsPoses:
+    def test_a_centroid_is_not_called_poses(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_centroid_recording(tmp_path / "rec", range(1, 301)))
+        assert win._session_state.text() == "Centroid only"
+
+    def test_the_blank_canvas_does_not_offer_a_pose_csv(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_centroid_recording(tmp_path / "rec", range(1, 301)))
+        why = win._canvas._why_blank()  # no calibration, no video: no arena size
+        assert "pose CSV" not in why and "Set arena size" not in why
+
+    def test_no_behavioral_state_draws_no_behaviour_lane(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_centroid_recording(tmp_path / "rec", range(1, 301), with_state=False))
+        assert [row.key for row in win._bar._rows() if row.kind == "group"] == []
+
+
+class TestTheSelectAllShortcutIsNative:
+    def test_the_menu_and_the_shortcuts_list_use_the_platform_text(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        from PyQt6.QtGui import QKeySequence
+
+        native = QKeySequence(QKeySequence.StandardKey.SelectAll).toString(
+            QKeySequence.SequenceFormat.NativeText
+        )
+        assert native in ("⌘A", "Ctrl+A")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        texts = [a.text() for a in win._timeline_menu(0).actions()]
+        assert f"Select whole session\t{native}" in texts
+        shown = _said(monkeypatch, "information")
+        win._show_shortcuts()
+        assert f"{native}  select the whole session" in shown[0]

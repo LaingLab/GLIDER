@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import QSettings, Qt, QTimer
-from PyQt6.QtGui import QBrush, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QBrush, QIcon, QKeySequence, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -156,6 +156,20 @@ def _dress_table(table: QTableWidget) -> None:
     table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
     table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     table.verticalHeader().setDefaultSectionSize(28)
+
+
+# Everything a lab's files can make loading raise. GLIDER installs no
+# excepthook, so one of these escaping a menu action would end the process --
+# and a running experiment with it. (SessionViewError is a ValueError; it is
+# named for the reader.)
+_UNREADABLE = (SessionViewError, OSError, ValueError, KeyError)
+
+
+def _select_all_text() -> str:
+    """⌘A on macOS, Ctrl+A elsewhere."""
+    return QKeySequence(QKeySequence.StandardKey.SelectAll).toString(
+        QKeySequence.SequenceFormat.NativeText
+    )
 
 
 _EDIT_KEYS = {
@@ -400,6 +414,7 @@ class AnalysisWindow(QMainWindow):
         for table in (self._cohort_table, self._bouts, self._zone_table):
             _dress_table(table)
         self._timeline_panel.addTab(self._cohort_table, "Cohort")
+        self._timeline_panel.currentChanged.connect(self._on_tab_changed)
 
     def _build_bout_stepper(self) -> None:
         # Jumping between bouts, which is what reviewing an ethogram actually
@@ -555,40 +570,46 @@ class AnalysisWindow(QMainWindow):
     def open_path(self, path: Path) -> None:
         """Open an ethogram CSV, or a recording folder."""
         path = Path(path)
+        # Reopening must read the disk again: a recording may still be growing.
+        self._recordings.clear()
         if path.is_file():
             self.load(path)
             return
         session = self._recording(path)
+        problem = None
         if session is not None:
             try:
                 view = SessionView.from_recording(session)
-            except SessionViewError as e:
-                QMessageBox.critical(self, "Open session", str(e))
+            except _UNREADABLE as e:
+                # CV off writes no tracking CSV, and such a folder is the source
+                # of an offline apply run: its one ethogram is what to open.
+                problem = e
+            else:
+                self._cohort_root = None
+                # A different session: the range (and its heatmap) belonged to
+                # the one that just left, exactly as a single ethogram does.
+                self._bar.clear_selection()
+                self._set_cohort([(path, view)])
                 return
-            self._cohort_root = None
-            # A different session: the range (and its heatmap) belonged to
-            # the one that just left, exactly as a single ethogram does.
-            self._bar.clear_selection()
-            self._set_cohort([(path, view)])
-            return
         ethograms = sorted(path.rglob("ethogram_raw.csv"))
         if len(ethograms) == 1:
             self.load(ethograms[0])
             return
         found = "no ethogram_raw.csv" if not ethograms else f"{len(ethograms)} ethograms"
         more = "  Use Open folder as cohort to load them all." if ethograms else ""
-        QMessageBox.critical(
-            self,
-            "Open session",
-            f"{path.name} holds no GLIDER recording (no tracking, events or data CSV) "
-            f"and {found}.{more}",
+        recording = (
+            "holds no GLIDER recording (no tracking, events or data CSV)"
+            if problem is None
+            else f"holds a GLIDER recording that could not be opened ({problem})"
         )
+        QMessageBox.critical(self, "Open session", f"{path.name} {recording} and {found}.{more}")
 
     def load(self, ethogram_csv: Path, *, pose_csv: Path | None = None) -> None:
         """Load a single session, replacing whatever was open."""
+        self._recordings.clear()
         try:
             view = SessionView.load(ethogram_csv, pose_csv=pose_csv)
-        except SessionViewError as e:
+        except _UNREADABLE as e:
             QMessageBox.critical(self, "Open session", str(e))
             return
         # A different recording: the range (and its heatmap) belonged to the
@@ -604,7 +625,12 @@ class AnalysisWindow(QMainWindow):
     def load_folder(self, root: Path) -> None:
         """Every ethogram and recording beneath ``root``, as one grouped cohort."""
         root = Path(root)
-        sources, warning = discover_sessions(root)
+        self._recordings.clear()
+        try:
+            sources, warning = discover_sessions(root)
+        except (OSError, ValueError) as e:
+            QMessageBox.critical(self, "Open cohort", f"Could not read {root}: {e}")
+            return
         if not sources:
             QMessageBox.warning(
                 self,
@@ -623,7 +649,7 @@ class AnalysisWindow(QMainWindow):
                     view = SessionView.from_recording(session)
                 else:
                     view = SessionView.load(source.path)
-            except SessionViewError as e:  # one bad session must not lose the rest
+            except _UNREADABLE as e:  # one bad session must not lose the rest
                 failed.append(f"{source.session_id}: {e}")
                 continue
             loaded.append((source.path, view))
@@ -642,12 +668,13 @@ class AnalysisWindow(QMainWindow):
 
     def load_many(self, ethograms: list[Path]) -> None:
         """Load a cohort. The first becomes the shown session."""
+        self._recordings.clear()
         loaded: list[tuple[Path, SessionView]] = []
         failed: list[str] = []
         for path in ethograms:
             try:
                 loaded.append((path, SessionView.load(path)))
-            except SessionViewError as e:  # one bad file must not lose the rest
+            except _UNREADABLE as e:  # one bad file must not lose the rest
                 failed.append(f"{path.parent.name}: {e}")
         if not loaded:
             QMessageBox.critical(self, "Open cohort", "\n".join(failed) or "nothing loaded")
@@ -667,11 +694,14 @@ class AnalysisWindow(QMainWindow):
         Timelines are built up front: the sessions panel badges which sessions
         have hardware, and a recording is parsed once per cohort either way.
         """
-        self._cohort = list(loaded)
-        self._ids = list(ids) if ids is not None else [session_id_for(p) for p, _ in loaded]
-        self._groups = list(groups) if groups is not None else [""] * len(loaded)
+        # Everything is built before anything is assigned, so a failure part
+        # way leaves the cohort on screen whole rather than half replaced.
+        loaded = list(loaded)
+        ids = list(ids) if ids is not None else [session_id_for(p) for p, _ in loaded]
+        groups = list(groups) if groups is not None else [""] * len(loaded)
+        built = [self._timeline_for(path, view) for path, view in loaded]
+        self._cohort, self._ids, self._groups = loaded, ids, groups
         self._invalidate_cohort_cache()
-        built = [self._timeline_for(path, view) for path, view in self._cohort]
         self._timelines = [timeline for timeline, _ in built]
         self._recordings_of = [recording for _, recording in built]
         order = behavior_order(label for _, view in self._cohort for label in view.labels)
@@ -777,14 +807,16 @@ class AnalysisWindow(QMainWindow):
         self._video_on.setEnabled(has_video)
         self._canvas.set_show_video(has_video and self._video_on.isChecked())
 
+        # A recording's one keypoint is the tracked centre, not a pose.
+        poses = "centroid" if view.keypoint_names == ["centroid"] else "poses"
         if view.xy is None:
             self._session_state.set_state("warn", "No poses")
         elif not has_video:
-            self._session_state.set_state("ok", "Poses only")
+            self._session_state.set_state("ok", f"{poses.capitalize()} only")
         elif not view.video_is_aligned:
             self._session_state.set_state("warn", "Video may not align")
         else:
-            self._session_state.set_state("ok", "Video + poses")
+            self._session_state.set_state("ok", f"Video + {poses}")
         lanes = timeline.lanes if timeline is not None else []
         self._hw_pill.setVisible(bool(lanes))
         self._hw_pill.set_state("ok", f"Hardware · {len(lanes)} lanes")
@@ -806,7 +838,8 @@ class AnalysisWindow(QMainWindow):
             if not view.video_is_aligned:
                 found += (
                     f"  ⚠ It has {view.video_frames:,} frames against the session's "
-                    f"{int(view.frames[-1]) + 1:,}, so frames may not line up."
+                    f"{int(view.frames[-1]) - view.first_video_frame + 1:,}, "
+                    "so frames may not line up."
                 )
         self._session_text.setText(
             f"{view.n_rows:,} scored rows at {view.fps:.2f} fps "
@@ -873,8 +906,13 @@ class AnalysisWindow(QMainWindow):
             event.accept()
             return
 
-        if event.key() in _EDIT_KEYS:
-            self._edit_key(event.key(), event.modifiers())
+        shortcut = event.modifiers() & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier
+        )
+        if event.key() in _EDIT_KEYS and not shortcut:
+            # Held J/L would otherwise double the rate at the key-repeat rate.
+            if not (event.isAutoRepeat() and event.key() in (Qt.Key.Key_J, Qt.Key.Key_L)):
+                self._edit_key(event.key(), event.modifiers())
             event.accept()
             return
 
@@ -1008,7 +1046,7 @@ class AnalysisWindow(QMainWindow):
         menu = QMenu(self)
         menu.addAction(self._range_title()).setEnabled(False)
         menu.addSeparator()
-        menu.addAction("Select whole session\t⌘A", self._select_all).setEnabled(
+        menu.addAction(f"Select whole session\t{_select_all_text()}", self._select_all).setEnabled(
             self._view is not None
         )
         menu.addAction("Set In here\tI", lambda: self._set_in(frame))
@@ -1027,7 +1065,9 @@ class AnalysisWindow(QMainWindow):
         return menu
 
     def _show_timeline_menu(self, global_pos, frame: int) -> None:
-        self._timeline_menu(frame).exec(global_pos)
+        menu = self._timeline_menu(frame)
+        menu.exec(global_pos)
+        menu.deleteLater()  # parented to the window: one would pile up per right-click
 
     def _loop_range(self) -> None:
         selection = self._bar.selection()
@@ -1060,7 +1100,7 @@ class AnalysisWindow(QMainWindow):
             "[  ]  previous / next bout\n"
             "I  O  set In / Out at the playhead\n"
             "X  select the bout under the playhead\n"
-            "⌘/Ctrl-A  select the whole session\n"
+            f"{_select_all_text()}  select the whole session\n"
             "Z  zoom to range    ⇧Z  fit the session\n"
             "Esc  clear the range\n"
             "⌘/Ctrl-scroll or pinch  zoom    scroll  pan\n"
@@ -1103,6 +1143,8 @@ class AnalysisWindow(QMainWindow):
         elif looping:
             self._set_frame(lo if self._rate > 0 else hi)
         else:
+            # At 8x the last step overshoots; land on the bound, not short of it.
+            self._set_frame(max(lo, min(hi, target)))
             self._stop()
 
     def _hud_behavior(self):
@@ -1222,12 +1264,19 @@ class AnalysisWindow(QMainWindow):
         self._fill_bouts(stats)
         self._fill_movement(stats)
         self._summary.setText(self._describe(stats))
-        self._fill_cohort(start, end)
+        if self._tables.currentWidget() is self._cohort_table:
+            self._fill_cohort(start, end)
         self._fill_zones(start, end)
         self._fill_hardware(start, end)
         self._apply_heatmap()
         self._export_btn.setEnabled(True)
         self._export_window_action.setEnabled(True)
+
+    def _on_tab_changed(self, _index: int) -> None:
+        """Fill the Cohort table when it is shown; hidden, a drag never pays for it."""
+        selection = self._bar.selection()
+        if selection is not None and self._tables.currentWidget() is self._cohort_table:
+            self._fill_cohort(*selection)
 
     def _on_selection_cleared(self) -> None:
         self._inspector.clear_range()
