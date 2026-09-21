@@ -539,3 +539,49 @@ def test_the_toolbar_belongs_to_the_timeline_tab(panel):
     assert panel.cornerWidget(Qt.Corner.TopRightCorner).isHidden()
     panel.setCurrentIndex(0)
     assert not panel.cornerWidget(Qt.Corner.TopRightCorner).isHidden()
+
+
+def test_the_navigator_strip_follows_the_device_pixel_ratio(panel):
+    """Built at 1x it is blurry on a Retina screen."""
+    nav = panel.navigator
+    nav.devicePixelRatioF = lambda: 2.0
+    assert nav._strip_pixmap().devicePixelRatio() == pytest.approx(2.0)
+
+
+def test_a_whole_session_pulse_train_repaints_quickly(qtbot):
+    """Zoomed out, every pan or zoom repaints every lane: this cost ~60 ms a lane."""
+    import time
+
+    frames = np.arange(0, 45001, dtype=float)  # 1500 s at 30 fps
+    segments = []
+    for i in range(15000):  # 10 Hz, 50 % duty, the whole session
+        segments.append(Segment(i * 100.0, i * 100.0 + 50.0, 1.0, 1.0))
+        segments.append(Segment(i * 100.0 + 50.0, (i + 1) * 100.0, 0.0, 0.0))
+    train = Lane("led1", "led1", "board0", segments, [], pin_type="DIGITAL")
+    view = TimelineView()
+    qtbot.addWidget(view)
+    view.resize(HEADER_W + 1400, 200)
+    view.set_timeline(
+        Timeline(
+            lanes=[train],
+            behavior=[],
+            frame_map=FrameMap(frames, frames / 30.0 * 1000.0, "tracking"),
+            flow_start_ms=0.0,
+            flow_end_ms=1_500_000.0,
+            start_ms=0.0,
+            end_ms=1_500_000.0,
+        )
+    )
+    rows = view._rows()
+    view._static_pixmap(rows)  # warm: the lane's cached arrays
+    view._static = None
+    t0 = time.perf_counter()
+    view._static_pixmap(rows)
+    assert time.perf_counter() - t0 < 0.05
+
+
+def test_column_coverage_is_exact():
+    from glider.gui.review.timeline import _column_coverage
+
+    a, b = np.array([0.2, 1.5, 3.9]), np.array([0.7, 3.25, 9.0])
+    assert _column_coverage(a, b, 4).tolist() == pytest.approx([0.5, 0.5, 1.0, 0.35])

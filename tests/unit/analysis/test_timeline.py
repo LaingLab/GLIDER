@@ -458,3 +458,22 @@ def test_format_ms():
     assert format_ms(145000.0) == "2:25.0"
     assert format_ms(-5500.0) == "-0:05.5"
     assert format_ms(59960.0) == "1:00.0"
+
+
+@pytest.mark.parametrize(
+    ("pin_type", "values", "binary"),
+    [
+        ("DIGITAL", (0.0, 1.0, 0.0), True),
+        ("PWM", (0.0, 1.0), False),
+        ("DIGITAL", (0.0, 2.0), False),
+    ],
+)
+def test_binary_is_cached_on_the_lane_and_keeps_the_rule(pin_type, values, binary):
+    """Asked three times per lane per frame of playback, so computed once."""
+    from glider.analysis.timeline import Lane, Segment, is_binary
+
+    segments = [Segment(i * 10.0, (i + 1) * 10.0, v, min(v, 1.0)) for i, v in enumerate(values)]
+    lane = Lane("led1", "led1", "board0", segments, [], pin_type=pin_type)
+    assert lane.binary is binary
+    assert is_binary(lane) is binary
+    assert "binary" in vars(lane)  # cached, not recomputed

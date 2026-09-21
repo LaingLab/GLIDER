@@ -182,6 +182,21 @@ class Lane:
         return np.array([s.start_ms for s in self.segments], dtype=float)
 
     @cached_property
+    def ends_ms(self) -> np.ndarray:
+        return np.array([s.end_ms for s in self.segments], dtype=float)
+
+    @cached_property
+    def values(self) -> np.ndarray:
+        return np.array([s.value for s in self.segments], dtype=float)
+
+    @cached_property
+    def binary(self) -> bool:
+        """Whether the lane only ever held 0 and 1 -- a switch, drawn as blocks."""
+        return self.pin_type in ("", "DIGITAL") and all(
+            s.value in (0.0, 1.0) for s in self.segments
+        )
+
+    @cached_property
     def rising_ms(self) -> np.ndarray:
         """When the value went from zero (or nothing) to above zero."""
         rises, previous = [], 0.0
@@ -507,8 +522,8 @@ def rate_at(lane: Lane, ms: float, window_ms: float = 1000.0) -> float | None:
 
 
 def is_binary(lane: Lane) -> bool:
-    """Whether the lane only ever held 0 and 1 -- a switch, drawn as blocks."""
-    return lane.pin_type in ("", "DIGITAL") and all(s.value in (0.0, 1.0) for s in lane.segments)
+    """Whether the lane only ever held 0 and 1 (see :attr:`Lane.binary`)."""
+    return lane.binary
 
 
 def lane_role(lane: Lane) -> str:

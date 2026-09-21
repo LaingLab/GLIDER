@@ -34,7 +34,6 @@ from glider.analysis.timeline import (
     Lane,
     Timeline,
     describe_value,
-    is_binary,
     lane_role,
 )
 from glider.gui.review.viewport import Viewport, format_timecode, snap, tick_spacing
@@ -130,6 +129,20 @@ def _label_at(lane: BehaviorLane, frame: int) -> str:
     frames = np.asarray(lane.frames)
     index = int(np.searchsorted(frames, frame, side="right")) - 1
     return lane.labels[index] if 0 <= index < len(lane.labels) else ""
+
+
+def _column_coverage(a: np.ndarray, b: np.ndarray, width: int) -> np.ndarray:
+    """How much of each pixel column the spans ``[a, b)`` cover, capped at 1."""
+    a, b = np.clip(a, 0, width), np.clip(b, 0, width)
+    c0, c1 = a.astype(int), b.astype(int)
+    n = width + 2
+    one = c0 == c1
+    cover = np.bincount(c0[one], (b - a)[one], minlength=n)
+    c0, c1, a, b = c0[~one], c1[~one], a[~one], b[~one]
+    cover += np.bincount(c0, c0 + 1 - a, minlength=n) + np.bincount(c1, b - c1, minlength=n)
+    # Columns wholly inside a span: +1 from the one after its first to its last.
+    cover += np.cumsum(np.bincount(c0 + 1, minlength=n) - np.bincount(c1, minlength=n))
+    return np.minimum(cover[:width], 1.0)
 
 
 def _clock(seconds: float) -> str:
@@ -237,7 +250,9 @@ class TimelineView(QWidget):
         """A timeline's own lanes when it has any; otherwise one from the view."""
         if self._timeline is not None and self._timeline.behavior:
             return list(self._timeline.behavior)
-        if self._view is not None and len(self._view.labels):
+        # All-blank labels (a recording without behavioral_state) would draw
+        # an empty lane titled "Classifier".
+        if self._view is not None and any(self._view.labels):
             return [
                 BehaviorLane(
                     source="ethogram",
@@ -764,67 +779,67 @@ class TimelineView(QWidget):
         inner = rect.adjusted(0, 3, 0, -2)
         baseline = inner.bottom()
         vp = self._vp
-        segments = [s for s in lane.segments if s.end_ms >= vp.start and s.start_ms <= vp.end]
-        binary = is_binary(lane)
         p.save()
         p.setClipRect(rect)
-        for segment in segments:
-            if segment.level <= 0:
-                continue
-            x0, x1 = self.x_of_axis(segment.start_ms), self.x_of_axis(segment.end_ms)
-            width = max(1.0, x1 - x0)
-            height = inner.height() * (1.0 if binary else segment.level)
-            if binary:
-                p.fillRect(QRectF(x0, baseline - height, width, height), colour)
-                continue
-            p.fillRect(
-                QRectF(x0, baseline - height, width, height), colors.qcolor_with_alpha(colour, 0.4)
-            )
-            p.fillRect(QRectF(x0, baseline - height, width, 1.5), colour)
-            left = max(x0, rect.left()) + 5
-            if x1 - left >= 30:
-                p.setFont(data_font(8))
-                p.setPen(QColor(colors.TEXT_PRIMARY))
-                unit = "°" if lane.pin_type == "SERVO" else ""
-                p.drawText(QPointF(left, baseline - 3), f"{segment.value:g}{unit}")
-        if binary:
-            self._shade_busy_columns(p, rect, inner, colour, segments)
+        if lane.binary:
+            self._paint_switches(p, lane, rect, inner, colour)
+        else:
+            for segment in lane.segments:
+                if segment.level <= 0 or segment.end_ms < vp.start or segment.start_ms > vp.end:
+                    continue
+                x0, x1 = self.x_of_axis(segment.start_ms), self.x_of_axis(segment.end_ms)
+                width = max(1.0, x1 - x0)
+                height = inner.height() * segment.level
+                bar = QRectF(x0, baseline - height, width, height)
+                p.fillRect(bar, colors.qcolor_with_alpha(colour, 0.4))
+                p.fillRect(QRectF(x0, baseline - height, width, 1.5), colour)
+                left = max(x0, rect.left()) + 5
+                if x1 - left >= 30:
+                    p.setFont(data_font(8))
+                    p.setPen(QColor(colors.TEXT_PRIMARY))
+                    unit = "°" if lane.pin_type == "SERVO" else ""
+                    p.drawText(QPointF(left, baseline - 3), f"{segment.value:g}{unit}")
         p.setPen(QPen(QColor(colors.TEXT_MUTED), 1))
         for marker in lane.markers:
             x = self.x_of_axis(marker.at_ms)
             p.drawLine(QPointF(x, inner.top()), QPointF(x, baseline))
         p.restore()
 
-    def _shade_busy_columns(self, p, rect: QRectF, inner: QRectF, colour: QColor, segments) -> None:
-        """Columns holding more than one switch draw at their ON fraction.
+    def _paint_switches(self, p, lane: Lane, rect: QRectF, inner: QRectF, colour: QColor) -> None:
+        """ON spans as blocks; a column holding more than one switch at its ON fraction.
 
         Solid would draw a 10 Hz, 50 % train exactly like a lamp held on for
-        twenty seconds.
+        twenty seconds. Vectorised: a whole-session train is 30,000 segments,
+        and a fillRect plus an x_of_axis call for each cost ~60 ms a repaint.
+        Spans >= 1 px draw individually; narrower pulses only as columns, and a
+        column holding one lone pulse draws it solid, 1 px wide.
         """
         width = int(rect.width())
-        if width <= 0 or len(segments) < 3:
+        if width <= 0 or not lane.segments:
             return
         left = rect.left()
-        starts = np.array([self.x_of_axis(s.start_ms) for s in segments]) - left
-        ends = np.array([self.x_of_axis(s.end_ms) for s in segments]) - left
-        on = np.array([s.value > 0 for s in segments])
-        in_view = (starts >= 0) & (starts < width)
-        switches = np.bincount(starts[in_view].astype(int), minlength=width)
-        busy = np.flatnonzero(switches > 1)
-        if busy.size == 0:
+        x0 = self._xs(lane.starts_ms) - left
+        x1 = self._xs(lane.ends_ms) - left
+        on = (x1 >= 0) & (x0 <= width) & (lane.values > 0)
+        wide = on & (x1 - x0 >= 1)
+        for a, b in zip(x0[wide], x1[wide], strict=True):
+            p.fillRect(QRectF(left + a, inner.top(), b - a, inner.height()), colour)
+        starts = x0[(x0 >= 0) & (x0 < width)].astype(int)
+        switches = np.bincount(starts, minlength=width)
+        pulses = np.bincount(np.clip(x0[on & ~wide], 0, width - 1).astype(int), minlength=width)
+        lone = (pulses == 1) & (switches <= 2)  # one pulse's own rise and fall
+        busy = (switches > 1) & ~lone
+        for column in np.flatnonzero((pulses > 0) & ~busy):
+            p.fillRect(QRectF(left + column, inner.top(), 1.0, inner.height()), colour)
+        if not busy.any():
             return
-        coverage = np.zeros(width)
-        for a, b in zip(starts[on], ends[on], strict=True):
-            a, b = max(float(a), 0.0), min(float(b), float(width))
-            for column in range(int(a), min(int(np.ceil(b)), width)):
-                coverage[column] += max(0.0, min(b, column + 1) - max(a, column))
+        coverage = _column_coverage(x0[on], x1[on], width)
         background = QColor(colors.CANVAS)
-        for column in busy:
+        for column in np.flatnonzero(busy):
             x = QRectF(left + column, inner.top(), 1.0, inner.height())
             p.fillRect(x, background)
-            fraction = min(1.0, float(coverage[column]))
-            if fraction > 0:
-                p.fillRect(x, colors.qcolor_with_alpha(colour, fraction))
+            if coverage[column] > 0:
+                p.fillRect(x, colors.qcolor_with_alpha(colour, float(coverage[column])))
 
     # ------------------------------------------------------------------
     # painting: live layer (every frame of playback)
@@ -1069,6 +1084,7 @@ class TimelineView(QWidget):
                 menu = self._header_menu(row)
                 if not menu.isEmpty():
                     menu.exec(event.globalPos())
+                menu.deleteLater()
             return
         if self._vp is not None and pos.y() >= RULER_H:
             self.context_menu_requested.emit(event.globalPos(), self.frame_at_x(pos.x()))
@@ -1135,9 +1151,11 @@ class Navigator(QWidget):
 
     def _strip_pixmap(self) -> QPixmap:
         width, height = int(self._lane_width()), self.height()
-        key = (width, height, id(self._view.timeline()), id(self._view._view))
+        ratio = self.devicePixelRatioF()
+        key = (width, height, ratio, id(self._view.timeline()), id(self._view._view))
         if self._strip is None or self._strip_key != key:
-            pixmap = QPixmap(max(1, width), max(1, height))
+            pixmap = QPixmap(max(1, int(width * ratio)), max(1, int(height * ratio)))
+            pixmap.setDevicePixelRatio(ratio)
             pixmap.fill(QColor(colors.CHROME))
             painter = QPainter(pixmap)
             try:
