@@ -23,6 +23,7 @@ from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from glider.analysis.timeline import BehaviorLane, Timeline
+from glider.gui.review.timeline import behavior_order, behavior_qcolor  # noqa: F401 - re-exported
 from glider.gui.styles import colors
 
 __all__ = ["TimelineBar", "behavior_order", "behavior_qcolor"]
@@ -37,38 +38,6 @@ _BEHAVIOR_LANE_HEIGHT = 46
 _HW_LANE_HEIGHT = 14
 
 _LANE_GAP = 2
-
-
-def behavior_qcolor(name: str, order: list[str] | None = None) -> QColor:
-    """The colour the annotated video would have drawn this behaviour in.
-
-    Shared with the overlay so a bout looks the same wherever it is shown;
-    blank (unscored) frames read as background rather than a colour.
-
-    ``order`` is the behaviours present, which is what makes the colours
-    reliably *different*. Without it the palette slot comes from a hash of the
-    name, and a hash has no reason to avoid collisions: two behaviours in one
-    session could land on the same colour, and neighbouring ones routinely
-    landed on adjacent hues. Given the session's own label set, the first N
-    palette entries are handed out in order, and N distinct behaviours get N
-    distinct colours.
-    """
-    if not name:
-        return QColor(colors.BORDER)
-    from glider.analysis.behavior.classify.overlay import color_for_behavior
-
-    b, g, r = color_for_behavior(name, order)
-    return QColor(r, g, b)
-
-
-def behavior_order(labels) -> list[str]:
-    """The behaviours present, in a stable order.
-
-    Sorted rather than first-appearance: the same cohort scored twice must
-    colour the same behaviour the same way, and first-appearance makes that
-    depend on which animal happened to groom first.
-    """
-    return sorted({label for label in labels if label})
 
 
 class TimelineBar(QWidget):
