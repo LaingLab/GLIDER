@@ -19,6 +19,7 @@ drawn rather than clipped.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -31,12 +32,21 @@ __all__ = [
     "BehaviorLane",
     "FrameMap",
     "Lane",
+    "LaneSummary",
     "Marker",
     "Segment",
     "Timeline",
     "build_frame_map",
     "build_timeline",
+    "describe_summary",
+    "describe_value",
+    "format_ms",
+    "hardware_in_range",
     "hardware_lanes",
+    "is_binary",
+    "lane_role",
+    "rate_at",
+    "value_at",
 ]
 
 
@@ -161,6 +171,25 @@ class Lane:
     board_id: str
     segments: list[Segment]
     markers: list[Marker]
+    pin_type: str = ""
+    # "input" when the device reported changes (input_change rows), so the
+    # timeline can colour what the rig *sensed* apart from what it *drove*.
+    direction: str = "output"
+
+    @cached_property
+    def starts_ms(self) -> np.ndarray:
+        """Segment start times, for bisecting. Segments are built in time order."""
+        return np.array([s.start_ms for s in self.segments], dtype=float)
+
+    @cached_property
+    def rising_ms(self) -> np.ndarray:
+        """When the value went from zero (or nothing) to above zero."""
+        rises, previous = [], 0.0
+        for segment in self.segments:
+            if segment.value > 0 >= previous:
+                rises.append(segment.start_ms)
+            previous = segment.value
+        return np.array(rises, dtype=float)
 
 
 def _cell(value) -> str:
@@ -229,6 +258,7 @@ def hardware_lanes(
     rows["_board"] = [_cell(v) for v in rows["board_id"]]
     rows["_pin"] = [_cell(v) for v in rows["pin"]]
     rows["_pin_type"] = [_cell(v) for v in rows["pin_type"]]
+    rows["_source"] = [_cell(v) for v in rows["source"]]
     # A board-level write with no resolved device still deserves a row.
     rows["_key"] = [
         device or f"{board}:pin{pin}"
@@ -273,6 +303,8 @@ def hardware_lanes(
             for i, (ms, value) in enumerate(levels)
         ]
 
+        pin_types = [t for t in dict.fromkeys(group["_pin_type"]) if t]
+        direction = "input" if any(s.startswith("input") for s in group["_source"]) else "output"
         label = _cell(group["_device"].iloc[0]) or str(key)
         lanes.append(
             Lane(
@@ -281,6 +313,8 @@ def hardware_lanes(
                 board_id=_cell(group["_board"].iloc[0]),
                 segments=segments,
                 markers=markers,
+                pin_type=pin_types[0].upper() if pin_types else "",
+                direction=direction,
             )
         )
 
@@ -443,3 +477,147 @@ def build_timeline(session: Session | None, view: SessionView | None = None) -> 
         start_ms=start_ms,
         end_ms=end_ms,
     )
+
+
+# ---------------------------------------------------------------------------
+# Questions the review window asks of a lane
+# ---------------------------------------------------------------------------
+
+
+def value_at(lane: Lane, ms: float) -> float | None:
+    """The value ``lane`` held at ``ms``, or None before its first level.
+
+    Zero-order hold, the same rule the segments are built with.
+    """
+    index = int(np.searchsorted(lane.starts_ms, float(ms), side="right")) - 1
+    return None if index < 0 else lane.segments[index].value
+
+
+def rate_at(lane: Lane, ms: float, window_ms: float = 1000.0) -> float | None:
+    """Pulses per second around ``ms``, when the lane is being pulsed.
+
+    Needs two rising edges inside the window: one edge is a switch, not a train.
+    """
+    edges = lane.rising_ms
+    lo, hi = np.searchsorted(edges, [ms - window_ms / 2, ms + window_ms / 2])
+    inside = edges[lo:hi]
+    if len(inside) < 2 or inside[-1] <= inside[0]:
+        return None
+    return (len(inside) - 1) / (inside[-1] - inside[0]) * 1000.0
+
+
+def is_binary(lane: Lane) -> bool:
+    """Whether the lane only ever held 0 and 1 -- a switch, drawn as blocks."""
+    return lane.pin_type in ("", "DIGITAL") and all(s.value in (0.0, 1.0) for s in lane.segments)
+
+
+def lane_role(lane: Lane) -> str:
+    """``"input"``, ``"motor"`` or ``"output"`` -- what colour the lane draws in."""
+    if lane.direction == "input":
+        return "input"
+    if lane.pin_type in ("PWM", "SERVO"):
+        return "motor"
+    return "output"
+
+
+def describe_value(lane: Lane, ms: float) -> tuple[str, bool]:
+    """What a track header shows for ``lane`` at the playhead: (text, active).
+
+    A pulse train reads as its rate rather than as the instantaneous level, so
+    the header does not flicker ON/OFF ten times a second during playback.
+    """
+    value = value_at(lane, ms)
+    if value is None:
+        return "—", False
+    if is_binary(lane):
+        rate = rate_at(lane, ms)
+        if rate is not None:
+            return f"ON · {rate:.0f} Hz", True
+        return ("ON", True) if value > 0 else ("OFF", False)
+    text = f"{value:g}°" if lane.pin_type == "SERVO" else f"{value:g}"
+    return text, value > 0
+
+
+@dataclass(frozen=True)
+class LaneSummary:
+    """What one device did inside a selected range."""
+
+    key: str
+    label: str
+    pin_type: str
+    binary: bool
+    on_ms: float
+    rising_edges: int
+    changes: list[tuple[float, float, float]]  # (ms, from, to), at most five
+    n_changes: int
+    value_at_start: float | None
+    first_rise_ms: float | None
+
+
+_MAX_CHANGES = 5
+
+
+def hardware_in_range(lanes: list[Lane], start_ms: float, end_ms: float) -> list[LaneSummary]:
+    """Per device: time on, pulses, and value changes inside ``[start_ms, end_ms)``.
+
+    A device that did nothing in the range and held nothing above zero is left
+    out, so the inspector lists what happened rather than every pin on the rig.
+    """
+    out: list[LaneSummary] = []
+    for lane in lanes:
+        on = sum(
+            max(0.0, min(s.end_ms, end_ms) - max(s.start_ms, start_ms))
+            for s in lane.segments
+            if s.value > 0
+        )
+        edges = lane.rising_ms
+        inside = edges[(edges >= start_ms) & (edges < end_ms)]
+        changes: list[tuple[float, float, float]] = []
+        previous = None
+        for segment in lane.segments:
+            moved = previous is not None and segment.value != previous
+            if moved and start_ms <= segment.start_ms < end_ms:
+                changes.append((segment.start_ms, previous, segment.value))
+            previous = segment.value
+        if on <= 0 and not changes:
+            continue
+        out.append(
+            LaneSummary(
+                key=lane.key,
+                label=lane.label,
+                pin_type=lane.pin_type,
+                binary=is_binary(lane),
+                on_ms=on,
+                rising_edges=len(inside),
+                changes=changes[:_MAX_CHANGES],
+                n_changes=len(changes),
+                value_at_start=value_at(lane, start_ms),
+                first_rise_ms=float(inside[0]) if len(inside) else None,
+            )
+        )
+    return out
+
+
+def format_ms(ms: float) -> str:
+    """Flow-relative time as ``m:ss.s``, negative before flow start."""
+    sign = "-" if ms < 0 else ""
+    seconds = abs(ms) / 1000.0
+    return f"{sign}{int(seconds // 60)}:{seconds % 60:04.1f}"
+
+
+def describe_summary(summary: LaneSummary) -> str:
+    """One line for the inspector's Hardware section."""
+    if summary.binary:
+        on_s = summary.on_ms / 1000.0
+        if summary.rising_edges == 1 and summary.first_rise_ms is not None and on_s < 1.0:
+            return f"1× at {format_ms(summary.first_rise_ms)}"
+        if summary.rising_edges > 1:
+            return f"{on_s:.1f} s on · {summary.rising_edges} pulses"
+        return f"{on_s:.1f} s on"
+    unit = "°" if summary.pin_type == "SERVO" else ""
+    if not summary.changes:
+        return f"held {summary.value_at_start or 0:g}{unit}"
+    at, before, after = summary.changes[0]
+    text = f"{before:g}{unit} → {after:g}{unit} at {format_ms(at)}"
+    more = summary.n_changes - 1
+    return text + (f" (+{more} more)" if more > 0 else "")
