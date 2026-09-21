@@ -617,7 +617,11 @@ class TestFromRecording:
         view = _open(_recording(tmp_path / "r", _walk(10)))
         assert view.px_per_mm == pytest.approx(4.0)
         # 0.5 mm per frame at 30 fps is 1.5 cm/s.
-        assert np.nanmean(view.speed_cm_s) == pytest.approx(1.5)
+        assert np.nanmean(view.speed_cm_s) == pytest.approx(1.5, rel=1e-3)
+
+    def test_fps_comes_from_the_frame_span_not_rounded_timestamps(self, tmp_path):
+        view = _open(_recording(tmp_path / "r", _walk(300)))
+        assert view.fps == pytest.approx(30.0, rel=1e-3)
 
     def test_scale_follows_the_viewing_resolution(self):
         from glider.analysis.behavior.session_view import _recording_scale

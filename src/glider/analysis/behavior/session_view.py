@@ -133,6 +133,24 @@ def _subject_rows(tracking: pd.DataFrame) -> pd.DataFrame:
     return rows.drop_duplicates(subset="frame").sort_values("frame")
 
 
+def _tracking_fps(tracking: pd.DataFrame) -> float | None:
+    """Frames per second from the tracking CSV's own frame and elapsed_ms columns.
+
+    Not Session.frame_rate: that takes the median of millisecond-rounded
+    timestamps, so a 30 fps rig reads as 30.30 fps and every per-second number
+    drifts by a percent. The frame span over the elapsed span is exact.
+    """
+    if not {"frame", "elapsed_ms"}.issubset(tracking.columns):
+        return None
+    pairs = tracking[["frame", "elapsed_ms"]].apply(pd.to_numeric, errors="coerce").dropna()
+    pairs = pairs.drop_duplicates(subset="frame").sort_values("frame")
+    if len(pairs) < 2:
+        return None
+    frames = float(pairs["frame"].iloc[-1] - pairs["frame"].iloc[0])
+    elapsed = float(pairs["elapsed_ms"].iloc[-1] - pairs["elapsed_ms"].iloc[0])
+    return frames / elapsed * 1000.0 if frames > 0 and elapsed > 0 else None
+
+
 def _find_upward(start: Path, name: str) -> Path | None:
     """``name`` in *start* or a few folders above it, or None.
 
@@ -383,7 +401,7 @@ class SessionView:
         view = cls(
             labels=labels,
             frames=frames,
-            fps=float(session.frame_rate or 30.0),
+            fps=float(_tracking_fps(tracking) or session.frame_rate or 30.0),
             source=Path(session.directory),
             first_video_frame=1 if len(every_frame) and every_frame.min() >= 1 else 0,
         )
