@@ -130,7 +130,7 @@ class TestAnalysisWindow:
         assert win._bouts.item(0, 0).text() == "locomote"
 
     def test_selection_still_arrives_in_frames(self, qtbot, tmp_path):
-        """The swap from EthogramBar to TimelineBar must not change the
+        """The swap from EthogramBar to TimelineView must not change the
         unit the tables receive. If it does, every window statistic is
         computed over the wrong range and nothing raises."""
         win = self._win(qtbot, tmp_path)

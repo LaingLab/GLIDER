@@ -3,7 +3,7 @@
 The event log has always held everything a hardware raster needs — every
 pin edge and every commanded write, timestamped against a session epoch
 the other recorders share. Nothing had drawn it. This builds the lanes;
-:mod:`glider.gui.widgets.timeline_bar` draws them.
+:mod:`glider.gui.review.timeline` draws them.
 
 Qt-free on purpose, in the same way :mod:`glider.analysis.behavior.session_view`
 is: the axis arithmetic and the lane building are the parts worth testing,
