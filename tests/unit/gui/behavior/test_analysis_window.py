@@ -1565,3 +1565,15 @@ class TestHiddenLanesAreRemembered:
         qtbot.addWidget(again)
         again.open_path(folder)
         assert again._bar.hidden() == {"led1"}
+
+    def test_same_named_sessions_in_two_cohorts_do_not_share_hidden_lanes(self, qtbot, tmp_path):
+        a = _recording(tmp_path / "cohortA" / "sessions" / "m01")
+        b = _recording(tmp_path / "cohortB" / "sessions" / "m01")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(a)
+        win._bar.set_hidden({"led1"})
+        other = AnalysisWindow()
+        qtbot.addWidget(other)
+        other.open_path(b)
+        assert other._bar.hidden() == set()

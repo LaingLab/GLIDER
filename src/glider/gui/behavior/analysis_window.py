@@ -13,6 +13,7 @@ draw. This module wires them together.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -838,8 +839,11 @@ class AnalysisWindow(QMainWindow):
         self._status_path.setToolTip(str(self._ethogram_csv))
 
     def _hidden_key(self) -> str:
-        sid = self._ids[self._shown] if 0 <= self._shown < len(self._ids) else "session"
-        return f"review/hidden/{sid}"
+        """Per session on disk: ids repeat across cohorts (sessions/m01/)."""
+        if not 0 <= self._shown < len(self._cohort):
+            return "review/hidden/none"
+        path = str(Path(self._cohort[self._shown][0]).resolve())
+        return f"review/hidden/{hashlib.sha1(path.encode('utf-8')).hexdigest()[:16]}"
 
     def _remember_hidden(self, keys: list) -> None:
         if self._cohort:
