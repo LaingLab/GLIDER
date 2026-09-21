@@ -56,3 +56,35 @@ def test_zone_count_in_the_title(inspector):
     assert inspector.zones_title.text() == "ZONES (3)"
     inspector.set_zone_count(0)
     assert inspector.zones_title.text() == "ZONES"
+
+
+def test_tables_are_as_tall_as_their_rows(qtbot):
+    inspector = Inspector()
+    qtbot.addWidget(inspector)
+    inspector.resize(330, 2000)
+    inspector.show()
+    qtbot.waitExposed(inspector)
+    inspector.set_hardware([("a", "1.0 s on", QColor(colors.LANE_OUTPUT))])
+    qtbot.wait(20)
+    one_row = inspector.hardware.height()
+    assert one_row <= inspector.hardware.sizeHint().height() + 2
+    inspector.set_hardware([("a", "1.0 s on", QColor(colors.LANE_OUTPUT))] * 4)
+    qtbot.wait(20)
+    assert inspector.hardware.height() > one_row
+
+
+def test_session_review_qss_uses_only_token_colours():
+    import re
+    from pathlib import Path
+
+    from glider.gui import styles
+
+    qss = (Path(styles.__file__).parent / "tools.qss").read_text(encoding="utf-8")
+    review = qss[qss.index("Session Review: timeline panel") :]
+    tokens = {
+        v.lower()
+        for k, v in vars(colors).items()
+        if k.isupper() and isinstance(v, str) and v.startswith("#")
+    }
+    used = {h.lower() for h in re.findall(r"#[0-9a-fA-F]{6}\b", review)}
+    assert used <= tokens, sorted(used - tokens)

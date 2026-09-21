@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -48,6 +49,7 @@ def _grow_with_rows(table: QTableWidget) -> QTableWidget:
     table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
     table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     table.verticalHeader().setVisible(False)
+    table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     return table
 
 
@@ -201,6 +203,8 @@ class Inspector(QTabWidget):
             value.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.hardware.setItem(r, 0, item)
             self.hardware.setItem(r, 1, value)
+        self.hardware.updateGeometry()
+        self.hardware.setMaximumHeight(self.hardware.sizeHint().height())
 
     def set_zone_count(self, n: int) -> None:
         self.zones_title.setText("ZONES" if n == 0 else f"ZONES ({n})")

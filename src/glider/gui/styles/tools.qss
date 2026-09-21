@@ -721,7 +721,7 @@ QFrame#Transport {
     border-top: 1px solid #1e2530;
 }
 QLabel#TransportClock {
-    color: #f1f5f9;
+    color: #e2e8f0;
     padding: 0px 6px;
 }
 QCheckBox#ToggleChip {
@@ -765,7 +765,7 @@ QLabel#KpiValue {
     color: #e2e8f0;
 }
 QLabel#SectionTitle {
-    color: #64748b;
+    color: #718096;
     font-weight: 600;
     padding-top: 6px;
 }

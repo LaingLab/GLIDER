@@ -211,3 +211,10 @@ PLAYHEAD = "#ff5252"
 LANE_OUTPUT = ACCENT
 LANE_MOTOR = "#a78bfa"
 LANE_INPUT = "#34d399"
+
+# Timeline and transport chrome, used by tools.qss (QSS cannot import
+# these, so the stylesheet repeats the hex; keep them in step).
+REVIEW_TOOL_TEXT = "#8391a5"
+REVIEW_TOOL_ACTIVE = "#172230"
+REVIEW_TOOL_ACTIVE_BORDER = "#2f4a60"
+REVIEW_TOOL_BORDER = "#243040"
