@@ -103,9 +103,8 @@ def format_timecode(seconds: float, fps: float) -> str:
 def format_seconds(seconds: float) -> str:
     """``m:ss.ss`` for durations and read-outs."""
     sign = "-" if seconds < 0 else ""
-    s = abs(float(seconds))
-    minutes = int(s // 60)
-    return f"{sign}{minutes}:{s - 60 * minutes:05.2f}"
+    minutes, centis = divmod(round(abs(float(seconds)) * 100), 6000)
+    return f"{sign}{minutes}:{centis / 100:05.2f}"
 
 
 def tick_spacing(span_s: float) -> tuple[int, int]:

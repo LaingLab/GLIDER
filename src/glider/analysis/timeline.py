@@ -601,8 +601,8 @@ def hardware_in_range(lanes: list[Lane], start_ms: float, end_ms: float) -> list
 def format_ms(ms: float) -> str:
     """Flow-relative time as ``m:ss.s``, negative before flow start."""
     sign = "-" if ms < 0 else ""
-    seconds = abs(ms) / 1000.0
-    return f"{sign}{int(seconds // 60)}:{seconds % 60:04.1f}"
+    minutes, tenths = divmod(round(abs(ms) / 100.0), 600)
+    return f"{sign}{minutes}:{tenths / 10:04.1f}"
 
 
 def describe_summary(summary: LaneSummary) -> str:

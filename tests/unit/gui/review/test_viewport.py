@@ -84,6 +84,8 @@ def test_timecode_has_frames_and_a_sign():
 def test_seconds_read_out():
     assert format_seconds(125.5) == "2:05.50"
     assert format_seconds(-3.25) == "-0:03.25"
+    assert format_seconds(59.999) == "1:00.00"
+    assert format_seconds(3599.999) == "60:00.00"
 
 
 def test_tick_spacing_follows_the_span():

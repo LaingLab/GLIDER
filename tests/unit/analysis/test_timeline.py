@@ -457,3 +457,4 @@ def test_lane_roles(tmp_path: Path):
 def test_format_ms():
     assert format_ms(145000.0) == "2:25.0"
     assert format_ms(-5500.0) == "-0:05.5"
+    assert format_ms(59960.0) == "1:00.0"
