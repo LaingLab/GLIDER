@@ -746,3 +746,26 @@ QCheckBox#ToggleChip::indicator {
     height: 0px;
     border: none;
 }
+
+/* ---- Session Review: inspector ------------------------------------- */
+QTabWidget#Inspector::pane {
+    border: none;
+}
+QFrame#RangeCard {
+    background-color: rgba(56, 189, 248, 0.07);
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    border-radius: @RADIUS_MEDIUM@;
+}
+QFrame#Kpi {
+    background-color: #111820;
+    border: 1px solid #1e2530;
+    border-radius: @RADIUS_SMALL@;
+}
+QLabel#KpiValue {
+    color: #e2e8f0;
+}
+QLabel#SectionTitle {
+    color: #64748b;
+    font-weight: 600;
+    padding-top: 6px;
+}
