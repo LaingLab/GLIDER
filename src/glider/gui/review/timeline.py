@@ -509,6 +509,7 @@ class TimelineView(QWidget):
         key = (
             self.width(),
             self.height(),
+            self.devicePixelRatioF(),
             None if vp is None else (vp.start, vp.end),
             frozenset(self._collapsed),
             frozenset(self._hidden),

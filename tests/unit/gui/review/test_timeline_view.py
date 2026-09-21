@@ -232,3 +232,11 @@ def test_a_fast_pulse_train_is_drawn_at_its_duty_cycle(view):
     colour = _pixel(view, view.x_of_frame(150), view.lane_rect("led1").bottom() - 6)
     assert colour != QColor(colors.LANE_OUTPUT)
     assert colour != QColor(colors.CANVAS)
+
+
+def test_the_cached_image_follows_the_device_pixel_ratio(view):
+    view.set_timeline(_timeline())
+    rows = view._rows()
+    assert view._static_pixmap(rows).devicePixelRatio() == pytest.approx(view.devicePixelRatioF())
+    view.devicePixelRatioF = lambda: 2.0  # a move to a Retina screen, no resize
+    assert view._static_pixmap(rows).devicePixelRatio() == pytest.approx(2.0)
