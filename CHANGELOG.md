@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Session Review is rebuilt as an editor**, laid out like DaVinci Resolve's
+  Edit page: the loaded **sessions** down the left, grouped by treatment, each
+  row badged with the video, poses and hardware it has; the **viewer** in the
+  middle, with a HUD naming the behaviour under the playhead and every output
+  the rig is driving; an **inspector** on the right that fills with the
+  selected range's numbers as soon as a drag ends; and a full-width
+  **timeline** below, behaviour and hardware as tracks under one playhead, with
+  a **navigator** above it that always shows the whole session.
+  - **A live recording folder opens without an ethogram.** Its labels are the
+    rig's `behavioral_state` and its position the tracked centroid.
+  - **Opening a folder as a cohort groups it by `glider_project.json`.** A
+    manifest that cannot be read loads the sessions ungrouped, with a warning.
+  - **New keys:** I and O set the range's In and Out at the playhead; X selects
+    the bout under it; Z zooms to the range and ⇧Z fits the session; J, K and L
+    shuttle back, stop and forward (again for 2×, 4×, 8×); Esc clears the
+    range; ⌘A (Ctrl+A elsewhere) selects the whole session.
+
 - **A splash screen, a landing page, and top-level tabs.** GLIDER used to open
   straight onto an empty node graph belonging to an unnamed, unsaved session,
   with no sign it was still starting up.
@@ -207,6 +224,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Session Review's timeline gestures changed.** A plain drag in the timeline
+  now *selects* a range; it used to scrub. Scrub by dragging the ruler or the
+  navigator instead. A right-drag no longer selects: right-click opens the
+  range menu (Set In / Out here, select the bout, zoom, loop, export, copy the
+  timecode).
 - **Multi-animal batch tracking no longer writes the four-row DeepLabCut CSV
   — it writes one plain three-row CSV per animal instead, and the four-row
   file is now an opt-in export.** The four-row file was the one place this
