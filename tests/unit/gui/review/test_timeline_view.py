@@ -498,6 +498,23 @@ def test_dragging_an_edge_zooms(panel):
     assert panel.view.viewport.end == pytest.approx(6000.0, abs=40.0)
 
 
+def test_a_stale_navigator_drag_does_not_pan(panel):
+    nav = panel.navigator
+    panel.view.viewport.show(2000.0, 4000.0)
+    panel.view.refresh_viewport()
+    _mouse(nav, "press", _nav_x(nav, 3000.0), 15)
+    hover = QMouseEvent(
+        QEvent.Type.MouseMove,
+        QPointF(_nav_x(nav, 6000.0), 15),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    nav.mouseMoveEvent(hover)
+    assert panel.view.viewport.start == pytest.approx(2000.0)
+    assert nav._drag is None
+
+
 def test_the_toolbar_reports_the_range(panel):
     panel.view.set_selection(30, 59)
     assert panel.in_label.text() == "In 00:00:01:00"

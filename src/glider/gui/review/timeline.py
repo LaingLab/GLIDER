@@ -1216,6 +1216,10 @@ class Navigator(QWidget):
 
     def mouseMoveEvent(self, event):  # noqa: N802 - Qt override
         x = event.position().x()
+        if self._drag is not None and not (event.buttons() & Qt.MouseButton.LeftButton):
+            # The release was missed (e.g. it happened outside the widget).
+            self._drag = None
+            return
         if self._drag is None:
             box = self.box()
             near = box is not None and min(abs(x - box[0]), abs(x - box[1])) <= self.EDGE_PX
@@ -1233,7 +1237,9 @@ class Navigator(QWidget):
             vp.show(vp.start, max(t, vp.start + vp.min_span))
         self._view.refresh_viewport()
 
-    def mouseReleaseEvent(self, _event):  # noqa: N802 - Qt override
+    def mouseReleaseEvent(self, event):  # noqa: N802 - Qt override
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
         self._drag = None
 
 
