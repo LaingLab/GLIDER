@@ -60,3 +60,16 @@ def test_the_strip_is_the_ethogram_in_miniature(qtbot):
     assert image.width() == 10
     assert image.pixelColor(2, 0) == behavior_qcolor("a", ["a", "b"])
     assert image.pixelColor(8, 0) == behavior_qcolor("b", ["a", "b"])
+
+
+def test_reloading_releases_the_old_rows(qtbot):
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent
+
+    pool = SessionPool()
+    qtbot.addWidget(pool)
+    pool.set_entries(_entries())
+    old = [pool.tree.itemWidget(item, 0) for item in pool._items]
+    pool.set_entries(_entries())
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert all(sip.isdeleted(widget) for widget in old)
