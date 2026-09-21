@@ -373,7 +373,7 @@ class KeypointCanvas(QWidget):
 def _icon_button(glyph: str, tip: str) -> QPushButton:
     button = QPushButton(glyph)
     button.setToolTip(tip)
-    button.setFixedWidth(32)
+    button.setFixedWidth(36)
     set_button_role(button, "icon")
     return button
 
@@ -396,11 +396,11 @@ class Transport(QFrame):
         row.setContentsMargins(10, 6, 10, 6)
         row.setSpacing(4)
         self.to_start = _icon_button("⏮", "Session start  (Home)")
-        self.back = _icon_button("◀", "Back one frame  (←)")
+        self.back = _icon_button("◀▏", "Back one frame  (←)")
         self.play = QPushButton("▶  Play")
         self.play.setMinimumWidth(88)
         set_button_role(self.play, "primary")
-        self.forward = _icon_button("▶", "Forward one frame  (→)")
+        self.forward = _icon_button("▕▶", "Forward one frame  (→)")
         self.to_end = _icon_button("⏭", "Session end  (End)")
         for button in (self.to_start, self.back, self.play, self.forward, self.to_end):
             row.addWidget(button)

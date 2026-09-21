@@ -111,3 +111,11 @@ def test_the_transport_has_every_toggle(qtbot):
     assert transport.heatmap_on.isChecked() is False
     assert transport.video_on.isChecked() is True
     assert "Play" in transport.play.text()
+
+
+def test_step_buttons_do_not_look_like_play(qtbot):
+    transport = Transport()
+    qtbot.addWidget(transport)
+    assert transport.forward.text() != "▶"
+    assert "▶" not in {transport.back.text(), transport.forward.text()} - {"▕▶"}
+    assert (transport.back.text(), transport.forward.text()) == ("◀▏", "▕▶")
