@@ -17,7 +17,17 @@ from dataclasses import dataclass
 import numpy as np
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
-from PyQt6.QtWidgets import QMenu, QSizePolicy, QWidget
+from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QSizePolicy,
+    QTabWidget,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from glider.analysis.timeline import (
     BehaviorLane,
@@ -39,7 +49,9 @@ __all__ = [
     "MARKER_H",
     "RULER_H",
     "TOP_H",
+    "Navigator",
     "Row",
+    "TimelinePanel",
     "TimelineView",
     "behavior_order",
     "behavior_qcolor",
@@ -1073,3 +1085,251 @@ class TimelineView(QWidget):
                 f"Show hidden lanes ({len(self._hidden)})", lambda: self.set_hidden(set())
             )
         return menu
+
+
+def _span_text(seconds: float) -> str:
+    return f"{seconds:.0f} s" if seconds < 120 else _clock(seconds)
+
+
+class Navigator(QWidget):
+    """The whole session, always, with a box around what the timeline shows.
+
+    Drag the box to pan, drag its edges to zoom, click outside it to jump there.
+    Resolve's Cut page keeps a whole-session timeline above the zoomed one for
+    the same reason: at 45,000 frames you have to see where you are.
+    """
+
+    HEIGHT = 30
+    EDGE_PX = 5
+
+    def __init__(self, view: TimelineView, parent=None):
+        super().__init__(parent)
+        self._view = view
+        self.setFixedHeight(self.HEIGHT)
+        self.setMouseTracking(True)
+        self._drag: str | None = None
+        self._grab = 0.0
+        self._strip: QPixmap | None = None
+        self._strip_key = None
+        view.viewport_changed.connect(self.update)
+        view.playhead_moved.connect(lambda _frame: self.update())
+        view.selection_changed.connect(lambda *_: self.update())
+        view.selection_cleared.connect(self.update)
+
+    def _lane_width(self) -> float:
+        return max(1.0, float(self.width() - HEADER_W))
+
+    def _x(self, t: float) -> float:
+        vp = self._view.viewport
+        return HEADER_W + (t - vp.lo) / (vp.hi - vp.lo) * self._lane_width()
+
+    def _t(self, x: float) -> float:
+        vp = self._view.viewport
+        return vp.lo + (x - HEADER_W) / self._lane_width() * (vp.hi - vp.lo)
+
+    def box(self) -> tuple[float, float] | None:
+        vp = self._view.viewport
+        if vp is None or vp.hi <= vp.lo:
+            return None
+        return self._x(vp.start), self._x(vp.end)
+
+    def _strip_pixmap(self) -> QPixmap:
+        width, height = int(self._lane_width()), self.height()
+        key = (width, height, id(self._view.timeline()), id(self._view._view))
+        if self._strip is None or self._strip_key != key:
+            pixmap = QPixmap(max(1, width), max(1, height))
+            pixmap.fill(QColor(colors.CHROME))
+            painter = QPainter(pixmap)
+            try:
+                self._view.paint_overview(painter, QRectF(0, 5, width, height - 12))
+            finally:
+                painter.end()
+            self._strip, self._strip_key = pixmap, key
+        return self._strip
+
+    def paintEvent(self, _event):  # noqa: N802 - Qt override
+        p = QPainter(self)
+        h = float(self.height())
+        p.fillRect(self.rect(), QColor(colors.CHROME))
+        p.fillRect(QRectF(0, 0, HEADER_W, h), QColor(colors.SURFACE_1))
+        caption = _smaller(self.font(), 3)
+        caption.setBold(True)
+        p.setFont(caption)
+        p.setPen(QColor(colors.TEXT_MUTED))
+        p.drawText(QRectF(10, 2, HEADER_W - 20, 14), Qt.AlignmentFlag.AlignVCenter, "NAVIGATOR")
+        box = self.box()
+        if box is not None:
+            view, vp = self._view, self._view.viewport
+            shown = view.seconds_of_axis(vp.end) - view.seconds_of_axis(vp.start)
+            total = view.seconds_of_axis(vp.hi) - view.seconds_of_axis(vp.lo)
+            p.setFont(_smaller(self.font(), 2))
+            p.setPen(QColor(colors.TEXT_DISABLED))
+            p.drawText(
+                QRectF(10, 15, HEADER_W - 20, 13),
+                Qt.AlignmentFlag.AlignVCenter,
+                f"{_span_text(shown)} of {_clock(total)} shown",
+            )
+            p.drawPixmap(HEADER_W, 0, self._strip_pixmap())
+            selection = view.selection()
+            if selection is not None:
+                a = self._x(view.axis_of_frame(selection[0]))
+                b = self._x(view.axis_of_frame(selection[1] + 1))
+                p.fillRect(
+                    QRectF(a, 0, b - a, h), colors.qcolor_with_alpha(QColor(colors.ACCENT), 0.25)
+                )
+            x = self._x(view.axis_of_frame(view.current_frame()))
+            p.fillRect(QRectF(x, 0, 1.5, h), QColor(colors.PLAYHEAD))
+            x0, x1 = box
+            dim = colors.qcolor_with_alpha(QColor(colors.CANVAS), 0.6)
+            p.fillRect(QRectF(HEADER_W, 0, x0 - HEADER_W, h), dim)
+            p.fillRect(QRectF(x1, 0, self.width() - x1, h), dim)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setPen(QPen(QColor(colors.TEXT_PRIMARY), 1.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(QRectF(x0, 1.5, max(2.0, x1 - x0), h - 3), 4, 4)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(colors.TEXT_PRIMARY))
+            for edge in (x0, x1):
+                p.drawRoundedRect(QRectF(edge - 2, h / 2 - 7, 4, 14), 2, 2)
+        p.setPen(QPen(QColor(colors.BORDER), 1))
+        p.drawLine(QPointF(HEADER_W - 0.5, 0), QPointF(HEADER_W - 0.5, h))
+        p.drawLine(QPointF(0, h - 0.5), QPointF(self.width(), h - 0.5))
+
+    def mousePressEvent(self, event):  # noqa: N802 - Qt override
+        box = self.box()
+        x = event.position().x()
+        if box is None or event.button() != Qt.MouseButton.LeftButton or x < HEADER_W:
+            return
+        vp = self._view.viewport
+        x0, x1 = box
+        if abs(x - x0) <= self.EDGE_PX:
+            self._drag = "left"
+        elif abs(x - x1) <= self.EDGE_PX:
+            self._drag = "right"
+        elif x0 < x < x1:
+            self._drag, self._grab = "move", self._t(x) - vp.start
+        else:
+            t = self._t(x)
+            vp.show(t - vp.span / 2, t + vp.span / 2)
+            self._view.refresh_viewport()
+            self._drag, self._grab = "move", t - vp.start
+
+    def mouseMoveEvent(self, event):  # noqa: N802 - Qt override
+        x = event.position().x()
+        if self._drag is None:
+            box = self.box()
+            near = box is not None and min(abs(x - box[0]), abs(x - box[1])) <= self.EDGE_PX
+            self.setCursor(
+                Qt.CursorShape.SizeHorCursor if near else Qt.CursorShape.PointingHandCursor
+            )
+            return
+        vp, t = self._view.viewport, self._t(x)
+        if self._drag == "move":
+            start = t - self._grab
+            vp.show(start, start + vp.span)
+        elif self._drag == "left":
+            vp.show(min(t, vp.end - vp.min_span), vp.end)
+        else:
+            vp.show(vp.start, max(t, vp.start + vp.min_span))
+        self._view.refresh_viewport()
+
+    def mouseReleaseEvent(self, _event):  # noqa: N802 - Qt override
+        self._drag = None
+
+
+def _tool(text: str, tip: str, *, checked: bool | None = None) -> QToolButton:
+    button = QToolButton()
+    button.setObjectName("TimelineTool")
+    button.setText(text)
+    button.setToolTip(tip)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    if checked is not None:
+        button.setCheckable(True)
+        button.setChecked(checked)
+    return button
+
+
+def _rule() -> QFrame:
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.VLine)
+    line.setFixedSize(1, 18)
+    line.setObjectName("TimelineRule")
+    return line
+
+
+def _readout(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("TimelineReadout")
+    label.setFont(data_font(9))
+    return label
+
+
+class TimelinePanel(QTabWidget):
+    """The Timeline tab (navigator above lanes) and whatever tabs follow it.
+
+    The toolbar sits in the tab row, as Resolve's timeline toolbar does, and is
+    only shown while the Timeline tab is.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("TimelinePanel")
+        self.setDocumentMode(True)
+        self.view = TimelineView()
+        self.navigator = Navigator(self.view)
+        page = QWidget()
+        column = QVBoxLayout(page)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        column.addWidget(self.navigator)
+        column.addWidget(self.view, 1)
+        self.addTab(page, "Timeline")
+
+        tools = QWidget()
+        row = QHBoxLayout(tools)
+        row.setContentsMargins(8, 2, 8, 2)
+        row.setSpacing(4)
+        self.snap = _tool(
+            "Snap", "Selections snap to bout edges and hardware switches", checked=True
+        )
+        self.snap.toggled.connect(self.view.set_snap)
+        self.loop = _tool("Loop", "Playback loops inside the selected range", checked=False)
+        row.addWidget(self.snap)
+        row.addWidget(self.loop)
+        row.addWidget(_rule())
+        self.bout_slot = QHBoxLayout()
+        self.bout_slot.setSpacing(4)
+        row.addLayout(self.bout_slot)
+        row.addWidget(_rule())
+        self.in_label, self.out_label, self.dur_label = (
+            _readout("In —"),
+            _readout("Out —"),
+            _readout(""),
+        )
+        for label in (self.in_label, self.out_label, self.dur_label):
+            row.addWidget(label)
+        row.addWidget(_rule())
+        self.zoom_btn = _tool("Zoom to range", "Fit the selected range to the timeline  (Z)")
+        self.fit_btn = _tool("Fit", "Show the whole session  (⇧Z)")
+        self.zoom_btn.clicked.connect(self.view.zoom_to_selection)
+        self.fit_btn.clicked.connect(self.view.fit)
+        row.addWidget(self.zoom_btn)
+        row.addWidget(self.fit_btn)
+        self.setCornerWidget(tools, Qt.Corner.TopRightCorner)
+        self.currentChanged.connect(lambda index: tools.setVisible(index == 0))
+
+        self.view.selection_changed.connect(self._show_range)
+        self.view.selection_cleared.connect(self._clear_range)
+
+    def _show_range(self, start: int, end: int) -> None:
+        view, fps = self.view, self.view.fps()
+        t_in = view.seconds_of_axis(view.axis_of_frame(start))
+        t_out = view.seconds_of_axis(view.axis_of_frame(end + 1))
+        self.in_label.setText(f"In {format_timecode(t_in, fps)}")
+        self.out_label.setText(f"Out {format_timecode(t_out, fps)}")
+        self.dur_label.setText(f"{t_out - t_in:.2f} s")
+
+    def _clear_range(self) -> None:
+        self.in_label.setText("In —")
+        self.out_label.setText("Out —")
+        self.dur_label.setText("")

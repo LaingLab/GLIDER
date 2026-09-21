@@ -435,3 +435,90 @@ def test_a_right_release_does_not_end_a_left_drag(view):
     view.mouseReleaseEvent(right)
     _mouse(view, "move", view.x_of_frame(150), y)
     assert abs(view.selection()[1] - 150) <= 1
+
+
+from PyQt6.QtWidgets import QTableWidget  # noqa: E402
+
+from glider.gui.review.timeline import TimelinePanel  # noqa: E402
+
+
+@pytest.fixture
+def panel(qtbot):
+    widget = TimelinePanel()
+    qtbot.addWidget(widget)
+    widget.resize(HEADER_W + 400, 300)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.view.set_timeline(_timeline())
+    return widget
+
+
+def _nav_x(nav, t):
+    lane_w = nav.width() - HEADER_W
+    return HEADER_W + t / 10000.0 * lane_w
+
+
+def test_the_box_is_the_viewport(panel):
+    panel.view.viewport.show(2000.0, 4000.0)
+    panel.view.refresh_viewport()
+    x0, x1 = panel.navigator.box()
+    assert x0 == pytest.approx(_nav_x(panel.navigator, 2000.0))
+    assert x1 == pytest.approx(_nav_x(panel.navigator, 4000.0))
+
+
+def test_dragging_the_box_pans(panel):
+    nav = panel.navigator
+    panel.view.viewport.show(2000.0, 4000.0)
+    panel.view.refresh_viewport()
+    mid = _nav_x(nav, 3000.0)
+    to = _nav_x(nav, 4000.0)
+    _mouse(nav, "press", mid, 15)
+    _mouse(nav, "move", to, 15)
+    _mouse(nav, "release", to, 15)
+    assert panel.view.viewport.start == pytest.approx(3000.0, abs=40.0)
+    assert panel.view.viewport.span == pytest.approx(2000.0)
+
+
+def test_clicking_outside_the_box_jumps_there(panel):
+    panel.view.viewport.show(0.0, 2000.0)
+    panel.view.refresh_viewport()
+    _mouse(panel.navigator, "press", _nav_x(panel.navigator, 8000.0), 15)
+    _mouse(panel.navigator, "release", _nav_x(panel.navigator, 8000.0), 15)
+    assert panel.view.viewport.start == pytest.approx(7000.0, abs=40.0)
+
+
+def test_dragging_an_edge_zooms(panel):
+    nav = panel.navigator
+    panel.view.viewport.show(2000.0, 4000.0)
+    panel.view.refresh_viewport()
+    _mouse(nav, "press", _nav_x(nav, 4000.0), 15)
+    _mouse(nav, "move", _nav_x(nav, 6000.0), 15)
+    _mouse(nav, "release", _nav_x(nav, 6000.0), 15)
+    assert panel.view.viewport.start == pytest.approx(2000.0, abs=40.0)
+    assert panel.view.viewport.end == pytest.approx(6000.0, abs=40.0)
+
+
+def test_the_toolbar_reports_the_range(panel):
+    panel.view.set_selection(30, 59)
+    assert panel.in_label.text() == "In 00:00:01:00"
+    assert panel.out_label.text() == "Out 00:00:02:00"
+    assert panel.dur_label.text() == "1.00 s"
+
+
+def test_fit_shows_the_whole_session(panel):
+    panel.view.viewport.show(2000.0, 3000.0)
+    panel.fit_btn.click()
+    assert (panel.view.viewport.start, panel.view.viewport.end) == (0.0, 10000.0)
+
+
+def test_snap_toggle_reaches_the_view(panel):
+    panel.snap.setChecked(False)
+    assert panel.view._snap_on is False
+
+
+def test_the_toolbar_belongs_to_the_timeline_tab(panel):
+    panel.addTab(QTableWidget(), "Cohort")
+    panel.setCurrentIndex(1)
+    assert panel.cornerWidget(Qt.Corner.TopRightCorner).isHidden()
+    panel.setCurrentIndex(0)
+    assert not panel.cornerWidget(Qt.Corner.TopRightCorner).isHidden()

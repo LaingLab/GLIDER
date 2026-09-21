@@ -689,3 +689,28 @@ QToolTip {
     border-radius: @RADIUS_MEDIUM@;
     padding: 6px 8px;
 }
+
+/* ---- Session Review: timeline panel -------------------------------- */
+QTabWidget#TimelinePanel::pane {
+    border: none;
+}
+QToolButton#TimelineTool {
+    padding: 3px 8px;
+    border: 1px solid transparent;
+    border-radius: @RADIUS_SMALL@;
+    color: #8391a5;
+    background: transparent;
+}
+QToolButton#TimelineTool:checked {
+    color: #e2e8f0;
+    background-color: #172230;
+    border-color: #2f4a60;
+}
+QFrame#TimelineRule {
+    background-color: #243040;
+    border: none;
+}
+QLabel#TimelineReadout {
+    color: #c0c8d4;
+    padding: 0px 4px;
+}
