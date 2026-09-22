@@ -377,6 +377,21 @@ def _flow_elapsed(session: Session, marker: str) -> float | None:
     return float(hit["elapsed_ms"].iloc[0])
 
 
+def _first_tracked_frame(tracking) -> int:
+    """1 when the logger numbered this recording's frames from 1, else 0.
+
+    The rule :meth:`SessionView.from_recording` uses for ``first_video_frame``:
+    the tracking logger does ``_frame_count += 1`` before its first write,
+    while an ethogram counts video indices from 0.
+    """
+    import pandas as pd
+
+    if tracking.empty or "frame" not in tracking.columns:
+        return 0
+    frames = pd.to_numeric(tracking["frame"], errors="coerce").dropna()
+    return 1 if len(frames) and frames.min() >= 1 else 0
+
+
 def build_timeline(session: Session | None, view: SessionView | None = None) -> Timeline:
     """Assemble a session into lanes on one axis.
 
@@ -412,6 +427,17 @@ def build_timeline(session: Session | None, view: SessionView | None = None) -> 
     offset = flow_start_elapsed or 0.0
 
     frame_map = build_frame_map(session, offset)
+    # One timeline, one numbering -- the view's, since its playhead, selection
+    # and ethogram lane all speak it. An ethogram counts video indices from 0
+    # and the logger from 1, so without this ethogram frame n was drawn at
+    # the time of video frame n - 1 and every device sat a frame off the video.
+    shift = 0
+    if view is not None:
+        shift = _first_tracked_frame(session.tracking) - view.first_video_frame
+    if shift and frame_map is not None:
+        frame_map = FrameMap(
+            frames=frame_map.frames - shift, ms=frame_map.ms, source=frame_map.source
+        )
 
     tracking = session.tracking
     if not tracking.empty and "behavioral_state" in tracking.columns:
@@ -459,7 +485,7 @@ def build_timeline(session: Session | None, view: SessionView | None = None) -> 
                 BehaviorLane(
                     source=source,
                     labels=[str(v) for v in per_frame["behavioral_state"]],
-                    frames=per_frame["frame"].to_numpy(dtype=int),
+                    frames=per_frame["frame"].to_numpy(dtype=int) - shift,
                 )
             )
 

@@ -477,3 +477,45 @@ def test_binary_is_cached_on_the_lane_and_keeps_the_rule(pin_type, values, binar
     assert lane.binary is binary
     assert is_binary(lane) is binary
     assert "binary" in vars(lane)  # cached, not recomputed
+
+
+# ---------------------------------------------------------------------------
+# frame alignment: one numbering per timeline
+
+
+def _zero_based_view(n: int):
+    """An ethogram's view: frames are video indices, counted from 0."""
+    from glider.analysis.behavior.session_view import SessionView
+
+    return SessionView(labels=["groom"] * n, frames=np.arange(n), fps=30.0)
+
+
+def test_an_ethogram_paired_with_a_recording_counts_frames_from_zero(synthetic_recording: Path):
+    """The logger numbers frames from 1 and an ethogram from 0.
+
+    Ethogram frame n is video frame n, which the logger called n + 1, so it
+    must sit at the time the logger gave its frame n + 1.
+    """
+    session = Session.load(synthetic_recording)
+    alone = build_timeline(session)
+    paired = build_timeline(session, _zero_based_view(150))
+    assert alone.frame_map.frames[0] == 1  # the recording on its own is untouched
+    assert paired.frame_map.frames[0] == 0
+    assert paired.frame_map.ms_of(40) == pytest.approx(alone.frame_map.ms_of(41))
+
+
+def test_the_tracking_lane_shifts_with_the_frame_map(synthetic_recording: Path):
+    session = Session.load(synthetic_recording)
+    paired = build_timeline(session, _zero_based_view(150))
+    tracking = next(lane for lane in paired.behavior if lane.source == "tracking")
+    assert int(tracking.frames[0]) == 0
+
+
+def test_a_view_that_counts_like_the_logger_is_not_shifted(synthetic_recording: Path):
+    from glider.analysis.behavior.session_view import SessionView
+
+    session = Session.load(synthetic_recording)
+    view = SessionView.from_recording(session)
+    assert view.first_video_frame == 1
+    paired = build_timeline(session, view)
+    assert paired.frame_map.frames[0] == build_timeline(session).frame_map.frames[0]
