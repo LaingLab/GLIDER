@@ -240,6 +240,13 @@ def test_timestamps_that_land_nowhere_near_the_seek_are_not_trusted(stamp):
     assert [_index_of(reader.read(n)) for n in (1500, 1200, 1900)] == [1500, 1200, 1900]
 
 
+def test_a_dropped_frame_met_while_walking_ends_the_trust():
+    """A variable-rate file that skipped a frame at 1000: its stamps jump there."""
+    cap = _StampedCapture(error=5, stamp=lambda i: (i + (i >= 1000)) * 1000.0 / 30.0)
+    reader = ExactFrameReader(cap)
+    assert [_index_of(reader.read(n)) for n in (950, 1050, 1500, 1200)] == [950, 1050, 1500, 1200]
+
+
 def _numbered_clip(path: Path, n: int, fourcc: str) -> bool:
     """A long-GOP clip whose frames carry their index as 12 bright/dark blocks."""
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*fourcc), 30.0, (320, 240))

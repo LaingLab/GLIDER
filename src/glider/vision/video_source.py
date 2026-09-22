@@ -168,12 +168,19 @@ class ExactFrameReader:
     players seek exactly. Walking forward costs nothing, and a short hop ahead
     just walks.
 
-    The timestamps are checked against the frame asked for on every read. A
-    file whose timestamps do not count its frames (variable frame rate, or a
-    capture that reports none) is caught on the first mismatch, and from then
-    on the reader counts from frame 0 -- the one seek every capture gets
-    right -- as it always used to. A frame reached through a seek that failed
-    the check is fetched again that way, so the answer is exact either way.
+    Every read checks the frame's timestamp against the frame asked for. A
+    file whose timestamps do not count its frames -- none at all, a changing
+    rate, a dropped or doubled frame met on a walk -- is caught at the first
+    disagreement, and from then on the reader counts from frame 0 (the one
+    seek every capture gets right), as it always used to. A frame reached
+    through a seek is then fetched again that way, so the answer stays exact.
+
+    ponytail: a frame dropped in a stretch the reader has never walked through
+    cannot be seen, and a seek past it lands one frame off. On a lab cohort's
+    camera files (15.6 and 30 fps, capture-time stamps with +-4 ms of jitter)
+    the stamps named every frame of a whole 18,705-frame file. If a camera
+    ever drops frames into a variable-rate file, index its timestamps in one
+    pass on open and look landings up there instead of dividing by the rate.
 
     Why it matters: pose is paired with frames by index. A two-frame error is
     invisible while the animal is still and throws the skeleton clean off it
@@ -219,13 +226,11 @@ class ExactFrameReader:
             self._next, self._held = -1, None
             return None
         if self._stamps_ok and self._t0_ms is not None and self._stamp_index() != n:
-            # This file's timestamps do not name its frames. Stop trusting
-            # them; a frame reached by a seek may be the wrong one, so fetch
-            # it again by counting.
-            self._stamps_ok = False
-            if self._from_seek:
-                self._next, self._held = -1, None
-                return self.read(n)
+            self._stamps_ok = False  # this file's timestamps do not name its frames
+        if self._from_seek and not self._stamps_ok:
+            # Reached by trusting timestamps that have since failed: count instead.
+            self._next, self._held = -1, None
+            return self.read(n)
         return frame
 
     def _stamp_index(self) -> int:
