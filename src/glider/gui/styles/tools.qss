@@ -804,9 +804,10 @@ QLabel#ReviewTitle {
 }
 /* The top bar's menus (Open, Zones, Export): one padding whatever the role,
    so the primary Open is no taller than the rest, and the arrow centred in
-   room of its own on the right rather than in the bottom-right corner. */
+   room of its own on the right rather than in the bottom-right corner. Their
+   shared width is set in code (AnalysisWindow._even_out_menus), from the
+   widest label in the platform's own font. */
 QPushButton#ReviewMenu {
-    min-width: 64px;
     padding: 6px 30px 6px 14px;
 }
 QPushButton#ReviewMenu::menu-indicator {

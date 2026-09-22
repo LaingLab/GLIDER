@@ -347,11 +347,27 @@ class AnalysisWindow(QMainWindow):
         self._restore_layout()
         # Opened with parent=None, so nothing hands it the app theme.
         apply_tool_theme(self)
+        self._even_out_menus()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance)
 
     # ------------------------------------------------------------------
     # construction
+
+    def _even_out_menus(self) -> None:
+        """Open, Zones and Export at one width: the widest's, in this platform's font.
+
+        A fixed min-width in the stylesheet held only while every label fit
+        inside it -- true of the macOS font, not of Windows', where the same
+        three came out 110, 118 and 130 px. Measured after the theme is
+        applied, so the padding that makes room for the arrow is counted.
+        """
+        buttons = (self._open_btn, self._zones_btn, self._export_menu_btn)
+        for button in buttons:
+            button.ensurePolished()
+        width = max(button.sizeHint().width() for button in buttons)
+        for button in buttons:
+            button.setMinimumWidth(width)
 
     def _menu_button(self, text: str, items, *, role: str | None = None):
         button = QPushButton(text)

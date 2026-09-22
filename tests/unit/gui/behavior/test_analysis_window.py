@@ -1848,6 +1848,21 @@ class TestTheTopBarMenus:
         assert len({(b.width(), b.height()) for b in buttons}) == 1
         assert win._tour_btn.height() == win._open_btn.height()
 
+    def test_they_share_the_widest_width_when_a_label_outgrows_the_rest(self, qtbot):
+        """A fixed min-width held only while every label fit inside it.
+
+        True of the macOS font, not of Windows', where the same three came out
+        110, 118 and 130 px. A label wider than the rest is that case anywhere.
+        """
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win._export_menu_btn.setText("Export everything")
+        win._even_out_menus()
+        win.show()
+        qtbot.waitExposed(win)
+        buttons = (win._open_btn, win._zones_btn, win._export_menu_btn)
+        assert len({b.width() for b in buttons}) == 1
+
 
 class TestTheRangeIsMeasuredOnEachSessionsOwnZero:
     """Current range is seconds from each animal's own flow start: the time rule.
