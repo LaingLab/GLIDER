@@ -62,7 +62,7 @@ RULER_H = 26
 MARKER_H = 18  # empty in phase 1; phase 2 draws markers here
 TOP_H = RULER_H + MARKER_H
 GROUP_H = 18
-BEHAVIOR_H = 30
+BEHAVIOR_H = 44
 HW_H = 22
 HW_MIN_H = 10
 MIN_SPAN_FRAMES = 30
@@ -1115,7 +1115,7 @@ class Navigator(QWidget):
     the same reason: at 45,000 frames you have to see where you are.
     """
 
-    HEIGHT = 30
+    HEIGHT = 48
     EDGE_PX = 5
 
     def __init__(self, view: TimelineView, parent=None):
@@ -1159,7 +1159,7 @@ class Navigator(QWidget):
             pixmap.fill(QColor(colors.CHROME))
             painter = QPainter(pixmap)
             try:
-                self._view.paint_overview(painter, QRectF(0, 5, width, height - 12))
+                self._view.paint_overview(painter, QRectF(0, 7, width, height - 14))
             finally:
                 painter.end()
             self._strip, self._strip_key = pixmap, key
@@ -1174,7 +1174,9 @@ class Navigator(QWidget):
         caption.setBold(True)
         p.setFont(caption)
         p.setPen(QColor(colors.TEXT_MUTED))
-        p.drawText(QRectF(10, 2, HEADER_W - 20, 14), Qt.AlignmentFlag.AlignVCenter, "NAVIGATOR")
+        p.drawText(
+            QRectF(10, h / 2 - 15, HEADER_W - 20, 14), Qt.AlignmentFlag.AlignVCenter, "NAVIGATOR"
+        )
         box = self.box()
         if box is not None:
             view, vp = self._view, self._view.viewport
@@ -1183,7 +1185,7 @@ class Navigator(QWidget):
             p.setFont(_smaller(self.font(), 2))
             p.setPen(QColor(colors.TEXT_DISABLED))
             p.drawText(
-                QRectF(10, 15, HEADER_W - 20, 13),
+                QRectF(10, h / 2, HEADER_W - 20, 14),
                 Qt.AlignmentFlag.AlignVCenter,
                 f"{_span_text(shown)} of {_clock(total)} shown",
             )

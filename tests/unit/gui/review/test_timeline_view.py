@@ -585,3 +585,18 @@ def test_column_coverage_is_exact():
 
     a, b = np.array([0.2, 1.5, 3.9]), np.array([0.7, 3.25, 9.0])
     assert _column_coverage(a, b, 4).tolist() == pytest.approx([0.5, 0.5, 1.0, 0.35])
+
+
+def test_a_behaviour_lane_is_tall_enough_to_read(view):
+    view.set_timeline(_timeline())
+    assert view.lane_rect("tracking").height() >= 40
+
+
+def test_the_navigator_strip_is_tall_enough_to_read(panel):
+    """The whole-session ethogram in the navigator is a band, not a hairline."""
+    image = panel.navigator.grab().toImage()
+    x = HEADER_W + 20
+    groom = behavior_qcolor("groom", _ORDER)
+    # The old 30 px navigator drew an 18 px strip; y=38 was off the widget.
+    assert image.pixelColor(x, 9) == groom
+    assert image.pixelColor(x, 38) == groom

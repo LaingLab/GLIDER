@@ -48,7 +48,14 @@ from glider.gui.styles import colors
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["GLYPH_COLOURS", "GLYPH_KEYS", "ICON_DIR", "PastelGlyphEngine", "glyph_icon"]
+__all__ = [
+    "GLYPH_COLOURS",
+    "GLYPH_KEYS",
+    "ICON_DIR",
+    "PastelGlyphEngine",
+    "glyph_icon",
+    "lucide_icon",
+]
 
 #: Where the vendored Lucide SVGs live, beside the ISC licence that covers them.
 ICON_DIR = Path(__file__).resolve().parent.parent / "styles" / "icons" / "lucide"
@@ -162,4 +169,31 @@ def glyph_icon(widget: QWidget | None, key: str, size: int) -> QIcon:
     """
     icon = QIcon(PastelGlyphEngine(widget, key))
     icon.pixmap(QSize(size, size))
+    return icon
+
+
+def lucide_icon(name: str, colour: str, size: int = 18) -> QIcon:
+    """A vendored Lucide SVG drawn in ``colour``, for controls that aren't rail glyphs.
+
+    The rail glyphs keep their fixed pastels through :class:`PastelGlyphEngine`;
+    a transport button needs whatever colour its own background calls for. Drawn
+    at 1x and 2x so it stays sharp on a Retina screen. A missing file gives an
+    empty icon: a button loses its picture, never the window.
+    """
+    try:
+        source = (ICON_DIR / f"{name}.svg").read_text(encoding="utf-8")
+    except OSError:
+        logger.warning("Icon %r could not be read from %s", name, ICON_DIR)
+        return QIcon()
+    renderer = QSvgRenderer(source.replace("currentColor", colour).encode("utf-8"))
+    icon = QIcon()
+    for scale in (1, 2):
+        pixmap = QPixmap(size * scale, size * scale)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        renderer.render(painter)
+        painter.end()
+        pixmap.setDevicePixelRatio(scale)
+        icon.addPixmap(pixmap)
     return icon

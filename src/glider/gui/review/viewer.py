@@ -12,8 +12,8 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPen
+from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
+from PyQt6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 from glider.analysis.behavior.session_view import SessionView
 from glider.gui.review.timeline import behavior_qcolor
 from glider.gui.styles import colors
+from glider.gui.widgets.pastel_glyphs import lucide_icon
 from glider.gui.widgets.tool_ui import data_font, set_button_role, set_text_role
 
 __all__ = ["TRAIL_DEFAULT_S", "KeypointCanvas", "Transport"]
@@ -362,7 +363,8 @@ class KeypointCanvas(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setFont(self.font())
         if behavior is not None:
-            self._chip(painter, 12.0, 10.0, *behavior, right=False)
+            # The one thing a reviewer reads while scrubbing, so it is set large.
+            self._chip(painter, 12.0, 10.0, *behavior, right=False, large=True)
         y = 10.0
         for text, colour in chips[: self._MAX_CHIPS]:
             self._chip(painter, self.width() - 12.0, y, text, colour, right=True)
@@ -373,23 +375,44 @@ class KeypointCanvas(QWidget):
                 painter, self.width() - 12.0, y, extra, QColor(colors.TEXT_MUTED), right=True
             )
 
-    def _chip(self, painter, x, y, text, colour, *, right) -> None:
-        width = painter.fontMetrics().horizontalAdvance(text) + 30.0
+    def _chip(self, painter, x, y, text, colour, *, right, large=False) -> None:
+        height = BEHAVIOUR_CHIP_H if large else CHIP_H
+        font = QFont(self.font())
+        if large:
+            size = font.pointSizeF() if font.pointSizeF() > 0 else 10.0
+            font.setPointSizeF(size * 1.45)
+            font.setBold(True)
+        painter.setFont(font)
+        pad, dot = height / 2, height / 5
+        text_left = pad + dot + 8
+        width = painter.fontMetrics().horizontalAdvance(text) + text_left + pad * 0.8
         left = x - width if right else x
         painter.setPen(QPen(colors.qcolor_with_alpha(QColor(colors.TEXT_PRIMARY), 0.08), 1))
         painter.setBrush(colors.qcolor_with_alpha(QColor(colors.CANVAS), 0.78))
-        painter.drawRoundedRect(QRectF(left, y, width, 22.0), 11, 11)
+        painter.drawRoundedRect(QRectF(left, y, width, height), pad, pad)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(colour)
-        painter.drawEllipse(QPointF(left + 13, y + 11), 4, 4)
+        painter.drawEllipse(QPointF(left + pad, y + pad), dot, dot)
         painter.setPen(QColor(colors.TEXT_PRIMARY))
         painter.drawText(
-            QRectF(left + 22, y, width - 26, 22.0), Qt.AlignmentFlag.AlignVCenter, text
+            QRectF(left + text_left, y, width - text_left, height),
+            Qt.AlignmentFlag.AlignVCenter,
+            text,
         )
 
 
-def _icon_button(glyph: str, tip: str) -> QPushButton:
-    button = QPushButton(glyph)
+#: Heights of the HUD chips: the behaviour chip top-left, the output chips top-right.
+CHIP_H = 22.0
+BEHAVIOUR_CHIP_H = 36.0
+
+#: Transport glyphs are Lucide (``gui/styles/icons/lucide/``, ISC).
+_ICON_SIZE = QSize(18, 18)
+
+
+def _icon_button(icon: str, tip: str) -> QPushButton:
+    button = QPushButton()
+    button.setIcon(lucide_icon(icon, colors.TEXT_SECONDARY, _ICON_SIZE.width()))
+    button.setIconSize(_ICON_SIZE)
     button.setToolTip(tip)
     button.setFixedWidth(36)
     set_button_role(button, "icon")
@@ -413,13 +436,16 @@ class Transport(QFrame):
         row = QHBoxLayout(self)
         row.setContentsMargins(10, 6, 10, 6)
         row.setSpacing(4)
-        self.to_start = _icon_button("⏮", "Session start  (Home)")
-        self.back = _icon_button("◀▏", "Back one frame  (←)")
-        self.play = QPushButton("▶  Play")
-        self.play.setMinimumWidth(88)
+        self.to_start = _icon_button("skip-back", "Session start  (Home)")
+        self.back = _icon_button("step-back", "Back one frame  (←)")
+        self.play = QPushButton()
+        self.play.setMinimumWidth(92)
+        self.play.setIconSize(QSize(16, 16))
+        self.play.setToolTip("Play / pause  (Space)")
         set_button_role(self.play, "primary")
-        self.forward = _icon_button("▕▶", "Forward one frame  (→)")
-        self.to_end = _icon_button("⏭", "Session end  (End)")
+        self.set_playing(False)
+        self.forward = _icon_button("step-forward", "Forward one frame  (→)")
+        self.to_end = _icon_button("skip-forward", "Session end  (End)")
         for button in (self.to_start, self.back, self.play, self.forward, self.to_end):
             row.addWidget(button)
         self.clock = QLabel("—")
@@ -461,3 +487,9 @@ class Transport(QFrame):
         set_text_role(self.rate, "muted")
         row.addSpacing(6)
         row.addWidget(self.rate)
+
+    def set_playing(self, playing: bool) -> None:
+        """Show Pause while playing and Play otherwise, icon and word together."""
+        # Dark on the accent-filled primary button.
+        self.play.setIcon(lucide_icon("pause" if playing else "play", colors.CANVAS, 16))
+        self.play.setText("Pause" if playing else "Play")

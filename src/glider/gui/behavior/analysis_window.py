@@ -55,6 +55,8 @@ from glider.gui.review.pool import PoolEntry, SessionPool, ethogram_strip
 from glider.gui.review.timeline import TimelinePanel, behavior_order, behavior_qcolor, lane_colour
 from glider.gui.review.viewer import KeypointCanvas, Transport
 from glider.gui.review.viewport import format_seconds, format_timecode
+from glider.gui.styles import colors
+from glider.gui.widgets.pastel_glyphs import lucide_icon
 from glider.gui.widgets.tool_ui import (
     StatusPill,
     apply_tool_theme,
@@ -428,12 +430,14 @@ class AnalysisWindow(QMainWindow):
         )
         self._bout_filter.setMinimumWidth(140)
         slot.addWidget(self._bout_filter)
-        self._prev_bout = QPushButton("◀")
+        self._prev_bout = QPushButton()
+        self._prev_bout.setIcon(lucide_icon("chevron-left", colors.TEXT_SECONDARY, 16))
         self._prev_bout.setToolTip("Previous bout  ( [ )")
         self._prev_bout.setMaximumWidth(34)
         set_button_role(self._prev_bout, "icon")
         self._prev_bout.clicked.connect(lambda: self._step_bout(-1))
-        self._next_bout = QPushButton("▶")
+        self._next_bout = QPushButton()
+        self._next_bout.setIcon(lucide_icon("chevron-right", colors.TEXT_SECONDARY, 16))
         self._next_bout.setToolTip("Next bout  ( ] )")
         self._next_bout.setMaximumWidth(34)
         set_button_role(self._next_bout, "icon")
@@ -965,7 +969,7 @@ class AnalysisWindow(QMainWindow):
     def _stop(self) -> None:
         self._timer.stop()
         self._rate = 1
-        self._play.setText("▶  Play")
+        self._transport.set_playing(False)
         self._transport.rate.setText("1×")
 
     def _edit_key(self, key, modifiers) -> None:
@@ -1015,7 +1019,7 @@ class AnalysisWindow(QMainWindow):
         self._transport.rate.setText(f"{self._rate}×")
         if not self._timer.isActive():
             self._timer.start(int(1000 / max(1.0, self._view.fps)))
-            self._play.setText("❚❚  Pause")
+            self._transport.set_playing(True)
 
     def _step_frames(self, step: int) -> None:
         if self._view is None:
@@ -1127,7 +1131,7 @@ class AnalysisWindow(QMainWindow):
             # better in review than a stuttering exact one.
             self._rate = 1
             self._timer.start(int(1000 / max(1.0, self._view.fps)))
-            self._play.setText("❚❚  Pause")
+            self._transport.set_playing(True)
 
     def _advance(self) -> None:
         if self._view is None:

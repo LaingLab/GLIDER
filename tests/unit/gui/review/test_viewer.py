@@ -12,7 +12,12 @@ pytest.importorskip("PyQt6")
 from PyQt6.QtGui import QColor  # noqa: E402
 
 from glider.analysis.behavior.session_view import SessionView  # noqa: E402
-from glider.gui.review.viewer import KeypointCanvas, Transport  # noqa: E402
+from glider.gui.review.viewer import (  # noqa: E402
+    BEHAVIOUR_CHIP_H,
+    CHIP_H,
+    KeypointCanvas,
+    Transport,
+)
 from glider.gui.styles import colors  # noqa: E402
 
 
@@ -72,9 +77,22 @@ def test_the_hud_draws_the_behaviour_chip(canvas):
     canvas.set_view(_view())
     colour = QColor(colors.LANE_MOTOR)
     canvas.set_hud(("groom  1.20 s in", colour), [])
-    assert canvas.grab().toImage().pixelColor(25, 21) == colour
+    centre = int(12 + BEHAVIOUR_CHIP_H / 2), int(10 + BEHAVIOUR_CHIP_H / 2)
+    assert canvas.grab().toImage().pixelColor(*centre) == colour
     canvas.set_show_hud(False)
-    assert canvas.grab().toImage().pixelColor(25, 21) != colour
+    assert canvas.grab().toImage().pixelColor(*centre) != colour
+
+
+def test_the_behaviour_chip_is_larger_than_an_output_chip(canvas):
+    """It is what a reviewer reads while scrubbing; the output chips are secondary."""
+    assert BEHAVIOUR_CHIP_H >= 1.5 * CHIP_H
+    canvas.set_view(_view())
+    colour = QColor(colors.LANE_MOTOR)
+    canvas.set_hud(("groom  1.20 s in", colour), [])
+    image = canvas.grab().toImage()
+    # A dot this far from the centre only exists on the large chip.
+    centre_x, centre_y = int(12 + BEHAVIOUR_CHIP_H / 2), int(10 + BEHAVIOUR_CHIP_H / 2)
+    assert image.pixelColor(centre_x + 5, centre_y) == colour
 
 
 def test_hardware_chips_sit_top_right(canvas):
@@ -113,9 +131,19 @@ def test_the_transport_has_every_toggle(qtbot):
     assert "Play" in transport.play.text()
 
 
-def test_step_buttons_do_not_look_like_play(qtbot):
+def test_transport_buttons_are_drawn_icons_not_text_glyphs(qtbot):
     transport = Transport()
     qtbot.addWidget(transport)
-    assert transport.forward.text() != "▶"
-    assert "▶" not in {transport.back.text(), transport.forward.text()} - {"▕▶"}
-    assert (transport.back.text(), transport.forward.text()) == ("◀▏", "▕▶")
+    steps = (transport.to_start, transport.back, transport.forward, transport.to_end)
+    assert all(not button.icon().isNull() for button in steps)
+    assert all(button.text() == "" for button in steps)
+    assert not transport.play.icon().isNull()
+
+
+def test_play_turns_into_pause_while_playing(qtbot):
+    transport = Transport()
+    qtbot.addWidget(transport)
+    transport.set_playing(True)
+    assert transport.play.text() == "Pause"
+    transport.set_playing(False)
+    assert transport.play.text() == "Play"
