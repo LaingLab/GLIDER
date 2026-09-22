@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from glider.analysis import Session
-from glider.analysis.markers import frame_at, frames_in, seconds_at, t0_of, uses_ms
+from glider.analysis.markers import (
+    COHORT_FILE,
+    SESSION_FILE,
+    SWATCHES,
+    Marker,
+    MarkerFileError,
+    MarkerStore,
+    frame_at,
+    frames_in,
+    load_markers,
+    save_markers,
+    seconds_at,
+    t0_of,
+    uses_ms,
+)
 from glider.analysis.timeline import build_timeline
 
 from .conftest import RecordingSpec, write_synthetic_recording
@@ -85,3 +100,137 @@ def test_a_selection_survives_seconds_and_back(synthetic_recording: Path):
     start, end = 40, 99
     span = seconds_at(timeline, FPS, start), seconds_at(timeline, FPS, end + 1)
     assert frames_in(timeline, FPS, *span, (1, 150)) == (start, end)
+
+
+# ---------------------------------------------------------------------------
+# the model and its files
+
+
+def test_a_marker_survives_the_round_trip(tmp_path: Path):
+    path = tmp_path / SESSION_FILE
+    markers = [
+        Marker("point", 12.5, name="door stuck", color="red", note="lever jammed"),
+        Marker("range", 60.0, 260.0, name="Stim", color="cyan", scope="cohort"),
+    ]
+    save_markers(path, markers, t0="flow_start")
+    loaded, t0 = load_markers(path)
+    assert loaded == markers
+    assert t0 == "flow_start"
+
+
+def test_a_point_has_no_end_and_no_duration():
+    point = Marker("point", 3.0)
+    assert point.end_s is None and not point.is_range and point.duration_s == 0.0
+    assert Marker("range", 1.0, 4.5).duration_s == pytest.approx(3.5)
+
+
+def test_every_marker_gets_its_own_id():
+    assert Marker("point", 1.0).id != Marker("point", 1.0).id
+
+
+def test_a_missing_file_is_no_markers(tmp_path: Path):
+    assert load_markers(tmp_path / SESSION_FILE) == ([], None)
+
+
+def test_a_cohort_file_has_no_t0(tmp_path: Path):
+    path = tmp_path / COHORT_FILE
+    save_markers(path, [Marker("range", 0.0, 60.0, scope="cohort")])
+    assert "t0" not in json.loads(path.read_text())
+
+
+def test_writing_leaves_no_temp_file_behind(tmp_path: Path):
+    save_markers(tmp_path / SESSION_FILE, [Marker("point", 1.0)], t0="video_start")
+    assert [p.name for p in tmp_path.iterdir()] == [SESSION_FILE]
+
+
+def test_a_failed_write_keeps_the_old_file(tmp_path: Path, monkeypatch):
+    path = tmp_path / SESSION_FILE
+    save_markers(path, [Marker("point", 1.0)], t0="video_start")
+    before = path.read_bytes()
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("glider.analysis.markers.json.dump", boom)
+    with pytest.raises(OSError):
+        save_markers(path, [Marker("point", 2.0)], t0="video_start")
+    assert path.read_bytes() == before
+    assert [p.name for p in tmp_path.iterdir()] == [SESSION_FILE]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{not json",
+        '{"version": 1}',
+        '{"version": 1, "markers": [{"kind": "range", "start_s": 5.0}]}',
+        '{"version": 1, "markers": [{"kind": "blob", "start_s": 5.0}]}',
+        '{"markers": []}',
+    ],
+)
+def test_an_unreadable_file_raises(tmp_path: Path, text: str):
+    path = tmp_path / SESSION_FILE
+    path.write_text(text)
+    with pytest.raises(MarkerFileError):
+        load_markers(path)
+
+
+def test_a_newer_file_is_refused(tmp_path: Path):
+    path = tmp_path / SESSION_FILE
+    path.write_text('{"version": 2, "markers": []}')
+    with pytest.raises(MarkerFileError, match="newer"):
+        load_markers(path)
+
+
+def test_an_unknown_colour_loads_as_the_default(tmp_path: Path):
+    path = tmp_path / SESSION_FILE
+    path.write_text(
+        '{"version": 1, "markers": [{"kind": "point", "start_s": 1.0, "color": "teal"}]}'
+    )
+    (marker,), _ = load_markers(path)
+    assert marker.color == SWATCHES[0]
+
+
+# ---------------------------------------------------------------------------
+# the store
+
+
+def test_a_store_over_an_unreadable_file_is_read_only_and_never_writes(tmp_path: Path):
+    path = tmp_path / SESSION_FILE
+    path.write_text("{not json")
+    store = MarkerStore(path, t0="video_start")
+    assert store.error and not store.writable and store.markers == []
+    store.put(Marker("point", 1.0))
+    with pytest.raises(MarkerFileError):
+        store.save()
+    assert path.read_text() == "{not json"
+
+
+def test_a_store_puts_replaces_and_removes(tmp_path: Path):
+    store = MarkerStore(tmp_path / SESSION_FILE, t0="video_start")
+    marker = Marker("point", 1.0, name="a")
+    store.put(marker)
+    store.put(Marker("point", 2.0, name="b", id=marker.id))
+    assert [m.name for m in store.markers] == ["b"]
+    assert store.find(marker.id).start_s == 2.0
+    store.remove(marker.id)
+    assert store.markers == [] and store.find(marker.id) is None
+
+
+def test_a_store_saves_and_reloads(tmp_path: Path):
+    store = MarkerStore(tmp_path / SESSION_FILE, t0="flow_start")
+    store.put(Marker("range", 1.0, 2.0, name="Stim"))
+    store.save()
+    again = MarkerStore(tmp_path / SESSION_FILE, t0="flow_start")
+    assert [m.name for m in again.markers] == ["Stim"] and not again.t0_changed
+
+
+def test_a_changed_zero_is_flagged_but_still_loads(tmp_path: Path):
+    save_markers(tmp_path / SESSION_FILE, [Marker("point", 1.0)], t0="video_start")
+    store = MarkerStore(tmp_path / SESSION_FILE, t0="flow_start")
+    assert store.t0_changed and len(store.markers) == 1 and store.writable
+
+
+def test_a_cohort_store_never_flags_a_zero(tmp_path: Path):
+    save_markers(tmp_path / COHORT_FILE, [Marker("range", 0.0, 1.0, scope="cohort")])
+    assert not MarkerStore(tmp_path / COHORT_FILE).t0_changed
