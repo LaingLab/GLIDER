@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.analysis import markers as mk
 from glider.analysis.behavior.session_view import SessionView, SessionViewError
 from glider.analysis.cohort import discover_sessions, recording_candidates, session_id_for
 from glider.analysis.timeline import (
@@ -205,7 +206,12 @@ class AnalysisWindow(QMainWindow):
         self._timelines: list = []
         self._recordings_of: list = []
         self._shown = -1
-        self._cohort_cache: tuple[tuple, list[dict]] | None = None
+        # Rows per range, keyed on the range and the zones (see range_rows).
+        self._cohort_cache: dict[tuple, list[dict]] = {}
+        # The current range in seconds: what the user selected, kept as is
+        # while other animals are shown (see _show_session).
+        self._current_span: tuple[float, float] | None = None
+        self._switching = False  # a selection set by a session switch, not the user
         # Recording folder -> its loaded Session (None: nothing GLIDER wrote
         # there). A recording's CSVs are megabytes parsed on the GUI thread.
         self._recordings: dict[Path, object] = {}
@@ -778,15 +784,35 @@ class AnalysisWindow(QMainWindow):
             self._show_session(index)
 
     def _show_session(self, index: int) -> None:
-        """Put one of the loaded sessions on screen, keeping the selected range."""
+        """Put one of the loaded sessions on screen, keeping the selected range.
+
+        The range is the question being asked; switching which animal answers
+        it must not silently reset it. It is kept in seconds on each session's
+        own zero -- the time rule the epoch table uses -- and never re-derived
+        from the animal on screen, so the inspector and the table's row for
+        this animal describe the same stretch, and flicking between animals
+        never moves it.
+        """
         path, view = self._cohort[index]
-        selection = self._bar.selection()
+        span = self._current_span if self._bar.selection() is not None else None
         self._shown = index
         self._adopt(path, view, self._timelines[index])
-        if selection is not None:
-            # The range is the question being asked; switching which animal
-            # answers it must not silently reset it.
-            self._bar.set_selection(*selection)
+        if span is None:
+            return
+        bounds = self._scored_bounds(view)
+        frames = (
+            None
+            if bounds is None
+            else mk.frames_in(self._timelines[index], view.fps, *span, bounds)
+        )
+        self._switching = True
+        try:
+            if frames is not None:
+                self._bar.set_selection(*frames)
+            else:
+                self._on_selection_cleared()
+        finally:
+            self._switching = False
 
     def _adopt(self, path: Path, view: SessionView, timeline) -> None:
         """Show an already-loaded session."""
@@ -1270,6 +1296,8 @@ class AnalysisWindow(QMainWindow):
     def _on_selection(self, start: int, end: int) -> None:
         if self._view is None:
             return
+        if not self._switching:
+            self._current_span = self._span_seconds(start, end)
         stats = self._view.segment_stats(start, end)
         self._fill_bouts(stats)
         self._fill_movement(stats)
@@ -1289,6 +1317,8 @@ class AnalysisWindow(QMainWindow):
             self._fill_cohort(*selection)
 
     def _on_selection_cleared(self) -> None:
+        if not self._switching:
+            self._current_span = None
         self._inspector.clear_range()
         self._cohort_table.setRowCount(0)
         self._tables.setTabText(self._tables.indexOf(self._cohort_table), "Cohort")
@@ -1424,80 +1454,151 @@ class AnalysisWindow(QMainWindow):
         self._inspector.set_zone_count(len(rows))
 
     def _invalidate_cohort_cache(self) -> None:
-        self._cohort_cache = None
+        self._cohort_cache = {}
+
+    def _timeline_at(self, index: int):
+        return self._timelines[index] if 0 <= index < len(self._timelines) else None
+
+    @staticmethod
+    def _scored_bounds(view) -> tuple[int, int] | None:
+        """The frames a session has rows for: what any range is clipped to."""
+        if view is None or not view.n_rows:
+            return None
+        return int(view.frames[0]), int(view.frames[-1])
+
+    def _span_seconds(self, start: int, end: int) -> tuple[float, float]:
+        """The shown session's frames ``[start, end]`` as ``[start_s, end_s)``.
+
+        Read from the timeline widget's own session, so it is right even in
+        the middle of a switch, before the window's indices have moved on.
+        """
+        timeline, fps = self._bar.timeline(), self._bar.fps()
+        return mk.seconds_at(timeline, fps, start), mk.seconds_at(timeline, fps, end + 1)
 
     def cohort_rows(self, start: int, end: int) -> list[dict]:
-        """The selected window, per loaded session.
+        """The shown session's frames ``[start, end]``, as a range, per session."""
+        if self._view is None:
+            return []
+        return self.range_rows(*self._span_seconds(start, end))
 
-        The same frame window is applied to every session rather than a
-        per-session fraction: "minutes two to seven" has to mean the same
-        stretch in each animal or the comparison is not one.
+    def range_rows(self, start_s: float, end_s: float) -> list[dict]:
+        """``[start_s, end_s)`` on each session's own zero, one row per session.
 
-        Cached on the window and the zones, because that is all it depends
-        on. Switching which session is *shown* changes nothing here, and
-        recomputing thirty sessions — each a pass over 45,000 frames — to
-        redraw a table that did not change made flicking between animals feel
-        like the app had hung.
+        The time rule (:mod:`glider.analysis.markers`): seconds from flow start
+        where a session has one, from its first video frame otherwise, turned
+        into *that* session's frames. "Minutes two to seven" then means the
+        same stretch of each animal's protocol whatever its frame rate or
+        however long its rig ran before flow start. A range past a session's
+        end is clipped to it; one wholly outside gives a row that says so.
+
+        Cached on the range and the zones: switching which session is shown
+        changes nothing here, and recomputing thirty sessions -- each a pass
+        over 45,000 frames -- to redraw a table that did not change made
+        flicking between animals feel like the app had hung.
         """
-        key = (start, end, id(self._zones), len(self._cohort))
-        if self._cohort_cache is not None and self._cohort_cache[0] == key:
-            return self._cohort_cache[1]
-
-        rows = []
-        for sid, (_path, view) in zip(self._ids, self._cohort, strict=True):
-            stats = view.segment_stats(start, end)
-            scored = [lab for lab in view.labels if lab]
-            top = ""
-            if not stats.bouts.empty:
-                top = str(stats.bouts.iloc[0]["state"])
-            # Freezing and darting are ordinary states of `bouts` now, so
-            # they are read from there rather than from a parallel table.
-            by_state = stats.bouts.set_index("state") if not stats.bouts.empty else None
-
-            def total(state, table=by_state):
-                if table is None or state not in table.index:
-                    return 0.0
-                return float(table.loc[state, "total_s"])
-
-            rows.append(
-                {
-                    "session": sid,
-                    "scored_rows": len(scored),
-                    "duration_s": stats.duration_s,
-                    "distance_cm": stats.distance_cm,
-                    "mean_cm_s": stats.mean_speed_cm_s,
-                    "peak_cm_s": stats.peak_speed_cm_s,
-                    "freezing_s": total("freezing"),
-                    "darting_s": total("darting"),
-                    # Exported alongside the durations they explain: a table of
-                    # freezing seconds is not interpretable without the line
-                    # that was drawn to produce it.
-                    "freeze_threshold_cm_s": view.applied_freeze_cm_s,
-                    "dart_threshold_cm_s": view.applied_dart_cm_s,
-                    "freeze_threshold_px_frame": view.applied_freeze_px,
-                    "dart_threshold_px_frame": view.applied_dart_px,
-                    "duration_min": stats.duration_s / 60.0,
-                    # What this window alone would give, as the Selected-window
-                    # panel reports it -- distinct from the applied thresholds
-                    # above, which are what actually produced the labels. The
-                    # unit varies per session (cm/s with a pixel scale,
-                    # px/frame without), so it travels in its own column rather
-                    # than being baked into these names.
-                    "window_freeze_threshold": stats.freeze_threshold,
-                    "window_dart_threshold": stats.dart_threshold,
-                    "window_threshold_unit": stats.threshold_unit,
-                    "top_behavior": top,
-                    **{
-                        f"{state}_s": float(total)
-                        for state, total in zip(
-                            stats.bouts["state"], stats.bouts["total_s"], strict=True
-                        )
-                    },
-                    **self._zone_columns(start, end, view),
-                }
-            )
-        self._cohort_cache = (key, rows)
+        key = (round(float(start_s), 6), round(float(end_s), 6), id(self._zones), len(self._cohort))
+        cached = self._cohort_cache.get(key)
+        if cached is not None:
+            return cached
+        rows = [self._session_row(i, start_s, end_s) for i in range(len(self._cohort))]
+        # An animal that never showed a behaviour in the range showed it for
+        # 0 s: a measurement, not a gap.
+        states = sorted({s for row in rows for s in row.get("_states", ())})
+        for row in rows:
+            if not row.get("outside"):
+                for state in states:
+                    row.setdefault(f"{state}_s", 0.0)
+        # ponytail: cleared wholesale past 64 ranges; an LRU if dragging
+        # with the epoch table open ever shows up in a profile.
+        if len(self._cohort_cache) >= 64:
+            self._cohort_cache = {}
+        self._cohort_cache[key] = rows
         return rows
+
+    def _session_row(self, index: int, start_s: float, end_s: float) -> dict:
+        """One session's numbers over ``[start_s, end_s)`` on its own zero."""
+        _path, view = self._cohort[index]
+        timeline = self._timeline_at(index)
+        base = {
+            "session": self._ids[index],
+            "group": self._groups[index] if index < len(self._groups) else "",
+            "t0": mk.t0_of(timeline),
+        }
+        bounds = self._scored_bounds(view)
+        frames = (
+            None if bounds is None else mk.frames_in(timeline, view.fps, start_s, end_s, bounds)
+        )
+        if frames is None:
+            return {**base, "outside": True, "start_s": start_s, "end_s": end_s}
+        start, end = frames
+        stats = view.segment_stats(start, end)
+        scored = [lab for lab in view.labels if lab]
+        top = ""
+        if not stats.bouts.empty:
+            top = str(stats.bouts.iloc[0]["state"])
+        # Freezing and darting are ordinary states of `bouts` now, so they are
+        # read from there rather than from a parallel table.
+        by_state = stats.bouts.set_index("state") if not stats.bouts.empty else None
+
+        def total(state, table=by_state):
+            if table is None or state not in table.index:
+                return 0.0
+            return float(table.loc[state, "total_s"])
+
+        return {
+            **base,
+            "start_frame": start,
+            "end_frame": end,
+            "start_s": mk.seconds_at(timeline, view.fps, start),
+            "end_s": mk.seconds_at(timeline, view.fps, end + 1),
+            "scored_rows": len(scored),
+            "duration_s": stats.duration_s,
+            "distance_cm": stats.distance_cm,
+            "mean_cm_s": stats.mean_speed_cm_s,
+            "peak_cm_s": stats.peak_speed_cm_s,
+            "freezing_s": total("freezing"),
+            "darting_s": total("darting"),
+            # Exported alongside the durations they explain: a table of
+            # freezing seconds is not interpretable without the line that was
+            # drawn to produce it.
+            "freeze_threshold_cm_s": view.applied_freeze_cm_s,
+            "dart_threshold_cm_s": view.applied_dart_cm_s,
+            "freeze_threshold_px_frame": view.applied_freeze_px,
+            "dart_threshold_px_frame": view.applied_dart_px,
+            "duration_min": stats.duration_s / 60.0,
+            # What this window alone would give, as the Selected-window panel
+            # reports it -- distinct from the applied thresholds above, which
+            # are what actually produced the labels. The unit varies per
+            # session (cm/s with a pixel scale, px/frame without), so it
+            # travels in its own column rather than being baked into these
+            # names.
+            "window_freeze_threshold": stats.freeze_threshold,
+            "window_dart_threshold": stats.dart_threshold,
+            "window_threshold_unit": stats.threshold_unit,
+            "top_behavior": top,
+            "_states": tuple(str(s) for s in stats.bouts["state"] if s),
+            **{
+                f"{state}_s": float(seconds)
+                for state, seconds in zip(stats.bouts["state"], stats.bouts["total_s"], strict=True)
+            },
+            **self._zone_columns(start, end, view),
+            **self._hardware_columns(timeline, view.fps, start, end),
+        }
+
+    @staticmethod
+    def _hardware_columns(timeline, fps: float, start: int, end: int) -> dict:
+        """Seconds on per device, flattened onto a session row; 0 for an idle one."""
+        if not mk.uses_ms(timeline) or not timeline.lanes:
+            return {}
+        start_ms = mk.seconds_at(timeline, fps, start) * 1000.0
+        end_ms = mk.seconds_at(timeline, fps, end + 1) * 1000.0
+        on = {s.key: s.on_ms for s in hardware_in_range(timeline.lanes, start_ms, end_ms)}
+        names = [lane.label.replace(" ", "_") for lane in timeline.lanes]
+        columns = {
+            f"hw_{name}_on_s": on.get(lane.key, 0.0) / 1000.0
+            for name, lane in zip(names, timeline.lanes, strict=True)
+        }
+        return {**columns, "_devices": tuple(names)}
 
     def _zone_columns(self, start: int, end: int, view) -> dict:
         """Time, fraction and entries per zone, flattened onto a session row.
@@ -1516,6 +1617,7 @@ class AnalysisWindow(QMainWindow):
             out[f"zone_{zone}_frac"] = float(row["fraction"])
             out[f"zone_{zone}_entries"] = int(row["n_entries"])
             out[f"zone_{zone}_latency_s"] = float(row["latency_s"])
+        out["_zones"] = tuple(str(z).replace(" ", "_") for z in zones["zone"])
         return out
 
     @staticmethod
@@ -1536,16 +1638,19 @@ class AnalysisWindow(QMainWindow):
         rows = self.cohort_rows(start, end)
         self._cohort_table.setRowCount(len(rows))
         for r, row in enumerate(rows):
+            # An "outside" row (the range doesn't reach this session, see
+            # range_rows) carries none of the Phase 1 keys -- read with .get
+            # and show "—" for anything missing, rather than KeyError.
             values = [
                 row["session"],
-                f"{row['scored_rows']:,}",
-                "—" if row["distance_cm"] is None else f"{row['distance_cm']:.1f}",
-                "—" if row["mean_cm_s"] is None else f"{row['mean_cm_s']:.2f}",
-                f"{row['freezing_s']:.2f}",
-                f"{row['darting_s']:.2f}",
+                "—" if row.get("scored_rows") is None else f"{row['scored_rows']:,}",
+                "—" if row.get("distance_cm") is None else f"{row['distance_cm']:.1f}",
+                "—" if row.get("mean_cm_s") is None else f"{row['mean_cm_s']:.2f}",
+                "—" if row.get("freezing_s") is None else f"{row['freezing_s']:.2f}",
+                "—" if row.get("darting_s") is None else f"{row['darting_s']:.2f}",
                 self._threshold_text(row, "freeze"),
                 self._threshold_text(row, "dart"),
-                row["top_behavior"] or "—",
+                row.get("top_behavior") or "—",
             ]
             for c, value in enumerate(values):
                 # Column 0 is the session name and the last is a behaviour
@@ -1572,10 +1677,12 @@ class AnalysisWindow(QMainWindow):
             return
         import pandas as pd
 
-        start, end = selection
-        frame = pd.DataFrame(self.cohort_rows(start, end))
-        frame.insert(1, "start_frame", start)
-        frame.insert(2, "end_frame", end)
+        frame = pd.DataFrame(
+            self.range_rows(*(self._current_span or self._span_seconds(*selection)))
+        )
+        # Tuples for the window's own use, and the outside flag (an outside
+        # session's empty cells already say it), are not measurements.
+        frame = frame[[c for c in frame.columns if not str(c).startswith("_") and c != "outside"]]
         try:
             frame.to_csv(path, index=False)
         except OSError as e:

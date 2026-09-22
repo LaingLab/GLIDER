@@ -1144,7 +1144,7 @@ class TestTheCohortTabShowsTheAppliedThresholds:
         assert window._threshold_text(window.cohort_rows(0, 299)[0], "dart") == "—"
 
 
-def _recording(folder, *, n=300, fps=30.0, states=("resting", "active")):
+def _recording(folder, *, n=300, fps=30.0, states=("resting", "active"), flow_start=0):
     """A GLIDER recording directory: tracking + events, one LED on a pin.
 
     Written here rather than imported from ``tests/unit/analysis/conftest.py``
@@ -1175,7 +1175,7 @@ def _recording(folder, *, n=300, fps=30.0, states=("resting", "active")):
             "pin,pin_type,value\n"
         )
         rows = [
-            (0, "flow_marker", "", "", "", "", "", "start"),
+            (flow_start, "flow_marker", "", "", "", "", "", "start"),
             (30, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),
             (150, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "0"),
             (n - 1, "flow_marker", "", "", "", "", "", "end"),
@@ -1847,3 +1847,126 @@ class TestTheTopBarMenus:
         buttons = (win._open_btn, win._zones_btn, win._export_menu_btn)
         assert len({(b.width(), b.height()) for b in buttons}) == 1
         assert win._tour_btn.height() == win._open_btn.height()
+
+
+class TestTheRangeIsMeasuredOnEachSessionsOwnZero:
+    """Current range is seconds from each animal's own flow start: the time rule.
+
+    Animal b's rig ran a second before flow started, so "1 s to 3 s into the
+    protocol" is frames 60-119 for it and 30-89 for animal a.
+    """
+
+    def _two(self, qtbot, tmp_path):
+        root = tmp_path / "cohort"
+        _recording(root / "a", flow_start=0)
+        _recording(root / "b", flow_start=30)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(root)
+        win._pool.select(win._ids.index("a"))
+        return win
+
+    def test_the_same_seconds_are_different_frames_in_each_animal(self, qtbot, tmp_path):
+        win = self._two(qtbot, tmp_path)
+        rows = {r["session"]: r for r in win.cohort_rows(30, 89)}
+        assert (rows["a"]["start_frame"], rows["a"]["end_frame"]) == (30, 89)
+        assert (rows["b"]["start_frame"], rows["b"]["end_frame"]) == (60, 119)
+        assert rows["b"]["start_s"] == pytest.approx(1.0)
+        assert rows["b"]["t0"] == "flow_start"
+
+    def test_switching_animals_keeps_the_seconds_not_the_frames(self, qtbot, tmp_path):
+        win = self._two(qtbot, tmp_path)
+        win._bar.set_selection(30, 89)
+        win._pool.select(win._ids.index("b"))
+        assert win._bar.selection() == (60, 119)
+
+    def test_the_range_stays_put_when_the_shown_animal_changes(self, qtbot, tmp_path):
+        """A 15 fps animal cannot show 1.033 s; the range must not become what it can show."""
+        root = tmp_path / "rates"
+        _recording(root / "a", fps=30.0)
+        _recording(root / "c", fps=15.0)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(root)
+        win._pool.select(win._ids.index("a"))
+        win._bar.set_selection(31, 89)
+        before = win._current_span
+        win._pool.select(win._ids.index("c"))
+        assert win._current_span == before
+        win._pool.select(win._ids.index("a"))
+        assert win._bar.selection() == (31, 89)
+
+    def test_a_range_given_in_seconds_is_the_selection_given_in_frames(self, qtbot, tmp_path):
+        win = self._two(qtbot, tmp_path)
+        assert win.range_rows(1.0, 3.0) == win.cohort_rows(30, 89)
+
+    def test_time_on_per_device_joins_the_row(self, qtbot, tmp_path):
+        """The LED is on from frame 30 to 150: 1 s to 5 s after a's flow start."""
+        win = self._two(qtbot, tmp_path)
+        row = next(r for r in win.range_rows(0.0, 3.0) if r["session"] == "a")
+        (key,) = [k for k in row if k.startswith("hw_")]
+        assert row[key] == pytest.approx(2.0, abs=0.05)
+
+    def test_a_range_past_a_short_session_is_clipped_or_outside(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(
+            [
+                _ethogram(tmp_path / "long", ["groom"] * 300),
+                _ethogram(tmp_path / "short", ["groom"] * 150),
+            ]
+        )
+        rows = {r["session"]: r for r in win.range_rows(8.0, 12.0)}
+        assert (rows["long"]["start_frame"], rows["long"]["end_frame"]) == (240, 299)
+        assert rows["short"].get("outside") is True
+
+    def test_a_behaviour_one_animal_never_showed_is_zero_seconds_for_it(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(
+            [
+                _ethogram(tmp_path / "a", ["groom"] * 300),
+                _ethogram(tmp_path / "b", ["rear"] * 300),
+            ]
+        )
+        rows = {r["session"]: r for r in win.range_rows(0.0, 5.0)}
+        assert rows["a"]["rear_s"] == 0.0 and rows["b"]["groom_s"] == 0.0
+
+    def test_the_export_carries_seconds_and_no_private_columns(self, qtbot, tmp_path, monkeypatch):
+        win = self._two(qtbot, tmp_path)
+        win._bar.set_selection(30, 89)
+        out = tmp_path / "window_summary.csv"
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: (str(out), ""),
+        )
+        win._export_window()
+        written = pd.read_csv(out)
+        assert {"start_s", "end_s", "start_frame", "end_frame", "t0"} <= set(written.columns)
+        assert not [c for c in written.columns if c.startswith("_")]
+
+
+class TestTheCohortTabToleratesOutsideRows:
+    """Controller ruling: `_fill_cohort` still renders from `cohort_rows` until
+    Task 11 removes it, and an outside row lacks the Phase 1 keys entirely."""
+
+    def test_the_cohort_tab_fills_without_error_past_a_short_session(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(
+            [
+                _ethogram(tmp_path / "long", ["groom"] * 300),
+                _ethogram(tmp_path / "short", ["groom"] * 150),
+            ]
+        )
+        win._tables.setCurrentWidget(win._cohort_table)
+        win._bar.set_selection(240, 299)  # the shown (first, "long") session's own frames
+        rows = {r["session"]: r for r in win.cohort_rows(240, 299)}
+        assert rows["short"].get("outside") is True
+        short_row = next(
+            r
+            for r in range(win._cohort_table.rowCount())
+            if win._cohort_table.item(r, 0).text() == "short"
+        )
+        values = [win._cohort_table.item(short_row, c).text() for c in range(1, 9)]
+        assert all(v == "—" for v in values)
