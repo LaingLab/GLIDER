@@ -830,3 +830,36 @@ QStatusBar#ReviewStatus {
     background-color: #0b0f14;
     border-top: 1px solid #1e2530;
 }
+
+/* ---- Session Review: markers -------------------------------------- */
+QFrame#MarkerEditor {
+    background-color: #151c25;
+    border: 1px solid #243040;
+    border-radius: @RADIUS_MEDIUM@;
+}
+QLabel#MarkerEditorTitle {
+    font-weight: 600;
+}
+QToolButton#MarkerSwatch {
+    padding: 3px;
+    border: 1px solid transparent;
+    border-radius: @RADIUS_SMALL@;
+    background: transparent;
+}
+QToolButton#MarkerSwatch:checked {
+    border-color: #e2e8f0;
+}
+QToolButton#MarkerScope {
+    padding: 3px 10px;
+    border: 1px solid #243040;
+    color: #8391a5;
+    background: transparent;
+}
+QToolButton#MarkerScope:checked {
+    color: #e2e8f0;
+    background-color: #172230;
+    border-color: #2f4a60;
+}
+QToolButton#MarkerScope:disabled {
+    color: #475569;
+}
