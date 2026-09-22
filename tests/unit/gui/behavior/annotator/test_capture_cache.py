@@ -30,6 +30,9 @@ class _FakeCap:
     def set(self, *args, **kwargs):  # noqa: A003 - mirrors cv2 API
         return True
 
+    def get(self, *args, **kwargs):
+        return 0.0
+
     def read(self):
         return False, None
 

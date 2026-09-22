@@ -296,6 +296,9 @@ def test_clip_player_reports_the_frame_it_displayed(qtbot, tmp_path, monkeypatch
         def set(self, *a, **k):
             return True
 
+        def get(self, *a, **k):
+            return 0.0
+
         def read(self):
             return True, np.zeros((4, 4, 3), dtype=np.uint8)
 
