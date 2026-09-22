@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
-from PyQt6.QtCore import QSettings, Qt, QTimer
+from PyQt6.QtCore import QPoint, QSettings, Qt, QTimer
 from PyQt6.QtGui import QBrush, QIcon, QKeySequence, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -52,9 +53,17 @@ from glider.analysis.timeline import (
     is_binary,
     lane_role,
 )
-from glider.gui.review.inspector import Inspector
+from glider.gui.review.inspector import Inspector, MarkerRow
+from glider.gui.review.marker_editor import COHORT_NEEDS_A_FOLDER, MarkerEditor
 from glider.gui.review.pool import PoolEntry, SessionPool, ethogram_strip
-from glider.gui.review.timeline import TimelinePanel, behavior_order, behavior_qcolor, lane_colour
+from glider.gui.review.timeline import (
+    TOP_H,
+    TimelinePanel,
+    behavior_order,
+    behavior_qcolor,
+    lane_colour,
+    swatch,
+)
 from glider.gui.review.viewer import KeypointCanvas, Transport
 from glider.gui.review.viewport import format_seconds, format_timecode
 from glider.gui.styles import colors
@@ -219,6 +228,13 @@ class AnalysisWindow(QMainWindow):
         self._zones = None
         self._tour = None
         self._cohort_root: Path | None = None
+        # Marker files by the folder they sit in, kept for the cohort's
+        # lifetime so markers typed while a write was failing survive a
+        # session switch. The cohort file exists only for a folder opened as
+        # a cohort.
+        self._marker_stores: dict[Path, mk.MarkerStore] = {}
+        self._cohort_store: mk.MarkerStore | None = None
+        self._editor: MarkerEditor | None = None
 
         central = QWidget()
         central.setObjectName("ToolPage")
@@ -288,6 +304,14 @@ class AnalysisWindow(QMainWindow):
         self._build_fixes()
         self._export_btn.clicked.connect(self._export_window)
         self._trail_s.valueChanged.connect(self._apply_trail)
+        self._bar.marker_clicked.connect(self._go_to_marker)
+        self._bar.marker_activated.connect(self._edit_marker)
+        self._bar.marker_changed.connect(self._marker_dragged)
+        self._inspector.marker_picked.connect(self._go_to_marker)
+        self._inspector.save_marker_btn.clicked.connect(self._add_range_marker)
+        self._inspector.export_markers_btn.clicked.connect(self._export_markers)
+        self._timeline_panel.marker_btn.clicked.connect(lambda: self._add_point_marker())
+        self._timeline_panel.range_marker_btn.clicked.connect(self._add_range_marker)
 
         self._restore_layout()
         # Opened with parent=None, so nothing hands it the app theme.
@@ -631,6 +655,7 @@ class AnalysisWindow(QMainWindow):
         # A different recording: the range (and its heatmap) belonged to the
         # one that just left. Only switching within a cohort keeps it.
         self._bar.clear_selection()
+        self._cohort_root = None
         self._set_cohort([(Path(ethogram_csv), view)])
 
     def _open_folder(self) -> None:
@@ -695,6 +720,7 @@ class AnalysisWindow(QMainWindow):
         if not loaded:
             QMessageBox.critical(self, "Open cohort", "\n".join(failed) or "nothing loaded")
             return
+        self._cohort_root = None
         self._set_cohort(loaded)
         if failed:
             QMessageBox.warning(
@@ -718,6 +744,12 @@ class AnalysisWindow(QMainWindow):
         built = [self._timeline_for(path, view) for path, view in loaded]
         self._cohort, self._ids, self._groups = loaded, ids, groups
         self._invalidate_cohort_cache()
+        self._marker_stores = {}
+        self._cohort_store = (
+            None
+            if self._cohort_root is None
+            else self._open_store(self._cohort_root / mk.COHORT_FILE, t0=None)
+        )
         self._timelines = [timeline for timeline, _ in built]
         self._recordings_of = [recording for _, recording in built]
         order = behavior_order(label for _, view in self._cohort for label in view.labels)
@@ -885,6 +917,7 @@ class AnalysisWindow(QMainWindow):
             + ("" if view.px_per_mm else "  No calibration found: distances unavailable.")
         )
         self._update_status()
+        self._publish_markers()
 
     def _update_status(self) -> None:
         view = self._view
@@ -904,6 +937,9 @@ class AnalysisWindow(QMainWindow):
         if recording is not None:
             parts.append(f"events {len(recording.events):,} rows")
             parts.append(f"tracking {len(recording.tracking):,} rows")
+        markers = self._shown_markers()
+        if markers:
+            parts.append(f"{len(markers)} marker{'' if len(markers) == 1 else 's'}")
         self._status.setText("   ·   ".join(parts))
         self._status_path.setText(_short_path(self._ethogram_csv, keep=4))
         self._status_path.setToolTip(str(self._ethogram_csv))
@@ -950,6 +986,19 @@ class AnalysisWindow(QMainWindow):
             # Held J/L would otherwise double the rate at the key-repeat rate.
             if not (event.isAutoRepeat() and event.key() in (Qt.Key.Key_J, Qt.Key.Key_L)):
                 self._edit_key(event.key(), event.modifiers())
+            event.accept()
+            return
+
+        if event.key() in (Qt.Key.Key_M, Qt.Key.Key_Up, Qt.Key.Key_Down) and not shortcut:
+            if not event.isAutoRepeat() or event.key() != Qt.Key.Key_M:
+                if event.key() == Qt.Key.Key_Up:
+                    self._step_marker(-1)
+                elif event.key() == Qt.Key.Key_Down:
+                    self._step_marker(1)
+                elif event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    self._add_range_marker()
+                else:
+                    self._add_point_marker()
             event.accept()
             return
 
@@ -1089,6 +1138,14 @@ class AnalysisWindow(QMainWindow):
         menu.addAction("Set In here\tI", lambda: self._set_in(frame))
         menu.addAction("Set Out here\tO", lambda: self._set_out(frame))
         menu.addAction("Select bout under cursor\tX", lambda: self._select_bout(frame))
+        writable = self._marker_problem() is None
+        menu.addSeparator()
+        menu.addAction("Save range as marker…\t⇧M", self._add_range_marker).setEnabled(
+            has_range and writable
+        )
+        menu.addAction("Add marker here\tM", lambda: self._add_point_marker(frame)).setEnabled(
+            writable
+        )
         menu.addSeparator()
         for text, slot in (
             ("Zoom to range\tZ", self._bar.zoom_to_selection),
@@ -1140,6 +1197,8 @@ class AnalysisWindow(QMainWindow):
             f"{_select_all_text()}  select the whole session\n"
             "Z  zoom to range    ⇧Z  fit the session\n"
             "Esc  clear the range\n"
+            "M  point marker at the playhead    ⇧M  range marker from In/Out\n"
+            "↑  ↓  previous / next marker; double-click a marker to edit it\n"
             "⌘/Ctrl-scroll or pinch  zoom    scroll  pan\n"
             "Drag the lanes to select; drag the ruler to scrub.",
         )
@@ -1292,6 +1351,310 @@ class AnalysisWindow(QMainWindow):
             self._bar.set_selection(int(self._view.frames[0]), int(self._view.frames[-1]))
 
     # ------------------------------------------------------------------
+    # markers
+
+    def _open_store(self, path: Path, *, t0: str | None) -> mk.MarkerStore:
+        store = mk.MarkerStore(path, t0=t0)
+        if store.error is not None:
+            # Said once, when the file is first met; the store stays read-only.
+            QMessageBox.warning(
+                self,
+                "Markers",
+                f"{store.error}\n\nIts markers cannot be edited, and the file "
+                "will not be overwritten.",
+            )
+        return store
+
+    def _session_folder(self, index: int) -> Path:
+        path = Path(self._cohort[index][0])
+        return path if path.is_dir() else path.parent
+
+    def _session_store(self, index: int | None = None) -> mk.MarkerStore | None:
+        """The shown (or given) session's marker file, opened once per cohort."""
+        index = self._shown if index is None else index
+        if not 0 <= index < len(self._cohort):
+            return None
+        folder = self._session_folder(index).resolve()
+        store = self._marker_stores.get(folder)
+        if store is None:
+            timeline = self._timeline_at(index)
+            store = self._open_store(folder / mk.SESSION_FILE, t0=mk.t0_of(timeline))
+            self._marker_stores[folder] = store
+            if store.t0_changed:
+                self.statusBar().showMessage(
+                    f"{mk.SESSION_FILE} was saved when this session's time zero was "
+                    "different, so its markers may be shifted.",
+                    12000,
+                )
+        return store
+
+    def _shown_markers(self) -> list:
+        """This session's markers and the cohort's, as the timeline draws them."""
+        store = self._session_store()
+        own = list(store.markers) if store is not None else []
+        shared = list(self._cohort_store.markers) if self._cohort_store is not None else []
+        return own + shared
+
+    def _store_for(self, scope: str) -> mk.MarkerStore | None:
+        return self._cohort_store if scope == "cohort" else self._session_store()
+
+    def _marker_problem(self) -> str | None:
+        """Why this session's markers cannot be added to, or None."""
+        store = self._session_store()
+        if store is None:
+            return "Load a session to add markers."
+        if store.error is not None:
+            return f"{store.path.name} could not be read, so its markers are read-only."
+        return None
+
+    def _publish_markers(self) -> None:
+        """Hand the markers to everything that shows them."""
+        markers = self._shown_markers()
+        self._bar.set_markers(markers)
+        rows = [
+            MarkerRow(
+                id=m.id,
+                kind=m.kind,
+                name=m.name,
+                colour=swatch(m.color),
+                scope=m.scope,
+                time=(
+                    f"{format_seconds(m.start_s)} – {format_seconds(m.end_s)}"
+                    if m.is_range
+                    else format_seconds(m.start_s)
+                ),
+                duration=f"{m.duration_s:.1f} s" if m.is_range else "",
+                note=m.note,
+            )
+            for m in sorted(markers, key=lambda m: (not m.is_range, m.start_s))
+        ]
+        self._inspector.set_markers(rows)
+        problem = self._marker_problem()
+        self._inspector.set_marker_note(problem or "")
+        panel = self._timeline_panel
+        for button, tip in (
+            (panel.marker_btn, "Add a point marker at the playhead  (M)"),
+            (panel.range_marker_btn, "Save the In/Out range as a range marker  (⇧M)"),
+        ):
+            button.setEnabled(problem is None)
+            button.setToolTip(problem or tip)
+        self._inspector.save_marker_btn.setEnabled(
+            problem is None and self._bar.selection() is not None
+        )
+        self._refresh_inside()
+        self._update_status()
+
+    def _refresh_inside(self) -> None:
+        """The range markers the selection falls inside, on the range card."""
+        if self._bar.selection() is None or self._current_span is None:
+            self._inspector.set_inside([])
+            return
+        start_s, end_s = self._current_span
+        eps = 1e-6
+        self._inspector.set_inside(
+            [
+                m.name or "Range"
+                for m in self._shown_markers()
+                if m.is_range and m.start_s - eps <= start_s and end_s <= m.end_s + eps
+            ]
+        )
+
+    def _add_point_marker(self, frame: int | None = None) -> None:
+        """M: a point marker at the playhead (or where the menu opened), then its editor."""
+        problem = self._marker_problem()
+        if problem is not None or self._view is None:
+            self.statusBar().showMessage(problem or "", 8000)
+            return
+        marker = mk.Marker(
+            "point", self._bar.seconds_of_frame(self._frame if frame is None else frame)
+        )
+        if self._save_marker(marker):
+            self._edit_marker(marker.id)
+
+    def _add_range_marker(self) -> None:
+        """⇧M: the In/Out range as a range marker, then its editor."""
+        problem = self._marker_problem()
+        selection = self._bar.selection()
+        if problem is not None or selection is None:
+            self.statusBar().showMessage(
+                problem or "Set In and Out first (I and O), or drag across the lanes.", 8000
+            )
+            return
+        marker = mk.Marker("range", *(self._current_span or self._span_seconds(*selection)))
+        if self._save_marker(marker):
+            self._edit_marker(marker.id)
+
+    def _save_marker(self, marker, *, previous_scope: str | None = None) -> bool:
+        """Keep ``marker`` in its scope's file, moving it if its scope changed.
+
+        A failed write keeps the markers in memory -- nothing typed is lost --
+        and says which file and why.
+        """
+        store = self._store_for(marker.scope)
+        if store is None or not store.writable:
+            self.statusBar().showMessage("That marker file cannot be written.", 8000)
+            return False
+        touched = [store]
+        if previous_scope is not None and previous_scope != marker.scope:
+            old = self._store_for(previous_scope)
+            if old is not None and old.writable:
+                old.remove(marker.id)
+                touched.append(old)
+        store.put(marker)
+        for each in touched:
+            try:
+                each.save()
+            except (OSError, mk.MarkerFileError) as e:
+                QMessageBox.critical(
+                    self,
+                    "Markers",
+                    f"Could not write {each.path}: {e}\n\n"
+                    "The markers are kept in this window until it closes.",
+                )
+        self._publish_markers()
+        return True
+
+    def _find_marker(self, marker_id: str):
+        return next((m for m in self._shown_markers() if m.id == marker_id), None)
+
+    def _edit_marker(self, marker_id: str, at: QPoint | None = None) -> None:
+        """Open the editor on a marker, anchored under it."""
+        marker = self._find_marker(marker_id)
+        if marker is None:
+            return
+        store = self._store_for(marker.scope)
+        if store is None or not store.writable:
+            self.statusBar().showMessage(
+                f"{marker.name or 'This marker'} is in a file that cannot be written.", 8000
+            )
+            return
+        cohort = self._cohort_store
+        if cohort is None:
+            cohort_problem = COHORT_NEEDS_A_FOLDER
+        elif not cohort.writable:
+            cohort_problem = f"{cohort.path.name} could not be read, so it cannot be added to."
+        else:
+            cohort_problem = None
+        editor = MarkerEditor(
+            marker,
+            cohort_problem=cohort_problem,
+            in_out=self._current_span if self._bar.selection() is not None else None,
+            parent=self,
+        )
+        editor.done.connect(
+            lambda edited, scope=marker.scope: self._save_marker(edited, previous_scope=scope)
+        )
+        editor.deleted.connect(self._delete_marker)
+        self._editor = editor
+        if at is None:
+            x = self._bar.x_of_axis(self._bar.axis_of_seconds(marker.start_s))
+            at = self._bar.mapToGlobal(QPoint(int(x), TOP_H))
+        editor.popup(at)
+
+    def _delete_marker(self, marker_id: str) -> None:
+        marker = self._find_marker(marker_id)
+        store = None if marker is None else self._store_for(marker.scope)
+        if store is None or not store.writable:
+            return
+        store.remove(marker_id)
+        try:
+            store.save()
+        except (OSError, mk.MarkerFileError) as e:
+            QMessageBox.critical(self, "Markers", f"Could not write {store.path}: {e}")
+        self._publish_markers()
+
+    def _marker_dragged(self, marker_id: str, start_s: float, end_s) -> None:
+        """Keep where a dragged marker landed, or put it back if it cannot be kept."""
+        marker = self._find_marker(marker_id)
+        if marker is None:
+            return
+        if not self._save_marker(replace(marker, start_s=start_s, end_s=end_s)):
+            self._publish_markers()
+
+    def _go_to_marker(self, marker_id: str) -> None:
+        """Seek to a marker; a range is selected too, so its numbers fill."""
+        marker = self._find_marker(marker_id)
+        if marker is None or self._view is None:
+            return
+        timeline, fps = self._bar.timeline(), self._bar.fps()
+        first, last = self._bar.frame_bounds()
+        self._stop()
+        self._set_frame(max(first, min(last, mk.frame_at(timeline, fps, marker.start_s))))
+        if marker.is_range:
+            bounds = self._scored_bounds(self._view)
+            frames = (
+                None
+                if bounds is None
+                else mk.frames_in(timeline, fps, marker.start_s, marker.end_s, bounds)
+            )
+            if frames is not None:
+                self._bar.set_selection(*frames)
+
+    def _step_marker(self, direction: int) -> None:
+        """Up / down: the playhead to the previous / next marker start."""
+        if self._view is None:
+            return
+        timeline, fps = self._bar.timeline(), self._bar.fps()
+        starts = sorted({mk.frame_at(timeline, fps, m.start_s) for m in self._shown_markers()})
+        ahead = [f for f in starts if (f > self._frame if direction > 0 else f < self._frame)]
+        if not ahead:
+            return
+        first, last = self._bar.frame_bounds()
+        self._stop()
+        self._set_frame(max(first, min(last, ahead[0] if direction > 0 else ahead[-1])))
+
+    def _export_markers(self) -> None:
+        """Every loaded session's markers and the cohort's, as one CSV."""
+        if not self._cohort:
+            return
+        import pandas as pd
+
+        def record(m, session: str) -> dict:
+            return {
+                "session": session,
+                "scope": m.scope,
+                "kind": m.kind,
+                "name": m.name,
+                "color": m.color,
+                "start_s": m.start_s,
+                "end_s": m.end_s,
+                "duration_s": m.duration_s if m.is_range else None,
+                "note": m.note,
+                "id": m.id,
+            }
+
+        records = [
+            record(m, "") for m in (self._cohort_store.markers if self._cohort_store else [])
+        ]
+        for i, sid in enumerate(self._ids):
+            store = self._session_store(i)
+            records += [record(m, sid) for m in (store.markers if store else [])]
+        default = (self._cohort_root or self._session_folder(self._shown)) / "markers.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export markers", str(default), "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+        columns = [
+            "session",
+            "scope",
+            "kind",
+            "name",
+            "color",
+            "start_s",
+            "end_s",
+            "duration_s",
+            "note",
+            "id",
+        ]
+        try:
+            pd.DataFrame.from_records(records, columns=columns).to_csv(path, index=False)
+        except OSError as e:
+            QMessageBox.critical(self, "Export markers", f"Could not write {path}: {e}")
+            return
+        self.statusBar().showMessage(f"Wrote {path}", 10000)
+
+    # ------------------------------------------------------------------
     # the selected range
 
     def _on_selection(self, start: int, end: int) -> None:
@@ -1310,6 +1673,8 @@ class AnalysisWindow(QMainWindow):
         self._apply_heatmap()
         self._export_btn.setEnabled(True)
         self._export_window_action.setEnabled(True)
+        self._inspector.save_marker_btn.setEnabled(self._marker_problem() is None)
+        self._refresh_inside()
 
     def _on_tab_changed(self, _index: int) -> None:
         """Fill the Cohort table when it is shown; hidden, a drag never pays for it."""

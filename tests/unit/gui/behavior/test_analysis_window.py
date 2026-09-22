@@ -1988,3 +1988,176 @@ class TestTheCohortTabToleratesOutsideRows:
         )
         values = [win._cohort_table.item(short_row, c).text() for c in range(1, 9)]
         assert all(v == "—" for v in values)
+
+
+class TestMarkersInTheWindow:
+    """M, shift-M, up and down, the editor, and the files beside the data."""
+
+    def _win(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        csv = _session(tmp_path / "v")
+        win.load(csv)
+        return win, csv.parent
+
+    def _saved(self, folder, name="review_markers.json"):
+        import json
+
+        return json.loads((folder / name).read_text())
+
+    def test_m_adds_a_point_marker_at_the_playhead_and_saves_it(self, qtbot, tmp_path):
+        win, folder = self._win(qtbot, tmp_path)
+        win._set_frame(90)
+        _key(win, Qt.Key.Key_M)
+        win._editor.close()
+        saved = self._saved(folder)
+        (marker,) = saved["markers"]
+        assert marker["kind"] == "point" and marker["start_s"] == pytest.approx(3.0)
+        assert saved["t0"] == "video_start"
+        assert [m.start_s for m in win._bar.markers()] == [pytest.approx(3.0)]
+
+    def test_reopening_restores_the_markers(self, qtbot, tmp_path):
+        win, folder = self._win(qtbot, tmp_path)
+        win._set_frame(90)
+        _key(win, Qt.Key.Key_M)
+        win._editor.close()
+        win.load(folder / "ethogram_raw.csv")
+        assert [m.start_s for m in win._bar.markers()] == [pytest.approx(3.0)]
+
+    def test_shift_m_keeps_the_range(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        win._bar.set_selection(30, 89)
+        _key(win, Qt.Key.Key_M, Qt.KeyboardModifier.ShiftModifier)
+        win._editor.close()
+        (marker,) = win._bar.markers()
+        assert marker.kind == "range"
+        assert (marker.start_s, marker.end_s) == (pytest.approx(1.0), pytest.approx(3.0))
+
+    def test_shift_m_without_a_range_says_what_to_do(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_M, Qt.KeyboardModifier.ShiftModifier)
+        assert win._bar.markers() == []
+        assert "In and Out" in win.statusBar().currentMessage()
+
+    def test_the_editor_names_the_marker(self, qtbot, tmp_path):
+        win, folder = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_M)
+        win._editor.name.setText("door stuck")
+        win._editor.done_btn.click()
+        assert self._saved(folder)["markers"][0]["name"] == "door stuck"
+        assert win._inspector.tabText(2) == "Markers (1)"
+
+    def test_the_editor_deletes_the_marker(self, qtbot, tmp_path):
+        win, folder = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_M)
+        win._editor.delete_btn.click()
+        assert self._saved(folder)["markers"] == []
+        assert win._bar.markers() == []
+
+    def test_dragging_a_marker_saves_where_it_landed(self, qtbot, tmp_path):
+        win, folder = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_M)
+        win._editor.close()
+        (marker,) = win._bar.markers()
+        win._bar.marker_changed.emit(marker.id, 5.0, None)
+        assert self._saved(folder)["markers"][0]["start_s"] == pytest.approx(5.0)
+
+    def test_up_and_down_step_between_markers(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        for frame in (30, 150):
+            win._set_frame(frame)
+            _key(win, Qt.Key.Key_M)
+            win._editor.close()
+        win._set_frame(0)
+        _key(win, Qt.Key.Key_Down)
+        assert win._frame == 30
+        _key(win, Qt.Key.Key_Down)
+        assert win._frame == 150
+        _key(win, Qt.Key.Key_Up)
+        assert win._frame == 30
+
+    def test_going_to_a_range_marker_selects_it(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        win._bar.set_selection(30, 89)
+        _key(win, Qt.Key.Key_M, Qt.KeyboardModifier.ShiftModifier)
+        win._editor.close()
+        win._bar.clear_selection()
+        (marker,) = win._bar.markers()
+        win._go_to_marker(marker.id)
+        assert win._bar.selection() == (30, 89) and win._frame == 30
+
+    def test_the_range_card_names_the_markers_the_range_is_inside(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        win._bar.set_selection(30, 89)
+        _key(win, Qt.Key.Key_M, Qt.KeyboardModifier.ShiftModifier)
+        win._editor.name.setText("Stim")
+        win._editor.done_btn.click()
+        win._bar.set_selection(40, 50)
+        assert win._inspector.inside.text() == "inside Stim"
+
+    def test_the_menu_offers_markers(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        texts = [a.text() for a in win._timeline_menu(120).actions() if a.text()]
+        assert "Add marker here\tM" in texts and "Save range as marker…\t⇧M" in texts
+
+    def test_an_unreadable_file_is_left_alone_and_turns_the_tools_off(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        folder = tmp_path / "v"
+        csv = _session(folder)
+        (folder / "review_markers.json").write_text("{not json")
+        warned = _said(monkeypatch, "warning")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(csv)
+        assert warned and "review_markers.json" in warned[0]
+        assert not win._timeline_panel.marker_btn.isEnabled()
+        _key(win, Qt.Key.Key_M)
+        assert (folder / "review_markers.json").read_text() == "{not json"
+        assert win._bar.markers() == []
+
+    def test_a_failed_write_keeps_the_marker_and_says_where(self, qtbot, tmp_path, monkeypatch):
+        win, _folder = self._win(qtbot, tmp_path)
+        critical = _said(monkeypatch, "critical")
+
+        def boom(*_a, **_k):
+            raise OSError("read-only share")
+
+        monkeypatch.setattr("glider.analysis.markers.save_markers", boom)
+        _key(win, Qt.Key.Key_M)
+        win._editor.close()
+        assert critical and "review_markers.json" in critical[0]
+        assert len(win._bar.markers()) == 1
+
+    def test_a_single_session_cannot_share_a_range(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_M)
+        assert not win._editor.whole_cohort.isEnabled()
+        win._editor.close()
+
+    def test_a_cohort_range_is_kept_beside_the_cohort_and_shown_in_every_session(
+        self, qtbot, tmp_path
+    ):
+        root = tmp_path / "cohort"
+        _session(root / "a")
+        _session(root / "b")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(root)
+        win._bar.set_selection(30, 89)
+        _key(win, Qt.Key.Key_M, Qt.KeyboardModifier.ShiftModifier)
+        win._editor.name.setText("Stim")
+        win._editor.whole_cohort.setChecked(True)
+        win._editor.done_btn.click()
+        assert [m["scope"] for m in self._saved(root, "cohort_markers.json")["markers"]] == [
+            "cohort"
+        ]
+        assert self._saved(win._session_folder(win._shown))["markers"] == []
+        win._pool.select(1 - win._shown)
+        assert [m.name for m in win._bar.markers()] == ["Stim"]
+
+    def test_the_status_bar_counts_markers(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_M)
+        win._editor.close()
+        assert "1 marker" in win._status.text()

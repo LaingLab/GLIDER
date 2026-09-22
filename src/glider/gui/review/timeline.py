@@ -1555,6 +1555,13 @@ class TimelinePanel(QTabWidget):
         row = QHBoxLayout(tools)
         row.setContentsMargins(8, 2, 8, 2)
         row.setSpacing(4)
+        self.marker_btn = _tool("Marker", "Add a point marker at the playhead  (M)")
+        self.range_marker_btn = _tool(
+            "Range marker", "Save the In/Out range as a range marker  (⇧M)"
+        )
+        row.addWidget(self.marker_btn)
+        row.addWidget(self.range_marker_btn)
+        row.addWidget(_rule())
         self.snap = _tool(
             "Snap", "Selections snap to bout edges and hardware switches", checked=True
         )
