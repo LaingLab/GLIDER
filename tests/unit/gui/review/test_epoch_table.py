@@ -158,6 +158,30 @@ def test_the_shown_session_is_highlighted(table):
     assert {i.row() for i in table.table.selectedIndexes()} == {table.row_of(1)}
 
 
+def test_showing_a_session_does_not_report_it_as_picked(table):
+    seen = []
+    table.session_picked.connect(seen.append)
+    table.set_shown(1)
+    assert {i.row() for i in table.table.selectedIndexes()} == {table.row_of(1)}
+    assert seen == []
+
+
+def test_metrics_fall_back_to_the_defaults_when_the_catalog_no_longer_offers_them(table):
+    zoned = _rows()
+    for block in zoned.values():
+        for r in block:
+            r["_zones"] = ("open",)
+            r["zone_open_s"] = 5.0
+    table.set_data(EPOCHS, SESSIONS, zoned, metric_catalog(zoned["m1"]))
+    table.set_metrics(["zone_open_s"])
+    assert [m.key for m in table.metrics()] == ["zone_open_s"]
+
+    _fill(table)  # refill from a catalog with no zones at all
+    assert table.session_count() == 3
+    headers = [table.table.horizontalHeaderItem(c).text() for c in range(1, 4)]
+    assert headers == ["Distance (cm)", "Speed (cm/s)", "Freezing %"]
+
+
 def test_export_asks_for_a_shape(table):
     seen = []
     table.export_requested.connect(seen.append)

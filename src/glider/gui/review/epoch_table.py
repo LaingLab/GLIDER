@@ -200,9 +200,18 @@ class EpochTable(QWidget):
         return self.visible(self._epochs)
 
     def metric_keys(self, catalog) -> list[str]:
-        """The chosen metrics that ``catalog`` offers, in its order."""
+        """The chosen metrics that ``catalog`` offers, in its order.
+
+        Falls back to the catalog's defaults when the choice offers nothing --
+        a metric picked against one cohort's catalog can be entirely absent
+        from the next refill's. The choice itself (``set_metrics``) is left
+        untouched, so a metric that returns later is still the user's pick.
+        """
         chosen = self._chosen if self._chosen is not None else default_metrics(catalog)
-        return [m.key for m in catalog if m.key in chosen]
+        keys = [m.key for m in catalog if m.key in chosen]
+        if not keys and catalog:
+            keys = [m.key for m in catalog if m.key in default_metrics(catalog)]
+        return keys
 
     def metrics(self) -> list[Metric]:
         keys = set(self.metric_keys(self._catalog))
