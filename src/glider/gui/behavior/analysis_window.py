@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
 from glider.analysis import markers as mk
 from glider.analysis.behavior.session_view import SessionView, SessionViewError
 from glider.analysis.cohort import discover_sessions, recording_candidates, session_id_for
+from glider.analysis.epochs import threshold_text
 from glider.analysis.timeline import (
     build_timeline,
     describe_summary,
@@ -1622,17 +1623,8 @@ class AnalysisWindow(QMainWindow):
 
     @staticmethod
     def _threshold_text(row: dict, side: str) -> str:
-        """A cut-off in cm/s, falling back to px/frame, or an em dash.
-
-        An uncalibrated run has real thresholds in pixels; showing nothing
-        would claim it had none, and showing a converted number would invent
-        the scale it never had.
-        """
-        real = row.get(f"{side}_threshold_cm_s")
-        if real is not None:
-            return f"{real:.2f}"
-        pixels = row.get(f"{side}_threshold_px_frame")
-        return "—" if pixels is None else f"{pixels:.3f} px/f"
+        """A cut-off in cm/s, falling back to px/frame (see :func:`epochs.threshold_text`)."""
+        return threshold_text(row, side)
 
     def _fill_cohort(self, start: int, end: int) -> None:
         rows = self.cohort_rows(start, end)
