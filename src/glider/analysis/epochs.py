@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -116,7 +117,11 @@ def metric_value(row: dict, key: str) -> float | None:
         seconds, duration = row.get(key[: -len("_pct")] + "_s"), row.get("duration_s")
         if seconds is None or not duration:
             return None
-        return 100.0 * float(seconds) / float(duration)
+        seconds = float(seconds)
+        duration = float(duration)
+        if math.isnan(seconds) or math.isnan(duration):
+            return None
+        return 100.0 * seconds / duration
     if key in ("freeze_threshold", "dart_threshold"):
         key = f"{key}_cm_s"
     value = row.get(key)
@@ -185,15 +190,28 @@ def tidy_frame(
 
     ``start_s`` / ``end_s`` are what that session was actually measured over
     -- a range past its end is clipped -- so a row can be checked on its own.
+    Range labels are unique per epoch: the first occurrence of a name keeps it,
+    later ones get a suffix ``(2)``, ``(3)``, etc. This ensures ``wide_frame``'s
+    pivot operation never encounters duplicate column names.
     """
+    # Build unique range labels: count occurrences of each name and suffix duplicates
+    name_counts = Counter()
+    epoch_labels = {}
+    for epoch in epochs:
+        name_counts[epoch.name] += 1
+        count = name_counts[epoch.name]
+        label = epoch.name if count == 1 else f"{epoch.name} ({count})"
+        epoch_labels[epoch.key] = label
+
     records = []
     for epoch in epochs:
+        range_label = epoch_labels[epoch.key]
         for row in rows_by_epoch[epoch.key]:
             records.append(
                 {
                     "session": row["session"],
                     "group": row.get("group", ""),
-                    "range": epoch.name,
+                    "range": range_label,
                     "t0": row.get("t0", ""),
                     "start_s": row.get("start_s"),
                     "end_s": row.get("end_s"),

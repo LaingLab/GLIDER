@@ -140,3 +140,32 @@ def test_wide_is_one_row_per_session():
         "Current range__distance_cm",
     ]
     assert wide.loc[wide["session"] == "m02", "Baseline__distance_cm"].item() == 200.0
+
+
+def test_duplicate_epoch_names_get_unique_range_labels():
+    # Two epochs sharing a name: tidy should make their range labels unique
+    epochs = [
+        Epoch("m1", "Baseline", 0.0, 60.0, "slate"),
+        Epoch("m2", "Baseline", 60.0, 120.0, "slate"),
+    ]
+    rows_dict = {
+        "m1": [_row("m01"), _row("m02")],
+        "m2": [_row("m01"), _row("m02")],
+    }
+    tidy = tidy_frame(epochs, rows_dict, ["distance_cm"])
+    # Range labels should be unique: "Baseline" and "Baseline (2)"
+    ranges = tidy["range"].unique().tolist()
+    assert len(ranges) == 2
+    assert "Baseline" in ranges
+    assert "Baseline (2)" in ranges
+    # wide_frame should not crash with duplicate labels
+    wide = wide_frame(tidy, ["distance_cm"])
+    assert (
+        len(wide.columns) == 4
+    )  # session, group, Baseline__distance_cm, Baseline (2)__distance_cm
+
+
+def test_nan_in_state_duration_returns_none_not_nan():
+    row = _row("m01", distance=None, freezing_s=math.nan)
+    assert metric_value(row, "freezing_pct") is None
+    assert metric_text(row, Metric("freezing_pct", "Freezing %", 1)) == "—"
