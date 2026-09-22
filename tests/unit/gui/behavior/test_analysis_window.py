@@ -10,8 +10,8 @@ import pytest
 
 pytest.importorskip("PyQt6")
 
-from PyQt6.QtCore import QPointF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QKeyEvent, QMouseEvent  # noqa: E402
+from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6.QtGui import QColor, QKeyEvent  # noqa: E402
 
 from glider.analysis.behavior.session_view import SessionView  # noqa: E402
 from glider.gui.behavior.analysis_window import (  # noqa: E402
@@ -19,7 +19,7 @@ from glider.gui.behavior.analysis_window import (  # noqa: E402
     KeypointCanvas,
     behavior_qcolor,
 )
-from glider.gui.widgets.timeline_bar import TimelineBar  # noqa: E402
+from glider.gui.review.timeline import HEADER_W, TimelineView  # noqa: E402
 
 NAMES = ["nose", "l_ear", "r_ear", "tail_base"]
 
@@ -61,88 +61,6 @@ class TestBehaviorColours:
         from glider.gui.styles import colors
 
         assert behavior_qcolor("") == QColor(colors.BORDER)
-
-
-class TestTimelineBar:
-    def _bar(self, qtbot, tmp_path, **kw):
-        bar = TimelineBar()
-        qtbot.addWidget(bar)
-        bar.resize(300, 46)
-        bar.set_view(SessionView.load(_session(tmp_path / "v", **kw)))
-        return bar
-
-    def test_an_empty_bar_does_not_crash(self, qtbot):
-        bar = TimelineBar()
-        qtbot.addWidget(bar)
-        bar.set_view(None)
-        bar.resize(200, 46)
-        bar.grab()  # forces a paint
-
-    def test_it_paints_a_loaded_session(self, qtbot, tmp_path):
-        bar = self._bar(qtbot, tmp_path)
-        image = bar.grab().toImage()
-        assert image.width() == 300
-
-    def test_clicking_scrubs_to_that_frame(self, qtbot, tmp_path):
-        bar = self._bar(qtbot, tmp_path)
-        seen = []
-        bar.scrubbed.connect(seen.append)
-        event = QMouseEvent(
-            QMouseEvent.Type.MouseButtonPress,
-            QPointF(150, 20),
-            Qt.MouseButton.LeftButton,
-            Qt.MouseButton.LeftButton,
-            Qt.KeyboardModifier.NoModifier,
-        )
-        bar.mousePressEvent(event)
-        # Half way along a 300-frame session.
-        assert seen and 140 <= seen[0] <= 160
-
-    def test_a_selection_is_reported_and_kept(self, qtbot, tmp_path):
-        bar = self._bar(qtbot, tmp_path)
-        seen = []
-        bar.selection_changed.connect(lambda a, b: seen.append((a, b)))
-        bar.set_selection(200, 50)
-        # Reversed input is normalised rather than refused.
-        assert bar.selection() == (50, 200)
-        assert seen == [(50, 200)]
-
-    def test_the_selection_shades_what_it_excludes_and_nothing_else(self, qtbot, tmp_path):
-        """Two failures at once, and the scrim has to avoid both.
-
-        The old form tinted the *inside* of the selection, so the usual
-        whole-session selection dragged every behaviour on the bar toward one
-        hue — no palette could look distinct through it. And the scrim must
-        still be drawn with ``qcolor_with_alpha``: ``colors.with_alpha``
-        returns a QSS string, which QPainter reads as opaque black and which
-        blanked the bar outright.
-        """
-        bar = self._bar(qtbot, tmp_path)
-        inside_before = bar.grab().toImage().pixelColor(150, 23)
-        outside_before = bar.grab().toImage().pixelColor(250, 23)
-        bar.set_selection(100, 199)  # 1 px per frame, so x=150 is in, x=250 out
-        image = bar.grab().toImage()
-        assert image.pixelColor(150, 23) == inside_before  # data at full strength
-        assert image.pixelColor(250, 23) != outside_before  # excluded, and visibly so
-        assert image.pixelColor(250, 23) != QColor(0, 0, 0)
-
-    def test_selecting_everything_changes_nothing_about_the_colours(self, qtbot, tmp_path):
-        bar = self._bar(qtbot, tmp_path)
-        before = bar.grab().toImage()
-        bar.set_selection(0, 299)
-        after = bar.grab().toImage()
-        assert [after.pixelColor(x, 23) == before.pixelColor(x, 23) for x in (20, 150, 280)] == [
-            True,
-            True,
-            True,
-        ]
-
-    def test_scrubbing_does_not_clear_the_selection(self, qtbot, tmp_path):
-        """A window survives looking around inside it."""
-        bar = self._bar(qtbot, tmp_path)
-        bar.set_selection(50, 200)
-        bar.set_frame(120)
-        assert bar.selection() == (50, 200)
 
 
 class TestKeypointCanvas:
@@ -203,7 +121,7 @@ class TestAnalysisWindow:
     def test_loading_populates_the_widgets(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         assert win._view is not None
-        assert "300" in win._summary.text()
+        assert "300" in win._session_text.text()
 
     def test_selecting_a_window_fills_the_bout_table(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
@@ -212,7 +130,7 @@ class TestAnalysisWindow:
         assert win._bouts.item(0, 0).text() == "locomote"
 
     def test_selection_still_arrives_in_frames(self, qtbot, tmp_path):
-        """The swap from EthogramBar to TimelineBar must not change the
+        """The swap from EthogramBar to TimelineView must not change the
         unit the tables receive. If it does, every window statistic is
         computed over the wrong range and nothing raises."""
         win = self._win(qtbot, tmp_path)
@@ -247,7 +165,7 @@ class TestAnalysisWindow:
     def test_scrubbing_moves_the_clock(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._set_frame(90)  # 3 s at 30 fps
-        assert "3.00" in win._clock.text()
+        assert win._clock.text() == "00:00:03:00"
 
     def test_playback_stops_at_the_end(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
@@ -260,12 +178,12 @@ class TestAnalysisWindow:
 
     def test_the_repair_button_is_hidden_when_nothing_needs_repairing(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
-        assert win._fix_resolution.isVisibleTo(win) is False
+        assert win._fix_resolution.isHidden() is True
 
     def test_the_repair_button_appears_for_a_sidecar_without_a_resolution(self, qtbot, tmp_path):
         """Runs from before the field existed must still be viewable."""
         win = self._win(qtbot, tmp_path, with_resolution=False)
-        assert win._fix_resolution.isVisibleTo(win) is True
+        assert win._fix_resolution.isHidden() is False
 
     def test_repairing_writes_the_resolution_and_reloads(self, qtbot, tmp_path, monkeypatch):
         win = self._win(qtbot, tmp_path, with_resolution=False)
@@ -278,7 +196,7 @@ class TestAnalysisWindow:
         monkeypatch.setattr("glider.vision.video_source.video_resolution", lambda _p: (800, 600))
         win._resolution_from_video()
         assert win._view.resolution == (800, 600)
-        assert win._fix_resolution.isVisibleTo(win) is False
+        assert win._fix_resolution.isHidden() is True
 
     def test_an_unreadable_video_is_reported_and_changes_nothing(
         self, qtbot, tmp_path, monkeypatch
@@ -336,10 +254,10 @@ class TestWhenPosesAreElsewhere:
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load(self._session_without_poses(tmp_path))
-        assert win._pick_poses.isVisibleTo(win) is True
+        assert win._pick_poses.isHidden() is False
 
         win.load(_session(tmp_path / "with_poses"))
-        assert win._pick_poses.isVisibleTo(win) is False
+        assert win._pick_poses.isHidden() is True
 
     def test_the_blank_canvas_points_at_the_button(self, qtbot, tmp_path):
         win = AnalysisWindow()
@@ -379,13 +297,13 @@ class TestWhenPosesAreElsewhere:
         win._choose_pose_csv()
         assert win._view.xy is not None
         assert win._view.pose_path == chosen
-        assert win._pick_poses.isVisibleTo(win) is False
+        assert win._pick_poses.isHidden() is True
 
     def test_the_summary_names_the_pose_file_that_was_used(self, qtbot, tmp_path):
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load(_session(tmp_path / "v"))
-        assert "vDLC_exp-7.csv" in win._summary.text()
+        assert "vDLC_exp-7.csv" in win._session_text.text()
 
     def test_cancelling_the_picker_changes_nothing(self, qtbot, tmp_path, monkeypatch):
         win = AnalysisWindow()
@@ -498,23 +416,24 @@ class TestTheTimelineHasOneLane:
         ).to_csv(folder / "ethogram_raw.csv", index=False)
         return folder / "ethogram_raw.csv"
 
-    def test_the_bar_paints_one_full_height_lane(self, qtbot, tmp_path):
-        bar = TimelineBar()
-        qtbot.addWidget(bar)
-        bar.resize(300, 46)
-        bar.set_view(SessionView.load(self._session_with_freezing(tmp_path)))
-        image = bar.grab().toImage()
-        # Same column top and bottom: one behaviour, one band.
-        assert image.pixelColor(130, 8) == image.pixelColor(130, 40)
+    def _timeline_view(self, qtbot, tmp_path):
+        view = TimelineView()
+        qtbot.addWidget(view)
+        view.resize(HEADER_W + 300, 120)
+        view.set_view(SessionView.load(self._session_with_freezing(tmp_path)))
+        return view
+
+    def test_the_ethogram_is_one_lane(self, qtbot, tmp_path):
+        view = self._timeline_view(qtbot, tmp_path)
+        assert [row.kind for row in view._rows()] == ["group", "behavior"]
 
     def test_freezing_is_drawn_in_its_own_colour(self, qtbot, tmp_path):
-        bar = TimelineBar()
-        qtbot.addWidget(bar)
-        bar.resize(300, 46)
-        bar.set_view(SessionView.load(self._session_with_freezing(tmp_path)))
-        image = bar.grab().toImage()
-        # frames 100-159 of 300 sit around x=130; grooming is elsewhere.
-        assert image.pixelColor(130, 20) != image.pixelColor(20, 20)
+        view = self._timeline_view(qtbot, tmp_path)
+        y = int(view.lane_rect("ethogram").top() + 5)
+        image = view.grab().toImage()
+        assert image.pixelColor(int(view.x_of_frame(130)), y) != image.pixelColor(
+            int(view.x_of_frame(20)), y
+        )
 
     def test_freeze_bouts_reach_the_one_table(self, qtbot, tmp_path):
         win = AnalysisWindow()
@@ -548,7 +467,7 @@ class TestVideoPlayback:
         win.load(etho)
         assert win._view.video_path == clip
         assert win._video_on.isEnabled() is True
-        assert "v.mp4" in win._summary.text()
+        assert "v.mp4" in win._session_text.text()
         # And it actually decodes.
         assert win._canvas._frame_image(10) is not None
         win._canvas._close_reader()
@@ -583,13 +502,13 @@ class TestACohortOfSessions:
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
         assert len(win._cohort) == 4
-        assert win._sessions.count() == 4
+        assert win._pool.count() == 4
 
-    def test_the_picker_hides_for_a_single_session(self, qtbot, tmp_path):
+    def test_a_single_session_is_one_row(self, qtbot, tmp_path):
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load(_session(tmp_path / "v"))
-        assert win._sessions.isVisibleTo(win) is False
+        assert win._pool.count() == 1
 
     def test_switching_session_keeps_the_window(self, qtbot, tmp_path):
         """The window is the question; changing which animal answers it must
@@ -598,7 +517,7 @@ class TestACohortOfSessions:
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
         win._bar.set_selection(100, 199)
-        win._sessions.setCurrentIndex(2)
+        win._pool.select(2)
         assert win._bar.selection() == (100, 199)
         assert win._view is win._cohort[2][1]
 
@@ -620,13 +539,14 @@ class TestACohortOfSessions:
         assert rows["t0"]["freezing_s"] == pytest.approx(30 / 30.0)
         assert rows["t3"]["freezing_s"] == pytest.approx(120 / 30.0)
 
-    def test_the_cohort_table_fills_on_selection(self, qtbot, tmp_path):
+    def test_the_epoch_table_fills_on_selection(self, qtbot, tmp_path):
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
+        win._tables.setCurrentWidget(win._epoch)  # filled only while shown
         win._bar.set_selection(0, 299)
-        assert win._cohort_table.rowCount() == 4
-        assert "Cohort (4)" == win._tables.tabText(1)
+        assert win._epoch.session_count() == 4
+        assert win._tables.tabText(1) == "Epoch table (4)"
 
     def test_one_unreadable_session_does_not_lose_the_rest(self, qtbot, tmp_path, monkeypatch):
         ethograms = self._cohort(tmp_path)
@@ -669,6 +589,28 @@ class TestACohortOfSessions:
         assert win._export_btn.isEnabled() is True
 
 
+class TestClearingTheRangeClearsItsNumbers:
+    def test_clearing_empties_every_range_table(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        win._bar.set_selection(100, 199)
+        assert win._bouts.rowCount() == 1
+        win._bar.clear_selection()
+        assert win._bouts.rowCount() == 0
+        assert win._zone_table.rowCount() == 0
+        assert win._epoch.session_count() == 0
+        assert win._tables.tabText(win._tables.indexOf(win._epoch)) == "Epoch table"
+
+    def test_a_new_file_does_not_show_the_old_files_bouts(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "a"))
+        win._bar.set_selection(100, 199)
+        win.load(_session(tmp_path / "b"))
+        assert win._bouts.rowCount() == 0
+
+
 class TestZonesInTheWindow:
     """The spatial suite existed but could not be reached from a video-derived
     session at all — no time in zone, no entries, no heatmap."""
@@ -700,13 +642,13 @@ class TestZonesInTheWindow:
         win = self._win(qtbot, tmp_path)
         win._bar.set_selection(0, 299)
         assert win._zone_table.rowCount() >= 1
-        assert "Zones (" in win._tables.tabText(2)
+        assert "ZONES (" in win._inspector.zones_title.text()
 
     def test_without_zones_the_table_stays_empty(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path, with_zones=False)
         win._bar.set_selection(0, 299)
         assert win._zone_table.rowCount() == 0
-        assert win._tables.tabText(2) == "Zones"
+        assert win._inspector.zones_title.text() == "ZONES"
 
     def test_zone_columns_reach_the_cohort_export(self, qtbot, tmp_path, monkeypatch):
         win = self._win(qtbot, tmp_path)
@@ -933,23 +875,23 @@ class TestTheTimelineCoversTheEthogram:
         win.load(_windowed_session(tmp_path))
         assert win._frame == 3600
 
+    def _timeline_view(self, qtbot, tmp_path):
+        view = TimelineView()
+        qtbot.addWidget(view)
+        view.resize(HEADER_W + 300, 120)
+        view.set_view(SessionView.load(_windowed_session(tmp_path)))
+        return view
+
     def test_clicking_the_far_left_lands_on_the_first_frame(self, qtbot, tmp_path):
-        bar = TimelineBar()
-        qtbot.addWidget(bar)
-        bar.resize(300, 46)
-        bar.set_view(SessionView.load(_windowed_session(tmp_path)))
-        assert bar._frame_at(0.0) == 3600
-        # 9000 frames across 300 px is 30 frames per pixel, so the rightmost
-        # pixel lands inside the final 30 rather than exactly on the last.
-        assert 12570 <= bar._frame_at(299.9) <= 12599
+        view = self._timeline_view(qtbot, tmp_path)
+        assert view.frame_at_x(HEADER_W) == 3600
+        # 9000 frames across 300 px is 30 frames per pixel.
+        assert 12570 <= view.frame_at_x(HEADER_W + 299.9) <= 12599
 
     def test_the_scored_range_fills_the_width(self, qtbot, tmp_path):
-        bar = TimelineBar()
-        qtbot.addWidget(bar)
-        bar.resize(300, 46)
-        bar.set_view(SessionView.load(_windowed_session(tmp_path)))
-        assert bar._x_of(3600) == pytest.approx(0.0)
-        assert bar._x_of(12599) == pytest.approx(300.0, abs=0.5)
+        view = self._timeline_view(qtbot, tmp_path)
+        assert view.x_of_frame(3600) == pytest.approx(HEADER_W)
+        assert view.x_of_frame(12599) == pytest.approx(HEADER_W + 300.0, abs=0.5)
 
     def test_stepping_left_holds_at_the_first_scored_frame(self, qtbot, tmp_path):
         win = AnalysisWindow()
@@ -990,7 +932,7 @@ class TestSwitchingSessionsIsCheap:
             out.append(folder / "ethogram_raw.csv")
         return out
 
-    def test_the_cohort_table_is_computed_once_per_window(self, qtbot, tmp_path, monkeypatch):
+    def test_the_range_stats_are_computed_once_per_window(self, qtbot, tmp_path, monkeypatch):
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
@@ -1004,8 +946,8 @@ class TestSwitchingSessionsIsCheap:
         )
         win._bar.set_selection(0, 299)
         after_first = len(calls)
-        win._sessions.setCurrentIndex(2)
-        win._sessions.setCurrentIndex(3)
+        win._pool.select(2)
+        win._pool.select(3)
         # Switching costs the shown session only, not the cohort again.
         assert len(calls) - after_first <= 2
 
@@ -1175,13 +1117,14 @@ class TestTheCohortTabShowsTheAppliedThresholds:
                 {"freeze_threshold": 0.25, "dart_threshold": 12.0, "cm_s_per_px_frame": 2.0},
             )
         )
+        window._tables.setCurrentWidget(window._epoch)  # filled only while shown
         window._select_all()
-        headers = [
-            window._cohort_table.horizontalHeaderItem(c).text()
-            for c in range(window._cohort_table.columnCount())
-        ]
+        window._epoch.set_metrics(["freeze_threshold"])
+        grid = window._epoch.table
+        headers = [grid.horizontalHeaderItem(c).text() for c in range(grid.columnCount())]
         assert "Freeze < (cm/s)" in headers
-        assert window._cohort_table.item(0, headers.index("Freeze < (cm/s)")).text() == "0.50"
+        row = window._epoch.row_of(0)
+        assert grid.item(row, headers.index("Freeze < (cm/s)")).text() == "0.50"
 
     def test_an_uncalibrated_run_shows_pixels_rather_than_nothing(self, qtbot, tmp_path):
         """It had real thresholds; it just never had a scale."""
@@ -1201,7 +1144,7 @@ class TestTheCohortTabShowsTheAppliedThresholds:
         assert window._threshold_text(window.cohort_rows(0, 299)[0], "dart") == "—"
 
 
-def _recording(folder, *, n=300, fps=30.0, states=("resting", "active")):
+def _recording(folder, *, n=300, fps=30.0, states=("resting", "active"), flow_start=0):
     """A GLIDER recording directory: tracking + events, one LED on a pin.
 
     Written here rather than imported from ``tests/unit/analysis/conftest.py``
@@ -1232,7 +1175,7 @@ def _recording(folder, *, n=300, fps=30.0, states=("resting", "active")):
             "pin,pin_type,value\n"
         )
         rows = [
-            (0, "flow_marker", "", "", "", "", "", "start"),
+            (flow_start, "flow_marker", "", "", "", "", "", "start"),
             (30, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "1"),
             (150, "output_write", "board0", "led1", "LED", "5", "DIGITAL", "0"),
             (n - 1, "flow_marker", "", "", "", "", "", "end"),
@@ -1296,8 +1239,8 @@ class TestFindingTheRecordingTheEthogramCameFrom:
         qtbot.addWidget(window)
         window.load(_ethogram(recording / "v", ["groom"] * 300))
         bar = window._bar
-        bar.resize(300, bar.sizeHint().height())
-        heights = [h for kind, _lane, _top, h in bar._rows() if kind == "hardware"]
+        bar.resize(HEADER_W + 300, bar.sizeHint().height())
+        heights = [row.height for row in bar._rows() if row.kind == "hardware"]
         assert heights and min(heights) > 0
 
     def test_an_ethogram_with_no_recording_anywhere_still_loads(self, qtbot, tmp_path):
@@ -1385,7 +1328,8 @@ class TestTheTableAgreesWithTheBar:
         assert window._bouts.item(0, 0).text() == "dart"
         chip = self._chip_colour(window)
         # The ethogram lane is the top row; frame 150 is well inside it.
-        painted = bar.grab().toImage().pixelColor(int(bar._x_of(150)), 20)
+        y = int(bar.lane_rect("ethogram").top() + 5)
+        painted = bar.grab().toImage().pixelColor(int(bar.x_of_frame(150)), y)
         assert painted == chip
 
         # And the tracking lane really is shifting the order, so the equality
@@ -1400,3 +1344,993 @@ class TestTheTableAgreesWithTheBar:
         offered = [window._bout_filter.itemData(i) for i in range(window._bout_filter.count())]
         assert offered[0] is None  # "Any change"
         assert offered[1:] == window._bar.behavior_order()
+
+
+class TestOpeningARecording:
+    """A rig run opens without anyone having scored it."""
+
+    def test_a_recording_folder_opens_with_its_lanes(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_recording(tmp_path / "rec"))
+        assert win._pool.count() == 1
+        assert [lane.key for lane in win._bar.timeline().lanes] == ["led1"]
+        assert win._view.labels[0] == "resting"
+
+    def test_selecting_a_range_reports_the_hardware(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_recording(tmp_path / "rec"))
+        win._select_all()
+        assert win._inspector.hardware.rowCount() == 1
+        assert win._inspector.hardware.item(0, 1).text() == "4.0 s on"
+
+    def test_a_folder_with_one_ethogram_opens_it(self, qtbot, tmp_path):
+        ethogram = _ethogram(tmp_path / "out" / "v", ["groom"] * 300)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(tmp_path / "out")
+        assert win._ethogram_csv == ethogram
+
+    def test_a_folder_with_nothing_says_what_it_looked_for(self, qtbot, tmp_path, monkeypatch):
+        said = []
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QMessageBox.critical",
+            lambda *a, **k: said.append(a[-1]),
+        )
+        (tmp_path / "empty").mkdir()
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(tmp_path / "empty")
+        assert said and "no GLIDER recording" in said[0]
+
+
+class TestOpeningACohortFolder:
+    def _cohort(self, tmp_path):
+        for sid in ("s1", "s2"):
+            _ethogram(tmp_path / "sessions" / sid / "analysis", ["groom"] * 300)
+        (tmp_path / "glider_project.json").write_text(
+            '{"sessions": {"s1": {"group": "ChR2"}, "s2": {"group": "eYFP"}}}',
+            encoding="utf-8",
+        )
+
+    def test_sessions_are_grouped_by_the_manifest(self, qtbot, tmp_path):
+        self._cohort(tmp_path)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        assert win._ids == ["s1", "s2"]
+        assert win._groups == ["ChR2", "eYFP"]
+        assert win._pool.tree.topLevelItemCount() == 2
+
+    def test_a_broken_manifest_warns_and_still_loads(self, qtbot, tmp_path, monkeypatch):
+        self._cohort(tmp_path)
+        (tmp_path / "glider_project.json").write_text("{not json", encoding="utf-8")
+        warned = []
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QMessageBox.warning",
+            lambda *a, **k: warned.append(a[-1]),
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        assert win._pool.count() == 2
+        assert warned and "ungrouped" in warned[0]
+
+
+class TestEditingKeys:
+    def _win(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        return win
+
+    def test_i_and_o_set_the_range(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._set_frame(50)
+        _key(win, Qt.Key.Key_I)
+        win._set_frame(120)
+        _key(win, Qt.Key.Key_O)
+        assert win._bar.selection() == (50, 120)
+
+    def test_x_selects_the_bout_under_the_playhead(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)  # groom 0-99, locomote 100-199, groom 200-299
+        win._set_frame(150)
+        _key(win, Qt.Key.Key_X)
+        assert win._bar.selection() == (100, 199)
+
+    def test_z_zooms_to_the_range_and_shift_z_fits(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(100, 199)
+        _key(win, Qt.Key.Key_Z)
+        assert win._bar.viewport.span == pytest.approx(100.0)
+        _key(win, Qt.Key.Key_Z, Qt.KeyboardModifier.ShiftModifier)
+        assert win._bar.viewport.span == pytest.approx(300.0)
+
+    def test_escape_clears_the_range(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(100, 199)
+        _key(win, Qt.Key.Key_Escape)
+        assert win._bar.selection() is None
+        assert win._export_btn.isEnabled() is False
+
+    def test_l_plays_and_doubles(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_L)
+        assert win._timer.isActive() and win._rate == 1
+        _key(win, Qt.Key.Key_L)
+        assert win._rate == 2
+        _key(win, Qt.Key.Key_K)
+        assert not win._timer.isActive()
+
+    def test_j_plays_backward(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._set_frame(150)
+        _key(win, Qt.Key.Key_J)
+        win._advance()
+        assert win._frame == 149
+
+    def test_cmd_a_selects_the_whole_session(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+        assert win._bar.selection() == (0, 299)
+
+    def test_the_sessions_list_does_not_take_keyboard_focus(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        assert win._pool.tree.focusPolicy() == Qt.FocusPolicy.NoFocus
+
+
+class TestLoopAndFollow:
+    def _win(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        return win
+
+    def test_loop_wraps_inside_the_range(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(100, 120)
+        win._timeline_panel.loop.setChecked(True)
+        win._set_frame(120)
+        win._toggle_play()
+        win._advance()
+        assert win._frame == 100
+        assert win._timer.isActive()
+
+    def test_playback_pages_the_timeline(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.viewport.show(0, 50)
+        win._set_frame(50)
+        win._toggle_play()
+        win._advance()
+        assert win._bar.viewport.start == pytest.approx(51.0)
+
+
+class TestTheRangeMenu:
+    def test_set_in_here_uses_the_cursor_frame(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        menu = win._timeline_menu(120)
+        texts = [a.text() for a in menu.actions() if a.text()]
+        assert "Set In here\tI" in texts and "Zoom to range\tZ" in texts
+        next(a for a in menu.actions() if a.text() == "Set In here\tI").trigger()
+        assert win._bar.selection() == (120, 299)
+
+    def test_range_actions_are_off_without_a_range(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        menu = win._timeline_menu(120)
+        zoom = next(a for a in menu.actions() if a.text() == "Zoom to range\tZ")
+        assert zoom.isEnabled() is False
+
+    def test_the_select_whole_session_item_is_offered(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        from PyQt6.QtGui import QKeySequence
+
+        # ⌘A on macOS, Ctrl+A elsewhere: the platform's own text for Select All.
+        native = QKeySequence(QKeySequence.StandardKey.SelectAll).toString(
+            QKeySequence.SequenceFormat.NativeText
+        )
+        menu = win._timeline_menu(120)
+        texts = [a.text() for a in menu.actions() if a.text()]
+        assert f"Select whole session\t{native}" in texts
+        select_all = next(
+            a for a in menu.actions() if a.text() == f"Select whole session\t{native}"
+        )
+        assert select_all.isEnabled() is True
+        select_all.trigger()
+        assert win._bar.selection() == (0, 299)
+
+
+class TestTheHud:
+    def test_the_hud_names_the_behaviour(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        win._set_frame(150)
+        behavior, _chips = win._canvas._hud
+        assert behavior[0].startswith("locomote")
+
+    def test_the_hud_lists_active_outputs(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_recording(tmp_path / "rec"))
+        win._set_frame(60)  # the LED is on from frame 30 to 150
+        _behavior, chips = win._canvas._hud
+        assert [text for text, _colour in chips] == ["led1"]
+
+
+class TestHiddenLanesAreRemembered:
+    def test_a_hidden_lane_stays_hidden_on_reopen(self, qtbot, tmp_path):
+        folder = _recording(tmp_path / "rec")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(folder)
+        win._bar.set_hidden({"led1"})
+        again = AnalysisWindow()
+        qtbot.addWidget(again)
+        again.open_path(folder)
+        assert again._bar.hidden() == {"led1"}
+
+    def test_same_named_sessions_in_two_cohorts_do_not_share_hidden_lanes(self, qtbot, tmp_path):
+        a = _recording(tmp_path / "cohortA" / "sessions" / "m01")
+        b = _recording(tmp_path / "cohortB" / "sessions" / "m01")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(a)
+        win._bar.set_hidden({"led1"})
+        other = AnalysisWindow()
+        qtbot.addWidget(other)
+        other.open_path(b)
+        assert other._bar.hidden() == set()
+
+
+def _centroid_recording(folder, frames, *, with_state=True):
+    """A tracking CSV with a centroid, for the paths ``_recording`` does not reach."""
+    from datetime import datetime, timedelta
+
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    base = datetime(2026, 5, 25, 14, 0, 30)
+    state = ",behavioral_state" if with_state else ""
+    with open(folder / "rec_tracking.csv", "w", encoding="utf-8") as f:
+        f.write("# GLIDER Tracking Data\n\n")
+        f.write(f"frame,timestamp,elapsed_ms,object_id,center_x,center_y{state}\n")
+        for i, frame in enumerate(frames):
+            stamp = (base + timedelta(seconds=i / 30.0)).isoformat(timespec="milliseconds")
+            tail = ",rest" if with_state else ""
+            f.write(f"{frame},{stamp},{i / 30.0 * 1000:.1f},0,{100 + i},200{tail}\n")
+    return folder
+
+
+def _said(monkeypatch, kind):
+    said = []
+    monkeypatch.setattr(
+        f"glider.gui.behavior.analysis_window.QMessageBox.{kind}",
+        lambda *a, **k: said.append(a[-1]),
+    )
+    return said
+
+
+class TestNothingOnDiskAbortsTheWindow:
+    """GLIDER installs no excepthook: an exception out of a menu action kills
+    the process, and a running experiment with it."""
+
+    def test_negative_frames_are_reported_when_opened(self, qtbot, tmp_path, monkeypatch):
+        said = _said(monkeypatch, "critical")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_centroid_recording(tmp_path / "rec", range(-10, 0)))
+        assert said and "could not be opened" in said[0]
+        assert win._view is None
+
+    def test_negative_frames_cost_one_session_of_a_cohort(self, qtbot, tmp_path, monkeypatch):
+        warned = _said(monkeypatch, "warning")
+        _recording(tmp_path / "good")
+        _centroid_recording(tmp_path / "bad", range(-10, 0))
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        assert win._ids == ["good"]
+        assert warned and "bad" in warned[0]
+
+    def test_an_unreadable_folder_is_reported(self, qtbot, tmp_path, monkeypatch):
+        said = _said(monkeypatch, "critical")
+
+        def boom(_root):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr("glider.gui.behavior.analysis_window.discover_sessions", boom)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        assert said and "denied" in said[0]
+
+
+class TestAFolderWithoutTracking:
+    """CV off writes no tracking CSV: the folder is an offline apply run's source."""
+
+    def test_its_one_ethogram_opens(self, qtbot, tmp_path, monkeypatch):
+        said = _said(monkeypatch, "critical")
+        folder = _recording(tmp_path / "rec")
+        (folder / "rec_tracking.csv").unlink()
+        ethogram = _ethogram(folder / "v", ["groom"] * 300)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(folder)
+        assert said == []
+        assert win._ethogram_csv == ethogram
+
+    def test_without_one_it_names_both_problems(self, qtbot, tmp_path, monkeypatch):
+        said = _said(monkeypatch, "critical")
+        folder = _recording(tmp_path / "rec")
+        (folder / "rec_tracking.csv").unlink()
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(folder)
+        assert said and "no tracking CSV" in said[0] and "ethogram_raw.csv" in said[0]
+
+
+class TestReopeningReadsTheDiskAgain:
+    def test_a_growing_recording_shows_its_new_rows(self, qtbot, tmp_path):
+        folder = _recording(tmp_path / "rec")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(folder)
+        assert win._view.n_rows == 300
+        with open(folder / "rec_tracking.csv", "a", encoding="utf-8") as f:
+            for i in range(300, 400):
+                f.write(f"{i},2026-05-25T14:00:40.000,{i / 30.0 * 1000:.1f},0,active\n")
+        win.open_path(folder)
+        assert win._view.n_rows == 400
+
+
+class TestTheEpochTableFillsWhenShown:
+    """Filling it costs a pass per animal; a drag must not pay that per mouse move."""
+
+    def _cohort(self, tmp_path):
+        return [_ethogram(tmp_path / f"t{i}", ["groom"] * 300) for i in range(3)]
+
+    def test_a_hidden_tab_is_not_filled(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        win._bar.set_selection(0, 99)
+        assert win._epoch.session_count() == 0
+
+    def test_showing_the_tab_fills_it(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        win._bar.set_selection(0, 99)
+        win._tables.setCurrentWidget(win._epoch)
+        assert win._epoch.session_count() == 3
+        assert win._tables.tabText(1) == "Epoch table (3)"
+
+    def test_a_new_range_refills_the_shown_tab(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(self._cohort(tmp_path))
+        win._tables.setCurrentWidget(win._epoch)
+        asked = []
+        real = win.range_rows
+        monkeypatch.setattr(win, "range_rows", lambda s, e: asked.append((s, e)) or real(s, e))
+        win._bar.set_selection(10, 20)
+        assert asked == [(pytest.approx(10 / 30), pytest.approx(21 / 30))]
+
+
+class TestPlaybackAtSpeed:
+    def test_eight_x_lands_on_the_last_frame(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        win._set_frame(295)
+        win._toggle_play()
+        win._rate = 8
+        win._advance()
+        assert win._frame == 299
+        assert win._timer.isActive() is False
+
+
+class TestEditKeysLeaveShortcutsAlone:
+    def _win(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        return win
+
+    def test_cmd_z_does_not_zoom(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(100, 199)
+        _key(win, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+        assert win._bar.viewport.span == pytest.approx(300.0)
+
+    def test_an_auto_repeated_l_does_not_double_the_rate(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_L)
+        win.keyPressEvent(
+            QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_L, Qt.KeyboardModifier.NoModifier, "", True
+            )
+        )
+        assert win._rate == 1
+
+
+class TestSwitchingCohortsIsAllOrNothing:
+    def test_a_failed_build_keeps_the_old_cohort(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "a"))
+        before = (list(win._cohort), list(win._ids), list(win._groups))
+
+        def boom(*_a):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(win, "_timeline_for", boom)
+        view = SessionView.load(_session(tmp_path / "b"))
+        with pytest.raises(RuntimeError):
+            win._set_cohort([(tmp_path / "b" / "ethogram_raw.csv", view)])
+        assert (win._cohort, win._ids, win._groups) == before
+
+
+class TestARecordingIsHonestAboutItsPoses:
+    def test_a_centroid_is_not_called_poses(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_centroid_recording(tmp_path / "rec", range(1, 301)))
+        assert win._session_state.text() == "Centroid only"
+
+    def test_the_blank_canvas_does_not_offer_a_pose_csv(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_centroid_recording(tmp_path / "rec", range(1, 301)))
+        why = win._canvas._why_blank()  # no calibration, no video: no arena size
+        assert "pose CSV" not in why and "Set arena size" not in why
+
+    def test_no_behavioral_state_draws_no_behaviour_lane(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_centroid_recording(tmp_path / "rec", range(1, 301), with_state=False))
+        assert [row.key for row in win._bar._rows() if row.kind == "group"] == []
+
+
+class TestTheSelectAllShortcutIsNative:
+    def test_the_menu_and_the_shortcuts_list_use_the_platform_text(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        from PyQt6.QtGui import QKeySequence
+
+        native = QKeySequence(QKeySequence.StandardKey.SelectAll).toString(
+            QKeySequence.SequenceFormat.NativeText
+        )
+        assert native in ("⌘A", "Ctrl+A")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        texts = [a.text() for a in win._timeline_menu(0).actions()]
+        assert f"Select whole session\t{native}" in texts
+        shown = _said(monkeypatch, "information")
+        win._show_shortcuts()
+        assert f"{native}  select the whole session" in shown[0]
+
+
+class TestTheVideoStaysPut:
+    """Text that changes every frame must not resize the panels around the video."""
+
+    def test_the_canvas_does_not_move_as_the_bout_text_changes(self, qtbot, tmp_path):
+        labels = ["rest"] * 100 + ["grooming_bilateral_face_wash"] * 100 + ["rear"] * 9800
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.resize(1440, 900)
+        win.show()
+        qtbot.waitExposed(win)
+        win.load(_ethogram(tmp_path / "v", labels))
+        qtbot.wait(50)  # a size change reaches the splitter a few event passes later
+        geometry = []
+        for frame in (5, 150, 9990):
+            win._set_frame(frame)
+            qtbot.wait(50)
+            geometry.append(win._canvas.geometry())
+        assert geometry[0] == geometry[1] == geometry[2]
+
+
+class TestTheTopBarMenus:
+    def test_the_menu_buttons_are_one_size(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.show()
+        qtbot.waitExposed(win)
+        buttons = (win._open_btn, win._zones_btn, win._export_menu_btn)
+        assert len({(b.width(), b.height()) for b in buttons}) == 1
+        assert win._tour_btn.height() == win._open_btn.height()
+
+    def test_they_share_the_widest_width_when_a_label_outgrows_the_rest(self, qtbot):
+        """A fixed min-width held only while every label fit inside it.
+
+        True of the macOS font, not of Windows', where the same three came out
+        110, 118 and 130 px. A label wider than the rest is that case anywhere.
+        """
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win._export_menu_btn.setText("Export everything")
+        win._even_out_menus()
+        win.show()
+        qtbot.waitExposed(win)
+        buttons = (win._open_btn, win._zones_btn, win._export_menu_btn)
+        assert len({b.width() for b in buttons}) == 1
+
+
+class TestTheRangeIsMeasuredOnEachSessionsOwnZero:
+    """Current range is seconds from each animal's own flow start: the time rule.
+
+    Animal b's rig ran a second before flow started, so "1 s to 3 s into the
+    protocol" is frames 60-119 for it and 30-89 for animal a.
+    """
+
+    def _two(self, qtbot, tmp_path):
+        root = tmp_path / "cohort"
+        _recording(root / "a", flow_start=0)
+        _recording(root / "b", flow_start=30)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(root)
+        win._pool.select(win._ids.index("a"))
+        return win
+
+    def test_the_same_seconds_are_different_frames_in_each_animal(self, qtbot, tmp_path):
+        win = self._two(qtbot, tmp_path)
+        rows = {r["session"]: r for r in win.cohort_rows(30, 89)}
+        assert (rows["a"]["start_frame"], rows["a"]["end_frame"]) == (30, 89)
+        assert (rows["b"]["start_frame"], rows["b"]["end_frame"]) == (60, 119)
+        assert rows["b"]["start_s"] == pytest.approx(1.0)
+        assert rows["b"]["t0"] == "flow_start"
+
+    def test_switching_animals_keeps_the_seconds_not_the_frames(self, qtbot, tmp_path):
+        win = self._two(qtbot, tmp_path)
+        win._bar.set_selection(30, 89)
+        win._pool.select(win._ids.index("b"))
+        assert win._bar.selection() == (60, 119)
+
+    def test_the_range_stays_put_when_the_shown_animal_changes(self, qtbot, tmp_path):
+        """A 15 fps animal cannot show 1.033 s; the range must not become what it can show."""
+        root = tmp_path / "rates"
+        _recording(root / "a", fps=30.0)
+        _recording(root / "c", fps=15.0)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(root)
+        win._pool.select(win._ids.index("a"))
+        win._bar.set_selection(31, 89)
+        before = win._current_span
+        win._pool.select(win._ids.index("c"))
+        assert win._current_span == before
+        win._pool.select(win._ids.index("a"))
+        assert win._bar.selection() == (31, 89)
+
+    def test_a_range_survives_a_hop_through_an_animal_it_does_not_reach(self, qtbot, tmp_path):
+        """A no-overlap hop clears the bar's own selection, not just the shown
+        animal's -- the next switch must still restore it from `_current_span`,
+        not from what the bar happened to show right before the switch."""
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(
+            [
+                _ethogram(tmp_path / "long", ["groom"] * 300),
+                _ethogram(tmp_path / "short", ["groom"] * 150),
+            ]
+        )
+        win._bar.set_selection(240, 299)
+        win._pool.select(win._ids.index("short"))  # the range doesn't reach it
+        assert win._bar.selection() is None
+        win._pool.select(win._ids.index("long"))
+        assert win._bar.selection() == (240, 299)
+
+    def test_a_range_given_in_seconds_is_the_selection_given_in_frames(self, qtbot, tmp_path):
+        win = self._two(qtbot, tmp_path)
+        assert win.range_rows(1.0, 3.0) == win.cohort_rows(30, 89)
+
+    def test_time_on_per_device_joins_the_row(self, qtbot, tmp_path):
+        """The LED is on from frame 30 to 150: 1 s to 5 s after a's flow start."""
+        win = self._two(qtbot, tmp_path)
+        row = next(r for r in win.range_rows(0.0, 3.0) if r["session"] == "a")
+        (key,) = [k for k in row if k.startswith("hw_")]
+        assert row[key] == pytest.approx(2.0, abs=0.05)
+
+    def test_a_range_past_a_short_session_is_clipped_or_outside(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(
+            [
+                _ethogram(tmp_path / "long", ["groom"] * 300),
+                _ethogram(tmp_path / "short", ["groom"] * 150),
+            ]
+        )
+        rows = {r["session"]: r for r in win.range_rows(8.0, 12.0)}
+        assert (rows["long"]["start_frame"], rows["long"]["end_frame"]) == (240, 299)
+        assert rows["short"].get("outside") is True
+
+    def test_a_behaviour_one_animal_never_showed_is_zero_seconds_for_it(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(
+            [
+                _ethogram(tmp_path / "a", ["groom"] * 300),
+                _ethogram(tmp_path / "b", ["rear"] * 300),
+            ]
+        )
+        rows = {r["session"]: r for r in win.range_rows(0.0, 5.0)}
+        assert rows["a"]["rear_s"] == 0.0 and rows["b"]["groom_s"] == 0.0
+
+    def test_the_export_carries_seconds_and_no_private_columns(self, qtbot, tmp_path, monkeypatch):
+        win = self._two(qtbot, tmp_path)
+        win._bar.set_selection(30, 89)
+        out = tmp_path / "window_summary.csv"
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: (str(out), ""),
+        )
+        win._export_window()
+        written = pd.read_csv(out)
+        assert {"start_s", "end_s", "start_frame", "end_frame", "t0"} <= set(written.columns)
+        assert not [c for c in written.columns if c.startswith("_")]
+
+    def test_a_range_does_not_follow_into_an_unrelated_cohort(self, qtbot, tmp_path):
+        """A range picked in one cohort must not be re-applied -- as a time
+        span, or as a "Current range" epoch column -- to a different one."""
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many([_ethogram(tmp_path / "first" / "a", ["groom"] * 300)])
+        win._bar.set_selection(30, 89)
+        assert win._current_span is not None
+
+        win.load_many([_ethogram(tmp_path / "second" / "a", ["groom"] * 300)])
+        assert win._current_span is None
+        assert win._bar.selection() is None
+        assert [e.name for e in win._epochs()] == []
+
+
+class TestMarkersInTheWindow:
+    """M, shift-M, up and down, the editor, and the files beside the data."""
+
+    def _win(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        csv = _session(tmp_path / "v")
+        win.load(csv)
+        return win, csv.parent
+
+    def _saved(self, folder, name="review_markers.json"):
+        import json
+
+        return json.loads((folder / name).read_text())
+
+    def test_m_adds_a_point_marker_at_the_playhead_and_saves_it(self, qtbot, tmp_path):
+        win, folder = self._win(qtbot, tmp_path)
+        win._set_frame(90)
+        _key(win, Qt.Key.Key_M)
+        win._editor.close()
+        saved = self._saved(folder)
+        (marker,) = saved["markers"]
+        assert marker["kind"] == "point" and marker["start_s"] == pytest.approx(3.0)
+        assert saved["t0"] == "video_start"
+        assert [m.start_s for m in win._bar.markers()] == [pytest.approx(3.0)]
+
+    def test_reopening_restores_the_markers(self, qtbot, tmp_path):
+        win, folder = self._win(qtbot, tmp_path)
+        win._set_frame(90)
+        _key(win, Qt.Key.Key_M)
+        win._editor.close()
+        win.load(folder / "ethogram_raw.csv")
+        assert [m.start_s for m in win._bar.markers()] == [pytest.approx(3.0)]
+
+    def test_shift_m_keeps_the_range(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        win._bar.set_selection(30, 89)
+        _key(win, Qt.Key.Key_M, Qt.KeyboardModifier.ShiftModifier)
+        win._editor.close()
+        (marker,) = win._bar.markers()
+        assert marker.kind == "range"
+        assert (marker.start_s, marker.end_s) == (pytest.approx(1.0), pytest.approx(3.0))
+
+    def test_shift_m_without_a_range_says_what_to_do(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_M, Qt.KeyboardModifier.ShiftModifier)
+        assert win._bar.markers() == []
+        assert "In and Out" in win.statusBar().currentMessage()
+
+    def test_the_editor_names_the_marker(self, qtbot, tmp_path):
+        win, folder = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_M)
+        win._editor.name.setText("door stuck")
+        win._editor.done_btn.click()
+        assert self._saved(folder)["markers"][0]["name"] == "door stuck"
+        assert win._inspector.tabText(2) == "Markers (1)"
+
+    def test_the_editor_deletes_the_marker(self, qtbot, tmp_path):
+        win, folder = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_M)
+        win._editor.delete_btn.click()
+        assert self._saved(folder)["markers"] == []
+        assert win._bar.markers() == []
+
+    def test_dragging_a_marker_saves_where_it_landed(self, qtbot, tmp_path):
+        win, folder = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_M)
+        win._editor.close()
+        (marker,) = win._bar.markers()
+        win._bar.marker_changed.emit(marker.id, 5.0, None)
+        assert self._saved(folder)["markers"][0]["start_s"] == pytest.approx(5.0)
+
+    def test_up_and_down_step_between_markers(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        for frame in (30, 150):
+            win._set_frame(frame)
+            _key(win, Qt.Key.Key_M)
+            win._editor.close()
+        win._set_frame(0)
+        _key(win, Qt.Key.Key_Down)
+        assert win._frame == 30
+        _key(win, Qt.Key.Key_Down)
+        assert win._frame == 150
+        _key(win, Qt.Key.Key_Up)
+        assert win._frame == 30
+
+    def test_going_to_a_range_marker_selects_it(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        win._bar.set_selection(30, 89)
+        _key(win, Qt.Key.Key_M, Qt.KeyboardModifier.ShiftModifier)
+        win._editor.close()
+        win._bar.clear_selection()
+        (marker,) = win._bar.markers()
+        win._go_to_marker(marker.id)
+        assert win._bar.selection() == (30, 89) and win._frame == 30
+
+    def test_the_range_card_names_the_markers_the_range_is_inside(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        win._bar.set_selection(30, 89)
+        _key(win, Qt.Key.Key_M, Qt.KeyboardModifier.ShiftModifier)
+        win._editor.name.setText("Stim")
+        win._editor.done_btn.click()
+        win._bar.set_selection(40, 50)
+        assert win._inspector.inside.text() == "inside Stim"
+
+    def test_the_menu_offers_markers(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        texts = [a.text() for a in win._timeline_menu(120).actions() if a.text()]
+        assert "Add marker here\tM" in texts and "Save range as marker…\t⇧M" in texts
+
+    def test_an_unreadable_file_is_left_alone_and_turns_the_tools_off(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        folder = tmp_path / "v"
+        csv = _session(folder)
+        (folder / "review_markers.json").write_text("{not json")
+        warned = _said(monkeypatch, "warning")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(csv)
+        assert warned and "review_markers.json" in warned[0]
+        assert not win._timeline_panel.marker_btn.isEnabled()
+        _key(win, Qt.Key.Key_M)
+        assert (folder / "review_markers.json").read_text() == "{not json"
+        assert win._bar.markers() == []
+
+    def test_a_failed_write_keeps_the_marker_and_says_where(self, qtbot, tmp_path, monkeypatch):
+        win, _folder = self._win(qtbot, tmp_path)
+        critical = _said(monkeypatch, "critical")
+
+        def boom(*_a, **_k):
+            raise OSError("read-only share")
+
+        monkeypatch.setattr("glider.analysis.markers.save_markers", boom)
+        _key(win, Qt.Key.Key_M)
+        win._editor.close()
+        assert critical and "review_markers.json" in critical[0]
+        assert len(win._bar.markers()) == 1
+
+    def test_a_single_session_cannot_share_a_range(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_M)
+        assert not win._editor.whole_cohort.isEnabled()
+        win._editor.close()
+
+    def test_a_cohort_range_is_kept_beside_the_cohort_and_shown_in_every_session(
+        self, qtbot, tmp_path
+    ):
+        root = tmp_path / "cohort"
+        _session(root / "a")
+        _session(root / "b")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(root)
+        win._bar.set_selection(30, 89)
+        _key(win, Qt.Key.Key_M, Qt.KeyboardModifier.ShiftModifier)
+        win._editor.name.setText("Stim")
+        win._editor.whole_cohort.setChecked(True)
+        win._editor.done_btn.click()
+        assert [m["scope"] for m in self._saved(root, "cohort_markers.json")["markers"]] == [
+            "cohort"
+        ]
+        assert self._saved(win._session_folder(win._shown))["markers"] == []
+        win._pool.select(1 - win._shown)
+        assert [m.name for m in win._bar.markers()] == ["Stim"]
+
+    def test_the_status_bar_counts_markers(self, qtbot, tmp_path):
+        win, _folder = self._win(qtbot, tmp_path)
+        _key(win, Qt.Key.Key_M)
+        win._editor.close()
+        assert "1 marker" in win._status.text()
+
+
+class TestTheEpochTableInTheWindow:
+    """Cohort range markers become columns; a row is an animal; exports match."""
+
+    def _cohort(self, qtbot, tmp_path):
+        from glider.analysis import markers as mk
+
+        root = tmp_path / "cohort"
+        for sid in ("s1", "s2", "s3"):
+            _ethogram(root / "sessions" / sid / "analysis", ["groom"] * 150 + ["rear"] * 150)
+        (root / "glider_project.json").write_text(
+            '{"sessions": {"s1": {"group": "ChR2"}, "s2": {"group": "ChR2"},'
+            ' "s3": {"group": "eYFP"}}}',
+            encoding="utf-8",
+        )
+        mk.save_markers(
+            root / mk.COHORT_FILE,
+            [
+                mk.Marker("range", 5.0, 10.0, name="Stim", scope="cohort"),
+                mk.Marker("range", 0.0, 5.0, name="Baseline", scope="cohort"),
+            ],
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(root)
+        win._tables.setCurrentWidget(win._epoch)
+        return win
+
+    def _save_to(self, monkeypatch, path):
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: (str(path), ""),
+        )
+
+    def test_cohort_ranges_are_the_columns_in_time_order(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        assert [e.name for e in win._epoch.epochs()] == ["Baseline", "Stim"]
+        assert win._epoch.session_count() == 3
+        assert win._tables.tabText(1) == "Epoch table (3)"
+
+    def test_the_current_range_joins_them(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        win._bar.set_selection(0, 89)
+        assert [e.name for e in win._epoch.epochs()] == ["Baseline", "Stim", "Current range"]
+
+    def test_a_click_shows_that_animal_and_a_double_click_its_timeline(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        win._epoch.table.cellClicked.emit(win._epoch.row_of(2), 0)
+        assert win._shown == 2 and win._tables.currentWidget() is win._epoch
+        win._epoch.table.cellDoubleClicked.emit(win._epoch.row_of(1), 0)
+        assert win._shown == 1 and win._tables.currentIndex() == 0
+
+    def test_the_shown_animal_is_highlighted(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        win._pool.select(1)
+        rows = {i.row() for i in win._epoch.table.selectedIndexes()}
+        assert rows == {win._epoch.row_of(1)}
+
+    def test_a_range_saved_for_the_whole_cohort_becomes_a_column(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        win._tables.setCurrentIndex(0)
+        win._bar.set_selection(300 - 60, 299)
+        _key(win, Qt.Key.Key_M, Qt.KeyboardModifier.ShiftModifier)
+        win._editor.name.setText("Post")
+        win._editor.whole_cohort.setChecked(True)
+        win._editor.done_btn.click()
+        win._bar.clear_selection()
+        win._tables.setCurrentWidget(win._epoch)
+        assert [e.name for e in win._epoch.epochs()] == ["Baseline", "Stim", "Post"]
+
+    def test_the_tidy_export(self, qtbot, tmp_path, monkeypatch):
+        win = self._cohort(qtbot, tmp_path)
+        out = tmp_path / "epochs_tidy.csv"
+        self._save_to(monkeypatch, out)
+        win._export_epochs("tidy")
+        written = pd.read_csv(out)
+        assert len(written) == 6
+        assert set(written["range"]) == {"Baseline", "Stim"}
+        assert set(written["group"]) == {"ChR2", "eYFP"}
+        assert {"session", "t0", "start_s", "end_s", "freezing_pct"} <= set(written.columns)
+
+    def test_the_wide_export(self, qtbot, tmp_path, monkeypatch):
+        win = self._cohort(qtbot, tmp_path)
+        out = tmp_path / "epochs_wide.csv"
+        self._save_to(monkeypatch, out)
+        win._export_epochs("wide")
+        written = pd.read_csv(out)
+        assert list(written["session"]) == ["s1", "s2", "s3"]
+        assert "Stim__freezing_pct" in written.columns
+
+    def test_the_export_menu(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        assert [a.text() for a in win._export_menu_btn.menu().actions()] == [
+            "Range stats (CSV)…",
+            "Epoch table, tidy (CSV)…",
+            "Epoch table, wide (CSV)…",
+            "Markers (CSV)…",
+            "Heatmap (PNG + CSV)…",
+        ]
+
+    def test_the_markers_tab_opens_the_epoch_table(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        win._tables.setCurrentIndex(0)
+        win._inspector.epoch_btn.click()
+        assert win._tables.currentWidget() is win._epoch
+
+    def test_the_current_range_survives_a_switch_to_a_session_it_does_not_reach(
+        self, qtbot, tmp_path
+    ):
+        """Task 4 keeps `_current_span` across a switch; a switch that clears
+        the shown animal's own selection must not make the whole Current range
+        column disappear -- the short session's row is just marked outside."""
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(
+            [
+                _ethogram(tmp_path / "long", ["groom"] * 300),
+                _ethogram(tmp_path / "short", ["groom"] * 150),
+            ]
+        )
+        win._tables.setCurrentWidget(win._epoch)
+        win._bar.set_selection(240, 299)  # past the short session's end
+        win._pool.select(win._ids.index("short"))
+        assert win._bar.selection() is None  # this animal's own selection is gone
+        assert [e.name for e in win._epoch.epochs()] == ["Current range"]
+        (current,) = win._epoch.epochs()
+        rows = {r["session"]: r for r in win.range_rows(current.start_s, current.end_s)}
+        assert rows["short"].get("outside") is True
+
+    def test_a_behaviour_absent_from_a_whole_epoch_reads_zero_not_a_dash(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        """``rear`` only ever happens in Stim (see ``_cohort``): no session shows
+        it during Baseline. That is a real 0 s measurement, not a gap -- the
+        whole Baseline column must not read "-"."""
+        win = self._cohort(qtbot, tmp_path)
+        baseline, stim = win._epoch.epochs()
+        assert baseline.name == "Baseline" and stim.name == "Stim"
+        win._epoch.set_metrics(["rear_s"])
+        row = win._epoch.row_of(0)
+        item = win._epoch.table.item(row, 1)  # one epoch's worth of columns before Stim's
+        assert item.text() == "0.00"
+
+        out = tmp_path / "epochs_tidy.csv"
+        self._save_to(monkeypatch, out)
+        win._export_epochs("tidy")
+        written = pd.read_csv(out)
+        baseline_rear = written.loc[written["range"] == "Baseline", "rear_s"]
+        assert (baseline_rear == 0.0).all()
+        assert not baseline_rear.isna().any()
+
+    def test_a_marker_named_current_range_is_renumbered(self, qtbot, tmp_path):
+        """The literal Current range epoch always keeps that name; a user's
+        own marker sharing it is the one that gets suffixed."""
+        from glider.analysis import markers as mk
+
+        root = tmp_path / "cohort"
+        _ethogram(root / "sessions" / "s1" / "analysis", ["groom"] * 300)
+        mk.save_markers(
+            root / mk.COHORT_FILE,
+            [mk.Marker("range", 0.0, 5.0, name="Current range", scope="cohort")],
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(root)
+        win._bar.set_selection(0, 89)
+        names = [e.name for e in win._epochs()]
+        assert names == ["Current range (2)", "Current range"]
+        assert len(set(names)) == 2

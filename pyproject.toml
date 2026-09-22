@@ -215,6 +215,7 @@ markers = [
     # needs real model weights plus the reference CSV those tools produced, so
     # it is skipped unless GLIDER_POSE_FIXTURES points at a fixtures directory.
     "pose_parity: compares decode against real DLC/SLEAP output (needs GLIDER_POSE_FIXTURES)",
+    "real_recording: opens a real GLIDER recording in Session Review (needs GLIDER_REVIEW_RECORDING)",
 ]
 
 [tool.mypy]

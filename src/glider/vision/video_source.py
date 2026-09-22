@@ -144,56 +144,137 @@ class VideoFileSource:
         self._resolution = (0, 0)
 
 
+#: A jump further ahead than this seeks, rather than decoding every frame between.
+_WALK_LIMIT = 150
+#: How far before its target a seek aims, so one that lands a few frames late
+#: (as real long-GOP captures do) still lands at or before the target.
+_SEEK_MARGIN = 16
+
+
 class ExactFrameReader:
-    """Read frames by index, counting from 0 instead of trusting the seek.
+    """Read frames by index, exactly, without trusting where a seek lands.
 
     ``cap.set(CAP_PROP_POS_FRAMES, n)`` is exact only on all-keyframe codecs.
-    On a long-GOP mp4 it lands near ``n`` — measured at -5 to +8 frames on a
-    30 fps session — and ``get(CAP_PROP_POS_FRAMES)`` afterwards still returns
-    ``n``, so the decoder cannot be asked where it really is. Seeking to an
-    earlier frame and grabbing forward inherits the same error, and seeking by
+    On a long-GOP mp4 it lands near ``n`` -- measured at -5 to +8 frames on a
+    30 fps session -- and ``get(CAP_PROP_POS_FRAMES)`` afterwards still returns
+    ``n``, so it cannot say where the decoder really is. Seeking to an earlier
+    frame and grabbing forward inherits the same error, and seeking by
     ``CAP_PROP_POS_MSEC`` misses by exactly as much.
 
-    Only one seek is trustworthy: to frame 0. So this counts decoded frames
-    from there, which is exact, and keeps the count as it walks forward. A
-    request behind the current position rewinds and re-walks; a request ahead
-    grabs on. ``grab`` skips the decode of frames nobody asked for, and a full
-    pass over a 21,700-frame session runs in about six seconds, so the rewind
-    is affordable even from the end of a video.
+    What *can* be trusted is the frame itself: FFmpeg stamps every decoded
+    frame with its own time (``CAP_PROP_POS_MSEC`` after a grab). So a jump
+    seeks to just before its target, reads the landed frame's timestamp to
+    learn exactly which frame it is, and walks the rest -- the way video
+    players seek exactly. Walking forward costs nothing, and a short hop ahead
+    just walks.
+
+    Every read checks the frame's timestamp against the frame asked for. A
+    file whose timestamps do not count its frames -- none at all, a changing
+    rate, a dropped or doubled frame met on a walk -- is caught at the first
+    disagreement, and from then on the reader counts from frame 0 (the one
+    seek every capture gets right), as it always used to. A frame reached
+    through a seek is then fetched again that way, so the answer stays exact.
+
+    ponytail: a frame dropped in a stretch the reader has never walked through
+    cannot be seen, and a seek past it lands one frame off. On a lab cohort's
+    camera files (15.6 and 30 fps, capture-time stamps with +-4 ms of jitter)
+    the stamps named every frame of a whole 18,705-frame file. If a camera
+    ever drops frames into a variable-rate file, index its timestamps in one
+    pass on open and look landings up there instead of dividing by the rate.
 
     Why it matters: pose is paired with frames by index. A two-frame error is
     invisible while the animal is still and throws the skeleton clean off it
-    while the animal runs — which is how it went unnoticed.
+    while the animal runs -- which is how it went unnoticed. And counting from
+    0 on every backward step made scrubbing a long session crawl: one step
+    back at frame 40,000 re-decoded 40,000 frames.
     """
 
     def __init__(self, cap):
         self._cap = cap
         # Index the next grab() will decode. -1 = unknown, so rewind first.
         self._next = -1
+        # Index of the frame grab() last decoded, which retrieve() returns.
+        self._held: int | None = None
+        # Frame 0's timestamp, read on the first rewind.
+        self._t0_ms: float | None = None
+        # Whether the decoder was put where it is by a seek (not by counting).
+        self._from_seek = False
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        self._fps = float(fps) if fps and not math.isnan(fps) and fps > 0 else 0.0
+        # Trusted until one disagrees with the frame count.
+        self._stamps_ok = self._fps > 0
 
     def read(self, n: int) -> np.ndarray | None:
         """Frame ``n`` exactly, or None past the end of the video."""
         if n < 0:
             raise ValueError(f"frame index must be >= 0, got {n}")
-        if self._next < 0 or n < self._next:
-            if not self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0):
-                self._next = -1
-                return None
-            self._next = 0
-        for _ in range(n - self._next):
-            if not self._cap.grab():
-                self._next = -1
-                return None
-        if not self._cap.grab():
-            self._next = -1
-            return None
+        if not (self._held == n and self._next == n + 1):
+            far = self._next >= 0 and n - self._next > _WALK_LIMIT
+            if self._next < 0 or n < self._next or (far and self._stamps_ok):
+                self._position(n)
+                if self._next < 0:
+                    return None
+            for _ in range(n - self._next + 1):
+                if not self._cap.grab():
+                    self._next, self._held = -1, None
+                    return None
+                self._held, self._next = self._next, self._next + 1
+                if self._held == 0 and self._t0_ms is None:
+                    self._t0_ms = float(self._cap.get(cv2.CAP_PROP_POS_MSEC))
         ok, frame = self._cap.retrieve()
         if not ok:
-            self._next = -1
+            self._next, self._held = -1, None
             return None
-        self._next = n + 1
+        if self._stamps_ok and self._t0_ms is not None and self._stamp_index() != n:
+            self._stamps_ok = False  # this file's timestamps do not name its frames
+        if self._from_seek and not self._stamps_ok:
+            # Reached by trusting timestamps that have since failed: count instead.
+            self._next, self._held = -1, None
+            return self.read(n)
         return frame
+
+    def _stamp_index(self) -> int:
+        """Which frame the decoder holds, by its own timestamp."""
+        ms = float(self._cap.get(cv2.CAP_PROP_POS_MSEC))
+        return round((ms - self._t0_ms) * self._fps / 1000.0)
+
+    def _position(self, n: int) -> None:
+        """Put the decoder at or before ``n``, knowing exactly which frame it is at."""
+        if self._stamps_ok and self._t0_ms is None:
+            self._rewind()  # the walk that follows reads frame 0's timestamp
+            if self._next == 0 and n <= _WALK_LIMIT:
+                return
+            if self._next == 0 and self._cap.grab():
+                self._held, self._next = 0, 1
+                self._t0_ms = float(self._cap.get(cv2.CAP_PROP_POS_MSEC))
+        if self._stamps_ok and self._t0_ms is not None and self._seek(n):
+            return
+        self._rewind()
+
+    def _seek(self, n: int) -> bool:
+        """Land at or before ``n`` by a seek, and learn where from the timestamp."""
+        target = n - _SEEK_MARGIN
+        for _ in range(3):
+            if target <= 0:
+                return False
+            if not self._cap.set(cv2.CAP_PROP_POS_FRAMES, target) or not self._cap.grab():
+                return False
+            landed = self._stamp_index()
+            if landed < target - _WALK_LIMIT:
+                # Nowhere near where it was sent: these stamps are not frame times.
+                self._stamps_ok = False
+                return False
+            if landed <= n:
+                self._held, self._next, self._from_seek = landed, landed + 1, True
+                return True
+            target -= 4 * _SEEK_MARGIN  # landed past n: aim earlier
+        return False
+
+    def _rewind(self) -> None:
+        """Back to frame 0, the one seek every capture gets right."""
+        self._held, self._from_seek = None, False
+        self._next = 0 if self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0) else -1
 
     def invalidate(self) -> None:
         """Forget the tracked position — call after anyone else moves the cap."""
-        self._next = -1
+        self._next, self._held, self._from_seek = -1, None, False

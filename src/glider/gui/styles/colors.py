@@ -200,3 +200,51 @@ Q_PASTEL_PEACH = QColor(PASTEL_PEACH)
 Q_PASTEL_PEACH_DEEP = QColor(PASTEL_PEACH_DEEP)
 Q_PASTEL_SKY = QColor(PASTEL_SKY)
 Q_PASTEL_SKY_DEEP = QColor(PASTEL_SKY_DEEP)
+
+# === Session Review timeline ===
+#
+# Red playhead, as in every NLE: it is the one line that must never be
+# mistaken for data. Lanes are coloured by what the device *is*, so an
+# output the rig drove and an input it sensed never read as the same kind
+# of thing.
+PLAYHEAD = "#ff5252"
+LANE_OUTPUT = ACCENT
+LANE_MOTOR = "#a78bfa"
+LANE_INPUT = "#34d399"
+
+# Timeline and transport chrome, used by tools.qss (QSS cannot import
+# these, so the stylesheet repeats the hex; keep them in step).
+REVIEW_TOOL_TEXT = "#8391a5"
+REVIEW_TOOL_ACTIVE = "#172230"
+REVIEW_TOOL_ACTIVE_BORDER = "#2f4a60"
+REVIEW_TOOL_BORDER = "#243040"
+REVIEW_BADGE_BG = "#1a222d"
+REVIEW_BADGE_ABSENT = "#334155"
+REVIEW_VIEWER_BG = "#030507"
+
+# === Session Review markers ===
+#
+# Nine swatches, as Resolve offers a fixed set: a marker's colour is a
+# category the user chose (every "door stuck" note red), so it has to be one
+# of a few colours that stay distinct, not any colour at all. Marker files
+# save the name, so retuning a hex here recolours old markers too.
+MARKER_CYAN = ACCENT
+MARKER_BLUE = "#60a5fa"
+MARKER_VIOLET = "#a78bfa"
+MARKER_PINK = "#f472b6"
+MARKER_RED = "#f87171"
+MARKER_ORANGE = "#fb923c"
+MARKER_YELLOW = "#fbbf24"
+MARKER_GREEN = "#34d399"
+MARKER_SLATE = "#94a3b8"
+MARKER_SWATCHES = {
+    "cyan": MARKER_CYAN,
+    "blue": MARKER_BLUE,
+    "violet": MARKER_VIOLET,
+    "pink": MARKER_PINK,
+    "red": MARKER_RED,
+    "orange": MARKER_ORANGE,
+    "yellow": MARKER_YELLOW,
+    "green": MARKER_GREEN,
+    "slate": MARKER_SLATE,
+}

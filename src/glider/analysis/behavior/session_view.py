@@ -82,6 +82,83 @@ def _numeric_column(frame: pd.DataFrame, name: str, length: int) -> np.ndarray |
     return None if np.isnan(values).all() else values
 
 
+def _calibration_resolution(metadata: dict) -> tuple[int, int] | None:
+    """``(w, h)`` from a ``640x480`` calibration header, or None."""
+    width, _, height = str(metadata.get("Calibration Resolution", "")).lower().partition("x")
+    try:
+        size = int(width), int(height)
+    except ValueError:
+        return None
+    return size if all(v > 0 for v in size) else None
+
+
+def _recording_scale(metadata: dict, resolution: tuple[int, int] | None) -> float | None:
+    """Pixels per mm for a recording, at the resolution it is viewed in.
+
+    From the tracking CSV's ``# Pixels/mm`` header, which the logger writes only
+    when the rig was calibrated, scaled the way ``Calibration.pixels_to_mm``
+    scaled it while recording. Never from ``distance_px / distance_mm``:
+    uncalibrated, the logger writes the same number into both, and that ratio
+    would claim 1.00 px/mm for every uncalibrated run.
+    """
+    scale = _finite(metadata.get("Pixels/mm"))
+    if not scale or scale <= 0:
+        return None
+    calibrated = _calibration_resolution(metadata)
+    if calibrated and resolution and resolution[0] > 0:
+        scale *= resolution[0] / calibrated[0]
+    return scale
+
+
+def _subject_rows(tracking: pd.DataFrame) -> pd.DataFrame:
+    """One tracked animal's rows, one per frame, in frame order.
+
+    Ids only mean different animals when two of them are tracked in the same
+    frame. The live tracker issues a new ``object_id`` after a detection loss
+    (about 50 missed frames), so one animal is ids 0, 1, 2... over a session;
+    with no frame holding two ids, every row with an id >= 0 is that animal.
+    Otherwise it is the lowest id >= 0 that has any behaviour state -- the
+    object behind ``build_timeline``'s first tracking lane. The logger's ``-1``
+    heartbeat rows never count.
+    """
+    rows = tracking
+    if "object_id" in rows.columns:
+        ids = pd.to_numeric(rows["object_id"], errors="coerce")
+        real = ids >= 0
+        frames = pd.to_numeric(rows["frame"], errors="coerce")
+        pairs = pd.DataFrame({"frame": frames, "id": ids})[real].dropna().drop_duplicates()
+        if not pairs["frame"].duplicated().any():
+            if real.any():
+                rows = rows[real]
+        else:
+            if "behavioral_state" in rows.columns:
+                scored = rows["behavioral_state"].astype("string").fillna("").str.len() > 0
+            else:
+                scored = pd.Series(True, index=rows.index)
+            candidates = sorted(ids[real & scored].unique()) or sorted(ids[real].unique())
+            rows = rows[ids == candidates[0]]
+    rows = rows.assign(frame=pd.to_numeric(rows["frame"], errors="coerce")).dropna(subset=["frame"])
+    return rows.drop_duplicates(subset="frame").sort_values("frame")
+
+
+def _tracking_fps(tracking: pd.DataFrame) -> float | None:
+    """Frames per second from the tracking CSV's own frame and elapsed_ms columns.
+
+    Not Session.frame_rate: that takes the median of millisecond-rounded
+    timestamps, so a 30 fps rig reads as 30.30 fps and every per-second number
+    drifts by a percent. The frame span over the elapsed span is exact.
+    """
+    if not {"frame", "elapsed_ms"}.issubset(tracking.columns):
+        return None
+    pairs = tracking[["frame", "elapsed_ms"]].apply(pd.to_numeric, errors="coerce").dropna()
+    pairs = pairs.drop_duplicates(subset="frame").sort_values("frame")
+    if len(pairs) < 2:
+        return None
+    frames = float(pairs["frame"].iloc[-1] - pairs["frame"].iloc[0])
+    elapsed = float(pairs["elapsed_ms"].iloc[-1] - pairs["elapsed_ms"].iloc[0])
+    return frames / elapsed * 1000.0 if frames > 0 and elapsed > 0 else None
+
+
 def _find_upward(start: Path, name: str) -> Path | None:
     """``name`` in *start* or a few folders above it, or None.
 
@@ -233,6 +310,10 @@ class SessionView:
     pose_path: Path | None = None  # which CSV the poses came from
     video_path: Path | None = None  # a video to scrub alongside, if one exists
     video_frames: int = 0  # its length, for the alignment check
+    # The session frame that is video frame 0. The tracking logger numbers
+    # frames from 1 while a video decodes from 0, so for a live recording this
+    # is 1; an apply-run ethogram is already 0-based.
+    first_video_frame: int = 0
     # The measured speed behind the labels. Not a second scoring: `labels`
     # already has freezing and darting folded in, and these are what distance
     # and velocity are computed from.
@@ -288,10 +369,19 @@ class SessionView:
         speed_px = _numeric_column(etho, "speed_px_frame", len(labels))
         speed_cm_s = _numeric_column(etho, "speed_cm_s", len(labels))
 
+        # The run recorded the fps it actually classified at. Without that,
+        # a session whose poses never survived (or a video that is offline)
+        # silently reads every frame at the hardcoded default -- wrong for
+        # any rig that was not 30 fps. A reachable pose CSV still outranks
+        # this below, in `_load_poses`, the way it already outranks the
+        # plain default.
+        from glider.analysis.behavior.classify import read_run_manifest
+
+        manifest_fps = _finite((read_run_manifest(ethogram_csv.parent) or {}).get("fps"))
         view = cls(
             labels=labels,
             frames=frames,
-            fps=30.0,
+            fps=manifest_fps if manifest_fps and manifest_fps > 0 else 30.0,
             source=ethogram_csv,
             speed_px=speed_px,
             speed_cm_s=speed_cm_s,
@@ -301,6 +391,67 @@ class SessionView:
         view._load_applied_thresholds(ethogram_csv)
         view._load_video(ethogram_csv, video)
         return view
+
+    @classmethod
+    def from_recording(cls, session) -> SessionView:
+        """A live recording as a view, so a rig run opens without an ethogram.
+
+        The tracking CSV already carries what the viewer and the range stats
+        need: a behaviour per frame (``behavioral_state``), a position
+        (``center_x``/``center_y``, used as a one-keypoint pose) and, on a
+        calibrated rig, the distance moved (``distance_mm``).
+        """
+        tracking = session.tracking
+        if tracking.empty or "frame" not in tracking.columns:
+            raise SessionViewError(
+                f"{Path(session.directory).name} has no tracking CSV, so there is no "
+                "frame-by-frame record to review"
+            )
+        every_frame = pd.to_numeric(tracking["frame"], errors="coerce").dropna()
+        rows = _subject_rows(tracking)
+        frames = rows["frame"].to_numpy(dtype=int)
+        if len(frames) and frames.min() < 0:
+            # The logger counts from 0 or 1. Positions are indexed by frame, so
+            # a negative one would raise, or silently land at the far end.
+            raise SessionViewError(
+                f"{Path(session.directory).name}'s tracking CSV has negative frame "
+                f"numbers (from {frames.min()}), so its frames cannot be placed"
+            )
+        if "behavioral_state" in rows.columns:
+            labels = [("" if pd.isna(v) else str(v)) for v in rows["behavioral_state"]]
+        else:
+            labels = [""] * len(frames)
+
+        view = cls(
+            labels=labels,
+            frames=frames,
+            fps=float(_tracking_fps(tracking) or session.frame_rate or 30.0),
+            source=Path(session.directory),
+            first_video_frame=1 if len(every_frame) and every_frame.min() >= 1 else 0,
+        )
+        view._load_centroid(rows)
+        video = session.raw_video_path or session.annotated_video_path
+        if video is not None:
+            view._load_video(Path(session.directory), video)
+        if view.resolution is None:
+            view.resolution = _calibration_resolution(session.metadata)
+        view.px_per_mm = _recording_scale(session.metadata, view.resolution)
+        if view.px_per_mm and "distance_mm" in rows.columns:
+            distance = pd.to_numeric(rows["distance_mm"], errors="coerce").to_numpy(dtype=float)
+            view.speed_cm_s = distance * view.fps / _MM_PER_CM
+        return view
+
+    def _load_centroid(self, rows: pd.DataFrame) -> None:
+        """The tracked centre as a one-keypoint pose, indexed by frame."""
+        if not {"center_x", "center_y"}.issubset(rows.columns) or not len(self.frames):
+            return
+        xy = np.full((int(self.frames.max()) + 1, 1, 2), np.nan)
+        xy[self.frames, 0, 0] = pd.to_numeric(rows["center_x"], errors="coerce").to_numpy(float)
+        xy[self.frames, 0, 1] = pd.to_numeric(rows["center_y"], errors="coerce").to_numpy(float)
+        if np.isfinite(xy).any():
+            self.xy = xy
+            self.keypoint_names = ["centroid"]
+            self.body_axis = (0, 0)
 
     def _load_applied_thresholds(self, ethogram_csv: Path) -> None:
         """Recover the cut-offs this run scored with, from its manifest.
@@ -362,7 +513,7 @@ class SessionView:
         """
         if not self.video_frames or self.n_rows == 0:
             return False
-        expected = int(self.frames[-1]) + 1
+        expected = int(self.frames[-1]) - self.first_video_frame + 1
         return abs(self.video_frames - expected) <= _ALIGNMENT_SLACK
 
     def _load_poses(self, ethogram_csv: Path, pose_csv: Path | str | None) -> None:

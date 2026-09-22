@@ -266,16 +266,16 @@ def test_running_the_whole_walkthrough_does_not_raise(qtbot, name, settings):
         tour._next()
 
 
-def test_the_cohort_step_brings_the_cohort_tab_forward(qtbot, settings):
+def test_the_epoch_step_brings_the_epoch_table_forward(qtbot, settings):
     """The table lives behind a tab, so pointing at it has to raise it."""
     win = _session_review_window(qtbot)
     win._tables.setCurrentIndex(0)
 
-    step = next(s for s in session_review_steps() if s.target_key == "cohort_table")
+    step = next(s for s in session_review_steps() if s.target_key == "epoch_table")
     tour = Tour(win, steps=[step], settings=settings)
     tour.start()
 
-    assert win._tables.currentWidget() is win._cohort_table
+    assert win._tables.currentWidget() is win._epoch
 
 
 @pytest.mark.parametrize("name", sorted(WINDOWS))

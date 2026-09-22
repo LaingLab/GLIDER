@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Session Review is rebuilt as an editor**, laid out like DaVinci Resolve's
+  Edit page: the loaded **sessions** down the left, grouped by treatment, each
+  row badged with the video, poses and hardware it has; the **viewer** in the
+  middle, with a HUD naming the behaviour under the playhead and every output
+  the rig is driving; an **inspector** on the right that fills with the
+  selected range's numbers as soon as a drag ends; and a full-width
+  **timeline** below, behaviour and hardware as tracks under one playhead, with
+  a **navigator** above it that always shows the whole session.
+  - **A live recording folder opens without an ethogram.** Its labels are the
+    rig's `behavioral_state` and its position the tracked centroid.
+  - **Opening a folder as a cohort groups it by `glider_project.json`.** A
+    manifest that cannot be read loads the sessions ungrouped, with a warning.
+  - **New keys:** I and O set the range's In and Out at the playhead; X selects
+    the bout under it; Z zooms to the range and ⇧Z fits the session; J, K and L
+    shuttle back, stop and forward (again for 2×, 4×, 8×); Esc clears the
+    range; ⌘A (Ctrl+A elsewhere) selects the whole session.
+  - **Markers.** M drops a point marker at the playhead ("door stuck here");
+    ⇧M keeps the In/Out range as a named range marker. Double-click one to
+    name it, colour it, add a note, or share it with the **whole cohort**;
+    drag it to move it; ↑ and ↓ step between them. They are saved beside the
+    data (`review_markers.json`, and `cohort_markers.json` in a folder opened
+    as a cohort), never over a file that could not be read.
+  - **An epoch table** replaces the Cohort tab: every session against the
+    cohort's range markers (Baseline, Stim, Post) and the current range,
+    with a mean and SEM per group, exportable tidy or wide.
+
 - **A splash screen, a landing page, and top-level tabs.** GLIDER used to open
   straight onto an empty node graph belonging to an unnamed, unsaved session,
   with no sign it was still starting up.
@@ -207,6 +233,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Session Review measures a range from each session's own zero.** The
+  current range, a cohort range marker and the Range stats export all mean
+  the same seconds after each animal's flow start (or first video frame),
+  converted through that animal's own frames. Phase 1 applied the shown
+  animal's *frame* window to everyone, which is a different stretch of
+  protocol for any animal whose rig ran longer before flow start or recorded
+  at another rate. Exports gain `start_s`, `end_s` and `t0`.
+- **Session Review's timeline gestures changed.** A plain drag in the timeline
+  now *selects* a range; it used to scrub. Scrub by dragging the ruler or the
+  navigator instead. A right-drag no longer selects: right-click opens the
+  range menu (Set In / Out here, select the bout, zoom, loop, export, copy the
+  timecode).
 - **Multi-animal batch tracking no longer writes the four-row DeepLabCut CSV
   — it writes one plain three-row CSV per animal instead, and the four-row
   file is now an opt-in export.** The four-row file was the one place this
@@ -268,6 +306,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A session whose poses are gone no longer reads every frame at a
+  hardcoded 30 fps.** `SessionView.load` fell back to 30 whenever the pose
+  CSV could not be found — an offline video, a network share, a copy without
+  the DLC sidecar — silently mislabelling every duration and speed on a rig
+  recorded at any other rate. Found on a 15.59 fps recording, which read
+  every duration and speed at nearly twice its true rate.
+  `run.json` already records the fps a run classified at; `SessionView.load`
+  now falls back to that, the same way applied thresholds and px_per_mm
+  already do. A reachable pose CSV still outranks it, unchanged.
+- **An ethogram opened with its recording no longer sits a frame off its
+  hardware.** The ethogram counts frames from 0 and the rig's logger from 1;
+  every device lane was drawn one frame (about 33 ms) early against the video.
 - **Experiment rail entries are the full width of the rail.** A `QToolButton`
   sizes itself to its label, so every entry was a different width and most of
   the rail looked clickable while being inert — you aim at *Mice* and hit

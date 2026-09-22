@@ -148,3 +148,140 @@ def test_matches_sequential_decode_on_a_real_capture(synthetic_clip: Path):
             assert np.array_equal(got, expected[n]), f"frame {n} differs"
     finally:
         cap.release()
+
+
+# ---------------------------------------------------------------------------
+# Seeking near and counting the rest, by the frame's own timestamp.
+#
+# Counting from 0 on every backward jump made Session Review crawl: stepping
+# back one frame at 40,000 re-decoded 40,000 frames. A decoded frame carries
+# its own timestamp, which says where a seek really landed even when the seek
+# itself was inexact, so the reader seeks near, reads the landing, and walks
+# the last few frames -- falling back to counting when a file's timestamps
+# do not name its frames.
+
+
+class _StampedCapture(_MisSeekingCapture):
+    """Mis-seeks like the capture above, but stamps each frame as FFmpeg does."""
+
+    def __init__(self, n_frames: int = 2000, error: int = 5, fps: float = 30.0, stamp=None):
+        super().__init__(n_frames, error)
+        self.fps = fps
+        self.grabs = 0
+        self._stamp = stamp or (lambda i: i * 1000.0 / fps)
+
+    def grab(self):
+        self.grabs += 1
+        return super().grab()
+
+    def get(self, prop):
+        if prop == cv2.CAP_PROP_FPS:
+            return self.fps
+        if prop == cv2.CAP_PROP_POS_MSEC:
+            return 0.0 if self._held is None else self._stamp(self._held)
+        return super().get(prop)
+
+
+def test_a_backward_jump_seeks_instead_of_decoding_from_the_start():
+    cap = _StampedCapture(error=5)
+    reader = ExactFrameReader(cap)
+    assert _index_of(reader.read(1500)) == 1500
+    cap.grabs = 0
+    assert _index_of(reader.read(1200)) == 1200
+    assert cap.grabs < 40
+
+
+def test_a_far_jump_ahead_seeks_too():
+    cap = _StampedCapture(error=5)
+    reader = ExactFrameReader(cap)
+    reader.read(10)
+    cap.grabs = 0
+    assert _index_of(reader.read(1900)) == 1900
+    assert cap.grabs < 40
+
+
+def test_stepping_back_one_frame_is_cheap():
+    cap = _StampedCapture(error=5)
+    reader = ExactFrameReader(cap)
+    reader.read(1000)
+    cap.grabs = 0
+    assert _index_of(reader.read(999)) == 999
+    assert cap.grabs < 40
+
+
+def test_a_seek_that_lands_past_the_target_aims_earlier():
+    cap = _StampedCapture(error=40)
+    reader = ExactFrameReader(cap)
+    assert _index_of(reader.read(900)) == 900
+    assert _index_of(reader.read(500)) == 500
+
+
+def test_the_same_frame_twice_decodes_once():
+    cap = _StampedCapture()
+    reader = ExactFrameReader(cap)
+    reader.read(700)
+    cap.grabs = 0
+    assert _index_of(reader.read(700)) == 700
+    assert cap.grabs == 0
+
+
+def test_timestamps_that_do_not_count_frames_fall_back_to_counting():
+    """A variable-rate file: a frame's time no longer names its index."""
+    cap = _StampedCapture(error=5, stamp=lambda i: i * 1000.0 / 30.0 * 1.5)
+    reader = ExactFrameReader(cap)
+    assert [_index_of(reader.read(n)) for n in (1500, 1200, 10, 1300)] == [1500, 1200, 10, 1300]
+
+
+@pytest.mark.parametrize("stamp", [lambda i: 0.0, lambda i: i * 1000.0 / 30.0 * 0.5])
+def test_timestamps_that_land_nowhere_near_the_seek_are_not_trusted(stamp):
+    """No timestamps at all, or ones running slow: fall back to counting."""
+    cap = _StampedCapture(error=5, stamp=stamp)
+    reader = ExactFrameReader(cap)
+    assert [_index_of(reader.read(n)) for n in (1500, 1200, 1900)] == [1500, 1200, 1900]
+
+
+def test_a_dropped_frame_met_while_walking_ends_the_trust():
+    """A variable-rate file that skipped a frame at 1000: its stamps jump there."""
+    cap = _StampedCapture(error=5, stamp=lambda i: (i + (i >= 1000)) * 1000.0 / 30.0)
+    reader = ExactFrameReader(cap)
+    assert [_index_of(reader.read(n)) for n in (950, 1050, 1500, 1200)] == [950, 1050, 1500, 1200]
+
+
+def _numbered_clip(path: Path, n: int, fourcc: str) -> bool:
+    """A long-GOP clip whose frames carry their index as 12 bright/dark blocks."""
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*fourcc), 30.0, (320, 240))
+    if not writer.isOpened():
+        return False
+    for i in range(n):
+        image = np.full((240, 320, 3), 40, np.uint8)
+        for bit in range(12):
+            if i >> bit & 1:
+                row, col = divmod(bit, 6)
+                image[20 + row * 50 : 60 + row * 50, 10 + col * 50 : 50 + col * 50] = 230
+        image[150:190, (i * 7) % 280 : (i * 7) % 280 + 40] = (0, 180, 255)  # motion
+        writer.write(image)
+    writer.release()
+    return True
+
+
+def _number_of(image) -> int:
+    value = 0
+    for bit in range(12):
+        row, col = divmod(bit, 6)
+        if image[28 + row * 50 : 52 + row * 50, 18 + col * 50 : 42 + col * 50].mean() > 135:
+            value |= 1 << bit
+    return value
+
+
+@pytest.mark.parametrize("fourcc", ["mp4v", "avc1"])
+def test_exact_on_a_real_long_gop_file(tmp_path: Path, fourcc: str):
+    path = tmp_path / f"clip_{fourcc}.mp4"
+    if not _numbered_clip(path, 900, fourcc):
+        pytest.skip(f"this OpenCV cannot write {fourcc}")
+    cap = cv2.VideoCapture(str(path))
+    reader = ExactFrameReader(cap)
+    try:
+        for n in (600, 30, 899, 450, 449, 0, 777):
+            assert _number_of(reader.read(n)) == n
+    finally:
+        cap.release()
