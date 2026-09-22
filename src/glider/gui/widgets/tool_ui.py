@@ -43,6 +43,7 @@ from glider.gui.styles import load_stylesheet, restyle
 __all__ = [
     "Card",
     "CardGrid",
+    "ElidedLabel",
     "RunRail",
     "StatusPill",
     "ToolHeader",
@@ -184,6 +185,39 @@ def hint(text: str = "") -> QLabel:
     label = set_text_role(QLabel(text), "hint")
     label.setWordWrap(True)
     return label
+
+
+class ElidedLabel(QLabel):
+    """A label that gives up width to its neighbours and elides, rather than clipping.
+
+    Its text never widens the layout it sits in. Text that changes every frame
+    in an ordinary QLabel resizes the row, and through a splitter the panels
+    beside it -- the video in Session Review slid sideways with each bout.
+    ``text()`` is still the whole text.
+    """
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._full = ""
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt override
+        self._full = text
+        self._elide()
+
+    def text(self) -> str:
+        return self._full
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        metrics = self.fontMetrics()
+        elided = metrics.elidedText(self._full, Qt.TextElideMode.ElideRight, self.width())
+        super().setText(elided)
 
 
 def path_label(placeholder: str) -> QLabel:

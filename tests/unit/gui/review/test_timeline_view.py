@@ -600,3 +600,18 @@ def test_the_navigator_strip_is_tall_enough_to_read(panel):
     # The old 30 px navigator drew an 18 px strip; y=38 was off the widget.
     assert image.pixelColor(x, 9) == groom
     assert image.pixelColor(x, 38) == groom
+
+
+def test_a_long_value_at_the_playhead_stays_clear_of_the_lane_name(qtbot):
+    """The chip sits right of the title's column; a long label elides into it."""
+    from PyQt6.QtGui import QFontMetrics
+
+    from glider.gui.review.timeline import _VALUE_CHIP_LEFT, _fit_value
+    from glider.gui.widgets.tool_ui import data_font
+
+    metrics = QFontMetrics(data_font(8))
+    text = _fit_value(metrics, "grooming_bilateral_face_wash", True)
+    assert text != "grooming_bilateral_face_wash"
+    width = metrics.horizontalAdvance(text) + 12 + 10
+    assert HEADER_W - 8 - width >= _VALUE_CHIP_LEFT
+    assert _fit_value(metrics, "rest", True) == "rest"

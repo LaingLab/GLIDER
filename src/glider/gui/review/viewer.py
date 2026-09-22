@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
-from PyQt6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QImage, QPainter, QPen
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -28,7 +28,7 @@ from glider.analysis.behavior.session_view import SessionView
 from glider.gui.review.timeline import behavior_qcolor
 from glider.gui.styles import colors
 from glider.gui.widgets.pastel_glyphs import lucide_icon
-from glider.gui.widgets.tool_ui import data_font, set_button_role, set_text_role
+from glider.gui.widgets.tool_ui import ElidedLabel, data_font, set_button_role, set_text_role
 
 __all__ = ["TRAIL_DEFAULT_S", "KeypointCanvas", "Transport"]
 
@@ -63,6 +63,7 @@ class KeypointCanvas(QWidget):
         self._show_zones = True
         self._show_hud = True
         self._hud: tuple[tuple[str, QColor] | None, list[tuple[str, QColor]]] | None = None
+        self._hud_samples: list[str] = []  # what sizes the behaviour chip
 
     def set_view(self, view: SessionView | None) -> None:
         self._close_reader()
@@ -350,6 +351,19 @@ class KeypointCanvas(QWidget):
         self._hud = (behavior, list(chips))
         self.update()
 
+    def set_hud_names(self, names) -> None:
+        """The behaviours this session can show; they fix the behaviour chip's width.
+
+        Sized to the widest name with a long "seconds in", so the chip holds
+        still while scrubbing instead of twitching with every digit.
+        """
+        self._hud_samples = [f"{name}  000.00 s in" for name in names]
+        self.update()
+
+    def behaviour_chip_rect(self, text: str) -> QRectF:
+        """Where the behaviour chip showing ``text`` is drawn."""
+        return self._chip_rect(12.0, 10.0, text, right=False, large=True)
+
     def set_show_hud(self, enabled: bool) -> None:
         self._show_hud = bool(enabled)
         self.update()
@@ -375,27 +389,38 @@ class KeypointCanvas(QWidget):
                 painter, self.width() - 12.0, y, extra, QColor(colors.TEXT_MUTED), right=True
             )
 
-    def _chip(self, painter, x, y, text, colour, *, right, large=False) -> None:
-        height = BEHAVIOUR_CHIP_H if large else CHIP_H
+    def _chip_font(self, large: bool) -> QFont:
         font = QFont(self.font())
         if large:
             size = font.pointSizeF() if font.pointSizeF() > 0 else 10.0
             font.setPointSizeF(size * 1.45)
             font.setBold(True)
-        painter.setFont(font)
+        return font
+
+    def _chip_rect(self, x, y, text, *, right, large) -> QRectF:
+        height = BEHAVIOUR_CHIP_H if large else CHIP_H
         pad, dot = height / 2, height / 5
+        metrics = QFontMetricsF(self._chip_font(large))
+        # The behaviour chip is as wide as the session's widest behaviour, so
+        # its edge stays put as the label and the seconds change under it.
+        samples = [text, *self._hud_samples] if large else [text]
+        width = max(metrics.horizontalAdvance(t) for t in samples) + pad + dot + 8 + pad * 0.8
+        return QRectF(x - width if right else x, y, width, height)
+
+    def _chip(self, painter, x, y, text, colour, *, right, large=False) -> None:
+        rect = self._chip_rect(x, y, text, right=right, large=large)
+        pad, dot = rect.height() / 2, rect.height() / 5
         text_left = pad + dot + 8
-        width = painter.fontMetrics().horizontalAdvance(text) + text_left + pad * 0.8
-        left = x - width if right else x
+        painter.setFont(self._chip_font(large))
         painter.setPen(QPen(colors.qcolor_with_alpha(QColor(colors.TEXT_PRIMARY), 0.08), 1))
         painter.setBrush(colors.qcolor_with_alpha(QColor(colors.CANVAS), 0.78))
-        painter.drawRoundedRect(QRectF(left, y, width, height), pad, pad)
+        painter.drawRoundedRect(rect, pad, pad)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(colour)
-        painter.drawEllipse(QPointF(left + pad, y + pad), dot, dot)
+        painter.drawEllipse(QPointF(rect.left() + pad, rect.top() + pad), dot, dot)
         painter.setPen(QColor(colors.TEXT_PRIMARY))
         painter.drawText(
-            QRectF(left + text_left, y, width - text_left, height),
+            QRectF(rect.left() + text_left, rect.top(), rect.width() - text_left, rect.height()),
             Qt.AlignmentFlag.AlignVCenter,
             text,
         )
@@ -407,6 +432,10 @@ BEHAVIOUR_CHIP_H = 36.0
 
 #: Transport glyphs are Lucide (``gui/styles/icons/lucide/``, ISC).
 _ICON_SIZE = QSize(18, 18)
+
+
+def _text_width(label: QLabel, text: str) -> int:
+    return int(QFontMetricsF(label.font()).horizontalAdvance(text)) + 1
 
 
 def _icon_button(icon: str, tip: str) -> QPushButton:
@@ -448,21 +477,27 @@ class Transport(QFrame):
         self.to_end = _icon_button("skip-forward", "Session end  (End)")
         for button in (self.to_start, self.back, self.play, self.forward, self.to_end):
             row.addWidget(button)
+        # Every read-out in this row changes as the playhead moves, and the
+        # row's minimum width is the viewer panel's: a read-out that grew with
+        # its text pushed the splitter, and the video slid sideways. The clock
+        # and counter are fixed to their widest text, and the bout read-out
+        # takes what is left and elides.
         self.clock = QLabel("—")
         self.clock.setObjectName("TransportClock")
         self.clock.setFont(data_font(15))
+        self.clock.setFixedWidth(_text_width(self.clock, "-00:00:00:00") + 14)
         self.position = QLabel("")
         self.position.setFont(data_font(9))
         set_text_role(self.position, "muted")
+        self.position.setFixedWidth(_text_width(self.position, "000,000 / 000,000") + 4)
         row.addSpacing(8)
         row.addWidget(self.clock)
         row.addWidget(self.position)
-        self.bout = QLabel("—")
+        self.bout = ElidedLabel("—")
         self.bout.setFont(data_font(9))
         set_text_role(self.bout, "caption")
         row.addSpacing(8)
-        row.addWidget(self.bout)
-        row.addStretch(1)
+        row.addWidget(self.bout, 1)
         self.video_on = _toggle("Video", "Draw the session's video", checked=True)
         self.poses_on = _toggle("Poses", "Draw the tracked keypoints", checked=True)
         self.trail_on = _toggle("Trail", "Draw the recent centroid track", checked=True)

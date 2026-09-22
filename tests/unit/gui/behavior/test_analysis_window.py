@@ -1816,3 +1816,34 @@ class TestTheSelectAllShortcutIsNative:
         shown = _said(monkeypatch, "information")
         win._show_shortcuts()
         assert f"{native}  select the whole session" in shown[0]
+
+
+class TestTheVideoStaysPut:
+    """Text that changes every frame must not resize the panels around the video."""
+
+    def test_the_canvas_does_not_move_as_the_bout_text_changes(self, qtbot, tmp_path):
+        labels = ["rest"] * 100 + ["grooming_bilateral_face_wash"] * 100 + ["rear"] * 9800
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.resize(1440, 900)
+        win.show()
+        qtbot.waitExposed(win)
+        win.load(_ethogram(tmp_path / "v", labels))
+        qtbot.wait(50)  # a size change reaches the splitter a few event passes later
+        geometry = []
+        for frame in (5, 150, 9990):
+            win._set_frame(frame)
+            qtbot.wait(50)
+            geometry.append(win._canvas.geometry())
+        assert geometry[0] == geometry[1] == geometry[2]
+
+
+class TestTheTopBarMenus:
+    def test_the_menu_buttons_are_one_size(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.show()
+        qtbot.waitExposed(win)
+        buttons = (win._open_btn, win._zones_btn, win._export_menu_btn)
+        assert len({(b.width(), b.height()) for b in buttons}) == 1
+        assert win._tour_btn.height() == win._open_btn.height()

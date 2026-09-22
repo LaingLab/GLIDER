@@ -293,6 +293,10 @@ class AnalysisWindow(QMainWindow):
 
     def _menu_button(self, text: str, items, *, role: str | None = None):
         button = QPushButton(text)
+        # One size and one arrow for every top-bar menu (tools.qss). Left to
+        # the role styles, Open was taller than its neighbours and each arrow
+        # sat in its button's bottom-right corner.
+        button.setObjectName("ReviewMenu")
         if role is not None:
             set_button_role(button, role)
         menu = QMenu(button)
@@ -352,6 +356,7 @@ class AnalysisWindow(QMainWindow):
             "?", [("Tutorial", self.start_tour), ("Keyboard shortcuts", self._show_shortcuts)]
         )
         set_button_role(self._tour_btn, "ghost")
+        self._tour_btn.setObjectName("ReviewHelp")
         for button in (self._open_btn, self._zones_btn, self._export_menu_btn, self._tour_btn):
             row.addWidget(button)
         return bar
@@ -790,6 +795,7 @@ class AnalysisWindow(QMainWindow):
         self._path_label.setText(_short_path(Path(path)))
         self._path_label.setToolTip(str(path))
         self._bar.set_session(view, timeline)
+        self._canvas.set_hud_names(self._bar.behavior_order())
         self._bar.set_hidden(_settings().value(self._hidden_key(), [], type=list) or [])
         self._canvas.set_view(view)
         # The overlay belongs to the session that just left.

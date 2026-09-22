@@ -802,6 +802,27 @@ QFrame#ReviewTopBar {
 QLabel#ReviewTitle {
     font-weight: 600;
 }
+/* The top bar's menus (Open, Zones, Export): one padding whatever the role,
+   so the primary Open is no taller than the rest, and the arrow centred in
+   room of its own on the right rather than in the bottom-right corner. */
+QPushButton#ReviewMenu {
+    min-width: 64px;
+    padding: 6px 30px 6px 14px;
+}
+QPushButton#ReviewMenu::menu-indicator {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    right: 10px;
+}
+/* "?" is a menu too, but reads as a help button: same height, no arrow. */
+QPushButton#ReviewHelp {
+    min-width: 0px;
+    padding: 6px 12px;
+}
+QPushButton#ReviewHelp::menu-indicator {
+    image: none;
+    width: 0px;
+}
 QFrame#ReviewPanel {
     background-color: #030507;
 }

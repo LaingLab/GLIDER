@@ -147,3 +147,29 @@ def test_play_turns_into_pause_while_playing(qtbot):
     assert transport.play.text() == "Pause"
     transport.set_playing(False)
     assert transport.play.text() == "Play"
+
+
+def test_the_transport_keeps_its_width_whatever_its_text(qtbot):
+    """Its minimum width is the viewer panel's: text that grew it moved the video."""
+    transport = Transport()
+    qtbot.addWidget(transport)
+    before = transport.minimumSizeHint().width()
+    transport.bout.setText("grooming_bilateral_face_wash · 326.67 s · 326.33 s in")
+    transport.position.setText("123,456 / 999,999")
+    transport.clock.setText("-00:12:34:56")
+    assert transport.minimumSizeHint().width() == before
+
+
+def test_the_bout_readout_elides_but_keeps_its_text(qtbot):
+    transport = Transport()
+    qtbot.addWidget(transport)
+    transport.bout.setText("x" * 300)
+    assert transport.bout.text() == "x" * 300
+
+
+def test_the_behaviour_chip_is_one_width_for_the_session(canvas):
+    """A chip that tracks its text jitters every frame as the seconds tick."""
+    canvas.set_hud_names(["rest", "grooming_bilateral_face_wash"])
+    short = canvas.behaviour_chip_rect("rest  0.17 s in")
+    long = canvas.behaviour_chip_rect("grooming_bilateral_face_wash  1.67 s in")
+    assert short == long

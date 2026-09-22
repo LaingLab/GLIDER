@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QSizePolicy,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -28,7 +27,7 @@ from PyQt6.QtWidgets import (
 
 from glider.gui.review.timeline import behavior_qcolor
 from glider.gui.styles import colors
-from glider.gui.widgets.tool_ui import set_text_role
+from glider.gui.widgets.tool_ui import ElidedLabel, set_text_role
 
 __all__ = ["PoolEntry", "SessionPool", "ethogram_strip"]
 
@@ -72,21 +71,6 @@ def _badge(text: str, present: bool) -> QLabel:
     return label
 
 
-class _ElidedLabel(QLabel):
-    """A label that gives up width to its neighbours and elides, rather than clipping."""
-
-    def __init__(self, text: str, parent=None):
-        super().__init__(text, parent)
-        self._full = text
-        self.setMinimumWidth(0)
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-
-    def resizeEvent(self, event):  # noqa: N802 - Qt override
-        super().resizeEvent(event)
-        metrics = self.fontMetrics()
-        self.setText(metrics.elidedText(self._full, Qt.TextElideMode.ElideRight, self.width()))
-
-
 class _Row(QWidget):
     def __init__(self, entry: PoolEntry, parent=None):
         super().__init__(parent)
@@ -96,7 +80,7 @@ class _Row(QWidget):
         grid.setVerticalSpacing(3)
         # Name and length, then the badges on a row of their own: all three on
         # one line clipped the badges to "VI", "PO", "H" at the default width.
-        name = _ElidedLabel(entry.name)
+        name = ElidedLabel(entry.name)
         font = name.font()
         font.setBold(True)
         name.setFont(font)

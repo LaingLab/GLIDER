@@ -145,6 +145,16 @@ def _column_coverage(a: np.ndarray, b: np.ndarray, width: int) -> np.ndarray:
     return np.minimum(cover[:width], 1.0)
 
 
+#: Where a lane's value chip may start: right of the lane title's column.
+_VALUE_CHIP_LEFT = 10 + (HEADER_W - 96) + 4
+
+
+def _fit_value(metrics, text: str, dot: bool) -> str:
+    """The value chip's text, elided so the chip stays right of the lane's title."""
+    room = HEADER_W - 8 - _VALUE_CHIP_LEFT - 12 - (10 if dot else 0)
+    return metrics.elidedText(text, Qt.TextElideMode.ElideRight, int(room))
+
+
 def _clock(seconds: float) -> str:
     sign = "-" if seconds < 0 else ""
     whole = int(round(abs(seconds)))
@@ -898,6 +908,8 @@ class TimelineView(QWidget):
                 continue
             if row.height < 14:
                 continue
+            # A long behaviour name ran over the lane's own title.
+            text = _fit_value(metrics, text, dot is not None)
             width = metrics.horizontalAdvance(text) + 12 + (10 if dot is not None else 0)
             chip = QRectF(HEADER_W - 8 - width, row.top + (row.height - 16) / 2, width, 16)
             tone = (
