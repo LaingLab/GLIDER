@@ -1963,6 +1963,20 @@ class TestTheRangeIsMeasuredOnEachSessionsOwnZero:
         assert {"start_s", "end_s", "start_frame", "end_frame", "t0"} <= set(written.columns)
         assert not [c for c in written.columns if c.startswith("_")]
 
+    def test_a_range_does_not_follow_into_an_unrelated_cohort(self, qtbot, tmp_path):
+        """A range picked in one cohort must not be re-applied -- as a time
+        span, or as a "Current range" epoch column -- to a different one."""
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many([_ethogram(tmp_path / "first" / "a", ["groom"] * 300)])
+        win._bar.set_selection(30, 89)
+        assert win._current_span is not None
+
+        win.load_many([_ethogram(tmp_path / "second" / "a", ["groom"] * 300)])
+        assert win._current_span is None
+        assert win._bar.selection() is None
+        assert [e.name for e in win._epochs()] == []
+
 
 class TestMarkersInTheWindow:
     """M, shift-M, up and down, the editor, and the files beside the data."""
@@ -2264,6 +2278,28 @@ class TestTheEpochTableInTheWindow:
         (current,) = win._epoch.epochs()
         rows = {r["session"]: r for r in win.range_rows(current.start_s, current.end_s)}
         assert rows["short"].get("outside") is True
+
+    def test_a_behaviour_absent_from_a_whole_epoch_reads_zero_not_a_dash(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        """``rear`` only ever happens in Stim (see ``_cohort``): no session shows
+        it during Baseline. That is a real 0 s measurement, not a gap -- the
+        whole Baseline column must not read "-"."""
+        win = self._cohort(qtbot, tmp_path)
+        baseline, stim = win._epoch.epochs()
+        assert baseline.name == "Baseline" and stim.name == "Stim"
+        win._epoch.set_metrics(["rear_s"])
+        row = win._epoch.row_of(0)
+        item = win._epoch.table.item(row, 1)  # one epoch's worth of columns before Stim's
+        assert item.text() == "0.00"
+
+        out = tmp_path / "epochs_tidy.csv"
+        self._save_to(monkeypatch, out)
+        win._export_epochs("tidy")
+        written = pd.read_csv(out)
+        baseline_rear = written.loc[written["range"] == "Baseline", "rear_s"]
+        assert (baseline_rear == 0.0).all()
+        assert not baseline_rear.isna().any()
 
     def test_a_marker_named_current_range_is_renumbered(self, qtbot, tmp_path):
         """The literal Current range epoch always keeps that name; a user's

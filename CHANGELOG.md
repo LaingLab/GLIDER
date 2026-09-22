@@ -306,6 +306,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A session whose poses are gone no longer reads every frame at a
+  hardcoded 30 fps.** `SessionView.load` fell back to 30 whenever the pose
+  CSV could not be found — an offline video, a network share, a copy without
+  the DLC sidecar — silently mislabelling every duration and speed on a rig
+  recorded at any other rate. Found against the Blast Pilot cohort, whose
+  15.59 fps sessions read every number at nearly twice their true rate.
+  `run.json` already records the fps a run classified at; `SessionView.load`
+  now falls back to that, the same way applied thresholds and px_per_mm
+  already do. A reachable pose CSV still outranks it, unchanged.
 - **An ethogram opened with its recording no longer sits a frame off its
   hardware.** The ethogram counts frames from 0 and the rig's logger from 1;
   every device lane was drawn one frame (about 33 ms) early against the video.

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -142,6 +144,24 @@ def test_a_cohort_file_has_no_t0(tmp_path: Path):
 def test_writing_leaves_no_temp_file_behind(tmp_path: Path):
     save_markers(tmp_path / SESSION_FILE, [Marker("point", 1.0)], t0="video_start")
     assert [p.name for p in tmp_path.iterdir()] == [SESSION_FILE]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes only")
+def test_saving_over_a_group_readable_file_keeps_its_mode(tmp_path: Path):
+    path = tmp_path / SESSION_FILE
+    save_markers(path, [Marker("point", 1.0)], t0="video_start")
+    path.chmod(0o664)
+    save_markers(path, [Marker("point", 2.0)], t0="video_start")
+    assert (path.stat().st_mode & 0o777) == 0o664
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes only")
+def test_saving_a_fresh_file_is_group_readable_not_owner_only(tmp_path: Path):
+    path = tmp_path / SESSION_FILE
+    save_markers(path, [Marker("point", 1.0)], t0="video_start")
+    umask = os.umask(0)
+    os.umask(umask)
+    assert (path.stat().st_mode & 0o777) == (0o666 & ~umask)
 
 
 def test_a_failed_write_keeps_the_old_file(tmp_path: Path, monkeypatch):

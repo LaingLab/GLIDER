@@ -194,6 +194,28 @@ def _select_all_text() -> str:
     )
 
 
+def _zero_fill_across_epochs(rows_by_epoch: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """Zero-fill ``<state>_s`` using the states seen in *any* epoch, not just one.
+
+    ``range_rows`` already zero-fills a behaviour some session showed within
+    that one call's own rows (a measurement, not a gap -- see its comment),
+    but the epoch table's catalog is the union of states over every epoch. A
+    behaviour seen only in Stim left every Baseline row without a
+    ``<state>_s`` key at all, so the whole Baseline column read "-" where
+    0.00 was the true measurement. ``setdefault`` is idempotent, so mutating
+    the cached row lists in place is safe.
+    """
+    states = sorted(
+        {s for rows in rows_by_epoch.values() for row in rows for s in row.get("_states", ())}
+    )
+    for rows in rows_by_epoch.values():
+        for row in rows:
+            if not row.get("outside"):
+                for state in states:
+                    row.setdefault(f"{state}_s", 0.0)
+    return rows_by_epoch
+
+
 _EDIT_KEYS = {
     Qt.Key.Key_I,
     Qt.Key.Key_O,
@@ -733,6 +755,12 @@ class AnalysisWindow(QMainWindow):
         Timelines are built up front: the sessions panel badges which sessions
         have hardware, and a recording is parsed once per cohort either way.
         """
+        # A different cohort: the current range belonged to whatever experiment
+        # was open before, and re-applying it here would measure a span chosen
+        # in an unrelated cohort. `clear_selection()` alone doesn't reach this,
+        # since a switch that lands on an animal the range never touched has
+        # already left the bar with no selection to clear (see _show_session).
+        self._current_span = None
         # Everything is built before anything is assigned, so a failure part
         # way leaves the cohort on screen whole rather than half replaced.
         loaded = list(loaded)
@@ -2055,7 +2083,9 @@ class AnalysisWindow(QMainWindow):
         if not self._cohort or self._tables.currentWidget() is not self._epoch:
             return
         epochs = self._epochs()
-        rows = {e.key: self.range_rows(e.start_s, e.end_s) for e in epochs}
+        rows = _zero_fill_across_epochs(
+            {e.key: self.range_rows(e.start_s, e.end_s) for e in epochs}
+        )
         catalog = metric_catalog(r for block in rows.values() for r in block)
         self._epoch.set_data(epochs, self._epoch_sessions(), rows, catalog)
         self._epoch.set_shown(self._shown)
@@ -2074,7 +2104,9 @@ class AnalysisWindow(QMainWindow):
         if not self._cohort:
             return
         epochs = self._epoch.visible(self._epochs())
-        rows = {e.key: self.range_rows(e.start_s, e.end_s) for e in epochs}
+        rows = _zero_fill_across_epochs(
+            {e.key: self.range_rows(e.start_s, e.end_s) for e in epochs}
+        )
         catalog = metric_catalog(r for block in rows.values() for r in block)
         metrics = self._epoch.metric_keys(catalog)
         if not epochs or not metrics:

@@ -264,6 +264,17 @@ def save_markers(path: Path, markers: list[Marker], *, t0: str | None = None) ->
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
+        # mkstemp creates the temp file at 0600, and os.replace carries that
+        # mode onto the destination -- which would strip a shared lab
+        # folder's group-read bit every time a marker file is saved. Match
+        # the existing file's mode, or the mode a normal file create would
+        # get (0666 masked by the process umask) when there is no file yet.
+        if path.exists():
+            os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+        else:
+            umask = os.umask(0)
+            os.umask(umask)
+            os.chmod(tmp, 0o666 & ~umask)
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
