@@ -794,7 +794,7 @@ class AnalysisWindow(QMainWindow):
         never moves it.
         """
         path, view = self._cohort[index]
-        span = self._current_span if self._bar.selection() is not None else None
+        span = self._current_span
         self._shown = index
         self._adopt(path, view, self._timelines[index])
         if span is None:

@@ -1896,6 +1896,24 @@ class TestTheRangeIsMeasuredOnEachSessionsOwnZero:
         win._pool.select(win._ids.index("a"))
         assert win._bar.selection() == (31, 89)
 
+    def test_a_range_survives_a_hop_through_an_animal_it_does_not_reach(self, qtbot, tmp_path):
+        """A no-overlap hop clears the bar's own selection, not just the shown
+        animal's -- the next switch must still restore it from `_current_span`,
+        not from what the bar happened to show right before the switch."""
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(
+            [
+                _ethogram(tmp_path / "long", ["groom"] * 300),
+                _ethogram(tmp_path / "short", ["groom"] * 150),
+            ]
+        )
+        win._bar.set_selection(240, 299)
+        win._pool.select(win._ids.index("short"))  # the range doesn't reach it
+        assert win._bar.selection() is None
+        win._pool.select(win._ids.index("long"))
+        assert win._bar.selection() == (240, 299)
+
     def test_a_range_given_in_seconds_is_the_selection_given_in_frames(self, qtbot, tmp_path):
         win = self._two(qtbot, tmp_path)
         assert win.range_rows(1.0, 3.0) == win.cohort_rows(30, 89)
