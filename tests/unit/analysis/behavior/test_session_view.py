@@ -73,6 +73,29 @@ class TestLoading:
         assert view.resolution is None
         assert view.pose_path is None
 
+    def test_fps_falls_back_to_the_manifest_when_there_are_no_poses(self, tmp_path):
+        """run.json records the fps a run classified at; without poses it is
+        the only place that number survives -- the hardcoded 30 default
+        otherwise silently mislabels every frame of a session recorded at a
+        different rate."""
+        import json
+
+        folder = tmp_path / "v"
+        path = _write_session(folder, with_poses=False)
+        (folder / "run.json").write_text(json.dumps({"schema_version": 1, "fps": 15.5868}))
+        view = SessionView.load(path)
+        assert view.fps == pytest.approx(15.5868)
+
+    def test_poses_still_win_over_the_manifest_fps(self, tmp_path):
+        """A reachable pose CSV is measured directly; it outranks the manifest."""
+        import json
+
+        folder = tmp_path / "v"
+        path = _write_session(folder, fps=24.0)  # the poses were recorded at 24 fps
+        (folder / "run.json").write_text(json.dumps({"schema_version": 1, "fps": 15.5868}))
+        view = SessionView.load(path)
+        assert view.fps == pytest.approx(24.0)
+
     def test_a_missing_resolution_is_none_not_guessed(self, tmp_path):
         view = SessionView.load(_write_session(tmp_path / "v", with_meta=False))
         # Inferring it from the coordinate range would shrink the arena to

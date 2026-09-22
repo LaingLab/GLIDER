@@ -369,10 +369,19 @@ class SessionView:
         speed_px = _numeric_column(etho, "speed_px_frame", len(labels))
         speed_cm_s = _numeric_column(etho, "speed_cm_s", len(labels))
 
+        # The run recorded the fps it actually classified at. Without that,
+        # a session whose poses never survived (or a video that is offline)
+        # silently reads every frame at the hardcoded default -- wrong for
+        # any rig that was not 30 fps. A reachable pose CSV still outranks
+        # this below, in `_load_poses`, the way it already outranks the
+        # plain default.
+        from glider.analysis.behavior.classify import read_run_manifest
+
+        manifest_fps = _finite((read_run_manifest(ethogram_csv.parent) or {}).get("fps"))
         view = cls(
             labels=labels,
             frames=frames,
-            fps=30.0,
+            fps=manifest_fps if manifest_fps and manifest_fps > 0 else 30.0,
             source=ethogram_csv,
             speed_px=speed_px,
             speed_cm_s=speed_cm_s,
