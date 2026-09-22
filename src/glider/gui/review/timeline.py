@@ -592,7 +592,6 @@ class TimelineView(QWidget):
             frozenset(self._hidden),
             id(self._timeline),
             id(self._view),
-            tuple((m.id, m.start_s, m.end_s, m.color, m.name) for m in self._markers),
         )
         if self._static is None or self._static_key != key:
             ratio = self.devicePixelRatioF()
@@ -612,7 +611,6 @@ class TimelineView(QWidget):
         p.fillRect(QRectF(0, 0, HEADER_W, h), QColor(colors.SURFACE_1))
         p.fillRect(QRectF(HEADER_W, RULER_H, w - HEADER_W, MARKER_H), QColor(colors.CHROME))
         self._paint_ruler(p)
-        self._paint_markers(p)
         for row in rows:
             lane_rect = QRectF(HEADER_W, row.top, w - HEADER_W, row.height)
             if row.kind == "group":
@@ -632,7 +630,6 @@ class TimelineView(QWidget):
         p.drawLine(QPointF(HEADER_W - 0.5, 0), QPointF(HEADER_W - 0.5, h))
         p.drawLine(QPointF(HEADER_W, TOP_H - 0.5), QPointF(w, TOP_H - 0.5))
         self._paint_flow(p)
-        self._paint_point_rules(p)
 
     def _paint_ruler(self, p: QPainter) -> None:
         if self._vp is None:
@@ -984,6 +981,8 @@ class TimelineView(QWidget):
         p.drawPixmap(0, 0, self._static_pixmap(rows))
         self._paint_corner(p)
         self._paint_values(p, rows)
+        self._paint_point_rules(p)
+        self._paint_markers(p)
         self._paint_selection(p)
         self._paint_playhead(p)
 
@@ -1114,6 +1113,8 @@ class TimelineView(QWidget):
         """
         if self._vp is None or not RULER_H <= y < TOP_H:
             return None
+        if x < HEADER_W or x > self.width():
+            return None
         for marker in reversed([m for m in self._markers if not m.is_range]):
             if abs(x - self._x_of_seconds(marker.start_s)) <= EDGE_PX + 2:
                 return marker, "point"
@@ -1130,8 +1131,12 @@ class TimelineView(QWidget):
                 return marker, "body"
         return None
 
-    def _move_marker(self, marker, part: str, x: float) -> None:
-        """Drag a point, or trim a range's edge; snapping as a selection does."""
+    def _move_marker(self, marker, part: str, x: float) -> bool:
+        """Drag a point, or trim a range's edge; snapping as a selection does.
+
+        Returns whether the marker actually changed: a range's body does not
+        move (its edges do), so that drag is never a real edit.
+        """
         step = 1.0 / self.fps()
         if part == "point":
             marker.start_s = self.seconds_of_frame(self._snapped(x))
@@ -1141,8 +1146,9 @@ class TimelineView(QWidget):
             end = self.seconds_of_frame(self._snapped(x, end=True) + 1)
             marker.end_s = max(end, marker.start_s + step)
         else:
-            return  # a range's body does not move; its edges do
+            return False
         self.update()
+        return True
 
     def _snapped(self, x: float, *, end: bool = False) -> int:
         """The frame under ``x``, pulled onto a nearby bout edge or hardware switch.
@@ -1201,7 +1207,14 @@ class TimelineView(QWidget):
     def mouseMoveEvent(self, event):  # noqa: N802 - Qt override
         x = event.position().x()
         if self._drag is not None and not (event.buttons() & Qt.MouseButton.LeftButton):
-            # The release was missed (e.g. it happened outside the widget).
+            # The release was missed (e.g. it happened outside the widget). A
+            # moved marker still commits -- otherwise the view and the window
+            # would disagree until the next set_markers.
+            if self._drag == "marker" and self._marker_drag is not None:
+                marker, _part, moved = self._marker_drag
+                if moved:
+                    self._rebuild_snap()
+                    self.marker_changed.emit(marker.id, marker.start_s, marker.end_s)
             self._drag = None
             self._fixed = None
             self._marker_drag = None
@@ -1219,8 +1232,8 @@ class TimelineView(QWidget):
             marker, part, moved = self._marker_drag
             if not moved and abs(x - self._press_x) < DRAG_PX:
                 return
-            self._marker_drag = (marker, part, True)
-            self._move_marker(marker, part, x)
+            if self._move_marker(marker, part, x):
+                self._marker_drag = (marker, part, True)
             return
         if self._drag == "scrub":
             self.scrubbed.emit(self.frame_at_x(x))
@@ -1262,6 +1275,11 @@ class TimelineView(QWidget):
         if hit is None:
             super().mouseDoubleClickEvent(event)
             return
+        # Qt's own sequence for a double-click is press, release, double-click,
+        # release: clear the drag state now, or the trailing release could
+        # still act on it (e.g. emit marker_clicked for a stale marker drag).
+        self._drag, self._marker_drag = None, None
+        self._snap_exclude = np.empty(0)
         self.marker_activated.emit(hit[0].id, self.mapToGlobal(QPoint(int(x), TOP_H)))
 
     def wheelEvent(self, event):  # noqa: N802 - Qt override

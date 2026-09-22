@@ -742,3 +742,93 @@ def test_the_navigator_shows_range_markers(panel):
     panel.view.set_markers([mk.Marker("range", 2.0, 4.0, color="violet")])
     image = panel.navigator.grab().toImage()
     assert image.pixelColor(int(_nav_x(panel.navigator, 3000.0)), 5) == QColor(colors.MARKER_VIOLET)
+
+
+# ---------------------------------------------------------------------------
+# fix round 1
+
+
+def test_dragging_a_ranges_body_reports_no_change(view):
+    """A body drag does not move anything; the release is a click, not a commit."""
+    view.set_timeline(_timeline())
+    view.set_snap(False)
+    marker = mk.Marker("range", 2.0, 4.0)
+    view.set_markers([marker])
+    changed = []
+    clicked = []
+    view.marker_changed.connect(lambda *a: changed.append(a))
+    view.marker_clicked.connect(clicked.append)
+    x = _x_at(view, 3.0)  # inside the body, away from either edge
+    _drag(view, x, x + 40, RULER_H + 6)
+    assert changed == []
+    assert clicked == [marker.id]
+
+
+def test_a_marker_drag_repaints_without_rebuilding_the_static_layer(view):
+    """Markers are a live overlay now: dragging one must not touch the cached pixmap."""
+    view.set_timeline(_timeline())
+    view.set_snap(False)
+    view.set_markers([mk.Marker("point", 5.0)])
+    rows = view._rows()
+    pixmap_before = view._static_pixmap(rows)
+    _drag(view, _x_at(view, 5.0), _x_at(view, 7.0), RULER_H + 6)
+    assert view._static_pixmap(rows) is pixmap_before
+
+
+def test_a_double_clicks_trailing_release_does_not_also_click(view):
+    view.set_timeline(_timeline())
+    marker = mk.Marker("point", 5.0)
+    view.set_markers([marker])
+    activated = []
+    clicked = []
+    view.marker_activated.connect(lambda marker_id, _at: activated.append(marker_id))
+    view.marker_clicked.connect(clicked.append)
+    x, y = _x_at(view, 5.0), RULER_H + 6
+    _mouse(view, "press", x, y)
+    view.mouseDoubleClickEvent(
+        _QMouseEvent(
+            _QEvent.Type.MouseButtonDblClick,
+            _QPointF(x, y),
+            _Qt.MouseButton.LeftButton,
+            _Qt.MouseButton.LeftButton,
+            _Qt.KeyboardModifier.NoModifier,
+        )
+    )
+    _mouse(view, "release", x, y)
+    assert activated == [marker.id]
+    assert clicked == []
+
+
+def test_a_lost_release_still_commits_a_moved_marker(view):
+    view.set_timeline(_timeline())
+    view.set_snap(False)
+    marker = mk.Marker("point", 5.0)
+    view.set_markers([marker])
+    seen = []
+    view.marker_changed.connect(lambda *a: seen.append(a))
+    x0, x1, y = _x_at(view, 5.0), _x_at(view, 7.0), RULER_H + 6
+    _mouse(view, "press", x0, y)
+    _mouse(view, "move", x1, y)
+    stale = _QMouseEvent(
+        _QEvent.Type.MouseMove,
+        _QPointF(x1, y),
+        _Qt.MouseButton.NoButton,
+        _Qt.MouseButton.NoButton,
+        _Qt.KeyboardModifier.NoModifier,
+    )
+    view.mouseMoveEvent(stale)
+    assert len(seen) == 1
+    marker_id, start, end = seen[0]
+    assert marker_id == marker.id and end is None
+    assert start == pytest.approx(7.0, abs=0.05)
+    assert view._drag is None and view._marker_drag is None
+
+
+def test_marker_at_does_not_hit_the_header_column(view):
+    """A range whose body's on-axis start sits left of the header is not a hit there."""
+    view.set_timeline(_timeline())
+    view.viewport.show(5000.0, 8000.0)
+    view.refresh_viewport()
+    view.set_markers([mk.Marker("range", 2.0, 6.0)])
+    assert view.marker_at(HEADER_W - 10, RULER_H + 6) is None
+    assert view.marker_at(view.width() + 10, RULER_H + 6) is None
