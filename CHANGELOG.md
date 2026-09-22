@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the bout under it; Z zooms to the range and ⇧Z fits the session; J, K and L
     shuttle back, stop and forward (again for 2×, 4×, 8×); Esc clears the
     range; ⌘A (Ctrl+A elsewhere) selects the whole session.
+  - **Markers.** M drops a point marker at the playhead ("door stuck here");
+    ⇧M keeps the In/Out range as a named range marker. Double-click one to
+    name it, colour it, add a note, or share it with the **whole cohort**;
+    drag it to move it; ↑ and ↓ step between them. They are saved beside the
+    data (`review_markers.json`, and `cohort_markers.json` in a folder opened
+    as a cohort), never over a file that could not be read.
+  - **An epoch table** replaces the Cohort tab: every session against the
+    cohort's range markers (Baseline, Stim, Post) and the current range,
+    with a mean and SEM per group, exportable tidy or wide.
 
 - **A splash screen, a landing page, and top-level tabs.** GLIDER used to open
   straight onto an empty node graph belonging to an unnamed, unsaved session,
@@ -224,6 +233,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Session Review measures a range from each session's own zero.** The
+  current range, a cohort range marker and the Range stats export all mean
+  the same seconds after each animal's flow start (or first video frame),
+  converted through that animal's own frames. Phase 1 applied the shown
+  animal's *frame* window to everyone, which is a different stretch of
+  protocol for any animal whose rig ran longer before flow start or recorded
+  at another rate. Exports gain `start_s`, `end_s` and `t0`.
 - **Session Review's timeline gestures changed.** A plain drag in the timeline
   now *selects* a range; it used to scrub. Scrub by dragging the ruler or the
   navigator instead. A right-drag no longer selects: right-click opens the
@@ -290,6 +306,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An ethogram opened with its recording no longer sits a frame off its
+  hardware.** The ethogram counts frames from 0 and the rig's logger from 1;
+  every device lane was drawn one frame (about 33 ms) early against the video.
 - **Experiment rail entries are the full width of the rail.** A `QToolButton`
   sizes itself to its label, so every entry was a different width and most of
   the rail looked clickable while being inert — you aim at *Mice* and hit

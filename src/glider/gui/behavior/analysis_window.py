@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 
@@ -44,7 +45,14 @@ from PyQt6.QtWidgets import (
 from glider.analysis import markers as mk
 from glider.analysis.behavior.session_view import SessionView, SessionViewError
 from glider.analysis.cohort import discover_sessions, recording_candidates, session_id_for
-from glider.analysis.epochs import threshold_text
+from glider.analysis.epochs import (
+    CURRENT,
+    Epoch,
+    metric_catalog,
+    threshold_text,
+    tidy_frame,
+    wide_frame,
+)
 from glider.analysis.timeline import (
     build_timeline,
     describe_summary,
@@ -53,6 +61,7 @@ from glider.analysis.timeline import (
     is_binary,
     lane_role,
 )
+from glider.gui.review.epoch_table import EpochSession, EpochTable
 from glider.gui.review.inspector import Inspector, MarkerRow
 from glider.gui.review.marker_editor import COHORT_NEEDS_A_FOLDER, MarkerEditor
 from glider.gui.review.pool import PoolEntry, SessionPool, ethogram_strip
@@ -299,7 +308,7 @@ class AnalysisWindow(QMainWindow):
         self._bar.context_menu_requested.connect(self._show_timeline_menu)
         self._bar.hidden_changed.connect(self._remember_hidden)
         self._wire_transport()
-        self._build_cohort_table()
+        self._build_epoch_table()
         self._build_bout_stepper()
         self._build_fixes()
         self._export_btn.clicked.connect(self._export_window)
@@ -372,15 +381,18 @@ class AnalysisWindow(QMainWindow):
                 ("Clear zones", self._clear_zones),
             ],
         )
-        self._export_menu_btn, (self._export_window_action, self._export_heatmap_btn) = (
-            self._menu_button(
-                "Export",
-                [
-                    ("Range stats (CSV)…", self._export_window),
-                    ("Heatmap (PNG + CSV)…", self._export_heatmap),
-                ],
-            )
+        self._export_menu_btn, export_actions = self._menu_button(
+            "Export",
+            [
+                ("Range stats (CSV)…", self._export_window),
+                ("Epoch table, tidy (CSV)…", lambda: self._export_epochs("tidy")),
+                ("Epoch table, wide (CSV)…", lambda: self._export_epochs("wide")),
+                ("Markers (CSV)…", self._export_markers),
+                ("Heatmap (PNG + CSV)…", self._export_heatmap),
+            ],
         )
+        self._export_window_action = export_actions[0]
+        self._export_heatmap_btn = export_actions[-1]
         self._export_window_action.setEnabled(False)
         self._export_heatmap_btn.setEnabled(False)
         self._tour_btn, _ = self._menu_button(
@@ -424,35 +436,20 @@ class AnalysisWindow(QMainWindow):
         t.zones_on.toggled.connect(self._canvas.set_show_zones)
         t.hud_on.toggled.connect(self._canvas.set_show_hud)
 
-    def _build_cohort_table(self) -> None:
-        # Per-session rows for the same range. The cohort is the unit of
-        # analysis, and a per-animal breakdown is what gets exported.
-        self._cohort_table = QTableWidget(0, 9)
-        self._cohort_table.setHorizontalHeaderLabels(
-            [
-                "Session",
-                "Scored",
-                "Distance (cm)",
-                "Mean (cm/s)",
-                "Freezing (s)",
-                "Darting (s)",
-                # The cut-offs that produced those two columns, per session, in
-                # the unit they were chosen in: the only place the number a
-                # methods section has to quote actually exists.
-                "Freeze < (cm/s)",
-                "Dart > (cm/s)",
-                "Top behavior",
-            ]
-        )
-        self._cohort_table.setToolTip(
-            "Freeze/Dart are the thresholds this session was scored with, read "
-            "from its run.json — not thresholds recomputed from the selection."
-        )
-        self._cohort_table.verticalHeader().setVisible(False)
-        for table in (self._cohort_table, self._bouts, self._zone_table):
+    def _build_epoch_table(self) -> None:
+        # One row per animal, a column group per epoch. The cohort is the unit
+        # of analysis, and this is the table that gets exported.
+        self._epoch = EpochTable()
+        self._epoch.session_picked.connect(self._pool.select)
+        self._epoch.session_opened.connect(self._open_from_epochs)
+        self._epoch.export_requested.connect(self._export_epochs)
+        for table in (self._bouts, self._zone_table):
             _dress_table(table)
-        self._timeline_panel.addTab(self._cohort_table, "Cohort")
+        self._timeline_panel.addTab(self._epoch, "Epoch table")
         self._timeline_panel.currentChanged.connect(self._on_tab_changed)
+        self._inspector.epoch_btn.clicked.connect(
+            lambda: self._tables.setCurrentWidget(self._epoch)
+        )
 
     def _build_bout_stepper(self) -> None:
         # Jumping between bouts, which is what reviewing an ethogram actually
@@ -514,7 +511,7 @@ class AnalysisWindow(QMainWindow):
             "open_folder": self._open_btn,
             "canvas": self._canvas,
             "ethogram": self._bar,
-            "cohort_table": self._cohort_table,
+            "epoch_table": self._epoch,
             "zones": self._zones_btn,
             "export": self._export_menu_btn,
         }
@@ -830,6 +827,7 @@ class AnalysisWindow(QMainWindow):
         span = self._current_span
         self._shown = index
         self._adopt(path, view, self._timelines[index])
+        self._epoch.set_shown(index)
         if span is None:
             return
         bounds = self._scored_bounds(view)
@@ -1443,6 +1441,7 @@ class AnalysisWindow(QMainWindow):
         )
         self._refresh_inside()
         self._update_status()
+        self._fill_epochs()
 
     def _refresh_inside(self) -> None:
         """The range markers the selection falls inside, on the range card."""
@@ -1666,8 +1665,7 @@ class AnalysisWindow(QMainWindow):
         self._fill_bouts(stats)
         self._fill_movement(stats)
         self._summary.setText(self._describe(stats))
-        if self._tables.currentWidget() is self._cohort_table:
-            self._fill_cohort(start, end)
+        self._fill_epochs()
         self._fill_zones(start, end)
         self._fill_hardware(start, end)
         self._apply_heatmap()
@@ -1677,17 +1675,16 @@ class AnalysisWindow(QMainWindow):
         self._refresh_inside()
 
     def _on_tab_changed(self, _index: int) -> None:
-        """Fill the Cohort table when it is shown; hidden, a drag never pays for it."""
-        selection = self._bar.selection()
-        if selection is not None and self._tables.currentWidget() is self._cohort_table:
-            self._fill_cohort(*selection)
+        """Fill the Epoch table when it is shown; hidden, a drag never pays for it."""
+        self._fill_epochs()
 
     def _on_selection_cleared(self) -> None:
         if not self._switching:
             self._current_span = None
         self._inspector.clear_range()
-        self._cohort_table.setRowCount(0)
-        self._tables.setTabText(self._tables.indexOf(self._cohort_table), "Cohort")
+        self._epoch.clear()
+        self._tables.setTabText(self._tables.indexOf(self._epoch), "Epoch table")
+        self._fill_epochs()  # the cohort's ranges stay, less the current one
         self._export_btn.setEnabled(False)
         self._export_window_action.setEnabled(False)
         self._apply_heatmap()
@@ -1763,6 +1760,7 @@ class AnalysisWindow(QMainWindow):
         selection = self._bar.selection()
         if selection is not None:
             self._on_selection(*selection)
+        self._fill_epochs()
 
     def _clear_zones(self) -> None:
         self._zones = None
@@ -1991,36 +1989,6 @@ class AnalysisWindow(QMainWindow):
         """A cut-off in cm/s, falling back to px/frame (see :func:`epochs.threshold_text`)."""
         return threshold_text(row, side)
 
-    def _fill_cohort(self, start: int, end: int) -> None:
-        rows = self.cohort_rows(start, end)
-        self._cohort_table.setRowCount(len(rows))
-        for r, row in enumerate(rows):
-            # An "outside" row (the range doesn't reach this session, see
-            # range_rows) carries none of the Phase 1 keys -- read with .get
-            # and show "—" for anything missing, rather than KeyError.
-            values = [
-                row["session"],
-                "—" if row.get("scored_rows") is None else f"{row['scored_rows']:,}",
-                "—" if row.get("distance_cm") is None else f"{row['distance_cm']:.1f}",
-                "—" if row.get("mean_cm_s") is None else f"{row['mean_cm_s']:.2f}",
-                "—" if row.get("freezing_s") is None else f"{row['freezing_s']:.2f}",
-                "—" if row.get("darting_s") is None else f"{row['darting_s']:.2f}",
-                self._threshold_text(row, "freeze"),
-                self._threshold_text(row, "dart"),
-                row.get("top_behavior") or "—",
-            ]
-            for c, value in enumerate(values):
-                # Column 0 is the session name and the last is a behaviour
-                # name; everything between them is a measured quantity. No
-                # colour chip here: a cohort row's colours come from ITS own
-                # session's label set, so a chip would only sometimes match
-                # the bar -- decoration wearing the costume of information.
-                item = (
-                    QTableWidgetItem(value) if c in (0, len(values) - 1) else _measure_item(value)
-                )
-                self._cohort_table.setItem(r, c, item)
-        self._tables.setTabText(1, f"Cohort ({len(rows)})")
-
     def _export_window(self) -> None:
         """Write the per-session window table to CSV."""
         selection = self._bar.selection()
@@ -2044,6 +2012,94 @@ class AnalysisWindow(QMainWindow):
             frame.to_csv(path, index=False)
         except OSError as e:
             QMessageBox.critical(self, "Export window", f"Could not write {path}: {e}")
+            return
+        self.statusBar().showMessage(f"Wrote {path}", 10000)
+
+    def _epochs(self) -> list[Epoch]:
+        """The cohort's range markers in time order, then the current range.
+
+        Current range is added whenever `_current_span` is set, not only when
+        the shown animal has a selection: a switch to an animal the range
+        doesn't reach clears only that animal's *selection* (see
+        `_show_session`), and gating on the selection would make the whole
+        column vanish while viewing that animal, instead of showing it as an
+        outside row.
+        """
+        store = self._cohort_store
+        ranges = sorted(
+            (m for m in (store.markers if store is not None else []) if m.is_range),
+            key=lambda m: (m.start_s, m.end_s),
+        )
+        # Seeded with "Current range" so a user's own marker of that name is
+        # the one renumbered -- the actual Current range epoch below always
+        # keeps the literal name, to agree with tidy_frame's own uniquing.
+        seen: Counter = Counter({"Current range": 1})
+        epochs = []
+        for m in ranges:
+            base = m.name or "Range"
+            seen[base] += 1
+            name = base if seen[base] == 1 else f"{base} ({seen[base]})"
+            epochs.append(Epoch(m.id, name, m.start_s, m.end_s, m.color))
+        if self._current_span is not None:
+            epochs.append(Epoch(CURRENT, "Current range", *self._current_span))
+        return epochs
+
+    def _epoch_sessions(self) -> list[EpochSession]:
+        return [
+            EpochSession(i, sid, group)
+            for i, (sid, group) in enumerate(zip(self._ids, self._groups, strict=True))
+        ]
+
+    def _fill_epochs(self) -> None:
+        """Compute and show the Epoch table -- only while it is on screen."""
+        if not self._cohort or self._tables.currentWidget() is not self._epoch:
+            return
+        epochs = self._epochs()
+        rows = {e.key: self.range_rows(e.start_s, e.end_s) for e in epochs}
+        catalog = metric_catalog(r for block in rows.values() for r in block)
+        self._epoch.set_data(epochs, self._epoch_sessions(), rows, catalog)
+        self._epoch.set_shown(self._shown)
+        count = self._epoch.session_count()
+        self._tables.setTabText(
+            self._tables.indexOf(self._epoch), f"Epoch table ({count})" if count else "Epoch table"
+        )
+
+    def _open_from_epochs(self, index: int) -> None:
+        """Double-click: that animal, on the timeline, to see why a number looks odd."""
+        self._pool.select(index)
+        self._tables.setCurrentIndex(0)
+
+    def _export_epochs(self, shape: str) -> None:
+        """The epoch table as on screen -- its epochs and metrics -- tidy or wide."""
+        if not self._cohort:
+            return
+        epochs = self._epoch.visible(self._epochs())
+        rows = {e.key: self.range_rows(e.start_s, e.end_s) for e in epochs}
+        catalog = metric_catalog(r for block in rows.values() for r in block)
+        metrics = self._epoch.metric_keys(catalog)
+        if not epochs or not metrics:
+            QMessageBox.information(
+                self,
+                "Export epoch table",
+                "Nothing to export yet: save a range marker for the whole cohort, "
+                "or select a range.",
+            )
+            return
+        tidy = tidy_frame(epochs, rows, metrics)
+        frame = tidy if shape == "tidy" else wide_frame(tidy, metrics)
+        root = self._cohort_root or self._session_folder(max(0, self._shown))
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export epoch table",
+            str(root / f"epoch_table_{shape}.csv"),
+            "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        try:
+            frame.to_csv(path, index=False)
+        except OSError as e:
+            QMessageBox.critical(self, "Export epoch table", f"Could not write {path}: {e}")
             return
         self.statusBar().showMessage(f"Wrote {path}", 10000)
 

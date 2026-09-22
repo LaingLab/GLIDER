@@ -296,11 +296,12 @@ def session_review_steps() -> list[TourStep]:
             "computed over it. ⌘-scroll zooms.",
         ),
         TourStep(
-            "cohort_table",
+            "epoch_table",
             "4 · One row per animal",
-            "The Cohort tab under the timeline applies the same range to every "
-            "loaded session. Freeze and Dart are the cut-offs each session was "
-            "actually scored with, in cm/s.",
+            "The Epoch table under the timeline measures every loaded session over "
+            "the cohort's range markers (Baseline, Stim, Post) and the current range, "
+            "each from that session's own flow start, with a mean and SEM per group. "
+            "Press ⇧M to keep a range; make it Whole cohort to add a column.",
         ),
         TourStep(
             "zones",
@@ -311,9 +312,9 @@ def session_review_steps() -> list[TourStep]:
         TourStep(
             "export",
             "5 · Export",
-            "Export writes the per-session numbers for the selected range to "
-            "CSV, so the table on screen and the table in your analysis are the "
-            "same table.",
+            "Export writes the range stats, the epoch table (tidy or wide) or the "
+            "markers to CSV, so the table on screen and the table in your analysis "
+            "are the same table.",
         ),
         TourStep(
             None,

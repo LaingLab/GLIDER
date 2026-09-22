@@ -539,14 +539,14 @@ class TestACohortOfSessions:
         assert rows["t0"]["freezing_s"] == pytest.approx(30 / 30.0)
         assert rows["t3"]["freezing_s"] == pytest.approx(120 / 30.0)
 
-    def test_the_cohort_table_fills_on_selection(self, qtbot, tmp_path):
+    def test_the_epoch_table_fills_on_selection(self, qtbot, tmp_path):
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
-        win._tables.setCurrentWidget(win._cohort_table)  # filled only while shown
+        win._tables.setCurrentWidget(win._epoch)  # filled only while shown
         win._bar.set_selection(0, 299)
-        assert win._cohort_table.rowCount() == 4
-        assert "Cohort (4)" == win._tables.tabText(1)
+        assert win._epoch.session_count() == 4
+        assert win._tables.tabText(1) == "Epoch table (4)"
 
     def test_one_unreadable_session_does_not_lose_the_rest(self, qtbot, tmp_path, monkeypatch):
         ethograms = self._cohort(tmp_path)
@@ -599,8 +599,8 @@ class TestClearingTheRangeClearsItsNumbers:
         win._bar.clear_selection()
         assert win._bouts.rowCount() == 0
         assert win._zone_table.rowCount() == 0
-        assert win._cohort_table.rowCount() == 0
-        assert win._tables.tabText(win._tables.indexOf(win._cohort_table)) == "Cohort"
+        assert win._epoch.session_count() == 0
+        assert win._tables.tabText(win._tables.indexOf(win._epoch)) == "Epoch table"
 
     def test_a_new_file_does_not_show_the_old_files_bouts(self, qtbot, tmp_path):
         win = AnalysisWindow()
@@ -932,7 +932,7 @@ class TestSwitchingSessionsIsCheap:
             out.append(folder / "ethogram_raw.csv")
         return out
 
-    def test_the_cohort_table_is_computed_once_per_window(self, qtbot, tmp_path, monkeypatch):
+    def test_the_range_stats_are_computed_once_per_window(self, qtbot, tmp_path, monkeypatch):
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
@@ -1117,14 +1117,14 @@ class TestTheCohortTabShowsTheAppliedThresholds:
                 {"freeze_threshold": 0.25, "dart_threshold": 12.0, "cm_s_per_px_frame": 2.0},
             )
         )
-        window._tables.setCurrentWidget(window._cohort_table)  # filled only while shown
+        window._tables.setCurrentWidget(window._epoch)  # filled only while shown
         window._select_all()
-        headers = [
-            window._cohort_table.horizontalHeaderItem(c).text()
-            for c in range(window._cohort_table.columnCount())
-        ]
+        window._epoch.set_metrics(["freeze_threshold"])
+        grid = window._epoch.table
+        headers = [grid.horizontalHeaderItem(c).text() for c in range(grid.columnCount())]
         assert "Freeze < (cm/s)" in headers
-        assert window._cohort_table.item(0, headers.index("Freeze < (cm/s)")).text() == "0.50"
+        row = window._epoch.row_of(0)
+        assert grid.item(row, headers.index("Freeze < (cm/s)")).text() == "0.50"
 
     def test_an_uncalibrated_run_shows_pixels_rather_than_nothing(self, qtbot, tmp_path):
         """It had real thresholds; it just never had a scale."""
@@ -1689,7 +1689,7 @@ class TestReopeningReadsTheDiskAgain:
         assert win._view.n_rows == 400
 
 
-class TestTheCohortTableFillsWhenShown:
+class TestTheEpochTableFillsWhenShown:
     """Filling it costs a pass per animal; a drag must not pay that per mouse move."""
 
     def _cohort(self, tmp_path):
@@ -1700,27 +1700,27 @@ class TestTheCohortTableFillsWhenShown:
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
         win._bar.set_selection(0, 99)
-        assert win._cohort_table.rowCount() == 0
+        assert win._epoch.session_count() == 0
 
     def test_showing_the_tab_fills_it(self, qtbot, tmp_path):
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
         win._bar.set_selection(0, 99)
-        win._tables.setCurrentWidget(win._cohort_table)
-        assert win._cohort_table.rowCount() == 3
-        assert win._tables.tabText(1) == "Cohort (3)"
+        win._tables.setCurrentWidget(win._epoch)
+        assert win._epoch.session_count() == 3
+        assert win._tables.tabText(1) == "Epoch table (3)"
 
     def test_a_new_range_refills_the_shown_tab(self, qtbot, tmp_path, monkeypatch):
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
-        win._tables.setCurrentWidget(win._cohort_table)
+        win._tables.setCurrentWidget(win._epoch)
         asked = []
-        real = win.cohort_rows
-        monkeypatch.setattr(win, "cohort_rows", lambda s, e: asked.append((s, e)) or real(s, e))
+        real = win.range_rows
+        monkeypatch.setattr(win, "range_rows", lambda s, e: asked.append((s, e)) or real(s, e))
         win._bar.set_selection(10, 20)
-        assert asked == [(10, 20)]
+        assert asked == [(pytest.approx(10 / 30), pytest.approx(21 / 30))]
 
 
 class TestPlaybackAtSpeed:
@@ -1964,32 +1964,6 @@ class TestTheRangeIsMeasuredOnEachSessionsOwnZero:
         assert not [c for c in written.columns if c.startswith("_")]
 
 
-class TestTheCohortTabToleratesOutsideRows:
-    """Controller ruling: `_fill_cohort` still renders from `cohort_rows` until
-    Task 11 removes it, and an outside row lacks the Phase 1 keys entirely."""
-
-    def test_the_cohort_tab_fills_without_error_past_a_short_session(self, qtbot, tmp_path):
-        win = AnalysisWindow()
-        qtbot.addWidget(win)
-        win.load_many(
-            [
-                _ethogram(tmp_path / "long", ["groom"] * 300),
-                _ethogram(tmp_path / "short", ["groom"] * 150),
-            ]
-        )
-        win._tables.setCurrentWidget(win._cohort_table)
-        win._bar.set_selection(240, 299)  # the shown (first, "long") session's own frames
-        rows = {r["session"]: r for r in win.cohort_rows(240, 299)}
-        assert rows["short"].get("outside") is True
-        short_row = next(
-            r
-            for r in range(win._cohort_table.rowCount())
-            if win._cohort_table.item(r, 0).text() == "short"
-        )
-        values = [win._cohort_table.item(short_row, c).text() for c in range(1, 9)]
-        assert all(v == "—" for v in values)
-
-
 class TestMarkersInTheWindow:
     """M, shift-M, up and down, the editor, and the files beside the data."""
 
@@ -2161,3 +2135,151 @@ class TestMarkersInTheWindow:
         _key(win, Qt.Key.Key_M)
         win._editor.close()
         assert "1 marker" in win._status.text()
+
+
+class TestTheEpochTableInTheWindow:
+    """Cohort range markers become columns; a row is an animal; exports match."""
+
+    def _cohort(self, qtbot, tmp_path):
+        from glider.analysis import markers as mk
+
+        root = tmp_path / "cohort"
+        for sid in ("s1", "s2", "s3"):
+            _ethogram(root / "sessions" / sid / "analysis", ["groom"] * 150 + ["rear"] * 150)
+        (root / "glider_project.json").write_text(
+            '{"sessions": {"s1": {"group": "ChR2"}, "s2": {"group": "ChR2"},'
+            ' "s3": {"group": "eYFP"}}}',
+            encoding="utf-8",
+        )
+        mk.save_markers(
+            root / mk.COHORT_FILE,
+            [
+                mk.Marker("range", 5.0, 10.0, name="Stim", scope="cohort"),
+                mk.Marker("range", 0.0, 5.0, name="Baseline", scope="cohort"),
+            ],
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(root)
+        win._tables.setCurrentWidget(win._epoch)
+        return win
+
+    def _save_to(self, monkeypatch, path):
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: (str(path), ""),
+        )
+
+    def test_cohort_ranges_are_the_columns_in_time_order(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        assert [e.name for e in win._epoch.epochs()] == ["Baseline", "Stim"]
+        assert win._epoch.session_count() == 3
+        assert win._tables.tabText(1) == "Epoch table (3)"
+
+    def test_the_current_range_joins_them(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        win._bar.set_selection(0, 89)
+        assert [e.name for e in win._epoch.epochs()] == ["Baseline", "Stim", "Current range"]
+
+    def test_a_click_shows_that_animal_and_a_double_click_its_timeline(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        win._epoch.table.cellClicked.emit(win._epoch.row_of(2), 0)
+        assert win._shown == 2 and win._tables.currentWidget() is win._epoch
+        win._epoch.table.cellDoubleClicked.emit(win._epoch.row_of(1), 0)
+        assert win._shown == 1 and win._tables.currentIndex() == 0
+
+    def test_the_shown_animal_is_highlighted(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        win._pool.select(1)
+        rows = {i.row() for i in win._epoch.table.selectedIndexes()}
+        assert rows == {win._epoch.row_of(1)}
+
+    def test_a_range_saved_for_the_whole_cohort_becomes_a_column(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        win._tables.setCurrentIndex(0)
+        win._bar.set_selection(300 - 60, 299)
+        _key(win, Qt.Key.Key_M, Qt.KeyboardModifier.ShiftModifier)
+        win._editor.name.setText("Post")
+        win._editor.whole_cohort.setChecked(True)
+        win._editor.done_btn.click()
+        win._bar.clear_selection()
+        win._tables.setCurrentWidget(win._epoch)
+        assert [e.name for e in win._epoch.epochs()] == ["Baseline", "Stim", "Post"]
+
+    def test_the_tidy_export(self, qtbot, tmp_path, monkeypatch):
+        win = self._cohort(qtbot, tmp_path)
+        out = tmp_path / "epochs_tidy.csv"
+        self._save_to(monkeypatch, out)
+        win._export_epochs("tidy")
+        written = pd.read_csv(out)
+        assert len(written) == 6
+        assert set(written["range"]) == {"Baseline", "Stim"}
+        assert set(written["group"]) == {"ChR2", "eYFP"}
+        assert {"session", "t0", "start_s", "end_s", "freezing_pct"} <= set(written.columns)
+
+    def test_the_wide_export(self, qtbot, tmp_path, monkeypatch):
+        win = self._cohort(qtbot, tmp_path)
+        out = tmp_path / "epochs_wide.csv"
+        self._save_to(monkeypatch, out)
+        win._export_epochs("wide")
+        written = pd.read_csv(out)
+        assert list(written["session"]) == ["s1", "s2", "s3"]
+        assert "Stim__freezing_pct" in written.columns
+
+    def test_the_export_menu(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        assert [a.text() for a in win._export_menu_btn.menu().actions()] == [
+            "Range stats (CSV)…",
+            "Epoch table, tidy (CSV)…",
+            "Epoch table, wide (CSV)…",
+            "Markers (CSV)…",
+            "Heatmap (PNG + CSV)…",
+        ]
+
+    def test_the_markers_tab_opens_the_epoch_table(self, qtbot, tmp_path):
+        win = self._cohort(qtbot, tmp_path)
+        win._tables.setCurrentIndex(0)
+        win._inspector.epoch_btn.click()
+        assert win._tables.currentWidget() is win._epoch
+
+    def test_the_current_range_survives_a_switch_to_a_session_it_does_not_reach(
+        self, qtbot, tmp_path
+    ):
+        """Task 4 keeps `_current_span` across a switch; a switch that clears
+        the shown animal's own selection must not make the whole Current range
+        column disappear -- the short session's row is just marked outside."""
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(
+            [
+                _ethogram(tmp_path / "long", ["groom"] * 300),
+                _ethogram(tmp_path / "short", ["groom"] * 150),
+            ]
+        )
+        win._tables.setCurrentWidget(win._epoch)
+        win._bar.set_selection(240, 299)  # past the short session's end
+        win._pool.select(win._ids.index("short"))
+        assert win._bar.selection() is None  # this animal's own selection is gone
+        assert [e.name for e in win._epoch.epochs()] == ["Current range"]
+        (current,) = win._epoch.epochs()
+        rows = {r["session"]: r for r in win.range_rows(current.start_s, current.end_s)}
+        assert rows["short"].get("outside") is True
+
+    def test_a_marker_named_current_range_is_renumbered(self, qtbot, tmp_path):
+        """The literal Current range epoch always keeps that name; a user's
+        own marker sharing it is the one that gets suffixed."""
+        from glider.analysis import markers as mk
+
+        root = tmp_path / "cohort"
+        _ethogram(root / "sessions" / "s1" / "analysis", ["groom"] * 300)
+        mk.save_markers(
+            root / mk.COHORT_FILE,
+            [mk.Marker("range", 0.0, 5.0, name="Current range", scope="cohort")],
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(root)
+        win._bar.set_selection(0, 89)
+        names = [e.name for e in win._epochs()]
+        assert names == ["Current range (2)", "Current range"]
+        assert len(set(names)) == 2
