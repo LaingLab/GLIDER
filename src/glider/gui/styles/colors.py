@@ -221,3 +221,30 @@ REVIEW_TOOL_BORDER = "#243040"
 REVIEW_BADGE_BG = "#1a222d"
 REVIEW_BADGE_ABSENT = "#334155"
 REVIEW_VIEWER_BG = "#030507"
+
+# === Session Review markers ===
+#
+# Nine swatches, as Resolve offers a fixed set: a marker's colour is a
+# category the user chose (every "door stuck" note red), so it has to be one
+# of a few colours that stay distinct, not any colour at all. Marker files
+# save the name, so retuning a hex here recolours old markers too.
+MARKER_CYAN = ACCENT
+MARKER_BLUE = "#60a5fa"
+MARKER_VIOLET = "#a78bfa"
+MARKER_PINK = "#f472b6"
+MARKER_RED = "#f87171"
+MARKER_ORANGE = "#fb923c"
+MARKER_YELLOW = "#fbbf24"
+MARKER_GREEN = "#34d399"
+MARKER_SLATE = "#94a3b8"
+MARKER_SWATCHES = {
+    "cyan": MARKER_CYAN,
+    "blue": MARKER_BLUE,
+    "violet": MARKER_VIOLET,
+    "pink": MARKER_PINK,
+    "red": MARKER_RED,
+    "orange": MARKER_ORANGE,
+    "yellow": MARKER_YELLOW,
+    "green": MARKER_GREEN,
+    "slate": MARKER_SLATE,
+}

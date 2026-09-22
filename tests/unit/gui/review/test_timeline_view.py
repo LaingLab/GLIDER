@@ -615,3 +615,130 @@ def test_a_long_value_at_the_playhead_stays_clear_of_the_lane_name(qtbot):
     width = metrics.horizontalAdvance(text) + 12 + 10
     assert HEADER_W - 8 - width >= _VALUE_CHIP_LEFT
     assert _fit_value(metrics, "rest", True) == "rest"
+
+
+# ---------------------------------------------------------------------------
+# the marker row (phase 2)
+
+from PyQt6.QtCore import QEvent as _QEvent  # noqa: E402
+from PyQt6.QtCore import QPointF as _QPointF  # noqa: E402
+from PyQt6.QtCore import Qt as _Qt  # noqa: E402
+from PyQt6.QtGui import QMouseEvent as _QMouseEvent  # noqa: E402
+
+from glider.analysis import markers as mk  # noqa: E402
+from glider.gui.review.timeline import MARKER_H, RULER_H  # noqa: E402
+
+
+def _x_at(view, seconds):
+    return view.x_of_axis(view.axis_of_seconds(seconds))
+
+
+def test_the_marker_row_is_tall_enough_to_read():
+    assert MARKER_H >= 28
+
+
+def test_every_swatch_has_a_token():
+    assert set(colors.MARKER_SWATCHES) == set(mk.SWATCHES)
+
+
+def test_a_range_marker_is_drawn_in_its_swatch(view):
+    view.set_timeline(_timeline())
+    view.set_markers([mk.Marker("range", 2.0, 4.0, name="Stim", color="red")])
+    assert _pixel(view, _x_at(view, 3.0), RULER_H + 2) == QColor(colors.MARKER_RED)
+
+
+def test_a_point_marker_rules_every_lane(view):
+    view.set_timeline(_timeline())
+    x = int(_x_at(view, 5.0))
+    rect = view.lanes_rect()
+
+    def column():
+        image = view.grab().toImage()
+        return [image.pixelColor(x, y).name() for y in range(int(rect.top()), int(rect.bottom()))]
+
+    before = column()
+    view.set_markers([mk.Marker("point", 5.0, name="door", color="yellow")])
+    assert column() != before
+
+
+def test_clicking_a_marker_reports_it(view):
+    view.set_timeline(_timeline())
+    marker = mk.Marker("point", 5.0, name="door")
+    view.set_markers([marker])
+    seen = []
+    view.marker_clicked.connect(seen.append)
+    _mouse(view, "press", _x_at(view, 5.0), RULER_H + 6)
+    _mouse(view, "release", _x_at(view, 5.0), RULER_H + 6)
+    assert seen == [marker.id]
+
+
+def test_dragging_a_point_moves_it(view):
+    view.set_timeline(_timeline())
+    view.set_snap(False)
+    marker = mk.Marker("point", 5.0)
+    view.set_markers([marker])
+    seen = []
+    view.marker_changed.connect(lambda *a: seen.append(a))
+    _drag(view, _x_at(view, 5.0), _x_at(view, 7.0), RULER_H + 6)
+    ((marker_id, start, end),) = seen
+    assert marker_id == marker.id and end is None
+    assert start == pytest.approx(7.0, abs=0.05)
+    assert marker.start_s == 5.0  # the caller's marker is untouched: the window saves
+
+
+def test_dragging_a_range_end_trims_it(view):
+    view.set_timeline(_timeline())
+    view.set_snap(False)
+    view.set_markers([mk.Marker("range", 2.0, 4.0)])
+    seen = []
+    view.marker_changed.connect(lambda *a: seen.append(a))
+    _drag(view, _x_at(view, 4.0), _x_at(view, 6.0), RULER_H + 6)
+    ((_id, start, end),) = seen
+    assert start == pytest.approx(2.0) and end == pytest.approx(6.0, abs=0.05)
+
+
+def test_an_empty_part_of_the_marker_row_still_scrubs(view):
+    view.set_timeline(_timeline())
+    seen = []
+    view.scrubbed.connect(seen.append)
+    _mouse(view, "press", view.x_of_frame(150), RULER_H + 6)
+    assert seen and abs(seen[0] - 150) <= 1
+
+
+def test_double_clicking_a_marker_asks_to_edit_it(view):
+    view.set_timeline(_timeline())
+    marker = mk.Marker("point", 5.0)
+    view.set_markers([marker])
+    seen = []
+    view.marker_activated.connect(lambda marker_id, _at: seen.append(marker_id))
+    view.mouseDoubleClickEvent(
+        _QMouseEvent(
+            _QEvent.Type.MouseButtonDblClick,
+            _QPointF(_x_at(view, 5.0), RULER_H + 6),
+            _Qt.MouseButton.LeftButton,
+            _Qt.MouseButton.LeftButton,
+            _Qt.KeyboardModifier.NoModifier,
+        )
+    )
+    assert seen == [marker.id]
+
+
+def test_a_selection_snaps_to_a_marker_edge(view):
+    """No bout or device edge anywhere near 6 s -- only the marker's."""
+    lane = BehaviorLane("tracking", ["groom"] * 301, np.arange(0, 301))
+    view.set_timeline(_timeline(hardware=False, beh=[lane]))
+    view.set_markers([mk.Marker("range", 2.0, 6.0)])
+    _drag(view, view.x_of_frame(30), view.x_of_frame(182), _lane_y(view))
+    assert view.selection()[1] == 179  # 6.0 s is frame 180; an inclusive end stops before it
+
+
+def test_seconds_of_frame_is_the_time_rule(view):
+    view.set_timeline(_timeline())
+    assert view.seconds_of_frame(90) == pytest.approx(3.0)
+    assert view.seconds_of_frame(301) == pytest.approx(301 / 30.0)  # past the map's end
+
+
+def test_the_navigator_shows_range_markers(panel):
+    panel.view.set_markers([mk.Marker("range", 2.0, 4.0, color="violet")])
+    image = panel.navigator.grab().toImage()
+    assert image.pixelColor(int(_nav_x(panel.navigator, 3000.0)), 5) == QColor(colors.MARKER_VIOLET)

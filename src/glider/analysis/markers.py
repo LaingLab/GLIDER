@@ -41,6 +41,7 @@ __all__ = [
     "load_markers",
     "save_markers",
     "seconds_at",
+    "stack_rows",
     "t0_of",
     "uses_ms",
 ]
@@ -317,3 +318,25 @@ class MarkerStore:
         if self.error is not None:
             raise MarkerFileError(self.error)
         save_markers(self.path, self.markers, t0=self.t0)
+
+
+# ---------------------------------------------------------------------------
+# drawing
+
+
+def stack_rows(spans: list[tuple[float, float]]) -> list[int]:
+    """Which of two sub-rows each range draws in, in the order given.
+
+    In start order, each range goes on the first sub-row it doesn't overlap;
+    one that overlaps both goes on the second, drawn on top. Two rows, not
+    as many as it takes: a marker row taller than the lanes it labels would
+    be the tail wagging the dog.
+    """
+    rows = [0] * len(spans)
+    ends = [-math.inf, -math.inf]
+    for i in sorted(range(len(spans)), key=lambda i: spans[i][0]):
+        start, end = spans[i]
+        row = 0 if start >= ends[0] else 1
+        rows[i] = row
+        ends[row] = max(ends[row], end)
+    return rows

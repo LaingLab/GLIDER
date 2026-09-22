@@ -12,7 +12,7 @@ still speak frames, so every table below the timeline is untouched.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, pyqtSignal
@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.analysis import markers as mk
 from glider.analysis.timeline import (
     BehaviorLane,
     Lane,
@@ -55,11 +56,13 @@ __all__ = [
     "behavior_order",
     "behavior_qcolor",
     "lane_colour",
+    "swatch",
 ]
 
 HEADER_W = 212
 RULER_H = 26
-MARKER_H = 18  # empty in phase 1; phase 2 draws markers here
+MARKER_H = 28  # markers: ranges in two stacked sub-rows, points as flags
+MARKER_SUB_H = MARKER_H / 2
 TOP_H = RULER_H + MARKER_H
 GROUP_H = 18
 BEHAVIOR_H = 44
@@ -114,6 +117,11 @@ _ROLE_COLOURS = {
 def lane_colour(lane: Lane) -> QColor:
     """What a device lane draws in: outputs, motors and inputs kept apart."""
     return QColor(_ROLE_COLOURS[lane_role(lane)])
+
+
+def swatch(name: str) -> QColor:
+    """A marker's colour, from its swatch name."""
+    return QColor(colors.MARKER_SWATCHES.get(name, colors.MARKER_CYAN))
 
 
 def _behavior_title(source: str) -> tuple[str, str]:
@@ -197,6 +205,10 @@ class TimelineView(QWidget):
     playhead_moved = pyqtSignal(int)
     context_menu_requested = pyqtSignal(QPoint, int)  # global position, frame
     hidden_changed = pyqtSignal(list)  # lane keys
+    marker_clicked = pyqtSignal(str)  # marker id
+    marker_activated = pyqtSignal(str, QPoint)  # marker id, where to open its editor
+    marker_changed = pyqtSignal(str, float, object)  # id, start_s, end_s (None: a point)
+    markers_set = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -221,6 +233,9 @@ class TimelineView(QWidget):
         self._snap_on = True
         self._collapsed: set[str] = set()
         self._hidden: set[str] = set()
+        self._markers: list = []  # copies of mk.Marker; a drag edits these
+        self._marker_drag = None  # (marker, part, moved) while one is dragged
+        self._snap_exclude = np.empty(0)  # the dragged marker's own edges
 
     # ------------------------------------------------------------------
     # loading
@@ -315,7 +330,7 @@ class TimelineView(QWidget):
         return cached
 
     def _rebuild_snap(self) -> None:
-        """Frames worth snapping to: bout starts and hardware switches."""
+        """Frames worth snapping to: bout starts, hardware switches, marker edges."""
         frames: list[float] = []
         for lane in self._behavior_lanes():
             first, following, _codes = self._lane_runs(lane)
@@ -325,6 +340,11 @@ class TimelineView(QWidget):
             frame_map = self._timeline.frame_map
             for lane in self._timeline.lanes:
                 frames.extend(frame_map.frame_at(s.start_ms) for s in lane.segments)
+        fps = self.fps()
+        for marker in self._markers:
+            for seconds in (marker.start_s, marker.end_s):
+                if seconds is not None:
+                    frames.append(mk.frame_at(self._timeline, fps, seconds))
         self._snap_frames = np.unique(np.asarray(frames, dtype=float))
 
     # ------------------------------------------------------------------
@@ -387,11 +407,18 @@ class TimelineView(QWidget):
     def _axis_span_of_frames(self, n: int) -> float:
         return n / self.fps() * 1000.0 if self.uses_ms() else float(n)
 
-    def _axis_of_seconds(self, seconds: float) -> float:
+    def axis_of_seconds(self, seconds: float) -> float:
         return seconds * 1000.0 if self.uses_ms() else seconds * self.fps()
 
     def seconds_of_axis(self, t: float) -> float:
         return t / 1000.0 if self.uses_ms() else t / self.fps()
+
+    def seconds_of_frame(self, frame: int) -> float:
+        """The time rule (:func:`glider.analysis.markers.seconds_at`) for this session."""
+        return mk.seconds_at(self._timeline, self.fps(), frame)
+
+    def _x_of_seconds(self, seconds: float) -> float:
+        return self.x_of_axis(self.axis_of_seconds(seconds))
 
     # ------------------------------------------------------------------
     # geometry
@@ -536,6 +563,16 @@ class TimelineView(QWidget):
     def hidden(self) -> set[str]:
         return set(self._hidden)
 
+    def set_markers(self, markers) -> None:
+        """What the marker row draws: this session's markers and the cohort's."""
+        self._markers = [replace(m) for m in markers]
+        self._rebuild_snap()
+        self.update()
+        self.markers_set.emit()
+
+    def markers(self) -> list:
+        return list(self._markers)
+
     def _toggle_group(self, key: str) -> None:
         self._collapsed ^= {key}
         self.update()
@@ -555,6 +592,7 @@ class TimelineView(QWidget):
             frozenset(self._hidden),
             id(self._timeline),
             id(self._view),
+            tuple((m.id, m.start_s, m.end_s, m.color, m.name) for m in self._markers),
         )
         if self._static is None or self._static_key != key:
             ratio = self.devicePixelRatioF()
@@ -574,6 +612,7 @@ class TimelineView(QWidget):
         p.fillRect(QRectF(0, 0, HEADER_W, h), QColor(colors.SURFACE_1))
         p.fillRect(QRectF(HEADER_W, RULER_H, w - HEADER_W, MARKER_H), QColor(colors.CHROME))
         self._paint_ruler(p)
+        self._paint_markers(p)
         for row in rows:
             lane_rect = QRectF(HEADER_W, row.top, w - HEADER_W, row.height)
             if row.kind == "group":
@@ -593,6 +632,7 @@ class TimelineView(QWidget):
         p.drawLine(QPointF(HEADER_W - 0.5, 0), QPointF(HEADER_W - 0.5, h))
         p.drawLine(QPointF(HEADER_W, TOP_H - 0.5), QPointF(w, TOP_H - 0.5))
         self._paint_flow(p)
+        self._paint_point_rules(p)
 
     def _paint_ruler(self, p: QPainter) -> None:
         if self._vp is None:
@@ -609,7 +649,7 @@ class TimelineView(QWidget):
         p.setFont(data_font(9))
         for k in range(int(np.ceil(s0 / minor)), int(np.floor(s1 / minor)) + 1):
             second = k * minor
-            x = self.x_of_axis(self._axis_of_seconds(second))
+            x = self.x_of_axis(self.axis_of_seconds(second))
             is_major = second % major == 0
             p.setPen(QPen(QColor(colors.TEXT_DISABLED if is_major else colors.BORDER), 1))
             p.drawLine(QPointF(x, RULER_H), QPointF(x, RULER_H - (10 if is_major else 4)))
@@ -639,6 +679,83 @@ class TimelineView(QWidget):
             if boundary is not None:
                 x = self.x_of_axis(boundary)
                 p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+        p.restore()
+
+    def _visible_seconds(self) -> float:
+        vp = self._vp
+        return self.seconds_of_axis(vp.end) - self.seconds_of_axis(vp.start)
+
+    def _range_rows(self) -> list[tuple]:
+        """``(marker, sub-row)`` for each range marker, sub-row 0 first."""
+        ranges = [m for m in self._markers if m.is_range]
+        rows = mk.stack_rows([(m.start_s, m.end_s) for m in ranges])
+        return sorted(zip(ranges, rows, strict=True), key=lambda pair: pair[1])
+
+    def _paint_markers(self, p: QPainter) -> None:
+        """Ranges as bars in two stacked sub-rows, points as flags."""
+        if self._vp is None or not self._markers:
+            return
+        row_rect = QRectF(HEADER_W, RULER_H, self._lane_width(), MARKER_H)
+        p.save()
+        p.setClipRect(row_rect)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        font = _smaller(self.font(), 1.5)
+        font.setBold(True)
+        p.setFont(font)
+        metrics = p.fontMetrics()
+        for marker, sub in self._range_rows():
+            x0, x1 = self._x_of_seconds(marker.start_s), self._x_of_seconds(marker.end_s)
+            if x1 < row_rect.left() or x0 > row_rect.right():
+                continue
+            colour = swatch(marker.color)
+            bar = QRectF(x0, RULER_H + 2 + sub * MARKER_SUB_H, max(2.0, x1 - x0), MARKER_SUB_H - 3)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(colors.qcolor_with_alpha(colour, 0.32))
+            p.drawRoundedRect(bar, 3, 3)
+            p.fillRect(QRectF(bar.left(), bar.top(), bar.width(), 2), colour)
+            left = max(x0, row_rect.left()) + 5  # the name sticks to the view's edge
+            room = x1 - left - 4
+            if room >= 24:
+                p.setPen(QColor(colors.TEXT_PRIMARY))
+                p.drawText(
+                    QRectF(left, bar.top() + 1, room, bar.height()),
+                    Qt.AlignmentFlag.AlignVCenter,
+                    metrics.elidedText(
+                        marker.name or "Range", Qt.TextElideMode.ElideRight, int(room)
+                    ),
+                )
+        named = self._visible_seconds() <= 90
+        for marker in (m for m in self._markers if not m.is_range):
+            x = self._x_of_seconds(marker.start_s)
+            if not row_rect.left() - 10 <= x <= row_rect.right():
+                continue
+            colour = swatch(marker.color)
+            p.fillRect(QRectF(x - 0.75, RULER_H + 2, 1.5, MARKER_H - 3), colour)
+            flag = QPainterPath()
+            flag.moveTo(x, RULER_H + 2)
+            flag.lineTo(x + 9, RULER_H + 6)
+            flag.lineTo(x, RULER_H + 10)
+            flag.closeSubpath()
+            p.fillPath(flag, colour)
+            if named and marker.name:
+                p.setPen(QColor(colors.TEXT_SECONDARY))
+                p.drawText(QPointF(x + 12, RULER_H + 11), marker.name)
+        p.restore()
+
+    def _paint_point_rules(self, p: QPainter) -> None:
+        """A faint dashed rule through every lane at each point marker."""
+        points = [m for m in self._markers if not m.is_range]
+        if self._vp is None or not points:
+            return
+        lanes = self.lanes_rect()
+        p.save()
+        p.setClipRect(lanes)
+        for marker in points:
+            x = self._x_of_seconds(marker.start_s)
+            pen = QPen(colors.qcolor_with_alpha(swatch(marker.color), 0.55), 1)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            p.drawLine(QPointF(x, lanes.top()), QPointF(x, lanes.bottom()))
         p.restore()
 
     def _paint_group_header(self, p: QPainter, row: Row) -> None:
@@ -989,6 +1106,44 @@ class TimelineView(QWidget):
             return "trim-out"
         return None
 
+    def marker_at(self, x: float, y: float):
+        """``(marker, part)`` under a point of the marker row, or None.
+
+        ``part`` is ``"point"``, ``"start"``, ``"end"`` or ``"body"``. Points
+        win over ranges: a flag is the smaller target.
+        """
+        if self._vp is None or not RULER_H <= y < TOP_H:
+            return None
+        for marker in reversed([m for m in self._markers if not m.is_range]):
+            if abs(x - self._x_of_seconds(marker.start_s)) <= EDGE_PX + 2:
+                return marker, "point"
+        sub = 0 if y < RULER_H + MARKER_SUB_H else 1
+        for marker, row in reversed(self._range_rows()):
+            if row != sub:
+                continue
+            x0, x1 = self._x_of_seconds(marker.start_s), self._x_of_seconds(marker.end_s)
+            if abs(x - x0) <= EDGE_PX:
+                return marker, "start"
+            if abs(x - x1) <= EDGE_PX:
+                return marker, "end"
+            if x0 < x < x1:
+                return marker, "body"
+        return None
+
+    def _move_marker(self, marker, part: str, x: float) -> None:
+        """Drag a point, or trim a range's edge; snapping as a selection does."""
+        step = 1.0 / self.fps()
+        if part == "point":
+            marker.start_s = self.seconds_of_frame(self._snapped(x))
+        elif part == "start":
+            marker.start_s = min(self.seconds_of_frame(self._snapped(x)), marker.end_s - step)
+        elif part == "end":
+            end = self.seconds_of_frame(self._snapped(x, end=True) + 1)
+            marker.end_s = max(end, marker.start_s + step)
+        else:
+            return  # a range's body does not move; its edges do
+        self.update()
+
     def _snapped(self, x: float, *, end: bool = False) -> int:
         """The frame under ``x``, pulled onto a nearby bout edge or hardware switch.
 
@@ -999,7 +1154,10 @@ class TimelineView(QWidget):
         if not self._snap_on or self._snap_frames.size == 0:
             return frame
         tolerance = max(1, abs(self.frame_at_x(x + SNAP_PX) - frame))
-        candidates = self._snap_frames - 1 if end else self._snap_frames
+        frames = self._snap_frames
+        if self._snap_exclude.size:
+            frames = np.setdiff1d(frames, self._snap_exclude)  # sorted, as snap needs
+        candidates = frames - 1 if end else frames
         first, last = self.frame_bounds()
         return max(first, min(last, int(round(snap(frame, candidates, tolerance)))))
 
@@ -1011,6 +1169,21 @@ class TimelineView(QWidget):
             row = self._row_at(y)
             if row is not None and row.kind == "group":
                 self._toggle_group(row.key)
+            return
+        hit = self.marker_at(x, y)
+        if hit is not None:
+            marker, part = hit
+            self._drag, self._press_x = "marker", x
+            self._marker_drag = (marker, part, False)
+            fps = self.fps()
+            self._snap_exclude = np.asarray(
+                [
+                    mk.frame_at(self._timeline, fps, s)
+                    for s in (marker.start_s, marker.end_s)
+                    if s is not None
+                ],
+                dtype=float,
+            )
             return
         if y < TOP_H:
             self._drag = "scrub"
@@ -1031,10 +1204,23 @@ class TimelineView(QWidget):
             # The release was missed (e.g. it happened outside the widget).
             self._drag = None
             self._fixed = None
+            self._marker_drag = None
+            self._snap_exclude = np.empty(0)
             return
         if self._drag is None:
-            grab = event.position().y() >= TOP_H and self._edge_at(x) is not None
+            y = event.position().y()
+            hit = self.marker_at(x, y)
+            grab = (hit is not None and hit[1] != "body") or (
+                y >= TOP_H and self._edge_at(x) is not None
+            )
             self.setCursor(Qt.CursorShape.SizeHorCursor if grab else Qt.CursorShape.ArrowCursor)
+            return
+        if self._drag == "marker":
+            marker, part, moved = self._marker_drag
+            if not moved and abs(x - self._press_x) < DRAG_PX:
+                return
+            self._marker_drag = (marker, part, True)
+            self._move_marker(marker, part, x)
             return
         if self._drag == "scrub":
             self.scrubbed.emit(self.frame_at_x(x))
@@ -1054,11 +1240,29 @@ class TimelineView(QWidget):
     def mouseReleaseEvent(self, event):  # noqa: N802 - Qt override
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        if self._drag == "marker":
+            marker, _part, moved = self._marker_drag
+            self._drag, self._marker_drag = None, None
+            self._snap_exclude = np.empty(0)
+            if moved:
+                self._rebuild_snap()
+                self.marker_changed.emit(marker.id, marker.start_s, marker.end_s)
+            else:
+                self.marker_clicked.emit(marker.id)
+            return
         if self._drag == "press":
             # A click, not a drag: move the playhead, keep any selection.
             self.scrubbed.emit(self.frame_at_x(self._press_x))
         self._drag = None
         self._fixed = None
+
+    def mouseDoubleClickEvent(self, event):  # noqa: N802 - Qt override
+        x, y = event.position().x(), event.position().y()
+        hit = self.marker_at(x, y)
+        if hit is None:
+            super().mouseDoubleClickEvent(event)
+            return
+        self.marker_activated.emit(hit[0].id, self.mapToGlobal(QPoint(int(x), TOP_H)))
 
     def wheelEvent(self, event):  # noqa: N802 - Qt override
         if self._vp is None:
@@ -1143,6 +1347,7 @@ class Navigator(QWidget):
         view.playhead_moved.connect(lambda _frame: self.update())
         view.selection_changed.connect(lambda *_: self.update())
         view.selection_cleared.connect(self.update)
+        view.markers_set.connect(self.update)
 
     def _lane_width(self) -> float:
         return max(1.0, float(self.width() - HEADER_W))
@@ -1202,6 +1407,11 @@ class Navigator(QWidget):
                 f"{_span_text(shown)} of {_clock(total)} shown",
             )
             p.drawPixmap(HEADER_W, 0, self._strip_pixmap())
+            for marker in view.markers():
+                if marker.is_range:
+                    a = self._x(view.axis_of_seconds(marker.start_s))
+                    b = self._x(view.axis_of_seconds(marker.end_s))
+                    p.fillRect(QRectF(a, 3, max(1.0, b - a), 4), swatch(marker.color))
             selection = view.selection()
             if selection is not None:
                 a = self._x(view.axis_of_frame(selection[0]))

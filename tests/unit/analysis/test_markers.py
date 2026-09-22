@@ -20,6 +20,7 @@ from glider.analysis.markers import (
     load_markers,
     save_markers,
     seconds_at,
+    stack_rows,
     t0_of,
     uses_ms,
 )
@@ -234,3 +235,17 @@ def test_a_changed_zero_is_flagged_but_still_loads(tmp_path: Path):
 def test_a_cohort_store_never_flags_a_zero(tmp_path: Path):
     save_markers(tmp_path / COHORT_FILE, [Marker("range", 0.0, 1.0, scope="cohort")])
     assert not MarkerStore(tmp_path / COHORT_FILE).t0_changed
+
+
+# ---------------------------------------------------------------------------
+# stacking range markers into sub-rows
+
+
+def test_overlapping_ranges_stack_into_two_rows():
+    # (0,10) row 0; (1,2) overlaps it: row 1; (5,15) overlaps row 0: row 1;
+    # (12,20) starts after row 0 ended: row 0.
+    assert stack_rows([(0, 10), (5, 15), (12, 20), (1, 2)]) == [0, 1, 0, 1]
+
+
+def test_a_range_overlapping_both_rows_goes_on_the_second():
+    assert stack_rows([(0, 10), (1, 20), (5, 8)]) == [0, 1, 1]
