@@ -7,7 +7,8 @@ twice is a no-op, so carrying both costs nothing and means the plugin works
 whether it was pip-installed or dropped into ``~/.glider/plugins/``.
 
 The device is a Nordic/Zephyr peripheral with one writable characteristic
-taking ``on``, ``off``, or ``<period_ms>,<duration_s>``. It lives outside core
+taking ``on``, ``off``, or
+``<period_ms>,<width_ms>,<count>,<intensity_pct>``. It lives outside core
 because it is one lab's hardware: GLIDER ships the BLE transport, and this
 ships the protocol that runs over it.
 """

@@ -121,8 +121,8 @@ async def test_off_is_the_first_thing_on_the_new_link(fake_bleak):
         if device._client.written:
             break
         await asyncio.sleep(0)
-    await device.pulse(500, 10)
-    assert device._client.written == [b"off", b"500,10"]
+    await device.pulse(50, 5, 20, 100)
+    assert device._client.written == [b"off", b"50,5,20,100"]
     await device.shutdown()
 
 
@@ -148,7 +148,7 @@ async def test_a_write_retry_does_not_write_off(fake_bleak):
     # except branch, the reconnect-inside-a-write path this test polices.
     clients_before = len(created["clients"])
 
-    await device.pulse(500, 10)
+    await device.pulse(50, 5, 20, 100)
     await asyncio.sleep(0)
 
     # Prove the retry path was actually taken, not skipped: _flaky was entered
@@ -159,5 +159,5 @@ async def test_a_write_retry_does_not_write_off(fake_bleak):
     assert len(created["clients"]) == clients_before + 1
     assert device._client is not original
     assert b"off" not in device._client.written
-    assert device._client.written == [b"500,10"]
+    assert device._client.written == [b"50,5,20,100"]
     await device.shutdown()
