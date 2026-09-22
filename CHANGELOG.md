@@ -310,8 +310,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hardcoded 30 fps.** `SessionView.load` fell back to 30 whenever the pose
   CSV could not be found — an offline video, a network share, a copy without
   the DLC sidecar — silently mislabelling every duration and speed on a rig
-  recorded at any other rate. Found against the Blast Pilot cohort, whose
-  15.59 fps sessions read every number at nearly twice their true rate.
+  recorded at any other rate. Found on a 15.59 fps recording, which read
+  every duration and speed at nearly twice its true rate.
   `run.json` already records the fps a run classified at; `SessionView.load`
   now falls back to that, the same way applied thresholds and px_per_mm
   already do. A reachable pose CSV still outranks it, unchanged.
