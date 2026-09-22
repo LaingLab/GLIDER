@@ -8,7 +8,7 @@ pytest.importorskip("PyQt6")
 
 from PyQt6.QtGui import QColor  # noqa: E402
 
-from glider.gui.review.inspector import Inspector  # noqa: E402
+from glider.gui.review.inspector import Inspector, MarkerRow  # noqa: E402
 from glider.gui.styles import colors  # noqa: E402
 
 
@@ -19,8 +19,12 @@ def inspector(qtbot):
     return widget
 
 
-def test_it_has_a_range_and_a_session_tab(inspector):
-    assert [inspector.tabText(i) for i in range(inspector.count())] == ["Range", "Session"]
+def test_it_has_range_session_and_markers_tabs(inspector):
+    assert [inspector.tabText(i) for i in range(inspector.count())] == [
+        "Range",
+        "Session",
+        "Markers",
+    ]
 
 
 def test_the_range_card_shows_what_it_is_given(inspector):
@@ -97,3 +101,54 @@ def test_session_review_qss_uses_only_token_colours():
     }
     used = {h.lower() for h in re.findall(r"#[0-9a-fA-F]{6}\b", review)}
     assert used <= tokens, sorted(used - tokens)
+
+
+def _rows():
+    colour = QColor(colors.MARKER_CYAN)
+    return [
+        MarkerRow("r1", "range", "Stim", colour, "cohort", "1:00.00 – 4:20.00", "200.0 s"),
+        MarkerRow("p1", "point", "door stuck", colour, "session", "2:11.50", "", "lever jammed"),
+    ]
+
+
+def test_markers_are_listed_and_counted(inspector):
+    inspector.set_markers(_rows())
+    assert inspector.marker_list.count() == 2
+    assert inspector.tabText(2) == "Markers (2)"
+    assert "Stim" in inspector.marker_list.item(0).text()
+    assert "lever jammed" in inspector.marker_list.item(1).text()
+    inspector.set_markers([])
+    assert inspector.tabText(2) == "Markers"
+
+
+def test_the_filters_show_one_kind(inspector):
+    inspector.set_markers(_rows())
+    inspector.marker_filters["point"].click()
+    hidden = [inspector.marker_list.item(i).isHidden() for i in range(2)]
+    assert hidden == [True, False]
+    inspector.marker_filters["all"].click()
+    assert not any(inspector.marker_list.item(i).isHidden() for i in range(2))
+
+
+def test_clicking_a_marker_picks_it(inspector):
+    inspector.set_markers(_rows())
+    seen = []
+    inspector.marker_picked.connect(seen.append)
+    inspector.marker_list.itemClicked.emit(inspector.marker_list.item(1))
+    assert seen == ["p1"]
+
+
+def test_the_range_card_names_the_markers_it_is_inside(inspector):
+    inspector.set_inside(["Baseline", "Stim"])
+    assert inspector.inside.text() == "inside Baseline, Stim"
+    assert not inspector.inside.isHidden()
+    inspector.clear_range()
+    assert inspector.inside.isHidden()
+    assert not inspector.save_marker_btn.isEnabled()
+
+
+def test_a_marker_note_shows_only_when_there_is_one(inspector):
+    inspector.set_marker_note("review_markers.json could not be read")
+    assert not inspector.marker_note.isHidden()
+    inspector.set_marker_note("")
+    assert inspector.marker_note.isHidden()
