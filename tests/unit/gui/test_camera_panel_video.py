@@ -58,6 +58,9 @@ class _FakeThread:
     def wait(self, ms):
         return True
 
+    def deleteLater(self):
+        pass
+
 
 def test_fps_field_shows_processing_rate_during_run(qtbot):
     import time

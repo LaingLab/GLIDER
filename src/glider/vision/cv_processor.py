@@ -474,13 +474,13 @@ class ObjectTracker:
                 self._objects[track_id].disappeared += 1
                 if self._objects[track_id].disappeared > self._max_disappeared:
                     self._deregister(track_id)
-            return list(self._objects.values())
+            return self._visible()
 
         # If no existing objects, register all detections
         if len(self._objects) == 0:
             for detection in detections:
                 self._register(detection)
-            return list(self._objects.values())
+            return self._visible()
 
         # Get current object IDs and centroids
         object_ids = list(self._objects.keys())
@@ -531,7 +531,17 @@ class ObjectTracker:
         for col in unused_cols:
             self._register(detections[col])
 
-        return list(self._objects.values())
+        return self._visible()
+
+    def _visible(self) -> list[TrackedObject]:
+        """Tracks matched on this frame.
+
+        Unmatched tracks are kept (up to ``max_disappeared``) so the ID
+        survives a brief occlusion, but they are not reported: their bbox is
+        where the animal *was*, and logging it as live froze the position,
+        zeroed velocity (-> FREEZE) and kept the animal in its last zone.
+        """
+        return [obj for obj in self._objects.values() if obj.disappeared == 0]
 
 
 class CVProcessor:
@@ -596,6 +606,9 @@ class CVProcessor:
         self._last_detections: list[Detection] = []
         self._last_tracked: list[TrackedObject] = []
         self._last_motion: MotionResult = MotionResult(False, 0.0)
+        #: True when the last process_frame returned the cached results above
+        #: for a frame skipped by ``process_every_n_frames``.
+        self.last_result_cached = False
 
         # Zone tracking
         self._zone_tracker: ZoneTracker | None = None
@@ -903,6 +916,7 @@ class CVProcessor:
         Returns:
             Tuple of (detections, tracked_objects, motion_result)
         """
+        self.last_result_cached = False
         if not self._settings.enabled:
             return [], [], MotionResult(False, 0.0)
 
@@ -914,6 +928,7 @@ class CVProcessor:
         skip_n = self._settings.process_every_n_frames
         if skip_n > 1 and (self._frame_counter % skip_n) != 1:
             # Return cached results (but don't fire callbacks for skipped frames)
+            self.last_result_cached = True
             return self._last_detections, self._last_tracked, self._last_motion
 
         with self._lock:
@@ -1505,7 +1520,10 @@ class CVProcessor:
             self._initialized = False
             self.initialize()
 
-        # Update tracker settings
+        # Update tracker settings. initialize() only builds the tracker when
+        # tracking is on, so turning it on later needs one built here.
+        if settings.tracking_enabled and self._tracker is None:
+            self._tracker = ObjectTracker(max_disappeared=settings.max_disappeared)
         if self._tracker:
             self._tracker._max_disappeared = settings.max_disappeared
 
@@ -1518,6 +1536,11 @@ class CVProcessor:
             self._tracker.reset()
         self._trail_history.clear()
         self._bytetrack_ages.clear()
+        # model.track(persist=True) keeps its ByteTrack state (IDs, Kalman
+        # filters) on the predictor; without this it carries across trials.
+        predictor = getattr(self._yolo_model, "predictor", None)
+        for tracker in getattr(predictor, "trackers", None) or []:
+            tracker.reset()
         # Reset frame skipping state
         self._frame_counter = 0
         self._last_detections = []

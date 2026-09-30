@@ -34,3 +34,19 @@ def test_worker_re_emits_preview_frames(qtbot, tmp_path):
 
     assert seen == [0, 3]
     assert finished == ["out"]
+
+
+def test_cancelled_run_is_not_reported_as_finished(qtbot, tmp_path):
+    cfg = VideoTrackingConfig(source_path=tmp_path / "clip.avi", output_dir=tmp_path / "out")
+    worker = VideoTrackingWorker(cfg)
+    worker._runner = _FakeRunner()
+    finished: list[str] = []
+    cancelled: list[str] = []
+    worker.finished.connect(finished.append)
+    worker.cancelled.connect(cancelled.append)
+
+    worker.cancel()
+    worker.run()
+
+    assert finished == []
+    assert cancelled == ["out"]

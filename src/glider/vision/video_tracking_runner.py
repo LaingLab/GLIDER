@@ -174,7 +174,12 @@ class VideoTrackingRunner:
                 ts = base + n / fps
                 _detections, tracked, motion = self._cv.process_frame(frame, ts)
                 if tracker is not None:
-                    tracker.log_frame(ts, tracked, motion.motion_detected, motion.motion_area)
+                    if getattr(self._cv, "last_result_cached", False):
+                        # A skipped frame repeats the last results; don't log
+                        # them as a new observation (zero-distance duplicates).
+                        tracker.log_frame(ts, [], False, 0.0)
+                    else:
+                        tracker.log_frame(ts, tracked, motion.motion_detected, motion.motion_area)
                 if zones:
                     elapsed_ms = (n / fps) * 1000.0
                     for zone in zones:
@@ -207,14 +212,18 @@ class VideoTrackingRunner:
                 if progress_cb is not None:
                     progress_cb(n + 1, total)
         finally:
-            if tracker is not None:
-                asyncio.run(tracker.stop())
-            source.release()
-            if annotated_writer is not None:
-                annotated_writer.release()
-            if zone_file is not None:
-                zone_file.close()
-                self._write_occupancy(zones, frames_in_zone, fps)
+            # Nested so a failing tracker.stop() still releases the annotated
+            # mp4 (else it has no moov atom) and closes the zone file.
+            try:
+                if tracker is not None:
+                    asyncio.run(tracker.stop())
+            finally:
+                source.release()
+                if annotated_writer is not None:
+                    annotated_writer.release()
+                if zone_file is not None:
+                    zone_file.close()
+                    self._write_occupancy(zones, frames_in_zone, fps)
 
         self._write_metadata(fps, total, (width, height))
         return cfg.output_dir

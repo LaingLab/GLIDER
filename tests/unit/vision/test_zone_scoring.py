@@ -275,3 +275,13 @@ def test_a_track_that_entered_no_zone_still_gets_occupancy_rows(tmp_path):
     write_zone_csvs(scoring, tmp_path)
     rows = (tmp_path / "zone_occupancy.csv").read_text().splitlines()
     assert rows[1].split(",")[:4] == ["animal0", "z1", "Zone 1", "0"]
+
+
+def test_event_frames_are_one_based_like_the_tracking_csv(tmp_path):
+    # Pose row 2 is video frame 3 in the tracking CSV / VideoTrackingRunner.
+    result = score_pose(_pose([OUTSIDE] * 2 + [INSIDE]), _centre_zone(), resolution=RESOLUTION)
+    assert result.events[0].frame == 2
+    write_zone_csvs(result, tmp_path)
+    with open(tmp_path / "zone_events.csv") as f:
+        row = list(csv.reader(f))[1]
+    assert row[0] == "3"

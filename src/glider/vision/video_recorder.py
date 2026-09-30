@@ -6,6 +6,7 @@ generating filenames that match the DataRecorder pattern.
 """
 
 import logging
+import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -56,6 +57,107 @@ class VideoFormat:
             extension=data.get("extension", ".mp4"),
             quality=data.get("quality", 95),
         )
+
+
+#: States in which a recorder holds open writers that stop() must finalize.
+#: PAUSED and ERROR included: skipping them left an mp4 with no moov atom.
+ACTIVE_STATES = (RecordingState.RECORDING, RecordingState.PAUSED, RecordingState.ERROR)
+
+#: Re-encode with the measured fps when it differs from the header fps by more
+#: than this. An 8% miss (27.5 vs 30 fps) shortens an hour-long video by ~5 min.
+FPS_CORRECTION_TOLERANCE = 0.01
+
+
+class FrameClock:
+    """Measured frame rate from capture timestamps of the frames written.
+
+    Only intervals between consecutive written frames count; ``break_()``
+    (on pause) starts a new segment so paused time is excluded, and stop()'s
+    writer drain never enters it.
+    """
+
+    def __init__(self) -> None:
+        self._last: float | None = None
+        self._span = 0.0
+        self._intervals = 0
+
+    def tick(self, timestamp: float) -> None:
+        if self._last is not None and timestamp > self._last:
+            self._span += timestamp - self._last
+            self._intervals += 1
+        self._last = timestamp
+
+    def break_(self) -> None:
+        self._last = None
+
+    @property
+    def fps(self) -> float | None:
+        return self._intervals / self._span if self._span > 0 else None
+
+
+def correct_video_fps(path: Path, recorded_fps: float, measured_fps: float | None, codec: str):
+    """Re-encode *path* at *measured_fps* if the header fps is off by too much."""
+    if not measured_fps or recorded_fps <= 0:
+        return
+    if abs(measured_fps - recorded_fps) / recorded_fps <= FPS_CORRECTION_TOLERANCE:
+        return
+    logger.info(
+        f"FPS drift detected: recorded at {recorded_fps:.2f} fps, "
+        f"measured {measured_fps:.2f} fps. Re-encoding {path}..."
+    )
+    fix_video_fps(path, measured_fps, codec)
+
+
+def fix_video_fps(video_path: Path, correct_fps: float, codec: str) -> bool:
+    """
+    Re-encode a video with the correct FPS.
+
+    Args:
+        video_path: Path to the video file
+        correct_fps: The correct FPS to use
+        codec: Preferred fourcc for the re-encode
+
+    Returns:
+        True if successful
+    """
+    try:
+        temp_path = video_path.with_suffix(".temp.mp4")
+
+        # Read original video
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            logger.error(f"Failed to open video for FPS fix: {video_path}")
+            return False
+
+        # Get video properties
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        # Create new writer with correct FPS (falls back to a compatible codec)
+        writer, _ = open_video_writer(temp_path, codec, correct_fps, (width, height))
+        if writer is None:
+            logger.error("Failed to create temp video writer")
+            cap.release()
+            return False
+
+        # Copy all frames
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            writer.write(frame)
+
+        cap.release()
+        writer.release()
+
+        # Replace original with fixed version
+        os.replace(str(temp_path), str(video_path))
+        logger.info(f"Fixed video FPS to {correct_fps:.2f}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to fix video FPS: {e}")
+        return False
 
 
 # Codec used when the requested codec cannot be opened by the local OpenCV build.
@@ -151,6 +253,7 @@ class VideoRecorder:
         self._record_annotated = False  # Whether to also record annotated video
         self._buffer_size: int | None = None  # None = use default
         self._writer_error: BaseException | None = None
+        self._clock = FrameClock()
 
     @property
     def is_recording(self) -> bool:
@@ -255,8 +358,13 @@ class VideoRecorder:
         if self._state == RecordingState.RECORDING:
             logger.warning("Recording already in progress")
             return self._file_path
+        if self._state in ACTIVE_STATES:
+            # Paused or errored: finalize it rather than overwrite live writers.
+            await self.stop()
 
         self._record_annotated = record_annotated
+        self._writer_error = None
+        self._clock = FrameClock()
 
         # Generate filename for raw video
         filename = self._generate_filename(experiment_name)
@@ -296,7 +404,10 @@ class VideoRecorder:
                 raise RuntimeError(f"Failed to create video file: {self._file_path}")
 
             self._writer_thread = FrameWriterThread(
-                self._writer, error_callback=self._on_writer_error, **fwt_kwargs
+                self._writer,
+                error_callback=self._on_writer_error,
+                frame_size=settings.resolution,
+                **fwt_kwargs,
             )
             self._writer_thread.start()
 
@@ -318,6 +429,7 @@ class VideoRecorder:
                     self._annotated_writer_thread = FrameWriterThread(
                         self._annotated_writer,
                         error_callback=self._on_writer_error,
+                        frame_size=settings.resolution,
                         **fwt_kwargs,
                     )
                     self._annotated_writer_thread.start()
@@ -368,6 +480,7 @@ class VideoRecorder:
         if self._writer_thread is not None:
             if self._writer_thread.enqueue(frame.copy()):
                 self._frame_count += 1
+                self._clock.tick(timestamp)
             else:
                 dropped = self._writer_thread.frames_dropped
                 if dropped == 1 or dropped % 100 == 0:
@@ -408,10 +521,12 @@ class VideoRecorder:
         """
         Stop recording and finalize video files.
 
+        Finalizes from RECORDING, PAUSED and ERROR; a no-op when idle.
+
         Returns:
             Path to the saved raw video file, or None if not recording
         """
-        if self._state not in (RecordingState.RECORDING, RecordingState.PAUSED):
+        if self._state not in ACTIVE_STATES:
             return None
 
         self._state = RecordingState.FINALIZING
@@ -437,21 +552,19 @@ class VideoRecorder:
         saved_path = self._file_path
         duration = self.duration
 
-        # Calculate actual FPS and fix video if needed
-        if duration > 0 and self._frame_count > 0:
-            actual_fps = self._frame_count / duration
-            fps_drift = abs(actual_fps - self._recording_fps) / self._recording_fps
-
-            # If FPS drift is more than 10%, re-encode with correct FPS
-            if fps_drift > 0.1:
-                logger.info(
-                    f"FPS drift detected: recorded at {self._recording_fps:.1f} fps, "
-                    f"actual {actual_fps:.1f} fps. Re-encoding..."
+        # Correct the header fps from the frames' capture timestamps: wall-clock
+        # duration would include the writer drain and any paused time.
+        codec = self._video_format.codec
+        measured_fps = self._clock.fps
+        if saved_path is not None:
+            correct_video_fps(saved_path, self._recording_fps, measured_fps, codec)
+        if measured_fps and self._record_annotated and self._annotated_file_path:
+            if self._frame_count > 0 and self._annotated_frame_count > 0:
+                # Annotated frames span the same time as the raw ones.
+                annotated_fps = measured_fps * self._annotated_frame_count / self._frame_count
+                correct_video_fps(
+                    self._annotated_file_path, self._recording_fps, annotated_fps, codec
                 )
-                self._fix_video_fps(self._file_path, actual_fps)
-                if self._record_annotated and self._annotated_file_path:
-                    annotated_actual_fps = self._annotated_frame_count / duration
-                    self._fix_video_fps(self._annotated_file_path, annotated_actual_fps)
 
         self._state = RecordingState.IDLE
 
@@ -466,64 +579,11 @@ class VideoRecorder:
             )
         return saved_path
 
-    def _fix_video_fps(self, video_path: Path, correct_fps: float) -> bool:
-        """
-        Re-encode a video with the correct FPS.
-
-        Args:
-            video_path: Path to the video file
-            correct_fps: The correct FPS to use
-
-        Returns:
-            True if successful
-        """
-        try:
-            temp_path = video_path.with_suffix(".temp.mp4")
-
-            # Read original video
-            cap = cv2.VideoCapture(str(video_path))
-            if not cap.isOpened():
-                logger.error(f"Failed to open video for FPS fix: {video_path}")
-                return False
-
-            # Get video properties
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-            # Create new writer with correct FPS (falls back to a compatible codec)
-            writer, _ = open_video_writer(
-                temp_path, self._video_format.codec, correct_fps, (width, height)
-            )
-            if writer is None:
-                logger.error("Failed to create temp video writer")
-                cap.release()
-                return False
-
-            # Copy all frames
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                writer.write(frame)
-
-            cap.release()
-            writer.release()
-
-            # Replace original with fixed version
-            import os
-
-            os.replace(str(temp_path), str(video_path))
-            logger.info(f"Fixed video FPS to {correct_fps:.1f}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to fix video FPS: {e}")
-            return False
-
     async def pause(self) -> None:
         """Pause recording (frames will be skipped)."""
         if self._state == RecordingState.RECORDING:
             self._state = RecordingState.PAUSED
+            self._clock.break_()  # paused time is not frame time
             logger.info("Recording paused")
 
     async def resume(self) -> None:

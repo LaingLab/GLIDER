@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.gui.panels.fps_meter import FpsMeter
+from glider.gui.qthreads import retire_thread
 
 if TYPE_CHECKING:
     from glider.vision.calibration import CameraCalibration
@@ -82,6 +83,9 @@ class FrameData:
     frame: np.ndarray
     timestamp: float
     camera_id: str | None = None  # For multi-camera mode
+    # Set by CVWorker: the results are CVProcessor's cached ones for a frame
+    # skipped by process_every_n_frames, not a fresh detection.
+    cv_cached: bool = False
 
 
 class CVWorker(QObject):
@@ -98,17 +102,25 @@ class CVWorker(QObject):
         self._cv_processor = cv_processor
 
     def process_frame(self, frame_data: FrameData):
-        """Process a frame and emit results."""
-        if not self._cv_processor or not self._cv_processor.is_initialized:
-            return
+        """Process a frame and emit results.
 
-        try:
-            detections, tracked, motion = self._cv_processor.process_frame(
-                frame_data.frame, frame_data.timestamp
-            )
-            self.results_ready.emit(frame_data, detections, tracked, motion)
-        except Exception as e:
-            logger.error(f"Error in CV worker: {e}")
+        Emits exactly once per call, even on failure (empty results): the
+        panel keeps one frame in flight and waits for this to send the next,
+        and a silently swallowed frame would also drop its tracking row and
+        device tick.
+        """
+        detections: list = []
+        tracked: list = []
+        motion = None
+        if self._cv_processor and self._cv_processor.is_initialized:
+            try:
+                detections, tracked, motion = self._cv_processor.process_frame(
+                    frame_data.frame, frame_data.timestamp
+                )
+                frame_data.cv_cached = self._cv_processor.last_result_cached
+            except Exception as e:
+                logger.error(f"Error in CV worker: {e}")
+        self.results_ready.emit(frame_data, detections, tracked, motion)
 
 
 class CameraPreviewWidget(QLabel):
@@ -342,6 +354,10 @@ class CameraPanel(QWidget):
         self._multi_camera_mode = False
         self._last_frame = None
         self._frame_count = 0
+        # Bounded hand-off to the CV worker (see _submit_to_cv).
+        self._cv_in_flight = False
+        self._cv_pending: FrameData | None = None
+        self._cv_frames_dropped = 0
 
         # --- Live behavior inference state ---
         # Chosen model paths (set via the pickers); both required to Start.
@@ -875,14 +891,13 @@ class CameraPanel(QWidget):
         # inference can't keep up with camera fps the queued frames back up and
         # latency grows -- but we must not silently drop frames, because that
         # corrupts the stateful features. (A future bounded/gap-aware path is
-        # out of scope.)
+        # out of scope.) The CV path below is bounded instead; it is not
+        # stateful in the same way.
         if self._behavior_running:
             self._behavior_frame_requested.emit(frame_data)
 
         if self._cv_enabled_cb.isChecked() and self._cv_processor.is_initialized:
-            # Offload to CV worker thread via signal (QueuedConnection ensures
-            # process_frame runs on the worker thread, not the main thread)
-            self._process_frame_requested.emit(frame_data)
+            self._submit_to_cv(frame_data)
         else:
             # Update UI immediately with raw frame
             self._process_frame_on_main_thread(frame_data)
@@ -895,8 +910,7 @@ class CameraPanel(QWidget):
             and self._multi_cam
             and frame_data.camera_id == self._multi_cam.primary_camera_id
         ):
-            # Offload primary camera to CV worker thread via signal
-            self._process_frame_requested.emit(frame_data)
+            self._submit_to_cv(frame_data)
         else:
             # Update UI immediately
             self._process_multi_frame_on_main_thread(frame_data)
@@ -1040,6 +1054,11 @@ class CameraPanel(QWidget):
 
             motion_detected = motion.motion_detected if motion else False
             motion_area = motion.motion_area if motion else 0.0
+            if frame_data.cv_cached:
+                # A skipped frame's results are the previous frame's; logging
+                # them again wrote duplicate rows with zero distance. The frame
+                # still advances the counter and ticks the device CSV.
+                tracked, motion_detected, motion_area = [], False, 0.0
 
             self._tracking_logger.log_frame(timestamp, tracked or [], motion_detected, motion_area)
 
@@ -1050,10 +1069,36 @@ class CameraPanel(QWidget):
             # that frame. Failures must not crash the CV pipeline.
             self._dispatch_frame_tick(self._tracking_logger.frame_count, timestamp)
 
+    def _submit_to_cv(self, frame_data: FrameData) -> None:
+        """Hand a frame to the CV worker, keeping at most one queued behind it.
+
+        Each emit is a queued signal carrying a full frame copy, so a camera
+        faster than inference used to grow the queue without bound (~1 GB/min
+        at 640x480) until OOM. One frame is in flight; the newest arrival waits
+        in a single slot and replaces any older one, which is counted dropped.
+        """
+        if self._cv_in_flight:
+            if self._cv_pending is not None:
+                self._cv_frames_dropped += 1
+                if self._cv_frames_dropped == 1 or self._cv_frames_dropped % 100 == 0:
+                    logger.warning(
+                        "CV processing is slower than the camera; %d frames dropped",
+                        self._cv_frames_dropped,
+                    )
+            self._cv_pending = frame_data
+            return
+        self._cv_in_flight = True
+        # QueuedConnection: process_frame runs on the worker thread.
+        self._process_frame_requested.emit(frame_data)
+
     def _process_cv_results_on_main_thread(
         self, frame_data: FrameData, detections: list, tracked: list, motion: Any
     ) -> None:
         """Handle results from CV worker on main thread."""
+        self._cv_in_flight = False
+        pending, self._cv_pending = self._cv_pending, None
+        if pending is not None:
+            self._submit_to_cv(pending)
         if frame_data.camera_id:
             self._process_multi_frame_on_main_thread(frame_data, detections, tracked, motion)
         else:
@@ -1309,6 +1354,8 @@ class CameraPanel(QWidget):
 
                 motion_detected = motion.motion_detected if motion else False
                 motion_area = motion.motion_area if motion else 0.0
+                if frame_data.cv_cached:  # see the single-camera path
+                    tracked, motion_detected, motion_area = [], False, 0.0
 
                 self._tracking_logger.log_frame(
                     timestamp, tracked or [], motion_detected, motion_area
@@ -1506,6 +1553,7 @@ class CameraPanel(QWidget):
         self._run_worker.progress.connect(self._on_run_progress)
         self._run_worker.preview.connect(self._on_run_preview)
         self._run_worker.finished.connect(self._on_run_finished)
+        self._run_worker.cancelled.connect(self._on_run_cancelled)
         self._run_worker.failed.connect(self._on_run_failed)
 
         self._progress_container.setVisible(True)
@@ -1573,6 +1621,13 @@ class CameraPanel(QWidget):
         if box.clickedButton() is open_btn:
             self.analysis_requested.emit(output_dir)
 
+    def _on_run_cancelled(self, output_dir: str) -> None:
+        """A cancelled run left truncated files: say so, and offer no analysis."""
+        self._teardown_run_thread()
+        self._progress_container.setVisible(False)
+        self._run_btn.setEnabled(True)
+        self._show_status(f"Tracking cancelled; partial results in {output_dir}")
+
     def _on_run_failed(self, message: str) -> None:
         from PyQt6.QtWidgets import QMessageBox
 
@@ -1595,8 +1650,7 @@ class CameraPanel(QWidget):
         if getattr(self, "_run_thread", None) is not None:
             if self._run_worker is not None:
                 self._run_worker.cancel()  # stop the loop between frames
-            self._run_thread.quit()
-            self._run_thread.wait(5000)
+            retire_thread(self._run_thread, self._run_worker)
             self._run_thread = None
             self._run_worker = None
             # Clear the processing-rate readout now the run is over.
@@ -1955,9 +2009,9 @@ class CameraPanel(QWidget):
             # queued deletion as the worker's loop unwinds.
             if worker is not None:
                 thread.finished.connect(worker.deleteLater)
-            thread.quit()
-            thread.wait(5000)
-            thread.deleteLater()
+            # A model load can outlast the wait; deleting the thread then
+            # aborted the process. retire_thread parks it until it finishes.
+            retire_thread(thread, worker)
             self._behavior_thread = None
         elif worker is not None:
             # No thread ever started for this worker — delete it directly.
