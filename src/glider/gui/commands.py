@@ -8,6 +8,7 @@ node graph editor. Commands accept a controller object that provides:
   - setup_node_ports(node_item, node_type): set up ports on a node
 """
 
+import copy
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -35,16 +36,18 @@ class Command:
 
 
 class CreateNodeCommand(Command):
-    """Command for creating a node."""
+    """Command for creating a node.
 
-    def __init__(
-        self, controller: "NodeEditorController", node_id: str, node_type: str, x: float, y: float
-    ):
+    Holds a snapshot of the node's config (real type, state such as
+    ``zone_id``/``function_start_id``, ``visible_in_runner``) so redo rebuilds
+    the node exactly as it was created, not as a bare default of its type.
+    """
+
+    def __init__(self, controller: "NodeEditorController", config, display_name: str):
         self._controller = controller
-        self._node_id = node_id
-        self._node_type = node_type
-        self._x = x
-        self._y = y
+        self._config = copy.deepcopy(config)
+        self._display_name = display_name
+        self._node_id = config.id
 
     def execute(self) -> None:
         """Create the node."""
@@ -60,59 +63,35 @@ class CreateNodeCommand(Command):
 
     def redo(self) -> None:
         """Re-create the node with the original ID."""
-        from glider.core.experiment_session import NodeConfig
-
-        node_item = self._controller._graph_view.add_node(
-            self._node_id, self._node_type, self._x, self._y
-        )
-        self._controller.setup_node_ports(node_item, self._node_type)
-
-        session = self._controller._session
-        if session:
-            node_config = NodeConfig(
-                id=self._node_id,
-                node_type=self._node_type,
-                position=(self._x, self._y),
-            )
-            session.add_node(node_config)
+        self._controller.restore_node(self._config, self._display_name)
 
     def description(self) -> str:
-        return f"Create {self._node_type}"
+        return f"Create {self._display_name}"
 
 
 class DeleteNodeCommand(Command):
-    """Command for deleting a node."""
+    """Command for deleting a node.
 
-    def __init__(self, controller: "NodeEditorController", node_id: str, node_data: dict):
+    ``connections`` are the edges ``session.remove_node`` cascaded away with
+    the node; undo puts them back too.
+    """
+
+    def __init__(
+        self, controller: "NodeEditorController", config, display_name: str, connections=()
+    ):
         self._controller = controller
-        self._node_id = node_id
-        self._node_data = node_data  # Saved node state for restoration
+        self._config = copy.deepcopy(config)
+        self._display_name = display_name
+        self._connections = copy.deepcopy(list(connections))
+        self._node_id = config.id
 
     def execute(self) -> None:
         """Delete is already done when command is recorded."""
         pass
 
     def undo(self) -> None:
-        """Restore the node."""
-        data = self._node_data
-        node_item = self._controller._graph_view.add_node(
-            data["id"], data["node_type"], data["x"], data["y"]
-        )
-        self._controller.setup_node_ports(node_item, data["node_type"])
-
-        session = self._controller._session
-        if session:
-            from glider.core.experiment_session import NodeConfig
-
-            node_config = NodeConfig(
-                id=data["id"],
-                node_type=data["node_type"],
-                position=(data["x"], data["y"]),
-                state=data.get("state", {}),
-                device_id=data.get("device_id"),
-                visible_in_runner=data.get("visible_in_runner", False),
-            )
-            session.add_node(node_config)
+        """Restore the node and its connections."""
+        self._controller.restore_node(self._config, self._display_name, self._connections)
 
     def redo(self) -> None:
         """Re-delete the node."""
@@ -122,7 +101,7 @@ class DeleteNodeCommand(Command):
             session.remove_node(self._node_id)
 
     def description(self) -> str:
-        return f"Delete {self._node_data.get('node_type', 'node')}"
+        return f"Delete {self._display_name}"
 
 
 class MoveNodeCommand(Command):

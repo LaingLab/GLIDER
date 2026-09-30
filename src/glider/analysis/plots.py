@@ -337,11 +337,15 @@ def plot_event_triggered(
     bin_idx = np.digitize(times, bins) - 1
     bin_idx = np.clip(bin_idx, 0, n_bins - 1)
 
+    # SEM is across TRIALS: each trial contributes its own mean per bin, so a
+    # bin's n is the number of trials, not the number of pooled frames (which
+    # understated the SEM by ~sqrt(frames per trial per bin)).
+    trials = eta["trial_id"].to_numpy() if "trial_id" in eta.columns else np.arange(len(eta))
     mean = np.full(n_bins, np.nan)
     sem = np.full(n_bins, np.nan)
     for i in range(n_bins):
-        bucket = values.iloc[bin_idx == i]
-        bucket = bucket.dropna()
+        in_bin = bin_idx == i
+        bucket = values[in_bin].groupby(trials[in_bin]).mean().dropna()
         if len(bucket) == 0:
             continue
         mean[i] = bucket.mean()

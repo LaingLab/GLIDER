@@ -293,7 +293,9 @@ class TrackingDataLogger:
             return ""
 
         zone_names = self._zone_config.get_zone_names_for_point(
-            center_x / self._frame_width, center_y / self._frame_height
+            center_x / self._frame_width,
+            center_y / self._frame_height,
+            self._frame_width / self._frame_height,
         )
         return ",".join(zone_names)
 
@@ -321,9 +323,13 @@ class TrackingDataLogger:
             return
         try:
             self._file.flush()
-        except Exception:
-            logger.exception("TrackingDataLogger: flush failed")
+        except Exception as e:
+            # writerow only fills a buffer; disk-full surfaces here, so this
+            # must count toward the error cap rather than be swallowed.
+            self._on_write_error(e, context="flush")
             return
+        # Bytes reached the OS: the consecutive-failure streak is over.
+        self._write_error_count = 0
         self._frames_since_fsync += 1
         if force or self._frames_since_fsync >= _FSYNC_INTERVAL_FRAMES:
             try:
@@ -527,6 +533,14 @@ class TrackingDataLogger:
             logger.warning("Tracking logger already recording")
             return self._file_path
 
+        # A previous session that died on write errors left its handles open
+        # and the failure latched; close those and start healthy.
+        if self._file is not None or self._kp_file is not None:
+            await self.stop()
+        self._failed = False
+        self._write_error_count = 0
+        self._frames_since_fsync = 0
+
         # Generate filename
         filename = self._generate_filename(experiment_name)
         self._file_path = self._output_dir / filename
@@ -681,10 +695,9 @@ class TrackingDataLogger:
         except Exception as e:
             self._on_write_error(e, context=context)
             return False
-        # Success — reset the consecutive-failure counter so transient
-        # errors don't accumulate over hours of healthy writes.
-        if self._write_error_count > 0:
-            self._write_error_count = 0
+        # The consecutive-failure counter is reset by a successful flush in
+        # _fsync_if_due, not here: writerow only fills a buffer, so resetting
+        # on it hid every flush failure from the cap.
         return True
 
     def log_frame(
@@ -834,7 +847,7 @@ class TrackingDataLogger:
         if not tracked_objects and not motion_detected:
             # Log a heartbeat every ~900 frames (30 seconds at 30fps)
             if self._frame_count == 1 or self._frame_count % 900 == 0:
-                self._writer.writerow(
+                self._safe_writerow(
                     [
                         self._frame_count,
                         iso_timestamp,
@@ -855,7 +868,8 @@ class TrackingDataLogger:
                         "",  # Empty zone_ids
                         "",  # Empty behavioral_state
                         "",  # Empty velocity
-                    ]
+                    ],
+                    context="log_frame[heartbeat]",
                 )
 
         self._fsync_if_due()
@@ -917,13 +931,14 @@ class TrackingDataLogger:
         Returns:
             Path to the saved log file
         """
-        if not self._recording:
+        if not self._recording and self._file is None and self._kp_file is None:
             return None
 
         self._recording = False
 
-        # Write footer
-        if self._writer and self._file:
+        # Write footer (skipped once the stream has failed: it would only fail
+        # again, and the handles below still need closing)
+        if self._writer and self._file and not self._failed:
             end_time = datetime.now()
             recording_duration = (
                 (end_time - self._start_time).total_seconds() if self._start_time else 0
@@ -950,7 +965,10 @@ class TrackingDataLogger:
 
         # Close file
         if self._file:
-            self._file.close()
+            try:
+                self._file.close()
+            except Exception:
+                logger.exception("TrackingDataLogger: close failed")
             self._file = None
             self._writer = None
 

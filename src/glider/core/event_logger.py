@@ -31,11 +31,13 @@ from __future__ import annotations
 import csv
 import logging
 import os
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from glider.core.fileio import unique_path
 from glider.hal.base_board import PinType
 
 if TYPE_CHECKING:
@@ -102,6 +104,9 @@ class DeviceEventLogger:
 
         # fsync bookkeeping (mirrors TrackingDataLogger's pattern).
         self._rows_since_fsync = 0
+        # Input events arrive on board callback threads; this keeps a row
+        # write from racing stop()'s footer and close().
+        self._write_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public properties
@@ -231,7 +236,8 @@ class DeviceEventLogger:
             return self._file_path  # type: ignore[return-value]
 
         filename = self._generate_filename(experiment_name)
-        self._file_path = self._output_dir / filename
+        # Same-second reruns share a timestamp; never overwrite the earlier run.
+        self._file_path = unique_path(self._output_dir / filename)
         self._start_time = datetime.now()
         self._start_timestamp = (
             self._session_epoch_override
@@ -267,18 +273,19 @@ class DeviceEventLogger:
         self._recording = False
         self._unsubscribe_all()
 
-        if self._writer and self._file:
-            end_time = datetime.now()
-            duration = (end_time - self._start_time).total_seconds() if self._start_time else 0
-            self._writer.writerow([])
-            self._writer.writerow(["# End Time", end_time.isoformat()])
-            self._writer.writerow(["# Duration (s)", f"{duration:.2f}"])
-            self._fsync(force=True)
+        with self._write_lock:
+            if self._writer and self._file:
+                end_time = datetime.now()
+                duration = (end_time - self._start_time).total_seconds() if self._start_time else 0
+                self._writer.writerow([])
+                self._writer.writerow(["# End Time", end_time.isoformat()])
+                self._writer.writerow(["# Duration (s)", f"{duration:.2f}"])
+                self._fsync(force=True)
 
-        if self._file:
-            self._file.close()
-            self._file = None
-            self._writer = None
+            if self._file:
+                self._file.close()
+                self._file = None
+                self._writer = None
 
         path = self._file_path
         logger.info(f"Stopped device event log. Saved to {path}")
@@ -478,24 +485,27 @@ class DeviceEventLogger:
         else:
             value_cell = str(value)
 
-        try:
-            self._writer.writerow(
-                [
-                    frame_cell,
-                    iso,
-                    f"{elapsed_ms:.1f}",
-                    source,
-                    board_id,
-                    device_id,
-                    device_type,
-                    pin,
-                    pin_type_cell,
-                    value_cell,
-                ]
-            )
-            self._fsync()
-        except Exception:
-            logger.exception("DeviceEventLogger: row write failed")
+        with self._write_lock:
+            if not self._recording or self._writer is None:
+                return  # stop() closed the file while this row was being built
+            try:
+                self._writer.writerow(
+                    [
+                        frame_cell,
+                        iso,
+                        f"{elapsed_ms:.1f}",
+                        source,
+                        board_id,
+                        device_id,
+                        device_type,
+                        pin,
+                        pin_type_cell,
+                        value_cell,
+                    ]
+                )
+                self._fsync()
+            except Exception:
+                logger.exception("DeviceEventLogger: row write failed")
 
     def _fsync(self, force: bool = False) -> None:
         if self._file is None:

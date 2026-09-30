@@ -45,6 +45,8 @@ This module has no Qt dependency — it's testable in isolation.
 from __future__ import annotations
 
 import csv
+import os
+import shutil
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -301,17 +303,31 @@ class AnnotationStore:
     # I/O
     # ------------------------------------------------------------------
     def save_csv(self, path: str | Path) -> Path:
-        """Write the zones to ``path``. Writes the header even when empty."""
+        """Write the zones to ``path``. Writes the header even when empty.
+
+        Atomic: the rows go to a sibling temp file that then replaces
+        ``path``, so a failed write (disk full, share dropped) leaves the
+        previous file intact instead of truncated. Any ``OSError`` is raised
+        to the caller, which must treat it as "not saved".
+        """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         # Sort by start_frame for deterministic output; behavior order within
         # a tie is preserved (Python sort is stable).
         zones = sorted(self._zones, key=lambda z: (z.start_frame, z.end_frame))
-        with path.open("w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=self.FIELDNAMES)
-            writer.writeheader()
-            for z in zones:
-                writer.writerow(z.to_row())
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            with tmp.open("w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=self.FIELDNAMES)
+                writer.writeheader()
+                for z in zones:
+                    writer.writerow(z.to_row())
+            if path.exists():
+                shutil.copymode(path, tmp)
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         return path
 
     @classmethod

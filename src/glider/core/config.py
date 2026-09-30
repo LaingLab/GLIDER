@@ -209,9 +209,10 @@ class GliderConfig:
         if path is None:
             path = self.paths.user_config_dir / "config.json"
 
+        from glider.core.fileio import atomic_write_text
+
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(self.to_dict(), f, indent=2)
+        atomic_write_text(path, json.dumps(self.to_dict(), indent=2))
 
         logger.info(f"Configuration saved to {path}")
 

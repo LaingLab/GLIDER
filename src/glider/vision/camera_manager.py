@@ -1042,6 +1042,7 @@ class CameraManager:
         self._frame_queue: Queue = Queue(maxsize=2)  # Double buffer
         self._running = False
         self._frame_callbacks: list[Callable[[np.ndarray, float], None]] = []
+        self._error_callbacks: list[Callable[[str], None]] = []
         self._lock = threading.Lock()
         self._last_frame: np.ndarray | None = None
         self._last_timestamp: float = 0.0
@@ -1594,6 +1595,7 @@ class CameraManager:
                 if self._settings.camera_index < len(camera_names):
                     device_name = camera_names[self._settings.camera_index]
                     logger.info(f"Trying FFmpeg DirectShow input: video={device_name}")
+                    self._cleanup_capture()  # the RGB-conversion attempt's handle
                     self._capture = cv2.VideoCapture(f"video={device_name}", cv2.CAP_FFMPEG)
                     if self._capture.isOpened():
                         time.sleep(0.5)
@@ -1800,11 +1802,10 @@ class CameraManager:
         Returns:
             True if connection successful
         """
-        if self._state == CameraState.STREAMING:
-            self.stop_streaming()
-
-        if self._capture is not None:
-            self._capture.release()
+        # Unconditional: a stalled stream is in ERROR, not STREAMING, and its
+        # loop must still be stopped before the handles go.
+        self.stop_streaming()
+        self._release_handles()
 
         self._state = CameraState.CONNECTING
 
@@ -1926,18 +1927,19 @@ class CameraManager:
             self._state = CameraState.ERROR
             return False
 
-    def disconnect(self) -> None:
-        """Disconnect from the current camera."""
-        if self._state == CameraState.STREAMING:
-            self.stop_streaming()
+    def _release_handles(self) -> None:
+        """Release the OpenCV capture and picamera2 and clear their flags.
 
+        connect() used to release only the capture, leaving _using_picamera2
+        set, and the capture loop prefers the picamera2 branch.
+        """
         if self._capture is not None:
             try:
                 self._capture.release()
             except Exception:
                 pass
             self._capture = None
-            self._using_ffmpeg = False
+        self._using_ffmpeg = False
 
         if self._picamera2 is not None:
             try:
@@ -1945,7 +1947,12 @@ class CameraManager:
             except Exception:
                 pass
             self._picamera2 = None
-            self._using_picamera2 = False
+        self._using_picamera2 = False
+
+    def disconnect(self) -> None:
+        """Disconnect from the current camera."""
+        self.stop_streaming()
+        self._release_handles()
 
         self._state = CameraState.DISCONNECTED
         self._last_frame = None
@@ -1960,6 +1967,16 @@ class CameraManager:
         """
         if self._state == CameraState.STREAMING:
             return True
+
+        # A loop that outlived stop_streaming's join (blocked in a slow read)
+        # still owns the device; a second loop would read it concurrently.
+        old = self._capture_thread
+        if old is not None and old.is_alive():
+            old.join(timeout=2.0)
+            if old.is_alive():
+                logger.error("Cannot start streaming: the previous capture loop is still running")
+                return False
+        self._capture_thread = None
 
         # Check if we have a valid capture source
         has_capture = self._capture is not None and self._capture.isOpened()
@@ -1981,14 +1998,19 @@ class CameraManager:
 
     def stop_streaming(self) -> None:
         """Stop frame capture."""
-        if not self._running:
+        if not self._running and self._capture_thread is None:
             return
 
         self._running = False
 
         if self._capture_thread is not None:
             self._capture_thread.join(timeout=2.0)
-            self._capture_thread = None
+            if self._capture_thread.is_alive():
+                # Keep the reference so start_streaming won't spawn a second
+                # loop beside it (it re-joins and refuses if still alive).
+                logger.warning("Capture loop did not stop within 2 s (blocked in a read)")
+            else:
+                self._capture_thread = None
 
         # Clear queue
         while not self._frame_queue.empty():
@@ -2032,6 +2054,27 @@ class CameraManager:
         with self._lock:
             if callback in self._frame_callbacks:
                 self._frame_callbacks.remove(callback)
+
+    def on_error(self, callback: Callable[[str], None]) -> None:
+        """Register ``callback(message)`` for a stream that stopped delivering.
+
+        Fired from the capture thread when no frame has arrived for
+        ``_STALL_TIMEOUT_S`` (unplugged camera) or the capture loop crashed;
+        the state is then ERROR. Recorders keep running on a stalled camera
+        and write nothing, so whoever owns the run should subscribe.
+        """
+        with self._lock:
+            self._error_callbacks.append(callback)
+
+    def _notify_error(self, message: str) -> None:
+        logger.error(f"Camera {self._settings.camera_index}: {message}")
+        with self._lock:
+            callbacks = list(self._error_callbacks)
+        for callback in callbacks:
+            try:
+                callback(message)
+            except Exception:
+                logger.exception("Camera error callback raised")
 
     def apply_settings(self, settings: CameraSettings) -> None:
         """
@@ -2265,6 +2308,7 @@ class CameraManager:
             logger.critical(f"Capture loop crashed: {e}", exc_info=True)
             self._state = CameraState.ERROR
             self._running = False
+            self._notify_error(f"capture loop crashed: {e}")
         logger.debug("Capture loop ended")
 
     #: A read slower than this is reported. Generous on purpose: the first
@@ -2272,6 +2316,10 @@ class CameraManager:
     #: set where a camera can no longer keep up with any usable frame rate
     #: rather than where it is merely sluggish.
     _SLOW_READ_MS = 250.0
+
+    #: With no frame for this long the camera is treated as gone (unplugged,
+    #: driver hung): state goes to ERROR and on_error callbacks fire.
+    _STALL_TIMEOUT_S = 5.0
 
     def _warn_if_slow(self, read_ms: float) -> None:
         """Say so when a camera delivers frames far slower than it was asked to.
@@ -2302,14 +2350,26 @@ class CameraManager:
         miniscope_frame_count = 0
         self._target_frame_interval = 1.0 / max(self._settings.fps, 1)
         last_frame_time = 0.0
+        last_ok = time.monotonic()
 
         while self._running:
             frame = None
+            capture_ts = 0.0
+
+            if (
+                self._state == CameraState.STREAMING
+                and time.monotonic() - last_ok > self._STALL_TIMEOUT_S
+            ):
+                self._state = CameraState.ERROR
+                self._notify_error(
+                    f"no frames for {self._STALL_TIMEOUT_S:.0f} s; camera disconnected?"
+                )
 
             # Handle picamera2
             if self._using_picamera2 and self._picamera2 is not None:
                 try:
                     frame = self._picamera2.capture_array()
+                    capture_ts = time.time()
                     # picamera2 returns RGB, convert to BGR for OpenCV compatibility
                     if frame is not None:
                         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -2340,6 +2400,9 @@ class CameraManager:
                         )
                     time.sleep(0.01)
                     continue
+                # grab() returns once the frame is in: the closest we get to
+                # its capture time. Taken before the throttle sleep below.
+                capture_ts = time.time()
 
                 ret, frame = self._capture.retrieve()
                 if not ret or frame is None:
@@ -2364,6 +2427,10 @@ class CameraManager:
                 continue
 
             consecutive_failures = 0  # Reset on success
+            last_ok = time.monotonic()
+            if self._state == CameraState.ERROR:
+                self._state = CameraState.STREAMING
+                logger.info(f"Camera {self._settings.camera_index}: frames are arriving again")
 
             # Normalize frame format for grayscale cameras (Y800/GREY)
             # These cameras output 2D frames (height, width) instead of 3D (height, width, 3)
@@ -2376,6 +2443,17 @@ class CameraManager:
             except Exception as e:
                 logger.warning(f"Frame conversion failed: {e}")
                 continue
+
+            # The negotiated size is what arrives, whatever was requested. Some
+            # connect paths never read it back, and a recorder opened at the
+            # requested size silently rejects every frame.
+            size = (frame.shape[1], frame.shape[0])
+            if size != tuple(self._settings.resolution):
+                logger.warning(
+                    f"Camera {self._settings.camera_index}: frames are {size[0]}x{size[1]}, "
+                    f"not the configured {self._settings.resolution}; using the real size"
+                )
+                self._settings.resolution = size
 
             # Miniscope watchdog: kick LED if image goes dark (Linux only)
             # On Windows, LED is controlled via OpenCV properties, not v4l2-ctl
@@ -2397,8 +2475,8 @@ class CameraManager:
             if sleep_time > 0.001:
                 time.sleep(sleep_time)
 
-            timestamp = time.time()
-            last_frame_time = timestamp
+            last_frame_time = time.time()
+            timestamp = capture_ts
 
             # Update FPS counter
             self._fps_counter += 1

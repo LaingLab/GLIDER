@@ -43,8 +43,18 @@ class FrameWriterThread:
         writer: cv2.VideoWriter,
         max_queue_size: int = _DEFAULT_MAX_QUEUE,
         error_callback: Callable[[BaseException], None] | None = None,
+        frame_size: tuple[int, int] | None = None,
     ):
+        """
+        Args:
+            frame_size: ``(width, height)`` the writer was opened with. A frame
+                of any other size is rejected and counted as dropped:
+                ``cv2.VideoWriter.write`` discards it silently, which left an
+                empty mp4 behind normal-looking frame counters.
+        """
         self._writer = writer
+        self._frame_size = tuple(frame_size) if frame_size else None
+        self._size_mismatch_logged = False
         self._queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=max_queue_size)
         self._max_queue_size = max_queue_size
         self._stop_event = threading.Event()
@@ -75,6 +85,19 @@ class FrameWriterThread:
             or the writer has already failed.
         """
         if self._failed:
+            with self._lock:
+                self._frames_dropped += 1
+            return False
+        if self._frame_size is not None and (frame.shape[1], frame.shape[0]) != self._frame_size:
+            if not self._size_mismatch_logged:
+                self._size_mismatch_logged = True
+                logger.error(
+                    "FrameWriterThread: frame is %dx%d but the video was opened at "
+                    "%dx%d; such frames cannot be written and are counted as dropped",
+                    frame.shape[1],
+                    frame.shape[0],
+                    *self._frame_size,
+                )
             with self._lock:
                 self._frames_dropped += 1
             return False

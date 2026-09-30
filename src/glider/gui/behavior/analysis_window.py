@@ -105,6 +105,20 @@ def _short_path(path: Path, keep: int = 3) -> str:
     return str(path) if len(parts) <= keep else "…/" + "/".join(parts[-keep:])
 
 
+def _unique(ids: list[str]) -> list[str]:
+    """Session ids made unique, later repeats suffixed `` (2)``, `` (3)``.
+
+    An id is a folder or video stem, so ``run_a/m01`` and ``run_b/m01`` share
+    one; the epoch table and its wide export key rows on it.
+    """
+    seen: Counter = Counter()
+    out = []
+    for sid in ids:
+        seen[sid] += 1
+        out.append(sid if seen[sid] == 1 else f"{sid} ({seen[sid]})")
+    return out
+
+
 def _measure_item(text: str) -> QTableWidgetItem:
     """A measured value: monospace, right-aligned.
 
@@ -782,17 +796,25 @@ class AnalysisWindow(QMainWindow):
         loaded = list(loaded)
         ids = list(ids) if ids is not None else [session_id_for(p) for p, _ in loaded]
         groups = list(groups) if groups is not None else [""] * len(loaded)
+        ids = _unique(ids)
         built = [self._timeline_for(path, view) for path, view in loaded]
-        self._cohort, self._ids, self._groups = loaded, ids, groups
-        self._invalidate_cohort_cache()
-        self._marker_stores = {}
-        self._cohort_store = (
+        # Before any assignment too: an unreadable file pops a modal dialog,
+        # whose event loop must still see the old cohort whole.
+        cohort_store = (
             None
             if self._cohort_root is None
             else self._open_store(self._cohort_root / mk.COHORT_FILE, t0=None)
         )
+        self._cohort, self._ids, self._groups = loaded, ids, groups
+        self._invalidate_cohort_cache()
+        self._marker_stores = {}
+        self._cohort_store = cohort_store
         self._timelines = [timeline for timeline, _ in built]
         self._recordings_of = [recording for _, recording in built]
+        self._fill_pool(0)
+        self._show_session(0)
+
+    def _fill_pool(self, selected: int) -> None:
         order = behavior_order(label for _, view in self._cohort for label in view.labels)
         self._pool.set_entries(
             [
@@ -811,9 +833,27 @@ class AnalysisWindow(QMainWindow):
             ]
         )
         self._pool.blockSignals(True)
-        self._pool.select(0)
+        self._pool.select(selected)
         self._pool.blockSignals(False)
-        self._show_session(0)
+
+    def _reload_shown(self, *, pose_csv: Path | None = None) -> None:
+        """Re-read the shown session in place, keeping the rest of the cohort.
+
+        Keeps the session's pose CSV unless given another: one chosen by hand
+        is recorded nowhere, so rediscovery would not find it again.
+        """
+        index = self._shown
+        path, old = self._cohort[index]
+        try:
+            view = SessionView.load(path, pose_csv=pose_csv or old.pose_path)
+        except _UNREADABLE as e:
+            QMessageBox.critical(self, "Open session", str(e))
+            return
+        self._cohort[index] = (path, view)
+        self._timelines[index], self._recordings_of[index] = self._timeline_for(path, view)
+        self._invalidate_cohort_cache()
+        self._fill_pool(index)
+        self._show_session(index)
 
     def _recording(self, folder: Path):
         """The recording in ``folder`` (cached), or None."""
@@ -946,7 +986,8 @@ class AnalysisWindow(QMainWindow):
             )
         if has_video:
             found += f"  Video: {view.video_path.name}."
-            if not view.video_is_aligned:
+            # An empty ethogram has no last frame to compare against.
+            if not view.video_is_aligned and view.n_rows:
                 found += (
                     f"  ⚠ It has {view.video_frames:,} frames against the session's "
                     f"{int(view.frames[-1]) - view.first_video_frame + 1:,}, "
@@ -994,8 +1035,10 @@ class AnalysisWindow(QMainWindow):
         return f"review/hidden/{hashlib.sha1(path.encode('utf-8')).hexdigest()[:16]}"
 
     def _remember_hidden(self, keys: list) -> None:
-        if self._cohort:
-            _settings().setValue(self._hidden_key(), list(keys))
+        # Only on a change: _adopt's own set_hidden echoes the saved list back.
+        key = self._hidden_key()
+        if self._cohort and list(keys) != (_settings().value(key, [], type=list) or []):
+            _settings().setValue(key, list(keys))
 
     # ------------------------------------------------------------------
     # playback
@@ -1320,7 +1363,7 @@ class AnalysisWindow(QMainWindow):
             "Pose CSV (*.csv);;All Files (*)",
         )
         if path:
-            self.load(self._ethogram_csv, pose_csv=Path(path))
+            self._reload_shown(pose_csv=Path(path))
 
     def _resolution_from_video(self) -> None:
         """Recover the arena size from the source video and keep it."""
@@ -1351,7 +1394,7 @@ class AnalysisWindow(QMainWindow):
                 f"({self._view.pose_path.name}). Is it writable?",
             )
             return
-        self.load(self._view.source)
+        self._reload_shown()
 
     def _refresh_heatmap_export_state(
         self, grid_tuple: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
@@ -1420,14 +1463,9 @@ class AnalysisWindow(QMainWindow):
         store = self._marker_stores.get(folder)
         if store is None:
             timeline = self._timeline_at(index)
+            # A file saved on another zero opens read-only and says so.
             store = self._open_store(folder / mk.SESSION_FILE, t0=mk.t0_of(timeline))
             self._marker_stores[folder] = store
-            if store.t0_changed:
-                self.statusBar().showMessage(
-                    f"{mk.SESSION_FILE} was saved when this session's time zero was "
-                    "different, so its markers may be shifted.",
-                    12000,
-                )
         return store
 
     def _shown_markers(self) -> list:
@@ -1446,7 +1484,7 @@ class AnalysisWindow(QMainWindow):
         if store is None:
             return "Load a session to add markers."
         if store.error is not None:
-            return f"{store.path.name} could not be read, so its markers are read-only."
+            return f"{store.path.name} cannot be written, so its markers are read-only."
         return None
 
     def _publish_markers(self) -> None:
@@ -1537,22 +1575,39 @@ class AnalysisWindow(QMainWindow):
         if store is None or not store.writable:
             self.statusBar().showMessage("That marker file cannot be written.", 8000)
             return False
-        touched = [store]
-        if previous_scope is not None and previous_scope != marker.scope:
-            old = self._store_for(previous_scope)
-            if old is not None and old.writable:
-                old.remove(marker.id)
-                touched.append(old)
+        moving = previous_scope is not None and previous_scope != marker.scope
+        old = self._store_for(previous_scope) if moving else None
         store.put(marker)
-        for each in touched:
+        # The new file first: the old one gives the marker up only once the
+        # new one holds it, so no failed write leaves it in neither.
+        try:
+            store.save()
+        except (OSError, mk.MarkerFileError) as e:
+            if moving:
+                # Its old file still holds it; holding it here too would show it twice.
+                store.markers = [m for m in store.markers if m.id != marker.id]
+            QMessageBox.critical(
+                self,
+                "Markers",
+                f"Could not write {store.path}: {e}\n\n"
+                + (
+                    f"The marker stays in {old.path.name}."
+                    if moving and old is not None
+                    else "The markers are kept in this window until it closes."
+                ),
+            )
+            self._publish_markers()
+            return not moving
+        if old is not None and old.writable:
+            old.remove(marker.id)
             try:
-                each.save()
+                old.save()
             except (OSError, mk.MarkerFileError) as e:
                 QMessageBox.critical(
                     self,
                     "Markers",
-                    f"Could not write {each.path}: {e}\n\n"
-                    "The markers are kept in this window until it closes.",
+                    f"Could not write {old.path}: {e}\n\n"
+                    f"The marker was saved to {store.path.name} but is still in this file.",
                 )
         self._publish_markers()
         return True

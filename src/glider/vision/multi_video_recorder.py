@@ -16,7 +16,14 @@ import cv2
 import numpy as np
 
 from glider.vision.frame_writer import FrameWriterThread
-from glider.vision.video_recorder import RecordingState, VideoFormat, open_video_writer
+from glider.vision.video_recorder import (
+    ACTIVE_STATES,
+    FrameClock,
+    RecordingState,
+    VideoFormat,
+    correct_video_fps,
+    open_video_writer,
+)
 
 if TYPE_CHECKING:
     from glider.vision.multi_camera_manager import MultiCameraManager
@@ -60,7 +67,7 @@ class MultiVideoRecorder:
         self._start_time: datetime | None = None
         self._video_format = VideoFormat()
         self._lock = threading.Lock()
-        self._frame_callbacks_registered: dict[str, bool] = {}
+        self._clocks: dict[str, FrameClock] = {}
         self._record_annotated = False
         self._recording_fps: dict[str, float] = {}
         #: camera_id -> filename-safe operator label. Empty until something
@@ -162,8 +169,13 @@ class MultiVideoRecorder:
         if self._state == RecordingState.RECORDING:
             logger.warning("Recording already in progress")
             return self._file_paths
+        if self._state in ACTIVE_STATES:
+            # Paused or errored: finalize it rather than overwrite live writers.
+            await self.stop()
 
         self._record_annotated = record_annotated
+        self._writer_error = None
+        self._clocks.clear()
         self._start_time = datetime.now()
         self._file_paths.clear()
         self._frame_counts.clear()
@@ -208,18 +220,24 @@ class MultiVideoRecorder:
                     self._file_paths[camera_id] = file_path
                     self._frame_counts[camera_id] = 0
                     self._frames_dropped[camera_id] = 0
+                    self._clocks[camera_id] = FrameClock()
 
                     # Wrap in FrameWriterThread
                     fwt = FrameWriterThread(
-                        writer, error_callback=self._on_writer_error, **fwt_kwargs
+                        writer,
+                        error_callback=self._on_writer_error,
+                        frame_size=settings.resolution,
+                        **fwt_kwargs,
                     )
                     fwt.start()
                     self._writer_threads[camera_id] = fwt
 
-                    # Register frame callback
-                    if not self._frame_callbacks_registered.get(camera_id, False):
-                        self._multi_cam.on_frame(camera_id, self._on_frame)
-                        self._frame_callbacks_registered[camera_id] = True
+                    # Register frame callback. Remove-then-add rather than a
+                    # "registered" flag: re-adding a camera after a preview
+                    # restart gives it a fresh, empty callback list, and a
+                    # stale flag left that run writing zero frames.
+                    self._multi_cam.remove_frame_callback(camera_id, self._on_frame)
+                    self._multi_cam.on_frame(camera_id, self._on_frame)
 
                     logger.info(f"Recording {camera_id} to {file_path} at {recording_fps:.1f} fps")
 
@@ -245,6 +263,7 @@ class MultiVideoRecorder:
                             self._annotated_writer_thread = FrameWriterThread(
                                 self._annotated_writer,
                                 error_callback=self._on_writer_error,
+                                frame_size=primary_settings.resolution,
                                 **fwt_kwargs,
                             )
                             self._annotated_writer_thread.start()
@@ -348,6 +367,9 @@ class MultiVideoRecorder:
         if fwt is not None:
             if fwt.enqueue(frame.copy()):
                 self._frame_counts[camera_id] = self._frame_counts.get(camera_id, 0) + 1
+                clock = self._clocks.get(camera_id)
+                if clock is not None:
+                    clock.tick(timestamp)
             else:
                 self._frames_dropped[camera_id] = self._frames_dropped.get(camera_id, 0) + 1
                 dropped = self._frames_dropped[camera_id]
@@ -386,10 +408,12 @@ class MultiVideoRecorder:
         """
         Stop recording and finalize all video files.
 
+        Finalizes from RECORDING, PAUSED and ERROR; a no-op when idle.
+
         Returns:
             Dictionary of camera_id -> saved file path
         """
-        if self._state not in (RecordingState.RECORDING, RecordingState.PAUSED):
+        if self._state not in ACTIVE_STATES:
             return {}
 
         self._state = RecordingState.FINALIZING
@@ -427,6 +451,29 @@ class MultiVideoRecorder:
             self._writers.clear()
 
         saved_paths = self._file_paths.copy()
+
+        # Each camera runs at its own real rate; correct each header from its
+        # frames' capture timestamps (the single-camera recorder does the same).
+        codec = self._video_format.codec
+        for camera_id, path in saved_paths.items():
+            clock = self._clocks.get(camera_id)
+            recorded_fps = self._recording_fps.get(camera_id, 0.0)
+            measured_fps = clock.fps if clock else None
+            correct_video_fps(path, recorded_fps, measured_fps, codec)
+            if (
+                self._record_annotated
+                and self._annotated_file_path
+                and camera_id == self._multi_cam.primary_camera_id
+            ):
+                raw = self._frame_counts.get(camera_id, 0)
+                if measured_fps and raw and self._annotated_frame_count:
+                    correct_video_fps(
+                        self._annotated_file_path,
+                        recorded_fps,
+                        measured_fps * self._annotated_frame_count / raw,
+                        codec,
+                    )
+
         self._state = RecordingState.IDLE
 
         duration = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0
@@ -438,6 +485,8 @@ class MultiVideoRecorder:
         """Pause recording (frames will be skipped)."""
         if self._state == RecordingState.RECORDING:
             self._state = RecordingState.PAUSED
+            for clock in self._clocks.values():
+                clock.break_()  # paused time is not frame time
             logger.info("Multi-camera recording paused")
 
     async def resume(self) -> None:

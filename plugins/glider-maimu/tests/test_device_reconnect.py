@@ -138,14 +138,15 @@ async def test_a_write_retry_does_not_write_off(fake_bleak):
         calls["n"] += 1
         if failing["first"]:
             failing["first"] = False
+            original.is_connected = False  # a real drop: retries only fire when the link is down
             raise OSError("link dropped mid-write")
         original.written.append(bytes(data))
 
     device._client.write_gatt_char = _flaky
     # original.is_connected is still True here, so _ensure_connected()'s first,
     # unconditional call short-circuits and op() runs straight into _flaky,
-    # which raises -- that is what actually drives _with_retry into its
-    # except branch, the reconnect-inside-a-write path this test polices.
+    # which drops the link and raises -- that drives _with_retry into its
+    # reconnect branch, the reconnect-inside-a-write path this test polices.
     clients_before = len(created["clients"])
 
     await device.pulse(500, 10)

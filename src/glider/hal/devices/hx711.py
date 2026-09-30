@@ -267,10 +267,19 @@ class HX711Device(BaseDevice):
         consecutive_bad = 0
         unexpected = 0
         needs_reprime = False
+        # Gain selected by the previous frame's pulse count, i.e. the gain the
+        # NEXT frame is converted at. Starts at the power-on default (A/128),
+        # so a non-default configured gain burns the first frame.
+        # ponytail: a chip that kept a non-128 gain from an earlier session
+        # while configured for 128 still passes one frame; a power cycle fixes it.
+        primed_gain = 128
         while not stop_event.is_set():
+            gain = self._gain  # read once: apply_settings may change it live
+            converted_at = primed_gain
             try:
-                raw = self._read_frame(dout, sck, stop_event)
+                raw = self._read_frame(dout, sck, stop_event, gain)
             except _GlitchError as e:
+                primed_gain = gain
                 consecutive_bad += 1
                 if consecutive_bad % CONSECUTIVE_DISCARD_WARN == 0:
                     # Modulo, not equality: a permanent fault must keep
@@ -317,8 +326,13 @@ class HX711Device(BaseDevice):
                 continue
             if raw is None:  # stop requested while waiting for data-ready
                 break
+            primed_gain = gain
             consecutive_bad = 0
             unexpected = 0
+            if converted_at != self._gain:
+                # Converted at a gain other than the one (and the scale) now
+                # configured -- a live gain edit -- so it is not a reading.
+                continue
             if needs_reprime:
                 # This frame re-primed the configured gain (the chip applies a
                 # pulse-count selection to the NEXT conversion), but was
@@ -457,7 +471,9 @@ class HX711Device(BaseDevice):
 
     # --- protocol (runs in the sampler thread) ---
 
-    def _read_frame(self, dout: Any, sck: Any, stop_event: threading.Event) -> int | None:
+    def _read_frame(
+        self, dout: Any, sck: Any, stop_event: threading.Event, gain: int | None = None
+    ) -> int | None:
         """Block until data-ready, clock out one sample, validate it.
 
         Returns the sign-extended raw value, or ``None`` if the stop event was
@@ -484,7 +500,7 @@ class HX711Device(BaseDevice):
             sck.off()
             max_high = max(max_high, time.perf_counter() - t0)
             raw = (raw << 1) | bit
-        for _ in range(GAIN_PULSES[self._gain]):
+        for _ in range(GAIN_PULSES[self._gain if gain is None else gain]):
             t0 = time.perf_counter()
             sck.on()
             sck.off()

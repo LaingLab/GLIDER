@@ -573,3 +573,21 @@ class TestZoneRoundtrip:
         assert restored.config_width == original.config_width
         assert restored.zones[0].id == original.zones[0].id
         assert restored.zones[1].shape == original.zones[1].shape
+
+
+def test_circle_is_scored_in_pixel_space_like_it_is_drawn():
+    # 640x480, centre (320, 240), radius point 100 px to the right. Drawn as a
+    # 100 px circle, so a point 90 px straight down is inside; testing in
+    # normalized space turned it into an ellipse ~75 px tall and missed it.
+    zone = Zone(
+        id="c",
+        name="c",
+        shape=ZoneShape.CIRCLE,
+        vertices=[(0.5, 0.5), (420 / 640, 0.5)],
+    )
+    assert zone.contains_point_pixels(320, 240 + 90, 640, 480) is True
+    assert zone.contains_point_pixels(320, 240 + 110, 640, 480) is False
+    config = ZoneConfiguration()
+    config.add_zone(zone)
+    assert config.point_in_zones_pixels(320, 330, 640, 480) == ["c"]
+    assert config.get_zone_names_for_point(0.5, 330 / 480, 640 / 480) == ["c"]

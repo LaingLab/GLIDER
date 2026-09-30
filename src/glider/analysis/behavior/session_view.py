@@ -517,7 +517,7 @@ class SessionView:
         return abs(self.video_frames - expected) <= _ALIGNMENT_SLACK
 
     def _load_poses(self, ethogram_csv: Path, pose_csv: Path | str | None) -> None:
-        from glider.vision.pose.dlc import from_dlc_csv, resolution_for_csv
+        from glider.vision.pose.dlc import fps_for_csv, from_dlc_csv, resolution_for_csv
 
         if pose_csv is None:
             pose_csv = find_session_poses(ethogram_csv)
@@ -530,7 +530,12 @@ class SessionView:
             return
         self.xy = pose.xy
         self.keypoint_names = list(pose.keypoint_names)
-        self.fps = float(pose.fps) or self.fps
+        # Only a RECORDED pose rate may override the one already known (e.g.
+        # from run.json); from_dlc_csv fills a missing sidecar with 30 fps,
+        # which is an assumption, not a measurement.
+        recorded_fps = fps_for_csv(Path(pose_csv))
+        if recorded_fps:
+            self.fps = float(recorded_fps)
         self.pose_path = Path(pose_csv)
         self.resolution = resolution_for_csv(self.pose_path)
         if self.keypoint_names:
@@ -579,7 +584,12 @@ class SessionView:
 
     @property
     def duration_s(self) -> float:
-        return self.n_rows / self.fps if self.fps else 0.0
+        # Rows are emitted every `stride` frames, so the span comes from the
+        # frame indices, not the row count (which is 1/stride of the frames).
+        if not self.fps or self.n_rows == 0:
+            return 0.0
+        span = int(self.frames[-1]) - int(self.frames[0]) + self._row_stride()
+        return span / self.fps
 
     def centroid(self) -> np.ndarray | None:
         """Per-frame body centre, or None without poses.
@@ -598,12 +608,22 @@ class SessionView:
             warnings.filterwarnings("ignore", r"Mean of empty slice", RuntimeWarning)
             return np.nanmean(self.xy, axis=1)
 
+    def _row_at(self, frame: int) -> int | None:
+        """Index of the row covering *frame*, or None outside the ethogram.
+
+        The last row covers one stride past its own frame and no further, so
+        a windowed ethogram does not hold its final label over the rest of a
+        longer timeline.
+        """
+        if self.n_rows == 0 or frame >= int(self.frames[-1]) + self._row_stride():
+            return None
+        idx = int(np.searchsorted(self.frames, frame, side="right")) - 1
+        return idx if 0 <= idx < self.n_rows else None
+
     def label_at(self, frame: int) -> str:
         """The behaviour covering *frame*, or '' beyond the ethogram."""
-        if self.n_rows == 0:
-            return ""
-        idx = int(np.searchsorted(self.frames, frame, side="right")) - 1
-        return self.labels[idx] if 0 <= idx < self.n_rows else ""
+        idx = self._row_at(frame)
+        return "" if idx is None else self.labels[idx]
 
     def bout_starts(self, behavior: str | None = None) -> np.ndarray:
         """Frames at which a bout begins.
@@ -637,10 +657,8 @@ class SessionView:
         None past either end of the ethogram. What it is for: saying how far
         through a bout the playhead is, which a frame number alone cannot.
         """
-        if self.n_rows == 0:
-            return None
-        idx = int(np.searchsorted(self.frames, frame, side="right")) - 1
-        if not 0 <= idx < self.n_rows:
+        idx = self._row_at(frame)
+        if idx is None:
             return None
         label = self.labels[idx]
         start = idx
@@ -681,7 +699,7 @@ class SessionView:
         labels = [self.labels[i] for i in rows]
         duration = (end_frame - start_frame + 1) / self.fps if self.fps else 0.0
 
-        bouts = self._bout_table(labels, compute_intervals, compute_bouts)
+        bouts = self._bout_table(labels, compute_intervals, compute_bouts, frames=self.frames[rows])
         distance, mean_speed, peak_speed = self._locomotion(start_frame, end_frame)
         freeze, dart, unit = self._window_thresholds(start_frame, end_frame, freeze_pct, dart_pct)
         return SegmentStats(
@@ -698,15 +716,18 @@ class SessionView:
             threshold_unit=unit,
         )
 
-    def _bout_table(self, labels, compute_intervals, compute_bouts) -> pd.DataFrame:
-        """Per-state bout tally for a label run, reusing the ethogram primitives."""
+    def _bout_table(self, labels, compute_intervals, compute_bouts, *, frames) -> pd.DataFrame:
+        """Per-state bout tally for a label run, reusing the ethogram primitives.
+
+        *frames* is each label's frame index, so durations are in real time.
+        """
         if not labels:
             return pd.DataFrame(
                 columns=["state", "n_bouts", "total_s", "fraction", "mean_s", "median_s"]
             )
         # The rows are emitted at the classifier's cadence, not per frame, so
         # timestamps come from the frame indices rather than the row count.
-        elapsed_ms = [i / self.fps * 1000.0 for i in range(len(labels))]
+        elapsed_ms = np.asarray(frames, dtype=float) / self.fps * 1000.0
         tracking = pd.DataFrame(
             {"object_id": 0, "behavioral_state": labels, "flow_elapsed_ms": elapsed_ms}
         )

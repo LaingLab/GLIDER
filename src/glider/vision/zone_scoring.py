@@ -70,6 +70,9 @@ class KeypointMissingError(KeyError):
 class ZoneEvent:
     """A transition across one zone boundary."""
 
+    #: 0-based index into the pose track. Written to ``zone_events.csv`` as
+    #: ``frame + 1``, the 1-based ``frame`` the tracking CSV and
+    #: VideoTrackingRunner use, so zone events join on that column.
     frame: int
     elapsed_ms: float
     zone_id: str
@@ -166,7 +169,7 @@ def score_pose(
         x = float(xy[frame, 0]) / width
         y = float(xy[frame, 1]) / height
         for zone in zones:
-            contains = zone.contains_point(x, y)
+            contains = zone.contains_point(x, y, width / height)
             if contains:
                 frames_in_zone[zone.id] += 1
             if contains != inside_now[zone.id]:
@@ -276,7 +279,7 @@ def write_zone_csvs_multi(scorings: dict[str, ZoneScoring], output_dir: Path | s
             for event in scorings[name].events:
                 writer.writerow(
                     [
-                        event.frame,
+                        event.frame + 1,
                         f"{event.elapsed_ms:.1f}",
                         event.zone_id,
                         event.zone_name,

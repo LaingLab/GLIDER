@@ -306,6 +306,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Behavior-analysis numbers that were wrong, from a deep code review.**
+  These change reported results; re-run anything that fed a figure or table.
+  - **Bout durations, time-in-state and session length are no longer a third
+    of the truth.** Ethogram rows arrive every `predict_every` frames
+    (default 3), but the Session Review inspector, epoch table, CSV exports
+    and the pool's session length counted rows as frames: a 10 s freeze read
+    3.3 s. Zone-occupancy fractions were about 3× too high for the same
+    reason. All now use the real frame span.
+  - **Mirror augmentation no longer leaks between train and test.** A zone's
+    mirrored copy got a different group id than the original, so a
+    within-session test split could hold the mirror of a training zone.
+    Mirrored poses are now a true reflection about one fixed pivot per
+    session, so their speed features match real data.
+  - **Cross-validation scores the rows it says it scores.** Background kept
+    after thinning is now scored (it was almost never scored, so the
+    false-alarm rate rested on almost nothing); the clean-window rule counts
+    over every frame as model evaluation does (CV dropped extra rows after
+    each session start and gap); macro F1 leaves out classes under the same
+    100-frame support floor evaluation uses, and a fold no longer scores 0 for
+    a class it never held; the pooled `macro_f1` is recorded beside the fold
+    mean. Bout metrics, in CV and evaluation, now count bouts shorter than the
+    feature window instead of silently dropping them.
+  - **A holdout session is scored under the same clean-window rule** as
+    cross-validation and evaluation, so its test accuracy is comparable.
+  - **Training refuses an annotations file that holds several animals** when
+    no animal is named, as evaluation and cross-validation already did; the
+    CNN sequence path refuses it too, scores the same clean windows, and uses
+    the same macro F1 definition.
+  - **Speed after a tracking dropout is no longer halved.** The first frame
+    after a gap has no predecessor; it used to report 0 and average that into
+    the next frames, biasing the freezing threshold down and counting as a
+    still frame. It is now reported as unknown.
+  - **A streamed run (annotated video on) reports whole freeze and dart
+    bouts**, the same as a batch run, when the poses are on disk; without them
+    it warns that bouts lack their first second.
+  - **A frame-rate mismatch between a model and its poses now warns**, and a
+    pose file with no recorded rate no longer overrides the rate a run
+    recorded with an assumed 30 fps.
+  - **Circle zones are circles on widescreen video**, as drawn, not ellipses.
+  - **Cached motion features can no longer be read from a different session**
+    with the same pose file name.
+  - **Event-triggered average SEM is across trials**, not pooled frames, which
+    understated it.
+  - **The behaviour under the playhead is blank past the end of a windowed
+    ethogram**, instead of holding the last label.
+  - **A `#` inside a CSV field no longer truncates it** when reading a
+    session, and **annotation files are saved atomically**, so a failed save
+    leaves the previous file intact.
 - **A session whose poses are gone no longer reads every frame at a
   hardcoded 30 fps.** `SessionView.load` fell back to 30 whenever the pose
   CSV could not be found — an offline video, a network share, a copy without

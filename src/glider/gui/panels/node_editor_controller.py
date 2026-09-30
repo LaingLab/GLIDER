@@ -5,6 +5,7 @@ Manages node creation/deletion/selection/movement, connection creation/deletion,
 properties panel updates, and undo/redo command integration.
 """
 
+import copy
 import logging
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -27,13 +28,10 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.gui.commands import (
-    Command,
     CreateConnectionCommand,
     CreateNodeCommand,
     DeleteConnectionCommand,
     DeleteNodeCommand,
-    MoveNodeCommand,
-    PropertyChangeCommand,
     UndoStack,
 )
 
@@ -215,57 +213,37 @@ class NodeEditorController(QObject):
 
         return _names(definition.inputs), _names(definition.outputs)
 
-    def redo_command(self, command: Command) -> None:
-        """Re-apply a command for redo."""
-        if isinstance(command, CreateNodeCommand):
-            self._on_node_created(command._node_type, command._x, command._y)
-            if self._undo_stack._undo_stack:
-                self._undo_stack._undo_stack.pop()
-        elif isinstance(command, DeleteNodeCommand):
-            node_id = command._node_id
-            self._graph_view.remove_node(node_id)
-            session = self._session
-            if session:
-                session.remove_node(node_id)
-        elif isinstance(command, MoveNodeCommand):
-            node_item = self._graph_view.nodes.get(command._node_id)
-            if node_item:
-                node_item.setPos(command._new_x, command._new_y)
-            session = self._session
-            if session:
-                session.update_node_position(command._node_id, command._new_x, command._new_y)
-        elif isinstance(command, CreateConnectionCommand):
-            self._graph_view.add_connection(
-                command._conn_id,
-                command._from_node,
-                command._from_port,
-                command._to_node,
-                command._to_port,
-            )
-            session = self._session
-            if session:
-                from glider.core.experiment_session import ConnectionConfig
+    def restore_node(self, config, display_name: str, connections=()) -> None:
+        """Put a node (and edges) back the way a fresh create builds it.
 
-                conn_config = ConnectionConfig(
-                    id=command._conn_id,
-                    from_node=command._from_node,
-                    from_output=command._from_port,
-                    to_node=command._to_node,
-                    to_input=command._to_port,
-                    connection_type=command._conn_type,
+        Used by undo/redo: the graph item needs its real type, category and
+        port signals, and the session a copy of the full config.
+        """
+        x, y = config.position
+        node_item = self._graph_view.add_node(config.id, display_name, x, y)
+        category = node_category_for_type(config.node_type)
+        node_item._category = category
+        node_item._header_color = node_item.CATEGORY_COLORS.get(
+            category, node_item.CATEGORY_COLORS["default"]
+        )
+        node_item._actual_node_type = config.node_type
+        node_item._definition_id = None
+        self.setup_node_ports(node_item, config.node_type)
+        self._graph_view._connect_port_signals(node_item)
+
+        session = self._session
+        if session:
+            session.add_node(copy.deepcopy(config))
+        for conn in connections:
+            try:
+                self._graph_view.add_connection(
+                    conn.id, conn.from_node, conn.from_output, conn.to_node, conn.to_input
                 )
-                session.add_connection(conn_config)
-        elif isinstance(command, DeleteConnectionCommand):
-            self._graph_view.remove_connection(command._conn_id)
-            session = self._session
+            except ValueError:
+                continue  # the other end is gone too; its own undo restores it
             if session:
-                session.remove_connection(command._conn_id)
-        elif isinstance(command, PropertyChangeCommand):
-            session = self._session
-            if session:
-                session.update_node_state(
-                    command._node_id, {command._prop_name: command._new_value}
-                )
+                session.add_connection(copy.deepcopy(conn))
+        self.flow_functions_changed.emit()
 
     # --- Node graph event handlers ---
 
@@ -324,18 +302,18 @@ class NodeEditorController(QObject):
 
         self._graph_view._connect_port_signals(node_item)
 
+        node_config = NodeConfig(
+            id=node_id,
+            node_type=actual_node_type,
+            position=(x, y),
+            state=initial_state,
+            device_id=None,
+            visible_in_runner=category == "interface",
+        )
         if session:
-            node_config = NodeConfig(
-                id=node_id,
-                node_type=actual_node_type,
-                position=(x, y),
-                state=initial_state,
-                device_id=None,
-                visible_in_runner=category == "interface",
-            )
             session.add_node(node_config)
 
-        command = CreateNodeCommand(self, node_id, actual_node_type, x, y)
+        command = CreateNodeCommand(self, node_config, display_name)
         self._undo_stack.push(command)
         self.undo_redo_changed.emit()
 
@@ -343,29 +321,23 @@ class NodeEditorController(QObject):
 
     def _on_node_deleted(self, node_id: str) -> None:
         """Handle node deletion from graph view."""
-        node_data = {}
-        node_item = self._graph_view.nodes.get(node_id)
-        if node_item:
-            node_data = {
-                "id": node_id,
-                "node_type": node_item.node_type,
-                "x": node_item.pos().x(),
-                "y": node_item.pos().y(),
-            }
-
         session = self._session
+        node_config = session.get_node(node_id) if session else None
+        connections = []
         if session:
-            node_config = session.get_node(node_id)
-            if node_config:
-                node_data["state"] = node_config.state
-                node_data["device_id"] = node_config.device_id
-                node_data["visible_in_runner"] = node_config.visible_in_runner
-
+            # remove_node cascades these away; the undo command restores them.
+            connections = [
+                c for c in session.flow.connections if node_id in (c.from_node, c.to_node)
+            ]
             session.remove_node(node_id)
 
-        command = DeleteNodeCommand(self, node_id, node_data)
-        self._undo_stack.push(command)
-        self.undo_redo_changed.emit()
+        node_item = self._graph_view.nodes.get(node_id)
+        if node_config is not None and node_item is not None:
+            node_config = copy.deepcopy(node_config)
+            node_config.position = (node_item.pos().x(), node_item.pos().y())
+            command = DeleteNodeCommand(self, node_config, node_item.node_type, connections)
+            self._undo_stack.push(command)
+            self.undo_redo_changed.emit()
 
         self.status_message.emit(f"Deleted node: {node_id}", 2000)
 

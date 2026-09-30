@@ -534,9 +534,11 @@ class TestRunIsBlockedDuringARegate:
         window._validate()
         assert window._run_button.isEnabled()  # guard: nothing else is blocking
         # What _start_regate leaves behind. A stand-in rather than a real
-        # QThread, but it answers closeEvent's quit/wait so the fixture can
-        # still tear the window down.
-        window._regate_thread = SimpleNamespace(quit=lambda: None, wait=lambda ms: None)
+        # QThread, but it answers closeEvent's quit/wait/deleteLater (as a
+        # thread that stopped in time) so the fixture can still tear down.
+        window._regate_thread = SimpleNamespace(
+            quit=lambda: None, wait=lambda ms: True, deleteLater=lambda: None
+        )
         window._run_button.setEnabled(False)
         return video
 

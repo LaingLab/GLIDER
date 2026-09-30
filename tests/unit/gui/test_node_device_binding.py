@@ -93,3 +93,56 @@ def test_switching_devices_rebinds(qtbot):
 
     assert config.device_id == "led2"
     assert node.device.name == "Other LED"
+
+
+class _PWMDevice:
+    id = "pwm1"
+    name = "Motor"
+    device_type = "PWMOutput"
+
+    def value_spec(self, action):
+        return None
+
+
+def test_reassigning_after_device_removed_keeps_the_node(qtbot, tmp_path):
+    """H1: deleting a node's device must leave the node, not drop it.
+
+    Removing the device used to delete the NodeConfig from the session while the
+    graph kept drawing the node, so reassigning a PWM device was a silent no-op
+    (no PWM row, nothing persisted) and the next save wrote the file without it.
+    """
+    from PyQt6.QtWidgets import QSpinBox
+
+    from glider.core.experiment_session import DeviceConfig, ExperimentSession, NodeConfig
+
+    session = ExperimentSession()
+    session.add_device(
+        DeviceConfig(id="led1", device_type="DigitalOutput", name="LED", board_id="b1", pins={})
+    )
+    session.add_node(NodeConfig(id="out1", node_type="Output", device_id="led1"))
+
+    session.remove_device("led1")
+    assert session.get_node("out1").device_id is None
+
+    pwm = _PWMDevice()
+    ctrl = NodeEditorController.__new__(NodeEditorController)  # skip heavy __init__
+    ctrl._session_fn = lambda: session
+    ctrl._hardware_manager = SimpleNamespace(
+        devices={"pwm1": pwm}, get_device=lambda i: pwm if i == "pwm1" else None
+    )
+    ctrl._core = SimpleNamespace(flow_engine=None)
+    ctrl._graph_view = SimpleNamespace(
+        nodes={"out1": SimpleNamespace(node_type="Output", _actual_node_type="Output")}
+    )
+    ctrl._zone_config = None
+    captured: dict = {}
+    ctrl._properties_dock = SimpleNamespace(setWidget=lambda w: captured.__setitem__("w", w))
+
+    ctrl._on_node_device_changed("out1", "pwm1")
+
+    assert session.get_node("out1").device_id == "pwm1"
+    assert captured["w"].findChildren(QSpinBox), "PWM value row not shown"
+
+    path = session.save(str(tmp_path / "exp.glider"))
+    reloaded = ExperimentSession.load(path)
+    assert reloaded.get_node("out1").device_id == "pwm1"

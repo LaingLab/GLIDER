@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.gui.pose_batch.calibration_table import CalibrationTable
+from glider.gui.qthreads import retire_thread
 from glider.gui.styles import colors
 from glider.gui.widgets.tool_ui import (
     GUTTER,
@@ -1117,9 +1118,13 @@ class PoseBatchWindow(QMainWindow):
 
     def _stop_meta_thread(self) -> None:
         if self._meta_thread is not None:
-            self._meta_thread.quit()
-            self._meta_thread.wait(5000)
-            self._meta_thread.deleteLater()
+            # A model load cannot be interrupted: do not block the GUI on it,
+            # and do not let a superseded model's names land later.
+            try:
+                self._meta_worker.done.disconnect(self._apply_meta)
+            except TypeError:
+                pass  # already disconnected
+            retire_thread(self._meta_thread, self._meta_worker, timeout_ms=0)
             self._meta_thread = None
             self._meta_worker = None
 
@@ -1434,9 +1439,7 @@ class PoseBatchWindow(QMainWindow):
 
     def _teardown_thread(self) -> None:
         if self._thread is not None:
-            self._thread.quit()
-            self._thread.wait(5000)
-            self._thread.deleteLater()
+            retire_thread(self._thread, self._worker)
             self._thread = None
         self._worker = None
         self._video_bar.setRange(0, 1)
@@ -1504,9 +1507,7 @@ class PoseBatchWindow(QMainWindow):
 
     def _teardown_regate(self) -> None:
         if self._regate_thread is not None:
-            self._regate_thread.quit()
-            self._regate_thread.wait(5000)
-            self._regate_thread.deleteLater()
+            retire_thread(self._regate_thread, self._regate_worker)
             self._regate_thread = None
         self._regate_worker = None
         self._validate()
@@ -1562,31 +1563,27 @@ class PoseBatchWindow(QMainWindow):
 
     def _teardown_export(self) -> None:
         if self._export_thread is not None:
-            self._export_thread.quit()
-            self._export_thread.wait(5000)
-            self._export_thread.deleteLater()
+            retire_thread(self._export_thread, self._export_worker)
             self._export_thread = None
         self._export_worker = None
         self._validate()
 
     def closeEvent(self, event):
         """Never let a running batch outlive its window."""
+        # Cancel lands only between frames, and the re-gate/export have no
+        # cancel at all, so a thread still running is parked until it ends
+        # (retire_thread) rather than joined or destroyed.
         if self._thread is not None and self._worker is not None:
             self._worker.cancel()
-            self._thread.quit()
-            self._thread.wait(5000)
+            retire_thread(self._thread, self._worker)
             self._thread = None
             self._worker = None
-        # No cancel to ask for: the re-gate has none, so the wait is the whole
-        # story. It finishes a CSV in the time a window takes to close.
         if self._regate_thread is not None:
-            self._regate_thread.quit()
-            self._regate_thread.wait(5000)
+            retire_thread(self._regate_thread, self._regate_worker, timeout_ms=0)
             self._regate_thread = None
             self._regate_worker = None
         if self._export_thread is not None:
-            self._export_thread.quit()
-            self._export_thread.wait(5000)
+            retire_thread(self._export_thread, self._export_worker, timeout_ms=0)
             self._export_thread = None
             self._export_worker = None
         self._stop_meta_thread()

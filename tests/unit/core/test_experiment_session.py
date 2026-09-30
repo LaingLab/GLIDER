@@ -407,9 +407,9 @@ class TestSessionStateEnum:
 
 
 class TestRemoveBoardFlowCleanup:
-    """remove_board must mirror remove_device's flow-node cleanup."""
+    """remove_board must mirror remove_device: bound nodes lose their device."""
 
-    def test_remove_board_removes_nodes_bound_to_its_devices(self):
+    def test_remove_board_unbinds_nodes_bound_to_its_devices(self):
         session = ExperimentSession()
         session.add_board(BoardConfig(id="b1", driver_type="mock"))
         session.add_board(BoardConfig(id="b2", driver_type="mock"))
@@ -441,8 +441,8 @@ class TestRemoveBoardFlowCleanup:
         assert session.get_board("b1") is None
         assert all(d.board_id != "b1" for d in session.hardware.devices)
 
-        # Nodes bound to the removed board's devices are gone; others remain
-        node_ids = {n.id for n in session.flow.nodes}
-        assert "n1" not in node_ids, "Node bound to removed board's device left dangling"
-        assert "n2" in node_ids
-        assert "n3" in node_ids
+        # Nodes bound to the removed board's devices stay, with no device (H1:
+        # dropping them left graph nodes with no config, lost on save).
+        assert session.get_node("n1").device_id is None
+        assert session.get_node("n2").device_id == "d2"
+        assert session.get_node("n3") is not None

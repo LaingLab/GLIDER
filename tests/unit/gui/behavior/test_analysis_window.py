@@ -2334,3 +2334,120 @@ class TestTheEpochTableInTheWindow:
         names = [e.name for e in win._epochs()]
         assert names == ["Current range (2)", "Current range"]
         assert len(set(names)) == 2
+
+
+class TestReviewFixes:
+    """Regressions from the Session Review code review (PR182-*, G*)."""
+
+    def test_an_empty_ethogram_with_a_video_opens(self, qtbot, tmp_path):
+        """G1: an aborted apply run leaves a header-only ethogram_raw.csv."""
+        folder = tmp_path / "v"
+        folder.mkdir()
+        (folder / "ethogram_raw.csv").write_text("frame,behavior\n")
+        view = SessionView(
+            labels=[], frames=np.arange(0), fps=30.0, video_path=folder / "v.mp4", video_frames=90
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win._set_cohort([(folder / "ethogram_raw.csv", view)])
+        assert win._view is view
+
+    def test_a_scope_move_that_cannot_be_written_keeps_the_marker_in_its_old_file(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        """PR182-1: the old file gives a marker up only once the new one holds it."""
+        import json
+
+        from glider.analysis import markers as mk
+
+        root = tmp_path / "cohort"
+        _session(root / "a")
+        _session(root / "b")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(root)
+        marker = mk.Marker("range", 1.0, 2.0, name="Stim")
+        assert win._save_marker(marker)
+        critical = _said(monkeypatch, "critical")
+        real = mk.save_markers
+
+        def refuse_cohort(path, *a, **k):
+            if Path(path).name == mk.COHORT_FILE:
+                raise OSError("read-only share")
+            return real(path, *a, **k)
+
+        monkeypatch.setattr("glider.analysis.markers.save_markers", refuse_cohort)
+        moved = mk.Marker("range", 1.0, 2.0, name="Stim", scope="cohort", id=marker.id)
+        win._save_marker(moved, previous_scope="session")
+        assert critical
+        saved = json.loads((win._session_folder(win._shown) / mk.SESSION_FILE).read_text())
+        assert [m["id"] for m in saved["markers"]] == [marker.id]
+        assert [m.id for m in win._shown_markers()] == [marker.id]
+
+    def test_choosing_a_pose_csv_keeps_the_cohort(self, qtbot, tmp_path, monkeypatch):
+        """PR182-4: the repair used to reload one session in place of the cohort."""
+        root = tmp_path / "cohort"
+        _session(root / "a", with_poses=False)
+        _session(root / "b")
+        chosen = _session(tmp_path / "elsewhere").parent / "vDLC_exp-7.csv"
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(root)
+        win._pool.select(win._ids.index("a"))
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getOpenFileName",
+            lambda *a, **k: (str(chosen), ""),
+        )
+        win._choose_pose_csv()
+        assert len(win._cohort) == 2 and win._cohort_root == root
+        assert win._view.pose_path == chosen and win._ids[win._shown] == "a"
+
+    def test_setting_the_arena_size_keeps_a_chosen_pose_csv(self, qtbot, tmp_path, monkeypatch):
+        """G6: the chosen CSV is recorded nowhere, so a reload must pass it on."""
+        folder = tmp_path / "outputs" / "t4"
+        folder.mkdir(parents=True)
+        etho = folder / "ethogram_raw.csv"
+        pd.DataFrame({"frame": range(300), "behavior": ["groom"] * 300}).to_csv(etho, index=False)
+        chosen = _session(tmp_path / "elsewhere", with_resolution=False).parent / "vDLC_exp-7.csv"
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(etho, pose_csv=chosen)
+        video = tmp_path / "v.mp4"
+        video.write_bytes(b"")
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getOpenFileName",
+            lambda *a, **k: (str(video), ""),
+        )
+        monkeypatch.setattr("glider.vision.video_source.video_resolution", lambda _p: (800, 600))
+        win._resolution_from_video()
+        assert win._view.pose_path == chosen
+        assert win._view.resolution == (800, 600)
+
+    def test_repeated_session_ids_are_made_unique(self, qtbot, tmp_path):
+        """G3: run_a/m01 and run_b/m01 made the wide epoch export raise."""
+        _ethogram(tmp_path / "run_a" / "m01", ["groom"] * 90)
+        _ethogram(tmp_path / "run_b" / "m01", ["groom"] * 90)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        assert sorted(win._ids) == ["m01", "m01 (2)"]
+
+    def test_switching_sessions_writes_no_settings(self, qtbot, tmp_path, monkeypatch):
+        """G11: _adopt's own set_hidden echoed back into QSettings every switch."""
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many([_session(tmp_path / "a"), _session(tmp_path / "b")])
+        written = []
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window._settings",
+            lambda: type(
+                "S",
+                (),
+                {
+                    "value": lambda self, *a, **k: [],
+                    "setValue": lambda self, *a: written.append(a),
+                },
+            )(),
+        )
+        win._pool.select(1)
+        assert written == []

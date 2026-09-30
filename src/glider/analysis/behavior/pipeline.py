@@ -79,6 +79,14 @@ SessionPair = tuple[Path, Path]
 #: is 100%, so 2% leaves a wide gap on both sides.
 FPS_REL_TOLERANCE = 0.02
 
+#: A class with fewer scored frames than this is reported but kept out of the
+#: macro average. Cross-validation showed why: a behaviour present in 4 of 34
+#: sessions scored 0.0 in the folds that held none of it and pulled the mean
+#: down by 0.06, measuring fold composition rather than the model. Shared by
+#: cross-validation and :mod:`~glider.analysis.behavior.evaluation` so both
+#: macro averages mean the same thing.
+DEFAULT_SUPPORT_FLOOR = 100
+
 
 def resolve_sessions_fps(
     sessions: list[SessionPair],
@@ -379,23 +387,50 @@ def train_model(
     split_strategy: str
     if holdout_sessions:
         # Mirror augmentation is NOT applied to held-out sessions; the
-        # test set should reflect real un-augmented data.
-        x_test_all, y_test_all, _g_test, _per_test_counts = _assemble_sessions(
-            holdout_sessions,
-            spec=spec,
-            window=window,
-            stats=stats,
-            fps=fps,
-            mirror_augment=False,
-            merge_map=merge_map,
-            exclude=exclude,
-            freq_features=freq_features,
-            traj_features=traj_features,
-            motion_features=motion_features,
-            individuals=holdout_individuals,
+        # test set should reflect real un-augmented data. Assembled one
+        # session at a time so the clean-window rule below counts runs
+        # within each session, never across a session boundary.
+        if holdout_individuals is not None and len(holdout_individuals) != len(holdout_sessions):
+            raise ValueError(
+                f"holdout_individuals has {len(holdout_individuals)} entries but "
+                f"holdout_sessions has {len(holdout_sessions)}; they must be "
+                f"positionally aligned, one entry per session"
+            )
+        test_parts: list[tuple[pd.DataFrame, pd.Series, np.ndarray]] = []
+        for hi, pair in enumerate(holdout_sessions):
+            x_h, y_h, _g_h, _c_h = _assemble_sessions(
+                [pair],
+                spec=spec,
+                window=window,
+                stats=stats,
+                fps=fps,
+                mirror_augment=False,
+                merge_map=merge_map,
+                exclude=exclude,
+                freq_features=freq_features,
+                traj_features=traj_features,
+                motion_features=motion_features,
+                individuals=(
+                    [holdout_individuals[hi]] if holdout_individuals is not None else None
+                ),
+            )
+            n_h = len(y_h)
+            clean_h = _clean_window_rows(
+                y_h.to_numpy(), np.zeros(n_h, dtype=int), np.arange(n_h), window
+            )
+            test_parts.append((x_h, y_h, clean_h))
+        x_test_all = pd.concat([p[0] for p in test_parts], axis=0, ignore_index=True)
+        y_test_all = pd.concat([p[1] for p in test_parts], axis=0, ignore_index=True)
+        test_clean = np.concatenate([p[2] for p in test_parts])
+        # Apply the same drop logic as training, plus the clean-window rule
+        # cross-validation and evaluate_model score under, so this holdout
+        # accuracy is comparable to theirs.
+        test_keep = (
+            (y_test_all != "")
+            & (y_test_all != AMBIGUOUS)
+            & ~x_test_all.isna().any(axis=1)
+            & test_clean
         )
-        # Apply the same drop logic as training.
-        test_keep = (y_test_all != "") & (y_test_all != AMBIGUOUS) & ~x_test_all.isna().any(axis=1)
         # Note: if include_background is on, we don't add background to
         # the test set — the test set's labels should only be the
         # behaviors we want to evaluate. The model will still predict
@@ -784,6 +819,22 @@ def _assemble_sessions(
             raise ValueError(f"failed to read DLC pose CSV {pose_csv}: {e}") from e
         individual = individuals[i] if individuals is not None else None
         store = AnnotationStore.load_csv(Path(ann_csv), individual=individual)
+        if individual is None:
+            # Same refusal as evaluate_model and cross-validation: a
+            # multi-animal annotations CSV holds every animal's zones, and
+            # training on all of them labels this animal with its partner's
+            # behavior.
+            slots = sorted({z.individual for z in store})
+            if len(slots) > 1:
+                raise ValueError(
+                    f"{ann_csv} holds zones for more than one animal "
+                    f"(individuals {slots}), and no `individuals` entry says "
+                    f"which one {Path(pose_csv).name} is. Training on every "
+                    f"animal's labels at once would mix the partner's behavior "
+                    f"into this animal's ground truth. Pass "
+                    f"train_model(sessions=..., individuals=[...]) (and "
+                    f"holdout_individuals for holdout sessions)."
+                )
 
         # Social features are measured against the OTHER animals in this
         # same session. mirror_augment is refused above when include_social
@@ -798,6 +849,18 @@ def _assemble_sessions(
         if mirror_augment:
             pose_variants.append(_mirror_pose(pose))
 
+        # Labels and zone ids are computed ONCE per session and shared by the
+        # mirrored copy, so a zone and its mirror always land in the same
+        # GroupShuffleSplit group (otherwise the mirror leaks into test).
+        labels, group_ids = build_label_and_group_series(
+            store, n_frames=pose.n_frames, merge_map=merge_map, exclude=exclude
+        )
+        bumped = group_ids.copy()
+        positive = bumped >= 0
+        bumped[positive] = bumped[positive] + group_offset
+        if positive.any():
+            group_offset = int(bumped[positive].max()) + 1
+
         for variant in pose_variants:
             feats = compute_features(variant, spec=spec, others=others)
             if motion_features:
@@ -811,18 +874,10 @@ def _assemble_sessions(
                 traj = apply_trajectory_rolling(variant.xy, body_axis=ba, window=window)
                 traj.index = windowed.index
                 windowed = pd.concat([windowed, traj], axis=1)
-            labels, group_ids = build_label_and_group_series(
-                store, n_frames=variant.n_frames, merge_map=merge_map, exclude=exclude
-            )
             if len(windowed) != len(labels):
                 raise RuntimeError(
                     f"windowed length {len(windowed)} != labels length {len(labels)} for {pose_csv}"
                 )
-            bumped = group_ids.copy()
-            positive = bumped >= 0
-            bumped[positive] = bumped[positive] + group_offset
-            if positive.any():
-                group_offset = int(bumped[positive].max()) + 1
             xs.append(windowed)
             ys.append(labels)
             groups_per_session.append(bumped)
@@ -1016,11 +1071,10 @@ def _mirror_pose(pose):
 
     Detects L/R pairs by name (``left_*`` / ``right_*``). For everything
     else we just leave the keypoint in place. The x-coord flip uses the
-    frame's keypoint extent as the pivot — we don't know the source
-    frame width, so we mirror around the per-frame median x. This
-    preserves all distances + angles + speeds (they're translation-
-    invariant after the swap) and is invariant under the camera
-    projection in 2D top-down setups.
+    session's median keypoint x as a single fixed pivot — we don't know the
+    source frame width. A fixed pivot is a true reflection (v' = -v), so it
+    preserves all distances, angles AND speeds; a per-frame pivot would
+    move with the animal and distort every velocity feature.
     """
     from glider.vision.pose.core import PoseData
 
@@ -1035,9 +1089,11 @@ def _mirror_pose(pose):
                 swap_map[j] = i
     xy = pose.xy.copy()
     confidence = pose.confidence.copy()
-    # Per-frame mirror around the median x of valid keypoints.
-    median_x = np.nanmedian(xy[..., 0], axis=1, keepdims=True)
-    xy[..., 0] = 2.0 * median_x - xy[..., 0]
+    # Mirror around ONE pivot for the whole session (see docstring).
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN pose
+        pivot_x = np.nanmedian(xy[..., 0])
+    xy[..., 0] = 2.0 * pivot_x - xy[..., 0]
     # Apply left/right keypoint swap.
     if swap_map:
         new_xy = xy.copy()
@@ -1251,6 +1307,9 @@ def cross_validate_and_train(
         # tab rendered a dash where the headline number belongs.
         "mean_macro_f1": cv_result.get("mean_macro_f1"),
         "fold_macro_f1": cv_result.get("fold_macro_f1"),
+        "macro_f1": cv_result.get("macro_f1"),
+        "thin_classes": cv_result.get("thin_classes") or [],
+        "support_floor": cv_result.get("support_floor"),
         "mean_accuracy": cv_result.get("mean_accuracy"),
         "std_accuracy": cv_result.get("std_accuracy"),
         "per_class_metrics": cv_result.get("per_class_metrics") or {},
@@ -1332,6 +1391,11 @@ class _CvData:
     #: scoring can tell which rows have a window free of bout boundaries
     #: without the caller having to pass it twice.
     window: int = 1
+    #: Per-row "trailing window lies inside one bout" flag, computed over
+    #: every frame BEFORE rows were filtered or background was thinned (the
+    #: same run counting evaluation uses). ``None`` recomputes it over the
+    #: kept rows.
+    clean: np.ndarray | None = None
 
 
 def _assemble_for_cv(
@@ -1443,6 +1507,16 @@ def _assemble_for_cv(
             raise ValueError("background_class_name must be non-empty")
         y_all = y_all.where(y_all != "", background_class_name)
 
+    # Clean-window runs are counted over EVERY frame, before the NaN-feature
+    # rows at a session start and the thinned background are removed. Counting
+    # over kept rows instead dropped an extra window-1 rows after each session
+    # start or NaN gap (evaluation counts over all frames), and thinned
+    # background almost never has window-1 consecutive survivors, so it was
+    # never scored at all.
+    clean_all = _clean_window_rows(
+        y_all.to_numpy(), sess_all, frame_all_rows, window, mirror=mirror_all
+    )
+
     keep = ((y_all != AMBIGUOUS) & ~x_all.isna().any(axis=1)).to_numpy()
     if not include_background:
         keep = keep & (y_all != "").to_numpy()
@@ -1451,6 +1525,7 @@ def _assemble_for_cv(
     sess = sess_all[keep]
     mirror = mirror_all[keep]
     frame = frame_all_rows[keep]
+    clean = clean_all[keep]
 
     # Subsample background to background_ratio × the largest behavior class
     # (same policy as train_model). The survivors stay a representative
@@ -1471,8 +1546,9 @@ def _assemble_for_cv(
                 sess = sess[sel]
                 mirror = mirror[sel]
                 frame = frame[sel]
+                clean = clean[sel]
 
-    return _CvData(x=x, y=y, sess=sess, mirror=mirror, frame=frame, window=window)
+    return _CvData(x=x, y=y, sess=sess, mirror=mirror, frame=frame, window=window, clean=clean)
 
 
 def _run_cv_folds(
@@ -1487,6 +1563,7 @@ def _run_cv_folds(
     include_background: bool,
     background_class_name: str,
     threshold_curve: bool,
+    support_floor: int = DEFAULT_SUPPORT_FLOOR,
 ) -> dict[str, Any]:
     """Fold, fit, and score an already-assembled matrix.
 
@@ -1498,7 +1575,9 @@ def _run_cv_folds(
 
     x, y = data.x, data.y
     sess, mirror, frame = data.sess, data.mirror, data.frame
-    scorable = _clean_window_rows(y.to_numpy(), sess, frame, data.window, mirror=mirror)
+    scorable = data.clean
+    if scorable is None:
+        scorable = _clean_window_rows(y.to_numpy(), sess, frame, data.window, mirror=mirror)
 
     n_unique = int(len(np.unique(sess)))
     if n_unique < 2:
@@ -1509,17 +1588,23 @@ def _run_cv_folds(
 
     gkf = GroupKFold(n_splits=n_splits)
     fold_acc: list[float] = []
-    fold_f1: list[float] = []
     all_true: list[np.ndarray] = []
     all_pred: list[np.ndarray] = []
-    all_sess: list[np.ndarray] = []
-    all_frame: list[np.ndarray] = []
+    # Every un-mirrored held-out row, window-contaminated ones included: bouts
+    # are stitched from these so a true bout shorter than the window still
+    # counts (the clean-window filter would erase it and inflate recall).
+    bout_sess: list[np.ndarray] = []
+    bout_frame: list[np.ndarray] = []
+    bout_true: list[np.ndarray] = []
+    bout_pred: list[np.ndarray] = []
     all_proba: list[tuple[np.ndarray, list]] = []  # (proba, fold class order)
     for train_idx, test_idx in gkf.split(x, y, groups=sess):
         # Score only on un-mirrored rows of the held-out session(s), and only
         # where the trailing feature window lies inside one bout -- see
         # _clean_window_rows. Training still sees every row.
-        eval_idx = test_idx[~mirror[test_idx] & scorable[test_idx]]
+        real_idx = test_idx[~mirror[test_idx]]
+        clean_sel = scorable[real_idx]
+        eval_idx = real_idx[clean_sel]
         if len(eval_idx) == 0:
             continue
         clf = _build_classifier(
@@ -1530,14 +1615,16 @@ def _run_cv_folds(
             lgbm_reg=lgbm_reg,
         )
         clf.fit(x.iloc[train_idx], y.iloc[train_idx])
+        real_pred = clf.predict(x.iloc[real_idx])
         y_true = y.iloc[eval_idx].to_numpy()
-        y_pred = clf.predict(x.iloc[eval_idx])
+        y_pred = real_pred[clean_sel]
         fold_acc.append(float((y_pred == y_true).mean()))
-        fold_f1.append(float(f1_score(y_true, y_pred, average="macro", zero_division=0)))
         all_true.append(y_true)
         all_pred.append(y_pred)
-        all_sess.append(sess[eval_idx])
-        all_frame.append(frame[eval_idx])
+        bout_sess.append(sess[real_idx])
+        bout_frame.append(frame[real_idx])
+        bout_true.append(y.iloc[real_idx].to_numpy())
+        bout_pred.append(real_pred)
         if threshold_curve:
             all_proba.append((clf.predict_proba(x.iloc[eval_idx]), [str(c) for c in clf.classes_]))
 
@@ -1580,6 +1667,25 @@ def _run_cv_folds(
             "labels": [str(lab) for lab in labels_seen],
             "matrix": cm.tolist(),
         }
+
+    # Macro F1 under evaluation's rule: only classes with >= support_floor
+    # pooled true frames count. Each fold averages those classes that are
+    # actually present in its test truth, so a class a fold never held no
+    # longer scores 0 there (fold composition, not the model).
+    macro_classes = [c for c, m in per_class_metrics.items() if m["support"] >= support_floor]
+    thin_classes = [c for c in per_class_metrics if c not in macro_classes]
+    pooled_macro = (
+        float(np.mean([per_class_metrics[c]["f1"] for c in macro_classes]))
+        if macro_classes
+        else None
+    )
+    fold_f1: list[float] = []
+    for y_true, y_pred in zip(all_true, all_pred, strict=True):
+        present = [c for c in macro_classes if (y_true == c).any()]
+        if present:
+            fold_f1.append(
+                float(f1_score(y_true, y_pred, labels=present, average="macro", zero_division=0))
+            )
 
     # Per-class probability-threshold curves (one-vs-rest). For each class,
     # sweep the firing threshold and report recall, precision, and the
@@ -1628,10 +1734,10 @@ def _run_cv_folds(
     bouts: dict[str, dict[str, float]] = {}
     if all_true:
         bouts = bout_metrics(
-            np.concatenate(all_sess),
-            np.concatenate(all_frame),
-            y_true_all,
-            y_pred_all,
+            np.concatenate(bout_sess),
+            np.concatenate(bout_frame),
+            np.concatenate(bout_true),
+            np.concatenate(bout_pred),
         )
 
     acc = np.array(fold_acc, dtype=float)
@@ -1644,6 +1750,12 @@ def _run_cv_folds(
         "mean_accuracy": float(acc.mean()) if len(acc) else None,
         "std_accuracy": float(acc.std()) if len(acc) else None,
         "mean_macro_f1": float(f1.mean()) if len(f1) else None,
+        # Pooled over every fold's predictions, same definition as
+        # evaluate_model's macro_f1, so the two are directly comparable.
+        "macro_f1": pooled_macro,
+        "macro_classes": macro_classes,
+        "thin_classes": thin_classes,
+        "support_floor": int(support_floor),
         "per_class_metrics": per_class_metrics,
         "confusion_matrix": confusion,
         "false_alarm_rate": false_alarm_rate,

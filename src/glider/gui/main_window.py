@@ -815,6 +815,15 @@ class MainWindow(QMainWindow):
         the reassignment: embedded, the editor was handed this very object and
         has been editing it in place, so there is nothing to fetch back.
         """
+        self._apply_zone_config()
+        self._save_zones_to_session()
+
+    def _apply_zone_config(self) -> None:
+        """Hand ``self._zone_config`` to everything that scores or shows zones.
+
+        New and Open replace the object; skipping any reader here leaves it
+        scoring enter/exit against the previous experiment's zones.
+        """
         if self._camera_panel:
             self._camera_panel.set_zone_configuration(self._zone_config)
         self._core.cv_processor.set_zone_configuration(self._zone_config)
@@ -822,9 +831,6 @@ class MainWindow(QMainWindow):
         if hasattr(self._core, "data_recorder"):
             self._core.data_recorder.set_zone_configuration(self._zone_config)
             self._core.data_recorder.set_cv_processor(self._core.cv_processor)
-
-        self._save_zones_to_session()
-
         if self._node_library_panel:
             self._node_library_panel.refresh_zones(self._zone_config)
         if self._node_editor:
@@ -2834,15 +2840,38 @@ class MainWindow(QMainWindow):
 
     # --- File operations ---
 
+    def _refuse_while_running(self, action: str) -> bool:
+        """True (after telling the user) if an experiment is live or mid-start.
+
+        New/Open clear the flow engine and hardware out from under a run.
+        """
+        from glider.core.experiment_session import SessionState
+
+        if self._core.state in (SessionState.RUNNING, SessionState.PAUSED) or (
+            self._core.is_experiment_busy
+        ):
+            QMessageBox.information(
+                self, "Experiment running", f"Stop the experiment before you {action}."
+            )
+            return True
+        return False
+
+    def _reset_undo_history(self) -> None:
+        """Drop undo/redo commands that refer to the previous graph."""
+        self._undo_stack.clear()
+        self._update_undo_redo_actions()
+
     def _on_new(self) -> None:
         """Create new experiment."""
+        if self._refuse_while_running("start a new experiment"):
+            return
         if self._check_save():
             self._core.hardware_manager.clear()
             self._core.new_session()
             self._graph_view.clear_graph()
+            self._reset_undo_history()
             self._zone_config = ZoneConfiguration()
-            if self._camera_panel:
-                self._camera_panel.set_zone_configuration(self._zone_config)
+            self._apply_zone_config()
             self.session_changed.emit()
             if self._hardware_panel:
                 self._hardware_panel.refresh_tree()
@@ -2850,9 +2879,6 @@ class MainWindow(QMainWindow):
                 self._dash_hardware_panel.refresh_tree()
             if self._node_library_panel:
                 self._node_library_panel.refresh_flow_functions()
-                self._node_library_panel.refresh_zones(self._zone_config)
-            if self._node_editor:
-                self._node_editor.set_zone_configuration(self._zone_config)
             if self._experiment_dialog:
                 self._experiment_dialog.set_session(self._core.session)
             # Same reason as in _load_experiment_path: the Experiment tab's
@@ -2862,6 +2888,8 @@ class MainWindow(QMainWindow):
 
     def _on_open(self) -> None:
         """Open experiment file."""
+        if self._refuse_while_running("open another experiment"):
+            return
         if not self._check_save():
             return
 
@@ -2890,8 +2918,11 @@ class MainWindow(QMainWindow):
         failure rather than dropping the user onto an empty Builder and calling
         that "opened".
         """
+        if self._refuse_while_running("open another experiment"):
+            return False
         try:
             self._core.load_session(file_path)
+            self._reset_undo_history()
             self._populate_hardware_from_session()
             self._populate_graph_from_session()
             self._load_zones_from_session()
@@ -3023,18 +3054,20 @@ class MainWindow(QMainWindow):
             f"{len(self._core.session.flow.connections)} connections from session"
         )
 
-    def _on_save(self) -> None:
+    def _on_save(self) -> bool:
+        """Save; True only if the file was written (not failed or cancelled)."""
         if self._core.session and self._core.session.file_path:
             try:
                 self._core.save_session()
                 self._refresh_strip_experiment()
                 self._show_status_message("Saved")
+                return True
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save: {e}")
-        else:
-            self._on_save_as()
+                return False
+        return self._on_save_as()
 
-    def _on_save_as(self) -> None:
+    def _on_save_as(self) -> bool:
         was_runner_mode = self._view_manager.is_runner_mode
 
         file_path, _ = QFileDialog.getSaveFileName(
@@ -3054,8 +3087,10 @@ class MainWindow(QMainWindow):
                 self._refresh_strip_experiment()
                 self._remember_current_experiment(file_path)
                 self._show_status_message(f"Saved: {file_path}")
+                return True
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save: {e}")
+        return False
 
     def _check_save(self) -> bool:
         if self._core.session and self._core.session.is_dirty:
@@ -3075,8 +3110,8 @@ class MainWindow(QMainWindow):
                 self.showFullScreen()
 
             if result == QMessageBox.StandardButton.Save:
-                self._on_save()
-                return True
+                # A failed or cancelled save must not discard the work.
+                return self._on_save()
             elif result == QMessageBox.StandardButton.Cancel:
                 return False
 
@@ -3365,22 +3400,9 @@ class MainWindow(QMainWindow):
                 self._zone_config.zones.append(zone)
             self._zone_config.config_width = session_zones.config_width
             self._zone_config.config_height = session_zones.config_height
-
-            if self._camera_panel:
-                self._camera_panel.set_zone_configuration(self._zone_config)
-            self._core.cv_processor.set_zone_configuration(self._zone_config)
-            self._core.tracking_logger.set_zone_configuration(self._zone_config)
-
-            if self._node_library_panel:
-                self._node_library_panel.refresh_zones(self._zone_config)
-            if self._node_editor:
-                self._node_editor.set_zone_configuration(self._zone_config)
         else:
             self._zone_config = ZoneConfiguration()
-            if self._camera_panel:
-                self._camera_panel.set_zone_configuration(self._zone_config)
-            if self._node_library_panel:
-                self._node_library_panel.refresh_zones(self._zone_config)
+        self._apply_zone_config()
 
     def _save_zones_to_session(self) -> None:
         if not self._core.session:
@@ -3800,13 +3822,13 @@ class MainWindow(QMainWindow):
         """
         import time
 
-        # Stop device control panel polling
-        if self._device_control_panel:
-            self._device_control_panel.stop_polling()
-
+        # Ask first: a Cancel here must leave polling ("continuous read") running.
         if not self._check_save():
             event.ignore()
             return
+
+        if self._device_control_panel:
+            self._device_control_panel.stop_polling()
 
         # The Builder frame is a page of the stack, not a window, so the window
         # is what remembers its layout. Never raises; see AppShell.save_layout.

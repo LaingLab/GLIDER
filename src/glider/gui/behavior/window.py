@@ -49,6 +49,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.analysis.behavior.classify.smoothing import DEFAULT_OFFLINE_WINDOW
+from glider.gui.qthreads import retire_thread
 from glider.gui.widgets.tool_ui import (
     GUTTER,
     Card,
@@ -705,6 +706,12 @@ class AnnotateTab(QWidget):
         from glider.gui.behavior.annotator.app import make_more_sampler
         from glider.gui.behavior.annotator.capture_cache import VideoCaptureCache
         from glider.gui.behavior.annotator.main_window import AnnotatorWindow
+
+        # Replacing the reference would destroy the old window without its
+        # closeEvent: no trim saved, speed-parse threads destroyed mid-run.
+        old = self._annotator_window
+        if old is not None and old.isVisible() and not old.close():
+            return
 
         self._set_queue_status(origin, clips, videos_meta)
 
@@ -1578,6 +1585,9 @@ class TrainTab(QWidget):
             )
             return
 
+        if self._train_thread is not None:
+            return  # Fit or Cross-validate already running; they share the thread slot
+
         from glider.gui.behavior import workers as workers_mod
 
         options = self._shared_options()
@@ -1620,6 +1630,9 @@ class TrainTab(QWidget):
             QMessageBox.warning(self, "Train", "Choose a model output file first.")
             return
 
+        if self._train_thread is not None:
+            return  # Fit or Cross-validate already running; they share the thread slot
+
         from glider.gui.behavior.workers import TrainWorker
 
         options = self._shared_options()
@@ -1646,6 +1659,7 @@ class TrainTab(QWidget):
         self._progress.setVisible(True)
         self._progress.setRange(0, 0)  # indeterminate until fit finishes
         self._fit_btn.setEnabled(False)
+        self._cv_btn.setEnabled(False)
         self._rail.status.set_state("running", "Fitting")
         self._train_thread.start()
 
@@ -1662,6 +1676,7 @@ class TrainTab(QWidget):
         self._teardown_train_thread()
         self._progress.setVisible(False)
         self._fit_btn.setEnabled(True)
+        self._cv_btn.setEnabled(True)
         self._rail.status.set_state("ok", "Done")
         # Deferred like the rest of the analysis imports, though this one is
         # cheap by design — it exists so the results pane never needs pandas.
@@ -1688,13 +1703,9 @@ class TrainTab(QWidget):
 
     def _teardown_train_thread(self) -> None:
         if self._train_thread is not None:
-            self._train_thread.quit()
-            self._train_thread.wait(5000)
-            self._train_thread.deleteLater()
-            self._train_thread = None
-        if self._train_worker is not None:
-            self._train_worker.deleteLater()
-            self._train_worker = None
+            retire_thread(self._train_thread, self._train_worker)
+        self._train_thread = None
+        self._train_worker = None
 
 
 class ApplyTab(QWidget):
@@ -3056,13 +3067,9 @@ class ApplyTab(QWidget):
 
     def _teardown_apply_thread(self) -> None:
         if self._apply_thread is not None:
-            self._apply_thread.quit()
-            self._apply_thread.wait(5000)
-            self._apply_thread.deleteLater()
-            self._apply_thread = None
-        if self._apply_worker is not None:
-            self._apply_worker.deleteLater()
-            self._apply_worker = None
+            retire_thread(self._apply_thread, self._apply_worker)
+        self._apply_thread = None
+        self._apply_worker = None
 
 
 # ---------------------------------------------------------------------------

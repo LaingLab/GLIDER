@@ -112,6 +112,19 @@ async def test_shutdown_closes_bus(fake_smbus2):
     bus.close.assert_called_once()
 
 
+async def test_shutdown_waits_for_in_flight_transfer(fake_smbus2):
+    """close() must not run while another holder has the i2c lock (B4)."""
+    _module, bus = fake_smbus2
+    device = await _initialized()
+    await device._board.i2c_lock.acquire()  # stands in for an in-flight ioctl
+    task = asyncio.create_task(device.shutdown())
+    await asyncio.sleep(0.05)
+    bus.close.assert_not_called()
+    device._board.i2c_lock.release()
+    await task
+    bus.close.assert_called_once()
+
+
 async def test_shutdown_without_initialize_is_safe():
     device = _make_device()
     await device.shutdown()  # must not raise

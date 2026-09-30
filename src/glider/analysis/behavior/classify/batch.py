@@ -83,6 +83,30 @@ class EthogramRows:
         return len(self.frames)
 
 
+def warn_on_fps_mismatch(pose_fps, model_fps, *, source: str = "classify") -> bool:
+    """Warn when poses and a model disagree on frame rate. True if warned.
+
+    Every rolling window is a frame count, so a 30 fps model applied to 60 fps
+    poses silently summarises half the time span it was trained on.
+    """
+    from glider.analysis.behavior.pipeline import FPS_REL_TOLERANCE
+
+    if not pose_fps or not model_fps:
+        return False
+    if abs(float(pose_fps) - float(model_fps)) <= FPS_REL_TOLERANCE * float(model_fps):
+        return False
+    import warnings
+
+    warnings.warn(
+        f"{source}: poses are {float(pose_fps):g} fps but the model was trained at "
+        f"{float(model_fps):g} fps. Its windows are counted in frames, so they "
+        f"now cover a different span of time and its labels are unreliable. "
+        f"Re-train at this rate or resample the poses.",
+        stacklevel=3,
+    )
+    return True
+
+
 def _stream_lag(history: int = _STREAM_HISTORY) -> int:
     """Frames the centered-gradient row trails the current frame by."""
     return (history - 1) - (history // 2)
@@ -258,6 +282,7 @@ def classify_pose_data(
 
     predict_every = max(1, int(predict_every))
     lag = _stream_lag()
+    warn_on_fps_mismatch(getattr(pose, "fps", None), getattr(model, "fps", None))
 
     per_frame_names, spectral = derive_stream_columns(model)
     if spectral:
@@ -531,7 +556,7 @@ def batch_apply(config, ethogram_csv, model, frame_range=None, pose=None) -> boo
     """
     from pathlib import Path
 
-    from glider.vision.pose.dlc import from_dlc_csv
+    from glider.vision.pose.dlc import fps_for_csv, from_dlc_csv
 
     def _decline(why: str) -> bool:
         if getattr(config, "offline_smooth_window", 0) > 1:
@@ -556,6 +581,15 @@ def batch_apply(config, ethogram_csv, model, frame_range=None, pose=None) -> boo
 
     if pose is None:
         pose = from_dlc_csv(Path(config.pose_csv_in))
+        if not config.fps_override and fps_for_csv(Path(config.pose_csv_in)) is None:
+            # from_dlc_csv filled in 30 fps; that is an assumption, not a
+            # measurement, so the fps check below cannot vouch for it.
+            logger.warning(
+                "no frame rate recorded beside %s; assuming %g fps. If the "
+                "recording is not at the model's rate, its windows are wrong.",
+                Path(config.pose_csv_in).name,
+                pose.fps,
+            )
     if config.fps_override:
         pose.fps = float(config.fps_override)
 

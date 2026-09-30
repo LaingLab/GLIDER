@@ -115,6 +115,11 @@ def _registry_for(kind: str) -> dict[str, type] | None:
 # node library needs in order to offer plugin nodes without hardcoding them.
 _PLUGIN_COMPONENTS: dict[tuple[str, str], str] = {}
 
+# The subset a plugin actually inserted into a registry, as {(kind, name):
+# plugin}. Unload removes only these: GLIDER's own built-in drivers are also
+# declared as entry points, and unloading those must not unregister them.
+_PLUGIN_INSERTED: dict[tuple[str, str], str] = {}
+
 
 def plugin_components(kind: str) -> dict[str, str]:
     """Components of ``kind`` that plugins registered, as {name: plugin}.
@@ -165,6 +170,7 @@ def _register_component(kind: str, name: str, component: type, plugin: str) -> N
 
     registry[name] = component
     _PLUGIN_COMPONENTS[(kind, name)] = plugin
+    _PLUGIN_INSERTED[(kind, name)] = plugin
     # The name matters and is not always the one the author expected: an entry
     # point naming a class registers under the *entry point's* name, so
     # `maimu = "...:MaimuDevice"` yields a device type called "maimu". Saying so
@@ -211,9 +217,13 @@ class PluginManager:
         if plugin_dirs:
             self._plugin_dirs.extend(plugin_dirs)
 
-        # Ensure plugin directories exist
+        # Ensure plugin directories exist. Best effort: a read-only HOME must
+        # not raise here, which used to disable entry-point plugins as well.
         for plugin_dir in self._plugin_dirs:
-            plugin_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                plugin_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                logger.warning(f"Could not create plugin directory {plugin_dir}: {e}")
 
     @property
     def plugins(self) -> dict[str, PluginInfo]:
@@ -255,10 +265,18 @@ class PluginManager:
         else:
             logger.debug("Directory plugin loading is disabled")
 
-        # Update registry
+        # Update registry. One package may use the same entry-point name in two
+        # groups (a driver and a device both called "harp"); keyed by name
+        # alone the second was dropped, so qualify it by type instead.
         for plugin in discovered:
-            if plugin.name not in self._plugins:
-                self._plugins[plugin.name] = plugin
+            key = plugin.name
+            existing = self._plugins.get(key)
+            if existing is not None and (existing.plugin_type, existing.entry_point) != (
+                plugin.plugin_type,
+                plugin.entry_point,
+            ):
+                key = f"{plugin.plugin_type}:{plugin.name}"
+            self._plugins.setdefault(key, plugin)
 
         logger.info(f"Discovered {len(discovered)} plugins")
         return discovered
@@ -568,6 +586,17 @@ class PluginManager:
                 else:
                     teardown_func()
 
+            # Take its components out of the registries, so an unloaded
+            # plugin's nodes/devices are no longer offered and a reload
+            # registers the new classes instead of colliding with the old.
+            for key in [k for k, p in _PLUGIN_INSERTED.items() if p == info.name]:
+                kind, component = key
+                registry = _registry_for(kind)
+                if registry is not None:
+                    registry.pop(component, None)
+                _PLUGIN_INSERTED.pop(key, None)
+                _PLUGIN_COMPONENTS.pop(key, None)
+
             info.loaded = False
             info.module = None
             return True
@@ -592,6 +621,13 @@ class PluginManager:
             True if reloaded successfully
         """
         await self.unload_plugin(name)
+        info = self._plugins.get(name)
+        if info is not None and info.entry_point and not info.path:
+            # import_module would hand back the cached module and its old
+            # classes; re-execute it so the reload picks up the new code.
+            module = sys.modules.get(info.entry_point.partition(":")[0])
+            if module is not None:
+                importlib.reload(module)
         return await self.load_plugin(name)
 
     def enable_plugin(self, name: str) -> bool:
@@ -638,10 +674,13 @@ class PluginManager:
         try:
             import subprocess
 
-            result = subprocess.run(
+            # Off the event loop (pip can take minutes) and bounded.
+            result = await asyncio.to_thread(
+                subprocess.run,
                 [sys.executable, "-m", "pip", "install"] + info.requirements,
                 capture_output=True,
                 text=True,
+                timeout=600,
             )
 
             if result.returncode != 0:

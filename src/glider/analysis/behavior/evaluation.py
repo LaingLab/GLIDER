@@ -24,19 +24,14 @@ from glider.analysis.behavior.features import compute_features
 from glider.analysis.behavior.labels import AMBIGUOUS, build_label_and_group_series
 from glider.analysis.behavior.model import BehaviorModel
 from glider.analysis.behavior.pipeline import (
+    DEFAULT_SUPPORT_FLOOR,
     SessionPair,
     _clean_window_rows,
     bout_metrics,
 )
 from glider.analysis.behavior.trajectory import apply_trajectory_rolling
 from glider.analysis.behavior.windowing import apply_rolling, apply_spectral_rolling
-from glider.vision.pose.dlc import from_dlc_csv
-
-#: A class with fewer scored frames than this is reported but kept out of the
-#: macro average. Cross-validation showed why: a behaviour present in 4 of 34
-#: sessions scored 0.0 in the folds that held none of it and pulled the mean
-#: down by 0.06, measuring fold composition rather than the model.
-DEFAULT_SUPPORT_FLOOR = 100
+from glider.vision.pose.dlc import fps_for_csv, from_dlc_csv
 
 
 def summarise_predictions(
@@ -213,6 +208,12 @@ def evaluate_model(
                     f"aligned with sessions, exactly as "
                     f"train_model(sessions=..., individuals=[...]) takes it."
                 )
+        if fps is None:
+            # The poses are read at the model's rate; say so when their own
+            # recorded rate disagrees, since every window is a frame count.
+            from glider.analysis.behavior.classify.batch import warn_on_fps_mismatch
+
+            warn_on_fps_mismatch(fps_for_csv(Path(pose_csv)), model.fps, source=Path(pose_csv).name)
         windowed = _windowed_for(model, Path(pose_csv), rate)
         labels, _groups = build_label_and_group_series(
             store, n_frames=len(windowed), merge_map=None, exclude=None
@@ -236,15 +237,14 @@ def evaluate_model(
             f"trained with a feature set this pose data does not support."
         )
 
-    annotated = ((y_all != "") & (y_all != AMBIGUOUS)).to_numpy()
-    n_annotated = int(annotated.sum())
+    labelled = ((y_all != "") & (y_all != AMBIGUOUS)).to_numpy()
+    n_annotated = int(labelled.sum())
     # Same rule cross-validation scores under: a frame whose causal window
     # still covers the previous behavior is not a fair test of the model. Kept
     # identical to _run_cv_folds so a CV score and an evaluation score mean the
     # same thing and can be compared.
-    annotated = annotated & _clean_window_rows(
-        y_all.to_numpy(), sess_all, frame_all, int(model.window)
-    )
+    clean = _clean_window_rows(y_all.to_numpy(), sess_all, frame_all, int(model.window))
+    annotated = labelled & clean
     if not annotated.any():
         raise ValueError(
             "these sessions have no annotated frames to score against "
@@ -265,10 +265,22 @@ def evaluate_model(
             order = np.argsort(frame_all[in_session], kind="stable")
             idx = np.nonzero(in_session)[0][order]
             predictions[idx] = centered_majority_vote(list(raw[idx]), smooth_window)
-        predictions = predictions[annotated].astype(object)
+        labelled_pred = predictions[labelled].astype(object)
     else:
-        predictions = model.predict(x_all.loc[annotated])
+        labelled_pred = np.asarray(model.predict(x_all.loc[labelled]), dtype=object)
 
+    # Bouts are stitched from every labelled frame, window-contaminated ones
+    # included: the clean-window filter would erase true bouts shorter than
+    # the window and inflate bout recall/precision (same as cross-validation).
+    bout_ok = labelled_pred != ""
+    bouts = bout_metrics(
+        sess_all[labelled][bout_ok],
+        frame_all[labelled][bout_ok],
+        y_all.to_numpy()[labelled][bout_ok].astype(str),
+        labelled_pred[bout_ok].astype(str),
+    )
+
+    predictions = labelled_pred[clean[labelled]]
     y = y_all.loc[annotated].to_numpy()
     sess = sess_all[annotated]
     frame = frame_all[annotated]
@@ -284,6 +296,7 @@ def evaluate_model(
     )
     result.update(
         {
+            "bouts": bouts,
             "model_path": str(model_path),
             "model_classes": list(model.classes),
             "sessions": [str(p) for p, _a in sessions],

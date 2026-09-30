@@ -687,13 +687,14 @@ class AnalogInputDevice(BaseDevice):
         pin = self._config.pins["input"]
         value = await self._board.read_analog(pin)
 
-        # Validate the value is within expected range (0-1023 for 10-bit ADC)
+        # Validate the value is within the board's ADC range
+        max_value = (1 << self._board.capabilities.analog_resolution) - 1
         if not isinstance(value, (int, float)):
             logger.warning(f"Invalid analog value type: {type(value)}, value: {value}")
             value = 0
-        elif value < 0 or value > 1023:
-            logger.warning(f"Analog value out of range: {value}, clamping to 0-1023")
-            value = max(0, min(1023, int(value)))
+        elif value < 0 or value > max_value:
+            logger.warning(f"Analog value out of range: {value}, clamping to 0-{max_value}")
+            value = max(0, min(max_value, int(value)))
         else:
             value = int(value)
 
@@ -956,6 +957,7 @@ class ADS1115Device(BaseDevice):
         self._gain = config.settings.get("gain", 1)
         self._data_rate = config.settings.get("data_rate", 128)
         self._channel = config.settings.get("channel", 0)
+        self._i2c = None  # busio.I2C handle, released in shutdown()
         self._ads = None  # Will hold the ADS1115 object
         self._channels: dict[int, Any] = {}  # Cache for AnalogIn objects
         self._last_values: dict[int, int] = {}  # Channel -> raw value
@@ -999,7 +1001,7 @@ class ADS1115Device(BaseDevice):
                 for i in range(4):
                     channels[i] = AnalogIn(ads, i)
 
-                return ads, channels
+                return i2c, ads, channels
             except ImportError as e:
                 raise RuntimeError(
                     "ADS1115 libraries not installed. Run: "
@@ -1009,15 +1011,23 @@ class ADS1115Device(BaseDevice):
                 logger.error(f"Failed to initialize ADS1115: {e}")
                 raise
 
-        self._ads, self._channels = await asyncio.to_thread(_init_ads)
+        self._i2c, self._ads, self._channels = await asyncio.to_thread(_init_ads)
         self._initialized = True
         logger.info(f"ADS1115 initialized at address 0x{self._i2c_address:02X}")
 
     async def shutdown(self) -> None:
-        """Shutdown the ADS1115."""
-        self._ads = None
-        self._channels = {}
+        """Shutdown the ADS1115, releasing its busio.I2C under the bus lock."""
         self._initialized = False
+        lock = getattr(self._board, "i2c_lock", self._lock)
+        async with lock:
+            i2c, self._i2c = self._i2c, None
+            self._ads = None
+            self._channels = {}
+            if i2c is not None:
+                try:
+                    await asyncio.to_thread(i2c.deinit)
+                except Exception as e:  # best-effort
+                    logger.warning("ADS1115: error releasing I2C bus: %s", e)
 
     async def read(self, channel: int | None = None) -> int:
         """
@@ -1277,13 +1287,18 @@ class GenericI2CDevice(BaseDevice):
         logger.info("GenericI2C initialized on bus %d at 0x%02X", self._bus_num, self._address)
 
     async def shutdown(self) -> None:
-        """Close the bus and clear state (safe to call before initialize)."""
-        try:
-            if self._bus is not None:
-                await asyncio.to_thread(self._bus.close)
-        finally:
-            self._bus = None
-            self._initialized = False
+        """Close the bus and clear state (safe to call before initialize).
+
+        Takes the same lock ``_transfer`` holds so close() waits for an
+        in-flight ioctl rather than freeing its fd mid-syscall (e-stop
+        bypasses the command lock).
+        """
+        self._initialized = False
+        lock = getattr(self._board, "i2c_lock", self._lock)
+        async with lock:
+            bus, self._bus = self._bus, None
+            if bus is not None:
+                await asyncio.to_thread(bus.close)
 
     # --- transfer plumbing ---
 
@@ -1680,7 +1695,18 @@ class BLEWriteDevice(BaseDevice):
                 # reconnecting would re-arm a device that was just stopped.
                 if not self._initialized:
                     raise
+                # Retry only a dropped link: with the link up the write may
+                # have landed (ack timed out), and resending a non-idempotent
+                # command would run it twice. Disconnect before dropping.
+                client = self._client
+                if client is not None and client.is_connected:
+                    raise
                 self._client = None
+                if client is not None:
+                    try:
+                        await client.disconnect()
+                    except Exception as e:  # pragma: no cover - best-effort
+                        logger.debug("BLEWrite: disconnect while dropping client: %s", e)
                 await self._ensure_connected()
                 await self._client.write_gatt_char(
                     self._char_uuid, data, response=self._effective_response()

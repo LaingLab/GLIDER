@@ -271,11 +271,21 @@ class EpochTable(QWidget):
             action = menu.addAction(metric.label)
             action.setCheckable(True)
             action.setChecked(metric.key in chosen)
-            action.toggled.connect(lambda on, key=metric.key: self._toggle_metric(key, on))
+            action.toggled.connect(
+                lambda on, key=metric.key, action=action: self._toggle_metric(key, on, action)
+            )
 
-    def _toggle_metric(self, key: str, on: bool) -> None:
+    def _toggle_metric(self, key: str, on: bool, action=None) -> None:
         keys = self.metric_keys(self._catalog)
         keys = [k for k in keys if k != key] + ([key] if on else [])
+        if not keys:
+            # The last one stays: with none chosen the table falls back to the
+            # defaults, and the menu would show all unticked beside them.
+            if action is not None:
+                action.blockSignals(True)
+                action.setChecked(True)
+                action.blockSignals(False)
+            return
         self._chosen = keys
         self._render()
 

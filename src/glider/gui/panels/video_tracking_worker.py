@@ -22,6 +22,7 @@ class VideoTrackingWorker(QObject):
     progress = pyqtSignal(int, int)  # done, total
     preview = pyqtSignal(object, int)  # annotated_frame (np.ndarray BGR), frame_index
     finished = pyqtSignal(str)  # output_dir
+    cancelled = pyqtSignal(str)  # output_dir holding the partial results
     failed = pyqtSignal(str)  # message
 
     def __init__(
@@ -41,7 +42,9 @@ class VideoTrackingWorker(QObject):
                 cancel_cb=lambda: self._cancelled,
                 frame_cb=lambda frame, n: self.preview.emit(frame, n),
             )
-            self.finished.emit(str(out))
+            # run() also returns normally on cancel; the outputs are truncated
+            # and must not be reported as a completed run.
+            (self.cancelled if self._cancelled else self.finished).emit(str(out))
         except Exception as exc:  # surfaced to the panel, never crashes the UI
             logger.exception("VideoTrackingWorker failed")
             self.failed.emit(str(exc))

@@ -32,6 +32,7 @@ CV re-runs read the cache instead of re-decoding.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import cv2
@@ -190,7 +191,14 @@ def load_or_compute_motion(
     pose_csv = Path(pose_csv)
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    key = f"{pose_csv.stem}_o{out_size}_c{cover:g}_t{thresh:g}.csv"
+    # Keyed on the resolved pose path + video, not the stem alone: stems
+    # repeat across sessions (`<video>_animals/animal0.csv`, `<id>/pose.csv`),
+    # and a stem-only key handed one session another's features. body_axis
+    # changes the patch, so it is part of the key too.
+    ident = f"{pose_csv.resolve()}|{Path(video_path).resolve()}"
+    digest = hashlib.sha1(ident.encode("utf-8")).hexdigest()[:12]
+    head, tail = int(body_axis[0]), int(body_axis[1])
+    key = f"{pose_csv.stem}_{digest}_a{head}-{tail}_o{out_size}_c{cover:g}_t{thresh:g}.csv"
     cache_file = cache_dir / key
 
     n = len(np.asarray(xy))

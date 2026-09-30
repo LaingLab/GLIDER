@@ -353,6 +353,7 @@ async def test_the_hook_does_not_run_on_a_write_retry(fake_bleak):
     async def _flaky(char, data, response=False):
         if failing["first"]:
             failing["first"] = False
+            original.is_connected = False  # a real drop, so the retry is allowed
             raise OSError("link dropped mid-write")
         original.written.append(bytes(data))
 
@@ -417,6 +418,7 @@ async def test_a_write_retry_keeps_the_notify_subscription(fake_bleak):
     assert original.subscribed
 
     async def _flaky(char, data, response=False):
+        original.is_connected = False
         raise OSError("link dropped mid-write")
 
     original.write_gatt_char = _flaky

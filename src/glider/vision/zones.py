@@ -21,6 +21,18 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+def circle_contains(cx, cy, rx, ry, x, y, aspect: float = 1.0):
+    """Circle-zone membership in normalized coords, measured in pixel space.
+
+    The circle is drawn with a pixel radius (``draw_zones``), so distances are
+    taken after scaling x by ``aspect`` (frame width / height); in normalized
+    space a circle on a 4:3 frame would be tested as an ellipse. ``x``/``y``
+    may be scalars or numpy arrays.
+    """
+    radius = np.hypot((rx - cx) * aspect, ry - cy)
+    return np.hypot((x - cx) * aspect, y - cy) <= radius
+
+
 class ZoneShape(Enum):
     """Supported zone shapes."""
 
@@ -47,13 +59,16 @@ class Zone:
     vertices: list[tuple[float, float]]
     color: tuple[int, int, int] = (0, 255, 0)  # BGR for OpenCV
 
-    def contains_point(self, x: float, y: float) -> bool:
+    def contains_point(self, x: float, y: float, aspect: float = 1.0) -> bool:
         """
         Check if a point (normalized coords) is inside the zone.
 
         Args:
             x: X coordinate (0-1)
             y: Y coordinate (0-1)
+            aspect: Frame width / height. Circles are drawn in pixel space, so
+                the circle test needs it to match what the operator sees;
+                rectangles and polygons are unaffected by it.
 
         Returns:
             True if point is inside the zone
@@ -74,13 +89,8 @@ class Zone:
         elif self.shape == ZoneShape.CIRCLE:
             if len(self.vertices) < 2:
                 return False
-            cx, cy = self.vertices[0]  # Center
-            rx, ry = self.vertices[1]  # Point on radius
-            # Calculate radius
-            radius = math.sqrt((rx - cx) ** 2 + (ry - cy) ** 2)
-            # Check distance from center
-            dist = math.sqrt((x - cx) ** 2 + (y - cy) ** 2)
-            return dist <= radius
+            (cx, cy), (rx, ry) = self.vertices[0], self.vertices[1]
+            return bool(circle_contains(cx, cy, rx, ry, x, y, aspect))
 
         elif self.shape == ZoneShape.POLYGON:
             if len(self.vertices) < 3:
@@ -115,7 +125,7 @@ class Zone:
         # Convert to normalized coordinates
         norm_x = px / width
         norm_y = py / height
-        return self.contains_point(norm_x, norm_y)
+        return self.contains_point(norm_x, norm_y, width / height)
 
     def get_pixel_vertices(self, width: int, height: int) -> list[tuple[int, int]]:
         """
@@ -253,18 +263,19 @@ class ZoneConfiguration:
         self.config_height = 0
         logger.info("Cleared all zones")
 
-    def point_in_zones(self, x: float, y: float) -> list[str]:
+    def point_in_zones(self, x: float, y: float, aspect: float = 1.0) -> list[str]:
         """
         Get list of zone IDs containing a point (normalized coords).
 
         Args:
             x: X coordinate (0-1)
             y: Y coordinate (0-1)
+            aspect: Frame width / height (see ``Zone.contains_point``)
 
         Returns:
             List of zone IDs containing the point
         """
-        return [zone.id for zone in self.zones if zone.contains_point(x, y)]
+        return [zone.id for zone in self.zones if zone.contains_point(x, y, aspect)]
 
     def point_in_zones_pixels(self, px: int, py: int, width: int, height: int) -> list[str]:
         """
@@ -283,20 +294,21 @@ class ZoneConfiguration:
             return []
         norm_x = px / width
         norm_y = py / height
-        return self.point_in_zones(norm_x, norm_y)
+        return self.point_in_zones(norm_x, norm_y, width / height)
 
-    def get_zone_names_for_point(self, x: float, y: float) -> list[str]:
+    def get_zone_names_for_point(self, x: float, y: float, aspect: float = 1.0) -> list[str]:
         """
         Get list of zone names containing a point (normalized coords).
 
         Args:
             x: X coordinate (0-1)
             y: Y coordinate (0-1)
+            aspect: Frame width / height (see ``Zone.contains_point``)
 
         Returns:
             List of zone names containing the point
         """
-        return [zone.name for zone in self.zones if zone.contains_point(x, y)]
+        return [zone.name for zone in self.zones if zone.contains_point(x, y, aspect)]
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""

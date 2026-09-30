@@ -327,6 +327,73 @@ async def test_streaming_reader_discards_partial_frame(fake_serial):
     await device.shutdown()
 
 
+async def test_streaming_reader_drops_tail_after_partial_frame(fake_serial):
+    # B7: "2" timed out mid-line; its tail "3.14\n" must not be cached as a sample.
+    _module, ser = fake_serial
+    lines = [b"2", b"3.14\n", b"23.15\n"]
+    consumed = []
+
+    def _read_until(*_a, **_k):
+        if lines:
+            consumed.append(lines.pop(0))
+            return consumed[-1]
+        time.sleep(0.005)
+        return b""
+
+    ser.read_until.side_effect = _read_until
+    device = await _initialized(settings={"stream": True})
+    for _ in range(50):
+        if await device.get_state() is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert await device.get_state() == "23.15"
+    await device.shutdown()
+
+
+async def test_request_response_drops_stale_input(fake_serial):
+    # B7: query() flushes stale input before writing; an incomplete read flushes
+    # its tail so it is not returned as the next reply.
+    _module, ser = fake_serial
+    ser.read_until.return_value = b"ok\n"
+    device = await _initialized()
+    assert await device.query("MEAS?") == "ok"
+    assert ser.reset_input_buffer.call_count == 1
+    ser.read_until.return_value = b"23"
+    with pytest.raises(RuntimeError, match="incomplete read"):
+        await device.read_line()
+    assert ser.reset_input_buffer.call_count == 2
+
+
+async def test_initialize_sets_write_timeout(fake_serial):
+    # B2: an unbounded write would hold the port lock past shutdown's budget.
+    module, _ser = fake_serial
+    await _initialized()
+    assert module.Serial.call_args.kwargs["write_timeout"] > 0
+
+
+async def test_shutdown_cancels_blocking_read_before_taking_lock(fake_serial):
+    # B2: a request/response read blocks up to the user timeout while holding
+    # the port lock; shutdown must cancel it so close() runs promptly.
+    _module, ser = fake_serial
+    import threading
+
+    released = threading.Event()
+
+    def _blocking_read(*_a, **_k):
+        released.wait(5)
+        return b""
+
+    ser.read_until.side_effect = _blocking_read
+    ser.cancel_read.side_effect = released.set
+    device = await _initialized(settings={"timeout": 60})
+    read_task = asyncio.create_task(device.read_line())
+    await asyncio.sleep(0.05)
+    await asyncio.wait_for(device.shutdown(), timeout=2.0)
+    ser.close.assert_called_once()
+    with pytest.raises(RuntimeError):
+        await read_task
+
+
 async def test_write_comma_joins_multiple_args(fake_serial):
     # #5: node comma-split "SET,1,2" -> write("SET",1,2) must round-trip.
     _module, ser = fake_serial

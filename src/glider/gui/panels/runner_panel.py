@@ -231,16 +231,9 @@ class RunnerPanel(QWidget):
 
         self._refresh_run_readiness()
 
-        # The header timer is hidden while live (RUNNING or PAUSED) because the
-        # persistent run banner (shown across both Runner pages) owns the
-        # visible timer then; it is reshown once idle/stopped, where the
-        # snap-to-duration repaint below already keeps it in sync. PAUSED counts
-        # as live: main_window auto-pauses on a mid-run board disconnect, and
-        # the banner (not the header) stays visible through that.
-        if state_name in ("RUNNING", "PAUSED"):
-            self._runner_timer.hide()
-        else:
-            self._runner_timer.show()
+        # The header timer stays visible in every state. RunnerShell shows its
+        # run banner only when the operator is OFF the Run tab, so this header
+        # is the only timer on the Run tab during a live run.
 
         # Update recording indicator
         if state_name == "RUNNING" and self._core.data_recorder.is_recording:

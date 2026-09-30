@@ -638,17 +638,11 @@ class ExperimentSession:
         self._mark_dirty()
 
     def remove_board(self, board_id: str) -> None:
-        """Remove a board, its associated devices, and nodes bound to them."""
+        """Remove a board and its devices; nodes bound to them keep no device."""
         removed_device_ids = {d.id for d in self._hardware.devices if d.board_id == board_id}
         self._hardware.boards = [b for b in self._hardware.boards if b.id != board_id]
         self._hardware.devices = [d for d in self._hardware.devices if d.board_id != board_id]
-        # Also remove nodes that reference the removed devices (mirrors
-        # remove_device); otherwise the flow keeps dangling device_id refs
-        # that silently fail to bind on the next load.
-        if removed_device_ids:
-            self._flow.nodes = [
-                n for n in self._flow.nodes if n.device_id not in removed_device_ids
-            ]
+        self._unbind_nodes(removed_device_ids)
         self._mark_dirty()
 
     def get_board(self, board_id: str) -> BoardConfig | None:
@@ -687,9 +681,20 @@ class ExperimentSession:
     def remove_device(self, device_id: str) -> None:
         """Remove a device."""
         self._hardware.devices = [d for d in self._hardware.devices if d.id != device_id]
-        # Also remove nodes that reference this device
-        self._flow.nodes = [n for n in self._flow.nodes if n.device_id != device_id]
+        self._unbind_nodes({device_id})
         self._mark_dirty()
+
+    def _unbind_nodes(self, device_ids: set[str]) -> None:
+        """Clear the device on nodes bound to ``device_ids``; keep the nodes.
+
+        Deleting the nodes here used to leave them drawn in the graph editor
+        with no config behind them: reassigning a device was a silent no-op and
+        the next save dropped them from the file. A cleared node is the same
+        as a freshly placed one, so the editor's normal assign path applies.
+        """
+        for node in self._flow.nodes:
+            if node.device_id in device_ids:
+                node.device_id = None
 
     def get_device(self, device_id: str) -> DeviceConfig | None:
         """Get a device by ID."""
@@ -849,8 +854,11 @@ class ExperimentSession:
                 raise ValueError("No file path specified")
             file_path = self._file_path
 
-        with open(file_path, "w") as f:
-            f.write(self.to_json())
+        from glider.core.fileio import atomic_write_text
+
+        # Serialize first: a value to_json cannot encode must fail here, not
+        # after the old experiment file has been truncated.
+        atomic_write_text(file_path, self.to_json())
 
         self._file_path = file_path
         self._mark_clean()

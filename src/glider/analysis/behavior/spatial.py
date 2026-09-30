@@ -155,7 +155,8 @@ def _zone_ids(track: np.ndarray, zones, resolution) -> list[str]:
     # changes — which is what made the table feel like a hang.
     # ``_zone_mask`` is checked against Zone.contains_point in the tests, so
     # the two cannot drift apart.
-    per_zone = [(zone.name, _zone_mask(zone, xs, ys) & finite) for zone in zones.zones]
+    aspect = width / height
+    per_zone = [(zone.name, _zone_mask(zone, xs, ys, aspect) & finite) for zone in zones.zones]
 
     out: list[str] = []
     for i in range(len(track)):
@@ -166,8 +167,11 @@ def _zone_ids(track: np.ndarray, zones, resolution) -> list[str]:
     return out
 
 
-def _zone_mask(zone, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
-    """Boolean membership for every point at once, mirroring Zone geometry."""
+def _zone_mask(zone, xs: np.ndarray, ys: np.ndarray, aspect: float = 1.0) -> np.ndarray:
+    """Boolean membership for every point at once, mirroring Zone geometry.
+
+    ``aspect`` is frame width / height, for circles measured in pixels.
+    """
     from glider.vision.zones import ZoneShape
 
     verts = zone.vertices
@@ -183,9 +187,12 @@ def _zone_mask(zone, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
     if zone.shape == ZoneShape.CIRCLE:
         if len(verts) < 2:
             return np.zeros(xs.shape, dtype=bool)
+        # A true pixel circle, as the overlay draws it: normalized x is scaled
+        # by width/height so a 16:9 frame does not test an ellipse.
+        from glider.vision.zones import circle_contains
+
         (cx, cy), (rx, ry) = verts[0], verts[1]
-        radius = np.hypot(rx - cx, ry - cy)
-        return np.hypot(xs - cx, ys - cy) <= radius
+        return circle_contains(cx, cy, rx, ry, xs, ys, aspect)
 
     if zone.shape == ZoneShape.POLYGON and len(verts) >= 3:
         # cv2.pointPolygonTest over the same integer-scaled vertices the
@@ -231,7 +238,10 @@ def zone_occupancy(
         )
 
     dwell = compute_zone_dwell(frame)
-    window_s = len(frame) / view.fps if view.fps else 0.0
+    # Real time spanned, not the row count: rows arrive every `stride` frames.
+    frames = frame["frame"].to_numpy()
+    stride = max(1, int(np.median(np.diff(frames)))) if len(frames) > 1 else 1
+    window_s = (int(frames[-1]) - int(frames[0]) + stride) / view.fps if view.fps else 0.0
     first_ms = float(frame["flow_elapsed_ms"].iloc[0])
 
     rows = []

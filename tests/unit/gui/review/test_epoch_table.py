@@ -188,3 +188,12 @@ def test_export_asks_for_a_shape(table):
     for action in table.export_btn.menu().actions():
         action.trigger()
     assert seen == ["tidy", "wide"]
+
+
+def test_the_last_metric_cannot_be_unticked(table):
+    """With none chosen the table shows defaults while the menu shows none ticked."""
+    table.set_metrics(["distance_cm"])
+    (only,) = [a for a in table.metrics_btn.menu().actions() if a.isChecked()]
+    only.trigger()
+    assert only.isChecked()
+    assert [m.key for m in table.metrics()] == ["distance_cm"]

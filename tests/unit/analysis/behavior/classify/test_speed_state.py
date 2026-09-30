@@ -388,4 +388,6 @@ class TestADropoutDoesNotManufactureSpeed:
         """
         speeds = causal_speed_series(self._walk(n=12, gap=slice(2, 7)), coord_smooth=1)
         assert np.isnan(speeds[2:7]).all()
-        assert np.isfinite(speeds[7:]).all()
+        # Frame 7 re-seeds the filter: no predecessor, so its speed is unknown.
+        assert np.isnan(speeds[7])
+        assert np.isfinite(speeds[8:]).all()

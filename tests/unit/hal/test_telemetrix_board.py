@@ -236,3 +236,55 @@ async def test_disconnect_clears_pin_state_caches():
     assert board._pin_values == {}
     assert board._pwm_pins_forced_low == set()
     assert board._analog_map == {}
+
+
+def _connected_board(board_type="uno"):
+    board = TelemetrixBoard(port="COM3", board_type=board_type)
+    calls = []
+
+    class FakeThread:
+        is_running = True
+        telemetrix = object()
+
+        def call_method(self, name, *args, **kwargs):
+            calls.append((name, *args))
+
+    board._telemetrix_thread = FakeThread()
+    board._set_state(BoardConnectionState.CONNECTED)
+    return board, calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("board_type, pin", [("uno", 14), ("mega", 54), ("mega", 69)])
+async def test_analog_channel_comes_from_the_board_pin_table(board_type, pin):
+    # B3: Mega A0 is pin 54 -> channel 0, not 40 (which the firmware lacks).
+    board, calls = _connected_board(board_type)
+    await board.set_pin_mode(pin, PinMode.INPUT, PinType.ANALOG)
+    first = 14 if board_type == "uno" else 54
+    assert calls == [("set_pin_mode_analog_input", pin - first)]
+
+
+@pytest.mark.asyncio
+async def test_non_analog_pin_is_rejected():
+    board, calls = _connected_board("mega")
+    with pytest.raises(ValueError, match="not an analog input"):
+        await board.set_pin_mode(30, PinMode.INPUT, PinType.ANALOG)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_emergency_stop_survives_pin_modes_mutation():
+    # B8: set_pin_mode running during the e-stop's awaits must not abort the
+    # loop with "dictionary changed size" and leave later outputs high.
+    board, calls = _connected_board()
+    board._pin_modes.update({2: PinMode.OUTPUT, 4: PinMode.OUTPUT})
+    real = board._telemetrix_thread.call_method
+
+    def mutating(name, *args, **kwargs):
+        board._pin_modes[7] = PinMode.INPUT
+        real(name, *args, **kwargs)
+
+    board._telemetrix_thread.call_method = mutating
+    await board.emergency_stop()
+    assert ("digital_write", 2, 0) in calls
+    assert ("digital_write", 4, 0) in calls

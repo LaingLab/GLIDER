@@ -2,8 +2,8 @@
 
 Wires the same connections main_window makes (panel.elapsed_updated ->
 shell.set_banner_time) and exercises the core behavior of Task 9: the
-header timer hides during a live run while the banner owns the visible timer,
-elapsed updates reach the banner, and the header reappears once idle.
+header timer stays visible on the Run tab during a live run (the banner is
+hidden there), and elapsed updates still reach the banner for the other tabs.
 """
 
 from unittest.mock import MagicMock
@@ -30,15 +30,17 @@ def _wire(qtbot, mock_core):
     return panel, shell
 
 
-def test_header_timer_hidden_during_run_and_reshown_idle(qtbot, mock_core):
+def test_run_tab_shows_a_timer_during_run(qtbot, mock_core):
     panel, shell = _wire(qtbot, mock_core)
 
-    panel.update_state("RUNNING")
-    assert panel._runner_timer.isVisibleTo(panel) is False
+    shell.select_tab(1)  # the Run tab, where the banner is hidden
+    shell.update_state("RUNNING")
+    assert shell._banner.isVisibleTo(shell) is False
+    assert panel._runner_timer.isVisibleTo(panel) is True
 
     # A live tick flows panel -> banner via elapsed_updated.
     panel._set_timer_display(5.0)
     assert shell._banner._time.text() == "00:05.00"
 
-    panel.update_state("IDLE")
+    shell.update_state("IDLE")
     assert panel._runner_timer.isVisibleTo(panel) is True

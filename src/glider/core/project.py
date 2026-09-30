@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from glider.core.experiment_session import Subject
+from glider.core.fileio import atomic_write_text
 from glider.core.session import Session
 
 __all__ = [
@@ -226,8 +227,12 @@ class Project:
         path = root / MANIFEST_NAME
         try:
             raw = path.read_text(encoding="utf-8")
-        except OSError:
+        except FileNotFoundError:
             return cls(root=root)
+        except OSError as e:
+            # Not "no manifest": an empty Project here would be saved over the
+            # real one the next time anything writes it.
+            raise ProjectError(f"could not read {path}: {e}") from e
         except UnicodeDecodeError as e:
             raise ProjectError(f"{path} is not UTF-8 text: {e}") from e
         try:
@@ -238,7 +243,9 @@ class Project:
             raise ProjectError(f"{path} must hold a JSON object at the top level")
 
         version = data.get("schema_version", PROJECT_SCHEMA_VERSION)
-        if isinstance(version, int) and version > PROJECT_SCHEMA_VERSION:
+        if not isinstance(version, int) or isinstance(version, bool):
+            raise ProjectError(f"{path}: schema_version must be an integer, not {version!r}")
+        if version > PROJECT_SCHEMA_VERSION:
             raise ProjectError(
                 f"{path} was written by a newer GLIDER (schema {version}, this one "
                 f"understands {PROJECT_SCHEMA_VERSION}). Reading it would silently "
@@ -294,9 +301,7 @@ class Project:
         payload = self.to_dict()
         self.created_at = payload["created_at"]
         target = self.manifest_path
-        tmp = target.with_name(target.name + ".tmp")
-        tmp.write_text(json.dumps(payload, indent=2) + "\n")
-        tmp.replace(target)
+        atomic_write_text(target, json.dumps(payload, indent=2) + "\n")
         return target
 
     # ------------------------------------------------------------------

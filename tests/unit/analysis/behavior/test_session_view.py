@@ -122,7 +122,8 @@ class TestScrubbing:
 
     def test_a_frame_past_the_end_has_no_label(self, tmp_path):
         view = SessionView.load(_write_session(tmp_path / "v"))
-        assert view.label_at(99999) == "groom"  # last known row
+        # Past the last row's stride there is no label, not the last one (G5).
+        assert view.label_at(99999) == ""
         assert view.label_at(-5) == ""
 
     def test_the_centroid_averages_the_keypoints(self, tmp_path):

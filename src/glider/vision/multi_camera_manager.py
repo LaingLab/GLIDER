@@ -33,6 +33,17 @@ class MultiCameraManager:
     - Per-camera frame callbacks
     """
 
+    def on_error(self, callback: Callable[[str, str], None]) -> None:
+        """Register ``callback(camera_id, message)`` for a camera whose stream stalled."""
+        self._error_callbacks.append(callback)
+
+    def _on_camera_error(self, camera_id: str, message: str) -> None:
+        for cb in list(self._error_callbacks):
+            try:
+                cb(camera_id, message)
+            except Exception as e:
+                logger.error(f"Camera error callback failed: {e}")
+
     def __init__(self):
         """Initialize the multi-camera manager."""
         self._cameras: dict[str, CameraManager] = {}
@@ -43,6 +54,7 @@ class MultiCameraManager:
 
         # Callbacks for each camera
         self._frame_callbacks: dict[str, list[Callable[[str, np.ndarray, float], None]]] = {}
+        self._error_callbacks: list[Callable[[str, str], None]] = []
 
         # Who currently wants the cameras streaming. This manager is shared --
         # the camera panel's multi-camera preview and the Multi-Camera window
@@ -135,6 +147,7 @@ class MultiCameraManager:
 
             # Register internal frame callback to route to external callbacks
             camera.on_frame(lambda frame, ts, cid=camera_id: self._on_camera_frame(cid, frame, ts))
+            camera.on_error(lambda msg, cid=camera_id: self._on_camera_error(cid, msg))
 
             # Set as primary if first camera
             if self._primary_camera_id is None:
