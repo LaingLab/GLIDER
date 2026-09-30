@@ -419,6 +419,21 @@ async def test_shutdown_stops_the_reader_before_writing_the_register(board, sche
     assert order.index("stop") < order.index("write") < order.index("close")
 
 
+async def test_shutdown_joins_the_reader_well_inside_the_managers_budget(device):
+    """B5: a join as long as HardwareManager's 2 s ``wait_for`` is cancelled
+    mid-wait, so Standby is never sent and the port is never closed."""
+    seen: dict[str, float] = {}
+    real_stop = device.reader.stop
+
+    def watched_stop(timeout=2.0):
+        seen["timeout"] = timeout
+        return real_stop(timeout)
+
+    device.reader.stop = watched_stop
+    await device.shutdown()
+    assert seen["timeout"] <= 1.0
+
+
 async def test_shutdown_joins_the_reader_off_the_event_loop(device):
     """``stop()`` blocks for up to 2 s waiting on the join.
 

@@ -443,13 +443,19 @@ class BLEDevice(BaseDevice):
         """Connect (resolving the address if needed) and subscribe if requested."""
         if not self._address and not self._adv_name:
             raise ValueError("BLE: set an 'address' or a 'name' to resolve")
+        # Validated before connecting: a raise after connect would strand a
+        # connected client (the peripheral stops advertising, so retry fails).
+        if self._notify and not self._read_char:
+            raise ValueError("BLE: 'read_char_uuid' is required when notify is enabled")
         async with self._lock:
             await self._ensure_connected()
             if self._notify:
-                if not self._read_char:
-                    raise ValueError("BLE: 'read_char_uuid' is required when notify is enabled")
                 self._latest = None
-                await self._client.start_notify(self._read_char, self._on_notify)
+                try:
+                    await self._client.start_notify(self._read_char, self._on_notify)
+                except BaseException:
+                    await self._drop_client()
+                    raise
             self._initialized = True
         logger.info(
             "BLE initialized: %s (notify=%s)", self._address or self._adv_name, self._notify
@@ -727,6 +733,20 @@ class BLEDevice(BaseDevice):
                 self._client = None
                 raise
 
+    async def _drop_client(self) -> None:
+        """Clear ``self._client``, disconnecting it (best-effort) first.
+
+        Dropping a still-connected BleakClient without disconnecting leaves the
+        peripheral bonded to a handle nobody holds: it stops advertising and no
+        reconnect can find it until the process exits.
+        """
+        client, self._client = self._client, None
+        if client is not None:
+            try:
+                await client.disconnect()
+            except Exception as e:  # noqa: BLE001 - best-effort
+                logger.debug("BLE %s: disconnect while dropping client: %s", self._name, e)
+
     async def _with_retry(self, op: Callable) -> Any:
         """Run a GATT op, reconnecting once and retrying on a dropped link.
 
@@ -745,7 +765,14 @@ class BLEDevice(BaseDevice):
         except Exception:
             if not self._initialized:
                 raise
-            self._client = None
+            # Retry only a dropped link. With the link still up the op may well
+            # have reached the peripheral (e.g. a write that timed out on its
+            # ack), and resending a non-idempotent command restarts a stimulus
+            # train -- so surface the error instead.
+            client = self._client
+            if client is not None and client.is_connected:
+                raise
+            await self._drop_client()
             await self._ensure_ready()
             return await op()
 

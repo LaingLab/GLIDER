@@ -141,18 +141,30 @@ class StepperA4988Device(BaseDevice):
                     "(or pip install gpiozero)"
                 ) from e
             pins = {}
-            for pin_name in self.required_pins:
-                bcm = self._config.pins[pin_name]
-                if pin_name == "enable":
-                    # A4988 ENABLE is active-low; invert here so .on() always
-                    # means "energized" everywhere else in this class.
-                    pins[pin_name] = gpiozero.DigitalOutputDevice(bcm, active_high=False)
-                else:
-                    pins[pin_name] = gpiozero.DigitalOutputDevice(bcm)
+            try:
+                for pin_name in self.required_pins:
+                    bcm = self._config.pins[pin_name]
+                    if pin_name == "enable":
+                        # A4988 ENABLE is active-low; invert here so .on() always
+                        # means "energized" everywhere else in this class.
+                        pins[pin_name] = gpiozero.DigitalOutputDevice(bcm, active_high=False)
+                    else:
+                        pins[pin_name] = gpiozero.DigitalOutputDevice(bcm)
+                self._gpio = pins
+                self._apply_steptype(self._steptype)
+            except Exception:
+                # Close what we already claimed (as HX711 does); otherwise those
+                # pins stay reserved and every retry fails with "pin in use".
+                self._gpio = {}
+                for dev in pins.values():
+                    try:
+                        dev.close()
+                    except Exception:
+                        pass
+                raise
             return pins
 
         self._gpio = await asyncio.to_thread(_claim)
-        self._apply_steptype(self._steptype)
         self._energized = False  # gpiozero initial_value=False -> de-energized
         self._initialized = True
         logger.info("StepperA4988 initialized on pins %s", self._config.pins)
@@ -227,13 +239,17 @@ class StepperA4988Device(BaseDevice):
             # with the pins already released.
             if not self._initialized:
                 raise RuntimeError("StepperA4988 not initialized")
+            # Cleared here, on the loop, rather than in the worker: a stop() or
+            # shutdown() landing before the thread starts must not be erased.
+            # No await separates this from the initialized check above.
+            self._stop_event.clear()
             return await asyncio.to_thread(self._run_move, steps, mode)
 
     def _run_move(self, steps: int, steptype: str) -> int:
-        """Blocking pulse loop; runs in a worker thread under the move lock."""
-        # Clear the stop flag on entry so a move issued after a stop() runs
-        # normally instead of exiting immediately.
-        self._stop_event.clear()
+        """Blocking pulse loop; runs in a worker thread under the move lock.
+
+        ``move_steps`` clears the stop event before handing off to this thread.
+        """
         self._apply_steptype(steptype)
         if steps >= 0:
             self._gpio["dir"].on()

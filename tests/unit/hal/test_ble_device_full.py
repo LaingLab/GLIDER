@@ -306,6 +306,7 @@ async def test_write_retries_once_after_reconnect(fake_bleak):
     first = created["client"]
 
     def boom(*a, **k):
+        first.is_connected = False
         raise RuntimeError("link dropped")
 
     first.write_gatt_char = boom
@@ -313,6 +314,47 @@ async def test_write_retries_once_after_reconnect(fake_bleak):
     new = created["client"]
     assert new is not first  # reconnected
     assert new.written == [("w", b"ON", False)]
+
+
+async def test_write_error_on_a_live_link_is_not_resent(fake_bleak):
+    # B10: the link is still up, so the write may have landed (ack timed out);
+    # resending would run a non-idempotent command twice.
+    _module, created = fake_bleak
+    device = await _initialized({"address": "x", "write_char_uuid": "w"})
+    first = created["client"]
+    calls = []
+
+    def ack_timeout(*a, **k):
+        calls.append(a)
+        raise TimeoutError("no ack")
+
+    first.write_gatt_char = ack_timeout
+    with pytest.raises(TimeoutError):
+        await device.write("20,10")
+    assert len(calls) == 1
+    assert created["client"] is first and first.is_connected
+
+
+async def test_notify_setup_failure_disconnects_the_client(fake_bleak):
+    # B6: a connected client must not be stranded when start_notify fails.
+    _module, created = fake_bleak
+
+    async def fail(*a, **k):
+        raise RuntimeError("notify refused")
+
+    device = _make_device({"address": "x", "read_char_uuid": "r", "notify": True})
+    orig_connect = _module.BleakClient
+
+    def factory(*a, **k):
+        client = orig_connect(*a, **k)
+        client.start_notify = fail
+        return client
+
+    _module.BleakClient = factory
+    with pytest.raises(RuntimeError, match="notify refused"):
+        await device.initialize()
+    assert not created["client"].is_connected
+    assert device._client is None
 
 
 async def test_write_mode_autodetected_from_characteristic(fake_bleak):

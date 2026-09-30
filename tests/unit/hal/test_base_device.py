@@ -31,3 +31,23 @@ async def test_execute_action_rearmed_by_reinitialize():
     await device.initialize()
     await device.execute_action("on")
     assert board.get_pin_state(5) is True
+
+
+async def test_analog_read_clamps_to_the_boards_resolution_not_10_bits():
+    # B-note: a 12-bit board's 4000 is a valid reading, not "out of range".
+    from types import SimpleNamespace
+
+    from glider.hal.base_device import AnalogInputDevice
+
+    class Board12:
+        capabilities = SimpleNamespace(analog_resolution=12)
+
+        async def read_analog(self, pin):
+            return self.value
+
+    board = Board12()
+    device = AnalogInputDevice(board, DeviceConfig(pins={"input": 0}))
+    board.value = 4000
+    assert await device.read() == 4000
+    board.value = 5000
+    assert await device.read() == 4095

@@ -503,6 +503,30 @@ async def test_reprime_dummy_that_also_glitches_does_not_trust_the_next_frame(fa
         await device.shutdown()
 
 
+async def test_live_gain_change_discards_frames_converted_at_the_old_gain(fake_chip):
+    # B11: frames after a gain edit that were converted at the OLD gain (a
+    # frame is converted at the gain the previous frame's pulses selected)
+    # must not be cached under the new gain and scale.
+    fake_chip.frames.append(111)
+    device = _make_device()
+    await device.initialize()
+    try:
+        assert await _wait_for_sample(device) == 111.0
+        # The sampler is already waiting on the next frame with gain 128.
+        device.apply_settings({"gain": 32})
+        fake_chip.frames.extend([222, 333, 444])
+        await _wait_for_frames(fake_chip, 4)
+        for _ in range(100):
+            if device._latest_sample()[0] != 111:
+                break
+            await asyncio.sleep(0.005)
+        # 222 (pulsed at 128) and 333 (converted at 128) are dropped.
+        assert device._latest_sample()[0] == 444
+        assert fake_chip.pulse_counts == [25, 25, 26, 26]
+    finally:
+        await device.shutdown()
+
+
 async def test_saturated_frame_does_not_trigger_reprime_dummy(fake_chip):
     # A saturated reading involves no power-down, so the gain is still primed
     # and the next frame must be trusted directly rather than burned as a

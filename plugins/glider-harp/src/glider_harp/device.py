@@ -130,6 +130,16 @@ ROUND_TRIP_READ_TIMEOUT_S = 0.05
 # releasing the port is not, so the courtesy gets the small budget.
 SHUTDOWN_ROUND_TRIP_TIMEOUT_S = 0.25
 
+# The reader's join on the way out. Well under the manager's 2 s budget (the
+# reader re-checks its stop event every <= 0.5 s): a join as long as the budget
+# gets cancelled mid-wait, so the reader is never retired, Standby is never
+# sent and the port is never closed. This plus two short round-trips fits.
+SHUTDOWN_JOIN_TIMEOUT_S = 1.0
+
+# A write that cannot drain raises after this long instead of holding the port
+# lock (and so shutdown's close) indefinitely.
+WRITE_TIMEOUT_S = 1.0
+
 _DEFAULT_BAUDRATE = 115200
 
 # Widest bound a declared ``ActionValueSpec`` will carry. A U32 or U64
@@ -632,9 +642,9 @@ class HarpDevice(BaseDevice):
 
         reader = self._reader
         if reader is not None:
-            # Up to 2 s inside the join, off the event loop -- on the loop it
-            # would stall the GUI and every other device mid-recording.
-            if not await asyncio.to_thread(reader.stop):
+            # Up to SHUTDOWN_JOIN_TIMEOUT_S inside the join, off the event
+            # loop -- on the loop it would stall the GUI and every other device.
+            if not await asyncio.to_thread(reader.stop, SHUTDOWN_JOIN_TIMEOUT_S):
                 logger.error(
                     "Harp %s: the reader thread would not stop and still owns %s; "
                     "leaving the device Active and the port open",
@@ -694,7 +704,10 @@ class HarpDevice(BaseDevice):
                 "pyserial not installed. Run: pip install pyserial (or reinstall GLIDER)."
             ) from e
         return serial.Serial(
-            port=self._port, baudrate=self._baudrate, timeout=ROUND_TRIP_READ_TIMEOUT_S
+            port=self._port,
+            baudrate=self._baudrate,
+            timeout=ROUND_TRIP_READ_TIMEOUT_S,
+            write_timeout=WRITE_TIMEOUT_S,
         )
 
     # --- schema, profile and what they derive ---

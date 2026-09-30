@@ -512,8 +512,7 @@ class TelemetrixBoard(BaseBoard):
                     )
 
             elif pin_type == PinType.ANALOG:
-                # Convert pin number to analog pin number if needed
-                analog_pin = pin - 14 if pin >= 14 else pin
+                analog_pin = self._analog_channel(pin)
                 self._analog_map[pin] = analog_pin
                 # Initialize pin value to 0 to prevent None values
                 with self._pin_values_lock:
@@ -546,6 +545,25 @@ class TelemetrixBoard(BaseBoard):
         except Exception as e:
             logger.error(f"Failed to set pin mode: {e}")
             raise
+
+    def _analog_channel(self, pin: int) -> int:
+        """Map a board pin (Uno A0=14, Mega A0=54) to its firmware analog channel.
+
+        The base comes from the board's pin table, not a hardcoded 14. A pin
+        below the channel count is taken as a channel number already (the old
+        ``A<n>`` convention). Anything else is rejected: the firmware would
+        never report it, and ``read_analog`` would return 0 forever.
+        """
+        analog_pins = sorted(
+            p
+            for p, cap in self._board_config["pins"].items()
+            if PinType.ANALOG in cap.supported_types
+        )
+        if pin in analog_pins:
+            return analog_pins.index(pin)
+        if 0 <= pin < len(analog_pins):
+            return pin
+        raise ValueError(f"Pin {pin} is not an analog input on {self._board_config['name']}")
 
     async def write_digital(self, pin: int, value: bool) -> None:
         """Write a digital value to a pin."""
@@ -715,7 +733,7 @@ class TelemetrixBoard(BaseBoard):
             return
 
         # Turn off all configured output pins, continuing even if individual pins fail
-        for pin, mode in self._pin_modes.items():
+        for pin, mode in list(self._pin_modes.items()):  # set_pin_mode may mutate
             if mode == PinMode.OUTPUT:
                 try:
                     cap = self._board_config["pins"].get(pin)

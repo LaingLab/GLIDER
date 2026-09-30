@@ -182,6 +182,33 @@ async def test_gpio_output_ops_and_pin_mode():
     assert ("write_analog", 7, 200) in board.calls
 
 
+@pytest.mark.parametrize(
+    "ops, expected",
+    [
+        (["set_high", "set_low"], ("write_digital", 7, False)),
+        (["write_pwm"], ("write_analog", 7, 0)),
+    ],
+)
+async def test_gpio_shutdown_drives_output_low(ops, expected):
+    defn = {
+        "name": "GpioSafe",
+        "transport": "gpio",
+        "settings": standard_settings("gpio"),
+        "actions": [
+            {"name": op, "op": op, "runtime_args": ["value"] if op == "write_pwm" else []}
+            for op in ops
+        ],
+    }
+    board = _MockBoard()
+    dev = _device(defn, board=board, pin=7)
+    await dev.initialize()
+    await dev.execute_action(ops[0], *([100] if ops[0] == "write_pwm" else []))
+    board.calls.clear()
+    await dev.shutdown()
+    assert board.calls == [expected]
+    assert not dev.is_initialized
+
+
 async def test_gpio_analog_input():
     defn = {
         "name": "GpioIn",

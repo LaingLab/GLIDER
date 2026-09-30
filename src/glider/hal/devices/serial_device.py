@@ -51,6 +51,9 @@ READ_WAIT_S = 1.0
 # thread leak on a large user timeout) and never busy-loops on timeout=0.
 MIN_READER_TIMEOUT_S = 0.05
 MAX_READER_TIMEOUT_S = 1.0
+# A write that cannot drain (flow control stalled, device gone) raises after
+# this long instead of blocking the port lock (and thus shutdown) forever.
+WRITE_TIMEOUT_S = 1.0
 
 
 class GenericSerialDevice(BaseDevice):
@@ -287,6 +290,7 @@ class GenericSerialDevice(BaseDevice):
                 parity=self._parity,
                 stopbits=self._stopbits,
                 timeout=self._timeout,
+                write_timeout=WRITE_TIMEOUT_S,
             )
 
         self._serial = await asyncio.to_thread(_open)
@@ -331,6 +335,7 @@ class GenericSerialDevice(BaseDevice):
         self._initialized = False
         try:
             self._stop_event.set()
+            self._cancel_io(self._serial)
             thread, self._thread = self._thread, None
             if thread is not None:
                 await asyncio.to_thread(self._join_reader, thread)
@@ -345,6 +350,24 @@ class GenericSerialDevice(BaseDevice):
             self._initialized = False
             with self._sample_lock:
                 self._latest = None
+
+    def _cancel_io(self, ser: Any) -> None:
+        """Abort a blocking read/write so shutdown's lock wait stays short.
+
+        A request/response ``read_until`` can block for the user's timeout (up
+        to 60 s), longer than the manager's shutdown budget; cancelling lets the
+        holder release the port lock so close() actually runs.
+        """
+        if ser is None:
+            return
+        for name in ("cancel_read", "cancel_write"):
+            fn = getattr(ser, name, None)
+            if fn is None:
+                continue
+            try:
+                fn()
+            except Exception as e:  # not supported by every backend
+                logger.debug("GenericSerial %s: %s failed: %s", self._name, name, e)
 
     def _join_reader(self, thread: threading.Thread) -> None:
         thread.join(timeout=2.0)
@@ -366,6 +389,7 @@ class GenericSerialDevice(BaseDevice):
         (shutdown may have closed the handle) and the loop exits quietly.
         """
         term = self._terminator.encode(self._encoding)
+        resync = False  # True after a partial frame: its tail is still buffered
         while not stop_event.is_set():
             try:
                 raw = ser.read_until(term)
@@ -383,6 +407,12 @@ class GenericSerialDevice(BaseDevice):
                 # exceeded the read timeout): a partial/truncated frame. Discard
                 # it rather than caching a fabricated value.
                 logger.debug("GenericSerial %s: discarded partial frame %r", self._name, raw)
+                resync = True
+                continue
+            if resync:
+                # The rest of the truncated line ("3.14" of "23.14"): drop it
+                # up to its terminator rather than cache it as a sample.
+                resync = False
                 continue
             text = self._decode(raw)
             if text:
@@ -458,6 +488,9 @@ class GenericSerialDevice(BaseDevice):
         async with self._port_lock:
             ser = self._require_open()  # re-checked under the lock (see shutdown)
             raw = await asyncio.to_thread(ser.read_until, term)
+            if not raw.endswith(term):
+                # Drop the buffered tail so it is not read as the next reply.
+                await asyncio.to_thread(ser.reset_input_buffer)
         if not raw.endswith(term):
             raise RuntimeError(
                 f"GenericSerial {self._name}: incomplete read (no terminator "
@@ -467,6 +500,12 @@ class GenericSerialDevice(BaseDevice):
 
     async def query(self, *args: Any) -> str:
         """Write a command, then read one framed reply (request/response)."""
+        if not self._stream:
+            # Discard stale bytes (a late reply to an earlier command) so the
+            # reply we read belongs to this command.
+            async with self._port_lock:
+                ser = self._require_open()
+                await asyncio.to_thread(ser.reset_input_buffer)
         await self.write(*args)
         return await self.read_line()
 

@@ -172,17 +172,31 @@ class DeclarativeDevice(BaseDevice):
         logger.info("DeclarativeDevice '%s' initialized (%s)", self.device_type, self._transport)
 
     async def shutdown(self) -> None:
-        if self._poll_task is not None:
-            self._poll_task.cancel()
-            try:
-                await self._poll_task
-            except asyncio.CancelledError:
-                pass
-            self._poll_task = None
-        if self._bus is not None:
-            await asyncio.to_thread(self._bus.close)
-            self._bus = None
-        self._initialized = False
+        try:
+            if self._initialized and self._transport == "gpio" and self._board is not None:
+                # Drive outputs to their safe state, as DigitalOutputDevice does.
+                ops = {a.get("op") for a in self._actions_def}
+                if ops & {"set_high", "set_low"}:
+                    await self._board.write_digital(self._pin(), False)
+                elif "write_pwm" in ops:
+                    await self._board.write_analog(self._pin(), 0)
+        finally:
+            self._initialized = False
+            # Hold the transfer lock so neither the poll loop nor an action
+            # has an ioctl in flight when the bus closes. Cancelling the poll
+            # task while we hold the lock guarantees it is not inside to_thread.
+            lock = getattr(self._board, "i2c_lock", None) or self._lock
+            async with lock:
+                if self._poll_task is not None:
+                    self._poll_task.cancel()
+                    try:
+                        await self._poll_task
+                    except asyncio.CancelledError:
+                        pass
+                    self._poll_task = None
+                bus, self._bus = self._bus, None
+                if bus is not None:
+                    await asyncio.to_thread(bus.close)
 
     async def _open_i2c(self) -> None:
         def _open():

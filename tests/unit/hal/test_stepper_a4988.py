@@ -189,6 +189,39 @@ async def test_initialize_without_gpiozero_raises_install_hint(monkeypatch):
     assert not device.is_initialized
 
 
+async def test_partial_claim_failure_releases_claimed_pins(fake_pins, monkeypatch):
+    # B9: a later pin failing must not leave the earlier ones reserved.
+    module = sys.modules["gpiozero"]
+    good = module.DigitalOutputDevice
+
+    def factory(pin, **kwargs):
+        if pin == PINS["ms3"]:
+            raise RuntimeError("pin in use")
+        return good(pin, **kwargs)
+
+    monkeypatch.setattr(module, "DigitalOutputDevice", factory)
+    device = _make_device()
+    with pytest.raises(RuntimeError, match="pin in use"):
+        await device.initialize()
+    assert fake_pins and all(fp.closed for fp in fake_pins.values())
+    assert not device.is_initialized
+
+
+async def test_stop_before_the_move_thread_starts_is_honoured(fake_pins, monkeypatch):
+    # B12: a stop() landing after move_steps takes the lock but before the
+    # worker runs must not be erased by the worker clearing the event.
+    device = await _initialized()
+    real_to_thread = asyncio.to_thread
+
+    async def stop_then_run(fn, *args):
+        device._stop_event.set()  # stop() lands here
+        return await real_to_thread(fn, *args)
+
+    monkeypatch.setattr(asyncio, "to_thread", stop_then_run)
+    assert await device.move_steps(50) == 0
+    assert fake_pins[PINS["step"]].on_count == 0
+
+
 async def test_shutdown_de_energizes_and_closes_pins(fake_pins):
     device = await _initialized()
     await device.shutdown()
