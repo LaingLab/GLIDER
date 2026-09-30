@@ -58,6 +58,7 @@ class KeypointCanvas(QWidget):
         self._zones = None
         self._heatmap = None
         self._reader = None  # VideoFileSource, opened lazily
+        self._video_failed = False  # this view's video would not open; retried on set_view
         self._cached: tuple[int, QImage] | None = None
         self._show_poses = True
         self._show_zones = True
@@ -67,6 +68,7 @@ class KeypointCanvas(QWidget):
 
     def set_view(self, view: SessionView | None) -> None:
         self._close_reader()
+        self._video_failed = False
         self._view = view
         self._frame = 0
         self.update()
@@ -90,7 +92,7 @@ class KeypointCanvas(QWidget):
         Decoded regardless of the video toggle: the zone editor wants the
         arena whether or not the operator is looking at it right now.
         """
-        if self._view is None or self._view.video_path is None:
+        if not self.has_video():
             return None
         was_showing, self._show_video = self._show_video, True
         try:
@@ -133,7 +135,9 @@ class KeypointCanvas(QWidget):
         self.update()
 
     def has_video(self) -> bool:
-        return self._view is not None and self._view.video_path is not None
+        return (
+            self._view is not None and self._view.video_path is not None and not self._video_failed
+        )
 
     def has_heatmap(self) -> bool:
         """Whether an overlay is actually on screen.
@@ -157,7 +161,7 @@ class KeypointCanvas(QWidget):
         selection change must not cost another decode, and scrubbing one frame
         at a time is a sequential read rather than a seek.
         """
-        if not self._show_video or self._view is None or self._view.video_path is None:
+        if not self._show_video or not self.has_video():
             return None
         if self._cached is not None and self._cached[0] == index:
             return self._cached[1]
@@ -167,7 +171,9 @@ class KeypointCanvas(QWidget):
             reader = VideoFileSource()
             if not reader.load(self._view.video_path):
                 logger.info("could not open %s for playback", self._view.video_path)
-                self._view.video_path = None  # stop retrying every repaint
+                # Stop retrying every repaint, but only here: the shared view
+                # keeps its video, so a share hiccup is not permanent.
+                self._video_failed = True
                 return None
             self._reader = reader
         # A live recording's tracking counts frames from 1 and its video from

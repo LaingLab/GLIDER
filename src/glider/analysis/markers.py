@@ -17,7 +17,6 @@ import contextlib
 import json
 import math
 import os
-import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +55,7 @@ VERSION = 1
 #: fixed set, as Resolve's markers are: a colour is a category the user chose.
 SWATCHES = ("cyan", "blue", "violet", "pink", "red", "orange", "yellow", "green", "slate")
 _KINDS = ("point", "range")
+_ZERO = {"flow_start": "flow start", "video_start": "the first video frame"}
 _SCOPES = ("session", "cohort")
 
 # How far below a whole frame still counts as that frame. Float noise from
@@ -225,11 +225,13 @@ def load_markers(path: Path) -> tuple[list[Marker], str | None]:
     the caller must then never overwrite.
     """
     path = Path(path)
-    if not path.exists():
-        return [], None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return [], None
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        # Any other OSError (EACCES, EIO, ESTALE on a flaky share) is a file
+        # that cannot be read, not an empty one.
         raise MarkerFileError(f"{path.name} could not be read: {e}") from e
     if not isinstance(data, dict) or not isinstance(data.get("markers"), list):
         raise MarkerFileError(f"{path.name} is not a GLIDER marker file")
@@ -260,21 +262,20 @@ def save_markers(path: Path, markers: list[Marker], *, t0: str | None = None) ->
     if t0 is not None:
         payload["t0"] = t0
     payload["markers"] = [m.to_dict() for m in markers]
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+    # Created 0666 less the umask, as any new file is (mkstemp's 0600 would
+    # strip a shared lab folder's group-read bit once os.replace carried it).
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
-        # mkstemp creates the temp file at 0600, and os.replace carries that
-        # mode onto the destination -- which would strip a shared lab
-        # folder's group-read bit every time a marker file is saved. Match
-        # the existing file's mode, or the mode a normal file create would
-        # get (0666 masked by the process umask) when there is no file yet.
-        if path.exists():
+            f.flush()
+            # On disk before the rename: a crash must leave the old file or
+            # the new one, never a zero-length file that then loads as broken.
+            os.fsync(f.fileno())
+        # An existing file keeps its own mode.
+        with contextlib.suppress(FileNotFoundError):
             os.chmod(tmp, os.stat(path).st_mode & 0o7777)
-        else:
-            umask = os.umask(0)
-            os.umask(umask)
-            os.chmod(tmp, 0o666 & ~umask)
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -288,9 +289,12 @@ class MarkerStore:
     A file that could not be read is never written back -- saving over it
     would destroy whatever it held -- so the store turns read-only and says
     why in ``error``. ``t0`` is the zero this session's seconds count from
-    today (None for a cohort file, whose sessions each use their own); a
-    file saved on a different zero still loads, with ``t0_changed`` set so
-    the window can warn that its markers may have moved.
+    today (None for a cohort file, whose sessions each use their own). A
+    file saved on a different zero still loads, with ``t0_changed`` set, but
+    read-only: saving would stamp today's zero on seconds counted from the
+    old one and move every marker for good, and converting needs the flow
+    start that one of the two zeros lacks. It is shown as saved until the
+    session's zero is the file's again (its events file restored).
     """
 
     def __init__(self, path: Path, *, t0: str | None = None):
@@ -299,12 +303,19 @@ class MarkerStore:
         self.markers: list[Marker] = []
         self.error: str | None = None
         self.t0_changed = False
+        self._removed: set[str] = set()  # ids deleted here since the last save
         try:
             self.markers, stored = load_markers(self.path)
         except MarkerFileError as e:
             self.error = str(e)
             return
         self.t0_changed = t0 is not None and stored is not None and stored != t0
+        if self.t0_changed:
+            self.error = (
+                f"{self.path.name} was saved with time zero {_ZERO.get(stored, stored)}, "
+                f"but this session's zero is now {_ZERO.get(t0, t0)}, so its markers "
+                "may be shifted. They are shown as saved."
+            )
 
     @property
     def writable(self) -> bool:
@@ -323,12 +334,37 @@ class MarkerStore:
 
     def remove(self, marker_id: str) -> None:
         self.markers = [m for m in self.markers if m.id != marker_id]
+        self._removed.add(marker_id)
 
     def save(self) -> None:
-        """Raises :class:`MarkerFileError` when read-only, :class:`OSError` on a failed write."""
+        """Merge with the file as it is now, then write it.
+
+        Someone else may have saved the file since it was read (a cohort file
+        on the lab share). The rule, by marker id: every marker held here is
+        written as it is here, one deleted here stays deleted, and any other
+        marker in the file -- another writer's addition -- is kept, and
+        joins this store.
+
+        ponytail: no tombstones in the file, so a marker another writer
+        deleted comes back if this store still holds it; add them if that
+        matters.
+
+        Raises :class:`MarkerFileError` when read-only or when the file can
+        no longer be read (it is then never overwritten), :class:`OSError`
+        on a failed write.
+        """
         if self.error is not None:
             raise MarkerFileError(self.error)
-        save_markers(self.path, self.markers, t0=self.t0)
+        on_disk, stored = load_markers(self.path)
+        if self.t0 is not None and stored is not None and stored != self.t0:
+            raise MarkerFileError(f"{self.path.name} was just saved on a different time zero")
+        held = {m.id for m in self.markers}
+        merged = self.markers + [
+            m for m in on_disk if m.id not in held and m.id not in self._removed
+        ]
+        save_markers(self.path, merged, t0=self.t0)
+        self.markers = merged
+        self._removed.clear()
 
 
 # ---------------------------------------------------------------------------

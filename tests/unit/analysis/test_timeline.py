@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -78,6 +79,27 @@ def test_frame_map_is_none_without_tracking(tmp_path: Path):
     directory = write_synthetic_recording(tmp_path / "rec", RecordingSpec(write_tracking=False))
     s = Session.load(directory)
     assert build_frame_map(s) is None
+
+
+def test_a_backwards_timestamp_falls_back_to_the_frame_rate(caplog):
+    """np.interp on non-rising times puts epochs and markers on wrong frames."""
+    import pandas as pd
+
+    tracking = pd.DataFrame({"frame": [1, 2, 3, 4], "elapsed_ms": [0.0, 33.3, 20.0, 100.0]})
+    fm = build_frame_map(SimpleNamespace(tracking=tracking, frame_rate=30.0))
+    assert fm.source == "frame_rate"
+    assert "not strictly increasing" in caplog.text
+
+
+def test_the_frame_rate_map_puts_a_1_based_first_frame_at_zero():
+    """Logger frame 1 is video index 0, at 0 ms -- as the tracking map has it."""
+    import pandas as pd
+
+    fm = build_frame_map(
+        SimpleNamespace(tracking=pd.DataFrame({"frame": [1, 2, 3]}), frame_rate=30.0)
+    )
+    assert fm.ms_of(1) == pytest.approx(0.0)
+    assert fm.ms_of(3) == pytest.approx(2 / 30.0 * 1000.0)
 
 
 def _rec(tmp_path: Path, events, name="rec") -> Path:

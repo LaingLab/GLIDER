@@ -173,3 +173,17 @@ def test_the_behaviour_chip_is_one_width_for_the_session(canvas):
     short = canvas.behaviour_chip_rect("rest  0.17 s in")
     long = canvas.behaviour_chip_rect("grooming_bilateral_face_wash  1.67 s in")
     assert short == long
+
+
+def test_a_video_that_will_not_open_is_not_forgotten_by_the_session(canvas, monkeypatch):
+    """One failed open (a share hiccup) must not strip the video from the shared view."""
+    monkeypatch.setattr(
+        "glider.vision.video_source.VideoFileSource.load", lambda self, _path: False
+    )
+    view = _view(video_path=Path("fake.mp4"))
+    canvas.set_view(view)
+    assert canvas._frame_image(5) is None
+    assert view.video_path == Path("fake.mp4")
+    assert not canvas.has_video()
+    canvas.set_view(view)  # shown again: tried again
+    assert canvas.has_video()

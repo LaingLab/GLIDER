@@ -225,8 +225,8 @@ def tidy_frame(
 def wide_frame(tidy: pd.DataFrame, metrics: list[str]) -> pd.DataFrame:
     """One row per session: ``session, group, <range>__<metric>…``.
 
-    ponytail: keyed on the session id, so two sessions with one id would
-    overwrite each other; ids are unique within a discovered cohort.
+    Keyed on the session id, which must be unique: the review window
+    suffixes a repeated one (two folders both named ``m01``).
     """
     out = tidy[["session", "group"]].drop_duplicates("session").set_index("session")
     for name, block in tidy.groupby("range", sort=False):

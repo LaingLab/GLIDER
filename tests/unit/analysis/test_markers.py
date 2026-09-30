@@ -246,10 +246,54 @@ def test_a_store_saves_and_reloads(tmp_path: Path):
     assert [m.name for m in again.markers] == ["Stim"] and not again.t0_changed
 
 
-def test_a_changed_zero_is_flagged_but_still_loads(tmp_path: Path):
+def test_a_changed_zero_loads_read_only_and_keeps_the_file(tmp_path: Path):
+    """Saving would stamp today's zero on seconds counted from the old one."""
+    path = tmp_path / SESSION_FILE
+    save_markers(path, [Marker("point", 1.0)], t0="video_start")
+    before = path.read_bytes()
+    store = MarkerStore(path, t0="flow_start")
+    assert store.t0_changed and len(store.markers) == 1 and not store.writable
+    with pytest.raises(MarkerFileError):
+        store.save()
+    assert path.read_bytes() == before
+
+
+def test_saving_merges_with_what_another_writer_saved(tmp_path: Path):
+    """Two people on one cohort file: neither save loses the other's markers."""
+    path = tmp_path / COHORT_FILE
+    gone = Marker("range", 0.0, 1.0, name="gone", scope="cohort")
+    save_markers(path, [gone])
+    mine, theirs = MarkerStore(path), MarkerStore(path)
+    theirs.put(Marker("range", 1.0, 2.0, name="theirs", scope="cohort"))
+    theirs.save()
+    mine.put(Marker("range", 2.0, 3.0, name="mine", scope="cohort"))
+    mine.remove(gone.id)
+    mine.save()
+    names = sorted(m.name for m in load_markers(path)[0])
+    assert names == ["mine", "theirs"]
+    assert sorted(m.name for m in mine.markers) == names
+
+
+def test_an_unreadable_file_on_a_share_is_a_marker_file_error(tmp_path: Path, monkeypatch):
+    """EACCES/EIO/ESTALE must not escape the store as a bare OSError."""
+
+    def denied(*_a, **_k):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "read_text", denied)
+    with pytest.raises(MarkerFileError):
+        load_markers(tmp_path / SESSION_FILE)
+    assert not MarkerStore(tmp_path / SESSION_FILE).writable
+
+
+def test_a_write_is_synced_before_it_replaces_the_file(tmp_path: Path, monkeypatch):
+    calls = []
+    real_fsync, real_replace = os.fsync, os.replace
+    monkeypatch.setattr(os, "fsync", lambda fd: (calls.append("fsync"), real_fsync(fd)))
+    monkeypatch.setattr(os, "replace", lambda a, b: (calls.append("replace"), real_replace(a, b)))
+    monkeypatch.setattr(os, "umask", lambda *_a: pytest.fail("the process umask is global"))
     save_markers(tmp_path / SESSION_FILE, [Marker("point", 1.0)], t0="video_start")
-    store = MarkerStore(tmp_path / SESSION_FILE, t0="flow_start")
-    assert store.t0_changed and len(store.markers) == 1 and store.writable
+    assert calls == ["fsync", "replace"]
 
 
 def test_a_cohort_store_never_flags_a_zero(tmp_path: Path):

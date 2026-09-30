@@ -18,6 +18,7 @@ drawn rather than clipped.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING
@@ -27,6 +28,8 @@ import numpy as np
 if TYPE_CHECKING:
     from glider.analysis.behavior.session_view import SessionView
     from glider.analysis.session import Session
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BehaviorLane",
@@ -110,22 +113,33 @@ def build_frame_map(session: Session, flow_offset_ms: float = 0.0) -> FrameMap |
         pairs = tracking[["frame", "elapsed_ms"]].dropna()
         # Several objects in one frame share a timestamp; one row per frame.
         pairs = pairs.drop_duplicates(subset="frame").sort_values("frame")
-        if len(pairs) >= 2:
+        ms = pairs["elapsed_ms"].to_numpy(dtype=float)
+        if len(pairs) >= 2 and np.all(np.diff(ms) > 0):
             return FrameMap(
                 frames=pairs["frame"].to_numpy(dtype=float),
-                ms=pairs["elapsed_ms"].to_numpy(dtype=float) - flow_offset_ms,
+                ms=ms - flow_offset_ms,
                 source="tracking",
+            )
+        if len(pairs) >= 2:
+            # np.interp needs rising times; a repeated or backwards stamp
+            # (a clock step) would put epochs and markers on the wrong frames.
+            logger.warning(
+                "tracking elapsed_ms is not strictly increasing; timing frames "
+                "by the nominal frame rate instead"
             )
 
     fps = session.frame_rate
     if fps:
-        last = 1.0
+        # The first logged frame is video index 0 at time 0, whether the
+        # logger counted from 0 or 1 -- as in the tracking map above.
+        first = float(_first_tracked_frame(tracking))
+        last = first + 1.0
         if not tracking.empty and "frame" in tracking.columns:
-            last = max(1.0, float(tracking["frame"].max()))
-        frames = np.array([0.0, last])
+            last = max(last, float(tracking["frame"].max()))
+        frames = np.array([first, last])
         return FrameMap(
             frames=frames,
-            ms=frames / fps * 1000.0 - flow_offset_ms,
+            ms=(frames - first) / fps * 1000.0 - flow_offset_ms,
             source="frame_rate",
         )
 

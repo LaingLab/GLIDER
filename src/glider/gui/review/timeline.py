@@ -135,6 +135,10 @@ def _behavior_title(source: str) -> tuple[str, str]:
 
 def _label_at(lane: BehaviorLane, frame: int) -> str:
     frames = np.asarray(lane.frames)
+    # Past the last row's own stride there is no label (G5), not the last one.
+    stride = max(1, int(np.median(np.diff(frames)))) if len(frames) > 1 else 1
+    if len(frames) == 0 or frame >= int(frames[-1]) + stride:
+        return ""
     index = int(np.searchsorted(frames, frame, side="right")) - 1
     return lane.labels[index] if 0 <= index < len(lane.labels) else ""
 
@@ -228,7 +232,9 @@ class TimelineView(QWidget):
         self._frame = 0
         self._selection: tuple[int, int] | None = None
         self._drag: str | None = None
-        self._fixed: int | None = None  # trim's opposite edge, fixed for the drag
+        # Trim's opposite edge, fixed for the drag, as a boundary: the first
+        # frame after it (exclusive), so it stays put whichever side it ends up.
+        self._fixed: int | None = None
         self._press_x = 0.0
         self._snap_on = True
         self._collapsed: set[str] = set()
@@ -387,7 +393,10 @@ class TimelineView(QWidget):
 
     def axis_of_frame(self, frame: int) -> float:
         if self.uses_ms():
-            return self._timeline.frame_map.ms_of(frame)
+            # The time rule, not the frame map's clamp: the frame after the
+            # last (a range's Out) must sit one frame later, as it does for
+            # the epoch table, or a whole-session range reads a frame short.
+            return mk.seconds_at(self._timeline, self.fps(), frame) * 1000.0
         return float(frame)
 
     def _axis_of_frames(self, frames: np.ndarray) -> np.ndarray:
@@ -869,10 +878,14 @@ class TimelineView(QWidget):
         if codes is None or width <= 0 or not len(frames) or end <= start:
             return
         edges_axis = start + np.arange(width + 1, dtype=float) * (end - start) / width
+        outside = np.zeros(width, dtype=bool)
         if self.uses_ms():
             frame_map = self._timeline.frame_map
             index = np.clip(np.searchsorted(frame_map.ms, edges_axis), 0, len(frame_map.frames) - 1)
             edges = frame_map.frames[index].astype(np.int64)
+            # Before the first frame or after the last there is no video; the
+            # clamp above would paint the first or last label there.
+            outside = (edges_axis[1:] <= frame_map.ms[0]) | (edges_axis[:-1] > frame_map.ms[-1])
         else:
             edges = np.floor(edges_axis).astype(np.int64)
         starts = np.searchsorted(frames, edges, side="left")
@@ -880,6 +893,8 @@ class TimelineView(QWidget):
         n_codes = len(self._palette)
         left = rect.left()
         for x in range(width):
+            if outside[x]:
+                continue
             lo, hi = int(starts[x]), int(starts[x + 1])
             if hi <= lo:
                 if not scored_first <= int(edges[x]) <= scored_last:
@@ -1197,7 +1212,7 @@ class TimelineView(QWidget):
             return
         edge = self._edge_at(x)
         if edge is not None:
-            self._fixed = self._selection[1] if edge == "trim-in" else self._selection[0]
+            self._fixed = self._selection[1] + 1 if edge == "trim-in" else self._selection[0]
             self._drag = "select"
             return
         self._drag = "press"
@@ -1244,8 +1259,10 @@ class TimelineView(QWidget):
             self._drag = "select"
         if self._drag == "select":
             if self._fixed is not None:  # trimming: the other edge stays put
-                edge = self._snapped(x, end=self.frame_at_x(x) >= self._fixed)
-                self.set_selection(self._fixed, edge)
+                if self.frame_at_x(x) >= self._fixed:  # the dragged edge is the Out
+                    self.set_selection(self._fixed, max(self._fixed, self._snapped(x, end=True)))
+                else:  # the dragged edge is the In
+                    self.set_selection(min(self._fixed - 1, self._snapped(x)), self._fixed - 1)
             else:  # a fresh range: snap each end by the role it ends up playing
                 lo, hi = sorted((x, self._press_x))
                 self.set_selection(self._snapped(lo), self._snapped(hi, end=True))

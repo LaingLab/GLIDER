@@ -400,7 +400,22 @@ def test_trimming_past_the_other_edge_keeps_that_edge(view):
         _mouse(view, "move", view.x_of_frame(frame), y)
     _mouse(view, "release", view.x_of_frame(280), y)
     start, end = view.selection()
-    assert start == 200 and abs(end - 280) <= 1
+    # The Out edge was drawn at x(201) (after frame 200); it stays there as the In.
+    assert start == 201 and abs(end - 280) <= 1
+
+
+def test_trimming_the_out_past_the_in_keeps_the_in(view):
+    view.set_timeline(_timeline())
+    view.set_snap(False)
+    view.set_selection(50, 200)
+    y = _lane_y(view)
+    _mouse(view, "press", view.x_of_frame(201), y)
+    for frame in (30, 20):
+        _mouse(view, "move", view.x_of_frame(frame), y)
+    _mouse(view, "release", view.x_of_frame(20), y)
+    start, end = view.selection()
+    # The In edge was at x(50); it stays there as the Out (frame 49 inclusive).
+    assert abs(start - 20) <= 1 and end == 49
 
 
 def test_a_move_without_the_button_ends_a_stale_drag(view):
@@ -832,3 +847,24 @@ def test_marker_at_does_not_hit_the_header_column(view):
     view.set_markers([mk.Marker("range", 2.0, 6.0)])
     assert view.marker_at(HEADER_W - 10, RULER_H + 6) is None
     assert view.marker_at(view.width() + 10, RULER_H + 6) is None
+
+
+def test_behavior_is_not_painted_before_the_first_frame(view):
+    """Device-init events widen the axis; there is no video there to label."""
+    # One-frame bouts: too narrow for clips, so painted as columns.
+    labels = ["groom", "locomote"] * 150 + ["groom"]
+    beh = [BehaviorLane("tracking", labels, np.arange(0, 301))]
+    view.set_timeline(_timeline(start_ms=-30000.0, beh=beh))
+    y = _band_y(view, "tracking")
+    assert _pixel(view, view.x_of_axis(5000.0), y) != QColor(colors.CANVAS)
+    for ms in (-29000.0, -20000.0, -1000.0):
+        assert _pixel(view, view.x_of_axis(ms), y) == QColor(colors.CANVAS)
+
+
+def test_the_frame_after_the_last_is_one_frame_later(view):
+    """A whole-session range's Out: extrapolated, as the epoch table does, not clamped."""
+    view.set_timeline(_timeline())
+    assert view.axis_of_frame(301) == pytest.approx(301 / 30.0 * 1000.0)
+    assert view.seconds_of_axis(view.axis_of_frame(301)) == pytest.approx(
+        view.seconds_of_frame(301)
+    )
