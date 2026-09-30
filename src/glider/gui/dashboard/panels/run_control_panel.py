@@ -47,6 +47,12 @@ _LIVE_STATES = ("RUNNING", "PAUSED")
 _LINE_FIELDS = (("experimenter", "Experimenter"), ("protocol", "Protocol"))
 
 
+def _caption(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setProperty("textRole", "muted")
+    return label
+
+
 class RunControlPanel(QWidget):
     """Dashboard panel: experiment metadata, file actions, START/STOP."""
 
@@ -111,35 +117,7 @@ class RunControlPanel(QWidget):
         status_row.addWidget(self._menu_btn)
         body.addLayout(status_row)
 
-        # === Experiment name + metadata ===
-        self._name_edit = QLineEdit()
-        self._name_edit.setProperty("title", True)
-        self._name_edit.setPlaceholderText("Enter experiment name...")
-        self._name_edit.setMinimumHeight(40)
-        self._name_edit.textChanged.connect(self._on_name_edited)
-        body.addWidget(self._name_edit)
-
-        meta = QGridLayout()
-        meta.setContentsMargins(0, 0, 0, 0)
-        meta.setHorizontalSpacing(8)
-        self._meta_edits: dict[str, QLineEdit] = {}
-        for col, (attr, label) in enumerate(_LINE_FIELDS):
-            edit = QLineEdit()
-            edit.setPlaceholderText(label)
-            edit.setMinimumHeight(40)
-            edit.textChanged.connect(lambda text, a=attr: self._set_metadata(a, text))
-            self._meta_edits[attr] = edit
-            meta.addWidget(edit, 0, col)
-        self._notes_edit = QPlainTextEdit()
-        self._notes_edit.setPlaceholderText("Notes")
-        self._notes_edit.setFixedHeight(64)
-        self._notes_edit.textChanged.connect(
-            lambda: self._set_metadata("notes", self._notes_edit.toPlainText())
-        )
-        meta.addWidget(self._notes_edit, 1, 0, 1, 2)
-        body.addLayout(meta)
-
-        # === File actions ===
+        # === File actions (above the metadata, so they never scroll away) ===
         file_row = QHBoxLayout()
         file_row.setSpacing(6)
         self._file_buttons: dict[str, QPushButton] = {}
@@ -157,6 +135,40 @@ class RunControlPanel(QWidget):
             self._file_buttons[label] = btn
             file_row.addWidget(btn)
         body.addLayout(file_row)
+
+        # === Experiment name + metadata ===
+        self._name_edit = QLineEdit()
+        self._name_edit.setProperty("title", True)
+        self._name_edit.setPlaceholderText("Enter experiment name...")
+        self._name_edit.setMinimumHeight(40)
+        self._name_edit.textChanged.connect(self._on_name_edited)
+        body.addWidget(_caption("Experiment"))
+        body.addWidget(self._name_edit)
+
+        meta = QGridLayout()
+        meta.setContentsMargins(0, 0, 0, 0)
+        meta.setHorizontalSpacing(8)
+        self._meta_edits: dict[str, QLineEdit] = {}
+        for col, (attr, label) in enumerate(_LINE_FIELDS):
+            edit = QLineEdit()
+            edit.setPlaceholderText(label)
+            edit.setMinimumHeight(40)
+            edit.textChanged.connect(lambda text, a=attr: self._set_metadata(a, text))
+            self._meta_edits[attr] = edit
+            # Captions, not just placeholders: a filled field hides its
+            # placeholder, and "G. Bradham" / "OF-v2" do not say what they are.
+            meta.addWidget(_caption(label), 0, col)
+            meta.addWidget(edit, 1, col)
+        self._notes_edit = QPlainTextEdit()
+        self._notes_edit.setPlaceholderText("Notes")
+        self._notes_edit.setFixedHeight(64)
+        self._notes_edit.textChanged.connect(
+            lambda: self._set_metadata("notes", self._notes_edit.toPlainText())
+        )
+        meta.addWidget(_caption("Notes"), 2, 0, 1, 2)
+        meta.addWidget(self._notes_edit, 3, 0, 1, 2)
+        body.addLayout(meta)
+
         body.addStretch(1)
 
         scroll.setWidget(content)
