@@ -15,8 +15,13 @@ import logging
 import re
 from pathlib import Path
 
+from glider.core.fileio import atomic_write_text
 from glider.hal.base_device import DEVICE_REGISTRY
-from glider.hal.declarative_device import build_device_class, validate_definition
+from glider.hal.declarative_device import (
+    DeclarativeDevice,
+    build_device_class,
+    validate_definition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,16 +38,36 @@ def definition_path(devices_dir: Path, name: str) -> Path:
     return Path(devices_dir) / f"{_slug(name)}{DEVICE_EXTENSION}"
 
 
+def _check_name_free(name: str) -> None:
+    """Refuse a name a built-in or plugin device type already owns.
+
+    Re-registering a custom (declarative) type is an edit and is allowed.
+    """
+    existing = DEVICE_REGISTRY.get(name)
+    if existing is not None and not (
+        isinstance(existing, type) and issubclass(existing, DeclarativeDevice)
+    ):
+        raise ValueError(f"'{name}' is already a device type; choose another name")
+
+
 def save_definition(definition: dict, devices_dir: Path) -> Path:
     """Validate and write a definition to the device library. Returns the path."""
     errors = validate_definition(definition)
     if errors:
         raise ValueError("; ".join(errors))
+    _check_name_free(definition["name"])
     devices_dir = Path(devices_dir)
     devices_dir.mkdir(parents=True, exist_ok=True)
     path = definition_path(devices_dir, definition["name"])
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(definition, f, indent=2)
+    # Two names can share a slug ("My Dev" / "My_Dev"); never overwrite the
+    # other device's file.
+    try:
+        other = json.loads(path.read_text(encoding="utf-8")).get("name")
+    except (OSError, ValueError, AttributeError):
+        other = None
+    if other is not None and other != definition["name"]:
+        raise ValueError(f"'{definition['name']}' would overwrite the saved device '{other}'")
+    atomic_write_text(path, json.dumps(definition, indent=2))
     logger.info("Saved device definition '%s' to %s", definition["name"], path)
     return path
 
@@ -74,6 +99,7 @@ def register_definition(definition: dict) -> str:
     if errors:
         raise ValueError("; ".join(errors))
     name = definition["name"]
+    _check_name_free(name)
     DEVICE_REGISTRY[name] = build_device_class(definition)
     logger.debug("Registered custom device type: %s", name)
     return name

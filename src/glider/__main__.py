@@ -287,18 +287,11 @@ async def init_glider(
         Initialized GliderCore instance
     """
     from glider.core.glider_core import GliderCore
-    from glider.plugins.plugin_manager import PluginManager
 
-    # Create and initialize core instance
+    # Create and initialize core instance; --no-plugins must reach initialize,
+    # which is where plugins are loaded.
     core = GliderCore()
-    await core.initialize()
-
-    # Load plugins unless disabled (plugins already loaded in initialize, but allow extra)
-    if not args.no_plugins and core._plugin_manager is None:
-        plugin_manager = PluginManager()
-        await plugin_manager.discover_plugins()
-        await plugin_manager.load_plugins()
-        # Plugins register their nodes directly with FlowEngine during load
+    await core.initialize(load_plugins=not args.no_plugins)
 
     # Load experiment file if specified
     if args.file and args.file.exists():

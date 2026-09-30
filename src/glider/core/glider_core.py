@@ -39,6 +39,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on one device's initialize() before a start gives up on it. Far
+# above a normal init (a BLE connect is a few seconds) but finite, so a wedged
+# device cannot hold the experiment lock -- and with it Stop -- forever.
+DEVICE_INIT_TIMEOUT_S = 30.0
+
 
 class GliderCore:
     """
@@ -134,6 +139,12 @@ class GliderCore:
         # Register hardware error handling
         self._hardware_manager.on_error(self._on_hardware_error)
         self._flow_engine.on_error(self._on_flow_error)
+        # A stalled or crashed camera leaves recorders running on no frames;
+        # surface it to the operator instead of only logging it.
+        self._camera_manager.on_error(lambda msg: self._notify_error("camera", RuntimeError(msg)))
+        self._multi_camera_manager.on_error(
+            lambda cid, msg: self._notify_error(f"camera:{cid}", RuntimeError(msg))
+        )
         self._flow_engine.on_flow_complete(self._on_flow_complete)
         self._flow_engine.on_node_update(self._on_node_update)
 
@@ -356,9 +367,30 @@ class GliderCore:
         self._notify_error(f"hardware:{source}", error)
 
     def _on_flow_error(self, source: str, error: Exception) -> None:
-        """Handle flow errors."""
+        """Handle flow errors.
+
+        A node that raised has ended its branch, so the protocol can no longer
+        reach EndExperiment and whatever it last drove stays driven. Stop the
+        run (recorders closed, devices to safe state) rather than leave it
+        RUNNING with outputs live.
+        """
         logger.error(f"Flow error from {source}: {error}")
         self._notify_error(f"flow:{source}", error)
+        if self._session is not None and self._session.state in (
+            SessionState.RUNNING,
+            SessionState.PAUSED,
+        ):
+            self._create_background_task(self._stop_after_node_failure(source))
+
+    async def _stop_after_node_failure(self, source: str) -> None:
+        async with self._experiment_lock:
+            if self._session is None or self._session.state not in (
+                SessionState.RUNNING,
+                SessionState.PAUSED,
+            ):
+                return  # already stopped by someone else
+            logger.error(f"Stopping experiment: node '{source}' failed")
+            await self._stop_experiment_locked()
 
     def _on_node_update(self, node_id: str, output_name: str, value: Any) -> None:
         """Handle node output updates — record events for audio playback, etc."""
@@ -441,8 +473,12 @@ class GliderCore:
         if self._session:
             self._session.state = SessionState.READY
 
-    async def initialize(self) -> None:
-        """Initialize the GLIDER core."""
+    async def initialize(self, load_plugins: bool = True) -> None:
+        """Initialize the GLIDER core.
+
+        Args:
+            load_plugins: False for ``--no-plugins``; no plugin code is imported.
+        """
         if self._initialized:
             return
 
@@ -456,7 +492,8 @@ class GliderCore:
         self._flow_engine.initialize()
 
         # Load plugins
-        await self._load_plugins()
+        if load_plugins:
+            await self._load_plugins()
 
         # Load declarative custom devices from the device library (safe: data,
         # not code) and register them as device types.
@@ -802,6 +839,16 @@ class GliderCore:
         """
         if self._session is None:
             raise RuntimeError("No session loaded")
+        if (
+            self._session.state
+            in (
+                SessionState.RUNNING,
+                SessionState.PAUSED,
+                SessionState.STOPPING,
+            )
+            or self._experiment_lock.locked()
+        ):
+            raise RuntimeError("Cannot set up hardware while an experiment is running")
 
         self._session.state = SessionState.INITIALIZING
 
@@ -846,6 +893,10 @@ class GliderCore:
 
         success = True
         for board_config in self._session.hardware.boards:
+            # Adding to existing hardware: rebuilding a board that is already
+            # there would orphan the live one (open port, outputs energised).
+            if not clear_first and self._hardware_manager.get_board(board_config.id):
+                continue
             try:
                 self._hardware_manager.build_board(board_config)
             except Exception as e:
@@ -853,6 +904,8 @@ class GliderCore:
                 success = False
 
         for device_config in self._session.hardware.devices:
+            if not clear_first and self._hardware_manager.get_device(device_config.id):
+                continue
             try:
                 self._hardware_manager.build_device(device_config)
             except Exception as e:
@@ -895,7 +948,13 @@ class GliderCore:
             if not getattr(device, "_initialized", False):
                 logger.info(f"Initializing device: {device_id}")
                 try:
-                    await device.initialize()
+                    await asyncio.wait_for(device.initialize(), timeout=DEVICE_INIT_TIMEOUT_S)
+                except TimeoutError:
+                    logger.error(
+                        "Initializing device %s timed out after %.0fs",
+                        device_id,
+                        DEVICE_INIT_TIMEOUT_S,
+                    )
                 except Exception as e:
                     logger.error(f"Failed to initialize device {device_id}: {e}")
 
@@ -933,6 +992,33 @@ class GliderCore:
         # Set up flow from session if not resuming
         if self._session.state != SessionState.PAUSED:
             self.setup_flow()
+            failures = self._flow_engine.load_failures
+            if failures:
+                # Running what did load would record a partial protocol as if
+                # it were the whole one.
+                raise RuntimeError(
+                    "The flow did not load completely, so the experiment was not started:\n"
+                    + "\n".join(failures)
+                )
+
+        prior_state = self._session.state
+        try:
+            await self._start_recorders_and_flow()
+        except BaseException:
+            # A4: nothing half-started survives a failed start: close what did
+            # open (so the next Start does not reuse stale files) and restore
+            # the state so Start is offered again.
+            logger.error("Start failed; rolling back recorders and flow")
+            await self._flow_engine.stop()
+            await self._stop_recorders()
+            self._session.state = prior_state
+            raise
+
+    async def _start_recorders_and_flow(self) -> None:
+        """Start every enabled recorder, then the flow. Raises if any fails."""
+        # A3: a recorder that fails to start must not leave an hours-long run
+        # without its data; collect them and refuse the start.
+        failures: list[str] = []
 
         # Shared session epoch — captured once, before any recorder is
         # started, and propagated to all three recorders so their
@@ -964,6 +1050,7 @@ class GliderCore:
                 logger.info(f"Recording data ({mode}) to: {file_path}")
             except Exception as e:
                 logger.error(f"Failed to start recording: {e}")
+                failures.append(f"data recorder: {e}")
 
         # Start the device event logger if enabled. It subscribes to
         # per-board output callbacks (write_digital/analog/servo) and to
@@ -976,6 +1063,7 @@ class GliderCore:
                 logger.info(f"Recording device events to: {event_path}")
             except Exception as e:
                 logger.error(f"Failed to start event logger: {e}")
+                failures.append(f"event logger: {e}")
 
         # Start video recording if enabled and camera is connected
         experiment_name = self._session.metadata.name or "experiment"
@@ -994,6 +1082,7 @@ class GliderCore:
                         logger.info("Also recording annotated video (primary camera only)")
                 except Exception as e:
                     logger.error(f"Failed to start multi-camera video recording: {e}")
+                    failures.append(f"multi-camera video: {e}")
             elif self._camera_manager.is_connected:
                 try:
                     # Single camera mode
@@ -1006,14 +1095,17 @@ class GliderCore:
                         logger.info("Also recording annotated video with tracking overlays")
                 except Exception as e:
                     logger.error(f"Failed to start video recording: {e}")
+                    failures.append(f"video: {e}")
 
         # Start audio recording if configured
         audio_device_name = self._session.camera.audio_device_name
         if audio_device_name:
             device_index = AudioRecorder.resolve_device_by_name(audio_device_name)
             if device_index is None:
-                logger.warning(
-                    f"Audio device '{audio_device_name}' not found — skipping audio recording"
+                logger.warning(f"Audio device '{audio_device_name}' not found")
+                failures.append(
+                    f"audio: device '{audio_device_name}' not found "
+                    "(reconnect it or clear the audio device)"
                 )
             else:
                 # Update cached index
@@ -1030,6 +1122,7 @@ class GliderCore:
                         logger.info(f"Recording audio to: {audio_path}")
                 except Exception as e:
                     logger.error(f"Failed to start audio recording: {e}")
+                    failures.append(f"audio: {e}")
 
         # Start tracking logger if CV processing enabled and camera is connected
         # (separate from video recording so tracking works even if video recording is disabled)
@@ -1046,6 +1139,13 @@ class GliderCore:
                 logger.info(f"Tracking data to: {tracking_path}")
             except Exception as e:
                 logger.error(f"Failed to start tracking logger: {e}")
+                failures.append(f"tracking logger: {e}")
+
+        if failures:
+            raise RuntimeError(
+                "Recording could not start, so the experiment was not started:\n"
+                + "\n".join(failures)
+            )
 
         # Reset prior-run timing so ``last_flow_duration_s`` is None until
         # this flow completes (callers can detect "still running" cleanly).
@@ -1109,8 +1209,13 @@ class GliderCore:
 
         self._session.state = SessionState.READY
 
-    async def _stop_recorders(self) -> None:
-        """Stop all active recorders (data, audio, video, tracking)."""
+    async def _stop_recorders(self, mux: bool = True) -> None:
+        """Stop all active recorders (data, audio, video, tracking).
+
+        Args:
+            mux: False skips muxing audio into the videos (e-stop path); the
+                WAV is left beside them.
+        """
         # Stop audio recording first (need the WAV path for muxing)
         audio_path = None
         if self._audio_recorder.is_recording:
@@ -1141,33 +1246,36 @@ class GliderCore:
         # Stop video recording and collect all video paths
         video_paths: list[Path] = []
 
-        if self._multi_video_recorder.is_recording:
-            try:
-                multi_paths = await self._multi_video_recorder.stop()
-                for cam_id, path in multi_paths.items():
-                    logger.info(f"Video {cam_id} saved to: {path}")
-                    video_paths.append(path)
-                # Check for annotated video
-                annotated = self._multi_video_recorder.annotated_file_path
-                if annotated and annotated.exists():
-                    video_paths.append(annotated)
-            except Exception as e:
-                logger.error(f"Failed to stop multi-camera video recording: {e}")
-        elif self._video_recorder.is_recording:
-            try:
-                video_path = await self._video_recorder.stop()
-                if video_path:
-                    logger.info(f"Video saved to: {video_path}")
-                    video_paths.append(video_path)
+        # Not gated on is_recording: that is False while PAUSED (and after a
+        # writer error), which used to leave a paused-then-stopped run's video
+        # unfinalized. stop() is a no-op on an idle recorder.
+        try:
+            multi_paths = await self._multi_video_recorder.stop()
+            for cam_id, path in multi_paths.items():
+                logger.info(f"Video {cam_id} saved to: {path}")
+                video_paths.append(path)
+            # Check for annotated video (only if this run recorded one)
+            annotated = self._multi_video_recorder.annotated_file_path
+            if multi_paths and annotated and annotated.exists():
+                video_paths.append(annotated)
+        except Exception as e:
+            logger.error(f"Failed to stop multi-camera video recording: {e}")
+        try:
+            video_path = await self._video_recorder.stop()
+            if video_path:
+                logger.info(f"Video saved to: {video_path}")
+                video_paths.append(video_path)
                 # Check for annotated video
                 annotated = self._video_recorder.annotated_file_path
                 if annotated and annotated.exists():
                     video_paths.append(annotated)
-            except Exception as e:
-                logger.error(f"Failed to stop video recording: {e}")
+        except Exception as e:
+            logger.error(f"Failed to stop video recording: {e}")
 
         # Mux audio into each video file
-        if audio_path and audio_path.exists() and video_paths:
+        if not mux and audio_path:
+            logger.warning(f"Audio not muxed (emergency stop); kept at {audio_path}")
+        elif audio_path and audio_path.exists() and video_paths:
             all_muxed = True
             for vpath in video_paths:
                 try:
@@ -1205,14 +1313,18 @@ class GliderCore:
                 logger.error(f"Failed to stop tracking logger: {e}")
 
     async def _set_all_devices_low(self) -> None:
-        """Set all output devices to LOW/off state for safety."""
-        for device_id, device in self._hardware_manager.devices.items():
-            try:
-                if hasattr(device, "shutdown"):
-                    await device.shutdown()
-                    logger.debug(f"Set device {device_id} to safe state")
-            except Exception as e:
-                logger.error(f"Error setting device {device_id} to safe state: {e}")
+        """Set all output devices to LOW/off state for safety.
+
+        In parallel, each bounded by ``DEVICE_IO_TIMEOUT_S`` inside
+        ``shutdown_device``: one wedged device must not hang Stop (and the
+        experiment lock) or delay the others reaching their safe state.
+        """
+        device_ids = list(self._hardware_manager.devices)
+        if device_ids:
+            await asyncio.gather(
+                *(self._hardware_manager.shutdown_device(d) for d in device_ids),
+                return_exceptions=True,
+            )
 
     async def pause_experiment(self) -> None:
         """Pause the running experiment."""
@@ -1258,19 +1370,22 @@ class GliderCore:
         """
         logger.warning("EMERGENCY STOP triggered!")
 
-        # Stop flow first
-        if self._flow_engine.is_running:
-            await self._flow_engine.stop()
-
-        # Stop all recorders
-        await self._stop_recorders()
-
-        # Emergency stop hardware
-        await self._hardware_manager.emergency_stop()
-
-        # Update state
-        if self._session:
-            self._session.state = SessionState.ERROR
+        # Hardware FIRST: nothing below (node stop(), recorder finalize) may
+        # delay or prevent outputs going safe. Each call is bounded.
+        try:
+            await self._hardware_manager.emergency_stop()
+        finally:
+            try:
+                # stop() is a no-op when already STOPPED, and covers PAUSED.
+                await self._flow_engine.stop()
+                # Again: a node running between the first e-stop and its
+                # cancellation may have re-driven an output.
+                await self._hardware_manager.emergency_stop()
+                # No ffmpeg mux on the e-stop path; the WAV is kept.
+                await self._stop_recorders(mux=False)
+            finally:
+                if self._session:
+                    self._session.state = SessionState.ERROR
 
     async def shutdown(self) -> None:
         """Shutdown the GLIDER core."""

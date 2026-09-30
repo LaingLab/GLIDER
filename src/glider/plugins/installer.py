@@ -86,7 +86,9 @@ def _refuse_argv_injection(package: str, requirements: Sequence[str]) -> None:
                 f"Refusing to install: {token!r} would be read as an installer "
                 "option, not a package. The catalogue entry is malformed."
             )
-    for token in requirements:
+    # The package too: a URL, VCS or direct reference (``git+https://...``,
+    # ``x @ https://...``) would install code from wherever the entry says.
+    for token in (package, *requirements):
         if not _REQUIREMENT_PATTERN.match(token):
             raise MalformedEntryError(
                 f"Refusing to install: {token!r} is not a package requirement. "

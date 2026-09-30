@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from glider.core.fileio import atomic_write_text, unique_path
 from glider.core.project import _VIDEO_SUFFIXES, Project
 from glider.core.session import _spelling_variants
 
@@ -280,7 +281,7 @@ def _destination(
     Returns ``(destination, session_id, why)``.
     """
     name = path.name
-    if name in _COHORT_FILES or name == REVERSAL_NAME:
+    if name in _COHORT_FILES or (name.startswith("adopt_reversal") and name.endswith(".json")):
         return None
 
     suffix = path.suffix.lower()
@@ -437,6 +438,12 @@ def apply_plan(plan: AdoptPlan, *, write_reversal: bool = True) -> AdoptResult:
         if not move.source.exists() and move.destination.exists():
             result.already_done.append(move)
             continue
+        # Rechecked here, not only at plan time: on POSIX os.rename silently
+        # replaces whatever appeared at the destination since.
+        if move.destination.exists():
+            result.failed = move
+            result.error = f"{move.destination} already exists; not overwriting it"
+            return result
         move.destination.parent.mkdir(parents=True, exist_ok=True)
         try:
             # os.rename, never shutil.move: on a locked file the latter falls
@@ -451,8 +458,10 @@ def apply_plan(plan: AdoptPlan, *, write_reversal: bool = True) -> AdoptResult:
 
 
 def _write_reversal(plan: AdoptPlan) -> Path:
-    path = plan.root / REVERSAL_NAME
-    path.write_text(
+    # A second run must never replace the first run's undo manifest.
+    path = unique_path(plan.root / REVERSAL_NAME)
+    atomic_write_text(
+        path,
         json.dumps(
             {
                 "schema_version": 1,
@@ -462,7 +471,7 @@ def _write_reversal(plan: AdoptPlan) -> Path:
             },
             indent=2,
         )
-        + "\n"
+        + "\n",
     )
     return path
 

@@ -268,3 +268,23 @@ class TestDescribe:
     def test_a_refused_plan_says_so(self, flat):
         _touch(flat / "Test 1_zone.json")
         assert "REFUSED" in plan_adopt(flat).describe()
+
+
+class TestSecondRun:
+    """A10: a later run neither overwrites a file nor the earlier undo manifest."""
+
+    def test_a_destination_that_appeared_after_planning_is_not_overwritten(self, flat):
+        plan = plan_adopt(flat)
+        target = _moved_to(plan, "Test 1.mp4")
+        _touch(target, "arrived since the plan")
+        result = apply_plan(plan)
+        assert not result.ok
+        assert target.read_text() == "arrived since the plan"
+
+    def test_a_second_run_keeps_the_first_runs_reversal(self, flat):
+        first = apply_plan(plan_adopt(flat))
+        _touch(flat / "Test 2.mp4")
+        second = apply_plan(plan_adopt(flat, session_ids=["Test 1", "Test 2"]))
+        assert second.reversal_path is not None
+        assert second.reversal_path != first.reversal_path
+        assert json.loads(first.reversal_path.read_text())["moves"]

@@ -62,6 +62,11 @@ class FlowEngine:
         # D11: warnings collected while binding nodes (a saved value now outside
         # its device's declared range). Consumed and shown once after a load.
         self._load_warnings: list[str] = []
+        # A6: nodes/connections load_from_session could not build. Unlike the
+        # warnings these are not consumed: start refuses while any remain.
+        self._load_failures: list[str] = []
+        # A8: exec propagations that fired while PAUSED, replayed on resume.
+        self._paused_propagations: list[tuple[str, int, str]] = []
         # One shared FlowFunctionRunner per StartFunction id (single-in-flight).
         self._function_runners: dict[str, Any] = {}
 
@@ -123,6 +128,11 @@ class FlowEngine:
         """Return and clear the out-of-range-at-load warnings (D11)."""
         warnings, self._load_warnings = self._load_warnings, []
         return warnings
+
+    @property
+    def load_failures(self) -> list[str]:
+        """Nodes and connections the last ``load_from_session`` had to skip."""
+        return list(self._load_failures)
 
     def set_live_signals(self, bus: Any) -> None:
         """Set the bus that carries live vision results to nodes.
@@ -356,6 +366,12 @@ class FlowEngine:
                 logger.warning(
                     f"Could not bind device '{device_id}' to node {node_id} (device={device})"
                 )
+                if device is None:
+                    # The node is kept (unbound) so it survives a save; say so.
+                    self._load_warnings.append(
+                        f"Node '{node_id}' uses device '{device_id}', which is missing; "
+                        "assign a device before running"
+                    )
 
         # Register update callback
         if hasattr(node, "on_output_update"):
@@ -484,9 +500,12 @@ class FlowEngine:
                 self._running_tasks.add(task)
                 task.add_done_callback(self._running_tasks.discard)
                 return task
-            else:
-                logger.warning(f"Skipping propagation - flow not running (state: {self._state})")
+            if self._state == FlowState.PAUSED:
+                # A Delay finishing mid-pause must not lose its downstream.
+                self._paused_propagations.append((fn, fo, tn))
                 return None
+            logger.warning(f"Skipping propagation - flow not running (state: {self._state})")
+            return None
 
         if hasattr(from_node, "_update_callbacks"):
             from_node._update_callbacks.append(on_exec_output)
@@ -606,6 +625,7 @@ class FlowEngine:
 
         logger.info("Starting flow execution")
 
+        self._paused_propagations.clear()
         self.state = FlowState.RUNNING
 
         # Start any continuous nodes (timers, sensors, etc.)
@@ -636,6 +656,7 @@ class FlowEngine:
             return
 
         logger.info("Stopping flow execution")
+        self._paused_propagations.clear()
 
         # Snapshot and cancel all running tasks
         # (done callbacks mutate _running_tasks, so we must not iterate the live set)
@@ -699,6 +720,11 @@ class FlowEngine:
                 except Exception as e:
                     logger.error(f"Error resuming node {node_id}: {e}")
 
+        pending, self._paused_propagations = self._paused_propagations, []
+        for fn, fo, tn in pending:
+            logger.info(f"Replaying propagation held during pause: {fn} -> {tn}")
+            self.track_task(asyncio.create_task(self._propagate_execution(fn, fo, tn)))
+
     def trigger_exec(self, node_id: str, exec_output: int = 0) -> None:
         """
         Trigger an execution flow from a node.
@@ -743,6 +769,7 @@ class FlowEngine:
         self._connections.clear()
         self._running_tasks.clear()
         self._function_runners.clear()
+        self._paused_propagations.clear()
         self.state = FlowState.STOPPED
 
         if self._ryvencore_available and self._session:
@@ -1002,6 +1029,8 @@ class FlowEngine:
         """
         # Clear existing
         self.clear()
+        self._load_failures = []
+        self._load_warnings = []
 
         # Create nodes
         for node_config in session.flow.nodes:
@@ -1016,6 +1045,9 @@ class FlowEngine:
                 )
             except Exception as e:
                 logger.error(f"Error creating node {node_config.id}: {e}")
+                self._load_failures.append(
+                    f"Node '{node_config.id}' ({node_config.node_type}) could not be loaded: {e}"
+                )
 
         # Create connections
         logger.info(f"Loading {len(session.flow.connections)} connections...")
@@ -1034,7 +1066,13 @@ class FlowEngine:
                 )
             except Exception as e:
                 logger.error(f"Error creating connection {conn_config.id}: {e}")
+                self._load_failures.append(
+                    f"Connection {conn_config.from_node} -> {conn_config.to_node} "
+                    f"could not be loaded: {e}"
+                )
 
+        # Surface them with the other load warnings, not only in the log.
+        self._load_warnings.extend(self._load_failures)
         logger.info(
             f"Loaded flow with {len(self._nodes)} nodes and {len(self._connections)} connections"
         )

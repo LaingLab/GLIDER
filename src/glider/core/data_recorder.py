@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from glider.core.fileio import unique_path
+
 if TYPE_CHECKING:
     from glider.core.experiment_session import ExperimentSession
     from glider.core.hardware_manager import HardwareManager
@@ -447,7 +449,8 @@ class DataRecorder:
 
         # Generate filename and create file
         filename = self._generate_filename(experiment_name)
-        self._file_path = self._output_dir / filename
+        # Same-second reruns share a timestamp; never overwrite the earlier run.
+        self._file_path = unique_path(self._output_dir / filename)
         self._start_time = datetime.now()
         # elapsed_ms is computed against either a session-wide epoch
         # (so multiple recorders share t=0) or, as a fallback, this
@@ -593,6 +596,8 @@ class DataRecorder:
             elapsed_ms=elapsed_ms,
             flow_elapsed_cell=flow_elapsed_cell,
         )
+        if self._writer is None:
+            return  # stop() closed the file while the row was being built
 
         self._writer.writerow(row)
         self._file.flush()
@@ -629,6 +634,8 @@ class DataRecorder:
             elapsed_ms=elapsed_ms,
             flow_elapsed_cell=flow_elapsed_cell,
         )
+        if self._writer is None:
+            return  # stop() closed the file while the row was being built
 
         self._writer.writerow(row)
         self._file.flush()

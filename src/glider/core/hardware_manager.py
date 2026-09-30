@@ -75,6 +75,8 @@ class HardwareManager:
         self._connection_callbacks: list[Callable[[str, BoardConnectionState], None]] = []
         self._device_connection_callbacks: list[Callable[[str, BoardConnectionState], None]] = []
         self._link_supervisor: asyncio.Task | None = None
+        # Teardown of hardware dropped by clear(), retained so it is not GC'd.
+        self._detached_teardowns: set[asyncio.Task] = set()
         # Notified with (device_id, device) when a device mutates its own
         # settings at runtime. Attached to every device this manager tracks.
         self._device_settings_callback: Callable[[str, BaseDevice], None] | None = None
@@ -632,22 +634,46 @@ class HardwareManager:
             logger.info(f"Added device: {device_id} (type: {device_type})")
 
     def clear(self) -> None:
-        """Clear all boards and devices without disconnecting them.
+        """Forget all boards and devices, and release any that are connected.
 
-        Warning: This does not disconnect boards or shutdown devices. Callers
-        should invoke ``shutdown()`` (async) first to perform a clean teardown
-        and avoid leaking hardware resources (open serial ports, GPIO handles,
-        background threads).
+        Synchronous because File > New/Open call it from Qt slots, so the
+        release -- safe state for each device, then disconnect -- runs as a
+        background task. Without it the old serial/telemetrix handles stayed
+        open with outputs energised, and the next file's board could not open
+        the same port.
         """
-        if self._boards or self._devices:
-            logger.warning(
-                "clear() called with active boards/devices. "
-                "Call shutdown() first to avoid resource leaks."
-            )
+        live_boards = [b for b in self._boards.values() if b.is_connected]
+        live_devices = [d for d in self._devices.values() if d.board in live_boards]
         self._devices.clear()
         self._boards.clear()
         self._pin_managers.clear()
         logger.info("Cleared all hardware")
+        if not live_boards:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning(
+                "clear() dropped %d connected board(s) with no event loop to release them",
+                len(live_boards),
+            )
+            return
+        task = loop.create_task(self._release_detached(live_devices, live_boards))
+        self._detached_teardowns.add(task)
+        task.add_done_callback(self._detached_teardowns.discard)
+
+    @staticmethod
+    async def _release_detached(devices: list[BaseDevice], boards: list[BaseBoard]) -> None:
+        """Drive dropped devices safe, then disconnect their boards. Bounded."""
+
+        async def bounded(coro, what: str) -> None:
+            try:
+                await asyncio.wait_for(coro, timeout=DEVICE_IO_TIMEOUT_S)
+            except Exception as e:  # noqa: BLE001 - one bad device, not the sweep
+                logger.warning("Releasing %s failed: %r", what, e)
+
+        await asyncio.gather(*(bounded(d.shutdown(), f"device {d.id}") for d in devices))
+        await asyncio.gather(*(bounded(b.disconnect(), f"board {b.id}") for b in boards))
 
     async def connect_all(self) -> dict[str, bool]:
         """
