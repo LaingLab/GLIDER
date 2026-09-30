@@ -23,6 +23,7 @@ CSVs that don't start with a recognized marker are ignored.
 
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -137,9 +138,12 @@ def parse_csv(path: Path) -> tuple[dict[str, str], pd.DataFrame]:
         zero rows but the columns inferred from the header row.
     """
     metadata = _parse_metadata_header(path)
+    # Skip WHOLE lines that start with '#'. pandas' comment="#" also cuts
+    # every field at an inline '#', truncating e.g. a note or zone name.
+    with open(path, encoding="utf-8", newline="") as f:
+        text = "".join(line for line in f if not line.lstrip().startswith("#"))
     df = pd.read_csv(
-        path,
-        comment="#",
+        io.StringIO(text),
         skip_blank_lines=True,
         # Keep zone_ids, behavioral_state etc. as strings rather than
         # letting pandas guess (it sometimes parses zone IDs as int).

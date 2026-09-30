@@ -331,6 +331,7 @@ def assemble_sequences(
     exclude: set | None = None,
     mirror_augment: bool = False,
     include_features: bool = False,
+    with_clean: bool = False,
 ):
     """Build egocentric keypoint sequences for every labeled, finite window.
 
@@ -346,11 +347,15 @@ def assemble_sequences(
     (distances/angles/speeds from :func:`compute_features`) are appended
     as extra channels — the "both" input. Their raw scales are handled by
     the model's input BatchNorm.
+
+    ``with_clean=True`` appends a fifth array: whether each window lies inside
+    one bout, by the same rule (counted over every frame) that LightGBM
+    cross-validation and ``evaluate_model`` score under.
     """
     from glider.analysis.behavior.annotations import AnnotationStore
     from glider.analysis.behavior.features import compute_features
     from glider.analysis.behavior.labels import AMBIGUOUS, build_label_and_group_series
-    from glider.analysis.behavior.pipeline import _mirror_pose
+    from glider.analysis.behavior.pipeline import _clean_window_rows, _mirror_pose
     from glider.vision.pose.dlc import from_dlc_csv
 
     if getattr(spec, "include_social", False):
@@ -369,10 +374,21 @@ def assemble_sequences(
             "include_social=False."
         )
 
-    xs, ys, sess_ids, mirror_flags = [], [], [], []
+    xs, ys, sess_ids, mirror_flags, clean_flags = [], [], [], [], []
     for sidx, (pose_csv, ann_csv) in enumerate(sessions):
         pose = from_dlc_csv(Path(pose_csv), fps=fps)
         store = AnnotationStore.load_csv(Path(ann_csv))
+        slots = sorted({z.individual for z in store})
+        if len(slots) > 1:
+            # Same refusal as LightGBM cross-validation and evaluate_model:
+            # with no animal filter, every animal would be labelled with
+            # every animal's zones.
+            raise ValueError(
+                f"{ann_csv} holds zones for more than one animal (individuals "
+                f"{slots}); CNN sequence training has no way to say which one "
+                f"{Path(pose_csv).name} is, so it would train on both animals' "
+                f"labels at once. Train the LightGBM model with individuals=[...]."
+            )
         body_axis = spec.with_resolved_body_axis(pose.n_keypoints).body_axis
 
         variants = [(pose, False)]
@@ -416,6 +432,8 @@ def assemble_sequences(
             ys.append(labels[keep_frames])
             sess_ids.append(np.full(m, sidx, dtype=int))
             mirror_flags.append(np.full(m, mirrored, dtype=bool))
+            clean = _clean_window_rows(labels, np.zeros(n, dtype=int), np.arange(n), window)
+            clean_flags.append(clean[keep_frames])
 
     if not xs:
         raise ValueError("no usable labeled windows found")
@@ -423,6 +441,8 @@ def assemble_sequences(
     y = np.concatenate(ys, axis=0)
     sess = np.concatenate(sess_ids)
     mirror = np.concatenate(mirror_flags)
+    if with_clean:
+        return x, y, sess, mirror, np.concatenate(clean_flags)
     return x, y, sess, mirror
 
 
@@ -456,7 +476,9 @@ def cross_validate_cnn(
     )
     from sklearn.model_selection import GroupKFold
 
-    x, y, sess, mirror = assemble_sequences(
+    from glider.analysis.behavior.pipeline import DEFAULT_SUPPORT_FLOOR
+
+    x, y, sess, mirror, clean = assemble_sequences(
         sessions,
         spec=spec,
         window=window,
@@ -465,6 +487,7 @@ def cross_validate_cnn(
         exclude=exclude,
         mirror_augment=mirror_augment,
         include_features=include_features,
+        with_clean=True,
     )
     classes = np.unique(y[~mirror])
     n_unique = len(np.unique(sess))
@@ -477,7 +500,9 @@ def cross_validate_cnn(
     gkf = GroupKFold(n_splits=n_splits)
     accs, f1s, all_true, all_pred = [], [], [], []
     for fold, (tr, te) in enumerate(gkf.split(x, y, groups=sess), 1):
-        eval_idx = te[~mirror[te]]
+        # Scored exactly like LightGBM CV: un-mirrored rows whose window lies
+        # inside one bout (see pipeline._clean_window_rows).
+        eval_idx = te[~mirror[te] & clean[te]]
         if len(eval_idx) == 0:
             continue
         if n_ensemble > 1:
@@ -504,12 +529,10 @@ def cross_validate_cnn(
         pred = model.predict(x[eval_idx])
         true = y[eval_idx]
         acc = accuracy_score(true, pred)
-        f1 = f1_score(true, pred, average="macro", labels=classes, zero_division=0)
         accs.append(acc)
-        f1s.append(f1)
         all_true.append(true)
         all_pred.append(pred)
-        progress(f"  fold {fold}: acc={acc:.3f}  macro-F1={f1:.3f}")
+        progress(f"  fold {fold}: acc={acc:.3f}")
 
     true_all = np.concatenate(all_true)
     pred_all = np.concatenate(all_pred)
@@ -517,10 +540,20 @@ def cross_validate_cnn(
         true_all, pred_all, labels=classes, zero_division=0
     )
     cm = confusion_matrix(true_all, pred_all, labels=classes)
+    # Same macro definition as LightGBM CV: classes under the support floor
+    # are left out, and each fold averages only the classes its test set
+    # actually holds (an absent class used to score 0 there).
+    macro_classes = [c for i, c in enumerate(classes) if supp[i] >= DEFAULT_SUPPORT_FLOOR]
+    for true, pred in zip(all_true, all_pred, strict=True):
+        present = [c for c in macro_classes if (true == c).any()]
+        if present:
+            f1s.append(f1_score(true, pred, average="macro", labels=present, zero_division=0))
     return {
         "mean_accuracy": float(np.mean(accs)),
         "std_accuracy": float(np.std(accs)),
-        "mean_macro_f1": float(np.mean(f1s)),
+        "mean_macro_f1": float(np.mean(f1s)) if f1s else None,
+        "macro_classes": [str(c) for c in macro_classes],
+        "support_floor": DEFAULT_SUPPORT_FLOOR,
         "per_fold_accuracy": [float(a) for a in accs],
         "classes": list(classes),
         "per_class": {

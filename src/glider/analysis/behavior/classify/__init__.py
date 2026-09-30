@@ -17,6 +17,7 @@ and free of any Qt dependency.
 
 import csv
 import logging
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -832,6 +833,15 @@ def classify(
         handover = {"model": model} if model is not None else {}
         pipeline = LiveInferencePipeline(config, **handover)
         pipeline.run()
+        if (
+            config.freeze_threshold is not None
+            and config.dart_threshold is not None
+            and ethogram_csv.exists()
+        ):
+            poses_on_disk = pose_csv_in or (
+                pose_csv_out if pose_csv_out is not None and pose_csv_out.exists() else None
+            )
+            _relabel_speed_axis_offline(ethogram_csv, poses_on_disk, config)
 
     # The classifier threads only write the ethogram CSV once at least one
     # prediction has been buffered. A too-short clip (never fills the feature
@@ -1028,6 +1038,51 @@ def _rows_in_range(rows: list[dict], frame_range: tuple[int, int]) -> list[dict]
         if first <= frame <= last:
             kept.append(row)
     return kept
+
+
+def _relabel_speed_axis_offline(ethogram_csv: Path, pose_csv: Path | None, config) -> None:
+    """Give a streamed ethogram the batch path's whole-run freeze/dart labels.
+
+    The live detector labels a bout only from its ``min_frames``-th frame, so
+    a streamed run (e.g. ``write_annotated=True``) reported ~``min_frames-1``
+    fewer frames per freeze than the batch path on the same poses. The
+    offline labelling is a superset of the streamed one on the same speed
+    signal, so relabelling only turns posture rows into speed rows and never
+    needs the postural label the stream overwrote. Without poses on disk it
+    cannot be done, which is warned rather than left to show up in stats.csv.
+    """
+    from glider.analysis.behavior.classify import batch as _batch
+    from glider.vision.pose.dlc import from_dlc_csv
+
+    if pose_csv is None:
+        warnings.warn(
+            "this run streamed its ethogram and kept no pose CSV, so freeze/dart "
+            "bouts lack their first min_frames-1 frames (the live confirmation "
+            "delay) and are shorter than a batch run would report. Write the "
+            "pose CSV or skip the annotated video to get whole bouts.",
+            stacklevel=3,
+        )
+        return
+    with ethogram_csv.open(newline="") as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        return
+    pose = from_dlc_csv(Path(pose_csv))
+    labels, _values = _batch._speed_axis(
+        pose.xy,
+        config.freeze_threshold,
+        config.dart_threshold,
+        config.freeze_min_frames,
+        config.dart_min_frames,
+    )
+    for row in rows:
+        try:
+            frame = int(row["frame"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= frame < len(labels) and labels[frame]:
+            row["behavior"] = labels[frame]
+    _rewrite_ethogram(ethogram_csv, rows)
 
 
 def _rewrite_ethogram(path: Path, rows: list[dict]) -> None:

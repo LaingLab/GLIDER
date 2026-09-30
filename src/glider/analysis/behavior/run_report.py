@@ -250,6 +250,11 @@ class TrainingRun:
         Falls back to ``mean_macro_f1`` only when there is no per-class table
         to pool, so a run that measured something never shows nothing.
         """
+        # Cross-validation records the pooled macro under the support floor
+        # (thin classes excluded, as evaluate_model does); prefer it.
+        floored = _float(self.summary.get("macro_f1"))
+        if floored is not None:
+            return floored
         scores = [c.f1 for c in self.per_class if c.f1 is not None]
         if scores:
             return sum(scores) / len(scores)

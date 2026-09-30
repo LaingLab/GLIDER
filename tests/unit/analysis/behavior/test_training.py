@@ -821,8 +821,12 @@ def test_assemble_sessions_labels_each_session_from_its_own_animal(tmp_path, thr
     assert set(per_session[1]) - housekeeping == {"freezing"}
 
 
-def test_without_individuals_every_session_sees_every_zone(tmp_path, three_regime_pose):
-    """The default must be unchanged: existing callers pass no `individuals`."""
+def test_without_individuals_a_multi_animal_csv_is_refused(tmp_path, three_regime_pose):
+    """No `individuals` + a CSV holding two animals' zones is refused (E12).
+
+    It used to train on both animals' zones at once, labelling this animal
+    with its partner's behavior -- the case evaluate_model and CV refuse.
+    """
     from glider.analysis.behavior.annotations import AnnotationStore, BehaviorZone
     from glider.analysis.behavior.features import FeatureSpec
     from glider.analysis.behavior.pipeline import _assemble_sessions
@@ -834,18 +838,17 @@ def test_without_individuals_every_session_sees_every_zone(tmp_path, three_regim
     store.add(BehaviorZone("freezing", 420, 560, individual=1))
     ann = store.save_csv(tmp_path / "flat_annotations.csv")
 
-    _x, _y, _groups, per_session = _assemble_sessions(
-        sessions=[(pose, ann)],
-        spec=FeatureSpec(),
-        fps=30.0,
-        window=30,
-        stats=("mean", "std"),
-        merge_map=None,
-        exclude=None,
-        mirror_augment=False,
-    )
-    housekeeping = {"__unannotated__", "__ambiguous__"}
-    assert set(per_session[0]) - housekeeping == {"walking", "freezing"}
+    with pytest.raises(ValueError, match="more than one animal"):
+        _assemble_sessions(
+            sessions=[(pose, ann)],
+            spec=FeatureSpec(),
+            fps=30.0,
+            window=30,
+            stats=("mean", "std"),
+            merge_map=None,
+            exclude=None,
+            mirror_augment=False,
+        )
 
 
 def test_individuals_length_must_match_sessions(tmp_path, three_regime_pose):

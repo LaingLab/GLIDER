@@ -169,7 +169,8 @@ class CausalSpeed:
       3. trailing rolling-**mean** of that speed over ``speed_smooth`` frames.
 
     The first frame returns ``0.0`` (no predecessor). A full-dropout frame
-    (all keypoints NaN) returns ``NaN`` so the detector breaks its run.
+    (all keypoints NaN) returns ``NaN`` so the detector breaks its run, and so
+    does the re-seed frame after it (no predecessor either).
 
     **A dropout resets the filter.** Everything above describes where the
     animal was, and a dropout is the tracker saying it no longer knows. Keeping
@@ -192,6 +193,7 @@ class CausalSpeed:
         self._coords: deque[np.ndarray] = deque(maxlen=self.coord_smooth)
         self._speeds: deque[float] = deque(maxlen=self.speed_smooth)
         self._prev_smoothed: np.ndarray | None = None
+        self._started = False  # any frame pushed yet (dropouts included)
 
     def _forget(self) -> None:
         """Drop everything describing where the animal was.
@@ -211,6 +213,7 @@ class CausalSpeed:
         if np.all(np.isnan(xy)):
             # Nothing was seen this frame, so nothing can be measured from it
             # and nothing measured before it survives the gap.
+            self._started = True
             self._forget()
             return float("nan")
         self._coords.append(xy)
@@ -225,13 +228,19 @@ class CausalSpeed:
         # deliberately does not advance it — so accepting one would make a
         # single dropped opening frame silently blank the speed axis for the
         # entire session, which is exactly what it did.
+        first = not self._started
+        self._started = True
         if self._prev_smoothed is None or np.all(np.isnan(self._prev_smoothed)):
             if np.all(np.isnan(smoothed)):
-                self._speeds.append(np.nan)
                 return float("nan")
             self._prev_smoothed = smoothed
-            self._speeds.append(0.0)
-            return 0.0
+            # A seed frame has no predecessor, so its speed is unknown. It is
+            # NOT put in the smoothing window: a fake 0.0 there halved the next
+            # frames' speed after every dropout. Only the stream's very first
+            # frame reports 0.0 (a long-standing contract every caller drops);
+            # a re-seed after a dropout is NaN, so it can never be pooled into
+            # a percentile or counted as a sub-threshold (freezing) frame.
+            return 0.0 if first else float("nan")
 
         disp = np.linalg.norm(smoothed - self._prev_smoothed, axis=1)  # (K,)
         if np.all(np.isnan(disp)):
