@@ -213,11 +213,15 @@ class RunnerPanel(QWidget):
     def _refresh_run_readiness(self) -> None:
         """Recompute board/experiment readiness and update the START button + hint."""
         r = compute_readiness(self._core)
-        if r == getattr(self, "_last_readiness", None):
+        live = getattr(self, "_state_name", "IDLE") in ("RUNNING", "PAUSED")
+        key = (r, live)
+        if key == getattr(self, "_last_readiness", None):
             return
-        self._last_readiness = r
-        self._start_btn.setEnabled(r.all_ready)
-        self._not_ready_hint.setVisible(not r.all_ready)
+        self._last_readiness = key
+        # START only when ready and not already running; STOP only mid-run.
+        self._start_btn.setEnabled(r.all_ready and not live)
+        self._stop_btn.setEnabled(live)
+        self._not_ready_hint.setVisible(not r.all_ready and not live)
 
     def update_state(self, state_name: str) -> None:
         """Update UI based on core state changes."""

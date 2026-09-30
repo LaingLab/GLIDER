@@ -150,11 +150,15 @@ class RunControlPanel(QWidget):
     def _refresh_run_readiness(self) -> None:
         """Recompute board/experiment readiness and update the START button + hint."""
         r = compute_readiness(self._core)
-        if r == getattr(self, "_last_readiness", None):
+        live = getattr(self, "_state_name", "IDLE") in ("RUNNING", "PAUSED")
+        key = (r, live)
+        if key == getattr(self, "_last_readiness", None):
             return
-        self._last_readiness = r
-        self._start_btn.setEnabled(r.all_ready)
-        self._not_ready_hint.setVisible(not r.all_ready)
+        self._last_readiness = key
+        # START only when ready and not already running; STOP only mid-run.
+        self._start_btn.setEnabled(r.all_ready and not live)
+        self._stop_btn.setEnabled(live)
+        self._not_ready_hint.setVisible(not r.all_ready and not live)
 
     def update_state(self, state_name: str) -> None:
         """Update UI based on core state changes."""
@@ -168,16 +172,9 @@ class RunControlPanel(QWidget):
 
         self._refresh_run_readiness()
 
-        # The header timer is hidden while live (RUNNING or PAUSED) because the
-        # persistent run banner (shown across both Runner pages) owns the
-        # visible timer then; it is reshown once idle/stopped, where the
-        # snap-to-duration repaint below already keeps it in sync. PAUSED counts
-        # as live: main_window auto-pauses on a mid-run board disconnect, and
-        # the banner (not the header) stays visible through that.
-        if state_name in ("RUNNING", "PAUSED"):
-            self._runner_timer.hide()
-        else:
-            self._runner_timer.show()
+        # The header timer stays visible in every state. DashboardView shows its
+        # run banner only when this panel is NOT on screen, so this header is
+        # the only timer the operator sees here during a live run.
 
         # Update recording indicator
         if state_name == "RUNNING" and self._core.data_recorder.is_recording:

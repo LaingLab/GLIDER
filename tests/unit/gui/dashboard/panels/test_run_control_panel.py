@@ -32,6 +32,7 @@ def test_start_button_emits_start_requested(qtbot, mock_core):
 
 def test_stop_button_emits_stop_requested(qtbot, mock_core):
     panel = _panel(qtbot, mock_core)
+    panel.update_state("RUNNING")
     with qtbot.waitSignal(panel.stop_requested, timeout=1000):
         panel._stop_btn.click()
 
@@ -52,3 +53,19 @@ def test_elapsed_updated_emitted_on_timer_display(qtbot, mock_core):
 def test_no_stall_instrument_attribute(qtbot, mock_core):
     panel = _panel(qtbot, mock_core)
     assert not hasattr(panel, "_stall_timer")
+
+
+def test_timer_stays_visible_and_buttons_follow_the_run(qtbot, mock_core):
+    # DashboardView hides its banner while this panel is shown, so the panel's
+    # own timer is the only one on screen during a run.
+    mock_core.last_flow_duration_s = None
+    panel = _panel(qtbot, mock_core)
+    assert panel._stop_btn.isEnabled() is False
+
+    panel.update_state("RUNNING")
+    assert panel._runner_timer.isVisibleTo(panel) is True
+    assert panel._start_btn.isEnabled() is False
+    assert panel._stop_btn.isEnabled() is True
+
+    panel.update_state("READY")
+    assert panel._stop_btn.isEnabled() is False
