@@ -145,7 +145,9 @@ async def test_a_recording_drives_real_hardware(qtbot, monkeypatch, tmp_path):
     stim = engine.create_node(node_id="s", node_type="Maimu", position=(1.0, 0.0), device_id="stim")
     stim.mode = "pulse"
     stim.period_ms = 500
-    stim.duration_s = 10
+    stim.pulse_width_ms = 5
+    stim.count = 20
+    stim.intensity_pct = 100
     engine.create_connection(
         connection_id="c",
         from_node_id="w",
@@ -177,7 +179,7 @@ async def test_a_recording_drives_real_hardware(qtbot, monkeypatch, tmp_path):
         await asyncio.sleep(0.01)
     await engine.stop()
 
-    assert written == [b"500,10"], "a recorded freeze did not reach the stimulator"
+    assert written == [b"500,5,20,100"], "a recorded freeze did not reach the stimulator"
 
 
 # --- which video does it play? ------------------------------------------------
