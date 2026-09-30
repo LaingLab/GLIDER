@@ -10,7 +10,7 @@ import logging
 import sys
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -1307,12 +1307,10 @@ class HardwarePanel(QWidget):
                                     logger.warning(f"Failed to initialize device {device_id}: {e}")
                     self.status_message.emit(f"Connected to {board_id}", 3000)
                 else:
-                    QMessageBox.warning(
-                        self, "Connection Failed", f"Could not connect to {board_id}"
-                    )
+                    self._notify("Connection Failed", f"Could not connect to {board_id}")
                 self.refresh_tree()
             except Exception as e:
-                QMessageBox.critical(self, "Connection Error", str(e))
+                self._notify("Connection Error", str(e), critical=True)
 
         self._run_async(connect())
 
@@ -1324,7 +1322,7 @@ class HardwarePanel(QWidget):
                 await self._hardware_manager.disconnect_board(board_id)
                 self.refresh_tree()
             except Exception as e:
-                QMessageBox.critical(self, "Disconnect Error", str(e))
+                self._notify("Disconnect Error", str(e), critical=True)
 
         self._run_async(disconnect())
 
@@ -1366,6 +1364,21 @@ class HardwarePanel(QWidget):
 
             self._run_async(remove())
 
+    def _notify(self, title: str, text: str, critical: bool = False) -> None:
+        """Show a non-modal message box on the next event-loop tick.
+
+        A modal ``QMessageBox`` inside a qasync task runs a nested event loop
+        and freezes the coroutine (see MainWindow._notify_user).
+        """
+
+        def show() -> None:
+            icon = QMessageBox.Icon.Critical if critical else QMessageBox.Icon.Warning
+            box = QMessageBox(icon, title, text, parent=self)
+            box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            box.open()
+
+        QTimer.singleShot(0, show)
+
     def on_connect_hardware(self) -> None:
         """Connect to all hardware."""
         self._run_async(self._connect_hardware_async())
@@ -1382,11 +1395,9 @@ class HardwarePanel(QWidget):
             self._hardware_manager.start_link_supervisor()
             failed = [k for k, v in results.items() if not v]
             if failed:
-                QMessageBox.warning(
-                    self, "Connection Warning", f"Failed to connect: {', '.join(failed)}"
-                )
+                self._notify("Connection Warning", f"Failed to connect: {', '.join(failed)}")
         except Exception as e:
-            QMessageBox.critical(self, "Connection Error", str(e))
+            self._notify("Connection Error", str(e), critical=True)
 
     def on_disconnect_hardware(self) -> None:
         """Disconnect all hardware."""

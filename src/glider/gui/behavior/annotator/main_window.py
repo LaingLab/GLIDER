@@ -66,6 +66,7 @@ from glider.gui.behavior.annotator.sampler import ProposedClip
 from glider.gui.behavior.annotator.speed_source import SpeedCache, load_session_speed
 from glider.gui.behavior.annotator.speed_trace import SpeedTrace
 from glider.gui.behavior.annotator.trim_bar import TrimBar, compute_window
+from glider.gui.qthreads import retire_thread
 from glider.gui.styles import colors, radius
 from glider.gui.widgets.tool_ui import apply_tool_theme, readable_text_on
 from glider.vision.pose.core import PoseData
@@ -642,13 +643,18 @@ class AnnotatorWindow(QMainWindow):
             store = self.stores[video]
             for z in zones:
                 store.remove(z)
-        self.vocab.remove(name)
-        self._save_vocab()
-        # Persist every store whose contents changed.
-        for video, zones in zones_using_by_video.items():
-            if not zones:
-                continue
+        # Persist every store whose contents changed, before touching the
+        # vocabulary: a name still on disk must stay in the vocabulary.
+        saved = [
             self._save_annotations_for_video(video)
+            for video, zones in zones_using_by_video.items()
+            if zones
+        ]
+        if all(saved):
+            self.vocab.remove(name)
+            self._save_vocab()
+        else:
+            self._warn_vocab_kept([name])
         self._rebuild_behavior_shortcuts()
         self._refresh_all()
         self.clip.setFocus()
@@ -683,12 +689,16 @@ class AnnotatorWindow(QMainWindow):
         sources = [s for s in sources if s != target and s in self.vocab]
         if not sources or target not in self.vocab:
             return
+        saved = []
         for video, store in self.stores.items():
             store.replace(merge_behavior_zones(list(store), sources, target))
-            self._save_annotations_for_video(video)
-        for s in sources:
-            self.vocab.remove(s)
-        self._save_vocab()
+            saved.append(self._save_annotations_for_video(video))
+        if all(saved):
+            for s in sources:
+                self.vocab.remove(s)
+            self._save_vocab()
+        else:
+            self._warn_vocab_kept(sources)
         self._rebuild_behavior_shortcuts()
         # Zone objects were replaced; rebuild the clip→zone associations.
         self._clip_zone.clear()
@@ -1038,14 +1048,13 @@ class AnnotatorWindow(QMainWindow):
             if thread is None:
                 continue
             try:
-                thread.quit()
-                thread.wait(5000)
+                # No wait: a parse still running is parked (with the workers
+                # it may be running) until it ends, not joined on the GUI.
+                retire_thread(thread, *self._speed_workers, timeout_ms=0)
             except RuntimeError:
                 # Already deleted by deleteLater; nothing left to wait for.
                 pass
         self._speed_threads.clear()
-        # Safe only after every thread above has stopped: these are the
-        # objects those threads were running.
         self._speed_workers.clear()
 
     def _refresh_speed_trace(self) -> None:
@@ -1161,8 +1170,12 @@ class AnnotatorWindow(QMainWindow):
         QMessageBox.warning(self, "Annotations not loaded", message)
         return True
 
-    def _save_annotations_for_video(self, video: Path) -> None:
-        """Persist the store for `video` to its annotations CSV."""
+    def _save_annotations_for_video(self, video: Path) -> bool:
+        """Persist the store for `video` to its annotations CSV.
+
+        False only when a write failed. An unreadable file is deliberately
+        left alone (True): there is nothing of ours on disk to go stale.
+        """
         ann_path = self.videos_meta[video]
         if video in self.load_errors:
             # Writing here would truncate a file we could not read, throwing
@@ -1170,7 +1183,7 @@ class AnnotatorWindow(QMainWindow):
             self._saved_video = None
             self._save_failure = None
             self._refresh_save_indicator()
-            return
+            return True
         store = self.stores[video]
         try:
             ann_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1178,10 +1191,22 @@ class AnnotatorWindow(QMainWindow):
         except OSError as e:
             self._saved_video = None
             self._save_failure = str(e)
+            ok = False
         else:
             self._saved_video = video
             self._save_failure = None
+            ok = True
         self._refresh_save_indicator()
+        return ok
+
+    def _warn_vocab_kept(self, names: list[str]) -> None:
+        QMessageBox.warning(
+            self,
+            "Annotations not saved",
+            f"Some annotation files could not be written, so {', '.join(names)} "
+            "stay in the vocabulary (files on disk may still use them). "
+            f"Fix the problem and try again.\n\n{self._save_failure or ''}",
+        )
 
     def _refresh_save_indicator(self) -> None:
         """Describe the session on screen, never the one last written to.
@@ -1208,8 +1233,8 @@ class AnnotatorWindow(QMainWindow):
         else:
             self.save_indicator.setText(f"· {ann_path.name}")
 
-    def _save_annotations_for(self, clip: ProposedClip) -> None:
-        self._save_annotations_for_video(Path(clip.video_path))
+    def _save_annotations_for(self, clip: ProposedClip) -> bool:
+        return self._save_annotations_for_video(Path(clip.video_path))
 
     def _save_vocab(self) -> None:
         if self.vocab_path is None and self._primary_video is not None:
@@ -1412,7 +1437,9 @@ class AnnotatorWindow(QMainWindow):
     # Cleanup
     # ------------------------------------------------------------------
     def closeEvent(self, event) -> None:
-        # Wait for any in-flight pose parse FIRST. Qt aborts the process when
+        # A trim is otherwise saved only on navigation; closing must keep it.
+        self._persist_current_trim()
+        # Retire any in-flight pose parse FIRST. Qt aborts the process when
         # a running QThread is destroyed, and this window owns them.
         self._stop_speed_threads()
         # Release any privately-owned capture in the player (no-op for
