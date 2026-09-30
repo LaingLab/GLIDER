@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.core.config import get_config
-from glider.gui.device_status import link_status_color, link_status_text
+from glider.gui.device_status import device_state_display, link_status_color, link_status_text
 from glider.gui.styles import colors, radius
 
 if TYPE_CHECKING:
@@ -128,34 +128,9 @@ class DeviceStatesPanel(QWidget):
             # made. "Has this been set up" is a question a peripheral that
             # walked out of range never stops answering yes to.
             link = getattr(device, "link_state", None)
-            device_type = getattr(device, "device_type", "Unknown")
-            is_analog_input = device_type == "AnalogInput"
 
             if hasattr(card, "_state_label"):
-                if is_analog_input:
-                    last_value = getattr(device, "_last_value", None)
-                    if last_value is not None:
-                        voltage = (last_value / 1023.0) * 5.0
-                        state_text = f"{last_value}\n{voltage:.2f}V"
-                        state_color = colors.ACCENT
-                        font_size = "11px"
-                    else:
-                        state_text = "---"
-                        state_color = colors.BORDER
-                        font_size = "11px"
-                else:
-                    state = getattr(device, "_state", None)
-                    if state is not None:
-                        if isinstance(state, bool):
-                            state_text = "HIGH" if state else "LOW"
-                            state_color = colors.SUCCESS if state else colors.TEXT_MUTED
-                        else:
-                            state_text = str(state)[:6]
-                            state_color = colors.ACCENT
-                    else:
-                        state_text = "---"
-                        state_color = colors.BORDER
-                    font_size = "14px"
+                state_text, state_color, font_size = device_state_display(device)
 
                 card._state_label.setText(state_text)
                 card._state_label.setStyleSheet(f"""
@@ -209,8 +184,6 @@ class DeviceStatesPanel(QWidget):
         link = getattr(device, "link_state", None)
         device_type = getattr(device, "device_type", "Unknown")
 
-        is_analog_input = device_type == "AnalogInput"
-
         status_widget = QWidget()
         # 80 for both: the link words ("Disconnected", "Reconnecting…") are
         # longer than the "Ready"/"---" the 60 was sized for, and a status that
@@ -220,27 +193,7 @@ class DeviceStatesPanel(QWidget):
         status_layout.setContentsMargins(0, 0, 0, 0)
         status_layout.setSpacing(2)
 
-        if is_analog_input:
-            last_value = getattr(device, "_last_value", None)
-            if last_value is not None:
-                voltage = (last_value / 1023.0) * 5.0
-                state_text = f"{last_value}\n{voltage:.2f}V"
-                state_color = colors.ACCENT
-            else:
-                state_text = "---"
-                state_color = colors.BORDER
-        else:
-            state = getattr(device, "_state", None)
-            if state is not None:
-                if isinstance(state, bool):
-                    state_text = "HIGH" if state else "LOW"
-                    state_color = colors.SUCCESS if state else colors.TEXT_MUTED
-                else:
-                    state_text = str(state)[:6]
-                    state_color = colors.ACCENT
-            else:
-                state_text = "---"
-                state_color = colors.BORDER
+        state_text, state_color, font_size = device_state_display(device)
 
         state_label = QLabel(state_text)
         state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -248,7 +201,7 @@ class DeviceStatesPanel(QWidget):
             QLabel {{
                 background-color: {state_color};
                 color: {colors.TEXT_PRIMARY};
-                font-size: {"11px" if is_analog_input else "14px"};
+                font-size: {font_size};
                 font-weight: bold;
                 border-radius: {radius.MEDIUM}px;
                 padding: 4px 8px;
