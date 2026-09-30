@@ -1,13 +1,16 @@
 """
-Run Control Panel - Dashboard quadrant panel for experiment run control.
+Run Control Panel - the dashboard's bottom-left quadrant.
 
-Provides the run-control header (experiment name, elapsed timer, status pill),
-the recording indicator, and the START/STOP controls. Readiness is computed
-here to gate START, but the readiness strip (tap-to-fix rows) and gear/setup
-menu live on the Setup page. Emergency stop is deliberately not offered here;
-it remains a desktop-only menu action (see MainWindow._on_emergency_stop).
+Experiment name and metadata (bound to ``session.metadata``), file actions,
+the board/experiment status line, the housekeeping menu, and START/STOP.
 
-Device status cards are a separate concern (DeviceStatesPanel).
+It also owns the run clock: it starts/stops the elapsed timer on state changes
+and snaps it to ``core.last_flow_duration_s`` at the end of a flow. It does not
+display the time itself — it emits ``elapsed_updated`` and the dashboard header
+(top-right) shows it, so there is exactly one place the time text comes from.
+
+Emergency stop is deliberately not offered here; it remains a desktop-only
+menu action (see MainWindow._on_emergency_stop).
 """
 
 import logging
@@ -16,10 +19,16 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
+    QPlainTextEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -27,21 +36,34 @@ from PyQt6.QtWidgets import (
 from glider.core.config import get_config
 from glider.gui.runner.readiness import compute_readiness
 from glider.gui.runner.run_timer import format_elapsed
-from glider.gui.styles import colors
 
 if TYPE_CHECKING:
     from glider.core.glider_core import GliderCore
 
 logger = logging.getLogger(__name__)
 
+_LIVE_STATES = ("RUNNING", "PAUSED")
+# Single-line metadata fields edited in place: (attribute, label).
+_LINE_FIELDS = (("experimenter", "Experimenter"), ("protocol", "Protocol"))
+
 
 class RunControlPanel(QWidget):
-    """Dashboard panel providing run-control header and START/STOP."""
+    """Dashboard panel: experiment metadata, file actions, START/STOP."""
 
     experiment_name_changed = pyqtSignal(str)
     start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     elapsed_updated = pyqtSignal(str)
+
+    # File actions and housekeeping (wired by MainWindow).
+    new_requested = pyqtSignal()
+    open_requested = pyqtSignal()
+    save_requested = pyqtSignal()
+    save_as_requested = pyqtSignal()
+    board_settings_requested = pyqtSignal()
+    help_requested = pyqtSignal()
+    switch_to_desktop_requested = pyqtSignal()
+    close_requested = pyqtSignal()
 
     def __init__(self, core: "GliderCore", parent=None):
         super().__init__(parent)
@@ -49,9 +71,11 @@ class RunControlPanel(QWidget):
 
         self._experiment_start_time: float | None = None
         self._state_name = "IDLE"
+        self._last_readiness = None
 
         self.setObjectName("runControlPanel")
         self._setup_ui()
+        self.refresh()
 
     def _setup_ui(self):
         """Build the run-control panel UI."""
@@ -59,55 +83,93 @@ class RunControlPanel(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        # === Header Bar ===
-        header = QWidget()
-        header.setFixedHeight(50)
-        header.setProperty("runnerHeader", True)
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(12, 4, 12, 4)
+        # Everything above START/STOP scrolls, so the run buttons never get
+        # squeezed off a short quadrant.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        body = QVBoxLayout(content)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(8)
 
-        self._runner_exp_name = QLineEdit("Untitled Experiment")
-        self._runner_exp_name.setProperty("title", True)
-        self._runner_exp_name.setPlaceholderText("Enter experiment name...")
-        self._runner_exp_name.setReadOnly(True)
-        self._runner_exp_name.textChanged.connect(self._on_experiment_name_changed)
-        header_layout.addWidget(self._runner_exp_name)
-
-        header_layout.addStretch()
-
-        self._runner_timer = QLabel("00:00.00")
-        self._runner_timer.setProperty("timer", True)
-        self._runner_timer.setStyleSheet(
-            f"color: {colors.SUCCESS}; font-size: 36px; font-weight: bold; font-family: monospace;"
+        # === Status line + housekeeping ⚙ ===
+        status_row = QHBoxLayout()
+        self._board_status = QLabel()
+        self._exp_status = QLabel()
+        status_row.addWidget(self._board_status)
+        status_row.addWidget(self._exp_status)
+        status_row.addStretch(1)
+        self._menu_btn = QPushButton("⚙")
+        self._menu_btn.setFixedSize(48, 48)
+        self._menu_btn.setStyleSheet(
+            "min-width:48px; max-width:48px; min-height:48px; max-height:48px; "
+            "padding:0px; border:none; font-size: 20px;"
         )
-        header_layout.addWidget(self._runner_timer)
+        self._menu_btn.clicked.connect(self._open_housekeeping_menu)
+        status_row.addWidget(self._menu_btn)
+        body.addLayout(status_row)
 
-        self._status_label = QLabel("IDLE")
-        self._status_label.setProperty("runnerStatus", True)
-        self._status_label.setProperty("statusState", "IDLE")
-        header_layout.addWidget(self._status_label)
+        # === Experiment name + metadata ===
+        self._name_edit = QLineEdit()
+        self._name_edit.setProperty("title", True)
+        self._name_edit.setPlaceholderText("Enter experiment name...")
+        self._name_edit.setMinimumHeight(40)
+        self._name_edit.textChanged.connect(self._on_name_edited)
+        body.addWidget(self._name_edit)
 
-        layout.addWidget(header)
+        meta = QGridLayout()
+        meta.setContentsMargins(0, 0, 0, 0)
+        meta.setHorizontalSpacing(8)
+        self._meta_edits: dict[str, QLineEdit] = {}
+        for col, (attr, label) in enumerate(_LINE_FIELDS):
+            edit = QLineEdit()
+            edit.setPlaceholderText(label)
+            edit.setMinimumHeight(40)
+            edit.textChanged.connect(lambda text, a=attr: self._set_metadata(a, text))
+            self._meta_edits[attr] = edit
+            meta.addWidget(edit, 0, col)
+        self._notes_edit = QPlainTextEdit()
+        self._notes_edit.setPlaceholderText("Notes")
+        self._notes_edit.setFixedHeight(64)
+        self._notes_edit.textChanged.connect(
+            lambda: self._set_metadata("notes", self._notes_edit.toPlainText())
+        )
+        meta.addWidget(self._notes_edit, 1, 0, 1, 2)
+        body.addLayout(meta)
 
-        # === Recording Indicator ===
-        self._runner_recording = QLabel("● REC")
-        self._runner_recording.setProperty("recording", True)
-        self._runner_recording.setFixedHeight(28)
-        self._runner_recording.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._runner_recording.hide()
-        layout.addWidget(self._runner_recording)
+        # === File actions ===
+        file_row = QHBoxLayout()
+        file_row.setSpacing(6)
+        self._file_buttons: dict[str, QPushButton] = {}
+        for label, signal in (
+            ("New", self.new_requested),
+            ("Open", self.open_requested),
+            ("Save", self.save_requested),
+            ("Save As", self.save_as_requested),
+            ("Connect / Ports", self.board_settings_requested),
+        ):
+            btn = QPushButton(label)
+            btn.setMinimumHeight(48)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            btn.clicked.connect(signal)
+            self._file_buttons[label] = btn
+            file_row.addWidget(btn)
+        body.addLayout(file_row)
+        body.addStretch(1)
 
-        layout.addStretch(1)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
 
-        # === Control Buttons ===
+        # === START / STOP ===
         controls = QWidget()
-        controls.setMinimumHeight(110)
         controls.setProperty("runnerControls", True)
         controls_layout = QVBoxLayout(controls)
-        controls_layout.setContentsMargins(12, 12, 12, 12)
-        controls_layout.setSpacing(8)
+        controls_layout.setContentsMargins(12, 8, 12, 8)
+        controls_layout.setSpacing(6)
 
-        self._not_ready_hint = QLabel("Not ready — check Setup")
+        self._not_ready_hint = QLabel("Not ready — connect a board and load an experiment")
         self._not_ready_hint.setProperty("textRole", "muted")
         self._not_ready_hint.hide()
         controls_layout.addWidget(self._not_ready_hint)
@@ -125,16 +187,16 @@ class RunControlPanel(QWidget):
         self._stop_btn = QPushButton("■  STOP")
         self._stop_btn.setFixedHeight(60)
         self._stop_btn.setProperty("runnerAction", "stop")
+        self._stop_btn.setEnabled(False)
         self._stop_btn.clicked.connect(self.stop_requested.emit)
         top_row.addWidget(self._stop_btn)
 
         controls_layout.addLayout(top_row)
-
         layout.addWidget(controls)
 
         # Timers
         config = get_config()
-        self._elapsed_timer = QTimer()
+        self._elapsed_timer = QTimer(self)
         self._elapsed_timer.setInterval(config.timing.elapsed_timer_interval_ms)
         self._elapsed_timer.timeout.connect(self._update_elapsed_time)
 
@@ -143,44 +205,37 @@ class RunControlPanel(QWidget):
         self._readiness_timer.timeout.connect(self._refresh_run_readiness)
         self._readiness_timer.start()
 
-        self._refresh_run_readiness()
-
     # --- Public API ---
 
-    def _refresh_run_readiness(self) -> None:
-        """Recompute board/experiment readiness and update the START button + hint."""
-        r = compute_readiness(self._core)
-        live = getattr(self, "_state_name", "IDLE") in ("RUNNING", "PAUSED")
-        key = (r, live)
-        if key == getattr(self, "_last_readiness", None):
-            return
-        self._last_readiness = key
-        # START only when ready and not already running; STOP only mid-run.
-        self._start_btn.setEnabled(r.all_ready and not live)
-        self._stop_btn.setEnabled(live)
-        self._not_ready_hint.setVisible(not r.all_ready and not live)
+    @property
+    def is_live(self) -> bool:
+        return self._state_name in _LIVE_STATES
+
+    def refresh(self) -> None:
+        """Reload the metadata fields from the (possibly new) session."""
+        metadata = self._metadata()
+
+        def value(attr: str) -> str:
+            return str(getattr(metadata, attr, "") or "")
+
+        edits = (self._name_edit, self._notes_edit, *self._meta_edits.values())
+        for edit in edits:
+            edit.blockSignals(True)
+        self._name_edit.setText(value("name"))
+        for attr, edit in self._meta_edits.items():
+            edit.setText(value(attr))
+        self._notes_edit.setPlainText(value("notes"))
+        for edit in edits:
+            edit.blockSignals(False)
+        self._apply_lock()
+        self._last_readiness = None
+        self._refresh_run_readiness()
 
     def update_state(self, state_name: str) -> None:
         """Update UI based on core state changes."""
         self._state_name = state_name
-
-        # Update status label
-        self._status_label.setText(state_name)
-        self._status_label.setProperty("statusState", state_name)
-        self._status_label.style().unpolish(self._status_label)
-        self._status_label.style().polish(self._status_label)
-
+        self._apply_lock()
         self._refresh_run_readiness()
-
-        # The header timer stays visible in every state. DashboardView shows its
-        # run banner only when this panel is NOT on screen, so this header is
-        # the only timer the operator sees here during a live run.
-
-        # Update recording indicator
-        if state_name == "RUNNING" and self._core.data_recorder.is_recording:
-            self._runner_recording.show()
-        else:
-            self._runner_recording.hide()
 
         # Start/stop elapsed timer
         if state_name == "RUNNING":
@@ -198,35 +253,61 @@ class RunControlPanel(QWidget):
             # 10.11s / 10.43s run-to-run.
             self._snap_timer_to_flow_duration()
 
-    def update_experiment_name(self, name: str | None = None) -> None:
-        """Update the experiment name from session."""
-        self._runner_exp_name.blockSignals(True)
-        if name:
-            self._runner_exp_name.setText(name)
-        elif self._core.session and self._core.session.metadata.name:
-            self._runner_exp_name.setText(self._core.session.metadata.name)
-        else:
-            self._runner_exp_name.setText("Untitled Experiment")
-        self._runner_exp_name.blockSignals(False)
-
     # --- Internal methods ---
 
-    def _on_experiment_name_changed(self, name: str) -> None:
-        """Handle experiment name change from user input."""
-        if self._core.session:
-            self._core.session.metadata.name = name
-            self._core.session.mark_dirty()
+    def _metadata(self):
+        session = self._core.session
+        return getattr(session, "metadata", None) if session is not None else None
+
+    def _apply_lock(self) -> None:
+        """Metadata is read-only while a run is live (it is being recorded)."""
+        live = self.is_live
+        self._name_edit.setReadOnly(live)
+        self._notes_edit.setReadOnly(live)
+        for edit in self._meta_edits.values():
+            edit.setReadOnly(live)
+
+    def _set_metadata(self, attr: str, value: str) -> None:
+        metadata = self._metadata()
+        if metadata is None or self.is_live:
+            return
+        setattr(metadata, attr, value)
+        self._core.session.mark_dirty()
+
+    def _on_name_edited(self, name: str) -> None:
+        self._set_metadata("name", name)
         self.experiment_name_changed.emit(name)
 
-    def _update_elapsed_time(self) -> None:
-        """Update the elapsed time display.
+    def _refresh_run_readiness(self) -> None:
+        """Recompute readiness; update the status line and START/STOP."""
+        r = compute_readiness(self._core)
+        live = self.is_live
+        key = (r, live)
+        if key == self._last_readiness:
+            return
+        self._last_readiness = key
+        if r.board_ready:
+            self._board_status.setText(f"Board: ✓ {r.board_label}")
+        else:
+            self._board_status.setText("Board: ✗ not connected")
+        if r.experiment_ready:
+            self._exp_status.setText("Experiment: ✓ ready")
+        else:
+            self._exp_status.setText("Experiment: ✗ no flow")
+        # START only when ready and not already running; STOP only mid-run.
+        self._start_btn.setEnabled(r.all_ready and not live)
+        self._stop_btn.setEnabled(live)
+        self._not_ready_hint.setVisible(not r.all_ready and not live)
 
-        Format is ``MM:SS.cc`` (or ``HH:MM:SS.cc`` past one hour), where ``cc``
-        is centiseconds — two decimal digits of seconds. We deliberately round
-        *toward zero* (truncate) rather than rounding nearest so the display
-        never jumps ahead of the wall clock and the centiseconds field never
-        reads "60" on a boundary.
-        """
+    def _open_housekeeping_menu(self) -> None:
+        menu = QMenu(self)
+        menu.addAction("Help").triggered.connect(self.help_requested)
+        menu.addAction("Switch to Desktop").triggered.connect(self.switch_to_desktop_requested)
+        menu.addAction("Exit").triggered.connect(self.close_requested)
+        menu.exec(self._menu_btn.mapToGlobal(self._menu_btn.rect().center()))
+
+    def _update_elapsed_time(self) -> None:
+        """Emit the live elapsed time (see ``format_elapsed`` for the format)."""
         if self._experiment_start_time is None:
             return
         self._set_timer_display(time.time() - self._experiment_start_time)
@@ -234,13 +315,9 @@ class RunControlPanel(QWidget):
     def _snap_timer_to_flow_duration(self) -> None:
         """On flow end, freeze the timer on the flow's logical duration.
 
-        This is the operator-visible piece of the timing fix. The QTimer's
-        last live-tick was a few hundred ms before the state change
-        actually fired (timer ticks at the configured interval), and the
-        state change itself fired *after* the entire teardown sequence.
-        Without this, the display ends on a stale wall-clock value that
-        includes I/O latency. ``core.last_flow_duration_s`` is anchored
-        to flow-engine start/end and is the truth-of-record.
+        The QTimer's last tick was up to one interval before the state change,
+        and the state change fired *after* teardown. ``core.last_flow_duration_s``
+        is anchored to flow-engine start/end and is the truth-of-record.
         """
         duration = self._core.last_flow_duration_s
         if duration is None:
@@ -251,29 +328,17 @@ class RunControlPanel(QWidget):
         self._set_timer_display(duration)
 
     def _set_timer_display(self, elapsed: float) -> None:
-        """Format ``elapsed`` (seconds) and paint it into the timer label."""
-        text = format_elapsed(elapsed)
-        self._runner_timer.setText(text)
-        self.elapsed_updated.emit(text)
+        """Format ``elapsed`` (seconds) and publish it to the dashboard header."""
+        self.elapsed_updated.emit(format_elapsed(elapsed))
 
     # --- Cleanup ---
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        """
-        Stop all QTimers before the widget is destroyed.
-
-        Timers started in __init__ keep firing against a dead widget if we
-        don't explicitly stop them — polluting logs and blocking garbage
-        collection of this panel.
-        """
-        for attr in ("_elapsed_timer", "_readiness_timer"):
-            timer = getattr(self, attr, None)
-            if timer is not None:
-                try:
-                    timer.stop()
-                except Exception:
-                    # Qt objects may already be partially torn down by the time
-                    # closeEvent fires; swallow to guarantee the other timers
-                    # still get stopped.
-                    pass
+        """Stop the QTimers so they don't fire against a dying widget."""
+        for timer in (self._elapsed_timer, self._readiness_timer):
+            try:
+                timer.stop()
+            except Exception:
+                # Qt objects may already be partially torn down.
+                pass
         super().closeEvent(event)

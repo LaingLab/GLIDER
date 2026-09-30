@@ -14,10 +14,9 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _isolate_dashboard_layout(tmp_path, monkeypatch):
+def _isolate_user_config_dir(tmp_path, monkeypatch):
     """Redirect the per-user config dir to a tmp path so tests that build
-    MainWindow/DashboardView never read or write the developer's real
-    ~/.glider/dashboard_layout.json."""
+    MainWindow never read or write the developer's real ~/.glider files."""
     from glider.core.config import get_config
 
     monkeypatch.setattr(get_config().paths, "user_config_dir", tmp_path)

@@ -1,140 +1,83 @@
 import pytest
 from PyQt6.QtWidgets import QLabel
 
-from glider.gui.dashboard.dashboard_view import DashboardView
-from glider.gui.dashboard.layout import QUADRANTS, default_layout
-from glider.gui.dashboard.layout_store import load_layout
-from glider.gui.dashboard.panel_registry import PANEL_KEYS
+from glider.gui.dashboard.dashboard_view import QUADRANT_TITLES, DashboardView
 
 
 class _StatePanel(QLabel):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, text):
+        super().__init__(text)
         self.last_state = None
 
     def update_state(self, name):
         self.last_state = name
 
 
-def _panels():
-    return {key: QLabel(key) for key in PANEL_KEYS}
+@pytest.fixture
+def panels():
+    return {
+        key: _StatePanel(key)
+        for key in ("camera", "device_states", "run_control", "manual_controls")
+    }
 
 
 @pytest.fixture
-def view(qtbot, tmp_path):
-    v = DashboardView(_panels(), save_path=tmp_path / "layout.json")
+def view(qtbot, panels):
+    v = DashboardView(**panels)
     qtbot.addWidget(v)
     return v
 
 
-def test_four_quadrants_show_default_panels(view):
-    shown = {q: view.host(q).current_panel_key for q in QUADRANTS}
-    assert shown == default_layout().assignment
+def _within(widget, ancestor):
+    while widget is not None:
+        if widget is ancestor:
+            return True
+        widget = widget.parent()
+    return False
 
 
-def test_benched_panel_is_alive_but_not_in_a_quadrant(view):
-    benched = view.current_layout().benched_panel()
-    assert benched == "manual_controls"
-    assert benched not in {view.host(q).current_panel_key for q in QUADRANTS}
-    assert view.panel(benched).parent() is not None
+def test_panels_have_fixed_quadrants(view, panels):
+    expected = {
+        "top_left": "camera",
+        "top_right": "device_states",
+        "bottom_left": "run_control",
+        "bottom_right": "manual_controls",
+    }
+    for quadrant, key in expected.items():
+        assert _within(panels[key], view.quadrant(quadrant)), (quadrant, key)
+    assert _within(view._timer, view.quadrant("top_right"))
 
 
-def test_pick_swaps_and_persists(view, tmp_path):
-    view.host("top_left").trigger_pick("device_states")
-    assert view.host("top_left").current_panel_key == "device_states"
-    assert view.host("top_right").current_panel_key == "run_control"
-    assert load_layout(tmp_path / "layout.json").assignment["top_left"] == "device_states"
+def test_quadrants_are_equal(qtbot, view):
+    view.resize(1000, 800)
+    view.show()
+    qtbot.waitExposed(view)
+    sizes = {view.quadrant(q).size() for q in QUADRANT_TITLES}
+    assert len(sizes) == 1
 
 
-def test_drag_swap_exchanges_quadrants(view):
-    view.host("top_left").swap_requested.emit("top_left", "bottom_right")
-    assert view.host("top_left").current_panel_key == "experiment_info"
-    assert view.host("bottom_right").current_panel_key == "run_control"
-    assert view.panel("experiment_info").parent() is not None
-    assert view.panel("run_control").parent() is not None
+def test_timer_visible_in_every_state(view):
+    for state in ("IDLE", "READY", "RUNNING", "PAUSED", "STOPPED"):
+        view.update_state(state)
+        assert view._timer.isVisibleTo(view), state
+        assert view._state.text() == state
 
 
-def test_pick_benched_panel_moves_it_in(view):
-    view.host("top_left").trigger_pick("manual_controls")
-    assert view.host("top_left").current_panel_key == "manual_controls"
-    assert view.current_layout().benched_panel() == "run_control"
-    assert view.panel("run_control").parent() is not None
+def test_set_time_updates_header(view):
+    view.set_time("01:23.45")
+    assert view._timer.text() == "01:23.45"
 
 
-def test_update_state_fans_out_including_benched(qtbot):
-    panels = {key: _StatePanel() for key in PANEL_KEYS}
-    from glider.gui.dashboard.dashboard_view import DashboardView
-
-    v = DashboardView(panels, save_path=None)
-    qtbot.addWidget(v)
-    v.update_state("RUNNING")
-    for key in PANEL_KEYS:  # benched included
-        assert panels[key].last_state == "RUNNING"
+def test_rec_shows_only_while_recording_a_run(view):
+    view.update_state("RUNNING", recording=True)
+    assert view._rec.isVisibleTo(view)
+    view.update_state("RUNNING", recording=False)
+    assert not view._rec.isVisibleTo(view)
+    view.update_state("STOPPED", recording=True)
+    assert not view._rec.isVisibleTo(view)
 
 
-def test_banner_starts_hidden(qtbot):
-    from PyQt6.QtWidgets import QWidget
-
-    banner = QWidget()
-    v = DashboardView(_panels(), save_path=None, banner=banner)
-    qtbot.addWidget(v)
-    assert banner.isHidden()
-
-
-def test_banner_only_shows_live_with_run_control_benched(qtbot):
-    from PyQt6.QtWidgets import QWidget
-
-    banner = QWidget()
-    v = DashboardView(_panels(), save_path=None, banner=banner)
-    qtbot.addWidget(v)
-
-    # Live run but Run Control on screen: no banner.
-    v.update_banner("RUNNING", recording=False)
-    assert banner.isHidden()
-
-    # Bench Run Control (pick the benched panel into its quadrant): banner
-    # carries the timer/STOP while a run is live.
-    v.host("top_left").trigger_pick("manual_controls")
-    assert v.current_layout().benched_panel() == "run_control"
-    v.update_banner("RUNNING", recording=False)
-    assert banner.isVisibleTo(v)
-
-    # Back to idle: banner hides again.
-    v.update_banner("IDLE", recording=False)
-    assert banner.isHidden()
-
-
-def test_set_banner_time_forwards_to_banner(qtbot):
-    from PyQt6.QtWidgets import QLabel
-
-    class _Banner(QLabel):
-        def __init__(self):
-            super().__init__()
-            self.time_text = None
-
-        def set_time(self, text):
-            self.time_text = text
-
-    banner = _Banner()
-    v = DashboardView(_panels(), save_path=None, banner=banner)
-    qtbot.addWidget(v)
-    v.set_banner_time("01:23.45")
-    assert banner.time_text == "01:23.45"
-
-
-def test_restores_saved_layout_on_construction(qtbot, tmp_path):
-    from glider.gui.dashboard.layout import default_layout as _dl
-    from glider.gui.dashboard.layout_store import save_layout
-
-    custom = _dl().with_assignment(
-        {
-            "top_left": "camera",
-            "top_right": "run_control",
-            "bottom_left": "device_states",
-            "bottom_right": "manual_controls",
-        }
-    )
-    save_layout(custom, tmp_path / "layout.json")
-    v = DashboardView(_panels(), save_path=tmp_path / "layout.json")
-    qtbot.addWidget(v)
-    assert v.host("top_left").current_panel_key == "camera"
+def test_update_state_fans_out_to_panels(view, panels):
+    view.update_state("RUNNING")
+    for panel in panels.values():
+        assert panel.last_state == "RUNNING"

@@ -1,170 +1,131 @@
-"""The 2x2 quadrant dashboard: hosts four panels + one benched, applies
-pick/drag swaps via the pure layout model, and persists the arrangement.
+"""The desktop live-run dashboard: a fixed, equal 2x2 grid.
 
-Panels are constructed by the caller (they need `core`/main-window slots) and
-handed in as a {panel_key: QWidget} map. DashboardView owns only placement.
+    +----------------------+----------------------------+
+    | Camera Feed          | Device States & Timer      |
+    +----------------------+----------------------------+
+    | Start, Stop,         | Manual Control             |
+    | Metadata             |                            |
+    +----------------------+----------------------------+
+
+Panels are constructed by the caller (they need ``core``/main-window slots);
+DashboardView only frames and places them, and owns the run header (elapsed
+timer, state pill, REC) at the top of the Device States quadrant. The header
+shows whatever text ``set_time`` is handed — RunControlPanel's
+``elapsed_updated`` is the one source of that text.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
-from pathlib import Path
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtWidgets import QSplitter, QVBoxLayout, QWidget
+from glider.gui.styles import colors
 
-from glider.gui.dashboard.layout import (
-    QUADRANTS,
-    DashboardLayout,
-    apply_drag_swap,
-    apply_pick,
-    default_layout,
-)
-from glider.gui.dashboard.layout_store import load_layout, save_layout
-from glider.gui.dashboard.panel_registry import PANEL_NAMES
-from glider.gui.dashboard.quadrant_host import QuadrantHost
+QUADRANT_TITLES = {
+    "top_left": "Camera Feed",
+    "top_right": "Device States & Timer",
+    "bottom_left": "Start, Stop, Metadata",
+    "bottom_right": "Manual Control",
+}
 
 
 class DashboardView(QWidget):
-    """2x2 grid of QuadrantHosts with picker/drag swap and persistence."""
-
-    layout_changed = pyqtSignal()
+    """Fixed 2x2 grid: camera, device states + timer, run control, manual control."""
 
     def __init__(
         self,
-        panels: dict[str, QWidget],
-        save_path: Path | None = None,
-        banner: QWidget | None = None,
+        camera: QWidget,
+        device_states: QWidget,
+        run_control: QWidget,
+        manual_controls: QWidget,
         parent=None,
     ):
         super().__init__(parent)
-        self._panels = dict(panels)
-        self._save_path = save_path
-        self._banner = banner
-        self._hosts: dict[str, QuadrantHost] = {}
-        self._bench_holder = QWidget(self)
-        self._bench_holder.hide()
-        self._layout = load_layout(save_path) if save_path is not None else default_layout()
+        self._panels = (camera, device_states, run_control, manual_controls)
+        self._quadrants: dict[str, QFrame] = {}
 
-        self._save_timer = QTimer(self)
-        self._save_timer.setSingleShot(True)
-        self._save_timer.setInterval(400)
-        self._save_timer.timeout.connect(self._persist)
+        grid = QGridLayout(self)
+        grid.setContentsMargins(6, 6, 6, 6)
+        grid.setSpacing(6)
+        for row in (0, 1):
+            grid.setRowStretch(row, 1)
+        for col in (0, 1):
+            grid.setColumnStretch(col, 1)
 
-        self._setup_ui()
-        self._apply_layout(self._layout, persist=False)
+        top_right = QWidget()
+        tr_layout = QVBoxLayout(top_right)
+        tr_layout.setContentsMargins(0, 0, 0, 0)
+        tr_layout.setSpacing(0)
+        tr_layout.addWidget(self._build_header())
+        tr_layout.addWidget(device_states, 1)
 
-    def _setup_ui(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+        for key, widget, row, col in (
+            ("top_left", camera, 0, 0),
+            ("top_right", top_right, 0, 1),
+            ("bottom_left", run_control, 1, 0),
+            ("bottom_right", manual_controls, 1, 1),
+        ):
+            frame = self._frame(QUADRANT_TITLES[key], widget)
+            self._quadrants[key] = frame
+            grid.addWidget(frame, row, col)
 
-        if self._banner is not None:
-            outer.addWidget(self._banner)
-            # Hidden until a run is live with Run Control benched (see
-            # update_banner) — mirrors RunnerShell, which hides its banner at
-            # construction. Without this the banner shows on first entry in
-            # IDLE, duplicating the Run Control timer and STOP button.
-            self._banner.hide()
+    def _frame(self, title: str, widget: QWidget) -> QFrame:
+        frame = QFrame()
+        frame.setFrameShape(QFrame.Shape.StyledPanel)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        label = QLabel(title)
+        label.setProperty("textRole", "section")
+        label.setContentsMargins(10, 6, 10, 2)
+        layout.addWidget(label)
+        # Panels can be taller than a quadrant; let the grid, not them, decide.
+        widget.setMinimumHeight(0)
+        layout.addWidget(widget, 1)
+        return frame
 
-        for q in QUADRANTS:
-            host = QuadrantHost(q)
-            host.panel_selected.connect(self._on_panel_selected)
-            host.swap_requested.connect(self._on_swap_requested)
-            self._hosts[q] = host
+    def _build_header(self) -> QWidget:
+        header = QWidget()
+        header.setProperty("runnerHeader", True)
+        header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        row = QHBoxLayout(header)
+        row.setContentsMargins(12, 4, 12, 4)
+        row.setSpacing(10)
 
-        self._left_split = QSplitter(Qt.Orientation.Vertical)
-        self._left_split.addWidget(self._hosts["top_left"])
-        self._left_split.addWidget(self._hosts["bottom_left"])
+        self._timer = QLabel("00:00.00")
+        self._timer.setProperty("timer", True)
+        self._timer.setStyleSheet(
+            f"color: {colors.SUCCESS}; font-size: 36px; font-weight: bold; font-family: monospace;"
+        )
+        row.addWidget(self._timer)
+        row.addStretch(1)
 
-        self._right_split = QSplitter(Qt.Orientation.Vertical)
-        self._right_split.addWidget(self._hosts["top_right"])
-        self._right_split.addWidget(self._hosts["bottom_right"])
+        self._rec = QLabel("● REC")
+        self._rec.setProperty("recording", True)
+        self._rec.hide()
+        row.addWidget(self._rec)
 
-        self._outer_split = QSplitter(Qt.Orientation.Horizontal)
-        self._outer_split.addWidget(self._left_split)
-        self._outer_split.addWidget(self._right_split)
-        outer.addWidget(self._outer_split, 1)
-
-        for split in (self._outer_split, self._left_split, self._right_split):
-            split.splitterMoved.connect(lambda *_: self._save_timer.start())
+        self._state = QLabel("IDLE")
+        self._state.setProperty("runnerStatus", True)
+        self._state.setProperty("statusState", "IDLE")
+        row.addWidget(self._state)
+        return header
 
     # --- public API ---
 
-    def host(self, quadrant_id: str) -> QuadrantHost:
-        return self._hosts[quadrant_id]
+    def quadrant(self, key: str) -> QFrame:
+        """The framed quadrant (``top_left`` ... ``bottom_right``)."""
+        return self._quadrants[key]
 
-    def panel(self, panel_key: str) -> QWidget:
-        return self._panels[panel_key]
+    def set_time(self, text: str) -> None:
+        self._timer.setText(text)
 
-    def current_layout(self) -> DashboardLayout:
-        return self._layout
-
-    def update_state(self, state_name: str) -> None:
-        for widget in self._panels.values():
+    def update_state(self, state_name: str, recording: bool = False) -> None:
+        self._state.setText(state_name)
+        self._state.setProperty("statusState", state_name)
+        self._state.style().unpolish(self._state)
+        self._state.style().polish(self._state)
+        self._rec.setVisible(state_name == "RUNNING" and recording)
+        for widget in self._panels:
             if hasattr(widget, "update_state"):
                 widget.update_state(state_name)
-
-    def set_banner_time(self, text: str) -> None:
-        if self._banner is not None and hasattr(self._banner, "set_time"):
-            self._banner.set_time(text)
-
-    def update_banner(self, state_name: str, recording: bool) -> None:
-        if self._banner is None:
-            return
-        shown = {self._hosts[q].current_panel_key for q in QUADRANTS}
-        live = state_name in ("RUNNING", "PAUSED")
-        visible = live and "run_control" not in shown
-        self._banner.setVisible(visible)
-        if visible and hasattr(self._banner, "set_state"):
-            self._banner.set_state(state_name, recording=recording)
-
-    # --- layout application ---
-
-    def _apply_layout(self, layout: DashboardLayout, persist: bool = True) -> None:
-        # Park every panel in the hidden holder first so reassignments never
-        # collide (a panel briefly living in two hosts). QuadrantHost.set_panel
-        # only evicts a previous panel still parented under its own body, so
-        # parked panels are not clobbered back to a null parent.
-        # Park all panels first (cheap here; revisit if a panel does
-        # show/hide-triggered work).
-        for widget in self._panels.values():
-            widget.setParent(self._bench_holder)
-        for q in QUADRANTS:
-            key = layout.assignment[q]
-            self._hosts[q].set_panel(self._panels[key], key, PANEL_NAMES[key])
-        self._layout = layout
-        self._restore_splitter_sizes(layout)
-        if persist:
-            self._persist()
-        self.layout_changed.emit()
-
-    def _on_panel_selected(self, quadrant_id: str, panel_key: str) -> None:
-        self._apply_layout(apply_pick(self._layout, quadrant_id, panel_key))
-
-    def _on_swap_requested(self, source_id: str, target_id: str) -> None:
-        self._apply_layout(apply_drag_swap(self._layout, source_id, target_id))
-
-    # --- persistence ---
-
-    def _current_sizes(self) -> DashboardLayout:
-        return replace(
-            self._layout,
-            outer_sizes=tuple(self._outer_split.sizes()),
-            left_sizes=tuple(self._left_split.sizes()),
-            right_sizes=tuple(self._right_split.sizes()),
-        )
-
-    def _restore_splitter_sizes(self, layout: DashboardLayout) -> None:
-        if layout.outer_sizes:
-            self._outer_split.setSizes(list(layout.outer_sizes))
-        if layout.left_sizes:
-            self._left_split.setSizes(list(layout.left_sizes))
-        if layout.right_sizes:
-            self._right_split.setSizes(list(layout.right_sizes))
-
-    def _persist(self) -> None:
-        if self._save_path is None:
-            return
-        self._layout = self._current_sizes()
-        save_layout(self._layout, self._save_path)

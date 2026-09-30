@@ -23,21 +23,51 @@ def test_state_change_fans_out_to_dashboard(qtbot, main_window_factory):
     assert window._run_control_panel._state_name == "RUNNING"
 
 
-def test_banner_visible_only_when_running_and_run_control_not_shown(qtbot, main_window_factory):
+def test_dashboard_places_the_four_panels(qtbot, main_window_factory):
+    window = main_window_factory()
+    view = window._dashboard_view
+    for quadrant, panel in (
+        ("top_left", window._camera_slot),
+        ("top_right", window._device_states_panel),
+        ("bottom_left", window._run_control_panel),
+        ("bottom_right", window._runner_device_controls),
+    ):
+        assert _is_descendant(panel, view.quadrant(quadrant)), quadrant
+    # The hardware list backs Connect / Ports but is not shown on the dashboard.
+    assert window._dash_hardware_panel.isHidden()
+
+
+def test_timer_visible_and_ticking_while_running(qtbot, main_window_factory):
     window = main_window_factory()
     window.switch_to_runner()
     window.show()
-    window._dashboard_view.host("top_left").trigger_pick("manual_controls")  # bench run_control
+    view = window._dashboard_view
     window._on_core_state_change(_FakeState("RUNNING"))
-    assert window._dashboard_view._banner.isVisibleTo(window._dashboard_view)
+    assert view._timer.isVisible()
+    assert view._state.text() == "RUNNING"
+    window._run_control_panel._set_timer_display(3.5)
+    assert view._timer.text() == "00:03.50"
+    window._on_core_state_change(_FakeState("STOPPED"))
+    assert view._timer.isVisible()
 
 
-def test_banner_hidden_when_run_control_is_shown(qtbot, main_window_factory):
+def test_connect_ports_opens_the_board_settings_dialog(qtbot, main_window_factory, monkeypatch):
+    from glider.gui.panels.hardware_panel import HardwarePanel
+
+    opened = []
+    monkeypatch.setattr(
+        HardwarePanel, "show_board_settings_dialog", lambda self: opened.append(self)
+    )
     window = main_window_factory()
-    window.switch_to_runner()
-    window.show()
-    window._on_core_state_change(_FakeState("RUNNING"))  # default layout shows run_control top_left
-    assert not window._dashboard_view._banner.isVisibleTo(window._dashboard_view)
+    window._run_control_panel._file_buttons["Connect / Ports"].click()
+    assert opened == [window._dash_hardware_panel]
+
+
+def test_session_change_refreshes_metadata(qtbot, main_window_factory):
+    window = main_window_factory()
+    window._core.session.metadata.name = "Renamed elsewhere"
+    window.session_changed.emit()
+    assert window._run_control_panel._name_edit.text() == "Renamed elsewhere"
 
 
 def test_can_switch_builder_dashboard_bidirectionally(qtbot, main_window_factory):

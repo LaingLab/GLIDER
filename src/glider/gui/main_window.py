@@ -517,7 +517,6 @@ class MainWindow(QMainWindow):
         self._dashboard_view = None  # DashboardView (desktop mode)
         self._run_control_panel = None  # RunControlPanel (dashboard)
         self._device_states_panel = None  # DeviceStatesPanel (dashboard)
-        self._experiment_info_panel = None  # ExperimentInfoPanel (dashboard)
         self._runner_shell = None  # RunnerShell (runner mode)
         self._runner_panel = None  # RunnerPanel — Run tab (runner mode)
         self._runner_setup_page = None  # RunnerSetupPage — Setup tab (runner mode)
@@ -1180,25 +1179,31 @@ class MainWindow(QMainWindow):
             self._create_dashboard_view()
 
     def _create_dashboard_view(self) -> None:
-        """Create the desktop 2x2 quadrant DashboardView.
+        """Create the desktop dashboard: a fixed 2x2 grid.
 
-        Builds the DashboardView from five independent panels plus a persistent
-        run banner. The dashboard owns its OWN HardwarePanel
-        (``_dash_hardware_panel``) so the desktop docks can build a separate one
-        without stealing it. The Camera panel is (for now) the single shared
-        instance the desktop camera dock also re-hosts.
+        Camera Feed | Device States & Timer / Run Control | Manual Control.
+        The dashboard keeps its OWN HardwarePanel (``_dash_hardware_panel``),
+        built but never shown: it backs the Connect / Ports dialog, and its
+        ``refresh_tree`` -> ``hardware_changed`` is the fan-out that refreshes
+        the device cards and manual controls. The Camera panel is the single
+        shared instance the Builder's Camera tab also re-hosts.
         """
         from glider.gui.dashboard.dashboard_view import DashboardView
         from glider.gui.dashboard.panels.device_states_panel import DeviceStatesPanel
-        from glider.gui.dashboard.panels.experiment_info_panel import ExperimentInfoPanel
         from glider.gui.dashboard.panels.run_control_panel import RunControlPanel
         from glider.gui.runner.device_controls import RunnerDeviceControls
-        from glider.gui.runner.run_banner import RunBanner
 
-        # --- Run Control panel ---
+        # --- Run Control panel (START/STOP, metadata, file actions) ---
         run_control = RunControlPanel(self._core)
         run_control.start_requested.connect(self._on_start_clicked)
         run_control.stop_requested.connect(self._on_stop_clicked)
+        run_control.new_requested.connect(self._on_new)
+        run_control.open_requested.connect(self._on_open)
+        run_control.save_requested.connect(self._on_save)
+        run_control.save_as_requested.connect(self._on_save_as)
+        run_control.help_requested.connect(self._on_help)
+        run_control.close_requested.connect(self.close)
+        run_control.switch_to_desktop_requested.connect(self._switch_to_desktop_mode)
         self._run_control_panel = run_control
 
         # --- Device States panel ---
@@ -1229,78 +1234,49 @@ class MainWindow(QMainWindow):
         # two overlapping runs would corrupt each other's saved state.
         self._manual_run_busy = False
 
-        # --- Experiment Info panel (owns the dashboard's own Hardware panel) ---
-        self._dash_hardware_panel = HardwarePanel(
-            hardware_manager=self._core.hardware_manager,
-            session_fn=lambda: self._core.session,
-            run_async_fn=self._run_async,
-            show_add_buttons=False,
-        )
-        self._dash_hardware_panel.status_message.connect(self._show_status_message)
-        experiment_info = ExperimentInfoPanel(self._core, hardware_widget=self._dash_hardware_panel)
-        self._experiment_info_panel = experiment_info
-
-        # --- Camera panel (single reparented singleton). The dashboard's
-        # camera quadrant hosts a lightweight container slot; the real
-        # CameraPanel lives inside whichever view is currently visible (the
-        # slot when the dashboard is shown, the desktop dock when Builder is).
+        # --- Camera panel (single reparented singleton). The camera quadrant
+        # hosts a lightweight container slot; the real CameraPanel lives inside
+        # whichever view is currently visible (this slot when the dashboard is
+        # shown, the Builder's Camera tab when Builder is).
         self._camera_slot = QWidget()
         camera_slot_layout = QVBoxLayout(self._camera_slot)
         camera_slot_layout.setContentsMargins(0, 0, 0, 0)
         self._camera_panel = self._build_camera_panel()
 
-        # --- Persistent run banner ---
-        banner = RunBanner()
-        banner.stop_requested.connect(self._on_stop_clicked)
-
-        panels = {
-            "run_control": run_control,
-            "device_states": device_states,
-            "camera": self._camera_slot,
-            "manual_controls": self._runner_device_controls,
-            "experiment_info": experiment_info,
-        }
-
         self._dashboard_view = DashboardView(
-            panels,
-            save_path=get_config().paths.user_config_dir / "dashboard_layout.json",
-            banner=banner,
+            camera=self._camera_slot,
+            device_states=device_states,
+            run_control=run_control,
+            manual_controls=self._runner_device_controls,
         )
-        run_control.elapsed_updated.connect(self._dashboard_view.set_banner_time)
+        run_control.elapsed_updated.connect(self._dashboard_view.set_time)
+
+        # The dashboard's hidden HardwarePanel (see docstring). Parented to the
+        # view so it is owned and its dialog centres on the window.
+        self._dash_hardware_panel = HardwarePanel(
+            hardware_manager=self._core.hardware_manager,
+            session_fn=lambda: self._core.session,
+            run_async_fn=self._run_async,
+            show_add_buttons=False,
+            parent=self._dashboard_view,
+        )
+        self._dash_hardware_panel.hide()
+        self._dash_hardware_panel.status_message.connect(self._show_status_message)
+        run_control.board_settings_requested.connect(
+            self._dash_hardware_panel.show_board_settings_dialog
+        )
 
         # Initial camera placement: park the single CameraPanel in the dashboard
-        # slot. Desktop startup later re-hosts it into the camera dock (see
+        # slot. Desktop startup later re-hosts it into the Builder (see
         # _setup_dock_widgets), which is correct because Builder is shown then.
         self._move_camera_to_operator_view()
 
-        # Banner show/hide re-evaluates whenever the layout changes (e.g. an
-        # operator benches/unbenches Run Control mid-run). Init the cached
-        # state BEFORE connecting so the first emit has something to read.
-        self._last_dashboard_state = ("IDLE", False)
-        self._dashboard_view.layout_changed.connect(
-            lambda: self._dashboard_view.update_banner(*self._last_dashboard_state)
-        )
-
-        # Hardware-change fan-out to the dashboard panels (the dashboard owns
-        # _dash_hardware_panel; _setup_dock_widgets builds a separate panel and
-        # wires its own fan-out, so there is no double-firing).
+        # Hardware-change fan-out to the dashboard panels (_setup_dock_widgets
+        # builds a separate Builder panel and wires its own fan-out, so there
+        # is no double-firing).
         self._dash_hardware_panel.hardware_changed.connect(device_states.refresh_devices)
-        self._dash_hardware_panel.hardware_changed.connect(experiment_info.refresh)
         self._dash_hardware_panel.hardware_changed.connect(self._runner_device_controls.refresh)
         self._dash_hardware_panel.refresh_tree()
-
-        # Experiment Info file-action wiring (preserves the old Setup-page
-        # buttons — without these the New/Open/Save/etc. buttons are dead).
-        experiment_info.new_requested.connect(self._on_new)
-        experiment_info.open_requested.connect(self._on_open)
-        experiment_info.save_requested.connect(self._on_save)
-        experiment_info.save_as_requested.connect(self._on_save_as)
-        experiment_info.help_requested.connect(self._on_help)
-        experiment_info.close_requested.connect(self.close)
-        experiment_info.switch_to_desktop_requested.connect(self._switch_to_desktop_mode)
-        experiment_info.board_settings_requested.connect(
-            self._dash_hardware_panel.show_board_settings_dialog
-        )
 
     def _create_runner_shell_view(self) -> None:
         """Create the Pi 4-tab RunnerShell view (Setup / Run / Manual / Camera).
@@ -2331,9 +2307,7 @@ class MainWindow(QMainWindow):
         self.session_changed.connect(self._refresh_hardware_readouts)
         # Dashboard-only panels (desktop mode).
         if self._run_control_panel is not None:
-            self.session_changed.connect(lambda: self._run_control_panel.update_experiment_name())
-        if self._experiment_info_panel is not None:
-            self.session_changed.connect(self._experiment_info_panel.refresh)
+            self.session_changed.connect(self._run_control_panel.refresh)
         # Runner-only Setup page (runner mode).
         if self._runner_setup_page is not None:
             self.session_changed.connect(self._runner_setup_page.refresh)
@@ -2379,10 +2353,9 @@ class MainWindow(QMainWindow):
 
         # Update the operator view (whichever was built for this mode).
         if self._dashboard_view is not None:
-            self._dashboard_view.update_state(state_name)
-            recording = bool(self._core.data_recorder.is_recording)
-            self._last_dashboard_state = (state_name, recording)
-            self._dashboard_view.update_banner(state_name, recording)
+            self._dashboard_view.update_state(
+                state_name, recording=bool(self._core.data_recorder.is_recording)
+            )
         if self._runner_shell is not None:
             self._runner_shell.update_state(state_name)
 
