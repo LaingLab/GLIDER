@@ -33,15 +33,29 @@ def _has_runnable_flow(session) -> bool:
     return any(n.node_type == _START_EXPERIMENT for n in session.flow.nodes)
 
 
+def _needs_no_board(session) -> bool:
+    """True when the experiment configures no boards at all (e.g. video only).
+
+    Such a session has nothing to connect, so waiting for a board would keep
+    START disabled forever. GliderCore.start_experiment already handles it:
+    connecting zero boards succeeds and the run proceeds.
+    """
+    hardware = getattr(session, "hardware", None)
+    return hardware is not None and not hardware.boards
+
+
 def compute_readiness(core) -> Readiness:
     hw = core.hardware_manager
+    session = getattr(core, "session", None)
     board_ready = bool(hw.is_any_board_connected())
     board_label = ""
     if board_ready:
         desc = getattr(hw, "connected_board_description", lambda: "")()
         board_label = desc or "Board connected"
+    elif _needs_no_board(session):
+        board_ready = True
+        board_label = "None needed"
 
-    session = getattr(core, "session", None)
     experiment_ready = _has_runnable_flow(session)
     experiment_label = ""
     if session is not None and getattr(session, "metadata", None) is not None:

@@ -50,3 +50,18 @@ def test_no_session_is_not_ready():
     )
     r = compute_readiness(core)
     assert r.experiment_ready is False
+
+
+def test_a_session_with_no_boards_needs_no_board():
+    core = _core(board_connected=False, node_types=["StartExperiment"])
+    core.session.hardware = SimpleNamespace(boards=[])
+    r = compute_readiness(core)
+    assert r.board_ready is True
+    assert r.board_label == "None needed"
+    assert r.all_ready is True
+
+
+def test_a_session_with_a_board_still_waits_for_it():
+    core = _core(board_connected=False, node_types=["StartExperiment"])
+    core.session.hardware = SimpleNamespace(boards=[object()])
+    assert compute_readiness(core).board_ready is False
