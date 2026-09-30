@@ -38,24 +38,24 @@ def test_not_ready_hint_shown_when_blocked(qtbot, mock_core):
     assert p2._not_ready_hint.isVisibleTo(p2) is False
 
 
-def test_header_timer_hidden_while_running(qtbot, mock_core):
+def test_header_timer_visible_while_running(qtbot, mock_core):
     # IDLE (after RUNNING) runs the timer-snap path (else branch); None takes
     # its early return instead of painting a MagicMock into the timer label.
     mock_core.last_flow_duration_s = None
     p = _panel(qtbot, mock_core, board=True, has_start=True)
     p.update_state("RUNNING")
-    assert p._runner_timer.isVisibleTo(p) is False
+    assert p._runner_timer.isVisibleTo(p) is True
     p.update_state("IDLE")
     assert p._runner_timer.isVisibleTo(p) is True
 
 
-def test_header_timer_hidden_while_paused(qtbot, mock_core):
+def test_header_timer_visible_while_paused(qtbot, mock_core):
     # PAUSED runs the timer-snap path (else branch); None takes its early return
     # instead of painting a MagicMock into the timer label.
     mock_core.last_flow_duration_s = None
     p = _panel(qtbot, mock_core, board=True, has_start=True)
     p.update_state("PAUSED")
-    assert p._runner_timer.isVisibleTo(p) is False
+    assert p._runner_timer.isVisibleTo(p) is True
     p.update_state("IDLE")
     assert p._runner_timer.isVisibleTo(p) is True
 
