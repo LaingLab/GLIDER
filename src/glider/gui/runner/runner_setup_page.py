@@ -1,5 +1,5 @@
 """
-Runner Setup Page - setup/landing view reused by the dashboard's Experiment Info panel.
+Runner Setup Page - the Setup tab of the runner-mode RunnerShell.
 
 Shows a readiness status line, experiment file actions, an embedded hardware
 panel, and a housekeeping menu. This widget is PURE UI: it emits signals and

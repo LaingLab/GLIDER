@@ -651,6 +651,12 @@ QPushButton[runnerAction="stop"]:pressed {
     background-color: #5a6878;
 }
 
+QPushButton[runnerAction="start"]:disabled,
+QPushButton[runnerAction="stop"]:disabled {
+    background-color: #2d3748;
+    color: #718096;
+}
+
 QPushButton[runnerAction="emergency"] {
     background-color: rgba(248, 113, 113, 0.2);
     color: #f87171;
