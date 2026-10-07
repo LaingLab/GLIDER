@@ -541,3 +541,16 @@ def test_a_view_that_counts_like_the_logger_is_not_shifted(synthetic_recording: 
     assert view.first_video_frame == 1
     paired = build_timeline(session, view)
     assert paired.frame_map.frames[0] == build_timeline(session).frame_map.frames[0]
+
+
+def test_tracker_id_changes_stay_one_animal(synthetic_recording: Path):
+    """The live tracker issues a new object_id after a detection loss. With
+    no frame holding two ids that is still one animal, so one lane."""
+    session = Session.load(synthetic_recording)
+    tracking = session.tracking.copy()
+    tracking["object_id"] = tracking["frame"] // 10  # a new id every 10 frames
+    session.tracking = tracking
+    t = build_timeline(session)
+    tracking_lanes = [lane for lane in t.behavior if lane.source.startswith("tracking")]
+    assert [lane.source for lane in tracking_lanes] == ["tracking"]
+    assert len(tracking_lanes[0].labels) == tracking["frame"].nunique()

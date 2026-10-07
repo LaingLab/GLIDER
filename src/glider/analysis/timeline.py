@@ -24,6 +24,7 @@ from functools import cached_property
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
 
 if TYPE_CHECKING:
     from glider.analysis.behavior.session_view import SessionView
@@ -465,10 +466,18 @@ def build_timeline(session: Session | None, view: SessionView | None = None) -> 
         # object_id column at all falls back to one lane, unchanged — and
         # so does one whose object_id column is present but entirely
         # empty, since there is then nothing to group by.
+        object_ids = []
         if "object_id" in tracking.columns:
-            object_ids = sorted(tracking["object_id"].dropna().unique())
-        else:
-            object_ids = []
+            ids = pd.to_numeric(tracking["object_id"], errors="coerce")
+            real = tracking[ids >= 0]
+            pairs = real[["frame", "object_id"]].drop_duplicates()
+            # The live tracker issues a new id after a detection loss, so one
+            # animal is ids 0, 1, 2... over a session. Ids are separate animals
+            # only when two share a frame -- the rule SessionView uses too.
+            if pairs["frame"].duplicated().any():
+                object_ids = sorted(tracking["object_id"].dropna().unique())
+            elif len(real):
+                tracking = real
         if not object_ids:
             object_ids = [None]
 
