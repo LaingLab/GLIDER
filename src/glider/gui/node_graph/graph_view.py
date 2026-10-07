@@ -21,6 +21,7 @@ from PyQt6.QtGui import (
     QWheelEvent,
 )
 from PyQt6.QtWidgets import (
+    QGraphicsProxyWidget,
     QGraphicsScene,
     QGraphicsView,
     QHBoxLayout,
@@ -667,7 +668,11 @@ class NodeGraphView(QGraphicsView):
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Handle keyboard shortcuts."""
-        if event.key() == Qt.Key.Key_Delete:
+        # macOS keyboards label Backspace "delete"; leave both to an embedded
+        # node widget that has focus so typing in it still works.
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and not isinstance(
+            self._scene.focusItem(), QGraphicsProxyWidget
+        ):
             # Delete selected connections first
             from glider.gui.node_graph.connection_item import ConnectionItem
 

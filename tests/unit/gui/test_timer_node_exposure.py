@@ -24,17 +24,15 @@ def test_node_library_offers_timer_node(qtbot):
     assert timer_buttons[0].property("nodeCategory") == "Flow"
 
 
-def test_timer_node_uses_runtime_port_contract():
+def test_timer_node_keeps_its_settings_off_the_canvas():
     node_item = SimpleNamespace(inputs=[], outputs=[])
     node_item.add_input_port = lambda name, port_type: node_item.inputs.append((name, port_type))
     node_item.add_output_port = lambda name, port_type: node_item.outputs.append((name, port_type))
 
     NodeEditorController.setup_node_ports(None, node_item, "Timer")
 
-    assert node_item.inputs == [
-        ("Interval", PortType.DATA),
-        ("Enabled", PortType.DATA),
-    ]
+    # Interval and unit live in the properties panel, like Delay's duration.
+    assert node_item.inputs == []
     assert node_item.outputs == [
         ("Tick", PortType.EXEC),
         ("Count", PortType.DATA),
