@@ -236,7 +236,12 @@ class Session:
         median_interval = intervals_s.median()
         if median_interval <= 0:
             return None
-        return 1.0 / median_interval
+        # Timestamps are written to the millisecond, so a 30 fps median reads
+        # 33 ms (30.30 Hz). Averaging the ordinary intervals undoes that
+        # rounding; leaving out the long ones keeps dropped frames from
+        # dragging the rate down.
+        ordinary = intervals_s[intervals_s < 1.5 * median_interval]
+        return 1.0 / ordinary.mean()
 
     # ------------------------------------------------------------------
     # Event log with flow-relative time

@@ -53,19 +53,12 @@ def test_flow_boundaries_none_when_markers_missing(tmp_path: Path):
 
 
 def test_frame_rate_estimated_from_tracking_timestamps(synthetic_recording: Path):
-    """Frame rate derives from the median tracking timestamp interval.
-
-    Real CSVs write timestamps with millisecond precision, so 30 FPS
-    reads back as ~30.3 Hz (median interval = 33 ms instead of 33.33...).
-    Tolerance reflects that quantization, not framerate measurement
-    error. The library can't recover sub-ms precision the writer threw
-    away.
-    """
+    """Real CSVs write timestamps to the millisecond, so a 30 fps median
+    interval reads 33 ms (30.30 Hz); averaging the ordinary intervals
+    recovers the rate the rig ran at."""
     s = Session.load(synthetic_recording)
-    # Default spec is 30 FPS; ms-quantized timestamps push the estimate
-    # to ~30.3 Hz. Anything within 1 Hz is "correctly recovered".
     assert s.frame_rate is not None
-    assert abs(s.frame_rate - 30.0) < 1.0
+    assert abs(s.frame_rate - 30.0) < 0.05
 
 
 def test_frame_rate_none_for_empty_tracking(tmp_path: Path):
