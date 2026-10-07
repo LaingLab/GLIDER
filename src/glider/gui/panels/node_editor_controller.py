@@ -149,7 +149,7 @@ class NodeEditorController(QObject):
             "StartExperiment": ([], [">next"]),
             "EndExperiment": ([">exec"], []),
             "Delay": ([">exec"], [">next"]),
-            "Timer": (["Interval", "Enabled"], [">Tick", "Count"]),
+            "Timer": ([], [">Tick", "Count"]),
             "Loop": ([">exec"], [">body", ">done"]),
             "WaitForInput": ([">exec"], [">triggered"]),
             "Output": ([">exec"], [">next"]),
