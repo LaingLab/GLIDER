@@ -100,3 +100,12 @@ def test_plot_rejects_unknown_kind_without_writing(synthetic_recording, tmp_path
     with pytest.raises(ValueError, match="kind"):
         analysis.plot(str(synthetic_recording), "pie", str(out))
     assert not out.exists()
+
+
+def test_unknown_object_id_names_the_tracked_ones(synthetic_recording, tmp_path):
+    with pytest.raises(ValueError, match=r"object_id 7.*\[0\]"):
+        analysis.ethogram(str(synthetic_recording), object_id=7)
+    with pytest.raises(ValueError, match="object_id 7"):
+        analysis.kinematics(str(synthetic_recording), object_id=7)
+    with pytest.raises(ValueError, match="object_id 7"):
+        analysis.plot(str(synthetic_recording), "trajectory", str(tmp_path / "p.png"), object_id=7)

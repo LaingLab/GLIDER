@@ -39,12 +39,16 @@ def _load(path: str) -> Session:
     return Session.load(p)
 
 
-def _require_tracking(session: Session) -> None:
+def _require_tracking(session: Session, object_id: int | None = None) -> None:
     if session.tracking.empty:
         raise ValueError(
             f"{session.directory} has no tracking CSV, so there is no ethogram, "
             "trajectory or kinematics; session_summary shows what it does have"
         )
+    if object_id is not None and "object_id" in session.tracking:
+        ids = sorted(int(x) for x in session.tracking["object_id"].dropna().unique())
+        if object_id not in ids:
+            raise ValueError(f"object_id {object_id} is not tracked; tracked object_ids: {ids}")
 
 
 def _records(df: pd.DataFrame) -> list[dict[str, Any]]:
@@ -149,7 +153,7 @@ def ethogram(
         out_csv: Optional absolute .csv path for the full table.
     """
     s = _load(path)
-    _require_tracking(s)
+    _require_tracking(s, object_id)
     intervals = s.ethogram(object_id=object_id)
     if kind == "intervals":
         table = intervals
@@ -176,7 +180,7 @@ def trajectory(
             For an occupancy heatmap use plot(kind="occupancy").
     """
     s = _load(path)
-    _require_tracking(s)
+    _require_tracking(s, object_id)
     tables = {
         "zone_dwell": s.zone_dwell,
         "zone_transitions": s.zone_transitions,
@@ -191,7 +195,7 @@ def trajectory(
 def kinematics(path: str, object_id: int = 0, out_csv: str | None = None) -> dict[str, Any]:
     """Speed statistics, total distance, and the speed distribution."""
     s = _load(path)
-    _require_tracking(s)
+    _require_tracking(s, object_id)
     speed = pd.to_numeric(s.velocity(object_id=object_id)["velocity"], errors="coerce").dropna()
     cumulative = s.cumulative_distance(object_id=object_id)
     total = cumulative["cumulative_mm"].iloc[-1] if not cumulative.empty else None
@@ -286,7 +290,7 @@ def plot(path: str, kind: str, out_path: str, object_id: int = 0) -> Path:
         raise ValueError(f"unknown kind '{kind}'; use one of {', '.join(draw)}")
     target = writable_path(out_path, ".png")
     s = _load(path)
-    _require_tracking(s)
+    _require_tracking(s, object_id)
     fig, ax = plt.subplots(figsize=(8, 4.5))
     try:
         draw[kind](s, ax)
