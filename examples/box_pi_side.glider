@@ -389,22 +389,6 @@
         "connection_type": "exec"
       },
       {
-        "id": "conn_f95f4582",
-        "from_node": "loop_3edd28c8",
-        "from_output": 0,
-        "to_node": "waitforinput_32931562",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_61956df2",
-        "from_node": "waitforinput_32931562",
-        "from_output": 0,
-        "to_node": "output_6097c316",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
         "id": "conn_6c387afb",
         "from_node": "output_6097c316",
         "from_output": 0,
@@ -513,22 +497,6 @@
         "from_node": "delay_ff0086e4",
         "from_output": 0,
         "to_node": "output_29948224",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_34373717",
-        "from_node": "loop_3edd28c8",
-        "from_output": 0,
-        "to_node": "waitforinput_5439130e",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_b18d9d50",
-        "from_node": "waitforinput_5439130e",
-        "from_output": 0,
-        "to_node": "output_6097c316",
         "to_input": 0,
         "connection_type": "exec"
       },
