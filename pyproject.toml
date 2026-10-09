@@ -74,6 +74,12 @@ audio = [
     "soundfile>=0.12.0",
     "pydub>=0.25.0",
 ]
+mcp = [
+    # Model Context Protocol server (glider-mcp) so AI agents can design
+    # experiments and analyze recordings. 2.x renamed FastMCP to MCPServer.
+    "mcp>=2.3,<3",
+    "matplotlib>=3.7",  # the plot tool; also in [behavior]
+]
 i2c = [
     "adafruit-circuitpython-ads1x15",
     # Generic register-level I2C (smbus2). Pure-Python but imports `fcntl`, so it
@@ -113,7 +119,7 @@ dev = [
     "pyinstaller>=6.19.0",
     # Pull the full PC + ML + I2C surface for development so dev installs can
     # exercise every code path without remembering individual extras.
-    "GLIDER[pc,vision,i2c,behavior,pose-onnx]",
+    "GLIDER[pc,vision,i2c,behavior,pose-onnx,mcp]",
 ]
 pc = [
     "PyQt6>=6.4.0",
@@ -122,6 +128,7 @@ pc = [
 
 [project.scripts]
 glider = "glider.__main__:main"
+glider-mcp = "glider.mcp.server:main"
 
 [project.entry-points."glider.driver"]
 # NOTE: these four DO register the classes they name. PluginManager binds the

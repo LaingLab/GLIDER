@@ -114,5 +114,6 @@ nav:
       - Behavior Classifier Internals: reference/behavior-model.md
       - Node Catalog: reference/nodes.md
       - Device Catalog: reference/devices.md
+      - AI Agents (MCP): reference/mcp.md
       - Keyboard Shortcuts: reference/shortcuts.md
       - Troubleshooting: reference/troubleshooting.md

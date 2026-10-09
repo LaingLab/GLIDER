@@ -193,22 +193,6 @@
     ],
     "connections": [
       {
-        "id": "conn_e11828be",
-        "from_node": "output_35e1cd13",
-        "from_output": 0,
-        "to_node": "output_2c80209a",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
-        "id": "conn_b34d6991",
-        "from_node": "output_2c80209a",
-        "from_output": 0,
-        "to_node": "output_63fb3406",
-        "to_input": 0,
-        "connection_type": "exec"
-      },
-      {
         "id": "conn_28c20814",
         "from_node": "startexperiment_ef8180ed",
         "from_output": 0,
