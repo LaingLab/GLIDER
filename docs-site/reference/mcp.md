@@ -10,9 +10,16 @@ design experiments and analyze your recordings.
 
 ## Install
 
+From your GLIDER clone (see [Installation](../getting-started/installation.md)):
+
 ```bash
-pip install "glider[mcp]"
+uv sync --extra pc --extra mcp
 ```
+
+`uv sync` installs only the extras you list, so keep any others you already
+use (for example `--extra vision`). This puts `glider-mcp` in the clone's
+virtual environment: `.venv/bin/glider-mcp` on macOS/Linux,
+`.venv\Scripts\glider-mcp.exe` on Windows.
 
 The installer builds do not include `glider-mcp` yet.
 
@@ -21,17 +28,19 @@ The installer builds do not include `glider-mcp` yet.
 Claude Code:
 
 ```bash
-claude mcp add glider -- glider-mcp
+claude mcp add glider -- /path/to/glider/.venv/bin/glider-mcp
 ```
+
+On Windows, use `C:\path\to\glider\.venv\Scripts\glider-mcp.exe`.
 
 Claude Desktop and most other clients take a JSON entry:
 
 ```json
-{"mcpServers": {"glider": {"command": "glider-mcp"}}}
+{"mcpServers": {"glider": {"command": "/path/to/glider/.venv/bin/glider-mcp"}}}
 ```
 
-If `glider-mcp` is not on the client's `PATH`, use its full path
-(`which glider-mcp` on macOS/Linux, `where glider-mcp` on Windows).
+Always give the full path to the clone's script; `glider-mcp` is not on your
+`PATH` unless you activate the virtual environment first.
 
 ## Tools
 

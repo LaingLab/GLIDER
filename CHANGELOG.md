@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **AI agents can design experiments and analyze recordings** through a new
-  MCP server, `glider-mcp` (`pip install "glider[mcp]"`). Agents list node and
+  MCP server, `glider-mcp` (`uv sync --extra pc --extra mcp`). Agents list node and
   device types, build `.glider` files that are validated by GLIDER's own
   loader before they are written, and summarize, tabulate and plot recordings.
   The server never connects hardware or runs an experiment.
