@@ -7,17 +7,21 @@ plugin drivers and devices are included. Nothing here connects a board.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from glider.core.experiment_session import ConnectionConfig, ExperimentSession, NodeConfig
 from glider.core.flow_engine import FlowEngine
 from glider.core.glider_core import GliderCore
 from glider.core.hardware_manager import HardwareManager
 from glider.hal.base_device import DEVICE_REGISTRY, create_device_from_dict
 from glider.hal.mock_board import MockBoard
+from glider.mcp.paths import writable_path
 from glider.serialization import is_schema_format
 
 _core: GliderCore | None = None
@@ -387,3 +391,118 @@ async def validate_experiment(
     if path is not None:
         content = Path(path).read_text(encoding="utf-8")
     return await validate(_parse(content))
+
+
+_COLUMN_WIDTH = 250.0
+_ROW_HEIGHT = 150.0
+
+
+def _describe(data: dict) -> str:
+    flow, hardware = data.get("flow") or {}, data.get("hardware") or {}
+    name = (data.get("metadata") or {}).get("name", "experiment")
+    return (
+        f"{name}: {len(flow.get('nodes') or [])} nodes, "
+        f"{len(flow.get('connections') or [])} connections, "
+        f"{len(hardware.get('devices') or [])} devices"
+    )
+
+
+def new_experiment(path: str, name: str, description: str = "") -> dict[str, Any]:
+    """Create a minimal valid experiment (Start -> End) to build on.
+
+    Args:
+        path: Absolute path ending in .glider. Must not exist yet.
+        name: Experiment name.
+        description: Optional description.
+    """
+    target = writable_path(path, ".glider")
+    session = ExperimentSession()
+    session.name = name
+    session.metadata.description = description
+    session.add_node(NodeConfig(id="start", node_type="StartExperiment", position=(0.0, 0.0)))
+    session.add_node(NodeConfig(id="end", node_type="EndExperiment", position=(_COLUMN_WIDTH, 0.0)))
+    session.add_connection(
+        ConnectionConfig(
+            id="start_to_end",
+            from_node="start",
+            from_output=0,
+            to_node="end",
+            to_input=0,
+            connection_type="exec",
+        )
+    )
+    session.save(str(target))
+    data = session.to_dict()
+    return {"path": str(target), "experiment": data, "summary": f"created {_describe(data)}"}
+
+
+def read_experiment(path: str) -> dict[str, Any]:
+    """Return an experiment file's JSON so it can be edited and saved back."""
+    p = Path(path).expanduser()
+    if p.suffix.lower() != ".glider":
+        raise ValueError(f"{p.name} is not a .glider file")
+    data = json.loads(p.read_text(encoding="utf-8"))
+    return {"path": str(p), "experiment": data, "summary": _describe(data)}
+
+
+def _layout(nodes: list[dict], connections: list[dict]) -> None:
+    """Put nodes that have no position in a column by their depth from the start.
+
+    So an agent's experiment opens readable in the node graph instead of every
+    new node stacked at the origin.
+    """
+    if all("position" in n for n in nodes):
+        return
+    depth = {n["id"]: 0 for n in nodes}
+    limit = len(nodes)
+    # ponytail: repeated relaxation, O(nodes * connections); bounded so Loop cycles terminate
+    for _ in range(limit):
+        changed = False
+        for c in connections:
+            a, b = c.get("from_node"), c.get("to_node")
+            if a in depth and b in depth and depth[a] + 1 < limit and depth[b] < depth[a] + 1:
+                depth[b] = depth[a] + 1
+                changed = True
+        if not changed:
+            break
+    taken = {tuple(float(v) for v in n["position"]) for n in nodes if "position" in n}
+    for n in nodes:
+        if "position" in n:
+            continue
+        x, row = depth[n["id"]] * _COLUMN_WIDTH, 0
+        while (x, row * _ROW_HEIGHT) in taken:
+            row += 1
+        n["position"] = [x, row * _ROW_HEIGHT]
+        taken.add((x, row * _ROW_HEIGHT))
+
+
+async def save_experiment(
+    path: str, content: dict | str, overwrite: bool = False
+) -> dict[str, Any]:
+    """Validate an experiment and write it as a .glider file GLIDER can open.
+
+    Refuses to write anything that fails validate_experiment. Nodes without a
+    "position" are laid out left to right by flow depth.
+
+    Args:
+        path: Absolute path ending in .glider.
+        content: The experiment JSON (object or string).
+        overwrite: Replace an existing file. Off by default.
+    """
+    target = writable_path(path, ".glider", overwrite=overwrite)
+    data = _parse(content)
+    report = await validate(data)
+    if not report["valid"]:
+        return {"saved": False, **report, "summary": f"not saved; {report['summary']}"}
+    data = copy.deepcopy(data)
+    flow = data.setdefault("flow", {})
+    _layout(flow.setdefault("nodes", []), flow.get("connections") or [])
+    session = ExperimentSession.from_dict(data)
+    session.metadata.modified_at = datetime.now().isoformat()
+    session.save(str(target))
+    return {
+        "saved": True,
+        "path": str(target),
+        "warnings": report["warnings"],
+        "summary": f"saved {_describe(data)} to {target.name}",
+    }
