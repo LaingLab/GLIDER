@@ -32,7 +32,7 @@ names the states, zones and event sources the other tools accept. Pass out_csv
 for long tables and keep the preview in context.
 """
 
-server = MCPServer("glider", instructions=INSTRUCTIONS)
+server = MCPServer("glider", instructions=INSTRUCTIONS, log_level="WARNING")
 # The headless core is shared state; tools run one at a time.
 _lock = asyncio.Lock()
 

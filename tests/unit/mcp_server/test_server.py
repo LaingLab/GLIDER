@@ -53,7 +53,7 @@ async def test_agent_fixable_errors_reach_the_agent():
         await server.call_tool("new_experiment", {"path": "relative.glider", "name": "x"})
 
 
-def test_stdout_carries_only_protocol_frames():
+def test_stdout_carries_only_protocol_frames(tmp_path):
     """Core init, plugin loading and a tool call must not write to stdout.
 
     stdin stays open until the reply arrives: on EOF the server cancels any
@@ -78,13 +78,17 @@ def test_stdout_carries_only_protocol_frames():
             "params": {"name": "list_node_types", "arguments": {}},
         },
     ]
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "glider.mcp.server"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    # stderr goes to a file: an unread pipe fills (~4 KB on Windows) and blocks the server.
+    stderr_log = tmp_path / "stderr.log"
+    with stderr_log.open("w", encoding="utf-8") as err:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "glider.mcp.server"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=err,
+            text=True,
+            encoding="utf-8",
+        )
     watchdog = threading.Timer(120, proc.kill)
     watchdog.start()
     try:
@@ -98,7 +102,10 @@ def test_stdout_carries_only_protocol_frames():
             if message.get("id") == 2:
                 reply = message
                 break
-        assert reply is not None, proc.stderr.read()[-2000:]
+        assert reply is not None, stderr_log.read_text(encoding="utf-8")[-2000:]
+        assert (
+            "error" not in reply
+        ), f"{reply['error']}\n{stderr_log.read_text(encoding='utf-8')[-2000:]}"
         assert "StartExperiment" in reply["result"]["content"][0]["text"]
     finally:
         watchdog.cancel()
