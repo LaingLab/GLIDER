@@ -94,6 +94,14 @@ async def test_valid_experiment_passes():
             "hardware.boards[0].driver_type",
         ),
         (lambda d: d["flow"]["nodes"].append(dict(d["flow"]["nodes"][2])), "flow.nodes[3].id"),
+        (
+            lambda d: d["hardware"]["boards"].append(dict(d["hardware"]["boards"][0])),
+            "hardware.boards[1].id",
+        ),
+        (
+            lambda d: d["hardware"]["devices"].append(dict(d["hardware"]["devices"][0])),
+            "hardware.devices[1].id",
+        ),
         (lambda d: d["flow"]["nodes"].pop(0) and d["flow"]["connections"].pop(0), "flow.nodes"),
         (lambda d: d["flow"]["connections"][0].pop("to_node"), "flow.connections[0]"),
     ],
@@ -155,6 +163,19 @@ async def test_validate_experiment_reads_path_or_content(tmp_path):
         await experiments.validate_experiment()
     with pytest.raises(ValueError, match="line 1"):
         await experiments.validate_experiment(content="{nope")
+
+
+async def test_validate_experiment_path_must_be_absolute():
+    with pytest.raises(ValueError, match="not an absolute path"):
+        await experiments.validate_experiment(path="x.glider")
+
+
+async def test_vision_block_with_missing_weights_does_not_fail_validation():
+    """The loader must not initialise the file's vision backend (weights, torch, downloads)."""
+    data = copy.deepcopy(VALID)
+    data["vision"] = {"backend": "POSE_MODEL", "model_path": "/nonexistent/weights.pt"}
+    report = await experiments.validate(data)
+    assert report["valid"], report
 
 
 async def test_validation_never_touches_hardware(monkeypatch):

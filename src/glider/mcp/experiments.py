@@ -219,7 +219,11 @@ def _check_graph(data: dict, errors: list, warnings: list) -> None:
 
     drivers = set(HardwareManager.get_available_drivers())
     board_ids = {b["id"] for _, b in boards}
+    seen: set = set()
     for path, b in boards:
+        if b["id"] in seen:
+            errors.append(_finding(f"{path}.id", f"duplicate board id '{b['id']}'"))
+        seen.add(b["id"])
         if b["driver_type"] not in drivers:
             errors.append(
                 _finding(
@@ -230,7 +234,11 @@ def _check_graph(data: dict, errors: list, warnings: list) -> None:
             )
 
     device_ids = {d["id"] for _, d in devices}
+    seen = set()
     for path, d in devices:
+        if d["id"] in seen:
+            errors.append(_finding(f"{path}.id", f"duplicate device id '{d['id']}'"))
+        seen.add(d["id"])
         if d["device_type"] not in DEVICE_REGISTRY:
             errors.append(
                 _finding(
@@ -352,7 +360,10 @@ async def _real_load(data: dict) -> list[dict[str, str]]:
     try:
         with tempfile.TemporaryDirectory() as tmp:
             candidate = Path(tmp) / "candidate.glider"
-            candidate.write_text(json.dumps(data), encoding="utf-8")
+            # The vision block would make the loader bring up a CV backend
+            # (weights, torch, model downloads); none of that is validation.
+            loadable = {k: v for k, v in data.items() if k != "vision"}
+            candidate.write_text(json.dumps(loadable), encoding="utf-8")
             core.load_session(str(candidate))
             core.populate_hardware_from_session()
             core.setup_flow()
@@ -402,7 +413,10 @@ async def validate_experiment(
     if (path is None) == (content is None):
         raise ValueError("pass exactly one of path or content")
     if path is not None:
-        content = Path(path).read_text(encoding="utf-8")
+        p = Path(path).expanduser()
+        if not p.is_absolute():
+            raise ValueError(f"{path} is not an absolute path; pass the full path")
+        content = p.read_text(encoding="utf-8")
     return await validate(_parse(content))
 
 

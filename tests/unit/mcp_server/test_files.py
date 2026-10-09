@@ -105,3 +105,16 @@ def test_read_experiment_rejects_relative_path_and_bad_json(tmp_path):
     bad.write_text("{not json")
     with pytest.raises(ValueError, match="line 1"):
         experiments.read_experiment(str(bad))
+
+
+async def test_save_keeps_the_vision_block(tmp_path):
+    from tests.unit.mcp_server.test_validate import VALID
+
+    data = {
+        **VALID,
+        "vision": {"backend": "POSE_MODEL", "model_path": "/nonexistent/weights.pt"},
+    }
+    path = tmp_path / "v.glider"
+    result = await experiments.save_experiment(str(path), data)
+    assert result["saved"], result
+    assert json.loads(path.read_text())["vision"]["model_path"] == "/nonexistent/weights.pt"
