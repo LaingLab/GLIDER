@@ -83,3 +83,25 @@ def test_layout_survives_cycles():
     conns = [{"from_node": "a", "to_node": "b"}, {"from_node": "b", "to_node": "a"}]
     experiments._layout(nodes, conns)
     assert all("position" in n for n in nodes)
+
+
+async def test_save_refuses_bad_position_without_writing(tmp_path):
+    path = tmp_path / "p.glider"
+    experiments.new_experiment(str(path), "P")
+    data = experiments.read_experiment(str(path))["experiment"]
+    data["flow"]["nodes"][0]["position"] = "abc"
+    data["flow"]["nodes"].append({"id": "wait", "node_type": "Delay", "state": {}})
+    other = tmp_path / "q.glider"
+    result = await experiments.save_experiment(str(other), data)
+    assert result["saved"] is False
+    assert result["errors"][0]["path"] == "flow.nodes[0].position"
+    assert not other.exists()
+
+
+def test_read_experiment_rejects_relative_path_and_bad_json(tmp_path):
+    with pytest.raises(ValueError, match="absolute"):
+        experiments.read_experiment("a.glider")
+    bad = tmp_path / "bad.glider"
+    bad.write_text("{not json")
+    with pytest.raises(ValueError, match="line 1"):
+        experiments.read_experiment(str(bad))

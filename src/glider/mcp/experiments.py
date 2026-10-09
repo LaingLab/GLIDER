@@ -255,6 +255,19 @@ def _check_graph(data: dict, errors: list, warnings: list) -> None:
                     "list_node_types shows the available types",
                 )
             )
+        pos = n.get("position")
+        if "position" in n and not (
+            isinstance(pos, list)
+            and len(pos) == 2
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in pos)
+        ):
+            errors.append(
+                _finding(
+                    f"{path}.position",
+                    "must be [x, y], two numbers",
+                    "or omit it and save_experiment will place the node",
+                )
+            )
         device_id = n.get("device_id")
         if device_id is not None and device_id not in device_ids:
             errors.append(_finding(f"{path}.device_id", f"no device with id '{device_id}'"))
@@ -439,9 +452,11 @@ def new_experiment(path: str, name: str, description: str = "") -> dict[str, Any
 def read_experiment(path: str) -> dict[str, Any]:
     """Return an experiment file's JSON so it can be edited and saved back."""
     p = Path(path).expanduser()
+    if not p.is_absolute():
+        raise ValueError(f"{path} is not an absolute path; pass the full path")
     if p.suffix.lower() != ".glider":
         raise ValueError(f"{p.name} is not a .glider file")
-    data = json.loads(p.read_text(encoding="utf-8"))
+    data = _parse(p.read_text(encoding="utf-8"))
     return {"path": str(p), "experiment": data, "summary": _describe(data)}
 
 

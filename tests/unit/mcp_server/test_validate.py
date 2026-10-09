@@ -181,6 +181,10 @@ async def test_validation_never_touches_hardware(monkeypatch):
         (lambda d: d["hardware"]["devices"][0].update(board_id={}), "hardware.devices[0].board_id"),
         (lambda d: d["hardware"]["devices"][0].update(pins=[]), "hardware.devices[0].pins"),
         (lambda d: d["flow"]["nodes"][1].update(device_id=5), "flow.nodes[1].device_id"),
+        (lambda d: d["flow"]["nodes"][1].update(position="abc"), "flow.nodes[1].position"),
+        (lambda d: d["flow"]["nodes"][1].update(position=None), "flow.nodes[1].position"),
+        (lambda d: d["flow"]["nodes"][1].update(position=[1]), "flow.nodes[1].position"),
+        (lambda d: d["flow"]["nodes"][1].update(position=[True, 2]), "flow.nodes[1].position"),
     ],
 )
 async def test_malformed_shapes_report_instead_of_raising(edit, path):
