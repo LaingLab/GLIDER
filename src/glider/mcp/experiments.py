@@ -133,6 +133,15 @@ _REQUIRED = {
 }
 
 
+# Required fields that must be strings (they are hashed and compared by id).
+_STRINGS = {
+    "hardware.boards": ("id", "driver_type"),
+    "hardware.devices": ("id", "device_type", "name", "board_id"),
+    "flow.nodes": ("id", "node_type"),
+    "flow.connections": ("id", "from_node", "to_node"),
+}
+
+
 def _finding(path: str, message: str, hint: str = "") -> dict[str, str]:
     return {"path": path, "message": message, "hint": hint}
 
@@ -157,7 +166,11 @@ def _parse(content: dict | str) -> Any:
 def _items(data: dict, dotted: str, errors: list) -> list[tuple[str, dict]]:
     """(json path, item) for every item of one list that has its required fields."""
     section, key = dotted.split(".")
-    raw = (data.get(section) or {}).get(key, [])
+    body = data.get(section)
+    if body is not None and not isinstance(body, dict):
+        errors.append(_finding(section, f"{section} must be an object"))
+        return []
+    raw = (body or {}).get(key, [])
     if not isinstance(raw, list):
         errors.append(_finding(dotted, f"{dotted} must be a list"))
         return []
@@ -170,6 +183,17 @@ def _items(data: dict, dotted: str, errors: list) -> list[tuple[str, dict]]:
         missing = [f for f in _REQUIRED[dotted] if f not in item]
         if missing:
             errors.append(_finding(path, f"missing {', '.join(missing)}"))
+            continue
+        bad = [f for f in _STRINGS[dotted] if not isinstance(item[f], str)]
+        for f in bad:
+            errors.append(_finding(f"{path}.{f}", "must be a string"))
+        if dotted == "hardware.devices" and not isinstance(item["pins"], dict):
+            bad.append("pins")
+            errors.append(_finding(f"{path}.pins", "must be an object"))
+        if dotted == "flow.nodes" and not isinstance(item.get("device_id", ""), (str, type(None))):
+            bad.append("device_id")
+            errors.append(_finding(f"{path}.device_id", "must be a string"))
+        if bad:
             continue
         good.append((path, item))
     return good
@@ -271,7 +295,11 @@ def _check_graph(data: dict, errors: list, warnings: list) -> None:
                 _finding(
                     f"{path}.connection_type",
                     f"must be '{kind}' for {kind} ports",
-                    "exec connections that are typed 'data' never fire",
+                    (
+                        "exec connections that are typed 'data' never fire"
+                        if kind == "exec"
+                        else "set connection_type to match the ports"
+                    ),
                 )
             )
 

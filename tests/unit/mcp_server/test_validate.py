@@ -120,7 +120,7 @@ async def test_missing_required_pin_caught_by_real_load():
         broken(lambda d: d["hardware"]["devices"][0].update(pins={}))
     )
     assert not report["valid"]
-    assert any("led" in e["message"] for e in report["errors"]), report["errors"]
+    assert any("device led" in e["message"] for e in report["errors"]), report["errors"]
 
 
 async def test_warnings_do_not_invalidate():
@@ -166,3 +166,24 @@ async def test_validation_never_touches_hardware(monkeypatch):
     assert (await experiments.validate(VALID))["valid"]
     core = await experiments.get_core()
     assert not any(b.is_connected for b in core.hardware_manager.boards.values())
+
+
+@pytest.mark.parametrize(
+    "edit, path",
+    [
+        (lambda d: d.update(flow=[]), "flow"),
+        (lambda d: d.update(hardware="x"), "hardware"),
+        (lambda d: d["flow"]["nodes"][1].update(id=[]), "flow.nodes[1].id"),
+        (
+            lambda d: d["hardware"]["boards"][0].update(driver_type=["a"]),
+            "hardware.boards[0].driver_type",
+        ),
+        (lambda d: d["hardware"]["devices"][0].update(board_id={}), "hardware.devices[0].board_id"),
+        (lambda d: d["hardware"]["devices"][0].update(pins=[]), "hardware.devices[0].pins"),
+        (lambda d: d["flow"]["nodes"][1].update(device_id=5), "flow.nodes[1].device_id"),
+    ],
+)
+async def test_malformed_shapes_report_instead_of_raising(edit, path):
+    report = await experiments.validate(broken(edit))
+    assert not report["valid"]
+    assert path in error_paths(report), report["errors"]
