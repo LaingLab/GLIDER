@@ -85,3 +85,18 @@ def test_find_recordings_and_doctor(synthetic_recording):
     report = analysis.project_doctor(str(root))
     assert isinstance(report["findings"], list)
     assert "finding" in report["summary"]
+
+
+@pytest.mark.parametrize("kind", ["ethogram", "trajectory", "occupancy", "zone_dwell", "velocity"])
+def test_plot_writes_png(synthetic_recording, tmp_path, kind):
+    out = tmp_path / f"{kind}.png"
+    result = analysis.plot(str(synthetic_recording), kind, str(out))
+    assert result == out
+    assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_plot_rejects_unknown_kind_without_writing(synthetic_recording, tmp_path):
+    out = tmp_path / "x.png"
+    with pytest.raises(ValueError, match="kind"):
+        analysis.plot(str(synthetic_recording), "pie", str(out))
+    assert not out.exists()

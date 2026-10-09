@@ -15,6 +15,13 @@ import pandas as pd
 
 from glider.analysis import Session
 from glider.analysis.cohort import discover_sessions
+from glider.analysis.plots import (
+    plot_ethogram,
+    plot_occupancy_heatmap,
+    plot_trajectory,
+    plot_velocity,
+    plot_zone_dwell,
+)
 from glider.core.doctor import doctor
 from glider.core.project import Project
 from glider.mcp.paths import writable_path
@@ -251,3 +258,39 @@ def project_doctor(root: str) -> dict[str, Any]:
         for f in doctor(Project.load(root_path))
     ]
     return {"summary": f"{len(findings)} finding(s)", "findings": findings}
+
+
+def plot(path: str, kind: str, out_path: str, object_id: int = 0) -> Path:
+    """Render a recording plot to a PNG and return its path.
+
+    Args:
+        kind: "ethogram", "trajectory", "occupancy", "zone_dwell" or "velocity".
+        out_path: Absolute path ending in .png; must not exist yet.
+    """
+    import matplotlib
+
+    # Qt is already imported by the time the core initializes, so matplotlib
+    # would otherwise pick a Qt backend and need a QApplication this process
+    # never has.
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    draw = {
+        "ethogram": lambda s, ax: plot_ethogram(s.ethogram(object_id=object_id), ax=ax),
+        "trajectory": lambda s, ax: plot_trajectory(s.trajectory(object_id=object_id), ax=ax),
+        "occupancy": lambda s, ax: plot_occupancy_heatmap(*s.occupancy(object_id=object_id), ax=ax),
+        "zone_dwell": lambda s, ax: plot_zone_dwell(s.zone_dwell(object_id=object_id), ax=ax),
+        "velocity": lambda s, ax: plot_velocity(s.velocity(object_id=object_id), ax=ax),
+    }
+    if kind not in draw:
+        raise ValueError(f"unknown kind '{kind}'; use one of {', '.join(draw)}")
+    target = writable_path(out_path, ".png")
+    s = _load(path)
+    _require_tracking(s)
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    try:
+        draw[kind](s, ax)
+        fig.savefig(target, dpi=120, bbox_inches="tight")
+    finally:
+        plt.close(fig)
+    return target
