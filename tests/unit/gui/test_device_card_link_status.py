@@ -18,6 +18,7 @@ import pytest
 
 from glider.gui.styles import colors
 from glider.hal.base_board import ConnectionState
+from glider.hal.value_spec import KIND_SWITCH, ActionValueSpec
 
 pytestmark = pytest.mark.usefixtures("qtbot")
 
@@ -30,17 +31,17 @@ def _runner_panel(qtbot, core):
     return panel, panel._update_runner_device_states
 
 
-def _states_panel(qtbot, core):
-    from glider.gui.dashboard.panels.device_states_panel import DeviceStatesPanel
+def _controls_panel(qtbot, core):
+    from glider.gui.runner.device_controls import RunnerDeviceControls
 
-    panel = DeviceStatesPanel(core)
+    panel = RunnerDeviceControls(core.hardware_manager)
     qtbot.addWidget(panel)
-    return panel, panel._update_device_states
+    return panel, panel.refresh_values
 
 
 PANELS = [
     pytest.param(_runner_panel, id="runner"),
-    pytest.param(_states_panel, id="dashboard"),
+    pytest.param(_controls_panel, id="device-controls"),
 ]
 
 
@@ -50,10 +51,28 @@ def _card(qtbot, core, device, build, state):
     # this apart from a device that is genuinely up.
     device._initialized = True
     device.device_type = "Maimu"
+    device.actions = {"set": lambda *a: None}
+    device.value_spec = lambda n: ActionValueSpec(KIND_SWITCH, 0, 1)
     core.hardware_manager.devices = {"stim": device}
     panel, repaint = build(qtbot, core)
-    panel.refresh_devices()
-    return panel, repaint, panel._runner_device_cards["stim"]._ready_label
+    if hasattr(panel, "refresh_devices"):
+        panel.refresh_devices()
+        return panel, repaint, panel._runner_device_cards["stim"]._ready_label
+    panel.refresh()
+    return panel, repaint, _RowLabel(panel._rows["stim"])
+
+
+class _RowLabel:
+    """Adapts a device row (link text + dot) to the card label's text/styleSheet."""
+
+    def __init__(self, refs):
+        self._refs = refs
+
+    def text(self):
+        return self._refs.link.text()
+
+    def styleSheet(self):
+        return self._refs.dot.styleSheet()
 
 
 @pytest.mark.parametrize("build", PANELS)

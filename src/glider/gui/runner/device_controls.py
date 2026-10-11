@@ -24,12 +24,14 @@ engine's shared runner.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from datetime import datetime
+from typing import TYPE_CHECKING, NamedTuple
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -41,7 +43,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.core.config import get_config
 from glider.core.graph_functions import build_picker_labels, list_graph_functions
+from glider.gui.device_status import (
+    device_state_display,
+    link_status_color,
+    link_status_text,
+)
 from glider.gui.widgets.schema_form import build_schema_widgets, read_schema_widget
 from glider.hal.value_spec import KIND_SWITCH, KIND_WHOLE
 
@@ -64,6 +72,13 @@ _SWITCH_REDUNDANT = ("on", "off", "toggle")
 
 # Secondary helper actions covered by a primary control of the same device.
 _SECONDARY = ("set_percent",)
+
+
+class _RowRefs(NamedTuple):
+    dot: QLabel
+    value: QLabel
+    link: QLabel
+    manual: QLabel
 
 
 class RunnerDeviceControls(QWidget):
@@ -103,6 +118,11 @@ class RunnerDeviceControls(QWidget):
         # write can revert the control to what the device actually holds
         self._committed: dict[tuple[str, str], int] = {}
         self.setObjectName("runnerDeviceControls")
+        self._rows: dict[str, _RowRefs] = {}
+        self._state_name = "IDLE"
+        self._value_timer = QTimer(self)
+        self._value_timer.setInterval(get_config().timing.device_refresh_interval_ms)
+        self._value_timer.timeout.connect(self.refresh_values)
         self._setup_ui()
 
     # --- UI scaffolding ---
@@ -207,6 +227,7 @@ class RunnerDeviceControls(QWidget):
         self._widgets.clear()
         self._function_buttons.clear()
         self._committed.clear()
+        self._rows.clear()
 
         functions_section = self._make_functions_section()
         if functions_section is not None:
@@ -274,9 +295,7 @@ class RunnerDeviceControls(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        heading = QLabel(dev_id)
-        heading.setProperty("class", "device-section-header")
-        layout.addWidget(heading)
+        layout.addWidget(self._make_status_row(dev_id, device))
 
         for kind, action, spec in controls:
             builder = {
@@ -288,6 +307,66 @@ class RunnerDeviceControls(QWidget):
             }[kind]
             layout.addWidget(builder(dev_id, action, spec))
         return section
+
+    def _make_status_row(self, dev_id: str, device) -> QWidget:
+        """Dot, name and type, live value; plus a 'set by you' line under it."""
+        row = QWidget()
+        row.setProperty("deviceRow", True)
+        grid = QGridLayout(row)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(0)
+        dot = QLabel("●")
+        dot.setProperty("deviceDot", True)
+        name = QLabel(dev_id)
+        name.setProperty("class", "device-section-header")
+        kind = QLabel(getattr(device, "device_type", ""))
+        kind.setProperty("textRole", "muted")
+        value = QLabel()
+        value.setProperty("deviceValue", True)
+        value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        link = QLabel()
+        link.setProperty("textRole", "muted")
+        manual = QLabel()
+        manual.setProperty("textRole", "muted")
+        manual.hide()
+        grid.addWidget(dot, 0, 0, 2, 1)
+        grid.addWidget(name, 0, 1)
+        grid.addWidget(value, 0, 2, 2, 1)
+        grid.addWidget(kind, 1, 1)
+        grid.addWidget(manual, 2, 1, 1, 2)
+        grid.setColumnStretch(1, 1)
+        self._rows[dev_id] = _RowRefs(dot, value, link, manual)
+        self._paint_row(dev_id, device)
+        return row
+
+    def _paint_row(self, dev_id: str, device) -> None:
+        refs = self._rows[dev_id]
+        text, _colour, _size = device_state_display(device)
+        refs.value.setText(text.replace("\n", "  "))
+        link = getattr(device, "link_state", None)
+        refs.dot.setStyleSheet(f"color: {link_status_color(link)};")
+        refs.dot.setToolTip(link_status_text(link))
+        refs.link.setText(link_status_text(link))
+
+    def refresh_values(self) -> None:
+        devices = self._hardware_manager.devices
+        for dev_id in self._rows:
+            device = devices.get(dev_id)
+            if device is not None:
+                self._paint_row(dev_id, device)
+
+    def update_state(self, state_name: str) -> None:
+        self._state_name = state_name
+        if state_name == "RUNNING":
+            self._value_timer.start()
+        else:
+            self._value_timer.stop()
+            self.refresh_values()
+
+    def closeEvent(self, event) -> None:
+        self._value_timer.stop()
+        super().closeEvent(event)
 
     # --- Control builders ---
 
@@ -453,6 +532,10 @@ class RunnerDeviceControls(QWidget):
                 self._committed[key] = int(value[0])
             except (TypeError, ValueError):
                 pass
+        refs = self._rows.get(dev_id)
+        if refs is not None and self._state_name in ("RUNNING", "PAUSED"):
+            refs.manual.setText(f"set by you {datetime.now():%H:%M}")
+            refs.manual.show()
         self.clear_status()
 
     def on_action_failed(self, dev_id: str, action: str, message: str) -> None:
