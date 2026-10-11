@@ -1786,3 +1786,21 @@ QLabel#toolCardUnavailable {
 QLabel#toolCardIcon {
     background-color: transparent;
 }
+
+/* Click-to-edit field tags under the run-page title. */
+QPushButton[fieldTag="true"] {
+    background: #111820;                            /* SURFACE_1 */
+    border: 1px dashed #475569;                     /* TEXT_DISABLED */
+    border-radius: @RADIUS_MEDIUM@;
+    padding: 4px 9px;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    min-height: 0;
+}
+QPushButton[fieldTag="true"][need="true"] {
+    border: 1px solid #fbbf24;                      /* STATE_WARN */
+    color: #fbbf24;                                 /* STATE_WARN */
+}
+QPushButton[fieldTag="true"][locked="true"] {
+    border-style: solid;
+    border-color: #1e2530;                          /* BORDER */
+}
