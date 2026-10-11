@@ -1,13 +1,13 @@
 """
-Run Control Panel - the dashboard's bottom-left quadrant.
+Run Control Panel - the rail's "run box".
 
-Experiment name and metadata (bound to ``session.metadata``), file actions,
-the board/experiment status line, the housekeeping menu, and START/STOP.
+The run clock, a board sub-line, Start / Pause-Resume / Stop, and a readiness
+hint. Experiment metadata lives in RunHeader and the file actions live in the
+menus.
 
-It also owns the run clock: it starts/stops the elapsed timer on state changes
-and snaps it to ``core.last_flow_duration_s`` at the end of a flow. It does not
-display the time itself — it emits ``elapsed_updated`` and the dashboard header
-(top-right) shows it, so there is exactly one place the time text comes from.
+It owns and shows the run clock: it starts/stops the elapsed timer on state
+changes and snaps it to ``core.last_flow_duration_s`` at the end of a flow.
+``elapsed_updated`` is still emitted for anything else that wants the text.
 
 Emergency stop is deliberately not offered here; it remains a desktop-only
 menu action (see MainWindow._on_emergency_stop).
@@ -17,21 +17,8 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtWidgets import (
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMenu,
-    QPlainTextEdit,
-    QPushButton,
-    QScrollArea,
-    QSizePolicy,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt6.QtCore import QTimer, pyqtSignal
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from glider.core.config import get_config
 from glider.gui.runner.readiness import compute_readiness
@@ -43,33 +30,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _LIVE_STATES = ("RUNNING", "PAUSED")
-# Single-line metadata fields edited in place: (attribute, label).
-_LINE_FIELDS = (("experimenter", "Experimenter"), ("protocol", "Protocol"))
-
-
-def _caption(text: str) -> QLabel:
-    label = QLabel(text)
-    label.setProperty("textRole", "muted")
-    return label
 
 
 class RunControlPanel(QWidget):
-    """Dashboard panel: experiment metadata, file actions, START/STOP."""
+    """Rail run box: clock, Start/Pause/Resume/Stop, readiness hint."""
 
-    experiment_name_changed = pyqtSignal(str)
     start_requested = pyqtSignal()
+    pause_requested = pyqtSignal()
+    resume_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     elapsed_updated = pyqtSignal(str)
-
-    # File actions and housekeeping (wired by MainWindow).
-    new_requested = pyqtSignal()
-    open_requested = pyqtSignal()
-    save_requested = pyqtSignal()
-    save_as_requested = pyqtSignal()
-    board_settings_requested = pyqtSignal()
-    help_requested = pyqtSignal()
-    switch_to_desktop_requested = pyqtSignal()
-    close_requested = pyqtSignal()
 
     def __init__(self, core: "GliderCore", parent=None):
         super().__init__(parent)
@@ -78,133 +48,52 @@ class RunControlPanel(QWidget):
         self._experiment_start_time: float | None = None
         self._state_name = "IDLE"
         self._last_readiness = None
+        self._missing_field: str | None = None
 
         self.setObjectName("runControlPanel")
         self._setup_ui()
         self.refresh()
 
     def _setup_ui(self):
-        """Build the run-control panel UI."""
+        """Build the run box."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
 
-        # Everything above START/STOP scrolls, so the run buttons never get
-        # squeezed off a short quadrant.
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        content = QWidget()
-        body = QVBoxLayout(content)
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(8)
+        self._timer = QLabel("00:00.00")
+        self._timer.setProperty("timer", True)
+        layout.addWidget(self._timer)
+        self.elapsed_updated.connect(self._timer.setText)
 
-        # === Status line + housekeeping ⚙ ===
-        status_row = QHBoxLayout()
-        self._board_status = QLabel()
-        self._exp_status = QLabel()
-        status_row.addWidget(self._board_status)
-        status_row.addWidget(self._exp_status)
-        status_row.addStretch(1)
-        self._menu_btn = QPushButton("⚙")
-        self._menu_btn.setFixedSize(48, 48)
-        self._menu_btn.setStyleSheet(
-            "min-width:48px; max-width:48px; min-height:48px; max-height:48px; "
-            "padding:0px; border:none; font-size: 20px;"
-        )
-        self._menu_btn.clicked.connect(self._open_housekeeping_menu)
-        status_row.addWidget(self._menu_btn)
-        body.addLayout(status_row)
+        self._sub = QLabel()
+        self._sub.setProperty("textRole", "muted")
+        layout.addWidget(self._sub)
 
-        # === File actions (above the metadata, so they never scroll away) ===
-        file_row = QHBoxLayout()
-        file_row.setSpacing(6)
-        self._file_buttons: dict[str, QPushButton] = {}
-        for label, signal in (
-            ("New", self.new_requested),
-            ("Open", self.open_requested),
-            ("Save", self.save_requested),
-            ("Save As", self.save_as_requested),
-            ("Connect / Ports", self.board_settings_requested),
-        ):
-            btn = QPushButton(label)
-            btn.setMinimumHeight(48)
-            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            btn.clicked.connect(signal)
-            self._file_buttons[label] = btn
-            file_row.addWidget(btn)
-        body.addLayout(file_row)
-
-        # === Experiment name + metadata ===
-        self._name_edit = QLineEdit()
-        self._name_edit.setProperty("title", True)
-        self._name_edit.setPlaceholderText("Enter experiment name...")
-        self._name_edit.setMinimumHeight(40)
-        self._name_edit.textChanged.connect(self._on_name_edited)
-        body.addWidget(_caption("Experiment"))
-        body.addWidget(self._name_edit)
-
-        meta = QGridLayout()
-        meta.setContentsMargins(0, 0, 0, 0)
-        meta.setHorizontalSpacing(8)
-        self._meta_edits: dict[str, QLineEdit] = {}
-        for col, (attr, label) in enumerate(_LINE_FIELDS):
-            edit = QLineEdit()
-            edit.setPlaceholderText(label)
-            edit.setMinimumHeight(40)
-            edit.textChanged.connect(lambda text, a=attr: self._set_metadata(a, text))
-            self._meta_edits[attr] = edit
-            # Captions, not just placeholders: a filled field hides its
-            # placeholder, and "G. Bradham" / "OF-v2" do not say what they are.
-            meta.addWidget(_caption(label), 0, col)
-            meta.addWidget(edit, 1, col)
-        self._notes_edit = QPlainTextEdit()
-        self._notes_edit.setPlaceholderText("Notes")
-        self._notes_edit.setFixedHeight(64)
-        self._notes_edit.textChanged.connect(
-            lambda: self._set_metadata("notes", self._notes_edit.toPlainText())
-        )
-        meta.addWidget(_caption("Notes"), 2, 0, 1, 2)
-        meta.addWidget(self._notes_edit, 3, 0, 1, 2)
-        body.addLayout(meta)
-
-        body.addStretch(1)
-
-        scroll.setWidget(content)
-        layout.addWidget(scroll, 1)
-
-        # === START / STOP ===
-        controls = QWidget()
-        controls.setProperty("runnerControls", True)
-        controls_layout = QVBoxLayout(controls)
-        controls_layout.setContentsMargins(12, 8, 12, 8)
-        controls_layout.setSpacing(6)
-
-        self._not_ready_hint = QLabel("Not ready — connect a board and load an experiment")
-        self._not_ready_hint.setProperty("textRole", "muted")
-        self._not_ready_hint.hide()
-        controls_layout.addWidget(self._not_ready_hint)
-
-        top_row = QHBoxLayout()
-        top_row.setSpacing(8)
-
-        self._start_btn = QPushButton("▶  START")
-        self._start_btn.setFixedHeight(60)
+        self._start_btn = QPushButton("▶  Start run")
+        self._start_btn.setFixedHeight(54)
         self._start_btn.setProperty("runnerAction", "start")
         self._start_btn.setEnabled(False)
         self._start_btn.clicked.connect(self.start_requested.emit)
-        top_row.addWidget(self._start_btn)
+        layout.addWidget(self._start_btn)
 
-        self._stop_btn = QPushButton("■  STOP")
-        self._stop_btn.setFixedHeight(60)
+        live_row = QHBoxLayout()
+        live_row.setSpacing(8)
+        self._pause_btn = QPushButton("Pause")
+        self._pause_btn.setFixedHeight(54)
+        self._pause_btn.clicked.connect(self._on_pause_clicked)
+        live_row.addWidget(self._pause_btn)
+        self._stop_btn = QPushButton("■  Stop")
+        self._stop_btn.setFixedHeight(54)
         self._stop_btn.setProperty("runnerAction", "stop")
-        self._stop_btn.setEnabled(False)
         self._stop_btn.clicked.connect(self.stop_requested.emit)
-        top_row.addWidget(self._stop_btn)
+        live_row.addWidget(self._stop_btn)
+        layout.addLayout(live_row)
 
-        controls_layout.addLayout(top_row)
-        layout.addWidget(controls)
+        self._not_ready_hint = QLabel("Not ready — connect a board and load an experiment")
+        self._not_ready_hint.setProperty("textRole", "warning")
+        self._not_ready_hint.setWordWrap(True)
+        self._not_ready_hint.hide()
+        layout.addWidget(self._not_ready_hint)
 
         # Timers
         config = get_config()
@@ -224,29 +113,19 @@ class RunControlPanel(QWidget):
         return self._state_name in _LIVE_STATES
 
     def refresh(self) -> None:
-        """Reload the metadata fields from the (possibly new) session."""
-        metadata = self._metadata()
+        """Re-run readiness (the session may have changed)."""
+        self._last_readiness = None
+        self._refresh_run_readiness()
 
-        def value(attr: str) -> str:
-            return str(getattr(metadata, attr, "") or "")
-
-        edits = (self._name_edit, self._notes_edit, *self._meta_edits.values())
-        for edit in edits:
-            edit.blockSignals(True)
-        self._name_edit.setText(value("name"))
-        for attr, edit in self._meta_edits.items():
-            edit.setText(value(attr))
-        self._notes_edit.setPlainText(value("notes"))
-        for edit in edits:
-            edit.blockSignals(False)
-        self._apply_lock()
+    def set_missing_field(self, label: str | None) -> None:
+        """Block Start (with a hint) until the named required field is filled."""
+        self._missing_field = label
         self._last_readiness = None
         self._refresh_run_readiness()
 
     def update_state(self, state_name: str) -> None:
         """Update UI based on core state changes."""
         self._state_name = state_name
-        self._apply_lock()
         self._refresh_run_readiness()
 
         # Start/stop elapsed timer
@@ -267,56 +146,33 @@ class RunControlPanel(QWidget):
 
     # --- Internal methods ---
 
-    def _metadata(self):
-        session = self._core.session
-        return getattr(session, "metadata", None) if session is not None else None
-
-    def _apply_lock(self) -> None:
-        """Metadata is read-only while a run is live (it is being recorded)."""
-        live = self.is_live
-        self._name_edit.setReadOnly(live)
-        self._notes_edit.setReadOnly(live)
-        for edit in self._meta_edits.values():
-            edit.setReadOnly(live)
-
-    def _set_metadata(self, attr: str, value: str) -> None:
-        metadata = self._metadata()
-        if metadata is None or self.is_live:
-            return
-        setattr(metadata, attr, value)
-        self._core.session.mark_dirty()
-
-    def _on_name_edited(self, name: str) -> None:
-        self._set_metadata("name", name)
-        self.experiment_name_changed.emit(name)
+    def _on_pause_clicked(self) -> None:
+        if self._state_name == "PAUSED":
+            self.resume_requested.emit()
+        else:
+            self.pause_requested.emit()
 
     def _refresh_run_readiness(self) -> None:
-        """Recompute readiness; update the status line and START/STOP."""
+        """Recompute readiness; update the sub-line, buttons and hint."""
         r = compute_readiness(self._core)
         live = self.is_live
-        key = (r, live)
+        key = (r, live, self._state_name, self._missing_field)
         if key == self._last_readiness:
             return
         self._last_readiness = key
-        if r.board_ready:
-            self._board_status.setText(f"Board: ✓ {r.board_label}")
-        else:
-            self._board_status.setText("Board: ✗ not connected")
-        if r.experiment_ready:
-            self._exp_status.setText("Experiment: ✓ ready")
-        else:
-            self._exp_status.setText("Experiment: ✗ no flow")
-        # START only when ready and not already running; STOP only mid-run.
-        self._start_btn.setEnabled(r.all_ready and not live)
+        self._sub.setText(str(r.board_label) if r.board_ready else "No board connected")
+        self._start_btn.setVisible(not live)
+        self._pause_btn.setVisible(live)
+        self._stop_btn.setVisible(live)
+        self._pause_btn.setText("Resume" if self._state_name == "PAUSED" else "Pause")
+        ready = r.all_ready and not self._missing_field
+        self._start_btn.setEnabled(ready and not live)
         self._stop_btn.setEnabled(live)
-        self._not_ready_hint.setVisible(not r.all_ready and not live)
-
-    def _open_housekeeping_menu(self) -> None:
-        menu = QMenu(self)
-        menu.addAction("Help").triggered.connect(self.help_requested)
-        menu.addAction("Switch to Desktop").triggered.connect(self.switch_to_desktop_requested)
-        menu.addAction("Exit").triggered.connect(self.close_requested)
-        menu.exec(self._menu_btn.mapToGlobal(self._menu_btn.rect().center()))
+        if self._missing_field:
+            self._not_ready_hint.setText(f"Fill in {self._missing_field} to start.")
+        else:
+            self._not_ready_hint.setText("Not ready — connect a board and load an experiment")
+        self._not_ready_hint.setVisible(not ready and not live)
 
     def _update_elapsed_time(self) -> None:
         """Emit the live elapsed time (see ``format_elapsed`` for the format)."""
@@ -340,7 +196,7 @@ class RunControlPanel(QWidget):
         self._set_timer_display(duration)
 
     def _set_timer_display(self, elapsed: float) -> None:
-        """Format ``elapsed`` (seconds) and publish it to the dashboard header."""
+        """Format ``elapsed`` (seconds) and publish it (also shown on the clock label)."""
         self.elapsed_updated.emit(format_elapsed(elapsed))
 
     # --- Cleanup ---

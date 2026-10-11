@@ -719,6 +719,13 @@ QLabel[textRole="section"] { color: #718096; font-size: 10px; font-weight: bold;
 QLabel[textRole="secondary"] { color: #94a3b8; }
 QLabel[textRole="disabled"] { color: #475569; }
 QLabel[textRole="primary"] { color: #e2e8f0; }
+QLabel[textRole="warning"] { color: #fbbf24; font-size: 12px; }
+QLabel[timer="true"] {
+    color: #e2e8f0;
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 42px;
+    font-weight: bold;
+}
 
 /* Button roles */
 QPushButton[buttonRole="secondary"] { background-color: #1e2530; color: #94a3b8; }
