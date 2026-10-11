@@ -111,7 +111,7 @@ class ViewManager:
         # Pi hardware is the runner box: choose RUNNER regardless of what the
         # primary screen reports. Screen-size probing misfires on the Pi (a
         # phantom/headless HDMI output or compositor-reported size can look
-        # like a desktop monitor), which used to squeeze the 2x2 dashboard
+        # like a desktop monitor), which used to squeeze the desktop dashboard
         # onto the 480px touchscreen. `--builder` still overrides, since a
         # forced mode never reaches auto-detection.
         if self._is_raspberry_pi():

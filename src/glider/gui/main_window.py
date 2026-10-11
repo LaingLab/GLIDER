@@ -487,7 +487,7 @@ class MainWindow(QMainWindow):
         self._node_library_panel: NodeLibraryPanel | None = None
         self._node_editor: NodeEditorController | None = None
         self._camera_panel: CameraPanel | None = None
-        # Dashboard camera-quadrant occupant: a lightweight container that is
+        # Dashboard camera-stage occupant: a lightweight container that is
         # ALWAYS the dashboard's "camera" panel. The single CameraPanel is
         # reparented into this slot (dashboard shown) or the Builder's Camera
         # tab slot (Builder shown) on view switch — never duplicated (Task 12).
@@ -512,11 +512,11 @@ class MainWindow(QMainWindow):
 
         # Operator (non-Builder) view. Exactly ONE of these is built, chosen by
         # startup mode: the 4-tab RunnerShell in runner mode (Pi touchscreen),
-        # the 2x2 DashboardView in desktop mode. The other stays None, so every
+        # the camera-cockpit DashboardView in desktop mode. The other stays None, so every
         # site that touches a mode-specific widget must guard on it.
         self._dashboard_view = None  # DashboardView (desktop mode)
         self._run_control_panel = None  # RunControlPanel (dashboard)
-        self._device_states_panel = None  # DeviceStatesPanel (dashboard)
+        self._run_header = None  # RunHeader (dashboard)
         self._runner_shell = None  # RunnerShell (runner mode)
         self._runner_panel = None  # RunnerPanel — Run tab (runner mode)
         self._runner_setup_page = None  # RunnerSetupPage — Setup tab (runner mode)
@@ -1169,8 +1169,8 @@ class MainWindow(QMainWindow):
         """Build the operator (non-Builder) view for the detected mode.
 
         Runner mode (Pi touchscreen) gets the 4-tab RunnerShell — one full-width
-        page at a time, which fits the 480px screen. Desktop mode gets the 2x2
-        DashboardView. Exactly one is built, so the panels they share
+        page at a time, which fits the 480px screen. Desktop mode gets the
+        camera-first DashboardView. Exactly one is built, so the panels they share
         (CameraPanel, RunnerDeviceControls, HardwarePanel) are never double-owned.
         """
         if self._view_manager.is_runner_mode:
@@ -1179,36 +1179,30 @@ class MainWindow(QMainWindow):
             self._create_dashboard_view()
 
     def _create_dashboard_view(self) -> None:
-        """Create the desktop dashboard: a fixed 2x2 grid.
+        """Create the desktop Run page: the camera cockpit.
 
-        Camera Feed | Device States & Timer / Run Control | Manual Control.
-        The dashboard keeps its OWN HardwarePanel (``_dash_hardware_panel``),
+        Header and camera on the left; run box and device controls in the
+        right rail. The dashboard keeps its OWN HardwarePanel (``_dash_hardware_panel``),
         built but never shown: it backs the Connect / Ports dialog, and its
         ``refresh_tree`` -> ``hardware_changed`` is the fan-out that refreshes
-        the device cards and manual controls. The Camera panel is the single
+        the manual controls. The Camera panel is the single
         shared instance the Builder's Camera tab also re-hosts.
         """
         from glider.gui.dashboard.dashboard_view import DashboardView
-        from glider.gui.dashboard.panels.device_states_panel import DeviceStatesPanel
         from glider.gui.dashboard.panels.run_control_panel import RunControlPanel
+        from glider.gui.dashboard.panels.run_header import RunHeader
         from glider.gui.runner.device_controls import RunnerDeviceControls
 
-        # --- Run Control panel (START/STOP, metadata, file actions) ---
+        # --- Run box (clock, Start / Pause / Stop) ---
         run_control = RunControlPanel(self._core)
         run_control.start_requested.connect(self._on_start_clicked)
         run_control.stop_requested.connect(self._on_stop_clicked)
-        run_control.new_requested.connect(self._on_new)
-        run_control.open_requested.connect(self._on_open)
-        run_control.save_requested.connect(self._on_save)
-        run_control.save_as_requested.connect(self._on_save_as)
-        run_control.help_requested.connect(self._on_help)
-        run_control.close_requested.connect(self.close)
-        run_control.switch_to_desktop_requested.connect(self._switch_to_desktop_mode)
+        run_control.pause_requested.connect(self._on_pause_clicked)
+        run_control.resume_requested.connect(self._on_resume_clicked)
         self._run_control_panel = run_control
 
-        # --- Device States panel ---
-        device_states = DeviceStatesPanel(self._core)
-        self._device_states_panel = device_states
+        # --- Header (title, state pill, field tags) ---
+        self._run_header = RunHeader(self._core)
 
         # --- Manual Controls panel (RunnerDeviceControls) ---
         self._runner_device_controls = RunnerDeviceControls(
@@ -1234,7 +1228,7 @@ class MainWindow(QMainWindow):
         # two overlapping runs would corrupt each other's saved state.
         self._manual_run_busy = False
 
-        # --- Camera panel (single reparented singleton). The camera quadrant
+        # --- Camera panel (single reparented singleton). The camera stage
         # hosts a lightweight container slot; the real CameraPanel lives inside
         # whichever view is currently visible (this slot when the dashboard is
         # shown, the Builder's Camera tab when Builder is).
@@ -1245,11 +1239,10 @@ class MainWindow(QMainWindow):
 
         self._dashboard_view = DashboardView(
             camera=self._camera_slot,
-            device_states=device_states,
+            header=self._run_header,
             run_control=run_control,
-            manual_controls=self._runner_device_controls,
+            device_controls=self._runner_device_controls,
         )
-        run_control.elapsed_updated.connect(self._dashboard_view.set_time)
 
         # The dashboard's hidden HardwarePanel (see docstring). Parented to the
         # view so it is owned and its dialog centres on the window.
@@ -1262,9 +1255,6 @@ class MainWindow(QMainWindow):
         )
         self._dash_hardware_panel.hide()
         self._dash_hardware_panel.status_message.connect(self._show_status_message)
-        run_control.board_settings_requested.connect(
-            self._dash_hardware_panel.show_board_settings_dialog
-        )
 
         # Initial camera placement: park the single CameraPanel in the dashboard
         # slot. Desktop startup later re-hosts it into the Builder (see
@@ -1274,9 +1264,14 @@ class MainWindow(QMainWindow):
         # Hardware-change fan-out to the dashboard panels (_setup_dock_widgets
         # builds a separate Builder panel and wires its own fan-out, so there
         # is no double-firing).
-        self._dash_hardware_panel.hardware_changed.connect(device_states.refresh_devices)
         self._dash_hardware_panel.hardware_changed.connect(self._runner_device_controls.refresh)
         self._dash_hardware_panel.refresh_tree()
+
+        # Camera health overlay (fps, dropped frames, REC), once a second.
+        self._health_timer = QTimer(self)
+        self._health_timer.setInterval(1000)
+        self._health_timer.timeout.connect(self._refresh_run_health)
+        self._health_timer.start()
 
     def _create_runner_shell_view(self) -> None:
         """Create the Pi 4-tab RunnerShell view (Setup / Run / Manual / Camera).
@@ -1886,6 +1881,13 @@ class MainWindow(QMainWindow):
         disconnect_action.triggered.connect(self._on_disconnect_hardware)
         hardware_menu.addAction(disconnect_action)
 
+        self._connect_ports_action = QAction("Connect / &Ports…", self)
+        self._connect_ports_action.triggered.connect(
+            lambda: self._dash_hardware_panel
+            and self._dash_hardware_panel.show_board_settings_dialog()
+        )
+        hardware_menu.addAction(self._connect_ports_action)
+
         # Run menu
         run_menu = self._menu("&Run")
 
@@ -2307,6 +2309,7 @@ class MainWindow(QMainWindow):
         self.session_changed.connect(self._refresh_hardware_readouts)
         # Dashboard-only panels (desktop mode).
         if self._run_control_panel is not None:
+            self.session_changed.connect(self._run_header.refresh)
             self.session_changed.connect(self._run_control_panel.refresh)
         # Runner-only Setup page (runner mode).
         if self._runner_setup_page is not None:
@@ -3392,6 +3395,28 @@ class MainWindow(QMainWindow):
     def _on_start_clicked(self) -> None:
         self._run_async(self._start_async())
 
+    @pyqtSlot()
+    def _on_pause_clicked(self) -> None:
+        self._run_async(self._core.pause_experiment())
+
+    @pyqtSlot()
+    def _on_resume_clicked(self) -> None:
+        self._run_async(self._core.resume_experiment())
+
+    def _refresh_run_health(self) -> None:
+        """Feed the camera overlay: preview fps, frames dropped, REC."""
+        if self._dashboard_view is None:
+            return
+        fps = self._camera_panel.current_fps() if self._camera_panel is not None else None
+        dropped = self._core.video_recorder.frames_dropped + sum(
+            self._core.multi_video_recorder.frames_dropped.values()
+        )
+        recording = (
+            bool(self._core.data_recorder.is_recording)
+            and getattr(self, "_last_session_state", None) == "RUNNING"
+        )
+        self._dashboard_view.set_health(fps, dropped, recording)
+
     async def _start_async(self) -> None:
         # A manual function run briefly forces the flow engine RUNNING to gate
         # exec propagation; starting a real experiment on top of that would make
@@ -3810,7 +3835,7 @@ class MainWindow(QMainWindow):
 
         # Deterministically stop the CameraPanel CV thread now that we are
         # committed to closing. Runner mode always builds a CameraPanel (nested
-        # inside the DashboardView's camera quadrant), and its CV QThread is only stopped from
+        # inside the DashboardView's camera stage), and its CV QThread is only stopped from
         # CameraPanel.closeEvent/destroyed — which Qt does not fire for a nested
         # child during MainWindow teardown. Calling close() here synchronously
         # joins the thread (idempotent via its isRunning() guard), so the Pi

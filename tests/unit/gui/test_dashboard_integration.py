@@ -23,35 +23,32 @@ def test_state_change_fans_out_to_dashboard(qtbot, main_window_factory):
     assert window._run_control_panel._state_name == "RUNNING"
 
 
-def test_dashboard_places_the_four_panels(qtbot, main_window_factory):
+def test_dashboard_places_the_panels(qtbot, main_window_factory):
     window = main_window_factory()
     view = window._dashboard_view
-    for quadrant, panel in (
-        ("top_left", window._camera_slot),
-        ("top_right", window._device_states_panel),
-        ("bottom_left", window._run_control_panel),
-        ("bottom_right", window._runner_device_controls),
-    ):
-        assert _is_descendant(panel, view.quadrant(quadrant)), quadrant
-    # The hardware list backs Connect / Ports but is not shown on the dashboard.
+    assert _is_descendant(window._camera_slot, view.stage())
+    assert _is_descendant(window._run_header, view.stage())
+    assert _is_descendant(window._run_control_panel, view.rail())
+    assert _is_descendant(window._runner_device_controls, view.rail())
     assert window._dash_hardware_panel.isHidden()
+    assert not hasattr(window, "_device_states_panel")
 
 
 def test_timer_visible_and_ticking_while_running(qtbot, main_window_factory):
     window = main_window_factory()
     window.switch_to_runner()
     window.show()
-    view = window._dashboard_view
     window._on_core_state_change(_FakeState("RUNNING"))
-    assert view._timer.isVisible()
-    assert view._state.text() == "RUNNING"
-    window._run_control_panel._set_timer_display(3.5)
-    assert view._timer.text() == "00:03.50"
-    window._on_core_state_change(_FakeState("STOPPED"))
-    assert view._timer.isVisible()
+    rc = window._run_control_panel
+    assert rc._timer.isVisible()
+    assert window._run_header._pill.text() == "RUNNING"
+    rc._set_timer_display(3.5)
+    assert rc._timer.text() == "00:03.50"
 
 
-def test_connect_ports_opens_the_board_settings_dialog(qtbot, main_window_factory, monkeypatch):
+def test_connect_ports_menu_opens_the_board_settings_dialog(
+    qtbot, main_window_factory, monkeypatch
+):
     from glider.gui.panels.hardware_panel import HardwarePanel
 
     opened = []
@@ -59,15 +56,30 @@ def test_connect_ports_opens_the_board_settings_dialog(qtbot, main_window_factor
         HardwarePanel, "show_board_settings_dialog", lambda self: opened.append(self)
     )
     window = main_window_factory()
-    window._run_control_panel._file_buttons["Connect / Ports"].click()
+    window._connect_ports_action.trigger()
     assert opened == [window._dash_hardware_panel]
 
 
-def test_session_change_refreshes_metadata(qtbot, main_window_factory):
+def test_session_change_refreshes_header(qtbot, main_window_factory):
     window = main_window_factory()
     window._core.session.metadata.name = "Renamed elsewhere"
     window.session_changed.emit()
-    assert window._run_control_panel._name_edit.text() == "Renamed elsewhere"
+    assert window._run_header._title.text() == "Renamed elsewhere"
+
+
+def test_state_change_reaches_device_rows(qtbot, main_window_factory):
+    window = main_window_factory()
+    window._on_core_state_change(_FakeState("RUNNING"))
+    assert window._runner_device_controls._value_timer.isActive()
+    window._on_core_state_change(_FakeState("STOPPED"))
+    assert not window._runner_device_controls._value_timer.isActive()
+
+
+def test_health_overlay_fed_from_recorders(qtbot, main_window_factory):
+    window = main_window_factory()
+    window._camera_panel.current_fps = lambda: 29.9
+    window._refresh_run_health()
+    assert window._dashboard_view._fps.text() == "29.9 fps"
 
 
 def test_can_switch_builder_dashboard_bidirectionally(qtbot, main_window_factory):
