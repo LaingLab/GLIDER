@@ -1,7 +1,7 @@
 import pytest
 from PyQt6.QtWidgets import QLabel
 
-from glider.gui.dashboard.dashboard_view import QUADRANT_TITLES, DashboardView
+from glider.gui.dashboard.dashboard_view import DashboardView
 
 
 class _StatePanel(QLabel):
@@ -15,10 +15,7 @@ class _StatePanel(QLabel):
 
 @pytest.fixture
 def panels():
-    return {
-        key: _StatePanel(key)
-        for key in ("camera", "device_states", "run_control", "manual_controls")
-    }
+    return {k: _StatePanel(k) for k in ("camera", "header", "run_control", "device_controls")}
 
 
 @pytest.fixture
@@ -36,48 +33,32 @@ def _within(widget, ancestor):
     return False
 
 
-def test_panels_have_fixed_quadrants(view, panels):
-    expected = {
-        "top_left": "camera",
-        "top_right": "device_states",
-        "bottom_left": "run_control",
-        "bottom_right": "manual_controls",
-    }
-    for quadrant, key in expected.items():
-        assert _within(panels[key], view.quadrant(quadrant)), (quadrant, key)
-    assert _within(view._timer, view.quadrant("top_right"))
+def test_stage_holds_header_and_camera_rail_holds_controls(view, panels):
+    assert _within(panels["header"], view.stage())
+    assert _within(panels["camera"], view.stage())
+    assert _within(panels["run_control"], view.rail())
+    assert _within(panels["device_controls"], view.rail())
 
 
-def test_quadrants_are_equal(qtbot, view):
-    view.resize(1000, 800)
+def test_camera_gets_most_of_the_width(qtbot, view, panels):
+    view.resize(1400, 800)
     view.show()
     qtbot.waitExposed(view)
-    sizes = {view.quadrant(q).size() for q in QUADRANT_TITLES}
-    assert len(sizes) == 1
+    assert panels["camera"].width() > 2 * view.rail().width()
 
 
-def test_timer_visible_in_every_state(view):
-    for state in ("IDLE", "READY", "RUNNING", "PAUSED", "STOPPED"):
-        view.update_state(state)
-        assert view._timer.isVisibleTo(view), state
-        assert view._state.text() == state
-
-
-def test_set_time_updates_header(view):
-    view.set_time("01:23.45")
-    assert view._timer.text() == "01:23.45"
-
-
-def test_rec_shows_only_while_recording_a_run(view):
-    view.update_state("RUNNING", recording=True)
-    assert view._rec.isVisibleTo(view)
-    view.update_state("RUNNING", recording=False)
-    assert not view._rec.isVisibleTo(view)
-    view.update_state("STOPPED", recording=True)
-    assert not view._rec.isVisibleTo(view)
-
-
-def test_update_state_fans_out_to_panels(view, panels):
+def test_update_state_fans_out(view, panels):
     view.update_state("RUNNING")
-    for panel in panels.values():
-        assert panel.last_state == "RUNNING"
+    assert all(p.last_state == "RUNNING" for p in panels.values())
+
+
+def test_health_overlay(view):
+    view.set_health(30.0, 0, recording=True)
+    assert view._fps.text() == "30.0 fps"
+    assert view._dropped.text() == "0 dropped"
+    assert view._dropped.property("warn") is False
+    assert view._rec.isVisibleTo(view)
+    view.set_health(None, 14, recording=False)
+    assert view._fps.text() == "-- fps"
+    assert view._dropped.property("warn") is True
+    assert not view._rec.isVisibleTo(view)

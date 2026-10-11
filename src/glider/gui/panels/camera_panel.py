@@ -1139,16 +1139,18 @@ class CameraPanel(QWidget):
                 self._fps_label.setText(f"{fps:.1f} FPS")
             return
 
-        if self._preview_active:
-            if self._multi_camera_mode and self._multi_cam:
-                # Show primary camera FPS in status bar
-                primary_id = self._multi_cam.primary_camera_id
-                if primary_id:
-                    fps = self._multi_cam.get_camera_fps(primary_id)
-                    self._fps_label.setText(f"{fps:.1f} FPS")
-            else:
-                fps = self._camera.current_fps
-                self._fps_label.setText(f"{fps:.1f} FPS")
+        fps = self.current_fps()
+        if fps is not None:
+            self._fps_label.setText(f"{fps:.1f} FPS")
+
+    def current_fps(self) -> float | None:
+        """Live preview frame rate of the primary camera, or None when idle."""
+        if not self._preview_active:
+            return None
+        if self._multi_camera_mode and self._multi_cam:
+            primary_id = self._multi_cam.primary_camera_id
+            return float(self._multi_cam.get_camera_fps(primary_id)) if primary_id else None
+        return float(self._camera.current_fps)
 
     def _on_cv_toggle(self, enabled: bool) -> None:
         """Handle CV processing toggle."""

@@ -1823,3 +1823,30 @@ QPushButton[fieldTag="true"][locked="true"] {
     border-style: solid;
     border-color: #1e2530;                          /* BORDER */
 }
+
+/* Run cockpit: cards, camera health badges, device status rows */
+QFrame[runCard="true"] {
+    background: #0f1419;                            /* BASE */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_MEDIUM@;
+}
+QLabel[cameraBadge="true"] {
+    background: rgba(10, 14, 19, 0.72);             /* CANVAS at 0.72 */
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 11px;
+    padding: 3px 7px;
+    border-radius: @RADIUS_SMALL@;
+}
+QLabel[cameraBadge="true"][warn="true"] { color: #fbbf24; } /* STATE_WARN */
+QWidget[deviceRow="true"] {
+    background: transparent;
+    padding-top: 3px;
+}
+QLabel[deviceDot="true"] { font-size: 12px; }
+QLabel[deviceValue="true"] {
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+}

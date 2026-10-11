@@ -261,6 +261,12 @@ class VideoRecorder:
         return self._state == RecordingState.RECORDING
 
     @property
+    def frames_dropped(self) -> int:
+        """Frames the writer thread had to drop in the current/last recording."""
+        writer = self._writer_thread
+        return int(writer.frames_dropped) if writer is not None else 0
+
+    @property
     def is_paused(self) -> bool:
         """Whether recording is paused."""
         return self._state == RecordingState.PAUSED
