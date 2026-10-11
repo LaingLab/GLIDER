@@ -264,6 +264,9 @@ def mock_session():
     session.devices = {}
     session.flow_config = {}
     session.dashboard_config = {}
+    # Unsaved, like a real new session. A MagicMock here is truthy, which
+    # MainWindow reads as "--file opened an experiment" and tries to load it.
+    session.file_path = None
 
     session.mark_dirty = MagicMock()
     session.mark_clean = MagicMock()

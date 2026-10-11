@@ -307,6 +307,45 @@ def test_create_main_window_does_not_navigate_off_the_landing_page(qtbot, tmp_pa
         loop.close()
 
 
+def test_startup_with_a_file_draws_its_graph(qtbot, tmp_path):
+    """Regression: ``glider --file`` opened onto an empty node graph.
+
+    ``init_glider`` loads the file into the core before the window exists. The
+    window then skipped the landing page but never built the canvas, so the
+    devices and the name showed while every node was missing.
+    """
+    import asyncio
+    import shutil
+
+    from PyQt6.QtWidgets import QApplication
+
+    from glider.core.glider_core import GliderCore
+    from glider.gui.main_window import MainWindow
+    from glider.gui.view_manager import ViewManager, ViewMode
+
+    experiment = tmp_path / "pi_only.glider"
+    shutil.copy(Path(__file__).parents[4] / "examples" / "pi_only.glider", experiment)
+    core = GliderCore()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(core.initialize(load_plugins=False))
+    try:
+        loop.run_until_complete(core.load_experiment(experiment))  # what --file does
+        vm = ViewManager(QApplication.instance())
+        vm.mode = ViewMode.DESKTOP
+        settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+        window = MainWindow(core, view_manager=vm, settings=settings)
+        qtbot.addWidget(window, before_close_func=lambda _w: core.session._mark_clean())
+
+        assert not window.is_on_landing()
+        expected = {n.id for n in core.session.flow.nodes}
+        assert expected
+        assert set(window._graph_view.nodes) == expected
+    finally:
+        loop.run_until_complete(core.shutdown())
+        loop.close()
+
+
 def test_analyze_is_the_fourth_tab(qtbot, main_window_factory):
     from glider.gui.main_window import PAGE_ANALYZE
 

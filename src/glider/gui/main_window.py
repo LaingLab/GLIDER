@@ -651,7 +651,12 @@ class MainWindow(QMainWindow):
         else:
             self._stack.setCurrentIndex(PAGE_BUILDER)
             self._populate_builder_panels()
-            if not self._has_open_experiment():
+            if self._has_open_experiment():
+                # --file loaded the experiment into the core before this
+                # window existed, so nothing has drawn its graph, zones or
+                # panels yet. Open it the way File > Open does.
+                self._load_experiment_path(self._core.session.file_path)
+            else:
                 self._show_landing()
 
         self._install_palette_shortcut()
