@@ -64,3 +64,11 @@ def test_manual_change_outside_a_run_is_not_labelled(qtbot):
     w = _controls(qtbot, {"cue_led": _dev(state=False)})
     w.on_action_succeeded("cue_led", "set", True)
     assert not w._rows["cue_led"].manual.isVisibleTo(w)
+
+
+def test_manual_set_repaints_the_value_when_not_polling(qtbot):
+    dev = _dev(state=False)
+    w = _controls(qtbot, {"cue_led": dev})
+    dev._state = True
+    w.on_action_succeeded("cue_led", "set", True)
+    assert w._rows["cue_led"].value.text() == "HIGH"

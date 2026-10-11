@@ -532,6 +532,9 @@ class RunnerDeviceControls(QWidget):
                 self._committed[key] = int(value[0])
             except (TypeError, ValueError):
                 pass
+        device = self._hardware_manager.devices.get(dev_id)
+        if device is not None and dev_id in self._rows:
+            self._paint_row(dev_id, device)
         refs = self._rows.get(dev_id)
         if refs is not None and self._state_name in ("RUNNING", "PAUSED"):
             refs.manual.setText(f"set by you {datetime.now():%H:%M}")
