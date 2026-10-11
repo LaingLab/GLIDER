@@ -49,6 +49,7 @@ class RunControlPanel(QWidget):
         self._state_name = "IDLE"
         self._last_readiness = None
         self._missing_field: str | None = None
+        self._paused_at = 0.0
 
         self.setObjectName("runControlPanel")
         self._setup_ui()
@@ -125,14 +126,23 @@ class RunControlPanel(QWidget):
 
     def update_state(self, state_name: str) -> None:
         """Update UI based on core state changes."""
+        previous = self._state_name
         self._state_name = state_name
         self._refresh_run_readiness()
 
         # Start/stop elapsed timer
         if state_name == "RUNNING":
-            self._experiment_start_time = time.time()
+            if previous == "PAUSED" and self._experiment_start_time is not None:
+                # Resume: the paused stretch is not run time.
+                self._experiment_start_time += time.time() - self._paused_at
+            else:
+                self._experiment_start_time = time.time()
             self._elapsed_timer.start()
             self._update_elapsed_time()
+        elif state_name == "PAUSED":
+            # Freeze the display on its current value; no flow-duration snap.
+            self._paused_at = time.time()
+            self._elapsed_timer.stop()
         else:
             self._elapsed_timer.stop()
             # When the flow has completed, snap the displayed elapsed time

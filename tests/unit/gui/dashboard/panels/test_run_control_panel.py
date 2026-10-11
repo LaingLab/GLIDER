@@ -101,3 +101,38 @@ def test_missing_field_blocks_start_with_hint(qtbot, mock_core):
     assert panel._not_ready_hint.isVisibleTo(panel)
     panel.set_missing_field(None)
     assert panel._start_btn.isEnabled()
+
+
+def _clock(monkeypatch, now):
+    from glider.gui.dashboard.panels import run_control_panel as mod
+
+    monkeypatch.setattr(mod.time, "time", lambda: now[0])
+
+
+def test_pause_freezes_the_clock_without_snapping(qtbot, mock_core, monkeypatch):
+    now = [1000.0]
+    _clock(monkeypatch, now)
+    panel = _panel(qtbot, mock_core)
+    panel.update_state("RUNNING")
+    panel._experiment_start_time = now[0] - 10
+    panel._update_elapsed_time()
+    mock_core.last_flow_duration_s = 99.0  # must not be shown while paused
+    panel.update_state("PAUSED")
+    assert panel._timer.text() == "00:10.00"
+    assert not panel._elapsed_timer.isActive()
+
+
+def test_resume_keeps_the_elapsed_time(qtbot, mock_core, monkeypatch):
+    now = [1000.0]
+    _clock(monkeypatch, now)
+    panel = _panel(qtbot, mock_core)
+    panel.update_state("RUNNING")
+    panel._experiment_start_time = now[0] - 10
+    panel.update_state("PAUSED")
+    now[0] += 30  # time spent paused is not run time
+    panel.update_state("RUNNING")
+    assert panel._timer.text() == "00:10.00"
+    assert panel._elapsed_timer.isActive()
+    now[0] += 5
+    panel._update_elapsed_time()
+    assert panel._timer.text() == "00:15.00"
