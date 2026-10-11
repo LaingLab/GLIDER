@@ -757,9 +757,21 @@ QLabel[statusIndicator="true"] { color: #e2e8f0; padding: 4px 12px; border-radiu
 QLabel[statusState="IDLE"] { background-color: #1e2530; }
 QLabel[statusState="READY"] { background-color: rgba(52, 211, 153, 0.15); color: #34d399; }
 QLabel[statusState="RUNNING"] { background-color: rgba(56, 189, 248, 0.15); color: #38bdf8; }
-QLabel[statusState="PAUSED"], QLabel[statusState="STOPPING"] { background-color: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+QLabel[statusState="PAUSED"], QLabel[statusState="STOPPING"], QLabel[statusState="NEEDS_DETAILS"] { background-color: rgba(251, 191, 36, 0.15); color: #fbbf24; }
 QLabel[statusState="ERROR"] { background-color: rgba(248, 113, 113, 0.15); color: #f87171; }
 QLabel[statusState="INITIALIZING"] { background-color: rgba(96, 165, 250, 0.15); color: #60a5fa; }
+
+/* Run page title: flat until focused */
+QLineEdit[runTitle="true"] {
+    background-color: transparent;
+    border: 1px solid transparent;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+QLineEdit[runTitle="true"]:focus {
+    border-color: #1e2530;                          /* BORDER */
+}
 
 /* === Plugins window ===
  *
