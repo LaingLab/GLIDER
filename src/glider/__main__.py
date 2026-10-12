@@ -9,6 +9,7 @@ Usage:
     python -m glider --builder    # Force Builder (desktop) mode
     python -m glider --runner     # Force Runner (touch) mode
     python -m glider --file path  # Open an experiment file
+    python -m glider doctor       # Check this install can run GLIDER
 """
 
 import os
@@ -38,6 +39,15 @@ if sys.platform == "win32" and os.environ.get("GLIDER_SKIP_TORCH_PRELOAD") != "1
         import torch  # noqa: F401  (imported for its DLL-load side effect)
     except Exception:
         pass
+
+# `glider doctor` is dispatched here: after the torch preload, so it loads
+# libraries in the same order the app does, and before the Qt import below,
+# because a Qt that will not load is the commonest thing it has to report.
+# `--check-deps` is its old name.
+if sys.argv[1:2] == ["doctor"] or "--check-deps" in sys.argv[1:]:
+    from glider.env_doctor import run_doctor
+
+    sys.exit(run_doctor())
 
 import argparse
 import asyncio
@@ -128,6 +138,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="glider",
         description="GLIDER - General Laboratory Interface for Design, Experimentation, and Recording",
+        epilog="Run `glider doctor` to check this install can run GLIDER.",
     )
     parser.add_argument(
         "--version",
@@ -166,11 +177,6 @@ def parse_args() -> argparse.Namespace:
         "--gpu-check",
         action="store_true",
         help="Print GPU/accelerator diagnostics (CUDA/MPS/CPU) and exit",
-    )
-    parser.add_argument(
-        "--check-deps",
-        action="store_true",
-        help="Report which optional feature stacks can actually be imported, and exit",
     )
     return parser.parse_args()
 
@@ -213,63 +219,6 @@ def _print_gpu_check() -> int:
         selected = f"unavailable ({e.__class__.__name__})"
     print(f"Inference will use: {selected}")
     return 0
-
-
-#: Optional dependency stacks, in the shape the user meets them: the feature
-#: that breaks, and the modules that have to import for it to work. Grouped
-#: rather than flat because "hdbscan is missing" means nothing to someone whose
-#: actual complaint is that the Behavior menu is greyed out.
-_DEP_STACKS: list[tuple[str, str, list[str]]] = [
-    ("Behavior analysis", "behavior", ["umap", "hdbscan", "sklearn", "yaml"]),
-    ("Behavior plots", "behavior", ["matplotlib", "lightgbm"]),
-    ("Pose tracking (YOLO)", "vision", ["ultralytics", "torch", "lap"]),
-    ("Audio", "audio", ["sounddevice", "soundfile", "pydub"]),
-    ("Core", "-", ["cv2", "PyQt6.QtWidgets", "numpy", "polars", "ryvencore"]),
-]
-
-
-def _print_dep_check() -> int:
-    """Report whether each optional stack can actually be imported.
-
-    Deliberately *imports* every module rather than asking
-    :func:`importlib.util.find_spec` whether it exists. The two disagree in the
-    case that matters: a packaged build can carry every torch file on disk and
-    still fail to load ``c10.dll``, and find_spec would call that present. A
-    frozen bundle is exactly where you cannot check by hand, so the check has
-    to be the real thing.
-
-    Runs before any Qt or core init, so it also preserves the DLL load order
-    the Windows torch workaround at the top of this module depends on.
-    """
-    import importlib
-
-    from glider._version import __version__
-
-    print("GLIDER optional dependency check")
-    print(f"  version : {__version__}")
-    print(f"  frozen  : {getattr(sys, 'frozen', False)}")
-    print("-" * 60)
-
-    failures = 0
-    for label, extra, modules in _DEP_STACKS:
-        broken: list[str] = []
-        for mod in modules:
-            try:
-                importlib.import_module(mod)
-            except Exception as e:  # ImportError, OSError (DLL), anything
-                broken.append(f"{mod}: {e.__class__.__name__}: {e}")
-        if broken:
-            failures += 1
-            print(f"  [FAIL] {label}")
-            for line in broken:
-                print(f"           {line}")
-            if extra != "-":
-                print(f"           install with: pip install 'GLIDER[{extra}]'")
-        else:
-            print(f"  [ ok ] {label}")
-    print("-" * 60)
-    print("All optional stacks available." if not failures else f"{failures} stack(s) unavailable.")
-    return 1 if failures else 0
 
 
 async def init_glider(
@@ -419,7 +368,7 @@ def main() -> int:
     args = parse_args()
 
     # Headless diagnostics: report and exit before any Qt/core init.
-    if args.gpu_check or args.check_deps:
+    if args.gpu_check:
         # Windows hands a frozen app a cp1252 stdout when its output is piped
         # or redirected, and _print_gpu_check's tick marks are not encodable
         # there -- so the diagnostic died mid-report with a UnicodeEncodeError
@@ -431,10 +380,7 @@ def main() -> int:
                 stream.reconfigure(encoding="utf-8", errors="replace")
             except Exception:
                 pass
-    if args.gpu_check:
         return _print_gpu_check()
-    if args.check_deps:
-        return _print_dep_check()
 
     # Setup logging
     setup_logging(args.debug)
