@@ -484,6 +484,13 @@ async def _real_load(data: dict) -> list[dict[str, str]]:
     ]
 
 
+def _nodes_use_type(data: dict) -> bool:
+    nodes = (data.get("flow") or {}).get("nodes")
+    return isinstance(nodes, list) and any(
+        isinstance(n, dict) and "type" in n and "node_type" not in n for n in nodes
+    )
+
+
 async def validate(data: Any) -> dict[str, Any]:
     """Validate an experiment dict. Graph checks first; the real load only if they pass."""
     errors: list[dict[str, str]] = []
@@ -491,14 +498,28 @@ async def validate(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         return _result([_finding("$", "an experiment must be a JSON object")], warnings)
     if is_schema_format(data):
-        errors.append(
-            _finding(
-                "$",
-                "this file is in GLIDER's legacy serializer format",
-                "open it in GLIDER and re-save it to convert it, or use the session "
-                "format: nodes have 'node_type', boards have 'driver_type'",
-            )
+        resave = (
+            "If an older GLIDER wrote this file, open it in GLIDER and re-save it to convert it."
         )
+        if _nodes_use_type(data):
+            errors.append(
+                _finding(
+                    "$",
+                    "nodes use 'node_type', not 'type', so GLIDER reads this as its legacy "
+                    "serializer format",
+                    "rename each node's 'type' to 'node_type' (and each board's 'type' to "
+                    "'driver_type'). " + resave,
+                )
+            )
+        else:
+            errors.append(
+                _finding(
+                    "$",
+                    "this file is in GLIDER's legacy serializer format",
+                    resave + " Or use the session format: nodes have 'node_type', "
+                    "boards have 'driver_type'.",
+                )
+            )
         return _result(errors, warnings)
     check_top_level(data, errors, warnings)
     await get_core()

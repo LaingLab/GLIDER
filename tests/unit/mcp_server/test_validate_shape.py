@@ -218,6 +218,25 @@ async def test_plugin_node_settings_are_checked_and_bare_plugins_ignored(monkeyp
     assert not any(p.startswith("flow.nodes[4].state") for p in paths(report["warnings"]))
 
 
+async def test_nodes_using_type_are_told_to_use_node_type():
+    def edit(d):
+        for n in d["flow"]["nodes"]:
+            n["type"] = n.pop("node_type")
+
+    report = await experiments.validate(edited(edit))
+    assert not report["valid"]
+    err = report["errors"][0]
+    assert err["message"].startswith("nodes use 'node_type', not 'type'")
+    # Still offered, as the second sentence, for a file an old GLIDER really wrote.
+    assert err["hint"].index("rename") < err["hint"].index("re-save")
+
+
+async def test_legacy_boards_alone_keep_the_legacy_format_message():
+    legacy = {"hardware": {"boards": [{"id": "b", "type": "arduino"}]}}
+    report = await experiments.validate(legacy)
+    assert "legacy serializer format" in report["errors"][0]["message"]
+
+
 def _call_flow(state, with_function=True):
     def edit(d):
         extra = [{"id": "call", "node_type": "FunctionCall", "position": [0, 200]}]
