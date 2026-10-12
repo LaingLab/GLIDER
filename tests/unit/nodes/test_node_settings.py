@@ -177,6 +177,7 @@ PINNED = [
     ("MotorGovernor", "action", "stop"),
     ("StartFunction", "function_name", "MyFunction"),
     ("FunctionCall", "function_name", "Unknown"),
+    ("FunctionCall", "function_start_id", None),
     ("PID", "integral", 0.0),
     ("PID", "last_error", 0.0),
     ("PID", "output_min", -255.0),
@@ -312,12 +313,12 @@ def test_gui_written_keys_are_declared(node_class):
     """Files the GUI saves must not raise unknown-setting warnings."""
     from glider.gui.panels import node_editor_controller as nec
 
-    written = set(
-        re.findall(
-            r'_on_node_property_changed\(\s*\w+\s*,\s*"(\w+)"',
-            Path(nec.__file__).read_text(),
-        )
-    )
+    source = Path(nec.__file__).read_text()
+    written = set(re.findall(r'_on_node_property_changed\(\s*\w+\s*,\s*"(\w+)"', source))
+    # Keys a node is created with: initial_state["key"] = ... and initial_state = {"key": ...}.
+    written |= set(re.findall(r'initial_state\["(\w+)"\]', source))
+    for literal in re.findall(r"initial_state\s*=\s*\{([^}]+)\}", source):
+        written |= set(re.findall(r'"(\w+)"\s*:', literal))
     declared = {
         f["key"]
         for name in FlowEngine.get_available_nodes()

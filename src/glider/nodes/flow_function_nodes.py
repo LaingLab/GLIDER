@@ -278,7 +278,14 @@ class FunctionCallNode(GliderNode):
             "label": "Function name",
             "type": "str",
             "default": "Unknown",
-            "help": "The StartFunction to call, by name.",
+            "help": "Name shown for the call (the function is chosen by function_start_id).",
+        },
+        {
+            "key": "function_start_id",
+            "label": "Function",
+            "type": "str",
+            "default": None,
+            "help": "Id of the StartFunction node this calls. GLIDER links the call by this id.",
         },
     ]
 
