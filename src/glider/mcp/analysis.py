@@ -130,10 +130,15 @@ def session_summary(path: str) -> dict[str, Any]:
     object_ids = (
         sorted(int(x) for x in t["object_id"].dropna().unique()) if "object_id" in t else []
     )
-    frames = [s.ethogram(object_id=o) for o in object_ids] if not t.empty else []
+    # Recordings from before flow_elapsed_ms was logged cannot be binned into bouts.
+    timed = not t.empty and "flow_elapsed_ms" in t.columns
+    frames = [s.ethogram(object_id=o) for o in object_ids] if timed else []
     frames = [f for f in frames if not f.empty]
     intervals = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     state_time = _state_time(intervals) if not intervals.empty else []
+    states = (
+        sorted({row["state"] for row in state_time}) if timed else _unique(t, "behavioral_state")
+    )
     has = {
         "tracking": not t.empty,
         "data": not s.data.empty,
@@ -149,7 +154,7 @@ def session_summary(path: str) -> dict[str, Any]:
         "frame_rate": _number(s.frame_rate),
         "has": has,
         "object_ids": object_ids,
-        "states": sorted({row["state"] for row in state_time}),
+        "states": states,
         "state_time": state_time,
         "zones": sorted(zones),
         "event_sources": _unique(s.events, "source"),

@@ -127,6 +127,24 @@ def test_state_time_is_empty_without_tracking(tmp_path):
     assert s["state_time"] == [] and s["states"] == []
 
 
+def test_session_summary_reads_recordings_without_flow_elapsed_ms(synthetic_recording):
+    """Tracking CSVs written before 2026-06-10 have no flow_elapsed_ms column."""
+    csv = next(synthetic_recording.glob("*_tracking.csv"))
+    lines = csv.read_text(encoding="utf-8").splitlines(keepends=True)
+    header = next(i for i, line in enumerate(lines) if line.startswith("frame,"))
+    drop = lines[header].rstrip("\n").split(",").index("flow_elapsed_ms")
+    for i in range(header, len(lines)):
+        if lines[i].strip() and not lines[i].startswith("#"):
+            cells = lines[i].rstrip("\n").split(",")
+            del cells[drop]
+            lines[i] = ",".join(cells) + "\n"
+    csv.write_text("".join(lines), encoding="utf-8")
+
+    s = analysis.session_summary(str(synthetic_recording))
+    assert s["state_time"] == []
+    assert s["states"]
+
+
 def test_state_time_has_rows_per_animal(recording_factory):
     from .conftest import RecordingSpec
 
