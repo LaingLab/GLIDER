@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.core import presets
 from glider.core.config import get_config
 from glider.gui.commands import UndoStack
 from glider.gui.device_status import link_status_text, link_strip_state
@@ -1203,6 +1204,12 @@ class MainWindow(QMainWindow):
 
         # --- Header (title, state pill, field tags) ---
         self._run_header = RunHeader(self._core)
+        self._run_header.preset_chosen.connect(self._on_preset_chosen)
+        self._run_header.new_preset_requested.connect(self._on_new_preset)
+        self._run_header.save_as_preset_requested.connect(self._on_save_as_preset)
+        self._run_header.edit_fields_requested.connect(self._on_edit_preset_fields)
+        self._run_header.open_file_requested.connect(self._on_open)
+        self._run_header.show_presets_folder_requested.connect(self._on_show_presets_folder)
 
         # --- Manual Controls panel (RunnerDeviceControls) ---
         self._runner_device_controls = RunnerDeviceControls(
@@ -3067,6 +3074,75 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save: {e}")
         return False
+
+    # --- Presets ---
+
+    def _ask_preset_fields(self, fields, name: str = "", ask_name: bool = False):
+        from glider.gui.dialogs.preset_fields_dialog import PresetFieldsDialog
+
+        dialog = PresetFieldsDialog(list(fields), name=name, ask_name=ask_name, parent=self)
+        if dialog.exec() != PresetFieldsDialog.DialogCode.Accepted:
+            return None
+        return dialog.name() or name, dialog.fields()
+
+    def _on_preset_chosen(self, path: str) -> None:
+        if self._refuse_while_running("switch presets") or not self._check_save():
+            return
+        if self._load_experiment_path(path):
+            self._core.session.metadata.reset_run_values()
+            self.session_changed.emit()
+
+    def _on_new_preset(self) -> None:
+        if self._refuse_while_running("create a preset"):
+            return
+        answer = self._ask_preset_fields([], ask_name=True)
+        if answer is None or not self._check_save():
+            return
+        name, fields = answer
+        self._on_new()
+        md = self._core.session.metadata
+        md.name = name
+        md.run_fields = fields
+        md.reset_run_values()
+        path = presets.save_preset(self._core.session, name)
+        self._remember_current_experiment(str(path))
+        self.session_changed.emit()
+        self.switch_to_builder()
+        self._show_status_message(f"Created preset {name}. Build its flow, then save.")
+
+    def _on_save_as_preset(self) -> None:
+        md = self._core.session.metadata
+        answer = self._ask_preset_fields(
+            md.run_fields, name=md.experiment_type or md.name, ask_name=True
+        )
+        if answer is None:
+            return
+        name, fields = answer
+        md.run_fields = fields
+        md.reset_run_values()
+        path = presets.save_preset(self._core.session, name)
+        self._remember_current_experiment(str(path))
+        self.session_changed.emit()
+        self._show_status_message(f"Saved preset: {path}")
+
+    def _on_edit_preset_fields(self) -> None:
+        md = self._core.session.metadata
+        answer = self._ask_preset_fields(md.run_fields, name=md.experiment_type)
+        if answer is None:
+            return
+        _name, md.run_fields = answer
+        md.reset_run_values()
+        self._core.session.mark_dirty()
+        if self._core.session.file_path:
+            self._on_save()
+        self.session_changed.emit()
+
+    def _on_show_presets_folder(self) -> None:
+        from PyQt6.QtGui import QDesktopServices
+
+        folder = presets.presets_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _check_save(self) -> bool:
         if self._core.session and self._core.session.is_dirty:
