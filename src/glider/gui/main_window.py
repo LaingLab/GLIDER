@@ -7,6 +7,7 @@ and signal wiring between extracted panel components.
 
 import asyncio
 import logging
+import re
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -52,6 +53,7 @@ from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController, node_category_for_type
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
 from glider.gui.panels.tools_page import ToolsPage
+from glider.gui.runner.readiness import compute_readiness
 from glider.gui.shell import (
     AppShell,
     Command,
@@ -74,6 +76,10 @@ if TYPE_CHECKING:
     from glider.core.glider_core import GliderCore
 
 logger = logging.getLogger(__name__)
+
+_LIVE_STATES = ("RUNNING", "PAUSED")
+# States during which the current run's folder is still the one in use.
+_RUN_FOLDER_STATES = ("RUNNING", "PAUSED", "STOPPING")
 
 # QSettings flag, namespaced alongside the existing first_run/* keys and kept
 # separate from ``first_run/tour_complete``: one shared flag would mean sitting
@@ -519,6 +525,10 @@ class MainWindow(QMainWindow):
         self._dashboard_view = None  # DashboardView (desktop mode)
         self._run_control_panel = None  # RunControlPanel (dashboard)
         self._run_header = None  # RunHeader (dashboard)
+        # The current run's numbered folder, shown while it records (preset runs).
+        self._live_run_folder: Path | None = None
+        # A run went live since the last reset; READY/IDLE then resets run values.
+        self._run_was_live = False
         self._runner_shell = None  # RunnerShell (runner mode)
         self._runner_panel = None  # RunnerPanel — Run tab (runner mode)
         self._runner_setup_page = None  # RunnerSetupPage — Setup tab (runner mode)
@@ -2374,14 +2384,21 @@ class MainWindow(QMainWindow):
 
         self._refresh_strip_run_state(state_name)
 
-        if (
-            prev_state in ("RUNNING", "PAUSED")
-            and state_name not in ("RUNNING", "PAUSED", "ERROR")
-            and self._core.session is not None
-        ):
-            self._core.session.metadata.reset_run_values()
-            if self._run_header is not None:
-                self._run_header.refresh()
+        # The stop path is RUNNING -> STOPPING -> READY (or -> ERROR). Reset the
+        # run values once the run has fully ended; after an ERROR keep them so
+        # the operator can retry.
+        if state_name in ("RUNNING", "PAUSED"):
+            self._run_was_live = True
+        elif state_name == "ERROR":
+            self._run_was_live = False
+        elif state_name in ("READY", "IDLE") and self._run_was_live:
+            self._run_was_live = False
+            if self._core.session is not None:
+                self._core.session.metadata.reset_run_values()
+                if self._run_header is not None:
+                    self._run_header.refresh()
+        if prev_state in _RUN_FOLDER_STATES and state_name not in _RUN_FOLDER_STATES:
+            self._live_run_folder = None
         self._refresh_run_info()
 
         # Update toolbar status indicator
@@ -3543,7 +3560,6 @@ class MainWindow(QMainWindow):
                 # Lost a race with another window: recompute the number once.
                 if attempt:
                     raise
-        return None  # pragma: no cover
 
     def _refresh_run_info(self) -> None:
         if self._run_header is None or self._core.session is None:
@@ -3551,6 +3567,12 @@ class MainWindow(QMainWindow):
         md = self._core.session.metadata
         if not md.run_fields:
             self._run_header.set_run_info(None, "")
+            return
+        live = self._live_run_folder
+        if live is not None and getattr(self, "_last_session_state", None) in _LIVE_STATES:
+            # Recording: show this run's folder, not the next one.
+            match = re.search(r"_run(\d+)$", live.name)
+            self._run_header.set_run_info(int(match.group(1)) if match else None, str(live))
             return
         base, slug, today = self._run_base_dir(), self._preset_slug(), date.today()
         values = [md.run_values.get(f.key, "") for f in md.run_fields if f.required]
@@ -3563,7 +3585,7 @@ class MainWindow(QMainWindow):
         ``set_recording_directory`` is sticky, so the flat path must always set
         it too (recorders default to the current directory).
         """
-        folder = self._prepare_run_folder()
+        folder = self._live_run_folder = self._prepare_run_folder()
         if folder is not None:
             self._core.set_recording_directory(folder)
         else:
@@ -3582,11 +3604,22 @@ class MainWindow(QMainWindow):
                 level="warning",
             )
             return
+        # F5, Run > Start and the toolbar all land here, past the Start
+        # button's own gating, so check again. Commit a half-typed tag first.
+        if self._run_header is not None:
+            self._run_header.commit_pending()
+        if self._core.state.name not in ("IDLE", "READY"):
+            return  # already live: must not make a folder or move the recorders
+        missing = compute_readiness(self._core).missing_field
+        if missing:
+            self._notify_user("Missing details", f"Fill in {missing} to start.", level="warning")
+            return
         folder = None
         try:
             folder = self._apply_recording_directory()
             await self._core.start_experiment()
         except Exception as e:
+            self._live_run_folder = None
             if folder is not None:
                 try:
                     folder.rmdir()  # a failed start must not use up a run number
