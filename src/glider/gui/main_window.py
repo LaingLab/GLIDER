@@ -1420,7 +1420,9 @@ class MainWindow(QMainWindow):
             return
         if self._camera_slot is not None:
             self._camera_slot.layout().addWidget(self._camera_panel)  # dashboard slot
+            self._camera_panel.set_controls_visible(False)  # the cockpit shows video only
         elif self._runner_shell is not None:
+            self._camera_panel.set_controls_visible(True)
             self._runner_shell.rehost_camera()  # RunnerShell Camera tab
 
     def _move_camera_to_builder(self) -> None:
@@ -1436,6 +1438,7 @@ class MainWindow(QMainWindow):
         """
         if self._camera_tab_slot is not None and self._camera_panel is not None:
             self._camera_tab_slot.layout().addWidget(self._camera_panel)  # reparents
+            self._camera_panel.set_controls_visible(True)
 
     def _populate_builder_panels(self) -> None:
         """Build the Builder's panel widgets and host them in the shell.

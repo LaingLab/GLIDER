@@ -221,3 +221,21 @@ def test_switch_to_desktop_mode_keeps_camera_in_the_tab_on_repeat(qtbot, main_wi
     window._switch_to_desktop_mode()  # repeat: panels exist; camera must STILL move back
     assert _is_descendant(cam, window._builder_view.right)
     assert window._camera_panel is cam  # still the single instance
+
+
+def test_run_page_hides_the_camera_controls(qtbot, main_window_factory):
+    window = main_window_factory(desktop_mode=True)
+    cam = window._camera_panel
+    window.switch_to_runner()
+    assert not cam._refresh_btn.isVisibleTo(cam)
+    assert cam._preview_stack.isVisibleTo(cam) and cam._fps_label.isVisibleTo(cam)
+    window.switch_to_builder()
+    assert cam._refresh_btn.isVisibleTo(cam)
+
+
+def test_runner_shell_keeps_the_camera_controls(qtbot, main_window_factory):
+    window = main_window_factory(desktop_mode=False)
+    cam = window._camera_panel
+    window._switch_to_desktop_mode()
+    window.switch_to_runner()
+    assert cam._refresh_btn.isVisibleTo(cam)

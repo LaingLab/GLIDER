@@ -448,6 +448,14 @@ class CameraPanel(QWidget):
 
         layout.addWidget(status_frame)
 
+        # Everything below the preview and its status line lives in one
+        # container, so the Run page can hide the controls as a group.
+        self._controls = QWidget()
+        layout.addWidget(self._controls)
+        layout = QVBoxLayout(self._controls)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
         # Camera selector
         camera_layout = QHBoxLayout()
         camera_label = QLabel("Camera:")
@@ -1142,6 +1150,10 @@ class CameraPanel(QWidget):
         fps = self.current_fps()
         if fps is not None:
             self._fps_label.setText(f"{fps:.1f} FPS")
+
+    def set_controls_visible(self, visible: bool) -> None:
+        """Show or hide everything but the preview and its fps/status line."""
+        self._controls.setVisible(visible)
 
     def current_fps(self) -> float | None:
         """Live preview frame rate of the primary camera, or None when idle."""
