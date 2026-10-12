@@ -22,6 +22,14 @@ from glider.core.hardware_manager import HardwareManager
 from glider.hal.base_device import DEVICE_REGISTRY, create_device_from_dict
 from glider.hal.mock_board import MockBoard
 from glider.mcp.paths import writable_path
+from glider.mcp.shape import (
+    FIELDS,
+    check_item_fields,
+    check_settings_at,
+    check_top_level,
+    did_you_mean,
+)
+from glider.mcp.shape import finding as _finding
 from glider.serialization import is_schema_format
 
 _core: GliderCore | None = None
@@ -159,10 +167,6 @@ _STRINGS = {
 }
 
 
-def _finding(path: str, message: str, hint: str = "") -> dict[str, str]:
-    return {"path": path, "message": message, "hint": hint}
-
-
 def _result(errors: list, warnings: list) -> dict[str, Any]:
     if errors:
         summary = f"invalid: {len(errors)} error(s), {len(warnings)} warning(s)"
@@ -180,7 +184,7 @@ def _parse(content: dict | str) -> Any:
         raise ValueError(f"not valid JSON at line {e.lineno}, column {e.colno}: {e.msg}") from e
 
 
-def _items(data: dict, dotted: str, errors: list) -> list[tuple[str, dict]]:
+def _items(data: dict, dotted: str, errors: list, warnings: list) -> list[tuple[str, dict]]:
     """(json path, item) for every item of one list that has its required fields."""
     section, key = dotted.split(".")
     body = data.get(section)
@@ -199,8 +203,12 @@ def _items(data: dict, dotted: str, errors: list) -> list[tuple[str, dict]]:
             continue
         missing = [f for f in _REQUIRED[dotted] if f not in item]
         if missing:
-            errors.append(_finding(path, f"missing {', '.join(missing)}"))
+            detail = "; ".join(
+                f"missing {f}{did_you_mean(f, item, FIELDS[dotted])}" for f in missing
+            )
+            errors.append(_finding(path, detail))
             continue
+        check_item_fields(dotted, path, item, errors, warnings)
         bad = [f for f in _STRINGS[dotted] if not isinstance(item[f], str)]
         for f in bad:
             errors.append(_finding(f"{path}.{f}", "must be a string"))
@@ -225,10 +233,10 @@ def _check_port(path, index, ports, owner, direction, errors) -> bool:
 
 
 def _check_graph(data: dict, errors: list, warnings: list) -> None:
-    boards = _items(data, "hardware.boards", errors)
-    devices = _items(data, "hardware.devices", errors)
-    nodes = _items(data, "flow.nodes", errors)
-    connections = _items(data, "flow.connections", errors)
+    boards = _items(data, "hardware.boards", errors, warnings)
+    devices = _items(data, "hardware.devices", errors, warnings)
+    nodes = _items(data, "flow.nodes", errors, warnings)
+    connections = _items(data, "flow.connections", errors, warnings)
 
     drivers = set(HardwareManager.get_available_drivers())
     board_ids = {b["id"] for _, b in boards}
@@ -262,6 +270,12 @@ def _check_graph(data: dict, errors: list, warnings: list) -> None:
             )
         if d["board_id"] not in board_ids:
             errors.append(_finding(f"{path}.board_id", f"no board with id '{d['board_id']}'"))
+        cls = DEVICE_REGISTRY.get(d["device_type"])
+        schema = getattr(cls, "SETTINGS_SCHEMA", None) or []
+        if "settings" in d and not isinstance(d["settings"], dict):
+            errors.append(_finding(f"{path}.settings", "must be an object"))
+        elif schema:
+            check_settings_at(f"{path}.settings", schema, d.get("settings") or {}, errors, warnings)
 
     by_id: dict[str, dict] = {}
     for path, n in nodes:
@@ -275,6 +289,13 @@ def _check_graph(data: dict, errors: list, warnings: list) -> None:
                     f"unknown node type '{n['node_type']}'",
                     "list_node_types shows the available types",
                 )
+            )
+        node_cls = FlowEngine.get_node_class(n["node_type"])
+        if "state" in n and not isinstance(n["state"], dict):
+            errors.append(_finding(f"{path}.state", "must be an object"))
+        elif node_cls is not None and getattr(node_cls, "PROPERTIES_SCHEMA", None):
+            check_settings_at(
+                f"{path}.state", node_cls.PROPERTIES_SCHEMA, n.get("state") or {}, errors, warnings
             )
         pos = n.get("position")
         if "position" in n and not (
@@ -407,6 +428,7 @@ async def validate(data: Any) -> dict[str, Any]:
             )
         )
         return _result(errors, warnings)
+    check_top_level(data, errors, warnings)
     await get_core()
     _check_graph(data, errors, warnings)
     if not errors:
