@@ -80,6 +80,23 @@ def test_a_change_the_os_never_reports_is_still_found(qtbot, experiment, monkeyp
         w.stop()
 
 
+def test_a_same_size_change_within_one_clock_tick_is_found(qtbot, experiment, monkeypatch):
+    """Windows timestamps advance in ~15.6 ms ticks (FAT: 2 s), so a same-size
+    rewrite can leave size and mtime identical; only the contents differ."""
+    import os
+
+    w = ExperimentFileWatcher(debounce_ms=DEBOUNCE_MS, poll_ms=100)
+    monkeypatch.setattr(w, "_arm", lambda: None)  # no OS notifications at all
+    before = os.stat(experiment)
+    w.watch(str(experiment))
+    try:
+        with qtbot.waitSignal(w.changed_externally, timeout=3000):
+            atomic_write_text(experiment, '{"v": 2}')  # same size as '{"v": 1}'
+            os.utime(experiment, ns=(before.st_atime_ns, before.st_mtime_ns))
+    finally:
+        w.stop()
+
+
 def test_acknowledge_takes_the_disk_version_as_known(qtbot, watcher, experiment):
     with qtbot.waitSignal(watcher.changed_externally, timeout=3000):
         atomic_write_text(experiment, '{"v": 2}')
