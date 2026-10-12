@@ -2,9 +2,12 @@
 
 import asyncio
 import math
+import re
+from pathlib import Path
 
 import pytest
 
+import glider.nodes
 from glider.core.flow_engine import FlowEngine
 from glider.nodes.base_node import ExecNode, NodeCategory, NodeDefinition
 from glider.nodes.logic.flow_nodes import TimerNode
@@ -169,6 +172,60 @@ PINNED = [
     ("Toggle", "toggle_state", False),
 ]
 
+PINNED += [
+    ("AnalogRead", "pin", 0),
+    ("AnalogRead", "reference_voltage", 5.0),
+    ("AnalogRead", "resolution", 10),
+    ("AnalogRead", "continuous", False),
+    ("AnalogRead", "poll_interval", 0.05),
+    ("AnalogRead", "threshold", 512),
+    ("AnalogRead", "threshold_enabled", False),
+    ("AnalogRead", "visible_in_runner", False),
+    ("PWMWrite", "pin", 0),
+    ("DigitalWrite", "pin", 0),
+    ("DigitalRead", "pin", 0),
+    ("DigitalRead", "continuous", False),
+    ("DigitalRead", "poll_interval", 0.1),
+    ("DeviceAction", "action_name", ""),
+    ("DeviceAction", "arguments", ""),
+    ("DeviceRead", "read_action", "read"),
+    ("Label", "label", "Value"),
+    ("Gauge", "label", "Value"),
+    ("Gauge", "unit", ""),
+    ("Gauge", "warning_threshold", None),
+    ("Gauge", "danger_threshold", None),
+    ("Chart", "label", "Chart"),
+    ("Chart", "max_points", 100),
+    ("Chart", "y_min", None),
+    ("Chart", "y_max", None),
+    ("LEDIndicator", "label", "LED"),
+    ("LEDIndicator", "on_color", "#00ff00"),
+    ("LEDIndicator", "off_color", "#333333"),
+    ("Button", "label", "Button"),
+    ("ToggleSwitch", "label", "Switch"),
+    ("ToggleSwitch", "switch_state", False),
+    ("Slider", "label", "Slider"),
+    ("Slider", "slider_value", 0.0),
+    ("Slider", "min_value", 0.0),
+    ("Slider", "max_value", 100.0),
+    ("Slider", "step", 1.0),
+    ("NumericInput", "label", "Input"),
+    ("NumericInput", "numeric_value", 0.0),
+    ("NumericInput", "min_value", None),
+    ("NumericInput", "max_value", None),
+    ("NumericInput", "decimal_places", 2),
+    ("AudioPlayback", "file_path", ""),
+    ("AudioPlayback", "device_index", None),
+    ("AudioPlayback", "device_name", ""),
+    ("AudioPlayback", "volume", 1.0),
+    ("VideoPlayback", "file_path", ""),
+    ("VideoPlayback", "monitor_index", -1),
+    ("ZoneInput", "zone_id", ""),
+    ("ZoneInput", "zone_name", "Unnamed Zone"),
+    ("BehaviorInput", "target_behavior", ""),
+    ("BehaviorInput", "min_frames", 5),
+]
+
 FIELD_TYPES = {"int", "hex", "float", "bool", "str", "enum", "device_ref", "ble_address", "object"}
 
 
@@ -222,3 +279,36 @@ def test_every_declared_setting_is_pinned(node_class):
     for name, cls in _schema_classes(node_class):
         for f in cls.PROPERTIES_SCHEMA:
             assert (name, f["key"]) in pinned, f"{name}.{f['key']} has no pinned default"
+
+
+_READ = re.compile(r"""(?:_state|\bstate)\.(?:get|setdefault)\(\s*["']""")
+
+
+def test_no_node_reads_a_setting_inline():
+    """Every setting read goes through self.setting(), so defaults live in one place."""
+    root = Path(glider.nodes.__file__).parent
+    offenders = [
+        f"{path.relative_to(root)}:{n}"
+        for path in sorted(root.rglob("*.py"))
+        for n, line in enumerate(path.read_text().splitlines(), 1)
+        if _READ.search(line)
+    ]
+    assert offenders == [], "convert to self.setting(): " + ", ".join(offenders)
+
+
+def test_gui_written_keys_are_declared(node_class):
+    """Files the GUI saves must not raise unknown-setting warnings."""
+    from glider.gui.panels import node_editor_controller as nec
+
+    written = set(
+        re.findall(
+            r'_on_node_property_changed\(\s*\w+\s*,\s*"(\w+)"',
+            Path(nec.__file__).read_text(),
+        )
+    )
+    declared = {
+        f["key"]
+        for name in FlowEngine.get_available_nodes()
+        for f in getattr(node_class(name), "PROPERTIES_SCHEMA", [])
+    }
+    assert written - declared == set()

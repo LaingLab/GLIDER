@@ -28,13 +28,23 @@ class ButtonNode(ExecNode, InterfaceNode):
         color="#5a4a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "label",
+            "label": "Label",
+            "type": "str",
+            "default": "Button",
+            "help": "Text on the dashboard button.",
+        },
+    ]
+
     def __init__(self):
         ExecNode.__init__(self)
         # Manually initialize InterfaceNode fields not set by ExecNode so that
         # both branches of the diamond are properly initialized.
         self._visible_in_runner = True
         self._widget_callbacks: list = []
-        self._label = "Button"
+        self._label = self.setting("label")
         self._press_count = 0
 
     @property
@@ -65,7 +75,7 @@ class ButtonNode(ExecNode, InterfaceNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         ExecNode.set_state(self, state)
-        self._label = state.get("label", "Button")
+        self._label = self.setting("label")
 
 
 class ToggleSwitchNode(InterfaceNode):
@@ -83,10 +93,27 @@ class ToggleSwitchNode(InterfaceNode):
         color="#5a4a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "label",
+            "label": "Label",
+            "type": "str",
+            "default": "Switch",
+            "help": "Caption shown on the dashboard.",
+        },
+        {
+            "key": "switch_state",
+            "label": "On",
+            "type": "bool",
+            "default": False,
+            "help": "Current position. Saved by GLIDER; leave unset.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._label = "Switch"
-        self._switch_state = False
+        self._label = self.setting("label")
+        self._switch_state = self.setting("switch_state")
 
     @property
     def label(self) -> str:
@@ -127,8 +154,8 @@ class ToggleSwitchNode(InterfaceNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._label = state.get("label", "Switch")
-        self._switch_state = state.get("switch_state", False)
+        self._label = self.setting("label")
+        self._switch_state = self.setting("switch_state")
 
 
 class SliderNode(InterfaceNode):
@@ -146,13 +173,52 @@ class SliderNode(InterfaceNode):
         color="#5a4a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "label",
+            "label": "Label",
+            "type": "str",
+            "default": "Slider",
+            "help": "Caption shown on the dashboard.",
+        },
+        {
+            "key": "min_value",
+            "label": "Min",
+            "type": "float",
+            "default": 0.0,
+            "help": "Lowest value.",
+        },
+        {
+            "key": "max_value",
+            "label": "Max",
+            "type": "float",
+            "default": 100.0,
+            "help": "Highest value.",
+        },
+        {
+            "key": "step",
+            "label": "Step",
+            "type": "float",
+            "default": 1.0,
+            "min": 0,
+            "help": "Increment between values.",
+        },
+        {
+            "key": "slider_value",
+            "label": "Value",
+            "type": "float",
+            "default": 0.0,
+            "help": "Current value. Saved by GLIDER; leave unset.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._label = "Slider"
-        self._value = 0.0
-        self._min_value = 0.0
-        self._max_value = 100.0
-        self._step = 1.0
+        self._label = self.setting("label")
+        self._value = self.setting("slider_value")
+        self._min_value = self.setting("min_value")
+        self._max_value = self.setting("max_value")
+        self._step = self.setting("step")
 
     @property
     def label(self) -> str:
@@ -213,11 +279,11 @@ class SliderNode(InterfaceNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._label = state.get("label", "Slider")
-        self._value = state.get("slider_value", 0.0)
-        self._min_value = state.get("min_value", 0.0)
-        self._max_value = state.get("max_value", 100.0)
-        self._step = state.get("step", 1.0)
+        self._label = self.setting("label")
+        self._value = self.setting("slider_value")
+        self._min_value = self.setting("min_value")
+        self._max_value = self.setting("max_value")
+        self._step = self.setting("step")
 
 
 class NumericInputNode(InterfaceNode):
@@ -235,13 +301,52 @@ class NumericInputNode(InterfaceNode):
         color="#5a4a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "label",
+            "label": "Label",
+            "type": "str",
+            "default": "Input",
+            "help": "Caption shown on the dashboard.",
+        },
+        {
+            "key": "min_value",
+            "label": "Min",
+            "type": "float",
+            "default": None,
+            "help": "Lowest accepted value; null for no limit.",
+        },
+        {
+            "key": "max_value",
+            "label": "Max",
+            "type": "float",
+            "default": None,
+            "help": "Highest accepted value; null for no limit.",
+        },
+        {
+            "key": "decimal_places",
+            "label": "Decimals",
+            "type": "int",
+            "default": 2,
+            "min": 0,
+            "help": "Decimal places shown.",
+        },
+        {
+            "key": "numeric_value",
+            "label": "Value",
+            "type": "float",
+            "default": 0.0,
+            "help": "Current value. Saved by GLIDER; leave unset.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._label = "Input"
-        self._value = 0.0
-        self._min_value = None
-        self._max_value = None
-        self._decimal_places = 2
+        self._label = self.setting("label")
+        self._value = self.setting("numeric_value")
+        self._min_value = self.setting("min_value")
+        self._max_value = self.setting("max_value")
+        self._decimal_places = self.setting("decimal_places")
 
     @property
     def label(self) -> str:
@@ -292,8 +397,8 @@ class NumericInputNode(InterfaceNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._label = state.get("label", "Input")
-        self._value = state.get("numeric_value", 0.0)
-        self._min_value = state.get("min_value")
-        self._max_value = state.get("max_value")
-        self._decimal_places = state.get("decimal_places", 2)
+        self._label = self.setting("label")
+        self._value = self.setting("numeric_value")
+        self._min_value = self.setting("min_value")
+        self._max_value = self.setting("max_value")
+        self._decimal_places = self.setting("decimal_places")

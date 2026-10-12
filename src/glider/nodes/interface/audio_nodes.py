@@ -44,12 +44,43 @@ class AudioPlaybackNode(GliderNode):
         color="#5a4a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "file_path",
+            "label": "File",
+            "type": "str",
+            "default": "",
+            "help": "Audio file to play.",
+        },
+        {
+            "key": "volume",
+            "label": "Volume",
+            "type": "float",
+            "default": 1.0,
+            "min": 0,
+            "max": 1,
+            "help": "0–1. Overridden by the Volume input when connected.",
+        },
+        {
+            "key": "device_index",
+            "label": "Output device",
+            "type": "int",
+            "default": None,
+            "help": "Sound output device index; null for the system default.",
+        },
+        {
+            "key": "device_name",
+            "label": "Output device name",
+            "type": "str",
+            "default": "",
+            "help": "Name of the chosen output device, for display.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._state.setdefault("file_path", "")
-        self._state.setdefault("device_index", None)
-        self._state.setdefault("device_name", "")
-        self._state.setdefault("volume", 1.0)
+        for field in self.PROPERTIES_SCHEMA:
+            self._state.setdefault(field["key"], self.setting(field["key"]))
         self._cached_audio = None  # (data, samplerate)
         self._cached_path = None
 
@@ -59,7 +90,7 @@ class AudioPlaybackNode(GliderNode):
 
     async def execute(self) -> None:
         """Load and play the audio file, then fire the next exec output."""
-        file_path = self._state.get("file_path", "")
+        file_path = self.setting("file_path")
         if not file_path:
             logger.warning("AudioPlayback: no file path set")
             await self._fire_exec_output("next")
@@ -68,10 +99,10 @@ class AudioPlaybackNode(GliderNode):
         # Read volume from connected input or fall back to state
         volume = self.get_input_by_name("Volume")
         if volume is None:
-            volume = self._state.get("volume", 1.0)
+            volume = self.setting("volume")
         volume = max(0.0, min(1.0, float(volume)))
 
-        device_index = self._state.get("device_index")
+        device_index = self.setting("device_index")
 
         try:
             import numpy as np

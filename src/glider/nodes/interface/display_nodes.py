@@ -28,9 +28,19 @@ class LabelNode(InterfaceNode):
         color="#5a4a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "label",
+            "label": "Label",
+            "type": "str",
+            "default": "Value",
+            "help": "Caption shown on the dashboard.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._label = "Value"
+        self._label = self.setting("label")
         self._display_text = ""
 
     @property
@@ -63,7 +73,7 @@ class LabelNode(InterfaceNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._label = state.get("label", "Value")
+        self._label = self.setting("label")
 
 
 class GaugeNode(InterfaceNode):
@@ -82,12 +92,43 @@ class GaugeNode(InterfaceNode):
         color="#5a4a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "label",
+            "label": "Label",
+            "type": "str",
+            "default": "Value",
+            "help": "Caption shown on the dashboard.",
+        },
+        {
+            "key": "unit",
+            "label": "Unit",
+            "type": "str",
+            "default": "",
+            "help": "Unit text shown after the value.",
+        },
+        {
+            "key": "warning_threshold",
+            "label": "Warning at",
+            "type": "float",
+            "default": None,
+            "help": "Value at which the gauge turns amber; null for none.",
+        },
+        {
+            "key": "danger_threshold",
+            "label": "Danger at",
+            "type": "float",
+            "default": None,
+            "help": "Value at which the gauge turns red; null for none.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._label = "Value"
-        self._unit = ""
-        self._warning_threshold = None
-        self._danger_threshold = None
+        self._label = self.setting("label")
+        self._unit = self.setting("unit")
+        self._warning_threshold = self.setting("warning_threshold")
+        self._danger_threshold = self.setting("danger_threshold")
 
     @property
     def label(self) -> str:
@@ -137,10 +178,10 @@ class GaugeNode(InterfaceNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._label = state.get("label", "Value")
-        self._unit = state.get("unit", "")
-        self._warning_threshold = state.get("warning_threshold")
-        self._danger_threshold = state.get("danger_threshold")
+        self._label = self.setting("label")
+        self._unit = self.setting("unit")
+        self._warning_threshold = self.setting("warning_threshold")
+        self._danger_threshold = self.setting("danger_threshold")
 
 
 class ChartNode(InterfaceNode):
@@ -157,13 +198,45 @@ class ChartNode(InterfaceNode):
         color="#5a4a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "label",
+            "label": "Label",
+            "type": "str",
+            "default": "Chart",
+            "help": "Caption shown on the dashboard.",
+        },
+        {
+            "key": "max_points",
+            "label": "Points",
+            "type": "int",
+            "default": 100,
+            "min": 1,
+            "help": "How many recent values the chart keeps.",
+        },
+        {
+            "key": "y_min",
+            "label": "Y min",
+            "type": "float",
+            "default": None,
+            "help": "Fixed lower axis bound; null to autoscale.",
+        },
+        {
+            "key": "y_max",
+            "label": "Y max",
+            "type": "float",
+            "default": None,
+            "help": "Fixed upper axis bound; null to autoscale.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._label = "Chart"
-        self._max_points = 100
-        self._data: deque = deque(maxlen=100)
-        self._y_min = None
-        self._y_max = None
+        self._label = self.setting("label")
+        self._max_points = self.setting("max_points")
+        self._data: deque = deque(maxlen=self._max_points)
+        self._y_min = self.setting("y_min")
+        self._y_max = self.setting("y_max")
 
     @property
     def label(self) -> str:
@@ -213,10 +286,10 @@ class ChartNode(InterfaceNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._label = state.get("label", "Chart")
-        self._max_points = state.get("max_points", 100)
-        self._y_min = state.get("y_min")
-        self._y_max = state.get("y_max")
+        self._label = self.setting("label")
+        self._max_points = self.setting("max_points")
+        self._y_min = self.setting("y_min")
+        self._y_max = self.setting("y_max")
 
 
 class LEDIndicatorNode(InterfaceNode):
@@ -233,11 +306,35 @@ class LEDIndicatorNode(InterfaceNode):
         color="#5a4a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "label",
+            "label": "Label",
+            "type": "str",
+            "default": "LED",
+            "help": "Caption shown on the dashboard.",
+        },
+        {
+            "key": "on_color",
+            "label": "On colour",
+            "type": "str",
+            "default": "#00ff00",
+            "help": "Colour when on, as #rrggbb.",
+        },
+        {
+            "key": "off_color",
+            "label": "Off colour",
+            "type": "str",
+            "default": "#333333",
+            "help": "Colour when off, as #rrggbb.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._label = "LED"
-        self._on_color = "#00ff00"  # Green
-        self._off_color = "#333333"  # Dark gray
+        self._label = self.setting("label")
+        self._on_color = self.setting("on_color")  # Green
+        self._off_color = self.setting("off_color")  # Dark gray
 
     @property
     def label(self) -> str:
@@ -284,6 +381,6 @@ class LEDIndicatorNode(InterfaceNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._label = state.get("label", "LED")
-        self._on_color = state.get("on_color", "#00ff00")
-        self._off_color = state.get("off_color", "#333333")
+        self._label = self.setting("label")
+        self._on_color = self.setting("on_color")
+        self._off_color = self.setting("off_color")

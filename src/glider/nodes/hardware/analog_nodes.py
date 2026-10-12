@@ -59,17 +59,83 @@ class AnalogReadNode(HardwareNode):
         color="#2d5a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "pin",
+            "label": "Pin",
+            "type": "int",
+            "default": 0,
+            "min": 0,
+            "help": "Analog pin to read when no device is bound.",
+        },
+        {
+            "key": "reference_voltage",
+            "label": "Reference (V)",
+            "type": "float",
+            "default": 5.0,
+            "min": 0,
+            "help": "ADC reference voltage, for the voltage output.",
+        },
+        {
+            "key": "resolution",
+            "label": "Resolution (bits)",
+            "type": "int",
+            "default": 10,
+            "min": 1,
+            "help": "ADC resolution in bits.",
+        },
+        {
+            "key": "continuous",
+            "label": "Continuous",
+            "type": "bool",
+            "default": False,
+            "help": "Keep reading while the flow runs instead of once per exec.",
+        },
+        {
+            "key": "poll_interval",
+            "label": "Poll interval (s)",
+            "type": "float",
+            "default": 0.05,
+            "min": 0,
+            "help": "Seconds between continuous reads.",
+        },
+        {
+            "key": "threshold",
+            "label": "Threshold",
+            "type": "float",
+            "default": 512,
+            "min": 0,
+            "help": "Raw value that sets threshold_exceeded.",
+        },
+        {
+            "key": "threshold_enabled",
+            "label": "Use threshold",
+            "type": "bool",
+            "default": False,
+            "help": "Report threshold_exceeded.",
+        },
+        {
+            "key": "visible_in_runner",
+            "label": "Show in runner",
+            "type": "bool",
+            "default": False,
+            "help": "Show this reading on the runner dashboard.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._pin: int = 0
-        self._reference_voltage = 5.0
-        self._resolution = 10  # bits
-        self._continuous = False
-        self._poll_interval = 0.05  # 20Hz default
+        self._pin: int = self.setting("pin")
+        self._reference_voltage = self.setting("reference_voltage")
+        self._resolution = self.setting("resolution")  # bits
+        self._continuous = self.setting("continuous")
+        self._poll_interval = self.setting("poll_interval")  # 20Hz default
         self._polling_task = None
-        self._threshold = 512  # Default threshold (mid-range)
-        self._threshold_enabled = False
-        self.visible_in_runner = False  # Can be enabled for live display
+        self._threshold = self.setting("threshold")  # Default threshold (mid-range)
+        self._threshold_enabled = self.setting("threshold_enabled")
+        self.visible_in_runner = self.setting(
+            "visible_in_runner"
+        )  # Can be enabled for live display
 
     @property
     def pin(self) -> int:
@@ -160,14 +226,14 @@ class AnalogReadNode(HardwareNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._pin = state.get("pin", 0)
-        self._reference_voltage = state.get("reference_voltage", 5.0)
-        self._resolution = state.get("resolution", 10)
-        self._continuous = state.get("continuous", False)
-        self._poll_interval = state.get("poll_interval", 0.05)
-        self._threshold = state.get("threshold", 512)
-        self._threshold_enabled = state.get("threshold_enabled", False)
-        self.visible_in_runner = state.get("visible_in_runner", False)
+        self._pin = self.setting("pin")
+        self._reference_voltage = self.setting("reference_voltage")
+        self._resolution = self.setting("resolution")
+        self._continuous = self.setting("continuous")
+        self._poll_interval = self.setting("poll_interval")
+        self._threshold = self.setting("threshold")
+        self._threshold_enabled = self.setting("threshold_enabled")
+        self.visible_in_runner = self.setting("visible_in_runner")
 
 
 class PWMWriteNode(HardwareNode):
@@ -201,9 +267,20 @@ class PWMWriteNode(HardwareNode):
         color="#2d5a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "pin",
+            "label": "Pin",
+            "type": "int",
+            "default": 0,
+            "min": 0,
+            "help": "Pin to write when no device is bound.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._pin: int = 0
+        self._pin: int = self.setting("pin")
 
     @property
     def pin(self) -> int:
@@ -242,4 +319,4 @@ class PWMWriteNode(HardwareNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._pin = state.get("pin", 0)
+        self._pin = self.setting("pin")

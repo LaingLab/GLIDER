@@ -160,10 +160,28 @@ class VideoPlaybackNode(GliderNode):
         color="#2d4a5a",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "file_path",
+            "label": "File",
+            "type": "str",
+            "default": "",
+            "help": "Video file to play.",
+        },
+        {
+            "key": "monitor_index",
+            "label": "Monitor",
+            "type": "int",
+            "default": -1,
+            "min": -1,
+            "help": "Screen to play on; -1 for the default.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._state.setdefault("file_path", "")
-        self._state.setdefault("monitor_index", -1)
+        for field in self.PROPERTIES_SCHEMA:
+            self._state.setdefault(field["key"], self.setting(field["key"]))
         self._player: VideoPlayerWindow | None = None
 
     def update_event(self) -> None:
@@ -174,9 +192,9 @@ class VideoPlaybackNode(GliderNode):
         """Create the fullscreen window if it doesn't exist yet."""
         if self._player is not None:
             return
-        monitor_index = self._state.get("monitor_index", -1)
+        monitor_index = self.setting("monitor_index")
         self._player = VideoPlayerWindow(
-            file_path=self._state.get("file_path", ""),
+            file_path=self.setting("file_path"),
             monitor_index=monitor_index,
         )
         self._player.show()
@@ -184,7 +202,7 @@ class VideoPlaybackNode(GliderNode):
 
     async def execute(self) -> None:
         """Play the video and fire next after it finishes."""
-        file_path = self._state.get("file_path", "")
+        file_path = self.setting("file_path")
         if not file_path:
             logger.warning("VideoPlayback: no file path set")
             await self._fire_exec_output("next")

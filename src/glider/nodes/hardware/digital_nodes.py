@@ -47,9 +47,20 @@ class DigitalWriteNode(HardwareNode):
         color="#2d5a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "pin",
+            "label": "Pin",
+            "type": "int",
+            "default": 0,
+            "min": 0,
+            "help": "Pin to write when no device is bound.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._pin: int = 0
+        self._pin: int = self.setting("pin")
 
     @property
     def pin(self) -> int:
@@ -79,7 +90,7 @@ class DigitalWriteNode(HardwareNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._pin = state.get("pin", 0)
+        self._pin = self.setting("pin")
 
 
 class DigitalReadNode(HardwareNode):
@@ -112,11 +123,37 @@ class DigitalReadNode(HardwareNode):
         color="#2d5a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "pin",
+            "label": "Pin",
+            "type": "int",
+            "default": 0,
+            "min": 0,
+            "help": "Pin to read when no device is bound.",
+        },
+        {
+            "key": "continuous",
+            "label": "Continuous",
+            "type": "bool",
+            "default": False,
+            "help": "Keep reading while the flow runs instead of once per exec.",
+        },
+        {
+            "key": "poll_interval",
+            "label": "Poll interval (s)",
+            "type": "float",
+            "default": 0.1,
+            "min": 0,
+            "help": "Seconds between continuous reads.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._pin: int = 0
-        self._continuous = False
-        self._poll_interval = 0.1  # seconds
+        self._pin: int = self.setting("pin")
+        self._continuous = self.setting("continuous")
+        self._poll_interval = self.setting("poll_interval")  # seconds
         self._polling_task = None
 
     @property
@@ -187,6 +224,6 @@ class DigitalReadNode(HardwareNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._pin = state.get("pin", 0)
-        self._continuous = state.get("continuous", False)
-        self._poll_interval = state.get("poll_interval", 0.1)
+        self._pin = self.setting("pin")
+        self._continuous = self.setting("continuous")
+        self._poll_interval = self.setting("poll_interval")
