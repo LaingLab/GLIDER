@@ -50,10 +50,51 @@ Prebuilt installers are published on the project's
 
 ## From source
 
+### One command
+
+This installs uv and git if they are missing, downloads GLIDER into `~/glider`
+(set `GLIDER_DIR` to put it elsewhere), installs the right extras for your
+platform, and finishes by running [`glider doctor`](#verify-your-install).
+Run it again at any time to update.
+
+=== "macOS / Linux / Raspberry Pi"
+
+    ```bash
+    curl -LsSf https://raw.githubusercontent.com/LaingLab/glider/main/install.sh | sh
+    ```
+
+    To add [extras](#optional-extras), pass them after `sh -s --`:
+
+    ```bash
+    curl -LsSf https://raw.githubusercontent.com/LaingLab/glider/main/install.sh | sh -s -- --extra vision --extra behavior
+    ```
+
+=== "Windows"
+
+    In PowerShell:
+
+    ```powershell
+    irm https://raw.githubusercontent.com/LaingLab/glider/main/install.ps1 | iex
+    ```
+
+    To add [extras](#optional-extras):
+
+    ```powershell
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/LaingLab/glider/main/install.ps1))) -Extra vision,behavior
+    ```
+
+!!! note "Name every extra each time"
+    Re-running the installer installs exactly the extras you pass, plus the
+    platform's own. An extra you added last time and leave out now is removed.
+
+When it finishes, it prints the command that starts GLIDER.
+
+### By hand
+
 GLIDER uses [uv](https://docs.astral.sh/uv/) to manage its virtual environment
 and Python version.
 
-### 1. Install uv
+#### 1. Install uv
 
 === "macOS / Linux"
 
@@ -67,7 +108,7 @@ and Python version.
     winget install astral-sh.uv
     ```
 
-### 2. Get GLIDER and install it
+#### 2. Get GLIDER and install it
 
 === "macOS / Windows / Linux"
 
@@ -82,16 +123,18 @@ and Python version.
 === "Raspberry Pi"
 
     On the Pi, PyQt6 comes from the system package manager (it's intentionally
-    *not* a core dependency), so the virtual environment must be allowed to see
-    system packages:
+    *not* a core dependency), so the virtual environment must be the system
+    Python's, with access to its packages. Install with `uv pip` and start the
+    venv's own `glider`: `uv sync` and `uv run` would swap the venv for one on
+    the Python that `.python-version` pins, which cannot see apt's PyQt6.
 
     ```bash
-    sudo apt install python3-pyqt6
+    sudo apt install python3-pyqt6 python3-pyqt6.qtsvg python3-pyqt6.qtopengl
     git clone https://github.com/LaingLab/glider.git
     cd glider
-    uv venv --system-site-packages
-    uv sync --extra rpi --extra i2c
-    uv run glider
+    uv venv --system-site-packages --python /usr/bin/python3
+    uv pip install -e ".[rpi,i2c]"
+    .venv/bin/glider
     ```
 
 `uv run glider` launches the app. The first time you run it, GLIDER offers a
@@ -153,6 +196,9 @@ Video recording relies on **FFmpeg**. Install it once:
 
 === "From source"
 
+    Re-run the [one-command installer](#one-command) with the same extras, or
+    by hand:
+
     ```bash
     cd glider
     git pull
@@ -161,7 +207,18 @@ Video recording relies on **FFmpeg**. Install it once:
 
 ## Verify your install
 
-Launch GLIDER (`uv run glider`, or open the app). You should see the graph
+From source, `glider doctor` reports whether this machine can run GLIDER: the
+Python version, Qt and the core libraries, each optional extra, FFmpeg, and
+which device tracking will run on. Anything wrong comes with the command that
+fixes it, and an extra you never installed is listed as such, not as a fault.
+
+```bash
+uv run glider doctor
+```
+
+(On a Pi installed by hand as above: `.venv/bin/glider doctor`.)
+
+Then launch GLIDER (`uv run glider`, or open the app). You should see the graph
 editor with a **File / Edit / Experiment / View / Hardware / Run / Tools / Help**
 menu bar. To confirm your machine's compute capabilities (useful before
 [tracking](../camera-behavior/tracking.md)), open the **Analyze** tab and

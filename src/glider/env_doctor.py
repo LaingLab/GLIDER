@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import warnings
 
 #: Feature stacks in the shape the user meets them: the feature, the extra that
 #: installs it ("-" for core), and the modules that must import for it to work.
@@ -90,6 +91,10 @@ def run_doctor() -> int:
     Warnings, and extras that were never installed, do not fail it.
     """
     from glider._version import __version__
+
+    # pydub's regexes print SyntaxWarnings the first time a fresh install
+    # compiles it -- right above this report, where they read as the problem.
+    warnings.simplefilter("ignore", SyntaxWarning)
 
     failures = 0
 

@@ -25,8 +25,8 @@ function Install-Glider([string[]]$Extra) {
     }
     # An installer edits PATH in the registry; this session still has the old one.
     function Update-Path {
-        $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" +
-                    [Environment]::GetEnvironmentVariable("Path", "Machine")
+        $env:Path = $env:Path + ";" + [Environment]::GetEnvironmentVariable("Path", "User") +
+                    ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
     }
 
     if (-not (Has uv)) {
