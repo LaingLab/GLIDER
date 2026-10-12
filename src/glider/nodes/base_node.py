@@ -9,12 +9,15 @@ Extends ryvencore.Node with GLIDER-specific functionality:
 """
 
 import asyncio
+import copy
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Optional
+
+from glider.nodes.settings import find_field
 
 if TYPE_CHECKING:
     from glider.hal.base_device import BaseDevice
@@ -78,6 +81,11 @@ class GliderNode(ABC):
         category=NodeCategory.LOGIC,
         description="Base node class",
     )
+
+    #: The settings this node reads from its saved state, as a schema (see
+    #: glider.nodes.settings). The single source of each setting's default:
+    #: read settings with ``self.setting(key)``, never ``self._state.get``.
+    PROPERTIES_SCHEMA: list[dict[str, Any]] = []
 
     def __init__(self):
         """Initialize the node."""
@@ -299,6 +307,20 @@ class GliderNode(ABC):
     def set_state(self, state: dict[str, Any]) -> None:
         """Restore state from dictionary."""
         self._state = state.copy()
+
+    def setting(self, key: str) -> Any:
+        """A saved setting, or its declared default when none is saved.
+
+        Raises KeyError for a key the schema does not declare, so a typo in a
+        node's code fails its tests instead of quietly reading a default.
+        """
+        field = find_field(type(self).PROPERTIES_SCHEMA, key)
+        if field is None:
+            raise KeyError(f"{type(self).__name__} declares no setting '{key}'")
+        if key in self._state:
+            return self._state[key]
+        default = field.get("default")
+        return copy.deepcopy(default) if isinstance(default, (dict, list)) else default
 
     async def start(self) -> None:
         """
