@@ -33,10 +33,8 @@ def check_value(field: dict, value: Any) -> str | None:
     if value is None:
         return None if "default" in field and field["default"] is None else "must not be null"
     if ftype in _WHOLE:
-        whole = (isinstance(value, int) and not isinstance(value, bool)) or (
-            isinstance(value, float) and value.is_integer()
-        )
-        if not whole:
+        # Real ints only: a float such as 2.0 breaks consumers that call round(value, n).
+        if isinstance(value, bool) or not isinstance(value, int):
             return "must be a whole number"
     elif ftype == "float":
         if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -48,7 +46,9 @@ def check_value(field: dict, value: Any) -> str | None:
             return "must be true or false"
     elif ftype == "enum":
         allowed = [choice[0] for choice in field.get("choices", [])]
-        if value not in allowed:
+        # True == 1, so a bool would pass a numeric choice list unless a choice is itself a bool.
+        stray_bool = isinstance(value, bool) and not any(isinstance(a, bool) for a in allowed)
+        if value not in allowed or stray_bool:
             return "must be one of " + ", ".join(repr(a) for a in allowed)
     elif ftype == "object":
         if not isinstance(value, dict):

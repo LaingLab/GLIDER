@@ -23,6 +23,14 @@ ENUM = {
     "default": "seconds",
     "choices": [["seconds", "sec"], ["milliseconds", "ms"]],
 }
+HEX = {"key": "address", "type": "hex", "default": 0}
+SERIAL_ENUM = {"key": "stopbits", "type": "enum", "default": 1, "choices": [[1, "1"], [2, "2"]]}
+FLAG_ENUM = {
+    "key": "flag",
+    "type": "enum",
+    "default": False,
+    "choices": [[True, "on"], [False, "off"]],
+}
 STR = {"key": "label", "type": "str", "default": ""}
 OBJ = {"key": "extra", "type": "object", "default": {}}
 
@@ -31,13 +39,14 @@ OBJ = {"key": "extra", "type": "object", "default": {}}
     "field, value",
     [
         (INT, 5),
-        (INT, 500.0),
         (FLOAT, 2),
         (FLOAT, 2.5),
         (NULLABLE, None),
         (NULLABLE, 3.0),
         (BOOL, True),
         (ENUM, "milliseconds"),
+        (SERIAL_ENUM, 2),
+        (FLAG_ENUM, True),
         (STR, "x"),
         (OBJ, {"a": 1}),
     ],
@@ -51,6 +60,9 @@ def test_acceptable_values(field, value):
     [
         (INT, 2.5, "whole number"),
         (INT, True, "whole number"),
+        (INT, 500.0, "whole number"),  # NumericInput rounds with round(value, n): a float breaks it
+        (HEX, 2.0, "whole number"),
+        (SERIAL_ENUM, True, "one of"),  # True == 1 would otherwise pass a numeric choice list
         (INT, -1, "at least 0"),
         (FLOAT, "500", "number"),
         (FLOAT, 11, "at most 10"),
