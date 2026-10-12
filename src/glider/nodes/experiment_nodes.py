@@ -134,7 +134,7 @@ class OutputNode(GliderNode):
             logger.info(f"  Using value from state: {value}")
         else:
             # No saved state, default to HIGH
-            value = self.setting("value")
+            value = self.setting_default("value")
             logger.info(f"  Using default value: {value}")
 
         if self._device is not None:

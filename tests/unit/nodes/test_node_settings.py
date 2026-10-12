@@ -7,6 +7,7 @@ import pytest
 
 from glider.core.flow_engine import FlowEngine
 from glider.nodes.base_node import ExecNode, NodeCategory, NodeDefinition
+from glider.nodes.logic.flow_nodes import TimerNode
 from glider.nodes.settings import check_settings, check_value, find_field
 
 INT = {"key": "count", "type": "int", "default": 0, "min": 0}
@@ -104,6 +105,32 @@ def test_setting_rejects_undeclared_keys():
         node.setting("typo")
 
 
+def test_setting_default_ignores_the_saved_value():
+    node = _Node()
+    node.set_state({"count": 7})
+    assert node.setting_default("count") == 0
+    assert node.setting("count") == 7
+
+
+def test_setting_default_method_returns_a_copy():
+    a, b = _Node(), _Node()
+    a.setting_default("extra")["x"] = 1
+    assert b.setting_default("extra") == {}
+
+
+def test_setting_default_rejects_undeclared_keys():
+    node = _Node()
+    node.set_state({"typo": 1})
+    with pytest.raises(KeyError, match="typo"):
+        node.setting_default("typo")
+
+
+def test_timer_with_a_null_interval_falls_back_to_the_default():
+    timer = TimerNode()
+    timer.set_state({"interval": None})
+    assert timer._effective_interval() == 1.0
+
+
 # Every built-in setting with the default the code used before schemas existed.
 # A schema default or node.setting() that disagrees is a behaviour change.
 PINNED = [
@@ -158,13 +185,17 @@ def test_pinned_default(node_class, node_type, key, default):
     cls = node_class(node_type)
     field = find_field(cls.PROPERTIES_SCHEMA, key)
     assert field is not None, f"{node_type} does not declare '{key}'"
+    # == alone lets 1 pass for 1.0 and 0 for False; get_state writes these into saved files.
     assert field["default"] == default
+    assert type(field["default"]) is type(default)
     node = cls()
     assert node.setting(key) == default
+    assert type(node.setting(key)) is type(default)
     node.set_state({})
     state = node.get_state()
     if key in state:  # nodes that write attributes back into state
         assert state[key] == default
+        assert type(state[key]) is type(default)
 
 
 def _schema_classes(node_class):

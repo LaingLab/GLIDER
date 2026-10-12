@@ -118,7 +118,7 @@ class DelayNode(ExecNode):
         if "duration" in self._state:
             duration = float(self._state["duration"])
         else:
-            duration = float(self.get_input(1) or self.setting("duration"))
+            duration = float(self.get_input(1) or self.setting_default("duration"))
 
         unit = self.setting("unit")
         if unit == "milliseconds":
@@ -248,7 +248,7 @@ class TimerNode(ExecNode):
         else:
             raw = self.get_input(0)
         if raw is None:
-            raw = self.setting("interval")
+            raw = self.setting_default("interval")
         interval = float(raw)
         if self.setting("unit") == "milliseconds":
             interval = interval / 1000.0

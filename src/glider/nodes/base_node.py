@@ -314,11 +314,19 @@ class GliderNode(ABC):
         Raises KeyError for a key the schema does not declare, so a typo in a
         node's code fails its tests instead of quietly reading a default.
         """
+        default = self.setting_default(key)  # raises KeyError for an undeclared key
+        return self._state[key] if key in self._state else default
+
+    def setting_default(self, key: str) -> Any:
+        """A setting's declared default, ignoring any saved value.
+
+        For fallbacks that run when a saved value is absent *or unusable*
+        (None, an unconnected input), where setting() would hand back the
+        unusable saved value.
+        """
         field = find_field(type(self).PROPERTIES_SCHEMA, key)
         if field is None:
             raise KeyError(f"{type(self).__name__} declares no setting '{key}'")
-        if key in self._state:
-            return self._state[key]
         default = field.get("default")
         return copy.deepcopy(default) if isinstance(default, (dict, list)) else default
 
