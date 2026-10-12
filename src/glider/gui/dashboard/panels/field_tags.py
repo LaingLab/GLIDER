@@ -1,7 +1,9 @@
 """A row of click-to-edit field tags under the run-page title.
 
 Each tag reads "Label  value". Clicking one swaps it for a one-line editor;
-Return commits (``value_edited``), Escape cancels. Locked while a run is live.
+Return or focus loss commits (``value_edited``), Escape cancels. Locking, a
+field change and ``commit_pending`` commit an open edit first, so typed text
+is never lost. Locked while a run is live.
 """
 
 from __future__ import annotations
@@ -52,18 +54,23 @@ class FieldTags(QWidget):
     # --- public API ---
 
     def set_fields(self, fields: list[TagField]) -> None:
-        self._close_editor()
+        self.commit_pending()
         self._fields = list(fields)
         self._rebuild()
 
     def set_locked(self, locked: bool) -> None:
-        self._locked = locked
         if locked:
-            self._close_editor()
+            self.commit_pending()
+        self._locked = locked
         for chip in self._chips.values():
             chip.setProperty("locked", locked)
             chip.style().unpolish(chip)
             chip.style().polish(chip)
+
+    def commit_pending(self) -> None:
+        """Commit the open editor, if any (as Return would)."""
+        if self._editor is not None:
+            self._commit(self._editing_key)
 
     def set_trailing_text(self, text: str) -> None:
         self._trailing.setText(text)
@@ -82,6 +89,10 @@ class FieldTags(QWidget):
             item = self._row.takeAt(0)
             w = item.widget()
             if w is not None and w is not self._trailing:
+                # Hide and detach now; deleteLater alone leaves it painted
+                # until the event loop runs.
+                w.hide()
+                w.setParent(None)
                 w.deleteLater()
         self._chips.clear()
         for f in self._fields:
@@ -114,7 +125,8 @@ class FieldTags(QWidget):
         editor = _Editor(field.value)
         editor.setPlaceholderText(field.label)
         editor.setProperty("fieldTagEditor", True)
-        editor.returnPressed.connect(lambda: self._commit(key))
+        # editingFinished covers Return and focus loss.
+        editor.editingFinished.connect(lambda: self._commit(key))
         editor.cancelled.connect(self._close_editor)
         index = self._row.indexOf(chip)
         chip.hide()
@@ -125,7 +137,9 @@ class FieldTags(QWidget):
         editor.selectAll()
 
     def _commit(self, key: str) -> None:
-        text = self._editor.text().strip() if self._editor else ""
+        if self._editor is None:
+            return
+        text = self._editor.text().strip()
         self._close_editor()
         self.value_edited.emit(key, text)
 
@@ -133,6 +147,9 @@ class FieldTags(QWidget):
         if self._editor is None:
             return
         editor, self._editor = self._editor, None
+        # Disconnect first: hiding a focused editor loses focus, and the
+        # resulting editingFinished must not commit a cancelled edit.
+        editor.editingFinished.disconnect()
         editor.hide()
         editor.deleteLater()
         chip = self._chips.get(self._editing_key)

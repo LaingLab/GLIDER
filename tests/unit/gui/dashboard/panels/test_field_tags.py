@@ -56,3 +56,46 @@ def test_long_value_is_elided_with_full_tooltip(tags):
     tags.set_fields([TagField("notes", "Notes", long)])
     assert len(tags.chip("notes").text()) < 60
     assert tags.chip("notes").toolTip() == long
+
+
+def test_commit_pending_commits_typed_text(qtbot, tags):
+    tags.chip("dam_id").click()
+    tags.editor().setText("D14")
+    with qtbot.waitSignal(tags.value_edited) as sig:
+        tags.commit_pending()
+    assert sig.args == ["dam_id", "D14"]
+    assert tags.editor() is None
+
+
+def test_focus_loss_commits(qtbot, tags):
+    tags.chip("dam_id").click()
+    tags.editor().setText("D14")
+    with qtbot.waitSignal(tags.value_edited) as sig:
+        tags.editor().editingFinished.emit()
+    assert sig.args == ["dam_id", "D14"]
+
+
+def test_locking_commits_an_open_edit(qtbot, tags):
+    tags.chip("dam_id").click()
+    tags.editor().setText("D14")
+    with qtbot.waitSignal(tags.value_edited) as sig:
+        tags.set_locked(True)
+    assert sig.args == ["dam_id", "D14"]
+
+
+def test_escape_then_focus_loss_does_not_commit(qtbot, tags):
+    tags.chip("notes").click()
+    editor = tags.editor()
+    editor.setText("changed")
+    with qtbot.assertNotEmitted(tags.value_edited):
+        qtbot.keyClick(editor, Qt.Key.Key_Escape)
+        editor.editingFinished.emit()
+        tags.commit_pending()
+
+
+def test_rebuild_leaves_only_current_chips(tags):
+    from PyQt6.QtWidgets import QPushButton
+
+    tags.set_fields([TagField("a", "A"), TagField("b", "B"), TagField("c", "C")])
+    tags.set_fields([TagField("a", "A")])
+    assert len(tags.findChildren(QPushButton)) == 1
