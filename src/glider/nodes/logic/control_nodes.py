@@ -36,13 +36,44 @@ class PIDNode(LogicNode):
         color="#2d4a5a",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "output_min",
+            "label": "Output min",
+            "type": "float",
+            "default": -255.0,
+            "help": "Lowest output value.",
+        },
+        {
+            "key": "output_max",
+            "label": "Output max",
+            "type": "float",
+            "default": 255.0,
+            "help": "Highest output value.",
+        },
+        {
+            "key": "integral",
+            "label": "Integral",
+            "type": "float",
+            "default": 0.0,
+            "help": "Accumulated integral term. Saved by GLIDER; leave unset.",
+        },
+        {
+            "key": "last_error",
+            "label": "Last error",
+            "type": "float",
+            "default": 0.0,
+            "help": "Previous error. Saved by GLIDER; leave unset.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._integral = 0.0
-        self._last_error = 0.0
+        self._integral = self.setting("integral")
+        self._last_error = self.setting("last_error")
         self._last_time = time.time()
-        self._output_min = -255.0
-        self._output_max = 255.0
+        self._output_min = self.setting("output_min")
+        self._output_max = self.setting("output_max")
 
     def reset(self) -> None:
         """Reset the PID state."""
@@ -102,10 +133,10 @@ class PIDNode(LogicNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._integral = state.get("integral", 0.0)
-        self._last_error = state.get("last_error", 0.0)
-        self._output_min = state.get("output_min", -255.0)
-        self._output_max = state.get("output_max", 255.0)
+        self._integral = self.setting("integral")
+        self._last_error = self.setting("last_error")
+        self._output_min = self.setting("output_min")
+        self._output_max = self.setting("output_max")
 
 
 class ToggleNode(ExecNode):
@@ -128,9 +159,19 @@ class ToggleNode(ExecNode):
         color="#2d4a5a",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "toggle_state",
+            "label": "State",
+            "type": "bool",
+            "default": False,
+            "help": "Current on/off state. Saved by GLIDER; leave unset.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._toggle_state = False
+        self._toggle_state = self.setting("toggle_state")
 
     @property
     def state(self) -> bool:
@@ -170,4 +211,4 @@ class ToggleNode(ExecNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._toggle_state = state.get("toggle_state", False)
+        self._toggle_state = self.setting("toggle_state")

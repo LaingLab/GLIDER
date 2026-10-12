@@ -1,9 +1,11 @@
 """Node settings schemas: lookups, value checks, and GliderNode.setting()."""
 
+import asyncio
 import math
 
 import pytest
 
+from glider.core.flow_engine import FlowEngine
 from glider.nodes.base_node import ExecNode, NodeCategory, NodeDefinition
 from glider.nodes.settings import check_settings, check_value, find_field
 
@@ -100,3 +102,92 @@ def test_setting_rejects_undeclared_keys():
     node.set_state({"typo": 1})
     with pytest.raises(KeyError, match="typo"):
         node.setting("typo")
+
+
+# Every built-in setting with the default the code used before schemas existed.
+# A schema default or node.setting() that disagrees is a behaviour change.
+PINNED = [
+    ("Delay", "duration", 1.0),
+    ("Delay", "unit", "seconds"),
+    ("Timer", "interval", 1.0),
+    ("Timer", "unit", "seconds"),
+    ("Timer", "count", 0),
+    ("Loop", "count", 0),
+    ("Loop", "delay", 1.0),
+    ("Loop", "prompt_count", False),
+    ("WaitForInput", "input_behavior", None),
+    ("WaitForInput", "timeout", 0.0),
+    ("WaitForInput", "poll_interval", 0.05),
+    ("WaitForInput", "behavior_settings", {}),
+    ("WaitForInput", "threshold_mode", "digital"),
+    ("WaitForInput", "threshold", 512),
+    ("WaitForInput", "threshold_direction", "above"),
+    ("WaitForInput", "turns_target", 1),
+    ("WaitForInput", "counts_per_turn", 4096),
+    ("WaitForInput", "counts_target", 400),
+    ("WaitForInput", "ramp_down", False),
+    ("WaitForInput", "ramp_device_id", None),
+    ("WaitForInput", "drive_pwm", 100),
+    ("WaitForInput", "creep_pwm", 30),
+    ("WaitForInput", "ramp_zone", 512),
+    ("WaitForInput", "land_tolerance", 0),
+    ("Output", "value", 1),
+    ("MotorGovernor", "action", "stop"),
+    ("StartFunction", "function_name", "MyFunction"),
+    ("FunctionCall", "function_name", "Unknown"),
+    ("PID", "integral", 0.0),
+    ("PID", "last_error", 0.0),
+    ("PID", "output_min", -255.0),
+    ("PID", "output_max", 255.0),
+    ("Toggle", "toggle_state", False),
+]
+
+FIELD_TYPES = {"int", "hex", "float", "bool", "str", "enum", "device_ref", "ble_address", "object"}
+
+
+@pytest.fixture(scope="module")
+def node_class():
+    from glider.core.glider_core import GliderCore
+
+    asyncio.run(GliderCore().initialize(load_plugins=False))
+    return FlowEngine.get_node_class
+
+
+@pytest.mark.parametrize("node_type, key, default", PINNED, ids=lambda v: str(v))
+def test_pinned_default(node_class, node_type, key, default):
+    cls = node_class(node_type)
+    field = find_field(cls.PROPERTIES_SCHEMA, key)
+    assert field is not None, f"{node_type} does not declare '{key}'"
+    assert field["default"] == default
+    node = cls()
+    assert node.setting(key) == default
+    node.set_state({})
+    state = node.get_state()
+    if key in state:  # nodes that write attributes back into state
+        assert state[key] == default
+
+
+def _schema_classes(node_class):
+    names = sorted({t for t, _, _ in PINNED})
+    return [(n, node_class(n)) for n in names]
+
+
+def test_schemas_are_well_formed(node_class):
+    for name, cls in _schema_classes(node_class):
+        keys = [f["key"] for f in cls.PROPERTIES_SCHEMA]
+        assert len(keys) == len(set(keys)), f"{name} has duplicate keys"
+        for f in cls.PROPERTIES_SCHEMA:
+            for attr in ("key", "label", "type", "default"):
+                assert attr in f, f"{name}.{f.get('key')} lacks {attr}"
+            assert f["type"] in FIELD_TYPES, f"{name}.{f['key']} has unknown type {f['type']!r}"
+            if f["type"] == "enum":
+                assert f.get("choices"), f"{name}.{f['key']} enum has no choices"
+            if f["default"] is not None:
+                assert check_value(f, f["default"]) is None, f"{name}.{f['key']} default invalid"
+
+
+def test_every_declared_setting_is_pinned(node_class):
+    pinned = {(t, k) for t, k, _ in PINNED}
+    for name, cls in _schema_classes(node_class):
+        for f in cls.PROPERTIES_SCHEMA:
+            assert (name, f["key"]) in pinned, f"{name}.{f['key']} has no pinned default"

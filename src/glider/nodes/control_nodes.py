@@ -44,6 +44,32 @@ class LoopNode(GliderNode):
         ],
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "count",
+            "label": "Iterations",
+            "type": "int",
+            "default": 0,
+            "min": 0,
+            "help": "How many times to run the loop body; 0 repeats forever.",
+        },
+        {
+            "key": "delay",
+            "label": "Delay (s)",
+            "type": "float",
+            "default": 1.0,
+            "min": 0,
+            "help": "Seconds to wait between iterations.",
+        },
+        {
+            "key": "prompt_count",
+            "label": "Prompt for iterations",
+            "type": "bool",
+            "default": False,
+            "help": "Ask the operator for the iteration count at Start.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
         self._running = False
@@ -57,8 +83,8 @@ class LoopNode(GliderNode):
         logger.info(f"LoopNode.execute() called, node ID: {self._glider_id}")
 
         # Get parameters from state
-        count = self._state.get("count", 0)
-        delay = self._state.get("delay", 1.0)
+        count = self.setting("count")
+        delay = self.setting("delay")
 
         logger.info(f"  Loop count: {count} (0=infinite), delay: {delay}s")
 
@@ -183,25 +209,159 @@ class WaitForInputNode(GliderNode):
         ],
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "input_behavior",
+            "label": "Input behaviour",
+            "type": "str",
+            "default": None,
+            "help": "Name of the bound device's input behaviour to wait on.",
+        },
+        {
+            "key": "timeout",
+            "label": "Timeout (s)",
+            "type": "float",
+            "default": 0.0,
+            "min": 0,
+            "help": "Give up after this many seconds; 0 waits forever.",
+        },
+        {
+            "key": "poll_interval",
+            "label": "Poll interval (s)",
+            "type": "float",
+            "default": 0.05,
+            "min": 0,
+            "help": "Seconds between input checks.",
+        },
+        {
+            "key": "behavior_settings",
+            "label": "Behaviour settings",
+            "type": "object",
+            "default": {},
+            "help": "Per-behaviour settings, keyed by behaviour name.",
+        },
+        {
+            "key": "threshold_mode",
+            "label": "Mode",
+            "type": "enum",
+            "default": "digital",
+            "choices": [
+                ["digital", "Digital (rising edge)"],
+                ["analog", "Analog (threshold)"],
+                ["revolution", "Revolution (turns)"],
+                ["counts", "Move counts"],
+            ],
+            "help": "Used when the bound device offers no input behaviours.",
+        },
+        {
+            "key": "threshold",
+            "label": "Threshold",
+            "type": "float",
+            "default": 512,
+            "min": 0,
+            "help": "Analog mode: the value to cross.",
+        },
+        {
+            "key": "threshold_direction",
+            "label": "Direction",
+            "type": "enum",
+            "default": "above",
+            "choices": [["above", "Above"], ["below", "Below"]],
+            "help": "Analog mode: fire when the value goes above or below the threshold.",
+        },
+        {
+            "key": "turns_target",
+            "label": "Turns",
+            "type": "float",
+            "default": 1,
+            "min": 0,
+            "help": "Revolution mode: turns to wait for.",
+        },
+        {
+            "key": "counts_per_turn",
+            "label": "Counts per turn",
+            "type": "int",
+            "default": 4096,
+            "min": 1,
+            "help": "Revolution mode: encoder counts per turn.",
+        },
+        {
+            "key": "counts_target",
+            "label": "Counts",
+            "type": "int",
+            "default": 400,
+            "min": 0,
+            "help": "Counts mode: encoder counts to wait for.",
+        },
+        {
+            "key": "ramp_down",
+            "label": "Ramp down",
+            "type": "bool",
+            "default": False,
+            "help": "Slow a motor as the target approaches.",
+        },
+        {
+            "key": "ramp_device_id",
+            "label": "Ramp device",
+            "type": "device_ref",
+            "default": None,
+            "help": "The motor device to slow when ramping down.",
+        },
+        {
+            "key": "drive_pwm",
+            "label": "Drive PWM",
+            "type": "int",
+            "default": 100,
+            "min": 0,
+            "max": 255,
+            "help": "Motor PWM before the ramp zone.",
+        },
+        {
+            "key": "creep_pwm",
+            "label": "Creep PWM",
+            "type": "int",
+            "default": 30,
+            "min": 0,
+            "max": 255,
+            "help": "Motor PWM inside the ramp zone.",
+        },
+        {
+            "key": "ramp_zone",
+            "label": "Ramp zone",
+            "type": "int",
+            "default": 512,
+            "min": 0,
+            "help": "Counts before the target where the motor slows.",
+        },
+        {
+            "key": "land_tolerance",
+            "label": "Land tolerance",
+            "type": "int",
+            "default": 0,
+            "min": 0,
+            "help": "Counts short of the target that count as arrived.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
         self._waiting = False
         self._trigger_value = None
-        self._poll_interval = 0.05  # 50ms polling interval
-        self._threshold_mode = "digital"  # "digital", "analog", or "revolution"
-        self._threshold = 512  # Default analog threshold
-        self._threshold_direction = "above"  # "above" or "below"
-        self._turns_target = 1  # Revolution mode: fire after this many turns
-        self._counts_per_turn = 4096  # Revolution mode: sensor full-scale range
-        self._counts_target = 400  # Counts mode: move this many counts then stop
+        self._poll_interval = self.setting("poll_interval")
+        self._threshold_mode = self.setting("threshold_mode")
+        self._threshold = self.setting("threshold")
+        self._threshold_direction = self.setting("threshold_direction")
+        self._turns_target = self.setting("turns_target")
+        self._counts_per_turn = self.setting("counts_per_turn")
+        self._counts_target = self.setting("counts_target")
         # Revolution-mode "ramp down to landing": decelerate a motor PWM as the
         # angle approaches the wrap so it coasts almost nothing and lands on ~0.
-        self._ramp_down = False
-        self._ramp_device_id = None
-        self._drive_pwm = 100  # speed before the deceleration zone
-        self._creep_pwm = 30  # minimum speed at the wrap point
-        self._ramp_zone = 512  # counts before the wrap where ramping begins
-        self._land_tolerance = 0  # stop within this many counts of 0 (0 = off)
+        self._ramp_down = self.setting("ramp_down")
+        self._ramp_device_id = self.setting("ramp_device_id")
+        self._drive_pwm = self.setting("drive_pwm")
+        self._creep_pwm = self.setting("creep_pwm")
+        self._ramp_zone = self.setting("ramp_zone")
+        self._land_tolerance = self.setting("land_tolerance")
         self._ramp_direction = 1  # +1 angle rising toward top wrap, -1 falling to 0
         self._hardware_manager = None  # set by the flow engine for device lookup
         self._ramp_device = None  # resolved PWM device, looked up at execute time
@@ -228,7 +388,7 @@ class WaitForInputNode(GliderNode):
 
         # Route to a selected device input behavior when one is chosen and
         # available; otherwise fall through to the legacy poll path unchanged.
-        behavior_key = self._state.get("input_behavior")
+        behavior_key = self.setting("input_behavior")
         behaviors = list(getattr(self._device, "input_behaviors", []) or [])
         # A behavior-declaring device with no explicit selection defaults to its
         # first behavior — matching the editor's displayed default. Guarded on the
@@ -248,23 +408,23 @@ class WaitForInputNode(GliderNode):
             await self._run_behavior(behavior)
             return
 
-        timeout = self._state.get("timeout", 0.0)
-        poll_interval = self._state.get("poll_interval", 0.05)
+        timeout = self.setting("timeout")
+        poll_interval = self.setting("poll_interval")
         self._poll_interval = poll_interval
 
         # Get threshold settings from state
-        self._threshold_mode = self._state.get("threshold_mode", "digital")
-        self._threshold = self._state.get("threshold", 512)
-        self._threshold_direction = self._state.get("threshold_direction", "above")
-        self._turns_target = self._state.get("turns_target", 1)
-        self._counts_per_turn = self._state.get("counts_per_turn", 4096)
-        self._counts_target = self._state.get("counts_target", 400)
-        self._ramp_down = self._state.get("ramp_down", False)
-        self._ramp_device_id = self._state.get("ramp_device_id")
-        self._drive_pwm = self._state.get("drive_pwm", 100)
-        self._creep_pwm = self._state.get("creep_pwm", 30)
-        self._ramp_zone = self._state.get("ramp_zone", 512)
-        self._land_tolerance = self._state.get("land_tolerance", 0)
+        self._threshold_mode = self.setting("threshold_mode")
+        self._threshold = self.setting("threshold")
+        self._threshold_direction = self.setting("threshold_direction")
+        self._turns_target = self.setting("turns_target")
+        self._counts_per_turn = self.setting("counts_per_turn")
+        self._counts_target = self.setting("counts_target")
+        self._ramp_down = self.setting("ramp_down")
+        self._ramp_device_id = self.setting("ramp_device_id")
+        self._drive_pwm = self.setting("drive_pwm")
+        self._creep_pwm = self.setting("creep_pwm")
+        self._ramp_zone = self.setting("ramp_zone")
+        self._land_tolerance = self.setting("land_tolerance")
         self._ramp_direction = 1  # assume rising until motion proves otherwise
 
         # Resolve the PWM device to ramp (revolution/counts modes). If it can't
@@ -343,9 +503,9 @@ class WaitForInputNode(GliderNode):
         """
         from glider.hal.input_behavior import BehaviorContext
 
-        timeout = self._state.get("timeout", 0.0)
-        poll = self._state.get("poll_interval", 0.05)
-        all_settings = self._state.get("behavior_settings", {})
+        timeout = self.setting("timeout")
+        poll = self.setting("poll_interval")
+        all_settings = self.setting("behavior_settings")
         # schema defaults <- saved values (saved wins)
         settings = {f["key"]: f.get("default") for f in behavior.settings}
         settings.update(all_settings.get(behavior.key, {}))
@@ -548,18 +708,18 @@ class WaitForInputNode(GliderNode):
     def set_state(self, state: dict) -> None:
         """Set node state from deserialization."""
         super().set_state(state)
-        self._threshold_mode = state.get("threshold_mode", "digital")
-        self._threshold = state.get("threshold", 512)
-        self._threshold_direction = state.get("threshold_direction", "above")
-        self._turns_target = state.get("turns_target", 1)
-        self._counts_per_turn = state.get("counts_per_turn", 4096)
-        self._counts_target = state.get("counts_target", 400)
-        self._ramp_down = state.get("ramp_down", False)
-        self._ramp_device_id = state.get("ramp_device_id")
-        self._drive_pwm = state.get("drive_pwm", 100)
-        self._creep_pwm = state.get("creep_pwm", 30)
-        self._ramp_zone = state.get("ramp_zone", 512)
-        self._land_tolerance = state.get("land_tolerance", 0)
+        self._threshold_mode = self.setting("threshold_mode")
+        self._threshold = self.setting("threshold")
+        self._threshold_direction = self.setting("threshold_direction")
+        self._turns_target = self.setting("turns_target")
+        self._counts_per_turn = self.setting("counts_per_turn")
+        self._counts_target = self.setting("counts_target")
+        self._ramp_down = self.setting("ramp_down")
+        self._ramp_device_id = self.setting("ramp_device_id")
+        self._drive_pwm = self.setting("drive_pwm")
+        self._creep_pwm = self.setting("creep_pwm")
+        self._ramp_zone = self.setting("ramp_zone")
+        self._land_tolerance = self.setting("land_tolerance")
 
     def _exec_timeout(self) -> None:
         """Trigger the timeout output."""
