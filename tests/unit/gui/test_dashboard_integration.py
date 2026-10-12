@@ -228,7 +228,7 @@ def test_run_page_hides_the_camera_controls(qtbot, main_window_factory):
     cam = window._camera_panel
     window.switch_to_runner()
     assert not cam._refresh_btn.isVisibleTo(cam)
-    assert cam._preview_stack.isVisibleTo(cam) and cam._fps_label.isVisibleTo(cam)
+    assert cam._preview_stack.isVisibleTo(cam)
     window.switch_to_builder()
     assert cam._refresh_btn.isVisibleTo(cam)
 
@@ -239,3 +239,13 @@ def test_runner_shell_keeps_the_camera_controls(qtbot, main_window_factory):
     window._switch_to_desktop_mode()
     window.switch_to_runner()
     assert cam._refresh_btn.isVisibleTo(cam)
+
+
+def test_run_page_hides_the_duplicate_fps_readout(qtbot, main_window_factory):
+    window = main_window_factory(desktop_mode=True)
+    window.show()
+    cam = window._camera_panel
+    window.switch_to_runner()
+    assert not cam._fps_label.isVisibleTo(cam)
+    window.switch_to_builder()
+    assert cam._fps_label.isVisibleTo(cam)

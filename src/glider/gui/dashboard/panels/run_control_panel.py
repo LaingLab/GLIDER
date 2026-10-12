@@ -82,6 +82,7 @@ class RunControlPanel(QWidget):
         live_row.setSpacing(8)
         self._pause_btn = QPushButton("Pause")
         self._pause_btn.setFixedHeight(54)
+        self._pause_btn.setProperty("runnerAction", "pause")
         self._pause_btn.clicked.connect(self._on_pause_clicked)
         live_row.addWidget(self._pause_btn)
         self._stop_btn = QPushButton("■  Stop")

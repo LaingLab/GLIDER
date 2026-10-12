@@ -3617,6 +3617,9 @@ class MainWindow(QMainWindow):
         # button's own gating, so check again. Commit a half-typed tag first.
         if self._run_header is not None:
             self._run_header.commit_pending()
+        if self._core.state.name == "PAUSED":
+            await self._core.resume_experiment()  # a paused run keeps its folder
+            return
         if self._core.state.name not in ("IDLE", "READY"):
             return  # already live: must not make a folder or move the recorders
         missing = compute_readiness(self._core).missing_field

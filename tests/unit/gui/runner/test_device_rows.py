@@ -82,3 +82,24 @@ def test_new_run_clears_last_runs_manual_label(qtbot):
     w.update_state("RUNNING")
     assert not w._rows["cue_led"].manual.isVisibleTo(w)
     assert w._rows["cue_led"].manual.text() == ""
+
+
+_EMPTY_TEXT = "No devices yet. Add a board and devices in the Design tab."
+
+
+def _empty_labels(w):
+    from PyQt6.QtWidgets import QLabel
+
+    return [lb for lb in w.findChildren(QLabel) if lb.text() == _EMPTY_TEXT]
+
+
+def test_empty_rail_explains_itself(qtbot):
+    w = _controls(qtbot, {})
+    w.show()
+    labels = _empty_labels(w)
+    assert len(labels) == 1 and labels[0].isVisibleTo(w)
+
+
+def test_rail_with_a_device_has_no_empty_note(qtbot):
+    w = _controls(qtbot, {"cue_led": _dev(state=False)})
+    assert _empty_labels(w) == []

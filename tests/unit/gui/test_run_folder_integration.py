@@ -161,3 +161,21 @@ def test_run_info_shows_the_live_run_during_a_recording(window):
     _drive(window, "RUNNING")
     assert window._run_header._run_label.text() == "Run 1 today"
     assert window._run_header._tags._trailing.text().endswith("run01")
+
+
+def test_start_while_paused_resumes_without_a_new_folder(window, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from glider.core.experiment_session import SessionState
+
+    md = window._core.session.metadata
+    md.experiment_type = "OFT"
+    md.run_fields = [RunField("animal_id", "Animal ID", True)]
+    md.run_values = {"animal_id": "M031"}
+    window._core.session.state = SessionState.PAUSED
+    window._core.resume_experiment = AsyncMock()
+    window._core.start_experiment = AsyncMock()
+    _start(window)
+    window._core.resume_experiment.assert_awaited_once()
+    window._core.start_experiment.assert_not_called()
+    assert not (tmp_path / "oft").exists()

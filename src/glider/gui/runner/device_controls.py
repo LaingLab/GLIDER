@@ -233,10 +233,18 @@ class RunnerDeviceControls(QWidget):
         if functions_section is not None:
             self._content_layout.addWidget(functions_section)
 
+        added = functions_section is not None
         for dev_id, device in self._hardware_manager.devices.items():
             section = self._make_device_section(dev_id, device)
             if section is not None:
                 self._content_layout.addWidget(section)
+                added = True
+        if not added:
+            empty = QLabel("No devices yet. Add a board and devices in the Design tab.")
+            empty.setProperty("textRole", "muted")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.setWordWrap(True)
+            self._content_layout.addWidget(empty)
         self._content_layout.addStretch(1)
 
     def _make_functions_section(self) -> QWidget | None:

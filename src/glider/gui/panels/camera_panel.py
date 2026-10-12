@@ -427,7 +427,7 @@ class CameraPanel(QWidget):
         layout.addWidget(self._preview_stack, 1)  # Stretch factor 1
 
         # Status bar
-        status_frame = QFrame()
+        self._status_frame = status_frame = QFrame()
         status_layout = QHBoxLayout(status_frame)
         status_layout.setContentsMargins(8, 4, 8, 4)
 
@@ -1152,8 +1152,13 @@ class CameraPanel(QWidget):
             self._fps_label.setText(f"{fps:.1f} FPS")
 
     def set_controls_visible(self, visible: bool) -> None:
-        """Show or hide everything but the preview and its fps/status line."""
+        """Show or hide everything but the preview.
+
+        The fps/resolution status row goes too: the Run page's overlay already
+        shows fps and REC.
+        """
         self._controls.setVisible(visible)
+        self._status_frame.setVisible(visible)
 
     def current_fps(self) -> float | None:
         """Live preview frame rate of the primary camera, or None when idle."""

@@ -154,3 +154,11 @@ def test_stop_after_a_pause_shows_run_time_not_wall_time(qtbot, mock_core, monke
     assert panel._timer.text() == "01:00.00"
     panel.update_state("READY")
     assert panel._timer.text() == "01:00.00"
+
+
+def test_pause_is_styled_neutral(qtbot, mock_core):
+    from glider.gui.styles import load_stylesheet
+
+    panel = _panel(qtbot, mock_core, board=True, has_start=True)
+    assert panel._pause_btn.property("runnerAction") == "pause"
+    assert 'QPushButton[runnerAction="pause"]' in load_stylesheet("desktop")

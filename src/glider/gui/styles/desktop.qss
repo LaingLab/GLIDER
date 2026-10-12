@@ -684,7 +684,21 @@ QPushButton[runnerAction="stop"]:pressed {
     background-color: #5a6878;
 }
 
+QPushButton[runnerAction="pause"] {
+    background-color: #151c25;
+    color: #e2e8f0;
+    font-size: 20px;
+    font-weight: bold;
+    border-radius: @RADIUS_LARGE@;
+    border: 1px solid #1e2530;
+}
+
+QPushButton[runnerAction="pause"]:pressed {
+    background-color: #1e2530;
+}
+
 QPushButton[runnerAction="start"]:disabled,
+QPushButton[runnerAction="pause"]:disabled,
 QPushButton[runnerAction="stop"]:disabled {
     background-color: #2d3748;
     color: #718096;
