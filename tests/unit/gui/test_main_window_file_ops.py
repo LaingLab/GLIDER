@@ -59,6 +59,9 @@ def _window(state=SessionState.IDLE, busy=False):
     w._check_save = lambda: True
     w._update_undo_redo_actions = lambda: None
     w._zone_config = object()
+    w._file_watcher = types.SimpleNamespace(watch=lambda path: None)
+    w._external_change_bar = types.SimpleNamespace(hide=lambda: None)
+    w._pending_external_change = False
     return w
 
 

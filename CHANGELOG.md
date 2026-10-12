@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **GLIDER picks up changes to the open experiment made outside it**, such as
+  an agent's edits through `glider-mcp`: it reloads when there are no unsaved
+  edits, and otherwise offers Reload / Keep mine. Changes during a run wait
+  until the run ends.
 - **AI agents can design experiments and analyze recordings** through a new
   MCP server, `glider-mcp` (`uv sync --extra pc --extra mcp`). Agents list node and
   device types, build `.glider` files that are validated by GLIDER's own

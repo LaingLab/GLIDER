@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -99,3 +100,94 @@ def test_bar_offers_reload_and_keep(qtbot):
     with qtbot.waitSignal(bar.keep_requested, timeout=1000):
         bar._keep.click()
     assert "changed outside GLIDER" in bar._message.text()
+
+
+# --- the main window --------------------------------------------------------
+
+
+def _open_in_window(main_window_factory, tmp_path):
+    window = main_window_factory(desktop_mode=True)
+    path = tmp_path / "agent.glider"
+    window._core.save_session(str(path))
+    assert window._load_experiment_path(str(path))
+    return window, path
+
+
+def _agent_adds_a_node(path: Path, node_id: str = "agent_delay") -> None:
+    data = json.loads(path.read_text())
+    data["flow"]["nodes"].append(
+        {"id": node_id, "node_type": "Delay", "position": [300.0, 0.0], "state": {}}
+    )
+    atomic_write_text(path, json.dumps(data, indent=2))
+
+
+def test_window_reloads_an_outside_change_when_nothing_is_unsaved(
+    qtbot, main_window_factory, tmp_path
+):
+    window, path = _open_in_window(main_window_factory, tmp_path)
+    assert not window._core.session.is_dirty
+
+    _agent_adds_a_node(path)
+
+    qtbot.waitUntil(lambda: "agent_delay" in window._graph_view.nodes, timeout=5000)
+    assert window._external_change_bar.isHidden()
+
+
+def test_window_asks_before_discarding_unsaved_edits(qtbot, main_window_factory, tmp_path):
+    window, path = _open_in_window(main_window_factory, tmp_path)
+    window._core.session.mark_dirty()
+
+    _agent_adds_a_node(path)
+
+    qtbot.waitUntil(lambda: not window._external_change_bar.isHidden(), timeout=5000)
+    assert "agent_delay" not in window._graph_view.nodes
+
+    window._external_change_bar._reload.click()
+    assert "agent_delay" in window._graph_view.nodes
+    assert window._external_change_bar.isHidden()
+
+
+def test_keep_mine_dismisses_without_reloading(qtbot, main_window_factory, tmp_path):
+    window, path = _open_in_window(main_window_factory, tmp_path)
+    window._core.session.mark_dirty()
+    _agent_adds_a_node(path)
+    qtbot.waitUntil(lambda: not window._external_change_bar.isHidden(), timeout=5000)
+
+    window._external_change_bar._keep.click()
+
+    assert window._external_change_bar.isHidden()
+    assert "agent_delay" not in window._graph_view.nodes
+    assert window._core.session.is_dirty
+
+
+def test_glider_saving_its_own_file_does_not_reload(qtbot, main_window_factory, tmp_path):
+    window, path = _open_in_window(main_window_factory, tmp_path)
+    window._core.session.mark_dirty()
+
+    assert window._on_save()
+
+    with qtbot.assertNotEmitted(window._file_watcher.changed_externally, wait=800):
+        pass
+    assert window._external_change_bar.isHidden()
+
+
+def test_a_change_during_a_run_waits_for_the_run_to_end(qtbot, main_window_factory, tmp_path):
+    from glider.core.experiment_session import SessionState
+
+    window, path = _open_in_window(main_window_factory, tmp_path)
+    window._core.session.state = SessionState.RUNNING
+
+    _agent_adds_a_node(path)
+    qtbot.wait(1000)
+    assert "agent_delay" not in window._graph_view.nodes
+
+    window._core.session.state = SessionState.IDLE
+    qtbot.waitUntil(lambda: "agent_delay" in window._graph_view.nodes, timeout=5000)
+
+
+def test_new_experiment_stops_watching(qtbot, main_window_factory, tmp_path):
+    window, path = _open_in_window(main_window_factory, tmp_path)
+
+    assert window._on_new()
+
+    assert window._file_watcher.path is None

@@ -69,6 +69,15 @@ Agents only write `.glider`, `.csv` and `.png` files, only at absolute paths
 they name, and never replace an existing file unless told to with
 `save_experiment(..., overwrite=true)`.
 
+## Seeing an agent's changes in GLIDER
+
+If the experiment an agent edits is open in GLIDER, GLIDER picks the change up
+on its own: with no unsaved edits it reloads straight away; with unsaved edits
+a bar offers **Reload** (take the agent's version) or **Keep mine** (your next
+save overwrites it). During a run nothing changes until the run ends. Files on
+network shares may not report changes; open them from a local folder to get
+live updates.
+
 ## Try it
 
 > Make me an experiment at ~/glider/blink.glider: an Arduino Uno with an LED on
