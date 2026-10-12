@@ -1222,10 +1222,14 @@ class MainWindow(QMainWindow):
         self._run_header.open_file_requested.connect(self._on_open)
         self._run_header.run_values_changed.connect(self._refresh_run_info)
         self._run_header.show_presets_folder_requested.connect(self._on_show_presets_folder)
+        # The pill's READY / NOT READY follows the same board + flow check that
+        # enables Start, so the two can never disagree.
+        run_control.readiness_changed.connect(self._run_header.set_ready)
+        self._run_header.set_ready(run_control.is_ready())
 
         # --- Manual Controls panel (RunnerDeviceControls) ---
         self._runner_device_controls = RunnerDeviceControls(
-            self._core.hardware_manager, session_fn=lambda: self._core.session
+            self._core.hardware_manager, session_fn=lambda: self._core.session, compact=True
         )
         self._runner_device_controls.action_write_requested.connect(
             lambda dev_id, action, value: self._run_async(self._drive_action(dev_id, action, value))

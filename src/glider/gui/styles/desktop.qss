@@ -776,6 +776,7 @@ QWidget[deviceCard="true"] { background-color: #0f1419; border: 2px solid #1e253
 /* Status states */
 QLabel[statusIndicator="true"] { color: #e2e8f0; padding: 4px 12px; border-radius: @RADIUS_SMALL@; font-weight: bold; margin: 2px; }
 QLabel[statusState="IDLE"] { background-color: #1e2530; }
+QLabel[statusState="NOT_READY"] { background-color: #1e2530; color: #94a3b8; }  /* BORDER / TEXT_TERTIARY */
 QLabel[statusState="READY"] { background-color: rgba(52, 211, 153, 0.15); color: #34d399; }
 QLabel[statusState="RUNNING"] { background-color: rgba(56, 189, 248, 0.15); color: #38bdf8; }
 QLabel[statusState="PAUSED"], QLabel[statusState="STOPPING"], QLabel[statusState="NEEDS_DETAILS"] { background-color: rgba(251, 191, 36, 0.15); color: #fbbf24; }
@@ -1882,3 +1883,19 @@ QLabel[deviceValue="true"] {
     font-weight: 600;
     color: #e2e8f0;                                 /* TEXT_PRIMARY */
 }
+
+/* Desktop device switch: a small toggle, green while on. */
+QPushButton[deviceSwitch="true"] {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_MEDIUM@;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-weight: 600;
+    padding: 4px 10px;
+}
+QPushButton[deviceSwitch="true"]:checked {
+    background-color: rgba(74, 222, 128, 0.15);     /* STATE_OK @ 15% */
+    border-color: rgba(74, 222, 128, 0.45);
+    color: #4ade80;                                 /* STATE_OK */
+}
+QPushButton[deviceSwitch="true"]:disabled { color: #475569; }  /* TEXT_DISABLED */

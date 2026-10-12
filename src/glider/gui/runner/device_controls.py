@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from glider.core.hardware_manager import HardwareManager
 
 _CONTROL_MIN_HEIGHT = 72  # touch-target floor (matches the runner tab height)
+_COMPACT_MIN_HEIGHT = 32  # desktop: a mouse target
 _SPACING = 10
 
 # A range with more discrete steps than this is not usefully draggable on a
@@ -101,9 +102,14 @@ class RunnerDeviceControls(QWidget):
         hardware_manager: HardwareManager,
         session_fn: Callable[[], object] | None = None,
         parent: QWidget | None = None,
+        compact: bool = False,
     ):
         super().__init__(parent)
         self._hardware_manager = hardware_manager
+        # Desktop (mouse) sizing: smaller controls, and no "Set" caption,
+        # since the device row above already names what the control drives.
+        self._compact = compact
+        self._min_h = _COMPACT_MIN_HEIGHT if compact else _CONTROL_MIN_HEIGHT
         # Returns the current ExperimentSession (or None). When absent, the
         # Functions section is never built (used by device-only tests).
         self._session_fn = session_fn
@@ -272,7 +278,7 @@ class RunnerDeviceControls(QWidget):
 
         for label, start_node_id in build_picker_labels(infos):
             btn = QPushButton(label)
-            btn.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+            btn.setMinimumHeight(self._min_h)
             btn.clicked.connect(
                 lambda _=False, sid=start_node_id: self.function_run_requested.emit(sid)
             )
@@ -387,22 +393,34 @@ class RunnerDeviceControls(QWidget):
         text = _title(action) + (f" ({unit})" if unit else "")
         return QLabel(text)
 
+    def _captioned(self, action: str) -> bool:
+        """Whether a control gets its action caption ("Set", "Pulse", ...)."""
+        return not (self._compact and action == "set")
+
     def _make_switch(self, dev_id: str, action: str, spec) -> QWidget:
         block = QWidget()
         row = QHBoxLayout(block)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(_SPACING)
-        row.addWidget(self._labeled(action))
+        if self._captioned(action):
+            row.addWidget(self._labeled(action))
         switch = QPushButton("OFF")
         switch.setCheckable(True)
-        switch.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+        switch.setMinimumHeight(self._min_h)
+        if self._compact:
+            switch.setProperty("deviceSwitch", True)
+            switch.setFixedWidth(64)
 
         def _on_toggle(checked: bool) -> None:
             switch.setText("ON" if checked else "OFF")
             self.action_write_requested.emit(dev_id, action, bool(checked))
 
         switch.toggled.connect(_on_toggle)
-        row.addWidget(switch, 1)
+        if self._compact:
+            row.addWidget(switch)
+            row.addStretch(1)
+        else:
+            row.addWidget(switch, 1)
         self._widgets[(dev_id, action)] = {"switch": switch}
         return block
 
@@ -411,7 +429,8 @@ class RunnerDeviceControls(QWidget):
         layout = QVBoxLayout(block)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        layout.addWidget(self._labeled(action, spec.unit))
+        if self._captioned(action):
+            layout.addWidget(self._labeled(action, spec.unit))
 
         row = QHBoxLayout()
         row.setSpacing(_SPACING)
@@ -419,7 +438,7 @@ class RunnerDeviceControls(QWidget):
         spin = QSpinBox()
         spin.setRange(spec.min, spec.max)
         spin.setSingleStep(max(1, spec.step))
-        spin.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+        spin.setMinimumHeight(self._min_h)
 
         steps = (spec.max - spec.min) // max(1, spec.step)
         slider = None
@@ -427,7 +446,7 @@ class RunnerDeviceControls(QWidget):
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(spec.min, spec.max)
             slider.setSingleStep(max(1, spec.step))
-            slider.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+            slider.setMinimumHeight(self._min_h)
 
             # Live readout during drag, but commit (write) only on release, so
             # dragging never ramps the device through intermediate values.
@@ -454,7 +473,7 @@ class RunnerDeviceControls(QWidget):
 
     def _make_button(self, dev_id: str, action: str, spec) -> QWidget:
         btn = QPushButton(_title(action))
-        btn.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+        btn.setMinimumHeight(self._min_h)
         btn.clicked.connect(lambda _=False: self.action_fire_requested.emit(dev_id, action))
         self._widgets[(dev_id, action)] = {"button": btn}
         return btn
@@ -478,11 +497,11 @@ class RunnerDeviceControls(QWidget):
         fields: dict[str, tuple] = {}
         build_schema_widgets(form, schema, fields)
         for widget, _ftype in fields.values():
-            widget.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+            widget.setMinimumHeight(self._min_h)
         layout.addLayout(form)
 
         btn = QPushButton(_title(action))
-        btn.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+        btn.setMinimumHeight(self._min_h)
         btn.clicked.connect(
             lambda _=False: self.action_call_requested.emit(
                 dev_id,
@@ -501,7 +520,7 @@ class RunnerDeviceControls(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(_SPACING)
         read_btn = QPushButton("Read")
-        read_btn.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+        read_btn.setMinimumHeight(self._min_h)
         read_btn.clicked.connect(lambda _=False: self.read_requested.emit(dev_id, action))
         value_label = QLabel("—")
         self._value_labels[(dev_id, action)] = value_label

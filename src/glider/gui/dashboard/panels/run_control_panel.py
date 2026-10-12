@@ -40,6 +40,9 @@ class RunControlPanel(QWidget):
     resume_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     elapsed_updated = pyqtSignal(str)
+    # Board + runnable flow (not the run fields): feeds the header's
+    # READY / NOT READY pill so it never contradicts a disabled Start.
+    readiness_changed = pyqtSignal(bool)
 
     def __init__(self, core: "GliderCore", parent=None):
         super().__init__(parent)
@@ -49,6 +52,7 @@ class RunControlPanel(QWidget):
         self._state_name = "IDLE"
         self._last_readiness = None
         self._missing_field: str | None = None
+        self._was_ready: bool | None = None
         self._paused_at = 0.0
         self._paused_total = 0.0  # seconds paused so far in this run
 
@@ -120,6 +124,10 @@ class RunControlPanel(QWidget):
         self._last_readiness = None
         self._refresh_run_readiness()
 
+    def is_ready(self) -> bool:
+        """Board and runnable flow in place (the last value readiness_changed sent)."""
+        return bool(self._was_ready)
+
     def set_missing_field(self, label: str | None) -> None:
         """Block Start (with a hint) until the named required field is filled."""
         self._missing_field = label
@@ -175,6 +183,9 @@ class RunControlPanel(QWidget):
         if key == self._last_readiness:
             return
         self._last_readiness = key
+        if r.all_ready != self._was_ready:
+            self._was_ready = r.all_ready
+            self.readiness_changed.emit(r.all_ready)
         self._sub.setText(str(r.board_label) if r.board_ready else "No board connected")
         self._start_btn.setVisible(not live)
         self._pause_btn.setVisible(live)
@@ -185,8 +196,10 @@ class RunControlPanel(QWidget):
         self._stop_btn.setEnabled(live)
         if missing:
             self._not_ready_hint.setText(f"Fill in {missing} to start.")
+        elif not r.board_ready:
+            self._not_ready_hint.setText("Connect the board to start (Hardware > Connect All).")
         else:
-            self._not_ready_hint.setText("Not ready — connect a board and load an experiment")
+            self._not_ready_hint.setText("Add a Start Experiment node to the flow to start.")
         self._not_ready_hint.setVisible(not ready and not live)
 
     def _update_elapsed_time(self) -> None:

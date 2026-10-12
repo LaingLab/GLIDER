@@ -162,3 +162,19 @@ def test_pause_is_styled_neutral(qtbot, mock_core):
     panel = _panel(qtbot, mock_core, board=True, has_start=True)
     assert panel._pause_btn.property("runnerAction") == "pause"
     assert 'QPushButton[runnerAction="pause"]' in load_stylesheet("desktop")
+
+
+def test_readiness_changed_reports_board_and_flow(qtbot, mock_core):
+    panel = _panel(qtbot, mock_core, board=True, has_start=True)
+    assert panel.is_ready() is True
+    mock_core.hardware_manager.is_any_board_connected = lambda: False
+    mock_core.session.hardware.boards.append(object())  # a board is configured
+    with qtbot.waitSignal(panel.readiness_changed, timeout=1000) as sig:
+        panel.refresh()
+    assert sig.args == [False]
+    assert panel._not_ready_hint.text() == "Connect the board to start (Hardware > Connect All)."
+
+
+def test_hint_names_a_missing_start_node(qtbot, mock_core):
+    panel = _panel(qtbot, mock_core, board=True, has_start=False)
+    assert panel._not_ready_hint.text() == "Add a Start Experiment node to the flow to start."

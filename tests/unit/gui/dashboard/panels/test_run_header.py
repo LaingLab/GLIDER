@@ -182,3 +182,28 @@ def test_header_commit_pending_commits_an_open_tag(qtbot, mock_core):
     h._tags.editor().setText("nest at 09:10")
     h.commit_pending()
     assert mock_core.session.metadata.notes == "nest at 09:10"
+
+
+def test_pill_says_not_ready_when_board_or_flow_missing(qtbot, mock_core):
+    h = _header(qtbot, mock_core)
+    h.set_ready(False)
+    assert h._pill.text() == "NOT READY"
+    h.set_ready(True)
+    assert h._pill.text() == "READY"
+
+
+def test_missing_field_outranks_not_ready(qtbot, mock_core):
+    h = _preset_header(qtbot, mock_core)
+    h.set_ready(False)
+    assert h._pill.text() == "NEEDS DETAILS"
+
+
+def test_non_preset_picker_sits_right_after_the_title(qtbot, mock_core):
+    h = _header(qtbot, mock_core, name="Camera Recording 5 min + LED Blink")
+    h.resize(1400, 120)
+    h.show()
+    qtbot.waitExposed(h)
+    row = h._title_row
+    assert row.indexOf(h._title) < row.indexOf(h._picker)
+    gap = h._picker.geometry().left() - h._title.geometry().right()
+    assert gap < 40

@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
+from PyQt6.QtWidgets import QLabel
 
 from glider.hal.value_spec import KIND_SWITCH, ActionValueSpec
 
@@ -103,3 +104,21 @@ def test_empty_rail_explains_itself(qtbot):
 def test_rail_with_a_device_has_no_empty_note(qtbot):
     w = _controls(qtbot, {"cue_led": _dev(state=False)})
     assert _empty_labels(w) == []
+
+
+def test_compact_rows_use_desktop_sized_controls(qtbot):
+    from glider.gui.runner.device_controls import RunnerDeviceControls
+
+    w = RunnerDeviceControls(SimpleNamespace(devices={"led": _dev(state=False)}), compact=True)
+    qtbot.addWidget(w)
+    w.refresh()
+    switch = w._widgets[("led", "set")]["switch"]
+    assert switch.minimumHeight() <= 36
+    assert switch.property("deviceSwitch") is True
+    labels = [lab.text() for lab in w.findChildren(QLabel)]
+    assert "Set" not in labels  # the device row already names what the switch drives
+
+
+def test_touch_rows_keep_touch_sized_controls(qtbot):
+    w = _controls(qtbot, {"led": _dev(state=False)})
+    assert w._widgets[("led", "set")]["switch"].minimumHeight() >= 72

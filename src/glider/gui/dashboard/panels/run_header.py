@@ -53,6 +53,7 @@ class RunHeader(QWidget):
         self._core = core
         self._state_name = "IDLE"
         self._missing: str | None = None
+        self._ready = True  # board + flow, fed by RunControlPanel.readiness_changed
 
         col = QVBoxLayout(self)
         col.setContentsMargins(4, 4, 4, 0)
@@ -64,6 +65,8 @@ class RunHeader(QWidget):
         self._title.setProperty("runTitle", True)
         self._title.setPlaceholderText("Name this experiment")
         self._title.editingFinished.connect(self._on_title_edited)
+        # Sized to its text, so the ▾ beside it reads as part of the title.
+        self._title.textChanged.connect(self._fit_title)
         self._picker = QToolButton()
         self._picker.setProperty("presetPicker", True)
         self._picker.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -71,10 +74,9 @@ class RunHeader(QWidget):
         self._menu.setToolTipsVisible(True)  # field labels as each preset's subtitle
         self._menu.aboutToShow.connect(self._rebuild_menu)
         self._picker.setMenu(self._menu)
+        top.addWidget(self._title)
         top.addWidget(self._picker)
-        top.addWidget(self._title, 1)
-        # Takes the slack when the title is hidden (preset mode), so the pill
-        # keeps its size hint instead of stretching across the row.
+        # Takes the slack, so the title, ▾ and pill keep their size hints.
         top.addStretch()
         self._run_label = QLabel()
         self._run_label.setProperty("textRole", "muted")
@@ -98,6 +100,7 @@ class RunHeader(QWidget):
         self._title.blockSignals(True)
         self._title.setText(md.name if md else "")
         self._title.blockSignals(False)
+        self._fit_title()
         preset = self._is_preset()
         self._title.setVisible(not preset)
         self._picker.setText(f"{_type(md) or md.name} ▾" if preset else "▾")
@@ -129,6 +132,11 @@ class RunHeader(QWidget):
 
     def update_state(self, state_name: str) -> None:
         self._state_name = state_name
+        self._apply_state()
+
+    def set_ready(self, ready: bool) -> None:
+        """Whether a board and a runnable flow are in place (not the run fields)."""
+        self._ready = bool(ready)
         self._apply_state()
 
     def set_needs_details(self, missing_label: str | None) -> None:
@@ -184,6 +192,8 @@ class RunHeader(QWidget):
             text = self._state_name
         elif missing:
             text = "NEEDS DETAILS"
+        elif not self._ready:
+            text = "NOT READY"
         else:
             text = "READY"
         self._pill.setText(text)
@@ -193,6 +203,17 @@ class RunHeader(QWidget):
         self._picker.setEnabled(not live)
         self._title.setReadOnly(live)
         self._tags.set_locked(live)
+
+    def _fit_title(self, text: str = "") -> None:
+        self._title.ensurePolished()  # the stylesheet sets the 18 px title font
+        metrics = self._title.fontMetrics()
+        shown = self._title.text() or self._title.placeholderText()
+        self._title.setFixedWidth(min(metrics.horizontalAdvance(shown) + 24, 720))
+
+    def showEvent(self, event):  # noqa: N802 (Qt override)
+        # The app stylesheet can land after construction; measure again.
+        super().showEvent(event)
+        self._fit_title()
 
     def _set_metadata(self, attr: str, value: str) -> None:
         md = self._metadata()
