@@ -50,6 +50,7 @@ class RunControlPanel(QWidget):
         self._last_readiness = None
         self._missing_field: str | None = None
         self._paused_at = 0.0
+        self._paused_total = 0.0  # seconds paused so far in this run
 
         self.setObjectName("runControlPanel")
         self._setup_ui()
@@ -130,18 +131,20 @@ class RunControlPanel(QWidget):
         self._state_name = state_name
         self._refresh_run_readiness()
 
-        # Start/stop elapsed timer
+        # Start/stop elapsed timer. Paused stretches are not run time.
+        now = time.time()
+        if previous == "PAUSED" and state_name != "PAUSED":
+            self._paused_total += now - self._paused_at
         if state_name == "RUNNING":
-            if previous == "PAUSED" and self._experiment_start_time is not None:
-                # Resume: the paused stretch is not run time.
-                self._experiment_start_time += time.time() - self._paused_at
-            else:
-                self._experiment_start_time = time.time()
+            if previous != "PAUSED" or self._experiment_start_time is None:
+                self._experiment_start_time = now
+                self._paused_total = 0.0
             self._elapsed_timer.start()
             self._update_elapsed_time()
         elif state_name == "PAUSED":
             # Freeze the display on its current value; no flow-duration snap.
-            self._paused_at = time.time()
+            if previous != "PAUSED":
+                self._paused_at = now
             self._elapsed_timer.stop()
         else:
             self._elapsed_timer.stop()
@@ -189,7 +192,7 @@ class RunControlPanel(QWidget):
         """Emit the live elapsed time (see ``format_elapsed`` for the format)."""
         if self._experiment_start_time is None:
             return
-        self._set_timer_display(time.time() - self._experiment_start_time)
+        self._set_timer_display(time.time() - self._experiment_start_time - self._paused_total)
 
     def _snap_timer_to_flow_duration(self) -> None:
         """On flow end, freeze the timer on the flow's logical duration.
@@ -204,7 +207,8 @@ class RunControlPanel(QWidget):
             # the display. Happens on cleanup paths that don't correspond
             # to a flow termination.
             return
-        self._set_timer_display(duration)
+        # The flow's duration is wall time; take this run's pauses back out.
+        self._set_timer_display(max(0.0, duration - self._paused_total))
 
     def _set_timer_display(self, elapsed: float) -> None:
         """Format ``elapsed`` (seconds) and publish it (also shown on the clock label)."""

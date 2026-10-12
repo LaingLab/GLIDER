@@ -136,3 +136,21 @@ def test_resume_keeps_the_elapsed_time(qtbot, mock_core, monkeypatch):
     now[0] += 5
     panel._update_elapsed_time()
     assert panel._timer.text() == "00:15.00"
+
+
+def test_stop_after_a_pause_shows_run_time_not_wall_time(qtbot, mock_core, monkeypatch):
+    now = [1000.0]
+    _clock(monkeypatch, now)
+    panel = _panel(qtbot, mock_core)
+    panel.update_state("RUNNING")
+    now[0] += 50
+    panel.update_state("PAUSED")
+    now[0] += 10
+    panel.update_state("PAUSED")  # a repeat callback must not restart the pause
+    panel.update_state("RUNNING")
+    now[0] += 10
+    mock_core.last_flow_duration_s = 70.0  # wall time, pause included
+    panel.update_state("STOPPING")
+    assert panel._timer.text() == "01:00.00"
+    panel.update_state("READY")
+    assert panel._timer.text() == "01:00.00"
