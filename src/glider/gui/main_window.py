@@ -3532,8 +3532,12 @@ class MainWindow(QMainWindow):
         self._run_async(self._core.resume_experiment())
 
     def _refresh_run_health(self) -> None:
-        """Feed the camera overlay: preview fps, frames dropped, REC."""
-        if self._dashboard_view is None:
+        """Feed the camera overlay: preview fps, frames dropped, REC.
+
+        Only while the Run page is on screen: nobody can see the overlay
+        otherwise, and the poll has no business reading the recorders then.
+        """
+        if self._dashboard_view is None or not self._dashboard_view.isVisible():
             return
         fps = self._camera_panel.current_fps() if self._camera_panel is not None else None
         dropped = self._core.video_recorder.frames_dropped + sum(

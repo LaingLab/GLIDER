@@ -77,6 +77,8 @@ def test_state_change_reaches_device_rows(qtbot, main_window_factory):
 
 def test_health_overlay_fed_from_recorders(qtbot, main_window_factory):
     window = main_window_factory()
+    window.show()
+    window.switch_to_runner()  # the overlay is only fed while the Run page shows
     window._camera_panel.current_fps = lambda: 29.9
     window._refresh_run_health()
     assert window._dashboard_view._fps.text() == "29.9 fps"
@@ -249,3 +251,17 @@ def test_run_page_hides_the_duplicate_fps_readout(qtbot, main_window_factory):
     assert not cam._fps_label.isVisibleTo(cam)
     window.switch_to_builder()
     assert cam._fps_label.isVisibleTo(cam)
+
+
+def test_health_overlay_does_not_poll_while_the_run_page_is_hidden(qtbot, main_window_factory):
+    """CI regression: the 1 s health timer fired on the Builder page against a
+    recorder that wasn't there to ask, and raised inside the Qt event loop."""
+    from unittest.mock import MagicMock
+
+    window = main_window_factory(desktop_mode=True)
+    window.show()
+    window.switch_to_builder()
+    window._core._video_recorder = MagicMock()  # anything it would read must not be read
+    window._dashboard_view.set_health = MagicMock()
+    window._refresh_run_health()
+    window._dashboard_view.set_health.assert_not_called()
