@@ -21,6 +21,8 @@ from glider.core import presets
 from glider.gui.dashboard.panels.field_tags import FieldTags, TagField
 
 _LIVE = ("RUNNING", "PAUSED")
+# Non-live states the pill names as they are instead of READY / NEEDS DETAILS.
+_SHOWN_AS_IS = ("STOPPING", "ERROR", "INITIALIZING")
 # Part 1 tags: (metadata attribute, label).
 _META_TAGS = (("experimenter", "Experimenter"), ("protocol", "Protocol"), ("notes", "Notes"))
 
@@ -66,10 +68,14 @@ class RunHeader(QWidget):
         self._picker.setProperty("presetPicker", True)
         self._picker.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._menu = QMenu(self._picker)
+        self._menu.setToolTipsVisible(True)  # field labels as each preset's subtitle
         self._menu.aboutToShow.connect(self._rebuild_menu)
         self._picker.setMenu(self._menu)
         top.addWidget(self._picker)
         top.addWidget(self._title, 1)
+        # Takes the slack when the title is hidden (preset mode), so the pill
+        # keeps its size hint instead of stretching across the row.
+        top.addStretch()
         self._run_label = QLabel()
         self._run_label.setProperty("textRole", "muted")
         top.addWidget(self._run_label)
@@ -87,6 +93,7 @@ class RunHeader(QWidget):
     # --- public API ---
 
     def refresh(self) -> None:
+        self._tags.commit_pending()
         md = self._metadata()
         self._title.blockSignals(True)
         self._title.setText(md.name if md else "")
@@ -112,6 +119,10 @@ class RunHeader(QWidget):
         ]
         return tags
 
+    def commit_pending(self) -> None:
+        """Commit a tag the operator is still typing in (e.g. before a start)."""
+        self._tags.commit_pending()
+
     def set_run_info(self, run_number: int | None, folder: str) -> None:
         self._run_label.setText(f"Run {run_number} today" if run_number else "")
         self._tags.set_trailing_text(f"→ {folder}" if folder else "")
@@ -131,8 +142,10 @@ class RunHeader(QWidget):
         return getattr(session, "metadata", None) if session is not None else None
 
     def _is_preset(self) -> bool:
+        # Run fields only: an old file with just an Experiment Type keeps
+        # its editable title.
         md = self._metadata()
-        return bool(md and (_fields(md) or _type(md)))
+        return bool(md and _fields(md))
 
     def _rebuild_menu(self) -> None:
         self._menu.clear()
@@ -167,7 +180,7 @@ class RunHeader(QWidget):
         missing = self._missing or (
             presets.missing_required(_fields(md), md.run_values) if _fields(md) else None
         )
-        if live:
+        if live or self._state_name in _SHOWN_AS_IS:
             text = self._state_name
         elif missing:
             text = "NEEDS DETAILS"

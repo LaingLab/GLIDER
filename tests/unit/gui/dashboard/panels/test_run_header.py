@@ -147,3 +147,38 @@ def test_run_info(qtbot, mock_core):
     h.set_run_info(4, "~/GLIDER/pup-retrieval/d14_20261011_run04")
     assert h._run_label.text() == "Run 4 today"
     assert h._tags._trailing.text().endswith("run04")
+
+
+@pytest.mark.parametrize("state", ["STOPPING", "ERROR", "INITIALIZING"])
+def test_pill_shows_non_ready_states(qtbot, mock_core, state):
+    h = _header(qtbot, mock_core)
+    h.update_state(state)
+    assert h._pill.text() == state
+    assert h._pill.property("statusState") == state
+    assert not h._title.isReadOnly()  # only RUNNING/PAUSED lock editing
+
+
+def test_pill_keeps_its_size_in_preset_mode(qtbot, mock_core):
+    h = _preset_header(qtbot, mock_core)
+    h.resize(1200, 80)
+    h.show()
+    qtbot.waitExposed(h)
+    assert h._pill.width() < 300
+
+
+def test_preset_subtitles_show_as_tooltips(qtbot, mock_core):
+    h = _header(qtbot, mock_core)
+    assert h._menu.toolTipsVisible()
+
+
+def test_experiment_type_alone_keeps_the_editable_title(qtbot, mock_core):
+    h = _header(qtbot, mock_core, name="Old file", experiment_type="Open field")
+    assert h._title.isVisibleTo(h)
+
+
+def test_header_commit_pending_commits_an_open_tag(qtbot, mock_core):
+    h = _header(qtbot, mock_core)
+    h._tags.chip("notes").click()
+    h._tags.editor().setText("nest at 09:10")
+    h.commit_pending()
+    assert mock_core.session.metadata.notes == "nest at 09:10"
