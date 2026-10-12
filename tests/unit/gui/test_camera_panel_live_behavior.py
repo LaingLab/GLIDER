@@ -301,3 +301,11 @@ def test_stop_live_behavior_joins_thread(qtbot, tiny_behavior_model, tmp_path, m
     assert panel._live_behavior_btn.text() == "Start"
     assert panel._preview._pose_kps is None
     assert panel._preview._behavior_label == ""
+
+
+def test_rehearsal_status_is_hidden_until_there_is_news(qtbot):
+    panel = _make_panel(qtbot)
+    assert not panel._rehearse_status.isVisibleTo(panel)
+    panel._show_rehearse_status("Ready to rehearse from a recording.")
+    assert panel._rehearse_status.isVisibleTo(panel)
+    assert panel._rehearse_status.text() == "Ready to rehearse from a recording."

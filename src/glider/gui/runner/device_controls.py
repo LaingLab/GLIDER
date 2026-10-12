@@ -24,12 +24,14 @@ engine's shared runner.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from datetime import datetime
+from typing import TYPE_CHECKING, NamedTuple
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -41,7 +43,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.core.config import get_config
 from glider.core.graph_functions import build_picker_labels, list_graph_functions
+from glider.gui.device_status import (
+    device_state_display,
+    link_status_color,
+    link_status_text,
+)
 from glider.gui.widgets.schema_form import build_schema_widgets, read_schema_widget
 from glider.hal.value_spec import KIND_SWITCH, KIND_WHOLE
 
@@ -49,6 +57,7 @@ if TYPE_CHECKING:
     from glider.core.hardware_manager import HardwareManager
 
 _CONTROL_MIN_HEIGHT = 72  # touch-target floor (matches the runner tab height)
+_COMPACT_MIN_HEIGHT = 32  # desktop: a mouse target
 _SPACING = 10
 
 # A range with more discrete steps than this is not usefully draggable on a
@@ -64,6 +73,13 @@ _SWITCH_REDUNDANT = ("on", "off", "toggle")
 
 # Secondary helper actions covered by a primary control of the same device.
 _SECONDARY = ("set_percent",)
+
+
+class _RowRefs(NamedTuple):
+    dot: QLabel
+    value: QLabel
+    link: QLabel
+    manual: QLabel
 
 
 class RunnerDeviceControls(QWidget):
@@ -86,9 +102,14 @@ class RunnerDeviceControls(QWidget):
         hardware_manager: HardwareManager,
         session_fn: Callable[[], object] | None = None,
         parent: QWidget | None = None,
+        compact: bool = False,
     ):
         super().__init__(parent)
         self._hardware_manager = hardware_manager
+        # Desktop (mouse) sizing: smaller controls, and no "Set" caption,
+        # since the device row above already names what the control drives.
+        self._compact = compact
+        self._min_h = _COMPACT_MIN_HEIGHT if compact else _CONTROL_MIN_HEIGHT
         # Returns the current ExperimentSession (or None). When absent, the
         # Functions section is never built (used by device-only tests).
         self._session_fn = session_fn
@@ -103,6 +124,11 @@ class RunnerDeviceControls(QWidget):
         # write can revert the control to what the device actually holds
         self._committed: dict[tuple[str, str], int] = {}
         self.setObjectName("runnerDeviceControls")
+        self._rows: dict[str, _RowRefs] = {}
+        self._state_name = "IDLE"
+        self._value_timer = QTimer(self)
+        self._value_timer.setInterval(get_config().timing.device_refresh_interval_ms)
+        self._value_timer.timeout.connect(self.refresh_values)
         self._setup_ui()
 
     # --- UI scaffolding ---
@@ -207,15 +233,24 @@ class RunnerDeviceControls(QWidget):
         self._widgets.clear()
         self._function_buttons.clear()
         self._committed.clear()
+        self._rows.clear()
 
         functions_section = self._make_functions_section()
         if functions_section is not None:
             self._content_layout.addWidget(functions_section)
 
+        added = functions_section is not None
         for dev_id, device in self._hardware_manager.devices.items():
             section = self._make_device_section(dev_id, device)
             if section is not None:
                 self._content_layout.addWidget(section)
+                added = True
+        if not added:
+            empty = QLabel("No devices yet. Add a board and devices in the Design tab.")
+            empty.setProperty("textRole", "muted")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.setWordWrap(True)
+            self._content_layout.addWidget(empty)
         self._content_layout.addStretch(1)
 
     def _make_functions_section(self) -> QWidget | None:
@@ -243,7 +278,7 @@ class RunnerDeviceControls(QWidget):
 
         for label, start_node_id in build_picker_labels(infos):
             btn = QPushButton(label)
-            btn.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+            btn.setMinimumHeight(self._min_h)
             btn.clicked.connect(
                 lambda _=False, sid=start_node_id: self.function_run_requested.emit(sid)
             )
@@ -274,9 +309,7 @@ class RunnerDeviceControls(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        heading = QLabel(dev_id)
-        heading.setProperty("class", "device-section-header")
-        layout.addWidget(heading)
+        layout.addWidget(self._make_status_row(dev_id, device))
 
         for kind, action, spec in controls:
             builder = {
@@ -289,28 +322,105 @@ class RunnerDeviceControls(QWidget):
             layout.addWidget(builder(dev_id, action, spec))
         return section
 
+    def _make_status_row(self, dev_id: str, device) -> QWidget:
+        """Dot, name and type, live value; plus a 'set by you' line under it."""
+        row = QWidget()
+        row.setProperty("deviceRow", True)
+        grid = QGridLayout(row)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(0)
+        dot = QLabel("●")
+        dot.setProperty("deviceDot", True)
+        name = QLabel(dev_id)
+        name.setProperty("class", "device-section-header")
+        kind = QLabel(getattr(device, "device_type", ""))
+        kind.setProperty("textRole", "muted")
+        value = QLabel()
+        value.setProperty("deviceValue", True)
+        value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        link = QLabel()
+        link.setProperty("textRole", "muted")
+        manual = QLabel()
+        manual.setProperty("textRole", "muted")
+        manual.hide()
+        grid.addWidget(dot, 0, 0, 2, 1)
+        grid.addWidget(name, 0, 1)
+        grid.addWidget(value, 0, 2, 2, 1)
+        grid.addWidget(kind, 1, 1)
+        grid.addWidget(manual, 2, 1, 1, 2)
+        grid.setColumnStretch(1, 1)
+        self._rows[dev_id] = _RowRefs(dot, value, link, manual)
+        self._paint_row(dev_id, device)
+        return row
+
+    def _paint_row(self, dev_id: str, device) -> None:
+        refs = self._rows[dev_id]
+        text, _colour, _size = device_state_display(device)
+        refs.value.setText(text.replace("\n", "  "))
+        link = getattr(device, "link_state", None)
+        refs.dot.setStyleSheet(f"color: {link_status_color(link)};")
+        refs.dot.setToolTip(link_status_text(link))
+        refs.link.setText(link_status_text(link))
+
+    def refresh_values(self) -> None:
+        devices = self._hardware_manager.devices
+        for dev_id in self._rows:
+            device = devices.get(dev_id)
+            if device is not None:
+                self._paint_row(dev_id, device)
+
+    def update_state(self, state_name: str) -> None:
+        previous, self._state_name = self._state_name, state_name
+        if state_name == "RUNNING" and previous not in ("RUNNING", "PAUSED"):
+            # A new run: last run's "set by you" notes no longer apply.
+            for refs in self._rows.values():
+                refs.manual.hide()
+                refs.manual.clear()
+        if state_name == "RUNNING":
+            self._value_timer.start()
+        else:
+            self._value_timer.stop()
+            self.refresh_values()
+
+    def closeEvent(self, event) -> None:
+        self._value_timer.stop()
+        super().closeEvent(event)
+
     # --- Control builders ---
 
     def _labeled(self, action: str, unit: str = "") -> QLabel:
         text = _title(action) + (f" ({unit})" if unit else "")
         return QLabel(text)
 
+    def _captioned(self, action: str) -> bool:
+        """Whether a control gets its action caption ("Set", "Pulse", ...)."""
+        return not (self._compact and action == "set")
+
     def _make_switch(self, dev_id: str, action: str, spec) -> QWidget:
         block = QWidget()
         row = QHBoxLayout(block)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(_SPACING)
-        row.addWidget(self._labeled(action))
+        if self._captioned(action):
+            row.addWidget(self._labeled(action))
         switch = QPushButton("OFF")
         switch.setCheckable(True)
-        switch.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+        switch.setMinimumHeight(self._min_h)
+        if self._compact:
+            switch.setProperty("deviceSwitch", True)
+            switch.setFixedWidth(64)
 
         def _on_toggle(checked: bool) -> None:
             switch.setText("ON" if checked else "OFF")
             self.action_write_requested.emit(dev_id, action, bool(checked))
 
         switch.toggled.connect(_on_toggle)
-        row.addWidget(switch, 1)
+        if self._compact:
+            row.addWidget(switch)
+            row.addStretch(1)
+        else:
+            row.addWidget(switch, 1)
         self._widgets[(dev_id, action)] = {"switch": switch}
         return block
 
@@ -319,7 +429,8 @@ class RunnerDeviceControls(QWidget):
         layout = QVBoxLayout(block)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        layout.addWidget(self._labeled(action, spec.unit))
+        if self._captioned(action):
+            layout.addWidget(self._labeled(action, spec.unit))
 
         row = QHBoxLayout()
         row.setSpacing(_SPACING)
@@ -327,7 +438,7 @@ class RunnerDeviceControls(QWidget):
         spin = QSpinBox()
         spin.setRange(spec.min, spec.max)
         spin.setSingleStep(max(1, spec.step))
-        spin.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+        spin.setMinimumHeight(self._min_h)
 
         steps = (spec.max - spec.min) // max(1, spec.step)
         slider = None
@@ -335,7 +446,7 @@ class RunnerDeviceControls(QWidget):
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(spec.min, spec.max)
             slider.setSingleStep(max(1, spec.step))
-            slider.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+            slider.setMinimumHeight(self._min_h)
 
             # Live readout during drag, but commit (write) only on release, so
             # dragging never ramps the device through intermediate values.
@@ -362,7 +473,7 @@ class RunnerDeviceControls(QWidget):
 
     def _make_button(self, dev_id: str, action: str, spec) -> QWidget:
         btn = QPushButton(_title(action))
-        btn.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+        btn.setMinimumHeight(self._min_h)
         btn.clicked.connect(lambda _=False: self.action_fire_requested.emit(dev_id, action))
         self._widgets[(dev_id, action)] = {"button": btn}
         return btn
@@ -386,11 +497,11 @@ class RunnerDeviceControls(QWidget):
         fields: dict[str, tuple] = {}
         build_schema_widgets(form, schema, fields)
         for widget, _ftype in fields.values():
-            widget.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+            widget.setMinimumHeight(self._min_h)
         layout.addLayout(form)
 
         btn = QPushButton(_title(action))
-        btn.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+        btn.setMinimumHeight(self._min_h)
         btn.clicked.connect(
             lambda _=False: self.action_call_requested.emit(
                 dev_id,
@@ -409,7 +520,7 @@ class RunnerDeviceControls(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(_SPACING)
         read_btn = QPushButton("Read")
-        read_btn.setMinimumHeight(_CONTROL_MIN_HEIGHT)
+        read_btn.setMinimumHeight(self._min_h)
         read_btn.clicked.connect(lambda _=False: self.read_requested.emit(dev_id, action))
         value_label = QLabel("—")
         self._value_labels[(dev_id, action)] = value_label
@@ -453,6 +564,13 @@ class RunnerDeviceControls(QWidget):
                 self._committed[key] = int(value[0])
             except (TypeError, ValueError):
                 pass
+        device = self._hardware_manager.devices.get(dev_id)
+        if device is not None and dev_id in self._rows:
+            self._paint_row(dev_id, device)
+        refs = self._rows.get(dev_id)
+        if refs is not None and self._state_name in ("RUNNING", "PAUSED"):
+            refs.manual.setText(f"set by you {datetime.now():%H:%M}")
+            refs.manual.show()
         self.clear_status()
 
     def on_action_failed(self, dev_id: str, action: str, message: str) -> None:

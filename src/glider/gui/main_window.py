@@ -7,7 +7,9 @@ and signal wiring between extracted panel components.
 
 import asyncio
 import logging
+import re
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,6 +35,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.core import presets
 from glider.core.config import get_config
 from glider.gui.commands import UndoStack
 from glider.gui.device_status import link_status_text, link_strip_state
@@ -50,6 +53,7 @@ from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController, node_category_for_type
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
 from glider.gui.panels.tools_page import ToolsPage
+from glider.gui.runner.readiness import compute_readiness
 from glider.gui.shell import (
     AppShell,
     Command,
@@ -72,6 +76,10 @@ if TYPE_CHECKING:
     from glider.core.glider_core import GliderCore
 
 logger = logging.getLogger(__name__)
+
+_LIVE_STATES = ("RUNNING", "PAUSED")
+# States during which the current run's folder is still the one in use.
+_RUN_FOLDER_STATES = ("RUNNING", "PAUSED", "STOPPING")
 
 # QSettings flag, namespaced alongside the existing first_run/* keys and kept
 # separate from ``first_run/tour_complete``: one shared flag would mean sitting
@@ -487,7 +495,7 @@ class MainWindow(QMainWindow):
         self._node_library_panel: NodeLibraryPanel | None = None
         self._node_editor: NodeEditorController | None = None
         self._camera_panel: CameraPanel | None = None
-        # Dashboard camera-quadrant occupant: a lightweight container that is
+        # Dashboard camera-stage occupant: a lightweight container that is
         # ALWAYS the dashboard's "camera" panel. The single CameraPanel is
         # reparented into this slot (dashboard shown) or the Builder's Camera
         # tab slot (Builder shown) on view switch — never duplicated (Task 12).
@@ -512,11 +520,15 @@ class MainWindow(QMainWindow):
 
         # Operator (non-Builder) view. Exactly ONE of these is built, chosen by
         # startup mode: the 4-tab RunnerShell in runner mode (Pi touchscreen),
-        # the 2x2 DashboardView in desktop mode. The other stays None, so every
+        # the camera-cockpit DashboardView in desktop mode. The other stays None, so every
         # site that touches a mode-specific widget must guard on it.
         self._dashboard_view = None  # DashboardView (desktop mode)
         self._run_control_panel = None  # RunControlPanel (dashboard)
-        self._device_states_panel = None  # DeviceStatesPanel (dashboard)
+        self._run_header = None  # RunHeader (dashboard)
+        # The current run's numbered folder, shown while it records (preset runs).
+        self._live_run_folder: Path | None = None
+        # A run went live since the last reset; READY/IDLE then resets run values.
+        self._run_was_live = False
         self._runner_shell = None  # RunnerShell (runner mode)
         self._runner_panel = None  # RunnerPanel — Run tab (runner mode)
         self._runner_setup_page = None  # RunnerSetupPage — Setup tab (runner mode)
@@ -1174,8 +1186,8 @@ class MainWindow(QMainWindow):
         """Build the operator (non-Builder) view for the detected mode.
 
         Runner mode (Pi touchscreen) gets the 4-tab RunnerShell — one full-width
-        page at a time, which fits the 480px screen. Desktop mode gets the 2x2
-        DashboardView. Exactly one is built, so the panels they share
+        page at a time, which fits the 480px screen. Desktop mode gets the
+        camera-first DashboardView. Exactly one is built, so the panels they share
         (CameraPanel, RunnerDeviceControls, HardwarePanel) are never double-owned.
         """
         if self._view_manager.is_runner_mode:
@@ -1184,40 +1196,45 @@ class MainWindow(QMainWindow):
             self._create_dashboard_view()
 
     def _create_dashboard_view(self) -> None:
-        """Create the desktop dashboard: a fixed 2x2 grid.
+        """Create the desktop Run page: the camera cockpit.
 
-        Camera Feed | Device States & Timer / Run Control | Manual Control.
-        The dashboard keeps its OWN HardwarePanel (``_dash_hardware_panel``),
+        Header and camera on the left; run box and device controls in the
+        right rail. The dashboard keeps its OWN HardwarePanel (``_dash_hardware_panel``),
         built but never shown: it backs the Connect / Ports dialog, and its
         ``refresh_tree`` -> ``hardware_changed`` is the fan-out that refreshes
-        the device cards and manual controls. The Camera panel is the single
+        the manual controls. The Camera panel is the single
         shared instance the Builder's Camera tab also re-hosts.
         """
         from glider.gui.dashboard.dashboard_view import DashboardView
-        from glider.gui.dashboard.panels.device_states_panel import DeviceStatesPanel
         from glider.gui.dashboard.panels.run_control_panel import RunControlPanel
+        from glider.gui.dashboard.panels.run_header import RunHeader
         from glider.gui.runner.device_controls import RunnerDeviceControls
 
-        # --- Run Control panel (START/STOP, metadata, file actions) ---
+        # --- Run box (clock, Start / Pause / Stop) ---
         run_control = RunControlPanel(self._core)
         run_control.start_requested.connect(self._on_start_clicked)
         run_control.stop_requested.connect(self._on_stop_clicked)
-        run_control.new_requested.connect(self._on_new)
-        run_control.open_requested.connect(self._on_open)
-        run_control.save_requested.connect(self._on_save)
-        run_control.save_as_requested.connect(self._on_save_as)
-        run_control.help_requested.connect(self._on_help)
-        run_control.close_requested.connect(self.close)
-        run_control.switch_to_desktop_requested.connect(self._switch_to_desktop_mode)
+        run_control.pause_requested.connect(self._on_pause_clicked)
+        run_control.resume_requested.connect(self._on_resume_clicked)
         self._run_control_panel = run_control
 
-        # --- Device States panel ---
-        device_states = DeviceStatesPanel(self._core)
-        self._device_states_panel = device_states
+        # --- Header (title, state pill, field tags) ---
+        self._run_header = RunHeader(self._core)
+        self._run_header.preset_chosen.connect(self._on_preset_chosen)
+        self._run_header.new_preset_requested.connect(self._on_new_preset)
+        self._run_header.save_as_preset_requested.connect(self._on_save_as_preset)
+        self._run_header.edit_fields_requested.connect(self._on_edit_preset_fields)
+        self._run_header.open_file_requested.connect(self._on_open)
+        self._run_header.run_values_changed.connect(self._refresh_run_info)
+        self._run_header.show_presets_folder_requested.connect(self._on_show_presets_folder)
+        # The pill's READY / NOT READY follows the same board + flow check that
+        # enables Start, so the two can never disagree.
+        run_control.readiness_changed.connect(self._run_header.set_ready)
+        self._run_header.set_ready(run_control.is_ready())
 
         # --- Manual Controls panel (RunnerDeviceControls) ---
         self._runner_device_controls = RunnerDeviceControls(
-            self._core.hardware_manager, session_fn=lambda: self._core.session
+            self._core.hardware_manager, session_fn=lambda: self._core.session, compact=True
         )
         self._runner_device_controls.action_write_requested.connect(
             lambda dev_id, action, value: self._run_async(self._drive_action(dev_id, action, value))
@@ -1239,7 +1256,7 @@ class MainWindow(QMainWindow):
         # two overlapping runs would corrupt each other's saved state.
         self._manual_run_busy = False
 
-        # --- Camera panel (single reparented singleton). The camera quadrant
+        # --- Camera panel (single reparented singleton). The camera stage
         # hosts a lightweight container slot; the real CameraPanel lives inside
         # whichever view is currently visible (this slot when the dashboard is
         # shown, the Builder's Camera tab when Builder is).
@@ -1250,11 +1267,10 @@ class MainWindow(QMainWindow):
 
         self._dashboard_view = DashboardView(
             camera=self._camera_slot,
-            device_states=device_states,
+            header=self._run_header,
             run_control=run_control,
-            manual_controls=self._runner_device_controls,
+            device_controls=self._runner_device_controls,
         )
-        run_control.elapsed_updated.connect(self._dashboard_view.set_time)
 
         # The dashboard's hidden HardwarePanel (see docstring). Parented to the
         # view so it is owned and its dialog centres on the window.
@@ -1267,9 +1283,6 @@ class MainWindow(QMainWindow):
         )
         self._dash_hardware_panel.hide()
         self._dash_hardware_panel.status_message.connect(self._show_status_message)
-        run_control.board_settings_requested.connect(
-            self._dash_hardware_panel.show_board_settings_dialog
-        )
 
         # Initial camera placement: park the single CameraPanel in the dashboard
         # slot. Desktop startup later re-hosts it into the Builder (see
@@ -1279,9 +1292,14 @@ class MainWindow(QMainWindow):
         # Hardware-change fan-out to the dashboard panels (_setup_dock_widgets
         # builds a separate Builder panel and wires its own fan-out, so there
         # is no double-firing).
-        self._dash_hardware_panel.hardware_changed.connect(device_states.refresh_devices)
         self._dash_hardware_panel.hardware_changed.connect(self._runner_device_controls.refresh)
         self._dash_hardware_panel.refresh_tree()
+
+        # Camera health overlay (fps, dropped frames, REC), once a second.
+        self._health_timer = QTimer(self)
+        self._health_timer.setInterval(1000)
+        self._health_timer.timeout.connect(self._refresh_run_health)
+        self._health_timer.start()
 
     def _create_runner_shell_view(self) -> None:
         """Create the Pi 4-tab RunnerShell view (Setup / Run / Manual / Camera).
@@ -1411,7 +1429,9 @@ class MainWindow(QMainWindow):
             return
         if self._camera_slot is not None:
             self._camera_slot.layout().addWidget(self._camera_panel)  # dashboard slot
+            self._camera_panel.set_controls_visible(False)  # the cockpit shows video only
         elif self._runner_shell is not None:
+            self._camera_panel.set_controls_visible(True)
             self._runner_shell.rehost_camera()  # RunnerShell Camera tab
 
     def _move_camera_to_builder(self) -> None:
@@ -1427,6 +1447,7 @@ class MainWindow(QMainWindow):
         """
         if self._camera_tab_slot is not None and self._camera_panel is not None:
             self._camera_tab_slot.layout().addWidget(self._camera_panel)  # reparents
+            self._camera_panel.set_controls_visible(True)
 
     def _populate_builder_panels(self) -> None:
         """Build the Builder's panel widgets and host them in the shell.
@@ -1891,6 +1912,13 @@ class MainWindow(QMainWindow):
         disconnect_action.triggered.connect(self._on_disconnect_hardware)
         hardware_menu.addAction(disconnect_action)
 
+        self._connect_ports_action = QAction("Connect / &Ports…", self)
+        self._connect_ports_action.triggered.connect(
+            lambda: self._dash_hardware_panel
+            and self._dash_hardware_panel.show_board_settings_dialog()
+        )
+        hardware_menu.addAction(self._connect_ports_action)
+
         # Run menu
         run_menu = self._menu("&Run")
 
@@ -2312,6 +2340,8 @@ class MainWindow(QMainWindow):
         self.session_changed.connect(self._refresh_hardware_readouts)
         # Dashboard-only panels (desktop mode).
         if self._run_control_panel is not None:
+            self.session_changed.connect(self._run_header.refresh)
+            self.session_changed.connect(self._refresh_run_info)
             self.session_changed.connect(self._run_control_panel.refresh)
         # Runner-only Setup page (runner mode).
         if self._runner_setup_page is not None:
@@ -2365,6 +2395,23 @@ class MainWindow(QMainWindow):
             self._runner_shell.update_state(state_name)
 
         self._refresh_strip_run_state(state_name)
+
+        # The stop path is RUNNING -> STOPPING -> READY (or -> ERROR). Reset the
+        # run values once the run has fully ended; after an ERROR keep them so
+        # the operator can retry.
+        if state_name in ("RUNNING", "PAUSED"):
+            self._run_was_live = True
+        elif state_name == "ERROR":
+            self._run_was_live = False
+        elif state_name in ("READY", "IDLE") and self._run_was_live:
+            self._run_was_live = False
+            if self._core.session is not None:
+                self._core.session.metadata.reset_run_values()
+                if self._run_header is not None:
+                    self._run_header.refresh()
+        if prev_state in _RUN_FOLDER_STATES and state_name not in _RUN_FOLDER_STATES:
+            self._live_run_folder = None
+        self._refresh_run_info()
 
         # Update toolbar status indicator
         if self._toolbar_status is not None:
@@ -2839,30 +2886,32 @@ class MainWindow(QMainWindow):
         self._undo_stack.clear()
         self._update_undo_redo_actions()
 
-    def _on_new(self) -> None:
-        """Create new experiment."""
+    def _on_new(self) -> bool:
+        """Create new experiment. True when a new session was created."""
         if self._refuse_while_running("start a new experiment"):
-            return
-        if self._check_save():
-            self._core.hardware_manager.clear()
-            self._core.new_session()
-            self._graph_view.clear_graph()
-            self._reset_undo_history()
-            self._zone_config = ZoneConfiguration()
-            self._apply_zone_config()
-            self.session_changed.emit()
-            if self._hardware_panel:
-                self._hardware_panel.refresh_tree()
-            if self._dash_hardware_panel:
-                self._dash_hardware_panel.refresh_tree()
-            if self._node_library_panel:
-                self._node_library_panel.refresh_flow_functions()
-            if self._experiment_dialog:
-                self._experiment_dialog.set_session(self._core.session)
-            # Same reason as in _load_experiment_path: the Experiment tab's
-            # sections hold the session and ZoneConfiguration that were just
-            # thrown away.
-            self._reset_experiment_page()
+            return False
+        if not self._check_save():
+            return False
+        self._core.hardware_manager.clear()
+        self._core.new_session()
+        self._graph_view.clear_graph()
+        self._reset_undo_history()
+        self._zone_config = ZoneConfiguration()
+        self._apply_zone_config()
+        self.session_changed.emit()
+        if self._hardware_panel:
+            self._hardware_panel.refresh_tree()
+        if self._dash_hardware_panel:
+            self._dash_hardware_panel.refresh_tree()
+        if self._node_library_panel:
+            self._node_library_panel.refresh_flow_functions()
+        if self._experiment_dialog:
+            self._experiment_dialog.set_session(self._core.session)
+        # Same reason as in _load_experiment_path: the Experiment tab's
+        # sections hold the session and ZoneConfiguration that were just
+        # thrown away.
+        self._reset_experiment_page()
+        return True
 
     def _on_open(self) -> None:
         """Open experiment file."""
@@ -3069,6 +3118,88 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save: {e}")
         return False
+
+    # --- Presets ---
+
+    def _ask_preset_fields(self, fields, name: str = "", ask_name: bool = False):
+        from glider.gui.dialogs.preset_fields_dialog import PresetFieldsDialog
+
+        dialog = PresetFieldsDialog(list(fields), name=name, ask_name=ask_name, parent=self)
+        if dialog.exec() != PresetFieldsDialog.DialogCode.Accepted:
+            return None
+        return dialog.name() or name, dialog.fields()
+
+    def _on_preset_chosen(self, path: str) -> None:
+        if self._refuse_while_running("switch presets") or not self._check_save():
+            return
+        if self._load_experiment_path(path):
+            self._core.session.metadata.reset_run_values()
+            self.session_changed.emit()
+
+    def _on_new_preset(self) -> None:
+        if self._refuse_while_running("create a preset"):
+            return
+        answer = self._ask_preset_fields([], ask_name=True)
+        if answer is None:
+            return
+        name, fields = answer
+        if not self._on_new():  # refused, or cancelled at the save prompt
+            return
+        md = self._core.session.metadata
+        md.name = name
+        md.run_fields = fields
+        md.reset_run_values()
+        path = presets.save_preset(self._core.session, name)
+        self._remember_current_experiment(str(path))
+        self.session_changed.emit()
+        self.switch_to_builder()
+        self._show_status_message(f"Created preset {name}. Build its flow, then save.")
+
+    def _on_save_as_preset(self) -> None:
+        if self._refuse_while_running("save a preset"):
+            return
+        from glider.core.experiment_session import ExperimentSession
+
+        md = self._core.session.metadata
+        answer = self._ask_preset_fields(
+            md.run_fields, name=md.experiment_type or md.name, ask_name=True
+        )
+        if answer is None:
+            return
+        name, fields = answer
+        # Save a copy so the working session keeps its file path and unsaved
+        # edits. Sync first, as a save would, so live device and vision
+        # settings are not saved stale.
+        self._core.sync_session_for_save()
+        copy = ExperimentSession.from_dict(self._core.session.to_dict())
+        copy.metadata.run_fields = fields
+        path = presets.save_preset(copy, name)
+        md.run_fields = fields
+        md.reconcile_run_values()
+        self._core.session.mark_dirty()
+        self.session_changed.emit()
+        self._show_status_message(f"Saved preset: {path}")
+
+    def _on_edit_preset_fields(self) -> None:
+        if self._refuse_while_running("edit preset fields"):
+            return
+        md = self._core.session.metadata
+        answer = self._ask_preset_fields(md.run_fields, name=md.experiment_type)
+        if answer is None:
+            return
+        _name, md.run_fields = answer
+        md.reconcile_run_values()
+        self._core.session.mark_dirty()
+        if self._core.session.file_path:
+            self._on_save()
+        self.session_changed.emit()
+
+    def _on_show_presets_folder(self) -> None:
+        from PyQt6.QtGui import QDesktopServices
+
+        folder = presets.presets_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _check_save(self) -> bool:
         if self._core.session and self._core.session.is_dirty:
@@ -3397,6 +3528,93 @@ class MainWindow(QMainWindow):
     def _on_start_clicked(self) -> None:
         self._run_async(self._start_async())
 
+    @pyqtSlot()
+    def _on_pause_clicked(self) -> None:
+        self._run_async(self._core.pause_experiment())
+
+    @pyqtSlot()
+    def _on_resume_clicked(self) -> None:
+        self._run_async(self._core.resume_experiment())
+
+    def _refresh_run_health(self) -> None:
+        """Feed the camera overlay: preview fps, frames dropped, REC.
+
+        Only while the Run page is on screen: nobody can see the overlay
+        otherwise, and the poll has no business reading the recorders then.
+        """
+        if self._dashboard_view is None or not self._dashboard_view.isVisible():
+            return
+        fps = self._camera_panel.current_fps() if self._camera_panel is not None else None
+        dropped = self._core.video_recorder.frames_dropped + sum(
+            self._core.multi_video_recorder.frames_dropped.values()
+        )
+        recording = (
+            bool(self._core.data_recorder.is_recording)
+            and getattr(self, "_last_session_state", None) == "RUNNING"
+        )
+        self._dashboard_view.set_health(fps, dropped, recording)
+
+    def _run_base_dir(self) -> Path:
+        from glider.first_run import default_data_dir
+
+        rec_dir = self._core.session.metadata.recording_directory
+        return Path(rec_dir) if rec_dir else default_data_dir()
+
+    def _preset_slug(self) -> str:
+        md = self._core.session.metadata
+        return presets.slugify(md.experiment_type or md.name)
+
+    def _prepare_run_folder(self) -> Path | None:
+        """Create this run's numbered folder; None when the session has no run fields."""
+        session = self._core.session
+        if session is None or not session.metadata.run_fields:
+            return None
+        md = session.metadata
+        values = [md.run_values.get(f.key, "") for f in md.run_fields if f.required]
+        for attempt in range(2):
+            folder = presets.run_folder(
+                self._run_base_dir(), self._preset_slug(), values, date.today()
+            )
+            try:
+                folder.mkdir(parents=True, exist_ok=False)
+                return folder
+            except FileExistsError:
+                # Lost a race with another window: recompute the number once.
+                if attempt:
+                    raise
+
+    def _refresh_run_info(self) -> None:
+        if self._run_header is None or self._core.session is None:
+            return
+        md = self._core.session.metadata
+        if not md.run_fields:
+            self._run_header.set_run_info(None, "")
+            return
+        live = self._live_run_folder
+        if live is not None and getattr(self, "_last_session_state", None) in _LIVE_STATES:
+            # Recording: show this run's folder, not the next one.
+            match = re.search(r"_run(\d+)$", live.name)
+            self._run_header.set_run_info(int(match.group(1)) if match else None, str(live))
+            return
+        base, slug, today = self._run_base_dir(), self._preset_slug(), date.today()
+        values = [md.run_values.get(f.key, "") for f in md.run_fields if f.required]
+        folder = presets.run_folder(base, slug, values, today)
+        self._run_header.set_run_info(presets.next_run_number(base, slug, today), str(folder))
+
+    def _apply_recording_directory(self) -> Path | None:
+        """Point every recorder at this run's folder; returns it for preset runs.
+
+        ``set_recording_directory`` is sticky, so the flat path must always set
+        it too (recorders default to the current directory).
+        """
+        folder = self._live_run_folder = self._prepare_run_folder()
+        if folder is not None:
+            self._core.set_recording_directory(folder)
+        else:
+            rec_dir = self._core.session.metadata.recording_directory
+            self._core.set_recording_directory(Path(rec_dir) if rec_dir else Path.cwd())
+        return folder
+
     async def _start_async(self) -> None:
         # A manual function run briefly forces the flow engine RUNNING to gate
         # exec propagation; starting a real experiment on top of that would make
@@ -3408,12 +3626,30 @@ class MainWindow(QMainWindow):
                 level="warning",
             )
             return
+        # F5, Run > Start and the toolbar all land here, past the Start
+        # button's own gating, so check again. Commit a half-typed tag first.
+        if self._run_header is not None:
+            self._run_header.commit_pending()
+        if self._core.state.name == "PAUSED":
+            await self._core.resume_experiment()  # a paused run keeps its folder
+            return
+        if self._core.state.name not in ("IDLE", "READY"):
+            return  # already live: must not make a folder or move the recorders
+        missing = compute_readiness(self._core).missing_field
+        if missing:
+            self._notify_user("Missing details", f"Fill in {missing} to start.", level="warning")
+            return
+        folder = None
         try:
-            rec_dir = self._core.session.metadata.recording_directory
-            if rec_dir:
-                self._core.set_recording_directory(Path(rec_dir))
+            folder = self._apply_recording_directory()
             await self._core.start_experiment()
         except Exception as e:
+            self._live_run_folder = None
+            if folder is not None:
+                try:
+                    folder.rmdir()  # a failed start must not use up a run number
+                except OSError:
+                    pass
             # Non-blocking: avoid freezing the qasync loop during start.
             self._notify_user("Start Error", str(e), level="critical")
 
@@ -3815,7 +4051,7 @@ class MainWindow(QMainWindow):
 
         # Deterministically stop the CameraPanel CV thread now that we are
         # committed to closing. Runner mode always builds a CameraPanel (nested
-        # inside the DashboardView's camera quadrant), and its CV QThread is only stopped from
+        # inside the DashboardView's camera stage), and its CV QThread is only stopped from
         # CameraPanel.closeEvent/destroyed — which Qt does not fire for a nested
         # child during MainWindow teardown. Calling close() here synchronously
         # joins the thread (idempotent via its isRunning() guard), so the Pi

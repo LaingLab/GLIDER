@@ -89,10 +89,10 @@ def _resolution_bits(device: object, attr: str, default: int) -> int:
 def device_state_display(device: object) -> tuple[str, str, str]:
     """``(text, background colour, font size)`` for a device's live-state pill.
 
-    One function because the Run tab and the dashboard's Device States panel
-    each carried their own copy, and both only read ``_state`` -- which PWM
-    outputs (``_value``) and servos (``_angle``) do not have, so those cards
-    never moved during a run.
+    One function because the Run tab and the (since removed) dashboard
+    Device States panel each carried their own copy, and both only read
+    ``_state`` -- which PWM outputs (``_value``) and servos (``_angle``) do
+    not have, so those cards never moved during a run.
     """
     device_type = getattr(device, "device_type", "")
     if device_type == "AnalogInput":

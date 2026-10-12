@@ -606,6 +606,13 @@ class TrackingDataLogger:
                 self._writer.writerow(["# Lab", metadata.lab])
             if metadata.project:
                 self._writer.writerow(["# Project", metadata.project])
+            fields = getattr(metadata, "run_fields", None)
+            values = getattr(metadata, "run_values", None)
+            if isinstance(fields, list) and isinstance(values, dict):
+                for run_field in fields:
+                    value = values.get(run_field.key, "")
+                    if value:
+                        self._writer.writerow([f"# {run_field.label}", value])
 
             # Write active subject info
             active_subject = metadata.get_active_subject()

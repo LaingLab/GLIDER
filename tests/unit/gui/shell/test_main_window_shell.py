@@ -138,7 +138,7 @@ def test_panels_are_re_hosted_not_rebuilt(qtbot, main_window_factory):
     assert window._properties_host.widget() is window._properties_widget
 
     # The camera is the one panel that moves between views, so it lives in a
-    # slot the tab owns, exactly as the dashboard quadrant does.
+    # slot the tab owns, exactly as the dashboard camera stage does.
     assert _is_descendant(window._camera_panel, shell.right)
 
 

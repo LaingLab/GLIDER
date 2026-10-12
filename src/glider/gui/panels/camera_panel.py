@@ -427,7 +427,7 @@ class CameraPanel(QWidget):
         layout.addWidget(self._preview_stack, 1)  # Stretch factor 1
 
         # Status bar
-        status_frame = QFrame()
+        self._status_frame = status_frame = QFrame()
         status_layout = QHBoxLayout(status_frame)
         status_layout.setContentsMargins(8, 4, 8, 4)
 
@@ -447,6 +447,14 @@ class CameraPanel(QWidget):
         status_layout.addWidget(self._resolution_label)
 
         layout.addWidget(status_frame)
+
+        # Everything below the preview and its status line lives in one
+        # container, so the Run page can hide the controls as a group.
+        self._controls = QWidget()
+        layout.addWidget(self._controls)
+        layout = QVBoxLayout(self._controls)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
 
         # Camera selector
         camera_layout = QHBoxLayout()
@@ -650,12 +658,11 @@ class CameraPanel(QWidget):
         rehearsal_row.addWidget(self._rehearse_speed)
         behavior_layout.addLayout(rehearsal_row)
 
-        self._rehearse_status = QLabel(
-            "Start live behavior first \u2014 a rehearsal with no classifier "
-            "running does nothing."
-        )
+        # Hidden until there is something to say (ready, rehearsing, a result).
+        self._rehearse_status = QLabel()
         self._rehearse_status.setProperty("textRole", "muted")
         self._rehearse_status.setWordWrap(True)
+        self._rehearse_status.setVisible(False)
         behavior_layout.addWidget(self._rehearse_status)
 
         layout.addWidget(behavior_group)
@@ -768,15 +775,19 @@ class CameraPanel(QWidget):
         )
         if not self._rehearsal_pump.start():
             self._rehearsal_pump = None
-            self._rehearse_status.setText(f"Could not open {Path(path).name}.")
+            self._show_rehearse_status(f"Could not open {Path(path).name}.")
             return
 
         self._rehearse_btn.setText("Stop rehearsal")
         self._rehearse_speed.setEnabled(False)
-        self._rehearse_status.setText(
+        self._show_rehearse_status(
             f"Rehearsing {Path(path).name} \u2014 hardware is being driven for real."
         )
         logger.info("Rehearsal started from %s", path)
+
+    def _show_rehearse_status(self, text: str) -> None:
+        self._rehearse_status.setText(text)
+        self._rehearse_status.setVisible(bool(text))
 
     def _stop_rehearsal(self) -> None:
         pump = self._rehearsal_pump
@@ -818,7 +829,7 @@ class CameraPanel(QWidget):
             summary += f", worst lag {lag_ms:.0f} ms \u2014 inference did not keep up"
         elif self._rehearse_speed.currentData():
             summary += ", kept up with real time"
-        self._rehearse_status.setText(summary)
+        self._show_rehearse_status(summary)
         logger.info("%s", summary)
 
     def _convert_pose_model(self, folder: Path, converter) -> bool:
@@ -1139,16 +1150,27 @@ class CameraPanel(QWidget):
                 self._fps_label.setText(f"{fps:.1f} FPS")
             return
 
-        if self._preview_active:
-            if self._multi_camera_mode and self._multi_cam:
-                # Show primary camera FPS in status bar
-                primary_id = self._multi_cam.primary_camera_id
-                if primary_id:
-                    fps = self._multi_cam.get_camera_fps(primary_id)
-                    self._fps_label.setText(f"{fps:.1f} FPS")
-            else:
-                fps = self._camera.current_fps
-                self._fps_label.setText(f"{fps:.1f} FPS")
+        fps = self.current_fps()
+        if fps is not None:
+            self._fps_label.setText(f"{fps:.1f} FPS")
+
+    def set_controls_visible(self, visible: bool) -> None:
+        """Show or hide everything but the preview.
+
+        The fps/resolution status row goes too: the Run page's overlay already
+        shows fps and REC.
+        """
+        self._controls.setVisible(visible)
+        self._status_frame.setVisible(visible)
+
+    def current_fps(self) -> float | None:
+        """Live preview frame rate of the primary camera, or None when idle."""
+        if not self._preview_active:
+            return None
+        if self._multi_camera_mode and self._multi_cam:
+            primary_id = self._multi_cam.primary_camera_id
+            return float(self._multi_cam.get_camera_fps(primary_id)) if primary_id else None
+        return float(self._camera.current_fps)
 
     def _on_cv_toggle(self, enabled: bool) -> None:
         """Handle CV processing toggle."""
@@ -1913,7 +1935,7 @@ class CameraPanel(QWidget):
         self._preview.set_behavior_vocab(worker.classes)
         self._rehearse_btn.setEnabled(True)
         self._update_rehearse_label()
-        self._rehearse_status.setText("Ready to rehearse from a recording.")
+        self._show_rehearse_status("Ready to rehearse from a recording.")
         # Also hand the vocabulary to the flow side, so a Behavior Input node's
         # properties can offer the behaviors this model actually emits instead
         # of a free-text box where a typo means "never fires".
