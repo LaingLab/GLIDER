@@ -35,3 +35,11 @@ def test_reset_run_values_uses_defaults():
     md.run_values = {"dam_id": "D14", "stale": "x"}
     md.reset_run_values()
     assert md.run_values == {"dam_id": "", "litter": "6"}
+
+
+def test_reconcile_keeps_values_adds_defaults_drops_removed():
+    md = _md()
+    md.run_values = {"dam_id": "D14", "litter": "8", "stale": "x"}
+    md.run_fields = [RunField("dam_id", "Dam ID", True), RunField("sex", "Sex", False, "F")]
+    md.reconcile_run_values()
+    assert md.run_values == {"dam_id": "D14", "sex": "F"}

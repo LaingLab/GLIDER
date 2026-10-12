@@ -3111,6 +3111,10 @@ class MainWindow(QMainWindow):
         self._show_status_message(f"Created preset {name}. Build its flow, then save.")
 
     def _on_save_as_preset(self) -> None:
+        if self._refuse_while_running("save a preset"):
+            return
+        from glider.core.experiment_session import ExperimentSession
+
         md = self._core.session.metadata
         answer = self._ask_preset_fields(
             md.run_fields, name=md.experiment_type or md.name, ask_name=True
@@ -3118,20 +3122,25 @@ class MainWindow(QMainWindow):
         if answer is None:
             return
         name, fields = answer
+        # Save a copy so the working session keeps its file path and unsaved edits.
+        copy = ExperimentSession.from_dict(self._core.session.to_dict())
+        copy.metadata.run_fields = fields
+        path = presets.save_preset(copy, name)
         md.run_fields = fields
-        md.reset_run_values()
-        path = presets.save_preset(self._core.session, name)
-        self._remember_current_experiment(str(path))
+        md.reconcile_run_values()
+        self._core.session.mark_dirty()
         self.session_changed.emit()
         self._show_status_message(f"Saved preset: {path}")
 
     def _on_edit_preset_fields(self) -> None:
+        if self._refuse_while_running("edit preset fields"):
+            return
         md = self._core.session.metadata
         answer = self._ask_preset_fields(md.run_fields, name=md.experiment_type)
         if answer is None:
             return
         _name, md.run_fields = answer
-        md.reset_run_values()
+        md.reconcile_run_values()
         self._core.session.mark_dirty()
         if self._core.session.file_path:
             self._on_save()

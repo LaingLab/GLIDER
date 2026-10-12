@@ -170,6 +170,10 @@ class SessionMetadata:
     def reset_run_values(self) -> None:
         self.run_values = {f.key: f.default for f in self.run_fields}
 
+    def reconcile_run_values(self) -> None:
+        """Fit run_values to run_fields: keep filled values, default new keys, drop removed."""
+        self.run_values = {f.key: self.run_values.get(f.key, f.default) for f in self.run_fields}
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,

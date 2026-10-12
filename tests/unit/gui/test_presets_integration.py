@@ -54,3 +54,25 @@ def test_edit_fields_writes_back(window, tmp_path, monkeypatch):
     window._on_edit_preset_fields()
     [info] = presets.list_presets(tmp_path / "presets")
     assert info.field_labels == ("Animal ID", "Group")
+
+
+def test_save_as_preset_keeps_working_file_and_unsaved_edits(window, tmp_path):
+    orig = str(tmp_path / "mine.glider")
+    window._core.session.save(orig)
+    window._core.session.mark_dirty()
+    window._on_save_as_preset()
+    s = window._core.session
+    assert s.file_path == orig and s.is_dirty
+    assert s.metadata.run_fields == FIELDS
+    assert (tmp_path / "presets" / "open-field.glider").exists()
+
+
+def test_edit_fields_keeps_filled_values(window, monkeypatch):
+    window._on_new_preset()
+    window._core.session.metadata.run_values["animal_id"] = "M031"
+    new = [RunField("animal_id", "Animal ID", True), RunField("group", "Group")]
+    monkeypatch.setattr(
+        window, "_ask_preset_fields", lambda fields, name="", ask_name=False: ("Open field", new)
+    )
+    window._on_edit_preset_fields()
+    assert window._core.session.metadata.run_values == {"animal_id": "M031", "group": ""}
