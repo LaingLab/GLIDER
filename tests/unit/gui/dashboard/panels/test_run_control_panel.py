@@ -178,3 +178,18 @@ def test_readiness_changed_reports_board_and_flow(qtbot, mock_core):
 def test_hint_names_a_missing_start_node(qtbot, mock_core):
     panel = _panel(qtbot, mock_core, board=True, has_start=False)
     assert panel._not_ready_hint.text() == "Add a Start Experiment node to the flow to start."
+
+
+def test_run_clock_uses_the_ui_font_with_steady_digits(qtbot, mock_core):
+    """The clock reads in the app's own face, and every digit is the same width,
+    so a ticking time doesn't shuffle sideways."""
+    from glider.gui.styles import load_stylesheet
+
+    panel = _panel(qtbot, mock_core)
+    panel.setStyleSheet(load_stylesheet("desktop"))
+    panel._timer.ensurePolished()
+    font = panel._timer.font()
+    assert "mono" not in font.family().lower() and "menlo" not in font.family().lower()
+    metrics = panel._timer.fontMetrics()
+    widths = {metrics.horizontalAdvance(d) for d in "0123456789"}
+    assert len(widths) == 1, widths

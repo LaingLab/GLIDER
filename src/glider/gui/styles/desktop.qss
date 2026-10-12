@@ -734,11 +734,13 @@ QLabel[textRole="secondary"] { color: #94a3b8; }
 QLabel[textRole="disabled"] { color: #475569; }
 QLabel[textRole="primary"] { color: #e2e8f0; }
 QLabel[textRole="warning"] { color: #fbbf24; font-size: 12px; }
+/* The run clock: the app's own face, light and large. Helvetica Neue's
+ * figures are tabular, so the ticking digits never shift sideways. */
 QLabel[timer="true"] {
     color: #e2e8f0;
-    font-family: "SF Mono", "Menlo", "Consolas", monospace;
-    font-size: 42px;
-    font-weight: bold;
+    font-family: "Helvetica Neue", "Segoe UI", "Roboto", sans-serif;
+    font-size: 46px;
+    font-weight: 300;
 }
 
 /* Button roles */
@@ -1840,21 +1842,39 @@ QLabel#toolCardIcon {
 }
 
 /* Click-to-edit field tags under the run-page title. */
+/* Plain filled pills; an outline only on hover (editable) or when a
+ * required value is missing. The editor that replaces a pill while typing
+ * takes the same shape, so editing doesn't swap in a different-looking box. */
 QPushButton[fieldTag="true"] {
-    background: #111820;                            /* SURFACE_1 */
-    border: 1px dashed #475569;                     /* TEXT_DISABLED */
+    background: #151c25;                            /* SURFACE_2 */
+    border: 1px solid transparent;
     border-radius: @RADIUS_MEDIUM@;
-    padding: 4px 9px;
+    padding: 4px 10px;
     color: #e2e8f0;                                 /* TEXT_PRIMARY */
     min-height: 0;
 }
+QPushButton[fieldTag="true"]:hover {
+    border-color: #475569;                          /* TEXT_DISABLED */
+}
 QPushButton[fieldTag="true"][need="true"] {
-    border: 1px solid #fbbf24;                      /* STATE_WARN */
+    background: rgba(251, 191, 36, 0.10);           /* STATE_WARN @ 10% */
+    border-color: rgba(251, 191, 36, 0.55);
     color: #fbbf24;                                 /* STATE_WARN */
 }
-QPushButton[fieldTag="true"][locked="true"] {
-    border-style: solid;
-    border-color: #1e2530;                          /* BORDER */
+QPushButton[fieldTag="true"][locked="true"],
+QPushButton[fieldTag="true"][locked="true"]:hover {
+    background: transparent;
+    border-color: transparent;
+    color: #c0c8d4;                                 /* TEXT_SECONDARY */
+}
+QLineEdit[fieldTagEditor="true"] {
+    background: #151c25;                            /* SURFACE_2 */
+    border: 1px solid #38bdf8;                      /* ACCENT */
+    border-radius: @RADIUS_MEDIUM@;
+    padding: 3px 10px;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    min-height: 0;
+    min-width: 140px;
 }
 
 /* Run cockpit: cards, camera health badges, device status rows */
