@@ -8,6 +8,7 @@ and signal wiring between extracted panel components.
 import asyncio
 import logging
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -1209,6 +1210,7 @@ class MainWindow(QMainWindow):
         self._run_header.save_as_preset_requested.connect(self._on_save_as_preset)
         self._run_header.edit_fields_requested.connect(self._on_edit_preset_fields)
         self._run_header.open_file_requested.connect(self._on_open)
+        self._run_header.run_values_changed.connect(self._refresh_run_info)
         self._run_header.show_presets_folder_requested.connect(self._on_show_presets_folder)
 
         # --- Manual Controls panel (RunnerDeviceControls) ---
@@ -2317,6 +2319,7 @@ class MainWindow(QMainWindow):
         # Dashboard-only panels (desktop mode).
         if self._run_control_panel is not None:
             self.session_changed.connect(self._run_header.refresh)
+            self.session_changed.connect(self._refresh_run_info)
             self.session_changed.connect(self._run_control_panel.refresh)
         # Runner-only Setup page (runner mode).
         if self._runner_setup_page is not None:
@@ -2370,6 +2373,16 @@ class MainWindow(QMainWindow):
             self._runner_shell.update_state(state_name)
 
         self._refresh_strip_run_state(state_name)
+
+        if (
+            prev_state in ("RUNNING", "PAUSED")
+            and state_name not in ("RUNNING", "PAUSED")
+            and self._core.session is not None
+        ):
+            self._core.session.metadata.reset_run_values()
+            if self._run_header is not None:
+                self._run_header.refresh()
+        self._refresh_run_info()
 
         # Update toolbar status indicator
         if self._toolbar_status is not None:
@@ -3502,6 +3515,48 @@ class MainWindow(QMainWindow):
         )
         self._dashboard_view.set_health(fps, dropped, recording)
 
+    def _run_base_dir(self) -> Path:
+        from glider.first_run import default_data_dir
+
+        rec_dir = self._core.session.metadata.recording_directory
+        return Path(rec_dir) if rec_dir else default_data_dir()
+
+    def _preset_slug(self) -> str:
+        md = self._core.session.metadata
+        return presets.slugify(md.experiment_type or md.name)
+
+    def _prepare_run_folder(self) -> Path | None:
+        """Create this run's numbered folder; None when the session has no run fields."""
+        session = self._core.session
+        if session is None or not session.metadata.run_fields:
+            return None
+        md = session.metadata
+        values = [md.run_values.get(f.key, "") for f in md.run_fields if f.required]
+        for attempt in range(2):
+            folder = presets.run_folder(
+                self._run_base_dir(), self._preset_slug(), values, date.today()
+            )
+            try:
+                folder.mkdir(parents=True, exist_ok=False)
+                return folder
+            except FileExistsError:
+                # Lost a race with another window: recompute the number once.
+                if attempt:
+                    raise
+        return None  # pragma: no cover
+
+    def _refresh_run_info(self) -> None:
+        if self._run_header is None or self._core.session is None:
+            return
+        md = self._core.session.metadata
+        if not md.run_fields:
+            self._run_header.set_run_info(None, "")
+            return
+        base, slug, today = self._run_base_dir(), self._preset_slug(), date.today()
+        values = [md.run_values.get(f.key, "") for f in md.run_fields if f.required]
+        folder = presets.run_folder(base, slug, values, today)
+        self._run_header.set_run_info(presets.next_run_number(base, slug, today), str(folder))
+
     async def _start_async(self) -> None:
         # A manual function run briefly forces the flow engine RUNNING to gate
         # exec propagation; starting a real experiment on top of that would make
@@ -3514,9 +3569,13 @@ class MainWindow(QMainWindow):
             )
             return
         try:
-            rec_dir = self._core.session.metadata.recording_directory
-            if rec_dir:
-                self._core.set_recording_directory(Path(rec_dir))
+            folder = self._prepare_run_folder()
+            if folder is not None:
+                self._core.set_recording_directory(folder)
+            else:
+                rec_dir = self._core.session.metadata.recording_directory
+                if rec_dir:
+                    self._core.set_recording_directory(Path(rec_dir))
             await self._core.start_experiment()
         except Exception as e:
             # Non-blocking: avoid freezing the qasync loop during start.

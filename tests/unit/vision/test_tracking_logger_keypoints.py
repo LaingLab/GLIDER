@@ -319,3 +319,25 @@ async def test_state_resets_between_sessions(tmp_path):
 
     assert first.keypoints_file_path is None
     assert first_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_run_values_written_to_tracking_header(tmp_path):
+    from types import SimpleNamespace
+
+    from glider.core.experiment_session import RunField
+
+    metadata = SimpleNamespace(
+        protocol="",
+        experiment_type="",
+        experimenter="",
+        lab="",
+        project="",
+        run_fields=[RunField("dam_id", "Dam ID", True)],
+        run_values={"dam_id": "D14"},
+        get_active_subject=lambda: None,
+    )
+    tracker = TrackingDataLogger(output_dir=tmp_path)
+    path = await tracker.start("rv_test", SimpleNamespace(metadata=metadata))
+    await tracker.stop()
+    assert "# Dam ID,D14" in path.read_text(encoding="utf-8").splitlines()
