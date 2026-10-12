@@ -110,3 +110,13 @@ def test_save_session_ignores_devices_absent_from_session(temp_dir):
     core.save_session(str(temp_dir / "t.glider"))  # must not raise
 
     assert session.get_device("ghost") is None
+
+
+def test_sync_session_for_save_copies_device_drift_and_vision():
+    # Save-as-preset copies the session without saving it; it relies on this
+    # sync to pick up runtime device settings and the live CV configuration.
+    core, session, device = _core_with_device()
+    device.config.settings["offset"] = 7.0
+    core.sync_session_for_save()
+    assert session.get_device("dev1").settings == {"offset": 7.0}
+    assert session.to_dict()["vision"] == core.cv_processor.settings.to_dict()

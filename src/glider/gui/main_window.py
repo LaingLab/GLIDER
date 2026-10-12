@@ -2874,30 +2874,32 @@ class MainWindow(QMainWindow):
         self._undo_stack.clear()
         self._update_undo_redo_actions()
 
-    def _on_new(self) -> None:
-        """Create new experiment."""
+    def _on_new(self) -> bool:
+        """Create new experiment. True when a new session was created."""
         if self._refuse_while_running("start a new experiment"):
-            return
-        if self._check_save():
-            self._core.hardware_manager.clear()
-            self._core.new_session()
-            self._graph_view.clear_graph()
-            self._reset_undo_history()
-            self._zone_config = ZoneConfiguration()
-            self._apply_zone_config()
-            self.session_changed.emit()
-            if self._hardware_panel:
-                self._hardware_panel.refresh_tree()
-            if self._dash_hardware_panel:
-                self._dash_hardware_panel.refresh_tree()
-            if self._node_library_panel:
-                self._node_library_panel.refresh_flow_functions()
-            if self._experiment_dialog:
-                self._experiment_dialog.set_session(self._core.session)
-            # Same reason as in _load_experiment_path: the Experiment tab's
-            # sections hold the session and ZoneConfiguration that were just
-            # thrown away.
-            self._reset_experiment_page()
+            return False
+        if not self._check_save():
+            return False
+        self._core.hardware_manager.clear()
+        self._core.new_session()
+        self._graph_view.clear_graph()
+        self._reset_undo_history()
+        self._zone_config = ZoneConfiguration()
+        self._apply_zone_config()
+        self.session_changed.emit()
+        if self._hardware_panel:
+            self._hardware_panel.refresh_tree()
+        if self._dash_hardware_panel:
+            self._dash_hardware_panel.refresh_tree()
+        if self._node_library_panel:
+            self._node_library_panel.refresh_flow_functions()
+        if self._experiment_dialog:
+            self._experiment_dialog.set_session(self._core.session)
+        # Same reason as in _load_experiment_path: the Experiment tab's
+        # sections hold the session and ZoneConfiguration that were just
+        # thrown away.
+        self._reset_experiment_page()
+        return True
 
     def _on_open(self) -> None:
         """Open experiment file."""
@@ -3126,10 +3128,11 @@ class MainWindow(QMainWindow):
         if self._refuse_while_running("create a preset"):
             return
         answer = self._ask_preset_fields([], ask_name=True)
-        if answer is None or not self._check_save():
+        if answer is None:
             return
         name, fields = answer
-        self._on_new()
+        if not self._on_new():  # refused, or cancelled at the save prompt
+            return
         md = self._core.session.metadata
         md.name = name
         md.run_fields = fields
@@ -3152,7 +3155,10 @@ class MainWindow(QMainWindow):
         if answer is None:
             return
         name, fields = answer
-        # Save a copy so the working session keeps its file path and unsaved edits.
+        # Save a copy so the working session keeps its file path and unsaved
+        # edits. Sync first, as a save would, so live device and vision
+        # settings are not saved stale.
+        self._core.sync_session_for_save()
         copy = ExperimentSession.from_dict(self._core.session.to_dict())
         copy.metadata.run_fields = fields
         path = presets.save_preset(copy, name)

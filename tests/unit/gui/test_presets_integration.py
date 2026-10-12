@@ -76,3 +76,37 @@ def test_edit_fields_keeps_filled_values(window, monkeypatch):
     )
     window._on_edit_preset_fields()
     assert window._core.session.metadata.run_values == {"animal_id": "M031", "group": ""}
+
+
+def test_new_preset_cancelled_at_save_prompt_leaves_session_alone(window, tmp_path, monkeypatch):
+    s = window._core.session
+    s.metadata.name = "Mine"
+    orig = str(tmp_path / "mine.glider")
+    s.save(orig)
+    asked = []
+    monkeypatch.setattr(window, "_check_save", lambda: asked.append(1) or False)
+    window._on_new_preset()
+    monkeypatch.setattr(window, "_check_save", lambda: True)  # let the window close
+    assert window._core.session is s
+    assert s.metadata.name == "Mine" and s.metadata.run_fields == []
+    assert str(s.file_path) == orig
+    assert not (tmp_path / "presets").exists()
+    assert asked == [1]  # one prompt, not two
+
+
+def test_save_as_preset_syncs_live_settings_first(window, monkeypatch):
+    synced = []
+    monkeypatch.setattr(window._core, "sync_session_for_save", lambda: synced.append(1))
+    window._on_save_as_preset()
+    assert synced == [1]
+
+
+def test_new_preset_prompts_to_save_once(window, tmp_path, monkeypatch):
+    answers = iter([True, False])  # a second prompt would be cancelled
+    asked = []
+    monkeypatch.setattr(window, "_check_save", lambda: asked.append(1) or next(answers))
+    window._on_new_preset()
+    monkeypatch.setattr(window, "_check_save", lambda: True)  # let the window close
+    assert asked == [1]
+    assert window._core.session.metadata.run_fields == FIELDS
+    assert (tmp_path / "presets" / "open-field.glider").exists()
