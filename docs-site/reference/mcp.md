@@ -74,9 +74,9 @@ they name, and never replace an existing file unless told to with
 If the experiment an agent edits is open in GLIDER, GLIDER picks the change up
 on its own: with no unsaved edits it reloads straight away; with unsaved edits
 a bar offers **Reload** (take the agent's version) or **Keep mine** (your next
-save overwrites it). During a run nothing changes until the run ends. Files on
-network shares may not report changes; open them from a local folder to get
-live updates.
+save overwrites it). During a run nothing changes until the run ends. GLIDER
+also checks the file about once a second, so this works for experiments on a
+network share too.
 
 ## Try it
 

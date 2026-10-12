@@ -67,6 +67,19 @@ def test_watching_continues_after_a_swap(qtbot, watcher, experiment):
         atomic_write_text(experiment, '{"v": 3}')
 
 
+def test_a_change_the_os_never_reports_is_still_found(qtbot, experiment, monkeypatch):
+    """Windows' watcher can miss a swap-in save, and network shares report nothing:
+    the periodic check must catch it on its own."""
+    w = ExperimentFileWatcher(debounce_ms=DEBOUNCE_MS, poll_ms=100)
+    monkeypatch.setattr(w, "_arm", lambda: None)  # no OS notifications at all
+    w.watch(str(experiment))
+    try:
+        with qtbot.waitSignal(w.changed_externally, timeout=3000):
+            atomic_write_text(experiment, '{"v": "longer than before"}')
+    finally:
+        w.stop()
+
+
 def test_acknowledge_takes_the_disk_version_as_known(qtbot, watcher, experiment):
     with qtbot.waitSignal(watcher.changed_externally, timeout=3000):
         atomic_write_text(experiment, '{"v": 2}')

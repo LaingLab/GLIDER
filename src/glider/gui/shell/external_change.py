@@ -8,10 +8,20 @@ lose and otherwise shows :class:`ExternalChangeBar` so the operator chooses.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 from PyQt6.QtCore import QFileSystemWatcher, QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
+
+
+def _stat(path: str) -> tuple[int, int] | None:
+    """(modified time ns, size): cheap enough to check every second."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
 
 
 def _fingerprint(path: str) -> str | None:
@@ -28,11 +38,19 @@ class ExperimentFileWatcher(QObject):
     Compares contents, not timestamps, so GLIDER's own save is silent as long
     as the window calls :meth:`watch` again right after saving -- which also
     re-reads the fingerprint. A burst of writes collapses into one signal.
+
+    The OS notification is not enough on its own: Windows' watcher can miss a
+    file saved by swapping a temp file in (how GLIDER and glider-mcp save), and
+    network shares often report nothing. So the file's size and modified time
+    are also checked every ``poll_ms``; either route only starts the settle
+    timer, and the content hash decides.
     """
 
     changed_externally = pyqtSignal(str)
 
-    def __init__(self, parent: QObject | None = None, debounce_ms: int = 300) -> None:
+    def __init__(
+        self, parent: QObject | None = None, debounce_ms: int = 300, poll_ms: int = 1000
+    ) -> None:
         super().__init__(parent)
         self._watcher = QFileSystemWatcher(self)
         self._watcher.fileChanged.connect(self._on_event)
@@ -40,8 +58,12 @@ class ExperimentFileWatcher(QObject):
         self._settle_timer.setSingleShot(True)
         self._settle_timer.setInterval(debounce_ms)
         self._settle_timer.timeout.connect(self._settle)
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(poll_ms)
+        self._poll_timer.timeout.connect(self._poll)
         self._path: str | None = None
         self._known: str | None = None
+        self._last_stat: tuple[int, int] | None = None
 
     @property
     def path(self) -> str | None:
@@ -54,19 +76,24 @@ class ExperimentFileWatcher(QObject):
             return
         self._path = str(path)
         self._known = _fingerprint(self._path)
+        self._last_stat = _stat(self._path)
         self._arm()
+        self._poll_timer.start()
 
     def acknowledge(self) -> None:
         """Take what is on disk now as known, so the same version is not reported again."""
         if self._path is not None:
             self._known = _fingerprint(self._path)
+            self._last_stat = _stat(self._path)
 
     def stop(self) -> None:
         self._settle_timer.stop()
+        self._poll_timer.stop()
         if self._watcher.files():
             self._watcher.removePaths(self._watcher.files())
         self._path = None
         self._known = None
+        self._last_stat = None
 
     def _arm(self) -> None:
         # Saving by swapping a temp file in replaces the file the OS was
@@ -81,10 +108,19 @@ class ExperimentFileWatcher(QObject):
     def _on_event(self, _path: str) -> None:
         self._settle_timer.start()
 
+    def _poll(self) -> None:
+        if self._path is None:
+            return
+        current = _stat(self._path)
+        if current != self._last_stat:
+            self._last_stat = current
+            self._settle_timer.start()
+
     def _settle(self) -> None:
         if self._path is None:
             return
         self._arm()
+        self._last_stat = _stat(self._path)
         current = _fingerprint(self._path)
         if current is None or current == self._known:
             return  # deleted or moved away, or the same contents (our own save)
