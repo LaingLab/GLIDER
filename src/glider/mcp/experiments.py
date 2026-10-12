@@ -271,6 +271,37 @@ def _check_port(path, index, ports, owner, direction, errors) -> bool:
     return False
 
 
+def _check_function_calls(nodes: list[tuple[str, dict]], errors: list) -> None:
+    """A FunctionCall runs the StartFunction its state names by function_start_id, else nothing."""
+    starts = sorted(n["id"] for _, n in nodes if n["node_type"] == "StartFunction")
+    for path, n in nodes:
+        state = n.get("state", {})
+        if n["node_type"] != "FunctionCall" or not isinstance(state, dict):
+            continue  # a non-object state is already reported
+        target = state.get("function_start_id")
+        where = f"{path}.state.function_start_id"
+        if target is None:
+            errors.append(
+                _finding(
+                    where,
+                    "FunctionCall has no function_start_id, so it calls nothing",
+                    "set it to the id of a StartFunction node in this flow",
+                )
+            )
+        elif isinstance(target, str) and target not in starts:
+            errors.append(
+                _finding(
+                    where,
+                    f"no StartFunction node has id '{target}'",
+                    (
+                        "StartFunction ids in this flow: " + ", ".join(f"'{i}'" for i in starts)
+                        if starts
+                        else "add a StartFunction node and use its id"
+                    ),
+                )
+            )
+
+
 def _check_graph(data: dict, errors: list, warnings: list) -> None:
     boards = _items(data, "hardware.boards", errors, warnings)
     devices = _items(data, "hardware.devices", errors, warnings)
@@ -352,6 +383,8 @@ def _check_graph(data: dict, errors: list, warnings: list) -> None:
         device_id = n.get("device_id")
         if device_id is not None and device_id not in device_ids:
             errors.append(_finding(f"{path}.device_id", f"no device with id '{device_id}'"))
+
+    _check_function_calls(nodes, errors)
 
     types = {n["node_type"] for n in by_id.values()}
     if "StartExperiment" not in types:

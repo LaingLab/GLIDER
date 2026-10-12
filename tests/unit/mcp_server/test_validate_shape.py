@@ -216,3 +216,67 @@ async def test_plugin_node_settings_are_checked_and_bare_plugins_ignored(monkeyp
     report = await experiments.validate(edited(edit))
     assert "flow.nodes[3].state.level" in paths(report["errors"])
     assert not any(p.startswith("flow.nodes[4].state") for p in paths(report["warnings"]))
+
+
+def _call_flow(state, with_function=True):
+    def edit(d):
+        extra = [{"id": "call", "node_type": "FunctionCall", "position": [0, 200]}]
+        if state is not None:
+            extra[0]["state"] = state
+        if with_function:
+            extra.append(
+                {
+                    "id": "fn",
+                    "node_type": "StartFunction",
+                    "position": [0, 400],
+                    "state": {"function_name": "Beep"},
+                }
+            )
+        d["flow"]["nodes"] += extra
+
+    return edited(edit)
+
+
+CALL_ID = "flow.nodes[3].state.function_start_id"
+
+
+@pytest.mark.parametrize(
+    "state", [None, {}, {"function_name": "Beep"}, {"function_start_id": None}]
+)
+async def test_function_call_without_function_start_id_is_an_error(state):
+    report = await experiments.validate(_call_flow(state))
+    err = next(e for e in report["errors"] if e["path"] == CALL_ID)
+    assert "calls nothing" in err["message"]
+    assert "StartFunction" in err["hint"]
+
+
+async def test_function_call_naming_a_start_function_is_clean():
+    report = await experiments.validate(_call_flow({"function_start_id": "fn"}))
+    assert CALL_ID not in paths(report["errors"] + report["warnings"])
+    assert not any("function_start_id" in w["message"] for w in report["warnings"])
+
+
+async def test_function_call_with_an_unknown_function_id_names_the_ids_present():
+    report = await experiments.validate(_call_flow({"function_start_id": "gone"}))
+    err = next(e for e in report["errors"] if e["path"] == CALL_ID)
+    assert "'gone'" in err["message"]
+    assert "'fn'" in err["hint"]
+
+
+async def test_function_call_id_of_another_node_type_is_an_error():
+    report = await experiments.validate(_call_flow({"function_start_id": "wait"}))
+    assert CALL_ID in paths(report["errors"])
+
+
+async def test_function_call_with_no_start_function_in_the_flow_says_to_add_one():
+    report = await experiments.validate(
+        _call_flow({"function_start_id": "fn"}, with_function=False)
+    )
+    err = next(e for e in report["errors"] if e["path"] == CALL_ID)
+    assert "add a StartFunction" in err["hint"]
+
+
+@pytest.mark.parametrize("state", [["x"], {"function_start_id": 5}, {"function_start_id": ["fn"]}])
+async def test_function_call_with_malformed_state_does_not_raise(state):
+    report = await experiments.validate(_call_flow(state))
+    assert not report["valid"]
