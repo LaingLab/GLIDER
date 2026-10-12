@@ -2376,7 +2376,7 @@ class MainWindow(QMainWindow):
 
         if (
             prev_state in ("RUNNING", "PAUSED")
-            and state_name not in ("RUNNING", "PAUSED")
+            and state_name not in ("RUNNING", "PAUSED", "ERROR")
             and self._core.session is not None
         ):
             self._core.session.metadata.reset_run_values()
@@ -3557,6 +3557,20 @@ class MainWindow(QMainWindow):
         folder = presets.run_folder(base, slug, values, today)
         self._run_header.set_run_info(presets.next_run_number(base, slug, today), str(folder))
 
+    def _apply_recording_directory(self) -> Path | None:
+        """Point every recorder at this run's folder; returns it for preset runs.
+
+        ``set_recording_directory`` is sticky, so the flat path must always set
+        it too (recorders default to the current directory).
+        """
+        folder = self._prepare_run_folder()
+        if folder is not None:
+            self._core.set_recording_directory(folder)
+        else:
+            rec_dir = self._core.session.metadata.recording_directory
+            self._core.set_recording_directory(Path(rec_dir) if rec_dir else Path.cwd())
+        return folder
+
     async def _start_async(self) -> None:
         # A manual function run briefly forces the flow engine RUNNING to gate
         # exec propagation; starting a real experiment on top of that would make
@@ -3568,16 +3582,16 @@ class MainWindow(QMainWindow):
                 level="warning",
             )
             return
+        folder = None
         try:
-            folder = self._prepare_run_folder()
-            if folder is not None:
-                self._core.set_recording_directory(folder)
-            else:
-                rec_dir = self._core.session.metadata.recording_directory
-                if rec_dir:
-                    self._core.set_recording_directory(Path(rec_dir))
+            folder = self._apply_recording_directory()
             await self._core.start_experiment()
         except Exception as e:
+            if folder is not None:
+                try:
+                    folder.rmdir()  # a failed start must not use up a run number
+                except OSError:
+                    pass
             # Non-blocking: avoid freezing the qasync loop during start.
             self._notify_user("Start Error", str(e), level="critical")
 
