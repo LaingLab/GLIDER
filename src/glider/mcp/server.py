@@ -21,15 +21,18 @@ from glider.mcp import analysis, experiments
 INSTRUCTIONS = """\
 GLIDER designs and analyzes behavioral neuroscience experiments.
 
-Designing: call list_node_types and list_device_types, then new_experiment or
-read_experiment, edit the JSON, run validate_experiment until it is valid, and
-save_experiment. Files use GLIDER's session format. Ask the user before
-overwriting their files. This server never connects hardware or runs an
-experiment; the user runs it in GLIDER.
+Designing: read list_node_types and list_device_types first (list_examples
+shows working files), then new_experiment or read_experiment, edit the JSON,
+run validate_experiment until it is valid, and save_experiment. Nodes go in
+flow.nodes with "node_type"; settings go in each node's "state" using the keys
+list_node_types declares. Ask the user before overwriting their files. This
+server never connects hardware or runs an experiment; the user runs it in
+GLIDER.
 
 Analyzing: find_recordings, then session_summary on a recording folder; it
-names the states, zones and event sources the other tools accept. Pass out_csv
-for long tables and keep the preview in context.
+gives time per behavioural state and names the states, zones and event sources
+the other tools accept. Pass out_csv for long tables. Never report a number you
+did not get from a tool.
 """
 
 server = MCPServer("glider", instructions=INSTRUCTIONS, log_level="WARNING")
@@ -67,6 +70,7 @@ async def plot(path: str, kind: str, out_path: str, object_id: int = 0) -> Image
 for _fn in (
     experiments.list_node_types,
     experiments.list_device_types,
+    experiments.list_examples,
     experiments.new_experiment,
     experiments.read_experiment,
     experiments.validate_experiment,

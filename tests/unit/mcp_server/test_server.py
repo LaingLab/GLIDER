@@ -18,6 +18,7 @@ from glider.mcp.server import server  # noqa: E402
 TOOLS = {
     "list_node_types",
     "list_device_types",
+    "list_examples",
     "new_experiment",
     "read_experiment",
     "validate_experiment",

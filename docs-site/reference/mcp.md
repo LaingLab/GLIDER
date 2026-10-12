@@ -46,8 +46,9 @@ Always give the full path to the clone's script; `glider-mcp` is not on your
 
 | Designing experiments | |
 |---|---|
-| `list_node_types` | Node types and their ports |
-| `list_device_types` | Device types (with required pins) and board drivers |
+| `list_node_types` | Node types, their ports, and the settings each accepts |
+| `list_device_types` | Device types (required pins, settings) and board drivers |
+| `list_examples` | The shipped example experiments, to read as templates |
 | `new_experiment` | A minimal Start → End experiment to build on |
 | `read_experiment` | An experiment's JSON |
 | `validate_experiment` | Everything that would stop GLIDER opening or starting it |
@@ -56,7 +57,7 @@ Always give the full path to the clone's script; `glider-mcp` is not on your
 | Analyzing recordings | |
 |---|---|
 | `find_recordings` | Every recording under a folder, with its group |
-| `session_summary` | What a recording holds; start here |
+| `session_summary` | What a recording holds, including time in each state; start here |
 | `ethogram` | Bouts and per-state totals, or state transitions |
 | `trajectory` | Zone dwell, zone transitions, or the position trace |
 | `kinematics` | Speed statistics and distance |

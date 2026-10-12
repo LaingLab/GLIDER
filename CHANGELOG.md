@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MCP server, `glider-mcp` (`uv sync --extra pc --extra mcp`). Agents list node and
   device types, build `.glider` files that are validated by GLIDER's own
   loader before they are written, and summarize, tabulate and plot recordings.
-  The server never connects hardware or runs an experiment.
+  The server never connects hardware or runs an experiment. Node and device
+  settings are published and checked, the validator names misplaced or misspelled
+  fields, and `session_summary` reports time in each behavioural state.
 - **Session Review is rebuilt as an editor**, laid out like DaVinci Resolve's
   Edit page: the loaded **sessions** down the left, grouped by treatment, each
   row badged with the video, poses and hardware it has; the **viewer** in the

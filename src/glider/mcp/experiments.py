@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import glider
 from glider.core.experiment_session import ConnectionConfig, ExperimentSession, NodeConfig
 from glider.core.flow_engine import FlowEngine
 from glider.core.glider_core import GliderCore
@@ -147,6 +148,44 @@ async def list_device_types() -> dict[str, Any]:
         "device_types": devices,
         "board_drivers": drivers,
     }
+
+
+def _kinds(items: Any, field: str) -> list[str]:
+    return sorted(
+        {i[field] for i in items or [] if isinstance(i, dict) and isinstance(i.get(field), str)}
+    )
+
+
+def list_examples() -> dict[str, Any]:
+    """The example experiments shipped with GLIDER. A working example is the
+    quickest way to see the file shape; read one with read_experiment."""
+    folder = Path(glider.__file__).resolve().parents[2] / "examples"
+    if not folder.is_dir():
+        return {
+            "summary": "0 examples",
+            "examples": [],
+            "note": f"no examples folder at {folder}; this GLIDER install ships none",
+        }
+    examples = []
+    for path in sorted(folder.glob("*.glider")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        meta = data.get("metadata") or {}
+        flow = data.get("flow") or {}
+        hardware = data.get("hardware") or {}
+        examples.append(
+            {
+                "name": path.stem,
+                "description": meta.get("description") or meta.get("name") or "",
+                "node_types": _kinds(flow.get("nodes"), "node_type"),
+                "devices": _kinds(hardware.get("devices"), "device_type"),
+                "boards": _kinds(hardware.get("boards"), "driver_type"),
+                "path": str(path),
+            }
+        )
+    return {"summary": f"{len(examples)} examples", "examples": examples}
 
 
 # Fields each list item must have before anything else can be checked.
@@ -439,7 +478,8 @@ async def validate(data: Any) -> dict[str, Any]:
 async def validate_experiment(
     path: str | None = None, content: dict | str | None = None
 ) -> dict[str, Any]:
-    """Check an experiment for anything that would stop GLIDER opening or starting it.
+    """Check an experiment for anything that would stop GLIDER opening or starting it,
+    misplaced or misspelled fields, and settings outside what list_node_types declares.
 
     Pass exactly one of ``path`` (an existing .glider file) or ``content`` (the
     experiment JSON). Returns ``valid``, plus ``errors`` and ``warnings``, each
@@ -471,6 +511,13 @@ def _describe(data: dict) -> str:
 
 def new_experiment(path: str, name: str, description: str = "") -> dict[str, Any]:
     """Create a minimal valid experiment (Start -> End) to build on.
+
+    Before adding nodes or devices, read list_node_types and list_device_types
+    (and list_examples for the file shape). Nodes go in flow.nodes with
+    "node_type"; a node's settings go in its "state", using only the keys its
+    list_node_types "settings" declare. Exec ports connect with
+    connection_type "exec". Run validate_experiment and fix every error before
+    save_experiment.
 
     Args:
         path: Absolute path ending in .glider. Must not exist yet.
@@ -545,13 +592,15 @@ async def save_experiment(
 ) -> dict[str, Any]:
     """Validate an experiment and write it as a .glider file GLIDER can open.
 
-    Refuses to write anything that fails validate_experiment. Nodes without a
-    "position" are laid out left to right by flow depth.
+    Refuses to write anything that fails validate_experiment. Nodes go in
+    flow.nodes with "node_type", settings in each node's "state" (keys from
+    list_node_types). Nodes without a "position" are laid out left to right by
+    flow depth.
 
     Args:
         path: Absolute path ending in .glider.
         content: The experiment JSON (object or string).
-        overwrite: Replace an existing file. Off by default.
+        overwrite: Replace an existing file. Off by default; ask the user first.
     """
     target = writable_path(path, ".glider", overwrite=overwrite)
     data = _parse(content)

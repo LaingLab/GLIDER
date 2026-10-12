@@ -10,7 +10,7 @@ from glider.mcp import analysis  # noqa: E402
 def test_session_summary_lists_what_can_be_asked(synthetic_recording):
     s = analysis.session_summary(str(synthetic_recording))
     assert s["has"]["tracking"] and s["has"]["events"]
-    assert s["states"] == ["active", "resting", "unknown"]  # unknown = pre-flow frames
+    assert s["states"] == ["active", "resting"]
     assert s["zones"] == ["zone1"]
     assert s["object_ids"] == [0]
     assert s["frame_rate"] == pytest.approx(30.0, rel=0.05)
@@ -109,3 +109,29 @@ def test_unknown_object_id_names_the_tracked_ones(synthetic_recording, tmp_path)
         analysis.kinematics(str(synthetic_recording), object_id=7)
     with pytest.raises(ValueError, match="object_id 7"):
         analysis.plot(str(synthetic_recording), "trajectory", str(tmp_path / "p.png"), object_id=7)
+
+
+def test_session_summary_reports_time_per_state(synthetic_recording):
+    s = analysis.session_summary(str(synthetic_recording))
+    rows = {r["state"]: r for r in s["state_time"]}
+    assert rows["resting"]["percent"] == pytest.approx(62.5)
+    assert rows["resting"]["bouts"] == 2
+    assert rows["resting"]["seconds"] == pytest.approx(2.5)
+    assert rows["active"]["percent"] == pytest.approx(37.5)
+    assert rows["active"]["mean_bout_s"] == pytest.approx(1.5)
+    assert s["states"] == ["active", "resting"]
+
+
+def test_state_time_is_empty_without_tracking(tmp_path):
+    s = analysis.session_summary(str(tmp_path))
+    assert s["state_time"] == [] and s["states"] == []
+
+
+def test_state_time_has_rows_per_animal(recording_factory):
+    from .conftest import RecordingSpec
+
+    s = analysis.session_summary(str(recording_factory(RecordingSpec(n_objects=2))))
+    assert {r["object_id"] for r in s["state_time"]} == {0, 1}
+    for object_id in (0, 1):
+        total = sum(r["percent"] for r in s["state_time"] if r["object_id"] == object_id)
+        assert total == pytest.approx(100.0)

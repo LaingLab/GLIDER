@@ -19,3 +19,12 @@ async def test_example_validates(path):
 
 def test_examples_found():
     assert len(EXAMPLES) >= 5
+
+
+def test_list_examples_lists_every_shipped_example():
+    result = experiments.list_examples()
+    names = {e["name"] for e in result["examples"]}
+    assert names == {p.stem for p in EXAMPLES}
+    dispense = next(e for e in result["examples"] if e["name"] == "dispense")
+    assert "DigitalOutput" in dispense["devices"]
+    assert "StartExperiment" in dispense["node_types"]
