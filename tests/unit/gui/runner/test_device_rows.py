@@ -72,3 +72,13 @@ def test_manual_set_repaints_the_value_when_not_polling(qtbot):
     dev._state = True
     w.on_action_succeeded("cue_led", "set", True)
     assert w._rows["cue_led"].value.text() == "HIGH"
+
+
+def test_new_run_clears_last_runs_manual_label(qtbot):
+    w = _controls(qtbot, {"cue_led": _dev(state=False)})
+    w.update_state("RUNNING")
+    w.on_action_succeeded("cue_led", "set", True)
+    w.update_state("READY")
+    w.update_state("RUNNING")
+    assert not w._rows["cue_led"].manual.isVisibleTo(w)
+    assert w._rows["cue_led"].manual.text() == ""

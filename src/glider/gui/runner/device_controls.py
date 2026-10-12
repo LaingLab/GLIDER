@@ -357,7 +357,12 @@ class RunnerDeviceControls(QWidget):
                 self._paint_row(dev_id, device)
 
     def update_state(self, state_name: str) -> None:
-        self._state_name = state_name
+        previous, self._state_name = self._state_name, state_name
+        if state_name == "RUNNING" and previous not in ("RUNNING", "PAUSED"):
+            # A new run: last run's "set by you" notes no longer apply.
+            for refs in self._rows.values():
+                refs.manual.hide()
+                refs.manual.clear()
         if state_name == "RUNNING":
             self._value_timer.start()
         else:
