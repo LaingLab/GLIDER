@@ -105,6 +105,9 @@ excludes = [
     # "torch" and "torchvision" here AND give frozen builds a real way to
     # obtain them -- an add-on pack, or a bundled pip -- or tracking silently
     # disappears again.
+    # The MCP server is not shipped in the installer; dev syncs pull in its SDK.
+    "glider.mcp",
+    "mcp",
     # Test + dev tooling should never ride along.
     "pytest",
     "pytest_asyncio",

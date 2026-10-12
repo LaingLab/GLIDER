@@ -1327,6 +1327,11 @@ class NodeEditorController(QObject):
         from glider.gui.widgets.schema_form import build_schema_widgets, read_schema_widget
 
         node_class = FlowEngine.get_node_class(node_type)
+        # Built-in nodes keep their hand-written panels. The schema fallback is
+        # the else of only the *last* if/elif chain above, so rendering a
+        # built-in's schema would put a second copy of its fields beside them.
+        if node_class is not None and node_class.__module__.startswith("glider.nodes."):
+            return
         schema = getattr(node_class, "PROPERTIES_SCHEMA", None) if node_class else None
         if not schema:
             return

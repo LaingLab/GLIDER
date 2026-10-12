@@ -55,10 +55,27 @@ class DeviceActionNode(HardwareNode):
         color="#2d5a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "action_name",
+            "label": "Action",
+            "type": "str",
+            "default": "",
+            "help": "Name of the bound device's action to run.",
+        },
+        {
+            "key": "arguments",
+            "label": "Arguments",
+            "type": "str",
+            "default": "",
+            "help": "Arguments passed to the action.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._action_name = ""
-        self._arguments = ""  # constant args typed in node properties
+        self._action_name = self.setting("action_name")
+        self._arguments = self.setting("arguments")  # constant args typed in node properties
 
     @property
     def action_name(self) -> str:
@@ -135,8 +152,8 @@ class DeviceActionNode(HardwareNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._action_name = state.get("action_name", "")
-        self._arguments = state.get("arguments", "")
+        self._action_name = self.setting("action_name")
+        self._arguments = self.setting("arguments")
 
 
 class DeviceReadNode(HardwareNode):
@@ -168,9 +185,19 @@ class DeviceReadNode(HardwareNode):
         color="#2d5a2d",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "read_action",
+            "label": "Read action",
+            "type": "str",
+            "default": "read",
+            "help": "Name of the bound device's read action.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._read_action = "read"
+        self._read_action = self.setting("read_action")
 
     @property
     def read_action(self) -> str:
@@ -199,4 +226,4 @@ class DeviceReadNode(HardwareNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._read_action = state.get("read_action", "read")
+        self._read_action = self.setting("read_action")

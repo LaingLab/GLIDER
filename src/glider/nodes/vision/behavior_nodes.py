@@ -90,10 +90,28 @@ class BehaviorInputNode(InterfaceNode):
         color="#5a4a2d",  # Orange - interface color
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "target_behavior",
+            "label": "Behaviour",
+            "type": "str",
+            "default": "",
+            "help": "Behaviour label that makes this node active.",
+        },
+        {
+            "key": "min_frames",
+            "label": "Min frames",
+            "type": "int",
+            "default": DEFAULT_MIN_FRAMES,
+            "min": 1,
+            "help": "Consecutive frames required before the behaviour counts.",
+        },
+    ]
+
     def __init__(self) -> None:
         super().__init__()
-        self._target_behavior: str = ""
-        self._min_frames: int = DEFAULT_MIN_FRAMES
+        self._target_behavior: str = self.setting("target_behavior")
+        self._min_frames: int = self.setting("min_frames")
 
         self._active = False
         self._last_behavior = ""
@@ -252,8 +270,8 @@ class BehaviorInputNode(InterfaceNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._target_behavior = state.get("target_behavior", "")
-        self.min_frames = state.get("min_frames", DEFAULT_MIN_FRAMES)
+        self._target_behavior = self.setting("target_behavior")
+        self.min_frames = self.setting("min_frames")
         self._reset_run_state()
 
     def get_display_name(self) -> str:

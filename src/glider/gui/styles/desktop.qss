@@ -1241,6 +1241,14 @@ QFrame#statusStrip {
     border-bottom: 1px solid #1e2530;               /* BORDER */
 }
 
+/* Shown under the tabs when the open experiment was changed outside GLIDER
+ * (e.g. by an agent) while there are unsaved edits: Reload / Keep mine. */
+QWidget#externalChangeBar {
+    background-color: rgba(251, 191, 36, 0.13);     /* STATE_WARN @ 13% */
+    border-bottom: 1px solid rgba(251, 191, 36, 0.30);
+}
+QWidget#externalChangeBar QLabel { color: #fbbf24; }  /* STATE_WARN */
+
 QFrame#statusStripDevices {
     background-color: transparent;
 }

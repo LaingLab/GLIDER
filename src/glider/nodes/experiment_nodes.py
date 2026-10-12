@@ -94,6 +94,17 @@ class OutputNode(GliderNode):
         ],
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "value",
+            "label": "Value",
+            "type": "float",
+            "default": 1,
+            "help": "Value written to the bound device: 1/0 for digital outputs, the "
+            "device's range for PWM/servo (GLIDER clamps out-of-range values).",
+        },
+    ]
+
     def update_event(self) -> None:
         """Called when inputs change."""
         pass
@@ -123,7 +134,7 @@ class OutputNode(GliderNode):
             logger.info(f"  Using value from state: {value}")
         else:
             # No saved state, default to HIGH
-            value = 1
+            value = self.setting_default("value")
             logger.info(f"  Using default value: {value}")
 
         if self._device is not None:
@@ -241,6 +252,17 @@ class MotorGovernorNode(GliderNode):
         ],
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "action",
+            "label": "Action",
+            "type": "enum",
+            "default": "stop",
+            "choices": [["up", "Move up"], ["down", "Move down"], ["stop", "Stop"]],
+            "help": "What the bound motor governor does.",
+        },
+    ]
+
     def update_event(self) -> None:
         """Called when inputs change."""
         pass
@@ -251,7 +273,7 @@ class MotorGovernorNode(GliderNode):
         logger.info(f"  Node state: {self._state}")
 
         # Get action from state (up, down, stop)
-        action = self._state.get("action", "stop")
+        action = self.setting("action")
         logger.info(f"  Action: {action}")
 
         if self._device is not None:

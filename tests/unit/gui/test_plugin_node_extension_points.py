@@ -237,3 +237,26 @@ def test_a_node_with_no_schema_renders_nothing_extra(qtbot, monkeypatch):
 
     headers = [lb.text() for lb in captured["w"].findChildren(QLabel)]
     assert not any("PROPERTIES" in t for t in headers)
+
+
+def test_built_in_nodes_never_get_a_schema_form(qtbot, monkeypatch):
+    """Built-in nodes have hand-written panels; a schema form would duplicate them."""
+    from PyQt6.QtWidgets import QLabel
+
+    from glider.nodes.interface.display_nodes import LabelNode
+
+    monkeypatch.setattr(
+        LabelNode,
+        "PROPERTIES_SCHEMA",
+        [{"key": "label", "label": "Label", "type": "str", "default": "Value"}],
+    )
+    monkeypatch.setitem(FlowEngine._node_registry, "Label", LabelNode)
+    ctrl, captured, _ = _controller({})
+    ctrl._graph_view = SimpleNamespace(
+        nodes={"n1": SimpleNamespace(node_type="Label", _actual_node_type=None)}
+    )
+
+    ctrl._update_properties_panel("n1")
+
+    headers = [lb.text() for lb in captured["w"].findChildren(QLabel)]
+    assert not any("PROPERTIES" in t for t in headers)

@@ -87,6 +87,25 @@ class DelayNode(ExecNode):
         color="#2d4a5a",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "duration",
+            "label": "Duration",
+            "type": "float",
+            "default": 1.0,
+            "min": 0,
+            "help": "How long to wait, in `unit`. Overrides the Duration input when set.",
+        },
+        {
+            "key": "unit",
+            "label": "Unit",
+            "type": "enum",
+            "default": "seconds",
+            "choices": [["seconds", "sec"], ["milliseconds", "ms"]],
+            "help": "Unit of `duration`.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
         # threading.Event (not asyncio.Event) — must be settable from the
@@ -99,9 +118,9 @@ class DelayNode(ExecNode):
         if "duration" in self._state:
             duration = float(self._state["duration"])
         else:
-            duration = float(self.get_input(1) or 1.0)
+            duration = float(self.get_input(1) or self.setting_default("duration"))
 
-        unit = self._state.get("unit", "seconds")
+        unit = self.setting("unit")
         if unit == "milliseconds":
             duration = duration / 1000.0
 
@@ -157,10 +176,38 @@ class TimerNode(ExecNode):
         color="#2d4a5a",
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "interval",
+            "label": "Interval",
+            "type": "float",
+            "default": 1.0,
+            "min": 0,
+            "help": "Time between ticks, in `unit` (at least 10 ms is used). Overrides the "
+            "Interval input when set.",
+        },
+        {
+            "key": "unit",
+            "label": "Unit",
+            "type": "enum",
+            "default": "seconds",
+            "choices": [["seconds", "sec"], ["milliseconds", "ms"]],
+            "help": "Unit of `interval`.",
+        },
+        {
+            "key": "count",
+            "label": "Count",
+            "type": "int",
+            "default": 0,
+            "min": 0,
+            "help": "Ticks so far. Saved by GLIDER; leave unset.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
         self._timer_task: asyncio.Task | None = None
-        self._count = 0
+        self._count = self.setting("count")
         self._paused = False
 
     @property
@@ -201,9 +248,9 @@ class TimerNode(ExecNode):
         else:
             raw = self.get_input(0)
         if raw is None:
-            raw = 1.0
+            raw = self.setting_default("interval")
         interval = float(raw)
-        if self._state.get("unit", "seconds") == "milliseconds":
+        if self.setting("unit") == "milliseconds":
             interval = interval / 1000.0
         return max(0.01, interval)
 
@@ -241,7 +288,7 @@ class TimerNode(ExecNode):
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
-        self._count = state.get("count", 0)
+        self._count = self.setting("count")
 
 
 logger = logging.getLogger(__name__)

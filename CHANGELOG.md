@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **GLIDER picks up changes to the open experiment made outside it**, such as
+  an agent's edits through `glider-mcp`: it reloads when there are no unsaved
+  edits, and otherwise offers Reload / Keep mine. Changes during a run wait
+  until the run ends.
+- **AI agents can design experiments and analyze recordings** through a new
+  MCP server, `glider-mcp` (`uv sync --extra pc --extra mcp`). Agents list node and
+  device types, build `.glider` files that are validated by GLIDER's own
+  loader before they are written, and summarize, tabulate and plot recordings.
+  The server never connects hardware or runs an experiment. Node and device
+  settings are published and checked, the validator names misplaced or misspelled
+  fields, and `session_summary` reports time in each behavioural state.
 - **Session Review is rebuilt as an editor**, laid out like DaVinci Resolve's
   Edit page: the loaded **sessions** down the left, grouped by treatment, each
   row badged with the video, poses and hardware it has; the **viewer** in the
@@ -306,6 +317,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three examples would not start** (`box_new`, `box_pi_side`, `dispense`):
+  they held connections to nodes that no longer existed. Those connections are
+  removed; they never loaded, so the experiments behave as before.
 - **Behavior-analysis numbers that were wrong, from a deep code review.**
   These change reported results; re-run anything that fed a figure or table.
   - **Bout durations, time-in-state and session length are no longer a third

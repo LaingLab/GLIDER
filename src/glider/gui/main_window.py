@@ -66,6 +66,7 @@ from glider.gui.shell import (
     menu_actions,
     remember_experiment,
 )
+from glider.gui.shell.external_change import ExperimentFileWatcher, ExternalChangeBar
 from glider.gui.styles import colors
 from glider.gui.view_manager import ViewManager, ViewMode
 from glider.hal.base_board import BoardConnectionState
@@ -633,6 +634,16 @@ class MainWindow(QMainWindow):
 
         column.addWidget(self._build_chrome_row(container))
 
+        # Created before the pages: --file opens the experiment while the
+        # window is still being built, and that open arms the watcher.
+        self._file_watcher = ExperimentFileWatcher(self)
+        self._file_watcher.changed_externally.connect(self._on_experiment_changed_externally)
+        self._pending_external_change = False
+        self._external_change_bar = ExternalChangeBar(container)
+        self._external_change_bar.reload_requested.connect(self._on_reload_external_change)
+        self._external_change_bar.keep_requested.connect(self._on_keep_own_version)
+        column.addWidget(self._external_change_bar)
+
         self._stack = QStackedWidget(container)
         column.addWidget(self._stack, 1)
         self.setCentralWidget(container)
@@ -663,7 +674,12 @@ class MainWindow(QMainWindow):
         else:
             self._stack.setCurrentIndex(PAGE_BUILDER)
             self._populate_builder_panels()
-            if not self._has_open_experiment():
+            if self._has_open_experiment():
+                # --file loaded the experiment into the core before this
+                # window existed, so nothing has drawn its graph, zones or
+                # panels yet. Open it the way File > Open does.
+                self._load_experiment_path(self._core.session.file_path)
+            else:
                 self._show_landing()
 
         self._install_palette_shortcut()
@@ -2408,6 +2424,9 @@ class MainWindow(QMainWindow):
             self._live_run_folder = None
         self._refresh_run_info()
 
+        if self._pending_external_change and not self._run_is_live():
+            self._apply_external_change()
+
         # Update toolbar status indicator
         if self._toolbar_status is not None:
             self._toolbar_status.setText(state_name)
@@ -2881,6 +2900,53 @@ class MainWindow(QMainWindow):
         self._undo_stack.clear()
         self._update_undo_redo_actions()
 
+    # --- Outside changes to the open file (e.g. an agent via glider-mcp) ---
+
+    def _watch_open_experiment(self) -> None:
+        """Watch the open file, its current contents taken as known.
+
+        Called after every open and every save, so GLIDER's own writes are
+        never mistaken for outside ones; a session with no file stops it.
+        """
+        session = self._core.session
+        self._file_watcher.watch(session.file_path if session is not None else None)
+        self._pending_external_change = False
+        self._external_change_bar.hide()
+
+    def _run_is_live(self) -> bool:
+        from glider.core.experiment_session import SessionState
+
+        return self._core.state in (SessionState.RUNNING, SessionState.PAUSED) or bool(
+            self._core.is_experiment_busy
+        )
+
+    def _on_experiment_changed_externally(self, _path: str) -> None:
+        if self._run_is_live():
+            # Reloading replaces the flow under the run; wait for it to end.
+            self._pending_external_change = True
+            self._show_status_message(
+                "The experiment file changed outside GLIDER; it will update when the run ends."
+            )
+            return
+        self._apply_external_change()
+
+    def _apply_external_change(self) -> None:
+        self._pending_external_change = False
+        session = self._core.session
+        if session is not None and session.is_dirty:
+            self._external_change_bar.show()
+            return
+        self._on_reload_external_change()
+
+    def _on_reload_external_change(self) -> None:
+        path = self._file_watcher.path
+        if path and self._load_experiment_path(path):
+            self._show_status_message("Reloaded: the experiment was changed outside GLIDER")
+
+    def _on_keep_own_version(self) -> None:
+        self._file_watcher.acknowledge()
+        self._external_change_bar.hide()
+
     def _on_new(self) -> bool:
         """Create new experiment. True when a new session was created."""
         if self._refuse_while_running("start a new experiment"):
@@ -2889,6 +2955,7 @@ class MainWindow(QMainWindow):
             return False
         self._core.hardware_manager.clear()
         self._core.new_session()
+        self._watch_open_experiment()
         self._graph_view.clear_graph()
         self._reset_undo_history()
         self._zone_config = ZoneConfiguration()
@@ -2966,6 +3033,7 @@ class MainWindow(QMainWindow):
             # config this load just replaced. Dropping them is what stops the
             # tab editing objects nothing reads any more.
             self._reset_experiment_page()
+            self._watch_open_experiment()
             self._show_status_message(f"Opened: {file_path}")
             return True
         except Exception as e:
@@ -3081,6 +3149,7 @@ class MainWindow(QMainWindow):
         if self._core.session and self._core.session.file_path:
             try:
                 self._core.save_session()
+                self._watch_open_experiment()
                 self._refresh_strip_experiment()
                 self._show_status_message("Saved")
                 return True
@@ -3106,6 +3175,7 @@ class MainWindow(QMainWindow):
         if file_path:
             try:
                 self._core.save_session(file_path)
+                self._watch_open_experiment()
                 self._refresh_strip_experiment()
                 self._remember_current_experiment(file_path)
                 self._show_status_message(f"Saved: {file_path}")

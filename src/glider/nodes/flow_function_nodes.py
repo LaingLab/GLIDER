@@ -179,16 +179,26 @@ class StartFunctionNode(GliderNode):
         ],
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "function_name",
+            "label": "Function name",
+            "type": "str",
+            "default": "MyFunction",
+            "help": "Name FunctionCall nodes use to call this function.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
-        self._function_name = "MyFunction"
+        self._function_name = self.setting("function_name")
 
     def update_event(self) -> None:
         pass
 
     def get_function_name(self) -> str:
         """Get the function name from state."""
-        return self._state.get("function_name", "MyFunction")
+        return self.setting("function_name")
 
     async def start(self) -> None:
         """Called when this function is invoked."""
@@ -262,6 +272,23 @@ class FunctionCallNode(GliderNode):
         ],
     )
 
+    PROPERTIES_SCHEMA = [
+        {
+            "key": "function_name",
+            "label": "Function name",
+            "type": "str",
+            "default": "Unknown",
+            "help": "Name shown for the call (the function is chosen by function_start_id).",
+        },
+        {
+            "key": "function_start_id",
+            "label": "Function",
+            "type": "str",
+            "default": None,
+            "help": "Id of the StartFunction node this calls. GLIDER links the call by this id.",
+        },
+    ]
+
     def __init__(self):
         super().__init__()
         self._function_id = None
@@ -277,7 +304,7 @@ class FunctionCallNode(GliderNode):
 
     async def execute(self) -> None:
         """Execute the function."""
-        function_name = self._state.get("function_name", "Unknown")
+        function_name = self.setting("function_name")
         logger.info(f"FunctionCall: invoking '{function_name}'")
 
         if self._function_runner is not None:
