@@ -497,7 +497,11 @@ async def validate(data: Any) -> dict[str, Any]:
     warnings: list[dict[str, str]] = []
     if not isinstance(data, dict):
         return _result([_finding("$", "an experiment must be a JSON object")], warnings)
-    if is_schema_format(data):
+    try:
+        legacy = is_schema_format(data)
+    except AttributeError:  # flow or hardware is not an object; _check_graph reports that
+        legacy = False
+    if legacy:
         resave = (
             "If an older GLIDER wrote this file, open it in GLIDER and re-save it to convert it."
         )

@@ -299,3 +299,10 @@ async def test_function_call_with_no_start_function_in_the_flow_says_to_add_one(
 async def test_function_call_with_malformed_state_does_not_raise(state):
     report = await experiments.validate(_call_flow(state))
     assert not report["valid"]
+
+
+@pytest.mark.parametrize("data", [{"flow": "x"}, {"flow": 5}, {"hardware": "x"}, {"hardware": []}])
+async def test_a_non_object_section_is_reported_not_raised(data):
+    report = await experiments.validate(data)
+    assert not report["valid"]
+    assert "must be an object" in report["errors"][0]["message"]
