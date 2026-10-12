@@ -122,3 +122,17 @@ def test_compact_rows_use_desktop_sized_controls(qtbot):
 def test_touch_rows_keep_touch_sized_controls(qtbot):
     w = _controls(qtbot, {"led": _dev(state=False)})
     assert w._widgets[("led", "set")]["switch"].minimumHeight() >= 72
+
+
+def test_row_value_uses_the_ui_font(qtbot):
+    from glider.gui.runner.device_controls import RunnerDeviceControls
+    from glider.gui.styles import load_stylesheet
+
+    w = RunnerDeviceControls(SimpleNamespace(devices={"led": _dev(state=False)}), compact=True)
+    qtbot.addWidget(w)
+    w.setStyleSheet(load_stylesheet("desktop"))
+    w.refresh()
+    value = w._rows["led"].value
+    value.ensurePolished()
+    family = value.font().family().lower()
+    assert "mono" not in family and "menlo" not in family, family

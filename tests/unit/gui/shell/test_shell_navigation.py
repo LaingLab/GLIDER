@@ -342,3 +342,16 @@ def test_an_unavailable_tool_card_opens_nothing(qtbot):
 
     page._on_clicked("ok")
     assert chosen == ["ok"]
+
+
+def test_landing_title_has_no_subtitle_or_letter_spacing(qtbot, tmp_path):
+    from PyQt6.QtCore import QSettings
+    from PyQt6.QtWidgets import QLabel
+
+    from glider.gui.styles import load_stylesheet
+
+    page = LandingPage(QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat))
+    qtbot.addWidget(page)
+    assert page.findChild(QLabel, "landingSubtitle") is None
+    rule = load_stylesheet("desktop").split("QLabel#landingTitle", 1)[1].split("}", 1)[0]
+    assert "letter-spacing" not in rule

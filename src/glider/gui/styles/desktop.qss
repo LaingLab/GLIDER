@@ -1607,13 +1607,6 @@ QLabel#landingTitle {
     color: #e2e8f0;                                 /* TEXT_PRIMARY */
     font-size: 26px;
     font-weight: 600;
-    letter-spacing: 3px;
-}
-
-QLabel#landingSubtitle {
-    background-color: transparent;
-    color: #718096;                                 /* TEXT_MUTED */
-    font-size: 12px;
 }
 
 QLabel#landingSectionLabel {
@@ -1886,7 +1879,7 @@ QFrame[runCard="true"] {
 QLabel[cameraBadge="true"] {
     background: rgba(10, 14, 19, 0.72);             /* CANVAS at 0.72 */
     color: #c0c8d4;                                 /* TEXT_SECONDARY */
-    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-family: "Helvetica Neue", "Segoe UI", "Roboto", sans-serif;
     font-size: 11px;
     padding: 3px 7px;
     border-radius: @RADIUS_SMALL@;
@@ -1897,8 +1890,9 @@ QWidget[deviceRow="true"] {
     padding-top: 3px;
 }
 QLabel[deviceDot="true"] { font-size: 12px; }
+/* Same face as the rest of the rail (tabular figures, so values don't jitter). */
 QLabel[deviceValue="true"] {
-    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-family: "Helvetica Neue", "Segoe UI", "Roboto", sans-serif;
     font-size: 13px;
     font-weight: 600;
     color: #e2e8f0;                                 /* TEXT_PRIMARY */

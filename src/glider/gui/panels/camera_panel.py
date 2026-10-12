@@ -658,12 +658,11 @@ class CameraPanel(QWidget):
         rehearsal_row.addWidget(self._rehearse_speed)
         behavior_layout.addLayout(rehearsal_row)
 
-        self._rehearse_status = QLabel(
-            "Start live behavior first \u2014 a rehearsal with no classifier "
-            "running does nothing."
-        )
+        # Hidden until there is something to say (ready, rehearsing, a result).
+        self._rehearse_status = QLabel()
         self._rehearse_status.setProperty("textRole", "muted")
         self._rehearse_status.setWordWrap(True)
+        self._rehearse_status.setVisible(False)
         behavior_layout.addWidget(self._rehearse_status)
 
         layout.addWidget(behavior_group)
@@ -776,15 +775,19 @@ class CameraPanel(QWidget):
         )
         if not self._rehearsal_pump.start():
             self._rehearsal_pump = None
-            self._rehearse_status.setText(f"Could not open {Path(path).name}.")
+            self._show_rehearse_status(f"Could not open {Path(path).name}.")
             return
 
         self._rehearse_btn.setText("Stop rehearsal")
         self._rehearse_speed.setEnabled(False)
-        self._rehearse_status.setText(
+        self._show_rehearse_status(
             f"Rehearsing {Path(path).name} \u2014 hardware is being driven for real."
         )
         logger.info("Rehearsal started from %s", path)
+
+    def _show_rehearse_status(self, text: str) -> None:
+        self._rehearse_status.setText(text)
+        self._rehearse_status.setVisible(bool(text))
 
     def _stop_rehearsal(self) -> None:
         pump = self._rehearsal_pump
@@ -826,7 +829,7 @@ class CameraPanel(QWidget):
             summary += f", worst lag {lag_ms:.0f} ms \u2014 inference did not keep up"
         elif self._rehearse_speed.currentData():
             summary += ", kept up with real time"
-        self._rehearse_status.setText(summary)
+        self._show_rehearse_status(summary)
         logger.info("%s", summary)
 
     def _convert_pose_model(self, folder: Path, converter) -> bool:
@@ -1932,7 +1935,7 @@ class CameraPanel(QWidget):
         self._preview.set_behavior_vocab(worker.classes)
         self._rehearse_btn.setEnabled(True)
         self._update_rehearse_label()
-        self._rehearse_status.setText("Ready to rehearse from a recording.")
+        self._show_rehearse_status("Ready to rehearse from a recording.")
         # Also hand the vocabulary to the flow side, so a Behavior Input node's
         # properties can offer the behaviors this model actually emits instead
         # of a free-text box where a typo means "never fires".
