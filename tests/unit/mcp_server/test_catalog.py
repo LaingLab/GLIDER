@@ -60,3 +60,20 @@ def test_writable_path_rules(tmp_path: Path):
     assert writable_path(str(good), ".glider", overwrite=True) == good
     with pytest.raises(ValueError, match="does not exist"):
         writable_path(str(tmp_path / "missing" / "a.glider"), ".glider")
+
+
+async def test_node_types_publish_their_settings():
+    result = await experiments.list_node_types()
+    by_name = {t["node_type"]: t for t in result["node_types"]}
+    delay = {f["key"]: f for f in by_name["Delay"]["settings"]}
+    assert delay["unit"]["choices"] == [["seconds", "sec"], ["milliseconds", "ms"]]
+    assert delay["duration"]["default"] == 1.0
+    assert by_name["Add"]["settings"] == []
+    assert "default_state" not in by_name["Delay"]
+
+
+async def test_device_types_publish_their_settings():
+    result = await experiments.list_device_types()
+    by_name = {d["device_type"]: d for d in result["device_types"]}
+    assert "baudrate" in {f["key"] for f in by_name["GenericSerial"]["settings"]}
+    assert by_name["DigitalOutput"]["settings"] == []

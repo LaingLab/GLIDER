@@ -59,7 +59,11 @@ def _ports(ports: list) -> list[dict[str, Any]]:
 
 
 async def list_node_types(category: str | None = None) -> dict[str, Any]:
-    """Every node type an experiment's flow may use, with its ports.
+    """Every node type a flow may use: its ports and the settings its `state` accepts.
+
+    Read this before writing nodes. Each node's `settings` lists the keys its
+    `state` accepts, with type, default, choices and range; anything else in
+    `state` is ignored by GLIDER.
 
     Args:
         category: Optional filter: "hardware", "logic", "interface", ...
@@ -73,10 +77,6 @@ async def list_node_types(category: str | None = None) -> dict[str, Any]:
             continue
         if category and definition.category.value != category:
             continue
-        try:
-            defaults = cls().get_state()
-        except Exception:
-            defaults = {}
         types.append(
             {
                 "node_type": name,
@@ -84,7 +84,9 @@ async def list_node_types(category: str | None = None) -> dict[str, Any]:
                 "description": definition.description,
                 "inputs": _ports(definition.inputs),
                 "outputs": _ports(definition.outputs),
-                "default_state": json.loads(json.dumps(defaults, default=str)),
+                "settings": json.loads(
+                    json.dumps(getattr(cls, "PROPERTIES_SCHEMA", None) or [], default=str)
+                ),
             }
         )
     return {
@@ -101,7 +103,7 @@ async def list_node_types(category: str | None = None) -> dict[str, Any]:
 
 
 async def list_device_types() -> dict[str, Any]:
-    """Device types (with the pin names each needs) and board drivers."""
+    """Device types (required pin names and the settings each accepts) and board drivers."""
     await get_core()
     devices = []
     for name in sorted(DEVICE_REGISTRY):
@@ -119,7 +121,18 @@ async def list_device_types() -> dict[str, Any]:
             pins: list[str] | None = list(probe.required_pins)
         except Exception:
             pins = None
-        devices.append({"device_type": name, "required_pins": pins})
+        devices.append(
+            {
+                "device_type": name,
+                "required_pins": pins,
+                "settings": json.loads(
+                    json.dumps(
+                        getattr(DEVICE_REGISTRY[name], "SETTINGS_SCHEMA", None) or [],
+                        default=str,
+                    )
+                ),
+            }
+        )
     drivers = sorted(HardwareManager.get_available_drivers())
     return {
         "summary": f"{len(devices)} device types, {len(drivers)} board drivers",
