@@ -780,6 +780,24 @@ QLineEdit[runTitle="true"]:focus {
     border-color: #1e2530;                          /* BORDER */
 }
 
+QToolButton[presetPicker="true"] {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: @RADIUS_SMALL@;
+    font-size: 18px;
+    font-weight: 600;
+    padding: 2px 6px;
+}
+
+QToolButton[presetPicker="true"]:hover {
+    background-color: #111820;                      /* SURFACE_1 */
+}
+
+QToolButton[presetPicker="true"]::menu-indicator {
+    image: none;
+    width: 0;
+}
+
 /* === Plugins window ===
  *
  * Every colour on a plugin row lives here rather than on the widget. A

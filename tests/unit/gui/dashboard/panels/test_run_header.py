@@ -77,3 +77,73 @@ def test_refresh_is_not_an_edit(qtbot, mock_core):
     h.refresh()
     assert h._title.text() == "Second"
     assert not new.is_dirty
+
+
+from glider.core import presets  # noqa: E402
+from glider.core.experiment_session import RunField  # noqa: E402
+
+
+def _preset_header(qtbot, mock_core):
+    h = _header(qtbot, mock_core, name="Pup run", experiment_type="Pup retrieval")
+    md = mock_core.session.metadata
+    md.run_fields = [
+        RunField("dam_id", "Dam ID", True),
+        RunField("litter", "Litter size", False, "6"),
+    ]
+    md.reset_run_values()
+    h.refresh()
+    return h
+
+
+def test_preset_tags_are_run_fields_then_experimenter_notes(qtbot, mock_core):
+    h = _preset_header(qtbot, mock_core)
+    keys = [f.key for f in h.tag_fields()]
+    assert keys == ["dam_id", "litter", "experimenter", "notes"]
+    assert h._tags.chip("litter").text() == "Litter size  6"
+
+
+def test_run_value_edit_is_not_dirty(qtbot, mock_core):
+    h = _preset_header(qtbot, mock_core)
+    mock_core.session._mark_clean()
+    with qtbot.waitSignal(h.run_values_changed):
+        h._tags.value_edited.emit("dam_id", "D14")
+    assert mock_core.session.metadata.run_values["dam_id"] == "D14"
+    assert not mock_core.session.is_dirty
+
+
+def test_pill_needs_details_until_required_field_filled(qtbot, mock_core):
+    h = _preset_header(qtbot, mock_core)
+    assert h._pill.text() == "NEEDS DETAILS"
+    h._tags.value_edited.emit("dam_id", "D14")
+    assert h._pill.text() == "READY"
+
+
+def test_picker_lists_presets(qtbot, mock_core, tmp_path, monkeypatch):
+    monkeypatch.setattr(presets, "presets_dir", lambda: tmp_path)
+    from glider.core.experiment_session import ExperimentSession
+
+    path = presets.save_preset(ExperimentSession(), "Open field", tmp_path)
+    h = _preset_header(qtbot, mock_core)
+    h._menu.aboutToShow.emit()
+    texts = [a.text() for a in h._menu.actions() if a.text()]
+    assert "Open field" in texts
+    assert "New preset…" in texts and "Show presets folder" in texts
+    action = next(a for a in h._menu.actions() if a.text() == "Open field")
+    with qtbot.waitSignal(h.preset_chosen) as sig:
+        action.trigger()
+    assert sig.args == [str(path)]
+
+
+def test_picker_disabled_while_live(qtbot, mock_core):
+    h = _preset_header(qtbot, mock_core)
+    h.update_state("RUNNING")
+    assert not h._picker.isEnabled()
+    h.update_state("STOPPED")
+    assert h._picker.isEnabled()
+
+
+def test_run_info(qtbot, mock_core):
+    h = _preset_header(qtbot, mock_core)
+    h.set_run_info(4, "~/GLIDER/pup-retrieval/d14_20261011_run04")
+    assert h._run_label.text() == "Run 4 today"
+    assert h._tags._trailing.text().endswith("run04")

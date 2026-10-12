@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from glider.core.presets import missing_required
+
 _START_EXPERIMENT = "StartExperiment"
 
 
@@ -17,6 +19,7 @@ class Readiness:
     experiment_ready: bool
     board_label: str
     experiment_label: str
+    missing_field: str | None = None
 
     @property
     def all_ready(self) -> bool:
@@ -61,9 +64,16 @@ def compute_readiness(core) -> Readiness:
     if session is not None and getattr(session, "metadata", None) is not None:
         experiment_label = session.metadata.name or ""
 
+    missing = None
+    md = getattr(session, "metadata", None) if session is not None else None
+    fields = getattr(md, "run_fields", None)
+    if isinstance(fields, list) and fields:  # tolerate mock sessions
+        missing = missing_required(fields, md.run_values)
+
     return Readiness(
         board_ready=board_ready,
         experiment_ready=experiment_ready,
         board_label=board_label,
         experiment_label=experiment_label,
+        missing_field=missing,
     )

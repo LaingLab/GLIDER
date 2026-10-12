@@ -166,7 +166,8 @@ class RunControlPanel(QWidget):
         """Recompute readiness; update the sub-line, buttons and hint."""
         r = compute_readiness(self._core)
         live = self.is_live
-        key = (r, live, self._state_name, self._missing_field)
+        missing = self._missing_field or r.missing_field
+        key = (r, live, self._state_name, missing)
         if key == self._last_readiness:
             return
         self._last_readiness = key
@@ -175,11 +176,11 @@ class RunControlPanel(QWidget):
         self._pause_btn.setVisible(live)
         self._stop_btn.setVisible(live)
         self._pause_btn.setText("Resume" if self._state_name == "PAUSED" else "Pause")
-        ready = r.all_ready and not self._missing_field
+        ready = r.all_ready and not missing
         self._start_btn.setEnabled(ready and not live)
         self._stop_btn.setEnabled(live)
-        if self._missing_field:
-            self._not_ready_hint.setText(f"Fill in {self._missing_field} to start.")
+        if missing:
+            self._not_ready_hint.setText(f"Fill in {missing} to start.")
         else:
             self._not_ready_hint.setText("Not ready — connect a board and load an experiment")
         self._not_ready_hint.setVisible(not ready and not live)
