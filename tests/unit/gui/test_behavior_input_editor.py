@@ -257,7 +257,7 @@ def _ready_panel(classes, bus=None):
     panel._behavior_running = False
     panel._live_behavior_btn = SimpleNamespace(setText=lambda t: None, setEnabled=lambda e: None)
     panel._rehearse_btn = SimpleNamespace(setText=lambda t: None, setEnabled=lambda e: None)
-    panel._rehearse_status = SimpleNamespace(setText=lambda t: None)
+    panel._rehearse_status = SimpleNamespace(setText=lambda t: None, setVisible=lambda v: None)
     panel._rehearsal_pump = None
     panel._video_source = SimpleNamespace(is_loaded=False, path=None)
     return panel

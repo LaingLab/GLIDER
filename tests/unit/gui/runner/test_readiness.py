@@ -65,3 +65,29 @@ def test_a_session_with_a_board_still_waits_for_it():
     core = _core(board_connected=False, node_types=["StartExperiment"])
     core.session.hardware = SimpleNamespace(boards=[object()])
     assert compute_readiness(core).board_ready is False
+
+
+def _session_core(session):
+    hw = SimpleNamespace(
+        is_any_board_connected=lambda: True, connected_board_description=lambda: "Uno"
+    )
+    return SimpleNamespace(hardware_manager=hw, session=session)
+
+
+def test_missing_required_field_reported():
+    from glider.core.experiment_session import ExperimentSession, RunField
+
+    s = ExperimentSession()
+    s._flow = FlowConfig(nodes=[NodeConfig(id="s", node_type="StartExperiment")])
+    s.metadata.run_fields = [RunField("dam_id", "Dam ID", True)]
+    s.metadata.reset_run_values()
+    r = compute_readiness(_session_core(s))
+    assert r.all_ready and r.missing_field == "Dam ID"
+    s.metadata.run_values["dam_id"] = "D14"
+    assert compute_readiness(_session_core(s)).missing_field is None
+
+
+def test_no_run_fields_no_missing():
+    from glider.core.experiment_session import ExperimentSession
+
+    assert compute_readiness(_session_core(ExperimentSession())).missing_field is None

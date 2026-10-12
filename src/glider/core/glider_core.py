@@ -811,6 +811,17 @@ class GliderCore:
         """
         if self._session is None:
             raise RuntimeError("No session to save")
+        self.sync_session_for_save()
+        return self._session.save(file_path)
+
+    def sync_session_for_save(self) -> None:
+        """Copy live runtime state into the session so a save captures it.
+
+        ``save_session`` calls this; so does anything that serializes the
+        session without saving it (e.g. save-as-preset's copy).
+        """
+        if self._session is None:
+            return
 
         # Runtime-mutated device settings (e.g. an HX711 tare offset) live on
         # the device instances; the session serializes its own DeviceConfig
@@ -825,8 +836,6 @@ class GliderCore:
         # because the weights were missing must not write that degradation back
         # as the choice.
         self._session.set_vision(self._cv_processor.settings.to_dict())
-
-        return self._session.save(file_path)
 
     async def setup_hardware(self) -> bool:
         """

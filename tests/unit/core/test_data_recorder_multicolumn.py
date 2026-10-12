@@ -471,3 +471,33 @@ async def test_the_footer_warning_does_not_disturb_the_analysis_reader(tmp_path)
     assert list(df.columns)[-1] == "harp1:lick_state"
     assert len(df) >= 1
     assert "the reader thread stopped mid-run" in path.read_text(encoding="utf-8")
+
+
+# --- Run-field values --------------------------------------------------
+
+
+def test_run_values_written_to_header(tmp_path):
+    """A preset's filled run fields become ``# Label,value`` header rows."""
+    from types import SimpleNamespace
+
+    from glider.core.experiment_session import RunField
+
+    metadata = SimpleNamespace(
+        protocol="",
+        experiment_type="",
+        experimenter="",
+        lab="",
+        project="",
+        run_fields=[RunField("dam_id", "Dam ID", True), RunField("note", "Note")],
+        run_values={"dam_id": "D14", "note": ""},
+        get_active_subject=lambda: None,
+    )
+    recorder = _recorder_for({})
+    path = tmp_path / "run_values.csv"
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        recorder._writer = csv.writer(fh)
+        recorder._write_metadata("run_values_test", SimpleNamespace(metadata=metadata))
+    recorder._writer = None
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert "# Dam ID,D14" in lines
+    assert not any(line.startswith("# Note") for line in lines)

@@ -11,7 +11,7 @@ touchscreen) and the desktop dashboard reuse these:
 - ``runner_setup_page.py`` — the RunnerShell's Setup page
 - ``runner_shell.py`` — the runner-mode tabbed shell
 
-See ``glider.gui.dashboard`` for the fixed 2x2 desktop dashboard.
+See ``glider.gui.dashboard`` for the desktop camera-cockpit dashboard.
 """
 
 __all__: list[str] = []

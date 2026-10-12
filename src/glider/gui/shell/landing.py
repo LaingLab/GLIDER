@@ -211,12 +211,6 @@ class LandingPage(QWidget):
         title.setObjectName("landingTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         body.addWidget(title)
-
-        subtitle = QLabel("General Laboratory Interface for Design, Experimentation, and Recording")
-        subtitle.setObjectName("landingSubtitle")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle.setWordWrap(True)
-        body.addWidget(subtitle)
         body.addSpacing(28)
 
         self._new_button = QPushButton("New Experiment")

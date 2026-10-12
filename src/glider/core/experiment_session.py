@@ -110,6 +110,33 @@ class Subject:
 
 
 @dataclass
+class RunField:
+    """One per-run field a preset asks for before each run (e.g. "Dam ID")."""
+
+    key: str
+    label: str
+    required: bool = False
+    default: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "required": self.required,
+            "default": self.default,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RunField":
+        return cls(
+            key=str(data.get("key", "")),
+            label=str(data.get("label", "")),
+            required=bool(data.get("required", False)),
+            default=str(data.get("default", "")),
+        )
+
+
+@dataclass
 class SessionMetadata:
     """Metadata about the experiment session."""
 
@@ -135,6 +162,18 @@ class SessionMetadata:
     subjects: list[Subject] = field(default_factory=list)
     active_subject_id: str | None = None
 
+    # Preset run fields (saved) and this run's values (never saved: a value
+    # typed for one animal must not leak into the preset file).
+    run_fields: list[RunField] = field(default_factory=list)
+    run_values: dict[str, str] = field(default_factory=dict)
+
+    def reset_run_values(self) -> None:
+        self.run_values = {f.key: f.default for f in self.run_fields}
+
+    def reconcile_run_values(self) -> None:
+        """Fit run_values to run_fields: keep filled values, default new keys, drop removed."""
+        self.run_values = {f.key: self.run_values.get(f.key, f.default) for f in self.run_fields}
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -154,6 +193,7 @@ class SessionMetadata:
             "recording_directory": self.recording_directory,
             "subjects": [s.to_dict() for s in self.subjects],
             "active_subject_id": self.active_subject_id,
+            "run_fields": [f.to_dict() for f in self.run_fields],
         }
 
     @classmethod
@@ -161,7 +201,7 @@ class SessionMetadata:
         subjects_data = data.get("subjects", [])
         subjects = [Subject.from_dict(s) for s in subjects_data]
 
-        return cls(
+        md = cls(
             id=data.get("id", str(uuid.uuid4())),
             name=data.get("name", "Untitled Experiment"),
             description=data.get("description", ""),
@@ -179,7 +219,10 @@ class SessionMetadata:
             recording_directory=data.get("recording_directory", ""),
             subjects=subjects,
             active_subject_id=data.get("active_subject_id"),
+            run_fields=[RunField.from_dict(f) for f in data.get("run_fields", [])],
         )
+        md.reset_run_values()
+        return md
 
     def get_active_subject(self) -> Subject | None:
         """Get the currently active subject."""
