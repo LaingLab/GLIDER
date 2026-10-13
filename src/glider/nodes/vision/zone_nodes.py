@@ -4,8 +4,8 @@ Zone Input Nodes - Nodes for zone-based triggering in the node graph.
 Each zone can have its own ZoneInputNode that outputs:
 - Occupied: bool indicating if any object is in the zone
 - Object Count: int number of objects in the zone
-- On Enter: exec triggered when an object enters the zone
-- On Exit: exec triggered when an object exits the zone
+- On Enter: exec triggered when the zone goes from empty to occupied
+- On Exit: exec triggered when the zone goes from occupied to empty
 """
 
 import asyncio
@@ -49,12 +49,12 @@ class ZoneInputNode(InterfaceNode):
             PortDefinition(
                 name="On Enter",
                 port_type=PortType.EXEC,
-                description="Triggered when an object enters the zone",
+                description="Triggered when the zone goes from empty to occupied",
             ),
             PortDefinition(
                 name="On Exit",
                 port_type=PortType.EXEC,
-                description="Triggered when an object exits the zone",
+                description="Triggered when the zone goes from occupied to empty",
             ),
         ],
         color="#5a4a2d",  # Orange - interface color
@@ -135,7 +135,7 @@ class ZoneInputNode(InterfaceNode):
         """One frame's ``{zone_id: ZoneState}`` from the CV processor."""
         state = states.get(self._zone_id)
         if state is not None:
-            self.update_zone_state(state.occupied, state.object_count, state.entered, state.exited)
+            self.update_zone_state(state.occupied, state.object_count)
 
     @property
     def zone_id(self) -> str:
@@ -177,21 +177,23 @@ class ZoneInputNode(InterfaceNode):
             except Exception as e:
                 logger.error(f"Exec callback error: {e}")
 
-    def update_zone_state(
-        self, occupied: bool, object_count: int, entered: bool, exited: bool
-    ) -> None:
+    def update_zone_state(self, occupied: bool, object_count: int) -> None:
         """
         Update the zone state from CV processor.
 
         This is called each frame with the current zone state.
 
+        On Enter / On Exit fire on the zone's occupancy changing, not on the
+        tracker's per-object enter/exit: its IDs are not stable. A duplicate
+        detection vanishing, or the animal being re-IDed (old ID exits, new ID
+        enters, same frame), reported an exit while the mouse sat inside the
+        zone -- and turned a stimulator off.
+
         Args:
             occupied: Whether any objects are in the zone
             object_count: Number of objects in the zone
-            entered: True if an object entered this frame
-            exited: True if an object exited this frame
         """
-        # Update state
+        was_occupied = self._occupied
         self._occupied = occupied
         self._object_count = object_count
 
@@ -210,11 +212,11 @@ class ZoneInputNode(InterfaceNode):
             )
             return
 
-        if entered:
+        if occupied and not was_occupied:
             asyncio.run_coroutine_threadsafe(self._fire_exec_output("On Enter"), loop)
             logger.debug(f"Zone '{self._zone_name}': On Enter triggered")
 
-        if exited:
+        if was_occupied and not occupied:
             asyncio.run_coroutine_threadsafe(self._fire_exec_output("On Exit"), loop)
             logger.debug(f"Zone '{self._zone_name}': On Exit triggered")
 

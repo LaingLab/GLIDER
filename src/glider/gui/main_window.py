@@ -530,6 +530,9 @@ class MainWindow(QMainWindow):
         self._live_run_folder: Path | None = None
         # A run went live since the last reset; READY/IDLE then resets run values.
         self._run_was_live = False
+        # Rehearse is starting the experiment / started the one now running.
+        self._rehearsal_starting = False
+        self._rehearsal_started_run = False
         self._runner_shell = None  # RunnerShell (runner mode)
         self._runner_panel = None  # RunnerPanel — Run tab (runner mode)
         self._runner_setup_page = None  # RunnerSetupPage — Setup tab (runner mode)
@@ -1413,6 +1416,11 @@ class MainWindow(QMainWindow):
         camera_panel.settings_requested.connect(self._on_camera_settings)
         camera_panel.analysis_requested.connect(self._on_open_analysis_panel)
         camera_panel.draw_zones_requested.connect(self._on_video_zones_requested)
+        camera_panel.rehearsal_requested.connect(
+            lambda path: self._run_async(self._rehearse_async(path))
+        )
+        camera_panel.rehearsal_ended.connect(lambda: self._run_async(self._end_rehearsal_async()))
+        self.state_changed.connect(camera_panel.on_experiment_state)
         camera_panel.set_video_recorder(self._core.video_recorder)
         camera_panel.set_multi_video_recorder(self._core.multi_video_recorder)
         camera_panel.set_tracking_logger(self._core.tracking_logger)
@@ -3350,7 +3358,14 @@ class MainWindow(QMainWindow):
             camera_settings = dialog.get_camera_settings()
             self._core.camera_manager.apply_settings(camera_settings)
             cv_settings = dialog.get_cv_settings()
-            self._core.cv_processor.update_settings(cv_settings)
+            try:
+                self._core.cv_processor.update_settings(cv_settings)
+            except Exception as exc:
+                # A pose model that will not load raises its own error, and
+                # GLIDER installs no excepthook: escaping this slot aborted the
+                # app and lost the unsaved experiment.
+                logger.exception("Could not apply the Computer Vision settings")
+                QMessageBox.warning(self, "Computer Vision", str(exc))
 
     def _on_camera_calibration(self) -> None:
         dialog = CalibrationDialog(
@@ -3717,6 +3732,36 @@ class MainWindow(QMainWindow):
                     pass
             # Non-blocking: avoid freezing the qasync loop during start.
             self._notify_user("Start Error", str(e), level="critical")
+
+    async def _rehearse_async(self, path: str) -> None:
+        """Start the experiment if it is not running, then play *path* through it.
+
+        Zone Input and Behavior Input only listen while the experiment runs, so
+        a rehearsal of a stopped one played the video to nobody.
+        """
+        if self._rehearsal_starting:
+            return  # a second click while the first is still starting the run
+        self._rehearsal_starting = True
+        try:
+            started_here = self._core.state.name in ("IDLE", "READY")
+            if self._core.state.name != "RUNNING":
+                await self._start_async()  # resumes a paused run; says why on failure
+            if self._core.state.name != "RUNNING":
+                return
+            self._rehearsal_started_run = started_here
+            # Node start()s run as tasks the flow engine just scheduled; let
+            # them subscribe before the first frame arrives.
+            await asyncio.sleep(0)
+            if not self._camera_panel.begin_rehearsal(path):
+                await self._end_rehearsal_async()
+        finally:
+            self._rehearsal_starting = False
+
+    async def _end_rehearsal_async(self) -> None:
+        """Stop the run a rehearsal started; one the operator started is theirs."""
+        started_here, self._rehearsal_started_run = self._rehearsal_started_run, False
+        if started_here and self._core.state.name == "RUNNING":
+            await self._stop_async()
 
     @pyqtSlot()
     def _on_stop_clicked(self) -> None:
