@@ -55,13 +55,17 @@ async def test_late_wakeups_do_not_accumulate(monkeypatch):
 
 
 async def test_body_time_counts_toward_the_period():
-    # A 130 ms body inside a 300 ms period -- the Maimu-write case.
+    # A 130 ms body inside a 300 ms period -- the Maimu-write case. Measured
+    # against the grid onsets[0] + k * 0.3, not gap by gap: a loaded macOS CI
+    # runner woke every wait ~100 ms late, which all lands in the first gap.
+    # What must not happen is lateness growing by the body's 130 ms each time.
     node, onsets = _loop(count=5, delay=0.3, body_s=0.13)
 
     await node.execute()
 
-    gaps = [b - a for a, b in zip(onsets, onsets[1:], strict=False)]
-    assert all(abs(g - 0.3) < 0.05 for g in gaps), gaps
+    late = [t - (onsets[0] + k * 0.3) for k, t in enumerate(onsets)]
+    assert min(late) > -0.02, late  # never early; Windows' monotonic ticks every 15.6 ms
+    assert late[-1] - late[1] < 0.1, late  # adding each body would make this 0.39
 
 
 async def test_an_overrun_does_not_trigger_catch_up_iterations():
