@@ -43,11 +43,12 @@ def _loop(count: int, delay: float, body_s=0.0) -> tuple[LoopNode, list[float]]:
 
 
 async def test_late_wakeups_do_not_accumulate(monkeypatch):
-    # Every wait overshoots by 50 ms, as a busy qasync loop can. Timed from
-    # each iteration's own start, the fifth gap would end 5 x 50 ms late;
-    # aimed at absolute deadlines, every onset is late by the same 50 ms.
+    # Every wait overshoots by 100 ms, as a busy qasync loop can. Timed from
+    # each iteration's own start, the onsets would drift 5 x 100 ms (a 1.5 s
+    # span); aimed at absolute deadlines, every onset is late by the same
+    # 100 ms (1.1 s). The bound sits halfway, clear of CI runner noise.
     async def oversleep(self, deadline):
-        await asyncio.sleep(max(0.0, deadline - flow_clock.now()) + 0.05)
+        await asyncio.sleep(max(0.0, deadline - flow_clock.now()) + 0.1)
         return flow_clock.now()
 
     monkeypatch.setattr(LoopNode, "_wait_until", oversleep)
@@ -56,14 +57,15 @@ async def test_late_wakeups_do_not_accumulate(monkeypatch):
     await node.execute()
 
     span = onsets[-1] - onsets[0]
-    assert span < 5 * 0.2 + 0.05 + 0.04, f"onsets drifted: span {span:.3f}s"
+    assert span < 1.3, f"onsets drifted: span {span:.3f}s"
 
 
 async def test_body_time_counts_toward_the_period():
     # A 130 ms body inside a 300 ms period -- the Maimu-write case. Measured
     # against the grid onsets[0] + k * 0.3, not gap by gap: a loaded macOS CI
-    # runner woke every wait ~100 ms late, which all lands in the first gap.
-    # What must not happen is lateness growing by the body's 130 ms each time.
+    # runner woke waits up to ~150 ms late at random, without it building up.
+    # Adding each body would build it up, leaving the fifth onset 0.52 s late.
+    # The bound sits halfway.
     node, onsets = _loop(count=5, delay=0.3, body_s=0.13)
 
     await node.execute()
@@ -72,7 +74,7 @@ async def test_body_time_counts_toward_the_period():
     # Never early. onsets[0] itself lands a little after the Loop's own start,
     # by however long the first body took to be scheduled, hence the slack.
     assert min(late) > -0.02, late
-    assert late[-1] - late[1] < 0.1, late  # adding each body would make this 0.39
+    assert late[-1] < 2 * 0.13, late
 
 
 async def test_an_overrun_does_not_trigger_catch_up_iterations():
