@@ -61,6 +61,11 @@ def fake_bleak(monkeypatch):
 
     module = MagicMock(name="bleak")
     module.BleakClient = make_client
+
+    async def _present(address, timeout=10.0):
+        return address  # stands in for the BLEDevice bleak returns; BleakClient takes either
+
+    module.BleakScanner.find_device_by_address = _present
     monkeypatch.setitem(sys.modules, "bleak", module)
     return module, created
 

@@ -108,6 +108,11 @@ async def test_a_recording_drives_real_hardware(qtbot, monkeypatch, tmp_path):
 
     bleak = MagicMock(name="bleak")
     bleak.BleakClient = _FakeClient
+
+    async def _present(address, timeout=10.0):
+        return address  # stands in for the BLEDevice bleak returns; BleakClient takes either
+
+    bleak.BleakScanner.find_device_by_address = _present
     monkeypatch.setitem(sys.modules, "bleak", bleak)
 
     from glider.core.flow_engine import FlowEngine

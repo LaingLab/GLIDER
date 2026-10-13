@@ -83,6 +83,11 @@ def fake_bleak(monkeypatch):
 
     module.BleakScanner.find_device_by_name = find_device_by_name
 
+    async def _present(address, timeout=10.0):
+        return address  # stands in for the BLEDevice bleak returns; BleakClient takes either
+
+    module.BleakScanner.find_device_by_address = _present
+
     monkeypatch.setitem(sys.modules, "bleak", module)
     return module, created
 
@@ -426,6 +431,7 @@ class _RotatingBleak:
         self.new_address = new_address
         self.name = name
         self.attempts: list[str] = []
+        self.lookups: list[tuple[str, float]] = []
         self.scans = 0
 
     def client_for(self, address, *a, **k):
@@ -440,6 +446,11 @@ class _RotatingBleak:
             client.connect = _refuse
             del original_connect
         return client
+
+    async def find_device_by_address(self, address, timeout=10.0):
+        self.lookups.append((address, timeout))
+        # The address stands in for the BLEDevice bleak returns: BleakClient takes either.
+        return None if address == self.old_address else address
 
     async def find_device_by_name(self, name, timeout=8.0):
         self.scans += 1
@@ -460,6 +471,7 @@ def rotating_bleak(monkeypatch):
     module = MagicMock(name="bleak")
     module.BleakClient = peripheral.client_for
     module.BleakScanner.find_device_by_name = peripheral.find_device_by_name
+    module.BleakScanner.find_device_by_address = peripheral.find_device_by_address
     monkeypatch.setitem(sys.modules, "bleak", module)
     return peripheral
 
@@ -472,9 +484,42 @@ async def test_a_stale_address_is_re_resolved_by_name(rotating_bleak):
 
     await device.initialize()
 
-    assert rotating_bleak.attempts == ["AA:OLD", "BB:NEW"]
+    assert [a for a, _ in rotating_bleak.lookups] == ["AA:OLD"]
+    assert rotating_bleak.attempts == ["BB:NEW"]
     assert rotating_bleak.scans == 1
     assert device.is_initialized
+
+
+async def test_a_stale_address_is_given_up_on_in_seconds_not_thirty(rotating_bleak):
+    """bleak 2.1.1 made connect() look for an address for 30s before saying it
+    is gone. With a name to fall back on, that was 30s of every Connect spent on
+    an address the peripheral had already rotated away from -- long enough that
+    the operator clicks Connect again, or removes the device mid-connect."""
+    from glider.hal.devices.ble_device import RESOLVE_SCAN_S
+
+    device = _make_device(
+        settings={"address": "AA:OLD", "name": "maimu_ezurio", "write_char_uuid": "c"}
+    )
+    await device.initialize()
+
+    assert rotating_bleak.lookups == [("AA:OLD", RESOLVE_SCAN_S)]
+
+
+async def test_a_reconnect_goes_straight_to_the_address_that_answered(rotating_bleak):
+    """Once the name has rescued a stale address, a later connect in the same
+    session must not start from the stale one again: every reconnect attempt
+    would pay for a lookup and a rescan before reaching the peripheral."""
+    device = _make_device(
+        settings={"address": "AA:OLD", "name": "maimu_ezurio", "write_char_uuid": "c"}
+    )
+    await device.initialize()
+    rotating_bleak.lookups.clear()
+    device._client.is_connected = False  # the link dropped
+
+    await device.write("on")
+
+    assert [a for a, _ in rotating_bleak.lookups] == ["BB:NEW"]
+    assert rotating_bleak.scans == 1
 
 
 async def test_without_a_name_the_original_failure_is_reported(rotating_bleak):
@@ -509,9 +554,16 @@ async def test_a_name_resolving_to_the_same_dead_address_is_not_retried(monkeypa
         found.address = "AA:OLD"
         return found
 
+    lookups: list[str] = []
+
+    async def _gone(address, timeout=10.0):
+        lookups.append(address)
+        return None
+
     module = MagicMock(name="bleak")
     module.BleakClient = _client
     module.BleakScanner.find_device_by_name = _find
+    module.BleakScanner.find_device_by_address = _gone
     monkeypatch.setitem(sys.modules, "bleak", module)
 
     device = _make_device(settings={"address": "AA:OLD", "name": "n", "write_char_uuid": "c"})
@@ -519,7 +571,8 @@ async def test_a_name_resolving_to_the_same_dead_address_is_not_retried(monkeypa
     with pytest.raises(RuntimeError, match="was not found"):
         await device.initialize()
 
-    assert attempts == ["AA:OLD"], "the dead address was tried twice"
+    assert lookups == ["AA:OLD"], "the dead address was tried twice"
+    assert attempts == []
 
 
 async def test_a_name_that_resolves_to_nothing_says_why(rotating_bleak):
@@ -553,8 +606,15 @@ async def test_a_nameless_peripheral_is_found_by_its_service(monkeypatch):
             client.connect = _refuse
         return client
 
+    lookups: list[str] = []
+
+    async def _gone(address, timeout=10.0):
+        lookups.append(address)
+        return None
+
     module = MagicMock(name="bleak")
     module.BleakClient = _client
+    module.BleakScanner.find_device_by_address = _gone
     monkeypatch.setitem(sys.modules, "bleak", module)
 
     async def _scan(timeout=8.0):
@@ -570,7 +630,8 @@ async def test_a_nameless_peripheral_is_found_by_its_service(monkeypatch):
     )
     await device.initialize()
 
-    assert attempts == ["AA:STALE", "BB:LIVE"]
+    assert lookups == ["AA:STALE"]
+    assert attempts == ["BB:LIVE"]
     assert device.is_initialized
 
 
@@ -592,8 +653,15 @@ async def test_several_peripherals_advertising_the_service_is_refused(monkeypatc
         client.connect = _refuse
         return client
 
+    lookups: list[str] = []
+
+    async def _gone(address, timeout=10.0):
+        lookups.append(address)
+        return None
+
     module = MagicMock(name="bleak")
     module.BleakClient = _client
+    module.BleakScanner.find_device_by_address = _gone
     monkeypatch.setitem(sys.modules, "bleak", module)
 
     async def _scan(timeout=8.0):
@@ -633,5 +701,5 @@ async def test_the_name_is_preferred_over_the_service(rotating_bleak, monkeypatc
     )
     await device.initialize()
 
-    assert rotating_bleak.attempts == ["AA:OLD", "BB:NEW"]
+    assert rotating_bleak.attempts == ["BB:NEW"]
     assert scanned == [], "the service scan ran even though the name resolved"

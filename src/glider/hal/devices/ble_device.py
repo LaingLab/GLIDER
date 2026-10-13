@@ -132,6 +132,9 @@ class BLEDevice(BaseDevice):
         # peripheral is actually answering.
         self._link = ConnectionState.DISCONNECTED
         self._reconnect_task: asyncio.Task | None = None
+        # Bumped by every shutdown(). A connect that began before the bump has
+        # outlived the shutdown that was meant to end it -- see _ensure_connected.
+        self._epoch = 0
 
     def _apply_setting_caches(self, s: dict[str, Any]) -> None:
         """Set the settings-derived cache attributes (validates value_format first,
@@ -447,15 +450,19 @@ class BLEDevice(BaseDevice):
         # connected client (the peripheral stops advertising, so retry fails).
         if self._notify and not self._read_char:
             raise ValueError("BLE: 'read_char_uuid' is required when notify is enabled")
+        # Taken before the lock: an initialize queued behind another (Connect
+        # clicked twice) must not go on to connect after a shutdown in between.
+        epoch = self._epoch
         async with self._lock:
             await self._ensure_connected()
-            if self._notify:
-                self._latest = None
-                try:
+            try:
+                if self._notify:
+                    self._latest = None
                     await self._client.start_notify(self._read_char, self._on_notify)
-                except BaseException:
-                    await self._drop_client()
-                    raise
+                self._raise_if_shut_down(epoch)
+            except BaseException:
+                await self._drop_client()
+                raise
             self._initialized = True
         logger.info(
             "BLE initialized: %s (notify=%s)", self._address or self._adv_name, self._notify
@@ -469,6 +476,7 @@ class BLEDevice(BaseDevice):
         state and drops the cache.
         """
         self._initialized = False
+        self._epoch += 1
         # Cancel BEFORE taking the lock: the reconnect loop holds it while it
         # connects, and an emergency stop must not queue behind a retry. The
         # _initialized guard above already stops a retry from re-arming a
@@ -503,12 +511,12 @@ class BLEDevice(BaseDevice):
             self._set_link(ConnectionState.DISCONNECTED)
 
     async def _resolve_address(self) -> str:
-        """Return a usable address, scanning for the advertised name if needed."""
-        if self._address:
-            return self._address
-        if self._resolved_address:
-            return self._resolved_address
-        return await self._find_by_name()
+        """Return a usable address, scanning for the advertised name if needed.
+
+        An address that already answered this session beats the configured
+        one, which a rotation may have left behind.
+        """
+        return self._resolved_address or self._address or await self._find_by_name()
 
     async def _find_by_service(self) -> str | None:
         """Address of a peripheral advertising ``service_uuid``, if exactly one is.
@@ -565,15 +573,27 @@ class BLEDevice(BaseDevice):
         """Open (or reopen) the BleakClient connection if not already up."""
         if self._client is not None and self._client.is_connected:
             return
+        epoch = self._epoch
         try:
-            from bleak import BleakClient
+            from bleak import BleakClient, BleakScanner
         except ImportError as e:
             raise RuntimeError(
                 "bleak not installed. Run: pip install bleak (or reinstall GLIDER)."
             ) from e
         address = await self._resolve_address()
         try:
-            client = BleakClient(address, disconnected_callback=self._on_disconnected)
+            target = address
+            if self._adv_name or self._service_uuid:
+                # bleak's connect() spends its whole 30s timeout looking for an
+                # address before saying it is gone, and a rotated address is the
+                # ordinary case here (below). With something to fall back on,
+                # look briefly first so the rescue starts in seconds. The
+                # connect itself keeps bleak's full timeout, which Windows
+                # spends on service discovery.
+                target = await BleakScanner.find_device_by_address(address, timeout=RESOLVE_SCAN_S)
+                if target is None:
+                    raise RuntimeError(f"Device with address {address} was not found")
+            client = BleakClient(target, disconnected_callback=self._on_disconnected)
             await client.connect()
         except Exception as exc:
             # A stored address goes stale. Many peripherals advertise a
@@ -609,9 +629,16 @@ class BLEDevice(BaseDevice):
                 raise
             client = BleakClient(fresh, disconnected_callback=self._on_disconnected)
             await client.connect()
-            address = fresh
+            address = self._resolved_address = fresh
 
         self._client = client
+        if self._epoch != epoch:
+            # shutdown() ran while this connect was in flight, gave up waiting
+            # for the lock it holds, and finished without it. Nobody would ever
+            # close this link, and a peripheral with a central attached stops
+            # advertising -- so it would be unreachable until GLIDER quits.
+            await self._drop_client()
+            self._raise_if_shut_down(epoch)
         logger.info("BLE: connected to %s", address)
         self._set_link(ConnectionState.CONNECTED)
 
@@ -732,6 +759,10 @@ class BLEDevice(BaseDevice):
                 # publish CONNECTED over it.
                 self._client = None
                 raise
+
+    def _raise_if_shut_down(self, epoch: int) -> None:
+        if self._epoch != epoch:
+            raise RuntimeError(f"BLE {self._name}: shut down while connecting")
 
     async def _drop_client(self) -> None:
         """Clear ``self._client``, disconnecting it (best-effort) first.
