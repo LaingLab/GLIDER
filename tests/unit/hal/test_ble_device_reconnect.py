@@ -609,3 +609,89 @@ async def test_a_failed_resubscribe_in_a_write_leaves_no_client_behind(fake_blea
     await device.poll_link()
     assert device._reconnect_task is not None
     await device.shutdown()
+
+
+# --- a shutdown that lands mid-connect ----------------------------------------
+
+
+def _gate_connects(module):
+    """Make every client built from here on wait on the returned event to connect."""
+    gate = asyncio.Event()
+    build = module.BleakClient
+
+    def _gated(address, *a, **k):
+        client = build(address, *a, **k)
+        connect = client.connect
+
+        async def _wait_then_connect():
+            await gate.wait()
+            await connect()
+
+        client.connect = _wait_then_connect
+        return client
+
+    module.BleakClient = _gated
+    return gate
+
+
+async def test_a_shutdown_mid_connect_leaves_no_link_behind(fake_bleak):
+    """The bench log: a Maimu was removed while its connect was still looking
+    for the peripheral. HardwareManager gives shutdown 2s; shutdown queued on
+    the lock the connect held and was abandoned, and the connect landed 10s
+    later on a device nobody held any more. That link was never closed, so the
+    peripheral stopped advertising and every later attempt to reach it said
+    'not found' until GLIDER quit."""
+    module, created = fake_bleak
+    gate = _gate_connects(module)
+    device = BLEDevice(_FakeBoard(), DeviceConfig(settings={"address": "AA"}), name="ble")
+
+    init = asyncio.create_task(device.initialize())
+    await asyncio.sleep(0)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(device.shutdown(), timeout=0.01)
+    gate.set()
+
+    with pytest.raises(RuntimeError, match="shut down"):
+        await init
+    assert not created["client"].is_connected
+    assert not device.is_initialized
+
+
+async def test_an_initialize_queued_behind_a_shutdown_does_not_connect_after_it(fake_bleak):
+    """Connect clicked twice, then the device removed: the second initialize
+    was waiting on the lock when the shutdown ran, and must not go on to
+    connect a device that is gone."""
+    module, created = fake_bleak
+    gate = _gate_connects(module)
+    device = BLEDevice(_FakeBoard(), DeviceConfig(settings={"address": "AA"}), name="ble")
+
+    first = asyncio.create_task(device.initialize())
+    second = asyncio.create_task(device.initialize())
+    await asyncio.sleep(0)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(device.shutdown(), timeout=0.01)
+    gate.set()
+
+    for init in (first, second):
+        with pytest.raises(RuntimeError, match="shut down"):
+            await init
+    assert not any(c.is_connected for c in created["clients"])
+    assert not device.is_initialized
+
+
+async def test_a_shutdown_during_a_writes_reconnect_leaves_no_link_behind(fake_bleak):
+    """Same orphan, reached through a write repairing a dropped link in-band."""
+    module, created = fake_bleak
+    device = await _initialized(write_char_uuid="cafe")
+    created["client"].drop(notify=False)
+    gate = _gate_connects(module)
+
+    write = asyncio.create_task(device.write("on"))
+    await asyncio.sleep(0)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(device.shutdown(), timeout=0.01)
+    gate.set()
+
+    with pytest.raises(RuntimeError, match="shut down"):
+        await write
+    assert not any(c.is_connected for c in created["clients"])
