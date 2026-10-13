@@ -142,6 +142,8 @@ class PIDNode(LogicNode):
 class ToggleNode(ExecNode):
     """Toggle between on/off states."""
 
+    PASSES_SCHEDULE = True  # see GliderNode.PASSES_SCHEDULE
+
     definition = NodeDefinition(
         name="Toggle",
         category=NodeCategory.LOGIC,

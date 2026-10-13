@@ -1,7 +1,5 @@
 """Tests for flow control nodes: DelayNode, TimerNode."""
 
-from unittest.mock import AsyncMock, patch
-
 import pytest
 
 from glider.nodes.logic.flow_nodes import DelayNode, TimerNode
@@ -10,31 +8,12 @@ from glider.nodes.logic.flow_nodes import DelayNode, TimerNode
 class TestDelayNode:
     """Tests for DelayNode unit-aware duration handling.
 
-    DelayNode runs its sleep via ``asyncio.to_thread(event.wait, duration)``
-    so the wait happens off the qasync event loop (see the docstring on
-    ``DelayNode`` for why). These tests patch ``asyncio.to_thread`` to
-    capture the resolved duration without actually sleeping.
+    The wait itself is the flow clock's (see test_flow_clock.py and
+    test_flow_schedule.py); these check the duration it is given.
     """
 
     async def _capture_resolved_duration(self, node: DelayNode) -> float:
-        """Run ``node.execute()`` and return the duration value handed
-        to ``asyncio.to_thread`` (which is the second arg to that call —
-        ``to_thread(event.wait, duration)``).
-        """
-        # _fire_exec_output requires no real wiring; stub it out so the
-        # call doesn't fail when execute() returns from the (mocked) sleep.
-        node._fire_exec_output = AsyncMock()  # type: ignore[assignment]
-
-        with patch("glider.nodes.logic.flow_nodes.asyncio.to_thread") as mock_to_thread:
-            mock_to_thread.return_value = False  # event.wait returns False on timeout
-            await node.execute()
-            assert mock_to_thread.await_count == 1, (
-                f"Expected asyncio.to_thread to be awaited once, "
-                f"got {mock_to_thread.await_count} times"
-            )
-            # to_thread(callable, *args) — duration is the second positional
-            args, _kwargs = mock_to_thread.await_args
-            return args[1]
+        return node._duration_s()
 
     @pytest.mark.asyncio
     async def test_execute_seconds_default_unit(self):

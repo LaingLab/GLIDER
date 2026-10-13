@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Optional
 
+from glider.core import flow_clock
 from glider.nodes.settings import find_field
 
 if TYPE_CHECKING:
@@ -222,23 +223,49 @@ class GliderNode(ABC):
         """
         pass
 
-    async def _fire_exec_output(self, output_name: str, value=True):
+    # Whether this node's exec outputs carry on the time it was scheduled for.
+    # False (the default): they carry the time it fired, which is right for a
+    # node that may have waited on something -- a sensor, the operator, a
+    # sub-flow. True suits a node that only does quick work, such as sending
+    # a command: its I/O latency is then absorbed by the next Delay instead of
+    # pushing back every timed node after it.
+    PASSES_SCHEDULE = False
+
+    def _exec_time(self) -> float:
+        """The scheduled time this node's exec outputs carry by default."""
+        if self.PASSES_SCHEDULE:
+            return flow_clock.scheduled_or_now()
+        return flow_clock.now()
+
+    async def _fire_exec_output(self, output_name: str, value=True, *, at: float | None = None):
         """
         Fire callbacks for an exec output and await downstream propagation tasks.
 
         Unlike the synchronous exec_output(), this method collects any asyncio tasks
         returned by callbacks and awaits them, ensuring the full downstream execution
         chain completes before returning.
-        """
-        tasks = []
-        for callback in self._update_callbacks:
-            try:
-                result = callback(output_name, value)
-                if result is not None and asyncio.isfuture(result):
-                    tasks.append(result)
-            except Exception as e:
-                logger.error(f"Error triggering callback for {output_name}: {e}", exc_info=True)
 
+        ``at`` is the scheduled time handed downstream (default
+        ``_exec_time()``). Returns the latest scheduled time the downstream
+        chain reached -- for a chain ending in a Delay, that Delay's deadline.
+        """
+        if at is None:
+            at = self._exec_time()
+        self._on_exec_fire(output_name, at)
+
+        tasks = []
+        # Downstream tasks are created inside the callbacks, and copy this
+        # context, so they inherit ``at`` as their scheduled time.
+        with flow_clock.scheduled_at(at):
+            for callback in self._update_callbacks:
+                try:
+                    result = callback(output_name, value)
+                    if result is not None and asyncio.isfuture(result):
+                        tasks.append(result)
+                except Exception as e:
+                    logger.error(f"Error triggering callback for {output_name}: {e}", exc_info=True)
+
+        end = at
         if tasks:
             # Use return_exceptions=True so that one failing branch doesn't crash the others
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -248,6 +275,13 @@ class GliderNode(ABC):
                         f"Error in downstream execution branch {i} from {output_name}: {result}",
                         exc_info=True,
                     )
+                elif isinstance(result, float) and result > end:
+                    end = result
+        flow_clock.note_chain_end(end)
+        return end
+
+    def _on_exec_fire(self, output_name: str, at: float) -> None:
+        """Called as an exec output fires, with its scheduled time. Optional."""
 
     def bind_device(self, device: "BaseDevice") -> None:
         """
@@ -423,12 +457,27 @@ class HardwareNode(ExecNode):
     # node type core has never heard of can still be bound to a device.
     REQUIRES_DEVICE = True
 
+    # A command that took 130 ms to land was still the step scheduled for its
+    # input's time; a Delay after it counts from that, not from the return.
+    PASSES_SCHEDULE = True
+
+    # Flow-clock time execute() began, for the timing log; None between runs.
+    _exec_started: float | None = None
+
     definition = NodeDefinition(
         name="HardwareNode",
         category=NodeCategory.HARDWARE,
         description="Base hardware node",
         color="#2d5a2d",  # Green
     )
+
+    def _on_exec_fire(self, output_name: str, at: float) -> None:
+        # Fires once the hardware call has returned, so this is its duration.
+        # Polling loops fire too, without going through execute(); those
+        # are not scheduled steps and are not logged.
+        started, self._exec_started = self._exec_started, None
+        if started is not None:
+            flow_clock.record(self, "hardware", at, started=started, done=flow_clock.now())
 
     async def execute(self) -> None:
         """Execute hardware operation."""
@@ -439,11 +488,14 @@ class HardwareNode(ExecNode):
         if not self._enabled:
             return
 
+        self._exec_started = flow_clock.now()
         try:
             await self.hardware_operation()
             self.clear_error()
         except Exception as e:
             self.set_error(str(e))
+        finally:
+            self._exec_started = None
 
     @abstractmethod
     async def hardware_operation(self) -> None:
