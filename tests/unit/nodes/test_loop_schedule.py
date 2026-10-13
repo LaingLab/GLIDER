@@ -81,9 +81,12 @@ async def test_an_overrun_does_not_trigger_catch_up_iterations():
 
     await node.execute()
 
+    # 20 ms of slack: the body's asyncio.sleep runs on time.monotonic, which
+    # ticks every 15.6 ms on Windows, and asyncio ends a sleep up to one tick
+    # early -- a 0.35 s body measured 0.344 s on windows-2022.
     gaps = [b - a for a, b in zip(onsets, onsets[1:], strict=False)]
-    assert gaps[0] >= 0.34
-    assert all(g >= 0.09 for g in gaps[1:]), gaps
+    assert gaps[0] >= 0.35 - 0.02, gaps
+    assert all(g >= 0.1 - 0.02 for g in gaps[1:]), gaps
 
 
 async def test_stop_ends_the_wait_between_iterations():
