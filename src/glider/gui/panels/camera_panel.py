@@ -589,6 +589,43 @@ class CameraPanel(QWidget):
         multi_cam_layout.addStretch()
         layout.addLayout(multi_cam_layout)
 
+        # --- rehearsal: drive the live path from a recording ------------------
+        rehearsal_line = QFrame()
+        rehearsal_line.setFrameShape(QFrame.Shape.HLine)
+        rehearsal_line.setProperty("textRole", "muted")
+        layout.addWidget(rehearsal_line)
+
+        rehearsal_row = QHBoxLayout()
+        self._rehearse_btn = QPushButton("Rehearse from video\u2026")
+        self._rehearse_btn.setToolTip(
+            "Play a recording through the live path instead of the camera.\n"
+            "Tracking, behavior (if running), node triggers and hardware all\n"
+            "run for real."
+        )
+        self._rehearse_btn.clicked.connect(self._toggle_rehearsal)
+        rehearsal_row.addWidget(self._rehearse_btn, 1)
+
+        self._rehearse_speed = QComboBox()
+        # Feature values do not depend on playback rate -- compute_features uses
+        # unit frame spacing -- so both modes classify identically. They answer
+        # different questions, which is why both exist.
+        self._rehearse_speed.addItem("Real time", 1.0)
+        self._rehearse_speed.addItem("As fast as possible", 0.0)
+        self._rehearse_speed.setToolTip(
+            "Real time answers 'does inference keep up, and what is the "
+            "latency?'.\nAs fast as possible answers 'is this wired up?' "
+            "sooner.\nBoth classify the recording identically."
+        )
+        rehearsal_row.addWidget(self._rehearse_speed)
+        layout.addLayout(rehearsal_row)
+
+        # Hidden until there is something to say (ready, rehearsing, a result).
+        self._rehearse_status = QLabel()
+        self._rehearse_status.setProperty("textRole", "muted")
+        self._rehearse_status.setWordWrap(True)
+        self._rehearse_status.setVisible(False)
+        layout.addWidget(self._rehearse_status)
+
         # --- Live Behavior inference ---
         behavior_group = QGroupBox("Live Behavior")
         behavior_layout = QVBoxLayout(behavior_group)
@@ -627,43 +664,6 @@ class CameraPanel(QWidget):
         self._live_behavior_btn.setEnabled(False)
         self._live_behavior_btn.clicked.connect(self._toggle_live_behavior)
         behavior_layout.addWidget(self._live_behavior_btn)
-
-        # --- rehearsal: drive the live path from a recording ------------------
-        rehearsal_line = QFrame()
-        rehearsal_line.setFrameShape(QFrame.Shape.HLine)
-        rehearsal_line.setProperty("textRole", "muted")
-        behavior_layout.addWidget(rehearsal_line)
-
-        rehearsal_row = QHBoxLayout()
-        self._rehearse_btn = QPushButton("Rehearse from video\u2026")
-        self._rehearse_btn.setEnabled(False)
-        self._rehearse_btn.setToolTip(
-            "Play a recording through the live path instead of the camera.\n"
-            "Classification, node triggers and hardware all run for real."
-        )
-        self._rehearse_btn.clicked.connect(self._toggle_rehearsal)
-        rehearsal_row.addWidget(self._rehearse_btn, 1)
-
-        self._rehearse_speed = QComboBox()
-        # Feature values do not depend on playback rate -- compute_features uses
-        # unit frame spacing -- so both modes classify identically. They answer
-        # different questions, which is why both exist.
-        self._rehearse_speed.addItem("Real time", 1.0)
-        self._rehearse_speed.addItem("As fast as possible", 0.0)
-        self._rehearse_speed.setToolTip(
-            "Real time answers 'does inference keep up, and what is the "
-            "latency?'.\nAs fast as possible answers 'is this wired up?' "
-            "sooner.\nBoth classify the recording identically."
-        )
-        rehearsal_row.addWidget(self._rehearse_speed)
-        behavior_layout.addLayout(rehearsal_row)
-
-        # Hidden until there is something to say (ready, rehearsing, a result).
-        self._rehearse_status = QLabel()
-        self._rehearse_status.setProperty("textRole", "muted")
-        self._rehearse_status.setWordWrap(True)
-        self._rehearse_status.setVisible(False)
-        behavior_layout.addWidget(self._rehearse_status)
 
         layout.addWidget(behavior_group)
 
@@ -1933,7 +1933,6 @@ class CameraPanel(QWidget):
         if worker is None:
             return
         self._preview.set_behavior_vocab(worker.classes)
-        self._rehearse_btn.setEnabled(True)
         self._update_rehearse_label()
         self._show_rehearse_status("Ready to rehearse from a recording.")
         # Also hand the vocabulary to the flow side, so a Behavior Input node's

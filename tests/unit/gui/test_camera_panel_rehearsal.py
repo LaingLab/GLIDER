@@ -287,3 +287,24 @@ def test_the_label_is_left_alone_while_a_rehearsal_runs(qtbot):
     panel._update_rehearse_label()
 
     assert labels == []
+
+
+# --- what it needs before it can run -------------------------------------------
+
+
+def test_rehearsal_does_not_need_a_behavior_model(qtbot):
+    """A tracker, a Zone Input node and a stimulator are a complete experiment
+    with no behavior classifier in it. Rehearse used to wait for a behavior
+    model to load, so that experiment could not be rehearsed at all -- and it
+    sat inside the Live Behavior box, which said the same thing."""
+    from PyQt6.QtWidgets import QGroupBox
+
+    from glider.vision.camera_manager import CameraManager
+    from glider.vision.cv_processor import CVProcessor
+
+    panel = CameraPanel(CameraManager(), CVProcessor())
+    qtbot.addWidget(panel)
+
+    assert panel._rehearse_btn.isEnabled()
+    behavior = next(g for g in panel.findChildren(QGroupBox) if g.title() == "Live Behavior")
+    assert not behavior.isAncestorOf(panel._rehearse_btn)
