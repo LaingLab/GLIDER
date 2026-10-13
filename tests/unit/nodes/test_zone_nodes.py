@@ -46,10 +46,39 @@ async def test_leaving_its_zone_fires_on_exit():
     bus = LiveSignalBus()
     node = await _started(bus)
 
+    bus.publish_zones({"nest": ZoneState("nest", "Nest", True, 1, entered=True)})
     bus.publish_zones({"nest": ZoneState("nest", "Nest", False, 0, exited=True)})
     await _settle()
 
-    assert node.fired == ["On Exit"]
+    assert node.fired == ["On Enter", "On Exit"]
+
+
+async def test_a_tracker_id_swap_inside_the_zone_is_not_an_exit():
+    """The tracker re-IDs the animal: its old ID exits and its new one enters
+    in the same frame. On Exit firing after On Enter left a stimulator off
+    while the mouse sat in the middle of the zone."""
+    bus = LiveSignalBus()
+    node = await _started(bus)
+
+    bus.publish_zones({"nest": ZoneState("nest", "Nest", True, 1, entered=True)})
+    bus.publish_zones({"nest": ZoneState("nest", "Nest", True, 1, entered=True, exited=True)})
+    await _settle()
+
+    assert node.fired == ["On Enter"]
+
+
+async def test_a_duplicate_detection_vanishing_is_not_an_exit():
+    """YOLO briefly boxes the one mouse twice; the extra track leaving is not
+    the zone emptying."""
+    bus = LiveSignalBus()
+    node = await _started(bus)
+
+    bus.publish_zones({"nest": ZoneState("nest", "Nest", True, 1, entered=True)})
+    bus.publish_zones({"nest": ZoneState("nest", "Nest", True, 2, entered=True)})
+    bus.publish_zones({"nest": ZoneState("nest", "Nest", True, 1, exited=True)})
+    await _settle()
+
+    assert node.fired == ["On Enter"]
 
 
 async def test_another_zones_events_are_not_its_own():
