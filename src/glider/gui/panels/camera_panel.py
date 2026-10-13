@@ -599,8 +599,8 @@ class CameraPanel(QWidget):
         self._rehearse_btn = QPushButton("Rehearse from video\u2026")
         self._rehearse_btn.setToolTip(
             "Play a recording through the live path instead of the camera.\n"
-            "Tracking, behavior (if running), node triggers and hardware all\n"
-            "run for real."
+            "Tracking, zones, behavior (if running), node triggers and hardware\n"
+            "all run for real."
         )
         self._rehearse_btn.clicked.connect(self._toggle_rehearsal)
         rehearsal_row.addWidget(self._rehearse_btn, 1)
