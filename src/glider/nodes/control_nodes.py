@@ -105,7 +105,9 @@ class LoopNode(GliderNode):
         # absolute deadline rather than "delay after this body started", so a
         # wakeup that lands a few ms late is taken out of the next wait instead
         # of pushing every later iteration back by the same amount.
-        next_start = time.monotonic()
+        # perf_counter, not monotonic: on Windows before Python 3.13, monotonic
+        # only advances every 15.6 ms, which would put each deadline that far off.
+        next_start = time.perf_counter()
 
         iteration = 0
         while self._running:
@@ -129,14 +131,14 @@ class LoopNode(GliderNode):
 
             if delay > 0 and self._running:
                 next_start += delay
-                remaining = next_start - time.monotonic()
+                remaining = next_start - time.perf_counter()
                 if remaining > 0:
                     await self._wait(remaining)
                 else:
                     # The body overran the period. Start the next iteration now
                     # and measure from here -- catching up would fire the missed
                     # iterations back to back.
-                    next_start = time.monotonic()
+                    next_start = time.perf_counter()
 
         logger.info(f"  Loop completed after {iteration} iterations")
 

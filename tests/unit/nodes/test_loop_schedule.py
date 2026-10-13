@@ -26,7 +26,7 @@ def _loop(count: int, delay: float, body_s=0.0) -> tuple[LoopNode, list[float]]:
     onsets: list[float] = []
 
     async def body(i: int) -> None:
-        onsets.append(time.monotonic())
+        onsets.append(time.perf_counter())
         await asyncio.sleep(body_s(i) if callable(body_s) else body_s)
 
     def on_output(name, _value):
@@ -64,23 +64,29 @@ async def test_body_time_counts_toward_the_period():
     await node.execute()
 
     late = [t - (onsets[0] + k * 0.3) for k, t in enumerate(onsets)]
-    assert min(late) > -0.02, late  # never early; Windows' monotonic ticks every 15.6 ms
+    # Never early. onsets[0] itself lands a little after the Loop's own start,
+    # by however long the first body took to be scheduled, hence the slack.
+    assert min(late) > -0.02, late
     assert late[-1] - late[1] < 0.1, late  # adding each body would make this 0.39
 
 
 async def test_an_overrun_does_not_trigger_catch_up_iterations():
     # Iteration 0 takes 3.5 periods. The next one starts as soon as it ends,
-    # and the ones after keep a full period apart rather than firing back to
-    # back to make up the missed deadlines.
+    # and the ones after run on a fresh 0.1 s grid from there rather than
+    # firing back to back to make up the missed deadlines.
     node, onsets = _loop(count=4, delay=0.1, body_s=lambda i: 0.35 if i == 0 else 0.0)
 
     await node.execute()
 
-    # 20 ms of slack: Windows' monotonic clock ticks every 15.6 ms, and asyncio
-    # runs a sleep up to one tick early, so a 0.35 s body measured 0.344 s.
-    gaps = [b - a for a, b in zip(onsets, onsets[1:], strict=False)]
-    assert gaps[0] >= 0.35 - 0.02, gaps
-    assert all(g >= 0.1 - 0.02 for g in gaps[1:]), gaps
+    # 20 ms of slack on the body: its asyncio.sleep runs on time.monotonic,
+    # which ticks every 15.6 ms on Windows, and asyncio ends a sleep up to one
+    # tick early -- a 0.35 s body measured 0.344 s on windows-2022.
+    assert onsets[1] - onsets[0] >= 0.35 - 0.02, onsets
+    # Checked against the grid, not gap by gap: a wakeup that lands late is
+    # taken out of the next wait, so the gap after it is short by design.
+    # Catching up would put these 0.1 and 0.2 s early.
+    late = [t - (onsets[1] + k * 0.1) for k, t in enumerate(onsets[1:])]
+    assert min(late) > -0.02, late
 
 
 async def test_stop_ends_the_wait_between_iterations():
