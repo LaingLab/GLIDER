@@ -8,10 +8,8 @@ These nodes provide control flow functionality:
 
 import asyncio
 import logging
-import threading
-import time
 
-from glider.core.timer_resolution import high_resolution_timers
+from glider.core import flow_clock
 from glider.hal import revolution_tracking as rt
 from glider.nodes.base_node import (
     GliderNode,
@@ -80,15 +78,22 @@ class LoopNode(GliderNode):
         super().__init__()
         self._running = False
         self._current_index = 0
-        # threading.Event, as in DelayNode: the wait between iterations runs on
-        # a worker thread, and stop() sets this to cut it short.
-        self._stop_event: threading.Event = threading.Event()
+        self._wait: flow_clock.ClockWait | None = None
 
     def update_event(self) -> None:
         pass
 
     async def execute(self) -> None:
-        """Execute the loop."""
+        """Execute the loop on the flow clock.
+
+        Iteration k is due at start + k * delay, where start is the time this
+        Loop was scheduled for. Each wait aims at that absolute deadline, so a
+        late wakeup or a slow write is taken out of the next wait instead of
+        pushing every later iteration back. With delay 0 the next iteration is
+        due when the body ended on the schedule -- for a body ending in a
+        Delay, that Delay's deadline -- which keeps Loop -> stimulus -> Delay
+        on time too.
+        """
         logger.info(f"LoopNode.execute() called, node ID: {self._glider_id}")
 
         # Get parameters from state
@@ -99,15 +104,11 @@ class LoopNode(GliderNode):
 
         self._running = True
         self._current_index = 0
-        self._stop_event = threading.Event()
 
-        # Iteration k is due at start + k * delay. Each wait aims at that
-        # absolute deadline rather than "delay after this body started", so a
-        # wakeup that lands a few ms late is taken out of the next wait instead
-        # of pushing every later iteration back by the same amount.
-        # perf_counter, not monotonic: on Windows before Python 3.13, monotonic
-        # only advances every 15.6 ms, which would put each deadline that far off.
-        next_start = time.perf_counter()
+        due = flow_clock.scheduled_or_now()
+        fired: float | None = None
+        note = ""
+        warned = False
 
         iteration = 0
         while self._running:
@@ -118,78 +119,83 @@ class LoopNode(GliderNode):
             self._current_index = iteration
 
             logger.info(f"  Loop iteration {iteration}")
+            flow_clock.record(self, "loop", due, clock=fired, started=flow_clock.now(), note=note)
 
+            body_end: float | None = None
             try:
                 # Trigger body execution and AWAIT completion
-                await self._exec_body_async()
+                body_end = await self._exec_body_async(at=due)
             except Exception as e:
                 logger.error(f"Error in Loop body (iteration {iteration}): {e}", exc_info=True)
                 if not self._running:
                     break
 
             iteration += 1
+            if not self._running:
+                break
 
-            if delay > 0 and self._running:
-                next_start += delay
-                remaining = next_start - time.perf_counter()
-                if remaining > 0:
-                    await self._wait(remaining)
-                else:
-                    # The body overran the period. Start the next iteration now
-                    # and measure from here -- catching up would fire the missed
-                    # iterations back to back.
-                    next_start = time.perf_counter()
+            due, note = self._next_due(due, delay, body_end)
+            if note and not warned:
+                logger.warning(f"Loop {self._glider_id} iteration {iteration}: {note}")
+                warned = True
+
+            fired = None
+            if due > flow_clock.now():
+                fired = await self._wait_until(due)
+                if fired is None:
+                    break  # stopped
 
         logger.info(f"  Loop completed after {iteration} iterations")
 
         # Trigger done output
         try:
-            await self._exec_done_async()
+            await self._exec_done_async(at=due)
         except Exception as e:
             logger.error(f"Error in Loop done execution: {e}", exc_info=True)
 
-    async def _wait(self, seconds: float) -> None:
-        """Wait between iterations, the way DelayNode waits.
+    @staticmethod
+    def _next_due(due: float, delay: float, body_end: float | None) -> tuple[float, str]:
+        """When the next iteration is due, and a note if the body overran.
 
-        ``asyncio.sleep`` wakes on the qasync loop, which Qt repaints and the
-        recorder's ticks can hold up by tens of ms -- see DelayNode for the
-        measurements. A worker-thread ``Event.wait`` under a 1 ms system timer
-        tick is not held up by them, and ``stop()`` can end it at once.
+        - The body fit in the period: one period on.
+        - On the schedule, the body ran past the period (e.g. a Delay in it
+          longer than the Loop's): when the body ended on the schedule.
+        - The schedule says the body fit, but real time has already passed
+          the period (a slow write that passes its schedule through): from
+          now. Catching up would fire the missed iterations back to back.
         """
-        with high_resolution_timers():
-            await asyncio.to_thread(self._stop_event.wait, seconds)
+        period_end = due + delay
+        scheduled_end = due if body_end is None else max(due, body_end)
+        if scheduled_end >= period_end:
+            if delay > 0 and scheduled_end > period_end:
+                return scheduled_end, (
+                    f"overrun: body is {(scheduled_end - due) * 1000:.1f} ms "
+                    f"on the schedule, longer than the {delay * 1000:.0f} ms period"
+                )
+            return scheduled_end, ""
+        current = flow_clock.now()
+        if delay > 0 and current > period_end:
+            return current, (
+                f"overrun: body took {(current - due) * 1000:.1f} ms, "
+                f"longer than the {delay * 1000:.0f} ms period; restarted from now"
+            )
+        return period_end, ""
 
-    async def _exec_body_async(self) -> None:
-        """Trigger the body execution output and await completion."""
-        tasks = []
-        for callback in self._update_callbacks:
-            try:
-                result = callback("body", True)
-                # Callbacks may return tasks that we should await
-                if result is not None and asyncio.isfuture(result):
-                    tasks.append(result)
-            except Exception as e:
-                logger.error(f"Error triggering body callback: {e}", exc_info=True)
+    async def _wait_until(self, deadline: float) -> float | None:
+        """Wait on the flow clock. Returns its fire time, or None if stopped."""
+        self._wait = flow_clock.wait_until(deadline)
+        try:
+            return await self._wait
+        finally:
+            self._wait = None
 
-        # Wait for all body tasks to complete
-        if tasks:
-            logger.info(f"  Awaiting {len(tasks)} body task(s)...")
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.error(f"Error in body task {i}: {result}", exc_info=True)
-            logger.info("  Body execution complete")
+    async def _exec_body_async(self, at: float | None = None) -> float:
+        """Fire the body, await it, and return when it ended on the schedule."""
+        return await self._fire_exec_output("body", at=at)
 
-    async def _exec_done_async(self) -> None:
-        """Trigger the done execution output and await completion."""
-        tasks = []
-        for callback in self._update_callbacks:
-            result = callback("done", True)
-            if result is not None and asyncio.isfuture(result):
-                tasks.append(result)
-
-        if tasks:
-            await asyncio.gather(*tasks)
+    async def _exec_done_async(self, at: float | None = None) -> None:
+        """Fire the done output and await completion."""
+        await self._fire_exec_output("done", at=at)
 
     def _exec_body(self) -> None:
         """Trigger the body execution output (sync version for compatibility)."""
@@ -212,7 +218,8 @@ class LoopNode(GliderNode):
         """Stop the loop."""
         logger.info(f"LoopNode.stop() called, node ID: {self._glider_id}")
         self._running = False
-        self._stop_event.set()
+        if self._wait is not None:
+            self._wait.cancel()
 
 
 class WaitForInputNode(GliderNode):

@@ -151,6 +151,7 @@ def test_timer_with_a_null_interval_falls_back_to_the_default():
 PINNED = [
     ("Delay", "duration", 1.0),
     ("Delay", "unit", "seconds"),
+    ("Delay", "count_from", "schedule"),
     ("Timer", "interval", 1.0),
     ("Timer", "unit", "seconds"),
     ("Timer", "count", 0),

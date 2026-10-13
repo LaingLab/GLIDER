@@ -12,6 +12,8 @@ from collections.abc import Callable
 from enum import Enum, auto
 from typing import Any
 
+from glider.core import flow_clock
+
 logger = logging.getLogger(__name__)
 
 
@@ -532,14 +534,23 @@ class FlowEngine:
 
     async def _propagate_execution(
         self, from_node_id: str, from_output: int, to_node_id: str
-    ) -> None:
-        """Propagate execution to the target node."""
+    ) -> float | None:
+        """Propagate execution to the target node.
+
+        Returns the latest scheduled time the target's chain reached (see
+        ``GliderNode._fire_exec_output``), or None if it reported none. The
+        upstream node gathers these, which is how a Loop learns when its body
+        ended on the flow clock.
+        """
         logger.info(f"_propagate_execution called: {from_node_id}:{from_output} -> {to_node_id}")
         to_node = self._nodes.get(to_node_id)
         if to_node is None:
             logger.error(f"Target node not found: {to_node_id}")
-            return
+            return None
 
+        # This task inherited the upstream task's context; report only this
+        # node's own chain.
+        flow_clock.begin_chain()
         try:
             if hasattr(to_node, "execute") and callable(to_node.execute):
                 logger.info(f"Executing node: {to_node_id} (type: {type(to_node).__name__})")
@@ -557,7 +568,7 @@ class FlowEngine:
                     logger.error(error_msg, exc_info=True)
                     self._notify_error(to_node_id, e)
                     # Don't propagate execution further on error
-                    return
+                    return None
 
                 # Check if this was EndExperiment - signal flow completion
                 if hasattr(to_node, "definition") and to_node.definition.name == "EndExperiment":
@@ -570,6 +581,7 @@ class FlowEngine:
                 f"Critical framework error during execution propagation: {e}", exc_info=True
             )
             self._notify_error("Framework", e)
+        return flow_clock.chain_end()
 
     def remove_connection(self, connection_id: str) -> None:
         """Remove a connection."""

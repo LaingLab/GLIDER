@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from glider.core import flow_clock
 from glider.core.data_recorder import DataRecorder
 from glider.core.event_logger import DeviceEventLogger
 from glider.core.experiment_session import (
@@ -1167,6 +1168,16 @@ class GliderCore:
         self._flow_end_wall = None
 
         self._session.state = SessionState.RUNNING
+        # Zero the flow clock and open the timing log beside the event log.
+        # Every timed node schedules against this start, and records its
+        # scheduled vs. actual times into the log.
+        event_path = self._event_logger.file_path if self._event_logger.is_recording else None
+        timing_path = None
+        if isinstance(event_path, Path):
+            timing_path = event_path.with_name(
+                event_path.name.replace("_events.csv", "_timing.csv")
+            )
+        flow_clock.begin_run(timing_path, experiment=self._session.metadata.name or "experiment")
         await self._flow_engine.start()
         # Capture the flow's logical start AFTER the engine is live —
         # i.e., the moment the StartExperiment node is about to be
@@ -1228,6 +1239,13 @@ class GliderCore:
             mux: False skips muxing audio into the videos (e-stop path); the
                 WAV is left beside them.
         """
+        # Close the timing log and release the run's timer settings. The flow
+        # has stopped on every path that gets here.
+        try:
+            flow_clock.end_run()
+        except Exception as e:
+            logger.error(f"Failed to close the flow timing log: {e}")
+
         # Stop audio recording first (need the WAV path for muxing)
         audio_path = None
         if self._audio_recorder.is_recording:

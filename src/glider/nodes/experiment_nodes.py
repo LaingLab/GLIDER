@@ -10,6 +10,7 @@ These nodes provide the core functionality for running experiments:
 
 import logging
 
+from glider.core import flow_clock
 from glider.hal.value_spec import clamp_to_spec
 from glider.nodes.base_node import (
     GliderNode,
@@ -43,7 +44,9 @@ class StartExperimentNode(GliderNode):
         """Called when experiment starts - triggers the flow."""
         logger.info(f"StartExperiment.start() called, node ID: {self._glider_id}")
         logger.info(f"  Registered callbacks: {len(self._update_callbacks)}")
-        await self._fire_exec_output("next")
+        # The whole flow's schedule is anchored on the run's start.
+        t0 = flow_clock.run_start()
+        await self._fire_exec_output("next", at=flow_clock.now() if t0 is None else t0)
 
     def exec_output(self, index: int = 0) -> None:
         """Trigger execution output."""
@@ -80,6 +83,8 @@ class EndExperimentNode(GliderNode):
 
 class OutputNode(GliderNode):
     """Write a value to a device (digital HIGH/LOW or PWM 0-255)."""
+
+    PASSES_SCHEDULE = True  # quick device I/O; see GliderNode.PASSES_SCHEDULE
 
     definition = NodeDefinition(
         name="Output",
@@ -187,6 +192,8 @@ class OutputNode(GliderNode):
 class InputNode(GliderNode):
     """Read from a device."""
 
+    PASSES_SCHEDULE = True  # quick device I/O; see GliderNode.PASSES_SCHEDULE
+
     definition = NodeDefinition(
         name="Input",
         category=NodeCategory.HARDWARE,
@@ -239,6 +246,8 @@ class InputNode(GliderNode):
 
 class MotorGovernorNode(GliderNode):
     """Control a motor governor device (up/down/stop)."""
+
+    PASSES_SCHEDULE = True  # quick device I/O; see GliderNode.PASSES_SCHEDULE
 
     definition = NodeDefinition(
         name="MotorGovernor",

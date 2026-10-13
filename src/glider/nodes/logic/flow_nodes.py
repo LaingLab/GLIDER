@@ -4,11 +4,9 @@ Flow Control Nodes - Execution flow control, delays, and timers.
 
 import asyncio
 import logging
-import threading
-import time
 from typing import Any
 
-from glider.core.timer_resolution import high_resolution_timers
+from glider.core import flow_clock
 from glider.nodes.base_node import (
     ExecNode,
     NodeCategory,
@@ -38,39 +36,32 @@ class SequenceNode(ExecNode):
     )
 
     async def execute(self) -> None:
-        for _i, output_def in enumerate(self.definition.outputs):
-            await self._fire_exec_output(output_def.name)
+        # Each output is scheduled for when the one before it finished on the
+        # flow clock, so a Delay in "Then 0" does not leak into "Then 1".
+        at = flow_clock.scheduled_or_now()
+        for output_def in self.definition.outputs:
+            at = await self._fire_exec_output(output_def.name, at=at)
 
 
 class DelayNode(ExecNode):
-    """Delay execution for a specified time.
+    """Delay execution for a specified time, on the flow clock.
 
-    Sleep is performed on a worker thread via
-    ``asyncio.to_thread(threading.Event.wait, duration)`` rather than
-    ``asyncio.sleep`` for two reasons:
+    The wait is held by the flow clock's timing thread, not by
+    ``asyncio.sleep`` on the qasync loop, which Qt repaints and the recorders'
+    ticks hold up by tens of ms (a 10 s delay used to return in 10.01-10.27 s).
+    See :mod:`glider.core.flow_clock`.
 
-    1. **Timing precision.** ``asyncio.sleep`` resolves on the qasync
-       event loop, which under typical GLIDER load (data recorder
-       sampling at 100 ms, runner timer ticking at 50 ms, Qt repaints,
-       device polls) is too congested for sub-100ms wakeup accuracy.
-       Field reports showed a 10-second delay returning in 10.01-10.27s
-       (260 ms jitter). ``threading.Event.wait(timeout)`` is backed by
-       an OS condition variable and runs on a thread that isn't
-       competing with Qt for loop time, so a 10s delay reliably
-       returns close to 10s. The condition variable cannot resolve
-       finer than the system timer tick, which is ~1 ms on macOS and
-       Linux but ~15.6 ms on Windows by default, so the wait is taken
-       under :func:`~glider.core.timer_resolution.high_resolution_timers`.
+    **What the duration counts from.** By default, from the time this node's
+    input was *scheduled* for, not from when it happened to arrive: in
+    ``Loop -> Maimu -> Delay 10 s`` the BLE write takes ~130 ms, and counting
+    from its return added that to every iteration (101.34 s for a 100 s run).
+    "End of previous step" restores the old behaviour, for a delay that is a
+    minimum gap after an action really finished -- a valve's settle time.
 
-    2. **Clean cancellation.** ``Event.set()`` returns control to the
-       waiting thread immediately, which then unblocks the ``to_thread``
-       wrapper, which delivers the result back to the asyncio side.
-       ``DelayNode.stop()`` simply sets the event and the in-flight
-       sleep returns promptly — no need to cancel an asyncio task and
-       hope its sleep wakeup observes the cancellation in time.
-
-    The event is replaced on each ``execute()`` so a node reused across
-    multiple runs starts each delay with a fresh, unset event.
+    If the input arrives later than the whole duration -- the upstream step
+    overran the schedule -- the delay counts from now instead and the timing
+    log notes the overrun. Firing at once would collapse a gap the protocol
+    asked for to zero.
     """
 
     definition = NodeDefinition(
@@ -104,53 +95,73 @@ class DelayNode(ExecNode):
             "choices": [["seconds", "sec"], ["milliseconds", "ms"]],
             "help": "Unit of `duration`.",
         },
+        {
+            "key": "count_from",
+            "label": "Count from",
+            "type": "enum",
+            "default": "schedule",
+            "choices": [["schedule", "Schedule"], ["previous", "End of previous step"]],
+            "help": (
+                "Schedule keeps a fixed timeline: time the previous steps took is "
+                "absorbed. End of previous step waits the full duration after the "
+                "step before this one finished, e.g. for a settle time."
+            ),
+        },
     ]
 
     def __init__(self):
         super().__init__()
-        # threading.Event (not asyncio.Event) — must be settable from the
-        # asyncio side AND waited on from the worker thread. stop() will
-        # set this to break out of an in-flight wait.
-        self._stop_event: threading.Event = threading.Event()
+        self._wait: flow_clock.ClockWait | None = None
 
-    async def execute(self) -> None:
+    def _duration_s(self) -> float:
+        """The configured duration in seconds."""
         # Priority: 1) state "duration", 2) input port, 3) default 1.0
         if "duration" in self._state:
             duration = float(self._state["duration"])
         else:
             duration = float(self.get_input(1) or self.setting_default("duration"))
 
-        unit = self.setting("unit")
-        if unit == "milliseconds":
+        if self.setting("unit") == "milliseconds":
             duration = duration / 1000.0
 
-        duration = max(0, duration)
+        return max(0, duration)
 
-        # Fresh event per execute() so a previous stop() doesn't leak
-        # into a new delay (and so the node is safely reusable across
-        # multiple flow runs without re-init).
-        self._stop_event = threading.Event()
+    async def execute(self) -> None:
+        duration = self._duration_s()
+        started = flow_clock.now()
+        scheduled = flow_clock.inherited_time()
+        if scheduled is None or self.setting("count_from") == "previous":
+            anchor = started
+        else:
+            anchor = scheduled
 
-        # Wait on a worker thread. Event.wait(timeout) returns True if
-        # the event was set (cancellation), False on timeout (delay
-        # completed normally). Either way we just unblock and fall
-        # through — only fire Completed on the normal path.
-        # Hold a 1 ms system timer tick for the wait. Event.wait cannot
-        # resolve finer than the tick, and Windows' default is ~15.6 ms, so
-        # without this a delay overshoots by a median of 31 ms and up to 63 ms
-        # -- quantised to the tick, not scattered. A no-op off Windows.
-        with high_resolution_timers():
-            cancelled = await asyncio.to_thread(self._stop_event.wait, duration)
-        if cancelled:
-            return
+        deadline = anchor + duration
+        note = ""
+        if duration > 0 and deadline < started:
+            note = f"overrun: input {(started - anchor) * 1000:.1f} ms behind schedule"
+            logger.warning(
+                "Delay %s: %s, longer than its %.3f s; counting from now",
+                self._glider_id,
+                note,
+                duration,
+            )
+            deadline = started + duration
 
-        await self._fire_exec_output("Completed")
+        self._wait = flow_clock.wait_until(deadline)
+        try:
+            fired = await self._wait
+        finally:
+            self._wait = None
+        if fired is None:
+            return  # stopped
+
+        flow_clock.record(self, "delay", deadline, clock=fired, started=flow_clock.now(), note=note)
+        await self._fire_exec_output("Completed", at=deadline)
 
     async def stop(self) -> None:
-        # Wakes any in-flight Event.wait on the worker thread within
-        # condition-variable precision (~µs). The asyncio side picks
-        # up the to_thread completion within a normal loop tick.
-        self._stop_event.set()
+        # Ends an in-flight wait at once; execute() returns without firing.
+        if self._wait is not None:
+            self._wait.cancel()
 
 
 class TimerNode(ExecNode):
@@ -255,22 +266,34 @@ class TimerNode(ExecNode):
         return max(0.01, interval)
 
     async def _timer_loop(self) -> None:
-        """Timer loop that triggers at intervals."""
-        next_tick = time.monotonic()
+        """Tick at fixed points on the flow clock: start + k * interval.
+
+        A tick whose downstream runs longer than the interval does not cause
+        a burst of catch-up ticks afterwards: the schedule restarts from now.
+        """
+        next_tick = flow_clock.scheduled_or_now()
         while True:
             try:
                 interval = self._effective_interval()
                 enabled = bool(self.get_input(1) if self.get_input(1) is not None else True)
 
                 next_tick += interval
-                sleep_time = next_tick - time.monotonic()
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
+                note = ""
+                current = flow_clock.now()
+                if next_tick < current:
+                    note = f"overrun: {(current - next_tick) * 1000:.1f} ms behind; restarted"
+                    next_tick = current
+                    fired = None
+                else:
+                    fired = await flow_clock.wait_until(next_tick)
 
                 if enabled and not self._paused:
+                    flow_clock.record(
+                        self, "timer", next_tick, clock=fired, started=flow_clock.now(), note=note
+                    )
                     self._count += 1
                     self.set_output(1, self._count)
-                    await self._fire_exec_output("Tick")
+                    await self._fire_exec_output("Tick", at=next_tick)
 
             except asyncio.CancelledError:
                 break
