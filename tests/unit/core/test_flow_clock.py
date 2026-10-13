@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -27,6 +29,32 @@ async def test_wait_fires_at_the_deadline_and_never_early():
         # Generous: this is the thread's wake-up on a shared CI runner. The
         # slow-marked test below holds it to the real target.
         assert fired - deadline < 0.015
+
+
+@pytest.mark.skipif(not shutil.which("taskpolicy"), reason="macOS only")
+def test_waits_stay_on_time_when_macos_rates_the_process_background():
+    # macOS holds back a background process's timed waits 60-100 ms -- a
+    # hidden window under App Nap, or a CI runner. Clamp a child process to
+    # utility QoS and time its waits there. Median, so one stall can't fail it.
+    code = (
+        "import asyncio, statistics\n"
+        "from glider.core import flow_clock\n"
+        "async def main():\n"
+        "    late = []\n"
+        "    for _ in range(10):\n"
+        "        deadline = flow_clock.now() + 0.02\n"
+        "        late.append(await flow_clock.wait_until(deadline) - deadline)\n"
+        "    print(statistics.median(late))\n"
+        "asyncio.run(main())\n"
+    )
+    out = subprocess.run(
+        ["taskpolicy", "-c", "utility", sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    assert float(out.stdout) < 0.02, out.stdout
 
 
 async def test_a_deadline_already_past_returns_at_once():

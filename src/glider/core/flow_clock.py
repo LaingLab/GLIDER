@@ -12,7 +12,10 @@ thread waits on a condition variable until ~3 ms out, sleeps on Python's
 high-resolution waitable timer until ~1 ms out, then spins on the clock. While
 it holds any deadline it also holds Windows' 1 ms timer tick (see
 :mod:`glider.core.timer_resolution`), which a condition-variable wait needs to
-resolve finer than 15.6 ms. Measured on a lab desktop with the GUI thread busy,
+resolve finer than 15.6 ms. On macOS it waits on a kqueue instead: when macOS
+rates the process as background (a hidden window under App Nap, a CI runner) it
+holds back condition-variable waits, ``time.sleep`` and ``select`` by 60-100 ms,
+but not a kqueue timeout. Measured on a lab desktop with the GUI thread busy,
 the thread's own wake-up is typically within 0.02 ms of the deadline, worst case
 ~2 ms. The waiting coroutine then resumes on its event loop; that hop is outside
 this module's control and is what moving the flow off the GUI thread addresses.
@@ -38,6 +41,8 @@ import csv
 import heapq
 import itertools
 import logging
+import os
+import select
 import statistics
 import sys
 import threading
@@ -148,6 +153,17 @@ class _TimingThread:
         self._seq = itertools.count()
         self._cv = threading.Condition()
         self._thread: threading.Thread | None = None
+        # macOS: wait on a kqueue, woken through a pipe rather than notify().
+        # Measured with the process clamped to utility QoS, a 20 ms wait
+        # overshot ~70 ms on the condition variable, time.sleep and select
+        # alike, and 1 ms on a kqueue. Raising the thread's own QoS did not
+        # help. The second, empty kqueue is a sleep nothing can cut short.
+        self._kq = self._sleep_kq = None
+        if sys.platform == "darwin":
+            self._kq, self._sleep_kq = select.kqueue(), select.kqueue()
+            self._wake_r, self._wake_w = os.pipe()
+            os.set_blocking(self._wake_w, False)
+            self._kq.control([select.kevent(self._wake_r)], 0)
 
     def call_at(self, deadline: float, callback: Callable[[float], None]) -> _Entry:
         entry = _Entry(callback)
@@ -158,8 +174,34 @@ class _TimingThread:
                     target=self._run, name="glider-flow-clock", daemon=True
                 )
                 self._thread.start()
-            self._cv.notify()
+            self._notify()
         return entry
+
+    def _notify(self) -> None:
+        """Wake the thread to look at a new deadline. Call with the lock held."""
+        if self._kq is None:
+            self._cv.notify()
+            return
+        with contextlib.suppress(BlockingIOError):  # the pipe is full: a wake is pending
+            os.write(self._wake_w, b"\0")
+
+    def _wait(self, timeout: float | None) -> None:
+        """Wait for :meth:`_notify` or ``timeout``. Call with the lock held."""
+        if self._kq is None:
+            self._cv.wait(timeout)
+            return
+        self._cv.release()
+        try:
+            if self._kq.control(None, 1, timeout):
+                os.read(self._wake_r, 4096)
+        finally:
+            self._cv.acquire()
+
+    def _sleep(self, seconds: float) -> None:
+        if self._sleep_kq is None:
+            time.sleep(seconds)
+        else:
+            self._sleep_kq.control(None, 1, seconds)
 
     def _run(self) -> None:
         _raise_thread_priority()
@@ -174,7 +216,7 @@ class _TimingThread:
                         if holding:
                             tick.close()
                             holding = False
-                        self._cv.wait()
+                        self._wait(None)
                         continue
                     if not holding:
                         tick.enter_context(high_resolution_timers())
@@ -182,13 +224,13 @@ class _TimingThread:
                     remaining = self._heap[0][0] - now()
                     if remaining <= COARSE_MARGIN_S:
                         break
-                    self._cv.wait(remaining - COARSE_MARGIN_S)
+                    self._wait(remaining - COARSE_MARGIN_S)
                 deadline = self._heap[0][0]
 
             # Outside the lock, so registering a deadline never waits on this.
             remaining = deadline - now()
             if remaining > SPIN_MARGIN_S:
-                time.sleep(remaining - SPIN_MARGIN_S)
+                self._sleep(remaining - SPIN_MARGIN_S)
             while now() < deadline:
                 pass
             fired = now()
@@ -209,8 +251,9 @@ class _TimingThread:
 def _raise_thread_priority() -> None:
     """Ask the OS to run the timing thread ahead of ordinary threads.
 
-    Windows only: elsewhere raising a thread's priority needs privileges, and
-    the default scheduler already wakes a sleeping thread promptly. HIGHEST,
+    Windows only: on Linux raising a thread's priority needs privileges, and on
+    macOS raising its QoS does not stop a background process's waits being held
+    back -- the kqueue wait in :class:`_TimingThread` does that. HIGHEST,
     not TIME_CRITICAL: the thread spins for ~1 ms per deadline, and a bug that
     kept it spinning should not be able to starve the rest of the machine.
     """
