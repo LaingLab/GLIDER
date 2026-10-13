@@ -2,8 +2,8 @@
 
 Vision produces a result per frame on a worker thread; nodes that react to it
 live in the flow and run on the asyncio loop. Nothing connected the two: nodes
-such as :class:`~glider.nodes.vision.zone_nodes.ZoneInputNode` carry an update
-method that nothing in the codebase ever calls, so their exec outputs could
+such as :class:`~glider.nodes.vision.zone_nodes.ZoneInputNode` carried an update
+method that nothing in the codebase ever called, so their exec outputs could
 never fire.
 
 This is the missing hop. Nodes subscribe when they start and unsubscribe when
@@ -60,6 +60,8 @@ class LiveSignalBus:
         self._lock = threading.RLock()
         self._behavior_subs: list[Callable[[BehaviorEvent], None]] = []
         self._behaviors: list[str] = []
+        # Each update is the CV processor's {zone_id: ZoneState} for one frame.
+        self._zone_subs: list[Callable[[dict[str, Any]], None]] = []
 
     # -- behavior ---------------------------------------------------------
     def subscribe_behavior(self, callback: Callable[[BehaviorEvent], None]) -> None:
@@ -106,13 +108,16 @@ class LiveSignalBus:
         unsubscribes from inside its own callback must not mutate the list
         being iterated.
         """
+        return self._deliver(self._behavior_subs, event, "behavior")
+
+    def _deliver(self, subscribers: list[Callable], payload: Any, kind: str) -> int:
         with self._lock:
-            subs = list(self._behavior_subs)
+            subs = list(subscribers)
         for cb in subs:
             try:
-                cb(event)
+                cb(payload)
             except Exception:
-                logger.exception("live bus: behavior subscriber raised, continuing")
+                logger.exception("live bus: %s subscriber raised, continuing", kind)
         return len(subs)
 
     @property
@@ -120,7 +125,34 @@ class LiveSignalBus:
         with self._lock:
             return len(self._behavior_subs)
 
+    # -- zones ------------------------------------------------------------
+    def subscribe_zones(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        """Register *callback* to receive every frame's zone states."""
+        with self._lock:
+            if callback not in self._zone_subs:
+                self._zone_subs.append(callback)
+
+    def unsubscribe_zones(self, callback: Callable[[dict[str, Any]], None]) -> None:
+        """Remove *callback*. Removing one that was never added is not an error."""
+        with self._lock:
+            if callback in self._zone_subs:
+                self._zone_subs.remove(callback)
+
+    def publish_zones(self, states: dict[str, Any]) -> int:
+        """Deliver one frame's ``{zone_id: ZoneState}``. Returns how many were called.
+
+        Called from the CV worker thread, with the same copy-then-release
+        delivery as publish_behavior.
+        """
+        return self._deliver(self._zone_subs, states, "zone")
+
+    @property
+    def zone_subscriber_count(self) -> int:
+        with self._lock:
+            return len(self._zone_subs)
+
     def clear(self) -> None:
         """Drop every subscriber. For teardown between sessions."""
         with self._lock:
             self._behavior_subs.clear()
+            self._zone_subs.clear()

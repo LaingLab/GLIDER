@@ -85,13 +85,57 @@ class ZoneInputNode(InterfaceNode):
         self._object_count = 0
         self._exec_callbacks: list[Callable[[int], None]] = []
         self._main_loop: asyncio.AbstractEventLoop | None = None
+        self._bus: Any = None
+        self._subscribed = False
 
         # Set outputs to initial values
         self._outputs = [False, 0, None, None]
 
     async def start(self) -> None:
-        """Capture the main event loop so CV-thread callbacks can post to it."""
+        """Capture the main event loop and subscribe to the live signal bus.
+
+        The loop has to be captured here: zone updates arrive on the CV thread,
+        where ``asyncio.get_event_loop()`` returns a fresh, non-running loop.
+        """
         self._main_loop = asyncio.get_running_loop()
+        if self._bus is None:
+            logger.warning(
+                "Zone Input '%s': no live signal bus attached; the node will not "
+                "fire. The flow engine injects one via set_live_signals.",
+                self._zone_name,
+            )
+            return
+        self._subscribe()
+
+    async def stop(self) -> None:
+        """Unsubscribe so a stopped flow stops receiving zone updates."""
+        self._unsubscribe()
+
+    def set_live_signals(self, bus: Any) -> None:
+        """Injected by the flow engine at node creation (as for Behavior Input)."""
+        if bus is self._bus:
+            return
+        was_subscribed = self._subscribed
+        self._unsubscribe()
+        self._bus = bus
+        if was_subscribed or self._main_loop is not None:
+            self._subscribe()
+
+    def _subscribe(self) -> None:
+        if self._bus is not None and not self._subscribed:
+            self._bus.subscribe_zones(self.handle_zone_states)
+            self._subscribed = True
+
+    def _unsubscribe(self) -> None:
+        if self._bus is not None and self._subscribed:
+            self._bus.unsubscribe_zones(self.handle_zone_states)
+        self._subscribed = False
+
+    def handle_zone_states(self, states: dict[str, Any]) -> None:
+        """One frame's ``{zone_id: ZoneState}`` from the CV processor."""
+        state = states.get(self._zone_id)
+        if state is not None:
+            self.update_zone_state(state.occupied, state.object_count, state.entered, state.exited)
 
     @property
     def zone_id(self) -> str:
