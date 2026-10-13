@@ -84,6 +84,9 @@ class GliderCore:
         # Vision components
         self._camera_manager = CameraManager()
         self._cv_processor = CVProcessor()
+        # The CV processor works out zone enter/exit every frame; this is what
+        # lets a Zone Input node hear it.
+        self._cv_processor.on_zone_update(self._live_signals.publish_zones)
         self._video_recorder = VideoRecorder(self._camera_manager)
         self._tracking_logger = TrackingDataLogger()
         self._audio_recorder = AudioRecorder()
