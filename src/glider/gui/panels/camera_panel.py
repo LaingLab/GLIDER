@@ -307,6 +307,11 @@ class CameraPanel(QWidget):
     settings_requested = pyqtSignal()
     analysis_requested = pyqtSignal(str)  # output_dir → open the Analysis panel
     draw_zones_requested = pyqtSignal(object)  # scrubbed frame (np.ndarray) for the zone editor
+    # Rehearse was clicked and the video and CV are ready. The host starts the
+    # experiment -- Zone Input and Behavior Input only listen while it runs --
+    # then calls begin_rehearsal(path).
+    rehearsal_requested = pyqtSignal(str)
+    rehearsal_ended = pyqtSignal()  # the video ran out or was stopped
 
     # Thread-safe signals for frame updates (background thread -> main thread)
     _frame_received = pyqtSignal(object)  # FrameData for single camera
@@ -718,7 +723,7 @@ class CameraPanel(QWidget):
 
     def _toggle_rehearsal(self) -> None:
         if self._rehearsal_pump is not None and self._rehearsal_pump.is_running:
-            self._stop_rehearsal()
+            self.stop_rehearsal()
         else:
             self._start_rehearsal()
 
@@ -759,13 +764,25 @@ class CameraPanel(QWidget):
             self._rehearse_btn.setText("Rehearse from video\u2026")
 
     def _start_rehearsal(self) -> None:
-        """Play a recording through the live path, hardware and all."""
-        from glider.vision.video_pump import VideoPump
-
+        """Choose the video and ready CV, then ask the host to start the run."""
         path = self._rehearsal_video()
         if not path:
             return
 
+        # Zone enter/exit comes out of the CV processor; _start_preview readies
+        # it for a camera, and nothing else would for a rehearsal. Before the
+        # experiment starts, so a model that fails to load drives no hardware.
+        if self._cv_enabled_cb.isChecked() and not self._init_cv():
+            return
+
+        self.rehearsal_requested.emit(path)
+
+    def begin_rehearsal(self, path: str) -> bool:
+        """Play a recording through the live path, hardware and all."""
+        from glider.vision.video_pump import VideoPump
+
+        if self._rehearsal_pump is not None:
+            return False  # one is already playing
         speed = self._rehearse_speed.currentData()
         self._rehearsal_pump = VideoPump(
             path,
@@ -776,20 +793,33 @@ class CameraPanel(QWidget):
         if not self._rehearsal_pump.start():
             self._rehearsal_pump = None
             self._show_rehearse_status(f"Could not open {Path(path).name}.")
-            return
+            return False
 
         self._rehearse_btn.setText("Stop rehearsal")
         self._rehearse_speed.setEnabled(False)
-        self._show_rehearse_status(
-            f"Rehearsing {Path(path).name} \u2014 hardware is being driven for real."
-        )
+        status = f"Rehearsing {Path(path).name} \u2014 hardware is being driven for real."
+        if not self._cv_enabled_cb.isChecked():
+            status += " Computer Vision is off, so nothing is tracked and zones will not fire."
+        bus = self._live_signals
+        if bus is not None and not (bus.zone_subscriber_count or bus.behavior_subscriber_count):
+            status += " No Zone Input or Behavior Input node is listening, so nothing will react."
+        self._show_rehearse_status(status)
         logger.info("Rehearsal started from %s", path)
+        return True
 
     def _show_rehearse_status(self, text: str) -> None:
         self._rehearse_status.setText(text)
         self._rehearse_status.setVisible(bool(text))
 
-    def _stop_rehearsal(self) -> None:
+    def on_experiment_state(self, state_name: str) -> None:
+        """Stop a rehearsal once the experiment it drives is no longer live.
+
+        Its nodes have unsubscribed by then, so the video would play to nobody.
+        """
+        if state_name in ("READY", "IDLE", "ERROR") and self._rehearsal_pump is not None:
+            self.stop_rehearsal()
+
+    def stop_rehearsal(self) -> None:
         pump = self._rehearsal_pump
         if pump is not None:
             pump.stop()
@@ -816,9 +846,12 @@ class CameraPanel(QWidget):
         self._rehearsal_finished.emit(stats)
 
     def _on_rehearsal_finished_main(self, stats: Any) -> None:
+        # Both ways a rehearsal ends land here: the pump calls back when the
+        # video runs out and when stop_rehearsal stops it.
         self._rehearse_speed.setEnabled(True)
         self._rehearsal_pump = None
         self._update_rehearse_label()
+        self.rehearsal_ended.emit()
 
         lag_ms = stats.max_lag_s * 1000
         summary = f"Rehearsal finished: {stats.frames_delivered} frames"
@@ -973,7 +1006,7 @@ class CameraPanel(QWidget):
 
             # Initialize CV processor
             if self._cv_enabled_cb.isChecked():
-                self._cv_processor.initialize()
+                self._init_cv()
 
             logger.info(f"Started camera preview: {camera_idx}")
         else:
@@ -1017,7 +1050,7 @@ class CameraPanel(QWidget):
         """
         Update UI with frame and CV results (called on main thread).
         """
-        if not self._preview_active:
+        if not self._frames_flowing:
             return
 
         frame = frame_data.frame
@@ -1163,6 +1196,34 @@ class CameraPanel(QWidget):
         self._controls.setVisible(visible)
         self._status_frame.setVisible(visible)
 
+    def _init_cv(self) -> bool:
+        """Ready the CV processor, reporting a model that will not load.
+
+        A pose backend re-raises its model's own error (see
+        ``CVProcessor.initialize``) and GLIDER installs no excepthook, so one
+        escaping a slot ends the process -- and any running experiment with it.
+        Left uninitialized, ``_handle_frame_input`` sends frames past CV.
+        """
+        from PyQt6.QtWidgets import QMessageBox
+
+        try:
+            self._cv_processor.initialize()
+        except Exception as exc:
+            logger.exception("Computer Vision could not start")
+            QMessageBox.warning(self, "Computer Vision", str(exc))
+            return False
+        return True
+
+    @property
+    def _frames_flowing(self) -> bool:
+        """A camera preview or a rehearsal is feeding the live path.
+
+        A rehearsal never opens the camera preview (video-file mode disables
+        it), so guarding on ``_preview_active`` alone dropped every rehearsal
+        frame before the preview and left CV -- and so zones -- uninitialized.
+        """
+        return self._preview_active or self._rehearsal_pump is not None
+
     def current_fps(self) -> float | None:
         """Live preview frame rate of the primary camera, or None when idle."""
         if not self._preview_active:
@@ -1176,8 +1237,8 @@ class CameraPanel(QWidget):
         """Handle CV processing toggle."""
         self._cv_processor.settings.enabled = enabled
         self._overlay_cb.setEnabled(enabled)
-        if enabled and self._preview_active:
-            self._cv_processor.initialize()
+        if enabled and self._frames_flowing:
+            self._init_cv()
 
     def _on_overlay_toggle(self, enabled: bool) -> None:
         """Handle overlay display toggle."""
@@ -1248,7 +1309,7 @@ class CameraPanel(QWidget):
 
         # Initialize CV processor for primary camera
         if self._cv_enabled_cb.isChecked():
-            self._cv_processor.initialize()
+            self._init_cv()
 
         self._preview_active = True
         self._preview_btn.setText("Stop Preview")

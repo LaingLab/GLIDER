@@ -308,3 +308,177 @@ def test_rehearsal_does_not_need_a_behavior_model(qtbot):
     assert panel._rehearse_btn.isEnabled()
     behavior = next(g for g in panel.findChildren(QGroupBox) if g.title() == "Live Behavior")
     assert not behavior.isAncestorOf(panel._rehearse_btn)
+
+
+# --- what the researcher sees and what gets tracked ---------------------------
+
+
+def _real_panel(qtbot):
+    from glider.vision.camera_manager import CameraManager
+    from glider.vision.cv_processor import CVProcessor
+
+    panel = CameraPanel(CameraManager(), CVProcessor())
+    qtbot.addWidget(panel)
+    return panel
+
+
+def test_rehearsal_frames_reach_the_preview_without_a_camera(qtbot):
+    """The preview used to drop every frame unless a camera preview was open,
+    which in video-file mode it never is -- so the video sat on frame 0 while
+    the rehearsal ran blind behind it."""
+    panel = _real_panel(qtbot)
+    assert not panel._preview_active
+    panel._rehearsal_pump = SimpleNamespace(is_running=True, stop=lambda: None)
+
+    frame = np.full((4, 4, 3), 9, dtype=np.uint8)
+    panel._process_frame_on_main_thread(FrameData(frame=frame, timestamp=1.0))
+
+    assert panel._last_frame is frame
+
+
+def test_starting_a_rehearsal_readies_computer_vision(qtbot, monkeypatch):
+    """Zone enter/exit comes out of the CV processor, which was only ever
+    initialized when a camera preview started. Uninitialized, every rehearsal
+    frame skipped CV, so a Zone Input node never fired."""
+    import glider.vision.video_pump as video_pump
+
+    class _Pump:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            return True
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(video_pump, "VideoPump", _Pump)
+    panel = _real_panel(qtbot)
+    panel._rehearsal_video = lambda: "/clips/session12.mp4"
+    panel._cv_enabled_cb.setChecked(True)
+    assert not panel._cv_processor.is_initialized
+
+    panel._start_rehearsal()
+
+    assert panel._cv_processor.is_initialized
+
+
+class _QuietPump:
+    started: list[bool] = []
+
+    def __init__(self, *a, **k):
+        pass
+
+    def start(self):
+        _QuietPump.started.append(True)
+        return True
+
+    def stop(self):
+        pass
+
+
+def test_a_model_that_will_not_load_stops_the_rehearsal_not_glider(qtbot, monkeypatch):
+    """A pose backend re-raises its model's own error, and GLIDER installs no
+    excepthook -- so it escaping the Rehearse click aborted the whole app. It
+    is reported instead, and no hardware is driven."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    import glider.vision.video_pump as video_pump
+    from glider.vision.pose.spec import PoseModelError
+
+    _QuietPump.started = []
+    monkeypatch.setattr(video_pump, "VideoPump", _QuietPump)
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a: warned.append(a[2])))
+    panel = _real_panel(qtbot)
+    panel._rehearsal_video = lambda: "/clips/session12.mp4"
+    panel._cv_enabled_cb.setChecked(True)
+
+    def _fail():
+        raise PoseModelError("enter the keypoint names")
+
+    monkeypatch.setattr(panel._cv_processor, "initialize", _fail)
+
+    requested = []
+    panel.rehearsal_requested.connect(requested.append)
+
+    panel._start_rehearsal()
+
+    assert warned == ["enter the keypoint names"]
+    assert requested == [], "the experiment must not be started"
+    assert _QuietPump.started == []
+    assert panel._rehearsal_pump is None
+
+
+def _rehearse_with_bus(qtbot, monkeypatch, bus):
+    import glider.vision.video_pump as video_pump
+
+    monkeypatch.setattr(video_pump, "VideoPump", _QuietPump)
+    panel = _real_panel(qtbot)
+    panel.set_live_signals(bus)
+    assert panel.begin_rehearsal("/clips/session12.mp4")
+    return panel._rehearse_status.text()
+
+
+def test_it_says_when_no_node_is_listening(qtbot, monkeypatch):
+    """An experiment with no Zone Input or Behavior Input node plays the video
+    to nobody, which looked exactly like the rehearsal being broken."""
+    from glider.core.live_signals import LiveSignalBus
+
+    assert "is listening" in _rehearse_with_bus(qtbot, monkeypatch, LiveSignalBus())
+
+
+def test_it_does_not_nag_once_a_node_is_listening(qtbot, monkeypatch):
+    from glider.core.live_signals import LiveSignalBus
+
+    bus = LiveSignalBus()
+    bus.subscribe_zones(lambda states: None)
+
+    assert "is listening" not in _rehearse_with_bus(qtbot, monkeypatch, bus)
+
+
+# --- the experiment it drives --------------------------------------------------
+
+
+def test_rehearse_asks_the_host_to_start_the_experiment_first(qtbot, monkeypatch):
+    """Playing straight away, before the experiment's nodes were listening,
+    is what made the first rehearsal do nothing."""
+    import glider.vision.video_pump as video_pump
+
+    _QuietPump.started = []
+    monkeypatch.setattr(video_pump, "VideoPump", _QuietPump)
+    panel = _real_panel(qtbot)
+    panel._rehearsal_video = lambda: "/clips/session12.mp4"
+    requested = []
+    panel.rehearsal_requested.connect(requested.append)
+
+    panel._start_rehearsal()
+
+    assert requested == ["/clips/session12.mp4"]
+    assert _QuietPump.started == []
+
+
+def test_the_end_of_a_rehearsal_is_announced(qtbot):
+    """So the host can stop the experiment the rehearsal started."""
+    from glider.vision.video_pump import PumpStats
+
+    panel = _real_panel(qtbot)
+    ended = []
+    panel.rehearsal_ended.connect(lambda: ended.append(True))
+
+    panel._on_rehearsal_finished_main(PumpStats(10, 10, 0.0, 0.0, True))
+
+    assert ended == [True]
+
+
+@pytest.mark.parametrize("state, stops", [("READY", True), ("ERROR", True), ("RUNNING", False)])
+def test_a_rehearsal_stops_with_its_experiment(qtbot, state, stops):
+    """Once the experiment stops its nodes stop listening; the video would
+    play on to nobody."""
+    panel = _real_panel(qtbot)
+    stopped = []
+    panel._rehearsal_pump = SimpleNamespace(stop=lambda: stopped.append(True))
+
+    panel.on_experiment_state(state)
+
+    assert bool(stopped) is stops

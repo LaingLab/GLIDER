@@ -169,3 +169,50 @@ def test_camera_panel_quick_toggles_still_mutate_live_settings(field, value):
     proc = CVProcessor(CVSettings())
     setattr(proc.settings, field, value)
     assert getattr(proc.settings, field) == value
+
+
+def test_a_model_that_will_not_load_is_reported_not_fatal(monkeypatch):
+    """Picking a YOLO .pt as a pose model raises PoseModelError from
+    update_settings. GLIDER installs no excepthook, so it escaping this slot
+    aborted the app and lost the unsaved experiment."""
+    from types import SimpleNamespace
+
+    from PyQt6.QtWidgets import QDialog, QMessageBox
+
+    import glider.gui.main_window as mw
+    from glider.vision.pose.spec import PoseModelError
+
+    class _Dialog:
+        def __init__(self, *, camera_settings, cv_settings, **_):
+            self._camera, self._cv = camera_settings, cv_settings
+            self.calibration_requested = SimpleNamespace(connect=lambda f: None)
+            self.zones_requested = SimpleNamespace(connect=lambda f: None)
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def get_camera_settings(self):
+            return self._camera
+
+        def get_cv_settings(self):
+            return self._cv
+
+    monkeypatch.setattr(mw, "CameraSettingsDialog", _Dialog)
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a: warned.append(a[2])))
+    proc = CVProcessor(CVSettings())
+
+    def _fail(settings):
+        raise PoseModelError("exp-14.pt is a YOLO checkpoint")
+
+    monkeypatch.setattr(proc, "update_settings", _fail)
+    window = SimpleNamespace(
+        _core=SimpleNamespace(camera_manager=CameraManager(), cv_processor=proc),
+        _view_manager=None,
+        _on_camera_calibration=lambda: None,
+        _on_zones_requested=lambda: None,
+    )
+
+    mw.MainWindow._on_camera_settings(window)
+
+    assert warned == ["exp-14.pt is a YOLO checkpoint"]
