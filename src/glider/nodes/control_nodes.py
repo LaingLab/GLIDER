@@ -8,8 +8,10 @@ These nodes provide control flow functionality:
 
 import asyncio
 import logging
+import threading
 import time
 
+from glider.core.timer_resolution import high_resolution_timers
 from glider.hal import revolution_tracking as rt
 from glider.nodes.base_node import (
     GliderNode,
@@ -59,7 +61,11 @@ class LoopNode(GliderNode):
             "type": "float",
             "default": 1.0,
             "min": 0,
-            "help": "Seconds to wait between iterations.",
+            "help": (
+                "Seconds from the start of one iteration to the start of the next. The "
+                "body's own run time counts toward it, so iterations stay on a fixed "
+                "schedule."
+            ),
         },
         {
             "key": "prompt_count",
@@ -74,6 +80,9 @@ class LoopNode(GliderNode):
         super().__init__()
         self._running = False
         self._current_index = 0
+        # threading.Event, as in DelayNode: the wait between iterations runs on
+        # a worker thread, and stop() sets this to cut it short.
+        self._stop_event: threading.Event = threading.Event()
 
     def update_event(self) -> None:
         pass
@@ -90,6 +99,15 @@ class LoopNode(GliderNode):
 
         self._running = True
         self._current_index = 0
+        self._stop_event = threading.Event()
+
+        # Iteration k is due at start + k * delay. Each wait aims at that
+        # absolute deadline rather than "delay after this body started", so a
+        # wakeup that lands a few ms late is taken out of the next wait instead
+        # of pushing every later iteration back by the same amount.
+        # perf_counter, not monotonic: on Windows before Python 3.13, monotonic
+        # only advances every 15.6 ms, which would put each deadline that far off.
+        next_start = time.perf_counter()
 
         iteration = 0
         while self._running:
@@ -101,8 +119,6 @@ class LoopNode(GliderNode):
 
             logger.info(f"  Loop iteration {iteration}")
 
-            body_start = time.monotonic()
-
             try:
                 # Trigger body execution and AWAIT completion
                 await self._exec_body_async()
@@ -113,13 +129,16 @@ class LoopNode(GliderNode):
 
             iteration += 1
 
-            # Delay between iterations, compensating for body execution time
-            # to prevent cumulative drift
             if delay > 0 and self._running:
-                body_elapsed = time.monotonic() - body_start
-                remaining = delay - body_elapsed
+                next_start += delay
+                remaining = next_start - time.perf_counter()
                 if remaining > 0:
-                    await asyncio.sleep(remaining)
+                    await self._wait(remaining)
+                else:
+                    # The body overran the period. Start the next iteration now
+                    # and measure from here -- catching up would fire the missed
+                    # iterations back to back.
+                    next_start = time.perf_counter()
 
         logger.info(f"  Loop completed after {iteration} iterations")
 
@@ -128,6 +147,17 @@ class LoopNode(GliderNode):
             await self._exec_done_async()
         except Exception as e:
             logger.error(f"Error in Loop done execution: {e}", exc_info=True)
+
+    async def _wait(self, seconds: float) -> None:
+        """Wait between iterations, the way DelayNode waits.
+
+        ``asyncio.sleep`` wakes on the qasync loop, which Qt repaints and the
+        recorder's ticks can hold up by tens of ms -- see DelayNode for the
+        measurements. A worker-thread ``Event.wait`` under a 1 ms system timer
+        tick is not held up by them, and ``stop()`` can end it at once.
+        """
+        with high_resolution_timers():
+            await asyncio.to_thread(self._stop_event.wait, seconds)
 
     async def _exec_body_async(self) -> None:
         """Trigger the body execution output and await completion."""
@@ -182,6 +212,7 @@ class LoopNode(GliderNode):
         """Stop the loop."""
         logger.info(f"LoopNode.stop() called, node ID: {self._glider_id}")
         self._running = False
+        self._stop_event.set()
 
 
 class WaitForInputNode(GliderNode):
