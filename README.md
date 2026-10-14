@@ -38,8 +38,8 @@ For extras or a manual install, see [Quick start](#quick-start).
 ---
 
 <div align="center">
-  <img src="docs-site/assets/readme/hero-tracking.gif" alt="Live tracking in GLIDER: a zebrafish larva, a mouse and a fly, each followed by its keypoints and trail">
-  <p><em>Live tracking in GLIDER: zebrafish · mouse · fly</em></p>
+  <img src="docs-site/assets/readme/hero-tracking.gif" alt="Tracking a zebrafish larva, a mouse and a fly, each followed by its keypoints and trail">
+  <p><em>zebrafish · mouse · fly</em></p>
 </div>
 
 GLIDER is a desktop application for building, running, and recording laboratory
