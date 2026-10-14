@@ -3068,36 +3068,13 @@ class MainWindow(QMainWindow):
 
         Delegates to the core rather than carrying a second implementation:
         this used to guess the driver from the board id, which turned every
-        non-Arduino board into a Raspberry Pi one.
+        non-Arduino board into a Raspberry Pi one. The core builds the devices
+        too, so adding them again here would hit each one's own pin claim.
         """
         if not self._core.session:
             return
 
         self._core.populate_hardware_from_session()
-
-        for device_config in self._core.session.hardware.devices:
-            try:
-                settings = device_config.settings or {}
-                if device_config.pins:
-                    self._core.hardware_manager.add_device_multi_pin(
-                        device_config.id,
-                        device_config.device_type,
-                        device_config.board_id,
-                        device_config.pins,
-                        name=device_config.name,
-                        settings=settings,
-                    )
-                else:
-                    self._core.hardware_manager.add_device_multi_pin(
-                        device_config.id,
-                        device_config.device_type,
-                        device_config.board_id,
-                        {},
-                        name=device_config.name,
-                        settings=settings,
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to add device {device_config.id}: {e}")
 
     def _populate_graph_from_session(self) -> None:
         """Populate graph view from session flow configuration."""
