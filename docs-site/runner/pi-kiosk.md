@@ -144,14 +144,20 @@ Its log is written to `/var/log/glider-update.log`.
 ## Installing on a Pi by hand (no prebuilt image)
 
 If you'd rather set up your own Pi instead of flashing the image, install GLIDER
-manually. On Raspberry Pi, PyQt6 comes from the system package manager (it is
-intentionally not a bundled dependency), and the virtual environment is created
-with access to those system packages:
+manually. The installer does all of it:
 
 ```bash
-sudo apt install python3-pyqt6
-uv venv --system-site-packages
-uv sync --extra rpi --extra i2c
+curl -LsSf https://raw.githubusercontent.com/LaingLab/glider/main/install.sh | sh
+```
+
+On Raspberry Pi, PyQt6 comes from the system package manager (it is
+intentionally not a bundled dependency), so the virtual environment is the
+system Python's, with access to those system packages. By hand, from a clone:
+
+```bash
+sudo apt install python3-pyqt6 python3-pyqt6.qtsvg python3-pyqt6.qtopengl
+uv venv --system-site-packages --python /usr/bin/python3
+uv pip install -e ".[rpi,i2c]"
 ```
 
 The `rpi` extra pulls in the Raspberry Pi GPIO libraries and `i2c` adds support
@@ -160,7 +166,7 @@ full walkthrough and the complete list of optional extras. Once installed, start
 the touchscreen layout with:
 
 ```bash
-glider --runner
+.venv/bin/glider --runner
 ```
 
 To make a hand-built Pi auto-launch on boot like the prebuilt image, you can

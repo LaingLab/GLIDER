@@ -51,7 +51,28 @@ run on Windows, macOS, and Linux.
 
 ## Quick start
 
-### Windows / macOS / Linux
+One command installs uv and git if they are missing, puts GLIDER in `~/glider`
+(or `GLIDER_DIR`), and finishes by running `glider doctor`. Run it again to update.
+
+macOS / Linux / Raspberry Pi:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/LaingLab/glider/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/LaingLab/glider/main/install.ps1 | iex
+```
+
+Add extras with `| sh -s -- --extra vision --extra behavior`, or on Windows
+`& ([scriptblock]::Create((irm https://raw.githubusercontent.com/LaingLab/glider/main/install.ps1))) -Extra vision,behavior`.
+
+`glider doctor` checks an install at any time: Python, Qt, each extra, FFmpeg
+and the inference device, each with the fix for whatever is wrong.
+
+### By hand: Windows / macOS / Linux
 
 ```bash
 git clone https://github.com/LaingLab/GLIDER.git
@@ -61,18 +82,21 @@ uv sync --extra pc
 uv run glider
 ```
 
-### Raspberry Pi
+### By hand: Raspberry Pi
 
 PyQt6 comes from apt on the Pi (it is intentionally not a core dependency),
-so the venv must be created with access to system packages:
+so the venv must be the system Python's, with access to its packages. Install
+with `uv pip` and start the venv's own `glider`: `uv sync` and `uv run` would
+swap the venv for one on the Python that `.python-version` pins, which cannot
+see apt's PyQt6.
 
 ```bash
-sudo apt install python3-pyqt6
+sudo apt install python3-pyqt6 python3-pyqt6.qtsvg python3-pyqt6.qtopengl
 git clone https://github.com/LaingLab/GLIDER.git
 cd GLIDER
-uv venv --system-site-packages
-uv sync --extra rpi --extra i2c
-uv run glider
+uv venv --system-site-packages --python /usr/bin/python3
+uv pip install -e ".[rpi,i2c]"
+.venv/bin/glider
 ```
 
 ## Optional extras

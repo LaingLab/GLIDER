@@ -18,7 +18,7 @@ only place left to get in front of it.
 
 Best-effort by design: torch is optional (absent from Raspberry Pi and minimal
 builds), so a failure here must never stop the app launching -- the vision
-layer degrades exactly as it does without torch installed. Use --check-deps to
+layer degrades exactly as it does without torch installed. Use `GLIDER doctor` to
 see whether it actually loaded.
 """
 
