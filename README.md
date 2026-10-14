@@ -48,6 +48,67 @@ Raspberry Pi, Bluetooth), track animals live on camera, record synchronized
 video and data, and review every session afterwards. Experiment files are
 portable across Windows, macOS, Linux and the Raspberry Pi.
 
+## Design
+
+Drag nodes onto a canvas and connect them. An experiment is a flow from
+**Start** to **End** that writes outputs, reads sensors, waits, loops and
+branches on the way, and the same graph drives an Arduino over USB, a Pi's GPIO
+pins or a Bluetooth stimulator.
+
+### …or ask an AI agent
+
+GLIDER ships an [MCP](https://modelcontextprotocol.io) server, `glider-mcp`.
+An agent (Claude Desktop, Claude Code, Cursor, or any MCP client) reads GLIDER's
+catalogue of nodes and devices, writes the experiment, and checks it with
+GLIDER's own loader before saving. If the file is open in GLIDER, it reloads on
+its own. The server never connects hardware or starts a run; you do that.
+[Set it up →](https://lainglab.github.io/GLIDER/reference/mcp/)
+
+<div align="center">
+  <img src="docs-site/assets/readme/mcp-agent.gif" alt="An agent builds an optogenetics experiment through glider-mcp: it lists node and device types, reads the open file, validates and saves it, and GLIDER reloads the new eight-node graph">
+</div>
+
+## Run
+
+The **Run** tab puts the camera first: the live view with its frame rate and
+dropped frames in the corner, the clock and Start/Stop beside it, and every
+device with its live value and its control. Save a setup as a **preset** with
+its own per-run fields (Dam ID, postnatal day, …), pick it from the title, and
+each run gets its own numbered folder with those values in its CSV headers.
+
+**Rehearse before you run.** *Rehearse from video…* plays a recording through
+the live path instead of the camera: tracking runs, Zone Input and Behavior
+Input nodes fire, and the hardware is driven for real, on footage where you
+already know what the animal did.
+[Closed-loop rehearsal →](https://lainglab.github.io/GLIDER/camera-behavior/rehearsal/)
+
+## Review
+
+**Session Review** is an editor laid out like DaVinci Resolve's: the sessions
+down the left, grouped by treatment; the video in the middle, with the behaviour
+under the playhead; and behaviour and hardware as tracks on one timeline. Drag a
+range and the inspector fills with its numbers. Drop markers, share them across
+a cohort, and compare every session in an epoch table with a mean and SEM per
+group.
+
+## Also in GLIDER
+
+- **Four tabs** (Experiment, Dashboard, Run, Analyze) and a landing page with
+  your recent experiments. Animals, zones and lab vocabulary live on the
+  Experiment tab. [Tour →](https://lainglab.github.io/GLIDER/building/builder-window/)
+- **Multi-animal pose tracking** with YOLO: one track and one CSV per animal,
+  and a sidecar that flags the frames where an identity was inferred.
+  [Tracking →](https://lainglab.github.io/GLIDER/camera-behavior/tracking/#multiple-animals)
+- **DeepLabCut and SLEAP models** through the `glider-dlc` and `glider-sleap`
+  plugins: select the folder your tool wrote and GLIDER converts it once.
+  [Pose models →](https://lainglab.github.io/GLIDER/camera-behavior/pose-models/)
+- **A flow clock**: every timed node runs on one schedule, so latency from a
+  slow device is absorbed instead of piling up over a session.
+- **Bluetooth peripherals reconnect themselves**, with backoff, and show their
+  own link state on every tab.
+- **A plugin catalogue**: find, install, enable and reload plugins from inside
+  GLIDER. [Plugins →](https://lainglab.github.io/GLIDER/building/plugins/#installing-plugins-from-the-catalogue)
+
 ## Prerequisites
 
 1. [uv](https://docs.astral.sh/uv/getting-started/installation/): manages the virtual environment and Python for you
