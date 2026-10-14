@@ -372,14 +372,10 @@ def main() -> int:
         # Windows hands a frozen app a cp1252 stdout when its output is piped
         # or redirected, and _print_gpu_check's tick marks are not encodable
         # there -- so the diagnostic died mid-report with a UnicodeEncodeError
-        # exactly when someone was capturing it to send us. Degrade unmappable
-        # characters instead of raising; a diagnostic must never be the thing
-        # that fails.
-        for stream in (sys.stdout, sys.stderr):
-            try:
-                stream.reconfigure(encoding="utf-8", errors="replace")
-            except Exception:
-                pass
+        # exactly when someone was capturing it to send us.
+        from glider.env_doctor import write_utf8_output
+
+        write_utf8_output()
         return _print_gpu_check()
 
     # Setup logging

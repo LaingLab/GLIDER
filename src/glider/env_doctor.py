@@ -12,8 +12,9 @@ Every module is really *imported*, never looked up with
 packaged build can carry every torch file on disk and still fail to load
 ``c10.dll``, and find_spec would call that present.
 
-Output is ASCII only: Windows hands a frozen app a cp1252 stdout when it is
-piped, which is exactly when someone is capturing this to send us.
+Windows hands a frozen app a cp1252 stdout when it is piped, which is exactly
+when someone is capturing this to send us. The report's own text is ASCII, but
+the paths and error messages in it are not, so it writes UTF-8 instead.
 """
 
 from __future__ import annotations
@@ -79,6 +80,19 @@ def _fix(extra: str) -> str:
     return f"add it with: uv sync --inexact --extra {extra}"
 
 
+def write_utf8_output() -> None:
+    """Make stdout and stderr UTF-8, degrading what they cannot encode.
+
+    A diagnostic must never be the thing that fails: on a cp1252 pipe, a
+    username like "张伟" in a path raised UnicodeEncodeError mid-report.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 - not every stream can be reconfigured
+            pass
+
+
 def _inference_device() -> str:
     from glider.vision.pose.device import resolve_device
 
@@ -92,6 +106,7 @@ def run_doctor() -> int:
     """
     from glider._version import __version__
 
+    write_utf8_output()
     # pydub's regexes print SyntaxWarnings the first time a fresh install
     # compiles it -- right above this report, where they read as the problem.
     warnings.simplefilter("ignore", SyntaxWarning)

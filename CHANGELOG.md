@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One command installs GLIDER from source**, and running it again updates it:
+  `install.sh` on macOS, Linux and the Raspberry Pi, `install.ps1` on Windows.
+  It installs uv and git when they are missing, puts GLIDER in `~/glider` (or
+  `GLIDER_DIR`), and installs the platform's extras plus any `--extra` you pass.
+- **`glider doctor` checks that this machine can run GLIDER**: the Python
+  version, the venv, Qt and the core libraries, each optional extra, FFmpeg and
+  the inference device, each problem with the command that fixes it. An extra
+  you never installed is noted, not failed. It replaces `--check-deps`, which
+  still works. The by-hand Pi steps are fixed too: `uv sync` replaced their
+  system-Python venv, so apt's PyQt6 vanished.
+
 - **GLIDER picks up changes to the open experiment made outside it**, such as
   an agent's edits through `glider-mcp`: it reloads when there are no unsaved
   edits, and otherwise offers Reload / Keep mine. Changes during a run wait

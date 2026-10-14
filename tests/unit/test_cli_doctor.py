@@ -9,6 +9,7 @@ that, because "does it exist" is the easier thing to write and would silently
 pass while helping nobody.
 """
 
+import os
 import subprocess
 import sys
 
@@ -131,6 +132,27 @@ def test_the_output_is_ascii_only(capsys, monkeypatch):
     monkeypatch.setattr("importlib.import_module", lambda name: object())
     run_doctor()
     capsys.readouterr().out.encode("cp1252")  # raises if anything is unmappable
+
+
+def test_a_non_ascii_path_on_a_cp1252_pipe_does_not_crash_it():
+    """The report's text is ASCII; the paths in it are whatever the user's are."""
+    blocked = ("ultralytics", "umap", "lightgbm", "sounddevice")
+    code = (
+        "import sys\n"
+        f"for name in {blocked!r}: sys.modules[name] = None\n"
+        "sys.prefix = 'C:\\\\Users\\\\\u5f20\u4f1f\\\\glider\\\\.venv'\n"
+        "from glider.env_doctor import run_doctor\n"
+        "run_doctor()\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+        timeout=120,
+    )
+    out = result.stdout.decode("utf-8")
+    assert "\u5f20\u4f1f" in out, result.stderr.decode("utf-8", "replace")
+    assert "-" * 60 in out.split("Virtual environment", 1)[1]  # it reached the end
 
 
 # ---------------------------------------------------------------------------
