@@ -73,7 +73,7 @@ its own. The server never connects hardware or starts a run; you do that.
 The **Run** tab puts the camera first: the live view with its frame rate and
 dropped frames in the corner, the clock and Start/Stop beside it, and every
 device with its live value and its control. Save a setup as a **preset** with
-its own per-run fields (Dam ID, postnatal day, …), pick it from the title, and
+its own per-run fields (Animal ID, postnatal day, …), pick it from the title, and
 each run gets its own numbered folder with those values in its CSV headers.
 
 **Rehearse before you run.** *Rehearse from video…* plays a recording through
@@ -81,6 +81,11 @@ the live path instead of the camera: tracking runs, Zone Input and Behavior
 Input nodes fire, and the hardware is driven for real, on footage where you
 already know what the animal did.
 [Closed-loop rehearsal →](https://lainglab.github.io/GLIDER/camera-behavior/rehearsal/)
+
+<div align="center">
+  <img src="docs-site/assets/readme/run-rehearse.gif" alt="The Run tab: a preset asks for the Animal ID before it will start; once filled in, a rehearsal plays a mouse recording, and the LED device row goes high while the mouse is in the NE corner zone and low when it leaves">
+  <p><em>Rehearsing a recording against GLIDER's mock board: the LED is high while the mouse is in the NE corner.</em></p>
+</div>
 
 ## Review
 
