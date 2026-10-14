@@ -20,18 +20,33 @@ Build, run, and record reproducible experiments without writing code.
 
 </div>
 
+macOS / Linux / Raspberry Pi:
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/LaingLab/glider/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/LaingLab/glider/main/install.ps1 | iex
+```
+
+The installer puts GLIDER in `~/glider` and finishes by running `glider doctor`.
+For extras or a manual install, see [Quick start](#quick-start).
+
 ---
 
-GLIDER is a desktop application for building, running, and recording laboratory
-experiments. You wire together a **visual node graph** that controls hardware
-(Arduino, Raspberry Pi, Bluetooth), reads sensors, records synchronized video and
-data, and drives an experiment from start to finish. Experiments files are portable, and can 
-run on Windows, macOS, and Linux.
-
 <div align="center">
-  <img src="docs-site/assets/screenshots/builder.png" alt="The GLIDER Builder, a visual node-graph editor" width="900">
-  <p><em>The Builder: design an experiment as a visual node graph, then press Start.</em></p>
+  <img src="docs-site/assets/readme/hero-tracking.gif" alt="Live tracking in GLIDER: a zebrafish larva, a mouse and a fly, each followed by its keypoints and trail">
+  <p><em>Live tracking in GLIDER: zebrafish · mouse · fly</em></p>
 </div>
+
+GLIDER is a desktop application for building, running, and recording laboratory
+experiments. You wire a **visual node graph** that drives hardware (Arduino,
+Raspberry Pi, Bluetooth), track animals live on camera, record synchronized
+video and data, and review every session afterwards. Experiment files are
+portable across Windows, macOS, Linux and the Raspberry Pi.
 
 ## Prerequisites
 
