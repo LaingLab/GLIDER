@@ -96,6 +96,10 @@ range and the inspector fills with its numbers. Drop markers, share them across
 a cohort, and compare every session in an epoch table with a mean and SEM per
 group.
 
+<div align="center">
+  <img src="docs-site/assets/readme/session-review.gif" alt="Session Review: the video plays into a grooming bout; X selects the bout and the inspector fills with distance, speed and time per behaviour; Shift-M saves it as a range marker; the epoch table compares all sixteen sessions across two cohort epochs with a mean and SEM">
+</div>
+
 ## Also in GLIDER
 
 - **Four tabs** (Experiment, Dashboard, Run, Analyze) and a landing page with
