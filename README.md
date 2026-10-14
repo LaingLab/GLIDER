@@ -180,15 +180,18 @@ uv pip install -e ".[rpi,i2c]"
 Add any of these to the sync command with additional `--extra` flags,
 e.g. `uv sync --extra pc --extra vision`:
 
-| Extra      | What it adds                                                  |
-| ---------- | ------------------------------------------------------------- |
-| `pc`       | PyQt6 + audio — the standard desktop install                  |
-| `rpi`      | Raspberry Pi GPIO (gpiozero, lgpio)                           |
-| `vision`   | YOLO tracking (ultralytics)                                   |
-| `audio`    | Audio recording/playback                                      |
-| `i2c`      | I2C devices (ADS1x15, smbus2) — Linux/Pi only at runtime      |
-| `behavior` | Behavior analysis (UMAP, HDBSCAN, scikit-learn, LightGBM)     |
-| `dev`      | Test/lint tooling plus the full pc+vision+i2c+behavior stack  |
+| Extra       | What it adds                                                          |
+| ----------- | --------------------------------------------------------------------- |
+| `pc`        | PyQt6 + audio — the standard desktop install                          |
+| `rpi`       | Raspberry Pi GPIO (gpiozero, lgpio)                                   |
+| `vision`    | YOLO tracking (ultralytics)                                           |
+| `pose-onnx` | DeepLabCut and SLEAP pose models, run through onnxruntime             |
+| `audio`     | Audio recording/playback                                              |
+| `i2c`       | I2C devices (ADS1x15, smbus2) — Linux/Pi only at runtime              |
+| `spi`       | SPI devices (spidev) — Linux/Pi only                                  |
+| `behavior`  | Behavior analysis (UMAP, HDBSCAN, scikit-learn, LightGBM)             |
+| `mcp`       | `glider-mcp`, the server AI agents use to design and analyze experiments |
+| `dev`       | Test/lint tooling plus the pc+vision+i2c+behavior+pose-onnx+mcp stack |
 
 ## Documentation
 
@@ -200,6 +203,9 @@ Full guides live at **[lainglab.github.io/GLIDER](https://lainglab.github.io/GLI
 | [Building Experiments](https://lainglab.github.io/GLIDER/building/) | The node graph, wiring devices, packaging routines |
 | [Camera & Behavior](https://lainglab.github.io/GLIDER/camera-behavior/) | Cameras, synchronized recording, tracking, analysis |
 | [Runner Mode](https://lainglab.github.io/GLIDER/runner/) | Operating experiments from a touchscreen or Pi kiosk |
+| [Pose Models](https://lainglab.github.io/GLIDER/camera-behavior/pose-models/) | YOLO, DeepLabCut and SLEAP models, and the plugins that convert them |
+| [Closed-loop Rehearsal](https://lainglab.github.io/GLIDER/camera-behavior/rehearsal/) | Driving the real rig from a recording before an animal is in it |
+| [AI Agents (MCP)](https://lainglab.github.io/GLIDER/reference/mcp/) | Letting an agent design experiments and analyze recordings |
 
 ## Development
 
