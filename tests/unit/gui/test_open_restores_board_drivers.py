@@ -14,6 +14,9 @@ which the files in ``examples/`` carry.
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 import pytest
 
 from glider.core.experiment_session import BoardConfig, DeviceConfig, ExperimentSession
@@ -119,3 +122,16 @@ def test_one_bad_board_does_not_stop_the_others(core):
 
     assert core.hardware_manager.get_board("b1") is not None
     assert core.hardware_manager.get_board("bad") is None
+
+
+def test_opening_a_file_adds_each_device_once(main_window_factory, caplog):
+    """The window used to re-add every device after the core had built it, so
+    each pinned device hit its own pin claim and logged a spurious error."""
+    example = Path(__file__).resolve().parents[3] / "examples" / "fiber_photometry.glider"
+    window = main_window_factory(desktop_mode=True)
+
+    with caplog.at_level(logging.WARNING):
+        assert window._load_experiment_path(str(example))
+
+    assert "already claimed" not in caplog.text
+    assert window._core.hardware_manager.get_device("fiber") is not None
