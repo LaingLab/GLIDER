@@ -57,9 +57,9 @@ pins or a Bluetooth stimulator.
 
 ### …or ask an AI agent
 
-GLIDER ships an [MCP](https://modelcontextprotocol.io) server, `glider-mcp`.
-An agent (Claude Desktop, Claude Code, Cursor, or any MCP client) reads GLIDER's
-catalogue of nodes and devices, writes the experiment, and checks it with
+GLIDER includes an [MCP](https://modelcontextprotocol.io) server, `glider-mcp`
+(the `mcp` extra). An agent (Claude Desktop, Claude Code, Cursor, or any MCP
+client) reads GLIDER's catalogue of nodes and devices, writes the experiment, and checks it with
 GLIDER's own loader before saving. If the file is open in GLIDER, it reloads on
 its own. The server never connects hardware or starts a run; you do that.
 [Set it up →](https://lainglab.github.io/GLIDER/reference/mcp/)
@@ -99,8 +99,9 @@ group.
 - **Multi-animal pose tracking** with YOLO: one track and one CSV per animal,
   and a sidecar that flags the frames where an identity was inferred.
   [Tracking →](https://lainglab.github.io/GLIDER/camera-behavior/tracking/#multiple-animals)
-- **DeepLabCut and SLEAP models** through the `glider-dlc` and `glider-sleap`
-  plugins: select the folder your tool wrote and GLIDER converts it once.
+- **Single-animal DeepLabCut 3.x and SLEAP models** through the `glider-dlc` and
+  `glider-sleap` plugins: select the folder your tool wrote and GLIDER converts
+  it once.
   [Pose models →](https://lainglab.github.io/GLIDER/camera-behavior/pose-models/)
 - **A flow clock**: every timed node runs on one schedule, so latency from a
   slow device is absorbed instead of piling up over a session.
