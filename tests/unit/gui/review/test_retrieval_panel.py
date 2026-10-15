@@ -147,6 +147,34 @@ def _fitted_panel(qtbot):
     return panel
 
 
+def _widths(panel, area) -> str:
+    """What made a row too wide, for a failure on a platform we cannot run."""
+    from PyQt6.QtWidgets import QFormLayout
+
+    parts = [
+        f"viewport={area.viewport().width()}",
+        f"content_min={area.widget().minimumSizeHint().width()}",
+        f"font={panel.trial_button.fontInfo().family()}/{panel.trial_button.fontInfo().pixelSize()}px",
+    ]
+    column = area.widget().layout()
+    for i in range(column.count()):
+        item = column.itemAt(i)
+        if isinstance(item.layout(), QFormLayout):
+            form = item.layout()
+            for r in range(form.rowCount()):
+                for role in (QFormLayout.ItemRole.LabelRole, QFormLayout.ItemRole.FieldRole):
+                    cell = form.itemAt(r, role)
+                    if cell is not None:
+                        parts.append(f"form[{r}].{role.name}={cell.minimumSize().width()}")
+        elif item.widget() is not None:
+            parts.append(
+                f"{type(item.widget()).__name__}={item.widget().minimumSizeHint().width()}"
+            )
+        elif item.layout() is not None:
+            parts.append(f"layout={item.layout().minimumSize().width()}")
+    return " ".join(parts)
+
+
 def test_the_tab_fits_the_default_inspector_without_clipping(qtbot):
     """Found by rendering Session Review: rows ran off the pane's edge.
 
@@ -156,7 +184,7 @@ def test_the_tab_fits_the_default_inspector_without_clipping(qtbot):
     """
     panel = _fitted_panel(qtbot)
     area = panel.findChild(QScrollArea)
-    assert not area.horizontalScrollBar().isVisible(), "a row is wider than the pane"
+    assert not area.horizontalScrollBar().isVisible(), _widths(panel, area)
     for button in (
         panel.nest_button,
         panel.remove_button,
@@ -198,7 +226,7 @@ def test_setup_rows_wrap_rather_than_overflow_with_wider_text(qtbot):
     for _ in range(20):
         QApplication.processEvents()
     area = panel.findChild(QScrollArea)
-    assert not area.horizontalScrollBar().isVisible(), "a row is wider than the pane"
+    assert not area.horizontalScrollBar().isVisible(), _widths(panel, area)
     for button in (panel.trial_button, panel.scale_button, panel.protocol_button):
         right = button.mapTo(area.viewport(), QPoint(button.width(), 0)).x()
         assert right <= area.viewport().width(), f"{button.text()} runs off the pane"
