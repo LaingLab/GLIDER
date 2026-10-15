@@ -185,3 +185,20 @@ def test_the_thresholds_row_is_named_for_what_it_holds(qtbot):
     assert panel.protocol_button.text() == "Thresholds…"
     texts = [label.text() for label in panel.findChildren(QLabel)]
     assert "Thresholds" in texts and "Protocol" not in texts
+
+
+def test_setup_rows_wrap_rather_than_overflow_with_wider_text(qtbot):
+    """Windows' text is wider than macOS's (CI caught it at 330 px): a setup
+    row whose label, value and button no longer fit side by side must wrap
+    under its label, never push past the pane's edge. Simulated here with a
+    font about a third larger than the theme's."""
+    panel = _fitted_panel(qtbot)
+    # The theme sizes text in its stylesheet, which outranks setFont.
+    panel.setStyleSheet(panel.styleSheet() + "\nQLabel, QPushButton { font-size: 17px; }")
+    for _ in range(20):
+        QApplication.processEvents()
+    area = panel.findChild(QScrollArea)
+    assert not area.horizontalScrollBar().isVisible(), "a row is wider than the pane"
+    for button in (panel.trial_button, panel.scale_button, panel.protocol_button):
+        right = button.mapTo(area.viewport(), QPoint(button.width(), 0)).x()
+        assert right <= area.viewport().width(), f"{button.text()} runs off the pane"

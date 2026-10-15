@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -73,26 +74,34 @@ class RetrievalPanel(QWidget):
         self.nest_button.clicked.connect(self.redraw_nest)
         self.remove_button = QPushButton("Remove")
         self.remove_button.clicked.connect(self._on_remove)
-        column.addLayout(self._row("Nest", self.nest_button))
+        # A form, not hand-built rows: where a label, value and button do not
+        # fit side by side (Windows' wider text in a 300 px inspector), the
+        # value and button wrap under the label instead of running off the pane.
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        form.addRow("Nest", self.nest_button)
         # Remove sits with the list it acts on: beside the draw button the row
         # was wider than the inspector.
         periods = QHBoxLayout()
         periods.addWidget(self.nest_list)
         periods.addWidget(self.remove_button, 0, Qt.AlignmentFlag.AlignTop)
-        column.addLayout(periods)
+        form.addRow(periods)
         self.trial_label = QLabel()
         self.trial_button = QPushButton("Set at playhead")
         self.trial_button.clicked.connect(self.set_trial_start)
-        column.addLayout(self._row("Trial start", self.trial_label, self.trial_button))
+        form.addRow("Trial start", self._pair(self.trial_label, self.trial_button))
         self.scale_label = QLabel()
         self.scale_button = QPushButton("Set scale…")
         self.scale_button.clicked.connect(self.set_scale)
-        column.addLayout(self._row("Scale", self.scale_label, self.scale_button))
+        form.addRow("Scale", self._pair(self.scale_label, self.scale_button))
         self.protocol_label = QLabel()
         self.protocol_label.setWordWrap(True)
         self.protocol_button = QPushButton("Thresholds…")
         self.protocol_button.clicked.connect(self.edit_protocol)
-        column.addLayout(self._row("Thresholds", self.protocol_label, self.protocol_button))
+        form.addRow("Thresholds", self._pair(self.protocol_label, self.protocol_button))
+        column.addLayout(form)
 
         column.addWidget(self._title("PUPS"))
         self.status = QLabel()
@@ -128,13 +137,10 @@ class RetrievalPanel(QWidget):
         return label
 
     @staticmethod
-    def _row(name: str, *widgets) -> QHBoxLayout:
+    def _pair(value: QLabel, button: QPushButton) -> QHBoxLayout:
         row = QHBoxLayout()
-        label = QLabel(name)
-        label.setMinimumWidth(78)
-        row.addWidget(label)
-        for w in widgets:
-            row.addWidget(w)
+        row.addWidget(value, 1)
+        row.addWidget(button)
         return row
 
     def show_setup(
