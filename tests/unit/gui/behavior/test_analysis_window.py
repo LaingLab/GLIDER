@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pandas as pd
 import pytest
@@ -2262,6 +2263,8 @@ class TestTheEpochTableInTheWindow:
             "Epoch table, tidy (CSV)…",
             "Epoch table, wide (CSV)…",
             "Markers (CSV)…",
+            "Retrieval tables (CSV)…",
+            "Nest distance per frame (CSV)…",
             "Heatmap (PNG + CSV)…",
         ]
 
@@ -2451,3 +2454,944 @@ class TestReviewFixes:
         )
         win._pool.select(1)
         assert written == []
+
+
+class TestExperimentType:
+    def test_the_selector_is_labelled_protocol(self, qtbot):
+        from PyQt6.QtWidgets import QLabel
+
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        [label] = [lab for lab in win.findChildren(QLabel) if lab.buddy() is win._type_combo]
+        assert label.text() == "Protocol"
+        assert "protocol" in win._type_combo.toolTip().lower()
+
+    def test_starts_at_none_and_follows_set_experiment_type(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        assert win._experiment_type == ""
+        assert win._type_combo.currentText() == "None"
+        with qtbot.assertNotEmitted(win.experiment_type_chosen):
+            win.set_experiment_type("Pup Retrieval")
+        assert win._type_combo.currentText() == "Pup Retrieval"
+
+    def test_choosing_a_type_emits_it(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        with qtbot.waitSignal(win.experiment_type_chosen) as sig:
+            win._type_combo.setCurrentIndex(win._type_combo.findText("Pup Retrieval"))
+        assert sig.args == ["Pup Retrieval"]
+        assert win._experiment_type == "Pup Retrieval"
+
+    def test_a_custom_type_is_shown(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval (P4)")
+        assert win._type_combo.currentText() == "Pup Retrieval (P4)"
+
+    def test_the_preset_decides_what_it_unlocks(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        assert not win._has_analysis("pup_retrieval")
+        win.set_experiment_type("Pup Retrieval (P4)")
+        assert win._has_analysis("pup_retrieval")
+
+    def test_only_the_current_custom_type_keeps_a_row(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        listed = win._type_combo.count()
+        win.set_experiment_type("Pup Retrieval (P4)")
+        win.set_experiment_type("Pup Retrieval (P5)")
+        assert win._type_combo.count() == listed + 1
+        win.set_experiment_type("Open Field")
+        assert win._type_combo.count() == listed
+        assert win._type_combo.currentText() == "Open Field"
+
+
+def _pup_video(folder, stem="litter1_pre", n=60):
+    from glider.vision.pose.pups import PupTracks, save_pups
+
+    folder.mkdir(parents=True, exist_ok=True)
+    video = folder / f"{stem}.avi"
+    writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 15.0, (64, 48))
+    for i in range(n):
+        writer.write(np.full((48, 64, 3), i % 255, np.uint8))
+    writer.release()
+    xy = np.full((2, n, 2), 20.0)
+    save_pups(
+        folder / f"{stem}_pups.npz",
+        PupTracks(xy, [[] for _ in range(n)], np.zeros((2, n), bool), {}),
+    )
+    return video
+
+
+def _scorable(folder, stem="litter1_pre", n=60, nose_name="nose"):
+    """A pup video Session Review can score: a nose pose, a nest, trial start and scale.
+
+    64x48 px, 15 fps; nest = the left half (x < 32 px); the nose sits at (40, 40),
+    8 px = 0.8 cm outside it (px_per_mm 1.0 = 10 px/cm).
+    """
+    from glider.analysis.behavior.retrieval_setup import (
+        NestPeriod,
+        RetrievalSetup,
+        save_setup,
+        setup_path,
+    )
+    from glider.vision.pose.core import PoseData
+    from glider.vision.pose.dlc import to_dlc_csv
+    from glider.vision.zones import Zone, ZoneShape
+
+    video = _pup_video(folder, stem, n)
+    to_dlc_csv(
+        PoseData(
+            xy=np.full((n, 1, 2), 40.0),
+            confidence=np.ones((n, 1)),
+            keypoint_names=[nose_name],
+            fps=15.0,
+        ),
+        folder / f"{stem}DLC_m.csv",
+    )
+    nest = Zone("n", "nest", ZoneShape.RECTANGLE, [(0.0, 0.0), (0.5, 1.0)])
+    save_setup(
+        setup_path(video),
+        RetrievalSetup(trial_start_s=0.0, nests=[NestPeriod(0.0, nest)], px_per_mm=1.0),
+    )
+    return video
+
+
+def _watch_scoring(win, monkeypatch, name="nose_to_pup_px"):
+    """What the cursor and status line said each time the window called *name*."""
+    from PyQt6.QtWidgets import QApplication
+
+    import glider.gui.behavior.analysis_window as module
+
+    seen = []
+    original = getattr(module, name)
+
+    def watched(*args, **kwargs):
+        cursor = QApplication.overrideCursor()
+        seen.append((cursor and cursor.shape(), win.statusBar().currentMessage()))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, watched)
+    return seen
+
+
+@pytest.fixture
+def no_dialogs(monkeypatch):
+    """A failure to read a file pops a modal box; fail the test instead of hanging on it."""
+
+    def refuse(*args, **kwargs):
+        pytest.fail(f"unexpected dialog: {args[-1]}")
+
+    for kind in ("critical", "warning"):
+        monkeypatch.setattr(f"glider.gui.behavior.analysis_window.QMessageBox.{kind}", refuse)
+
+
+@pytest.mark.usefixtures("no_dialogs")
+class TestOpenVideo:
+    def test_open_video_loads_a_bare_video(self, qtbot, tmp_path, monkeypatch):
+        video = _pup_video(tmp_path)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getOpenFileName",
+            lambda *a, **k: (str(video), ""),
+        )
+        win._open_video()
+        assert len(win._cohort) == 1
+        assert win._cohort[0][1].pups is not None
+
+    def test_open_path_takes_a_video_file(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_pup_video(tmp_path))
+        assert win._cohort[0][1].pups is not None
+
+    def test_the_open_menu_has_open_video(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        texts = [a.text() for a in win._open_btn.menu().actions()]
+        assert texts == [
+            "Open ethogram…",
+            "Open video…",
+            "Open recording folder…",
+            "Open folder as cohort…",
+        ]
+
+    def test_a_cohort_folder_of_pup_videos_loads(self, qtbot, tmp_path):
+        _pup_video(tmp_path, "litter1_pre")
+        _pup_video(tmp_path, "litter1_post")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        assert sorted(win._ids) == ["litter1_post", "litter1_pre"]
+        assert all(view.pups is not None for _path, view in win._cohort)
+
+    def test_a_pup_video_in_a_recording_is_one_session_with_its_hardware(self, qtbot, tmp_path):
+        from glider.analysis.cohort import session_id_for
+
+        recording = _recording(tmp_path / "rec")
+        video = _pup_video(recording, "mouse01")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        assert [path for path, _view in win._cohort] == [video.resolve()]
+        assert win._ids == [session_id_for(recording)]
+        assert [lane.key for lane in win._timelines[0].lanes] == ["led1"]
+
+    def test_two_videos_in_one_folder_keep_their_own_markers(self, qtbot, tmp_path):
+        _pup_video(tmp_path, "litter1_pre")
+        _pup_video(tmp_path, "litter1_post")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)  # opens the folder as a cohort
+        files = {win._marker_file(i).name for i in range(len(win._cohort))}
+        assert files == {"litter1_pre.review_markers.json", "litter1_post.review_markers.json"}
+        stores = {win._session_store(i) for i in range(len(win._cohort))}
+        assert len(stores) == 2
+
+    def test_an_ethogram_session_keeps_the_folder_marker_file(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        assert win._marker_file(0) == (tmp_path / "v" / "review_markers.json").resolve()
+
+    def test_choosing_poses_for_a_video_starts_in_its_folder(self, qtbot, tmp_path, monkeypatch):
+        video = _pup_video(tmp_path)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_video(video)
+        started = []
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getOpenFileName",
+            lambda *a, **k: started.append(a[2]) or ("", ""),
+        )
+        win._choose_pose_csv()
+        assert started == [str(tmp_path)]
+
+
+@pytest.mark.usefixtures("no_dialogs")
+class TestRetrievalTab:
+    def _win(self, qtbot, video):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load_video(video)
+        return win
+
+    @staticmethod
+    def _tab_shown(win):
+        return win._inspector.isTabVisible(win._inspector.indexOf(win._inspector.retrieval))
+
+    def test_the_tab_follows_the_experiment_type(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_video(_pup_video(tmp_path))
+        assert not self._tab_shown(win)
+        win.set_experiment_type("Pup Retrieval")
+        assert self._tab_shown(win)
+        win.set_experiment_type("Open Field")
+        assert not self._tab_shown(win)
+
+    def test_a_session_without_pups_says_so(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load(_session(tmp_path / "etho"))
+        assert self._tab_shown(win)
+        panel = win._inspector.retrieval
+        assert panel.status.text() == "No pup tracks: run the pup pass in Batch Pose"
+        assert panel.table.rowCount() == 0
+        assert not panel.trial_button.isEnabled()
+
+    def test_set_trial_start_saves_the_playhead_time(self, qtbot, tmp_path):
+        from glider.analysis.behavior.retrieval_setup import load_setup
+
+        win = self._win(qtbot, _pup_video(tmp_path))
+        win._set_frame(30)  # 2.0 s at 15 fps
+        win._set_trial_start()
+        assert load_setup(tmp_path / "litter1_pre.retrieval.json").trial_start_s == 2.0
+        assert "0:02" in win._inspector.retrieval.trial_label.text()
+
+    def test_without_a_nest_it_asks_for_one(self, qtbot, tmp_path):
+        win = self._win(qtbot, _pup_video(tmp_path))
+        win._set_trial_start()
+        assert win._inspector.retrieval.status.text() == "Draw the nest to score"
+
+    def test_an_unreadable_setup_is_read_only_and_untouched(self, qtbot, tmp_path):
+        video = _pup_video(tmp_path)
+        (tmp_path / "litter1_pre.retrieval.json").write_text("{broken")
+        win = self._win(qtbot, video)
+        win._set_trial_start()
+        assert (tmp_path / "litter1_pre.retrieval.json").read_text() == "{broken"
+        panel = win._inspector.retrieval
+        assert not panel.trial_button.isEnabled()
+        assert "not valid JSON" in panel.status.text()
+
+    def test_a_scorable_video_fills_the_table(self, qtbot, tmp_path):
+        win = self._win(qtbot, _scorable(tmp_path))
+        assert win._inspector.retrieval.table.rowCount() == 2
+        assert win._inspector.retrieval.status.text() == ""
+
+    def test_no_nose_column_is_reported(self, qtbot, tmp_path):
+        # Keypoints left as the model named them ("0".."6"), never renamed in the batch.
+        win = self._win(qtbot, _scorable(tmp_path, nose_name="0"))
+        assert "'nose'" in win._inspector.retrieval.status.text()
+
+    def test_the_setup_scale_reaches_the_scale_pill(self, qtbot, tmp_path):
+        win = self._win(qtbot, _scorable(tmp_path))
+        assert win._view.px_per_mm == 1.0
+        assert win._scale_pill.text() == "1.00 px/mm"
+
+    def test_removing_a_nest_saves_and_rescores(self, qtbot, tmp_path):
+        from glider.analysis.behavior.retrieval_setup import load_setup
+
+        win = self._win(qtbot, _scorable(tmp_path))
+        win._inspector.retrieval.remove_nest.emit(0)
+        assert load_setup(tmp_path / "litter1_pre.retrieval.json").nests == []
+        assert win._inspector.retrieval.status.text() == "Draw the nest to score"
+        assert win._inspector.retrieval.table.rowCount() == 0
+
+    def test_jump_to_moves_the_playhead(self, qtbot, tmp_path):
+        win = self._win(qtbot, _pup_video(tmp_path))
+        win._inspector.retrieval.jump_to.emit(2.0)
+        assert win._frame == 30
+
+    def test_a_new_video_is_not_shown_the_last_ones_score(self, qtbot, tmp_path):
+        win = self._win(qtbot, _scorable(tmp_path / "a"))
+        win.load_video(_pup_video(tmp_path / "b"))
+        assert win._inspector.retrieval.table.rowCount() == 0
+        assert win._inspector.retrieval.status.text() == "Draw the nest to score"
+
+    def test_retyping_the_type_does_not_rescore(self, qtbot, tmp_path, monkeypatch):
+        import glider.gui.behavior.analysis_window as module
+
+        win = self._win(qtbot, _scorable(tmp_path))
+        calls = []
+        original = module.score_session
+        monkeypatch.setattr(
+            module, "score_session", lambda *a, **k: (calls.append(1), original(*a, **k))[1]
+        )
+        for _ in range(3):
+            win.set_experiment_type("Pup Retrieval")
+        assert calls == []
+        assert win._inspector.retrieval.table.rowCount() == 2
+
+
+@pytest.mark.usefixtures("no_dialogs")
+class TestRetrievalScoresLazily:
+    """Showing a session must not block on work it cannot use yet, or touch other numbers."""
+
+    def test_the_nose_distances_wait_for_a_scorable_setup(self, qtbot, tmp_path, monkeypatch):
+        import glider.gui.behavior.analysis_window as module
+        from glider.analysis.behavior.retrieval_setup import (
+            RetrievalSetup,
+            save_setup,
+            setup_path,
+        )
+        from glider.vision.zones import Zone, ZoneShape
+
+        video = _scorable(tmp_path)
+        save_setup(setup_path(video), RetrievalSetup(trial_start_s=0.0, px_per_mm=1.0))
+        calls = []
+        original = module.nose_to_pup_px
+        monkeypatch.setattr(
+            module, "nose_to_pup_px", lambda *a, **k: (calls.append(1), original(*a, **k))[1]
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load_video(video)
+        assert win._inspector.retrieval.status.text() == "Draw the nest to score"
+        assert calls == []
+
+        zone = Zone("n", "nest", ZoneShape.RECTANGLE, [(0.0, 0.0), (0.5, 1.0)])
+        win._state(0).setup.set_nest(0.0, zone)
+        win._refresh_retrieval()
+        assert win._inspector.retrieval.table.rowCount() == 2
+        assert calls == [1]
+        win._refresh_retrieval()
+        assert calls == [1]  # kept with the session
+
+    def test_switching_sessions_neither_rescores_nor_clears_the_cohort(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        import glider.gui.behavior.analysis_window as module
+
+        _scorable(tmp_path, "litter1_pre")
+        _scorable(tmp_path, "litter1_post")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load_folder(tmp_path)
+        scored, cleared = [], []
+        original = module.score_session
+        monkeypatch.setattr(
+            module, "score_session", lambda *a, **k: (scored.append(1), original(*a, **k))[1]
+        )
+        monkeypatch.setattr(win, "_invalidate_cohort_cache", lambda: cleared.append(1))
+        for index in (1, 0, 1, 0):
+            win._pool.select(index)
+        assert win._shown == 0
+        assert scored == [1]  # the first visit to the second session only
+        assert cleared == []
+
+    def test_a_video_takes_its_setup_scale_whatever_the_type(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_video(_scorable(tmp_path))
+        assert win._view.px_per_mm == 1.0
+        assert win._scale_pill.text() == "1.00 px/mm"
+
+    def test_an_unreadable_setup_still_loads_the_video(self, qtbot, tmp_path):
+        video = _pup_video(tmp_path)
+        (tmp_path / "litter1_pre.retrieval.json").write_text("{broken")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_video(video)
+        assert len(win._cohort) == 1
+
+
+@pytest.mark.usefixtures("no_dialogs")
+class TestRetrievalDialogs:
+    def _win(self, qtbot, tmp_path, video=None):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load_video(video or _pup_video(tmp_path))
+        return win
+
+    def test_redraw_from_here_adds_a_period_at_the_playhead(self, qtbot, tmp_path, monkeypatch):
+        from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape
+
+        win = self._win(qtbot, tmp_path)
+        drawn = iter("ab")  # each outline the dialog draws is a new zone, with its own id
+        monkeypatch.setattr(
+            win,
+            "_run_zone_dialog",
+            lambda frame, config: ZoneConfiguration(
+                zones=[Zone(next(drawn), "nest", ZoneShape.RECTANGLE, [(0.1, 0.1), (0.4, 0.4)])]
+            ),
+        )
+        win._redraw_nest()  # first: from 0:00 whatever the playhead
+        win._set_frame(45)  # 3 s
+        win._inspector.retrieval.redraw_nest.emit()
+        state = win._retrieval_state[win._shown]
+        assert [p.from_s for p in state.setup.nests] == [0.0, 3.0]
+
+    def test_a_cancelled_zone_dialog_changes_nothing(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path)
+        monkeypatch.setattr(win, "_run_zone_dialog", lambda frame, config: None)
+        win._redraw_nest()
+        assert win._retrieval_state[win._shown].setup.nests == []
+
+    def test_the_zone_dialog_edits_a_copy_of_the_nest(self, qtbot, tmp_path, monkeypatch):
+        # The dialog edits its config in place; a cancelled edit must not stick.
+        win = self._win(qtbot, tmp_path, _scorable(tmp_path))
+
+        def scribble(frame, config):
+            config.zones[0].vertices[0] = (0.9, 0.9)
+            config.zones.clear()
+
+        monkeypatch.setattr(win, "_run_zone_dialog", scribble)
+        win._redraw_nest()
+        nests = win._retrieval_state[win._shown].setup.nests
+        assert len(nests) == 1 and nests[0].zone.vertices[0] == (0.0, 0.0)
+
+    def test_the_newest_zone_drawn_becomes_the_nest(self, qtbot, tmp_path, monkeypatch):
+        # The dialog only adds zones, so the old nest is still first in its list.
+        from glider.vision.zones import Zone, ZoneShape
+
+        win = self._win(qtbot, tmp_path, _scorable(tmp_path))
+        new = Zone("m", "nest 2", ZoneShape.RECTANGLE, [(0.5, 0.0), (1.0, 1.0)])
+
+        def draw(frame, config):
+            config.add_zone(new)
+            return config
+
+        monkeypatch.setattr(win, "_run_zone_dialog", draw)
+        win._set_frame(30)
+        win._redraw_nest()
+        nests = win._retrieval_state[win._shown].setup.nests
+        assert [(p.from_s, p.zone.name) for p in nests] == [(0.0, "nest"), (2.0, "nest 2")]
+
+    def test_ok_without_drawing_adds_no_period(self, qtbot, tmp_path, monkeypatch):
+        # The dialog is seeded with a copy of the current nest, which keeps its id.
+        win = self._win(qtbot, tmp_path, _scorable(tmp_path))
+        monkeypatch.setattr(win, "_run_zone_dialog", lambda frame, config: config)
+        win._set_frame(30)
+        win._redraw_nest()
+        assert [p.from_s for p in win._retrieval_state[win._shown].setup.nests] == [0.0]
+
+    def test_set_scale_for_the_whole_cohort(self, qtbot, tmp_path, monkeypatch):
+        from glider.analysis.behavior.retrieval_setup import load_setup
+
+        _pup_video(tmp_path, "litter1_pre")
+        _pup_video(tmp_path, "litter1_post")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load_folder(tmp_path)
+        assert "No calibration found" in win._session_text.text()
+        monkeypatch.setattr(win, "_run_scale_dialog", lambda video: (2.0, True))
+        win._set_scale()
+        for stem in ("litter1_pre", "litter1_post"):
+            assert load_setup(tmp_path / f"{stem}.retrieval.json").px_per_mm == 2.0
+        assert [view.px_per_mm for _path, view in win._cohort] == [2.0, 2.0]
+        assert win._scale_pill.text() == "2.00 px/mm"
+        assert "No calibration found" not in win._session_text.text()
+        assert win.statusBar().currentMessage() == "Scale set for 2 sessions"
+
+    def test_whole_cohort_set_scale_rescores_under_a_wait_cursor(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        """With the Epoch table showing, a new scale re-scores every session at once."""
+        _scorable(tmp_path, "litter1_pre")
+        _scorable(tmp_path, "litter1_post")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load_folder(tmp_path)
+        win._tables.setCurrentWidget(win._epoch)
+        win._bar.set_selection(0, 29)
+        seen = _watch_scoring(win, monkeypatch, "score_session")
+        monkeypatch.setattr(win, "_run_scale_dialog", lambda video: (2.0, True))
+        win._set_scale()
+        assert (Qt.CursorShape.WaitCursor, "Scoring 1 session…") in seen
+        assert win.statusBar().currentMessage() == "Scale set for 2 sessions"
+
+    def test_set_scale_says_which_sessions_kept_their_scale(self, qtbot, tmp_path, monkeypatch):
+        from glider.analysis.behavior.retrieval_setup import load_setup
+
+        _pup_video(tmp_path, "litter1_pre")
+        _pup_video(tmp_path, "litter1_post")
+        broken = tmp_path / "litter1_post.retrieval.json"
+        broken.write_bytes(b"{broken")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load_folder(tmp_path)
+        win._pool.select(win._ids.index("litter1_pre"))
+        monkeypatch.setattr(win, "_run_scale_dialog", lambda video: (2.0, True))
+        win._set_scale()
+        assert load_setup(tmp_path / "litter1_pre.retrieval.json").px_per_mm == 2.0
+        assert broken.read_bytes() == b"{broken"
+        assert win._cohort[win._ids.index("litter1_post")][1].px_per_mm is None
+        assert win.statusBar().currentMessage() == (
+            "Scale set for 1 session; kept the old scale for litter1_post "
+            "(its retrieval file could not be read)"
+        )
+
+    @pytest.mark.parametrize("failing", [("litter1_post",), ("litter1_post", "litter1_pre")])
+    def test_set_scale_counts_only_what_it_saved(self, qtbot, tmp_path, monkeypatch, failing):
+        """A failed save is not a scale set: named in the status line, one dialog for all."""
+        import glider.gui.behavior.analysis_window as module
+
+        _pup_video(tmp_path, "litter1_pre")
+        _pup_video(tmp_path, "litter1_post")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load_folder(tmp_path)
+        real_save = module.save_setup
+
+        def save(path, setup):
+            if Path(path).name.removesuffix(".retrieval.json") in failing:
+                raise OSError("disk full")
+            real_save(path, setup)
+
+        dialogs = []
+        monkeypatch.setattr(module, "save_setup", save)
+        monkeypatch.setattr(module.QMessageBox, "critical", lambda *a: dialogs.append(a[-1]))
+        monkeypatch.setattr(win, "_run_scale_dialog", lambda video: (2.0, True))
+        win._set_scale()
+
+        ok = 2 - len(failing)
+        unsaved = ", ".join(sid for sid in win._ids if sid in failing)
+        assert win.statusBar().currentMessage() == (
+            f"Scale set for {ok} session{'s' if ok != 1 else ''}; "
+            f"could not save the scale for {unsaved}"
+        )
+        assert len(dialogs) == 1
+        assert all(f"{sid}.retrieval.json: disk full" in dialogs[0] for sid in failing)
+        for sid in failing:  # memory still agrees with the file it could not change
+            index = win._ids.index(sid)
+            assert win._cohort[index][1].px_per_mm is None
+            assert win._state(index).setup.px_per_mm is None
+            assert not (tmp_path / f"{sid}.retrieval.json").exists()
+
+    def test_set_scale_for_one_session_rescores_it(self, qtbot, tmp_path, monkeypatch):
+        from glider.analysis.behavior.retrieval_setup import load_setup
+
+        win = self._win(qtbot, tmp_path, _scorable(tmp_path))
+        before = win._retrievals[win._shown]
+        monkeypatch.setattr(win, "_run_scale_dialog", lambda video: (2.0, False))
+        win._inspector.retrieval.set_scale.emit()
+        assert load_setup(tmp_path / "litter1_pre.retrieval.json").px_per_mm == 2.0
+        assert win._view.px_per_mm == 2.0
+        assert win._retrievals[win._shown] is not before
+        assert "2.00 px/mm" in win._inspector.retrieval.scale_label.text()
+
+    def test_set_scale_skips_sessions_without_pups(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load_many([_pup_video(tmp_path / "v"), _session(tmp_path / "etho")])
+        before = win._cohort[1][1].px_per_mm
+        monkeypatch.setattr(win, "_run_scale_dialog", lambda video: (2.0, True))
+        win._set_scale()
+        assert win._cohort[0][1].px_per_mm == 2.0
+        assert win._cohort[1][1].px_per_mm == before
+        assert not (tmp_path / "etho" / "ethogram_raw.retrieval.json").exists()
+
+    def test_protocol_is_saved_at_the_cohort_root(self, qtbot, tmp_path, monkeypatch):
+        from glider.analysis.behavior.retrieval_setup import RetrievalProtocol, load_protocol
+
+        win = self._win(qtbot, tmp_path)
+        monkeypatch.setattr(
+            win, "_run_protocol_dialog", lambda p, k: RetrievalProtocol(cutoff_s=600.0)
+        )
+        win._inspector.retrieval.edit_protocol.emit()
+        assert load_protocol(tmp_path).cutoff_s == 600.0
+        assert "10:00" in win._inspector.retrieval.protocol_label.text()
+
+    def test_a_new_nose_drops_the_cached_distances(self, qtbot, tmp_path, monkeypatch):
+        from glider.analysis.behavior.retrieval_setup import RetrievalProtocol
+
+        win = self._win(qtbot, tmp_path, _scorable(tmp_path))
+        state = win._retrieval_state[win._shown]
+        assert state.nose_pup_px is not None
+        monkeypatch.setattr(
+            win, "_run_protocol_dialog", lambda p, k: RetrievalProtocol(cutoff_s=600.0)
+        )
+        win._edit_protocol()
+        assert state.nose_pup_px is not None  # same nose: the distances still hold
+        monkeypatch.setattr(
+            win, "_run_protocol_dialog", lambda p, k: RetrievalProtocol(nose_keypoint="snout")
+        )
+        win._edit_protocol()
+        assert state.nose_pup_px is None
+        assert "'snout'" in win._inspector.retrieval.status.text()
+
+    def test_an_unreadable_protocol_blocks_only_the_protocol(self, qtbot, tmp_path, monkeypatch):
+        from glider.analysis.behavior.retrieval_setup import load_setup
+
+        video = _scorable(tmp_path)
+        (tmp_path / "retrieval_protocol.json").write_text("{broken")
+        win = self._win(qtbot, tmp_path, video)
+        panel = win._inspector.retrieval
+        # Not scored under default rules: the reason is the broken file.
+        assert panel.table.rowCount() == 0
+        assert "retrieval_protocol.json" in panel.status.text()
+        assert not panel.protocol_button.isEnabled()
+        assert panel.trial_button.isEnabled() and panel.scale_button.isEnabled()
+        win._set_frame(30)
+        win._set_trial_start()
+        assert load_setup(tmp_path / "litter1_pre.retrieval.json").trial_start_s == 2.0
+        monkeypatch.setattr(win, "_run_protocol_dialog", lambda p, k: pytest.fail("opened"))
+        win._edit_protocol()
+        assert (tmp_path / "retrieval_protocol.json").read_text() == "{broken"
+
+    def test_an_unreadable_setup_leaves_the_protocol_editable(self, qtbot, tmp_path):
+        video = _pup_video(tmp_path)
+        (tmp_path / "litter1_pre.retrieval.json").write_text("{broken")
+        win = self._win(qtbot, tmp_path, video)
+        panel = win._inspector.retrieval
+        assert panel.protocol_button.isEnabled()
+        assert not panel.scale_button.isEnabled()
+
+
+_NAN = float("nan")
+
+
+@pytest.mark.usefixtures("no_dialogs")
+class TestAMalformedSidecarNeverAbortsTheWindow:
+    """A hand-edited sidecar that parses but holds nonsense: a reason, never a crash.
+
+    These run from Qt slots and GLIDER installs no excepthook, so an exception
+    escaping any of them would end the process.
+    """
+
+    @pytest.mark.parametrize(
+        ("which", "content", "read_only", "reason"),
+        [
+            pytest.param("setup", {"trial_start_s": -1}, True, "trial_start_s", id="trial<0"),
+            pytest.param("setup", {"trial_start_s": _NAN}, True, "trial_start_s", id="trial-nan"),
+            pytest.param("setup", {"px_per_mm": _NAN}, True, "px_per_mm", id="scale-nan"),
+            pytest.param("setup", {"px_per_mm": -2}, True, "px_per_mm", id="scale<0"),
+            pytest.param(
+                "setup",
+                '{"version": 1, "x": ' + "[" * 10**5 + "]" * 10**5 + "}",
+                True,
+                "JSON",
+                id="deep",
+            ),
+            # Valid, so still editable -- redrawing it is the fix -- but unscorable.
+            pytest.param(
+                "setup",
+                {"nests": [{"from_s": 0, "zone": {"name": "nest", "vertices": [[2, 2], [3, 3]]}}]},
+                False,
+                "covers no pixels",
+                id="nest-off-frame",
+            ),
+            pytest.param("protocol", {"cutoff_s": 0}, True, "cutoff_s", id="cutoff=0"),
+            pytest.param("protocol", {"contact_cm": _NAN}, True, "contact_cm", id="contact-nan"),
+        ],
+    )
+    def test_it_loads_with_a_reason_and_is_never_overwritten(
+        self, qtbot, tmp_path, which, content, read_only, reason
+    ):
+        import json
+
+        from glider.analysis.behavior.retrieval_setup import protocol_path, setup_path
+
+        video = _scorable(tmp_path)
+        path = setup_path(video) if which == "setup" else protocol_path(tmp_path)
+        if isinstance(content, str):
+            text = content
+        else:
+            base = json.loads(path.read_text()) if path.exists() else {"version": 1}
+            text = json.dumps({**base, **content})
+        path.write_text(text)
+
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        for load in (lambda: win.load_video(video), lambda: win.load_folder(tmp_path)):
+            load()
+            panel = win._inspector.retrieval
+            assert reason in panel.status.text()
+            assert panel.table.rowCount() == 0
+            assert "pups_retrieved" not in win.range_rows(0.0, 3.0)[0]
+            scale = win._view.px_per_mm
+            assert scale is None or scale > 0  # never NaN or negative
+            win._set_frame(30)
+            win._set_trial_start()  # a no-op on a read-only file
+            if read_only:
+                assert path.read_text() == text
+
+
+@pytest.mark.usefixtures("no_dialogs")
+class TestRetrievalOnTheVideo:
+    """The score drawn over the video and named in the HUD, under a pup-retrieval preset only."""
+
+    def _win(self, qtbot, video, experiment_type="Pup Retrieval"):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type(experiment_type)
+        win.load_video(video)
+        return win
+
+    def test_the_hud_gives_the_nose_distance(self, qtbot, tmp_path):
+        win = self._win(qtbot, _scorable(tmp_path))
+        win._set_frame(10)
+        texts = [text for text, _ in win._hud_chips()]
+        assert "nose 0.8 cm from nest" in texts
+
+    @pytest.mark.parametrize("cm", [-0.4, 0.0])
+    def test_the_hud_says_when_the_nose_is_in_the_nest(self, qtbot, tmp_path, cm):
+        win = self._win(qtbot, _scorable(tmp_path))
+        win._retrievals[0].nose_nest_cm[10] = cm  # signed: 0 or below is inside
+        win._set_frame(10)
+        texts = [text for text, _ in win._hud_chips()]
+        assert "nose in nest" in texts
+        assert not any("cm from nest" in text for text in texts)
+
+    def test_no_nose_chip_without_the_preset(self, qtbot, tmp_path):
+        win = self._win(qtbot, _scorable(tmp_path), experiment_type="")
+        win._set_frame(10)
+        assert not any(text.startswith("nose") for text, _ in win._hud_chips())
+
+    def test_a_carried_pup_is_named_and_bolded(self, qtbot, tmp_path):
+        from glider.gui.styles import colors
+
+        win = self._win(qtbot, _scorable(tmp_path))
+        win._retrievals[0].pups["pup_1"].carried[10] = True
+        win._set_frame(10)
+        assert ("pup_1 carried", QColor(colors.CARRY)) in win._hud_chips()
+        table = win._inspector.retrieval.table
+        assert [table.item(row, 0).font().bold() for row in range(2)] == [False, True]
+
+    def test_the_overlay_and_its_toggle_follow_the_preset(self, qtbot, tmp_path):
+        win = self._win(qtbot, _scorable(tmp_path), experiment_type="")
+        assert win._transport.pups_on.isHidden()
+        assert win._canvas._pups is None
+        win.set_experiment_type("Pup Retrieval")
+        assert not win._transport.pups_on.isHidden()
+        assert win._canvas._pups is win._view.pups
+        assert win._canvas._retrieval is win._retrievals[0]
+        assert win._canvas._nest_at(0).name == "nest"
+        win.set_experiment_type("Open Field")
+        assert win._transport.pups_on.isHidden()
+        assert win._canvas._pups is None
+
+    def test_the_nest_nose_line_and_a_hidden_pup_are_drawn(self, qtbot, tmp_path):
+        win = self._win(qtbot, _scorable(tmp_path))
+        win._retrievals[0].hidden[1, 10] = True  # pup_1 in her mouth
+        win._canvas.resize(640, 480)
+        win._set_frame(10)
+        drawn = win._canvas.grab().toImage()
+        win._transport.pups_on.setChecked(False)
+        assert win._canvas.grab().toImage() != drawn
+
+    def test_a_session_without_pups_has_no_overlay(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load(_session(tmp_path / "etho"))
+        assert win._transport.pups_on.isHidden()
+        assert win._canvas._pups is None
+
+    def test_retyping_the_type_does_not_republish(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, _scorable(tmp_path))
+        calls = []
+        monkeypatch.setattr(win._canvas, "set_retrieval", lambda *a: calls.append(a))
+        for _ in range(3):
+            win.set_experiment_type("Pup Retrieval")
+        assert calls == []
+
+    def test_a_scored_session_puts_its_pups_on_the_timeline(self, qtbot, tmp_path):
+        from glider.analysis.behavior.retrieval_setup import RetrievalProtocol, save_protocol
+
+        save_protocol(tmp_path, RetrievalProtocol(cutoff_s=2.0))  # 30 of 60 frames
+        win = self._win(qtbot, _scorable(tmp_path))
+        lanes = win._bar._retrieval
+        assert [name for name, _codes in lanes.pups] == ["pup_0", "pup_1"]
+        assert lanes.distance is win._retrievals[0].nose_nest_cm
+        assert [(s, label) for s, label, _ in lanes.flags] == [
+            (0.0, "Trial start"),
+            (0.0, "Nest 1"),
+            (2.0, "Cutoff"),
+        ]
+        assert win._bar.lane_rect("nose_nest") is not None
+
+    def test_no_pup_lanes_without_the_preset(self, qtbot, tmp_path):
+        win = self._win(qtbot, _scorable(tmp_path), experiment_type="")
+        assert win._bar._retrieval is None
+        win.set_experiment_type("Pup Retrieval")
+        assert win._bar._retrieval is not None
+        win.set_experiment_type("")
+        assert win._bar._retrieval is None
+
+
+@pytest.mark.usefixtures("no_dialogs")
+class TestRetrievalExports:
+    def _scored(self, qtbot, tmp_path, *, second_scorable=True):
+        """A cohort of two pup videos; the second is unscored unless asked."""
+        _scorable(tmp_path, "litter1_pre")
+        (_scorable if second_scorable else _pup_video)(tmp_path, "litter1_post")
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load_folder(tmp_path)
+        return win
+
+    def _export_to(self, win, tmp_path, monkeypatch, method):
+        out = tmp_path / "exports"
+        out.mkdir(exist_ok=True)
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getExistingDirectory",
+            lambda *a, **k: str(out),
+        )
+        getattr(win, method)()
+        return out
+
+    def test_the_retrieval_exports_show_only_under_the_preset(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        actions = (win._export_retrieval_action, win._export_nest_action)
+        assert [a.isVisible() for a in actions] == [False, False]
+        win.set_experiment_type("Pup Retrieval")
+        assert [a.isVisible() for a in actions] == [True, True]
+        win.set_experiment_type("")
+        assert [a.isVisible() for a in actions] == [False, False]
+
+    def test_retrieval_tables_have_one_row_per_pup_and_per_session(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        win = self._scored(qtbot, tmp_path)
+        out = self._export_to(win, tmp_path, monkeypatch, "_export_retrieval")
+        pups = pd.read_csv(out / "retrieval.csv")
+        litter = pd.read_csv(out / "retrieval_litter.csv")
+        assert len(litter) == 2
+        assert len(pups) == 2 * 2  # two sessions x two pups
+        assert {"session_id", "pup", "retrieval_latency_s", "cutoff_s"} <= set(pups.columns)
+
+    def test_unscored_sessions_are_listed_as_skipped(self, qtbot, tmp_path, monkeypatch):
+        win = self._scored(qtbot, tmp_path, second_scorable=False)
+        out = self._export_to(win, tmp_path, monkeypatch, "_export_retrieval")
+        assert list(pd.read_csv(out / "retrieval_litter.csv")["session_id"]) == ["litter1_pre"]
+        assert "skipped litter1_post" in win.statusBar().currentMessage()
+
+    def test_nest_distance_per_frame_writes_one_file_per_session(
+        self, qtbot, tmp_path, monkeypatch
+    ):
+        win = self._scored(qtbot, tmp_path)
+        out = self._export_to(win, tmp_path, monkeypatch, "_export_nest_distance")
+        frame = pd.read_csv(out / "litter1_pre_nest_distance.csv")
+        assert list(frame.columns) == [
+            "frame",
+            "time_s",
+            "animal",
+            "x_px",
+            "y_px",
+            "dist_edge_cm",
+            "in_nest",
+            "nose_dist_cm",
+            "carried",
+            "hidden",
+        ]
+        assert (out / "litter1_post_nest_distance.csv").exists()
+
+    def test_same_named_videos_do_not_overwrite_one_file(self, qtbot, tmp_path, monkeypatch):
+        """Repeats, a stem that looks like a suffixed repeat, and a case-only twin."""
+        videos = {"run_a": ("m01", 60), "run_b": ("m01", 45), "run_c": ("m01 (2)", 50)}
+        videos["run_d"] = ("M01", 40)  # one file with m01 on APFS / NTFS
+        for run, (stem, n) in videos.items():
+            _scorable(tmp_path / run, stem, n)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.set_experiment_type("Pup Retrieval")
+        win.load_folder(tmp_path)
+        out = self._export_to(win, tmp_path, monkeypatch, "_export_nest_distance")
+        names = [p.name for p in out.iterdir()]
+        assert len({n.casefold() for n in names}) == len(names) == len(videos)
+        lengths = sorted(pd.read_csv(out / n)["frame"].max() + 1 for n in names)
+        assert lengths == sorted(n for _stem, n in videos.values())  # each session once
+        first = win._cohort[0][0]
+        kept = pd.read_csv(out / f"{first.stem}_nest_distance.csv")
+        assert kept["frame"].max() + 1 == videos[first.parent.name][1]
+
+    def test_exporting_scores_the_cohort_under_a_wait_cursor(self, qtbot, tmp_path, monkeypatch):
+        from PyQt6.QtWidgets import QApplication
+
+        win = self._scored(qtbot, tmp_path)  # the shown session is scored; the other is not
+        seen = _watch_scoring(win, monkeypatch)
+        self._export_to(win, tmp_path, monkeypatch, "_export_retrieval")
+        assert seen == [(Qt.CursorShape.WaitCursor, "Scoring 1 session…")]
+        assert QApplication.overrideCursor() is None
+        assert win.statusBar().currentMessage().startswith("Wrote retrieval.csv")
+
+    def test_cohort_rows_score_under_a_wait_cursor(self, qtbot, tmp_path, monkeypatch):
+        from PyQt6.QtWidgets import QApplication
+
+        win = self._scored(qtbot, tmp_path)
+        seen = _watch_scoring(win, monkeypatch)
+        win.range_rows(0.0, 3.0)
+        win.range_rows(0.0, 2.0)  # every session already scored: no cursor
+        assert seen == [(Qt.CursorShape.WaitCursor, "Scoring 1 session…")]
+        assert QApplication.overrideCursor() is None
+        assert win.statusBar().currentMessage() == ""
+
+    def test_range_rows_carry_the_retrieval_keys(self, qtbot, tmp_path):
+        win = self._scored(qtbot, tmp_path)
+        row = win.range_rows(0.0, 3.0)[0]
+        assert {"pups_retrieved", "dam_in_nest_frac", "nose_nest_mean_cm"} <= set(row)
+
+    def test_the_retrieval_keys_come_and_go_with_the_preset(self, qtbot, tmp_path):
+        win = self._scored(qtbot, tmp_path)
+        win.set_experiment_type("")
+        assert "pups_retrieved" not in win.range_rows(0.0, 3.0)[0]
+        win.set_experiment_type("Pup Retrieval")
+        assert "pups_retrieved" in win.range_rows(0.0, 3.0)[0]

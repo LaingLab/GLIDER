@@ -104,6 +104,7 @@ nav:
       - Pose Models: camera-behavior/pose-models.md
       - Behavior Analysis: camera-behavior/behavior.md
       - Closed-loop Rehearsal: camera-behavior/rehearsal.md
+      - Pup Retrieval: camera-behavior/pup-retrieval.md
   - Runner Mode:
       - runner/index.md
       - The Runner Screen: runner/runner.md

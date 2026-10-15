@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.analysis import markers as mk
+from glider.analysis.behavior.retrieval_session import STATES
 from glider.analysis.timeline import (
     BehaviorLane,
     Lane,
@@ -47,9 +48,12 @@ __all__ = [
     "HEADER_W",
     "HW_H",
     "MARKER_H",
+    "NUMERIC_H",
+    "PUP_H",
     "RULER_H",
     "TOP_H",
     "Navigator",
+    "RetrievalLanes",
     "Row",
     "TimelinePanel",
     "TimelineView",
@@ -68,6 +72,8 @@ GROUP_H = 18
 BEHAVIOR_H = 44
 HW_H = 22
 HW_MIN_H = 10
+NUMERIC_H = 46
+PUP_H = 22
 MIN_SPAN_FRAMES = 30
 CLIP_MIN_PX = 2.0
 SNAP_PX = 8  # how close an edge pulls
@@ -181,11 +187,26 @@ def _smaller(font: QFont, by: float = 2.0) -> QFont:
 
 
 @dataclass(frozen=True)
+class RetrievalLanes:
+    """A scored pup session as the timeline draws it.
+
+    Pups get their own row kind, not :class:`BehaviorLane`: behaviour lanes
+    share one sorted palette, and pup states joining it would reshuffle every
+    behaviour's colour.
+    """
+
+    pups: list[tuple[str, np.ndarray]]  # name, per-frame index into STATES (-1 blank)
+    retrieved_at: dict[str, int]  # name -> frame
+    distance: np.ndarray | None  # nose to nest per frame, cm, negative inside
+    flags: list[tuple[float, str, str]]  # seconds, label, hex colour
+
+
+@dataclass(frozen=True)
 class Row:
     """One horizontal band of the timeline, header and lane together."""
 
-    kind: str  # "group" | "behavior" | "hardware"
-    key: str  # group key, behaviour source, or device key
+    kind: str  # "group" | "behavior" | "hardware" | "numeric" | "pup"
+    key: str  # group key, behaviour source, device key, "nose_nest" or pup name
     label: str
     sub: str
     lane: BehaviorLane | Lane | None
@@ -242,6 +263,7 @@ class TimelineView(QWidget):
         self._markers: list = []  # copies of mk.Marker; a drag edits these
         self._marker_drag = None  # (marker, part, moved) while one is dragged
         self._snap_exclude = np.empty(0)  # the dragged marker's own edges
+        self._retrieval: RetrievalLanes | None = None
 
     # ------------------------------------------------------------------
     # loading
@@ -265,6 +287,13 @@ class TimelineView(QWidget):
     def timeline(self) -> Timeline | None:
         return self._timeline
 
+    def set_retrieval(self, lanes: RetrievalLanes | None) -> None:
+        """The pup lanes, the nose -> nest lane and the setup flags; None removes them."""
+        self._retrieval = lanes
+        self._static = None
+        self.update()
+        self.updateGeometry()
+
     def _reload(self) -> None:
         self._rebuild_codes()
         self._rebuild_snap()
@@ -283,7 +312,7 @@ class TimelineView(QWidget):
             return list(self._timeline.behavior)
         # All-blank labels (a recording without behavioral_state) would draw
         # an empty lane titled "Classifier".
-        if self._view is not None and any(self._view.labels):
+        if self._view is not None and self._view.has_labels:
             return [
                 BehaviorLane(
                     source="ethogram",
@@ -382,6 +411,10 @@ class TimelineView(QWidget):
                 min(int(np.asarray(ln.frames)[0]) for ln in lanes),
                 max(int(np.asarray(ln.frames)[-1]) for ln in lanes),
             )
+        # Nothing scored draws no lane, but the view still spans its frames: a
+        # bare video needs its playhead, zoom and pan to set a trial start.
+        if self._view is not None and len(self._view.frames):
+            return int(self._view.frames[0]), int(self._view.frames[-1])
         return 0, 0
 
     def _axis_bounds(self) -> tuple[float, float]:
@@ -439,7 +472,7 @@ class TimelineView(QWidget):
         return QRectF(HEADER_W, TOP_H, self._lane_width(), max(0.0, self.height() - TOP_H))
 
     def lane_rect(self, key: str) -> QRectF | None:
-        """Where a behaviour lane (by source) or device lane (by key) is drawn."""
+        """Where a behaviour (by source), device (by key) or retrieval lane (by key) is drawn."""
         for row in self._rows():
             if row.kind != "group" and row.key == key:
                 return QRectF(HEADER_W, row.top, self._lane_width(), row.height)
@@ -474,6 +507,18 @@ class TimelineView(QWidget):
                     title, sub = _behavior_title(lane.source)
                     rows.append(Row("behavior", lane.source, title, sub, lane, top, BEHAVIOR_H))
                     top += BEHAVIOR_H
+        if self._retrieval is not None:
+            rows.append(Row("group", "retrieval", "Retrieval", "", None, top, GROUP_H))
+            top += GROUP_H
+            if "retrieval" not in self._collapsed:
+                if self._retrieval.distance is not None:
+                    rows.append(
+                        Row("numeric", "nose_nest", "nose → nest", "cm", None, top, NUMERIC_H)
+                    )
+                    top += NUMERIC_H
+                for name, _codes in self._retrieval.pups:
+                    rows.append(Row("pup", name, name, "", None, top, PUP_H))
+                    top += PUP_H
         hardware = [
             ln
             for ln in (self._timeline.lanes if self._timeline else [])
@@ -502,6 +547,9 @@ class TimelineView(QWidget):
         boards = len({ln.board_id for ln in hardware})
         height = TOP_H + (GROUP_H + BEHAVIOR_H * len(behavior) if behavior else 0)
         height += GROUP_H * boards + HW_H * len(hardware)
+        if self._retrieval is not None:
+            height += GROUP_H + PUP_H * len(self._retrieval.pups)
+            height += NUMERIC_H if self._retrieval.distance is not None else 0
         return QSize(HEADER_W + 400, max(height, TOP_H + BEHAVIOR_H))
 
     def resizeEvent(self, event):  # noqa: N802 - Qt override
@@ -601,6 +649,7 @@ class TimelineView(QWidget):
             frozenset(self._hidden),
             id(self._timeline),
             id(self._view),
+            id(self._retrieval),
         )
         if self._static is None or self._static_key != key:
             ratio = self.devicePixelRatioF()
@@ -629,6 +678,10 @@ class TimelineView(QWidget):
                 p.fillRect(lane_rect, QColor(colors.CANVAS))
                 if row.kind == "behavior":
                     self._paint_behavior(p, row.lane, lane_rect.adjusted(0, 3, 0, -3))
+                elif row.kind == "numeric":
+                    self._paint_numeric(p, lane_rect)
+                elif row.kind == "pup":
+                    self._paint_pup(p, row, lane_rect)
                 else:
                     self._paint_hardware(p, row.lane, lane_rect)
                 self._paint_lane_header(p, row)
@@ -698,8 +751,9 @@ class TimelineView(QWidget):
         return sorted(zip(ranges, rows, strict=True), key=lambda pair: pair[1])
 
     def _paint_markers(self, p: QPainter) -> None:
-        """Ranges as bars in two stacked sub-rows, points as flags."""
-        if self._vp is None or not self._markers:
+        """Ranges as bars in two stacked sub-rows, points as flags; then the setup flags."""
+        flags = self._retrieval.flags if self._retrieval is not None else []
+        if self._vp is None or not (self._markers or flags):
             return
         row_rect = QRectF(HEADER_W, RULER_H, self._lane_width(), MARKER_H)
         p.save()
@@ -730,12 +784,8 @@ class TimelineView(QWidget):
                         marker.name or "Range", Qt.TextElideMode.ElideRight, int(room)
                     ),
                 )
-        named = self._visible_seconds() <= 90
-        for marker in (m for m in self._markers if not m.is_range):
-            x = self._x_of_seconds(marker.start_s)
-            if not row_rect.left() - 10 <= x <= row_rect.right():
-                continue
-            colour = swatch(marker.color)
+
+        def pennant(x: float, colour: QColor) -> None:
             p.fillRect(QRectF(x - 0.75, RULER_H + 2, 1.5, MARKER_H - 3), colour)
             flag = QPainterPath()
             flag.moveTo(x, RULER_H + 2)
@@ -743,9 +793,31 @@ class TimelineView(QWidget):
             flag.lineTo(x, RULER_H + 10)
             flag.closeSubpath()
             p.fillPath(flag, colour)
+
+        named = self._visible_seconds() <= 90
+        for marker in (m for m in self._markers if not m.is_range):
+            x = self._x_of_seconds(marker.start_s)
+            if not row_rect.left() - 10 <= x <= row_rect.right():
+                continue
+            pennant(x, swatch(marker.color))
             if named and marker.name:
                 p.setPen(QColor(colors.TEXT_SECONDARY))
                 p.drawText(QPointF(x + 12, RULER_H + 11), marker.name)
+        # The setup's flags look like points but never join self._markers, so
+        # marker_at cannot find them and nothing drags them. There are few, so
+        # each is named at any zoom -- unless it would overprint the one before
+        # (a trial start on the nest's first frame): then the earlier-listed
+        # flag keeps both its name and the top pennant.
+        flags = sorted(flags, key=lambda flag: flag[0])
+        xs = [self._x_of_seconds(seconds) for seconds, _label, _colour in flags]
+        for x, (_seconds, _label, colour) in reversed(list(zip(xs, flags, strict=True))):
+            pennant(x, QColor(colour))
+        clear = -np.inf
+        p.setPen(QColor(colors.TEXT_SECONDARY))
+        for x, (_seconds, label, _colour) in zip(xs, flags, strict=True):
+            if row_rect.left() - 10 <= x <= row_rect.right() and x + 12 >= clear:
+                p.drawText(QPointF(x + 12, RULER_H + 11), label)
+                clear = x + 12 + metrics.horizontalAdvance(label) + 6
         p.restore()
 
     def _paint_point_rules(self, p: QPainter) -> None:
@@ -780,6 +852,10 @@ class TimelineView(QWidget):
     def _row_colour(self, row: Row) -> QColor:
         if row.kind == "hardware":
             return lane_colour(row.lane)
+        if row.kind == "numeric":
+            return QColor(colors.NOSE)
+        if row.kind == "pup":
+            return QColor(colors.PUP)
         return QColor(colors.TEXT_TERTIARY)
 
     def _paint_lane_header(self, p: QPainter, row: Row) -> None:
@@ -787,7 +863,7 @@ class TimelineView(QWidget):
         p.setFont(self.font())
         p.setPen(QColor(colors.TEXT_PRIMARY))
         room = HEADER_W - 96
-        if row.kind == "behavior" and row.height >= 26:
+        if row.kind in ("behavior", "numeric") and row.height >= 26:
             p.drawText(
                 QRectF(10, row.top + 2, room, row.height / 2),
                 Qt.AlignmentFlag.AlignBottom,
@@ -980,13 +1056,93 @@ class TimelineView(QWidget):
             if coverage[column] > 0:
                 p.fillRect(x, colors.qcolor_with_alpha(colour, float(coverage[column])))
 
+    def _paint_pup(self, p: QPainter, row: Row, rect: QRectF) -> None:
+        """One pup's state per frame, with a ▼ where it was retrieved.
+
+        ponytail: one rect per run, so where runs are narrower than a pixel the
+        last one painted wins the column; resolve columns by majority, as
+        ``_paint_columns`` does, if contact flicker ever hides a state.
+        """
+        if self._vp is None:
+            return
+        codes = dict(self._retrieval.pups)[row.key]
+        if not len(codes):
+            return
+        inner = rect.adjusted(0, 4, 0, -4)
+        palette = [QColor(colors.PUP_STATES[s]) for s in STATES]
+        edges = np.flatnonzero(np.diff(codes)) + 1
+        starts = np.concatenate(([0], edges))
+        ends = np.concatenate((edges, [len(codes)]))
+        p.save()
+        p.setClipRect(rect)
+        for a, b in zip(starts, ends, strict=True):
+            code = int(codes[a])
+            if code < 0:
+                continue
+            x0, x1 = self.x_of_frame(int(a)), self.x_of_frame(int(b))
+            if x1 < rect.left() or x0 > rect.right():
+                continue
+            p.fillRect(QRectF(x0, inner.top(), max(1.0, x1 - x0), inner.height()), palette[code])
+        at = self._retrieval.retrieved_at.get(row.key)
+        if at is not None:
+            x = self.x_of_frame(at)
+            tick = QPainterPath()
+            tick.moveTo(x - 5, rect.top())
+            tick.lineTo(x + 5, rect.top())
+            tick.lineTo(x, rect.top() + 6)
+            tick.closeSubpath()
+            p.fillPath(tick, QColor(colors.TEXT_PRIMARY))
+        p.restore()
+
+    def _paint_numeric(self, p: QPainter, rect: QRectF) -> None:
+        """The nose's signed distance to the nest as a line; dashed at 0, the nest's edge."""
+        values = self._retrieval.distance
+        finite = values[np.isfinite(values)]
+        if self._vp is None or not finite.size:
+            return
+        inner = rect.adjusted(0, 4, 0, -4)
+        lo, hi = min(0.0, float(finite.min())), max(0.0, float(finite.max()))
+        span = (hi - lo) or 1.0
+
+        def y_of(v: float) -> float:
+            return inner.bottom() - (v - lo) / span * inner.height()
+
+        p.save()
+        p.setClipRect(rect)
+        p.setPen(QPen(QColor(colors.NEST), 1, Qt.PenStyle.DashLine))
+        p.drawLine(QPointF(rect.left(), y_of(0.0)), QPointF(rect.right(), y_of(0.0)))
+        first = max(0, self.frame_at_x(rect.left()))
+        last = min(len(values), self.frame_at_x(rect.right()) + 2)
+        # ponytail: about one sample per pixel, so a spike narrower than a
+        # column can drop out; draw each column's min and max if that matters.
+        step = max(1, (last - first) // max(1, int(rect.width())))
+        path, pen_down = QPainterPath(), False
+        for f in range(first, last, step):
+            v = values[f]
+            if not np.isfinite(v):
+                pen_down = False
+                continue
+            point = QPointF(self.x_of_frame(f), y_of(float(v)))
+            if pen_down:
+                path.lineTo(point)
+            else:
+                path.moveTo(point)
+            pen_down = True
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(QColor(colors.NOSE), 1.5))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+        p.restore()
+
     # ------------------------------------------------------------------
     # painting: live layer (every frame of playback)
 
     def paintEvent(self, _event):  # noqa: N802 - Qt override
         p = QPainter(self)
         rows = self._rows()
-        if not rows:
+        # No row is not no session: an unscored bare video has no lane yet but
+        # still needs its ruler, markers and playhead to set a trial start on.
+        if not rows and self._vp is None:
             p.fillRect(self.rect(), QColor(colors.BASE))
             p.setPen(QColor(colors.TEXT_MUTED))
             p.drawText(
@@ -1035,6 +1191,19 @@ class TimelineView(QWidget):
                     dot = self._palette[self._order.index(name) + 1]
             elif row.kind == "hardware" and ms is not None:
                 text, active = describe_value(row.lane, ms)
+            elif row.kind == "numeric":
+                values = self._retrieval.distance
+                v = values[self._frame] if 0 <= self._frame < len(values) else np.nan
+                if not np.isfinite(v):
+                    continue
+                text, active = f"{v:.1f} cm", True
+            elif row.kind == "pup":
+                codes = dict(self._retrieval.pups)[row.key]
+                code = int(codes[self._frame]) if 0 <= self._frame < len(codes) else -1
+                if code < 0:
+                    continue
+                text, active = STATES[code], True
+                dot = QColor(colors.PUP_STATES[text])
             else:
                 continue
             if row.height < 14:

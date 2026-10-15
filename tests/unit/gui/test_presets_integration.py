@@ -110,3 +110,80 @@ def test_new_preset_prompts_to_save_once(window, tmp_path, monkeypatch):
     assert asked == [1]
     assert window._core.session.metadata.run_fields == FIELDS
     assert (tmp_path / "presets" / "open-field.glider").exists()
+
+
+def test_a_built_in_preset_applies_to_the_open_experiment(window, qtbot, monkeypatch):
+    from glider.core.experiment_session import NodeConfig
+
+    s = window._core.session
+    s.metadata.name = "My rig"
+    s.metadata.protocol = "OFT-001"
+    s.add_node(NodeConfig("n1", "Delay"))
+    s._mark_clean()
+    window._open_session_review()
+    review = window._session_review_window
+    qtbot.addWidget(review)
+    window._experiment_detail_pages()
+    prompts = []
+    monkeypatch.setattr(window, "_check_save", lambda: prompts.append(1) or True)
+
+    window._run_header.builtin_preset_chosen.emit("Pup Retrieval")
+
+    assert window._core.session is s and prompts == []
+    md = s.metadata
+    assert md.experiment_type == "Pup Retrieval"
+    assert [f.label for f in md.run_fields] == ["Dam ID", "Postnatal day", "Litter size"]
+    assert md.run_values == {"dam_id": "", "postnatal_day": "", "litter_size": ""}
+    assert [n.id for n in s.flow.nodes] == ["n1"]
+    assert (md.name, md.protocol) == ("My rig", "OFT-001")
+    assert s.is_dirty
+    assert review._type_combo.currentText() == "Pup Retrieval"
+    assert window._experiment_details._protocol_combo.currentText() == "Pup Retrieval"
+    assert window._run_header._picker.text() == "Pup Retrieval ▾"
+    assert window._run_header._tags.chip("dam_id").property("need") is True
+
+
+def test_a_built_in_preset_is_refused_while_running(window, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    from glider.core.experiment_session import SessionState
+
+    told = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: told.append(a[2]))
+    s = window._core.session
+    s._state = SessionState.RUNNING
+    window._run_header.builtin_preset_chosen.emit("Open Field")
+    s._state = SessionState.IDLE  # let the window close
+    assert s.metadata.experiment_type == "" and s.metadata.run_fields == []
+    assert told == ["Stop the experiment before you switch presets."]
+
+
+def test_a_built_in_over_one_of_my_presets_detaches_it(window, tmp_path, monkeypatch):
+    """The open file is my own preset: the built-in must not end up saved into
+    it -- not by Save, and not by Edit preset fields, which saves silently."""
+    window._on_new_preset()  # my "Open field" preset, now the open file
+    mine = tmp_path / "presets" / "open-field.glider"
+    before = mine.read_bytes()
+
+    window._run_header.builtin_preset_chosen.emit("Pup Retrieval")
+
+    s = window._core.session
+    assert s.file_path is None  # Save now asks where
+    assert s.metadata.experiment_type == "Pup Retrieval"
+    new = [RunField("dam_id", "Dam ID", True)]
+    monkeypatch.setattr(
+        window, "_ask_preset_fields", lambda fields, name="", ask_name=False: ("x", new)
+    )
+    window._on_edit_preset_fields()
+    assert mine.read_bytes() == before
+    window._run_header._rebuild_menu()
+    ticked = [a.text() for a in window._run_header._menu.actions() if a.isChecked()]
+    assert ticked == ["Pup Retrieval"]
+    monkeypatch.setattr(window, "_check_save", lambda: True)  # let the window close
+
+
+def test_a_built_in_keeps_an_ordinary_experiment_file_attached(window, tmp_path):
+    s = window._core.session
+    s.save(str(tmp_path / "rig.glider"))
+    window._run_header.builtin_preset_chosen.emit("Open Field")
+    assert s.file_path == str(tmp_path / "rig.glider")

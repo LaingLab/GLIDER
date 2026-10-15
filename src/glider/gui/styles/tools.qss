@@ -751,6 +751,10 @@ QCheckBox#ToggleChip::indicator {
 QTabWidget#Inspector::pane {
     border: none;
 }
+/* Four tabs share a 300 px column: the window-wide 18 px padding would not fit them. */
+QTabWidget#Inspector > QTabBar::tab {
+    padding: 9px 10px;
+}
 QFrame#RangeCard {
     background-color: rgba(56, 189, 248, 0.07);
     border: 1px solid rgba(56, 189, 248, 0.35);

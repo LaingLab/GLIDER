@@ -16,12 +16,12 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections import Counter
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
-from PyQt6.QtCore import QPoint, QSettings, Qt, QTimer
-from PyQt6.QtGui import QBrush, QIcon, QKeySequence, QPainter, QPixmap
+from PyQt6.QtCore import QPoint, QSettings, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QIcon, QKeySequence, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -43,7 +43,27 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.analysis import markers as mk
-from glider.analysis.behavior.session_view import SessionView, SessionViewError
+from glider.analysis.behavior.retrieval_session import (
+    SessionRetrieval,
+    litter_row,
+    nest_distance_frame,
+    nose_to_pup_px,
+    pup_rows,
+    range_values,
+    score_session,
+)
+from glider.analysis.behavior.retrieval_setup import (
+    PROTOCOL_FILE,
+    RetrievalProtocol,
+    RetrievalSetup,
+    SidecarError,
+    load_protocol,
+    load_setup,
+    save_protocol,
+    save_setup,
+    setup_path,
+)
+from glider.analysis.behavior.session_view import SessionView, SessionViewError, is_video
 from glider.analysis.cohort import discover_sessions, recording_candidates, session_id_for
 from glider.analysis.epochs import (
     CURRENT,
@@ -61,12 +81,19 @@ from glider.analysis.timeline import (
     is_binary,
     lane_role,
 )
+from glider.core.experiment_types import (
+    ANALYSIS_PUP_RETRIEVAL,
+    EXPERIMENT_TYPES,
+    has_analysis,
+    type_label,
+)
 from glider.gui.review.epoch_table import EpochSession, EpochTable
 from glider.gui.review.inspector import Inspector, MarkerRow
 from glider.gui.review.marker_editor import COHORT_NEEDS_A_FOLDER, MarkerEditor
 from glider.gui.review.pool import PoolEntry, SessionPool, ethogram_strip
 from glider.gui.review.timeline import (
     TOP_H,
+    RetrievalLanes,
     TimelinePanel,
     behavior_order,
     behavior_qcolor,
@@ -230,6 +257,50 @@ def _zero_fill_across_epochs(rows_by_epoch: dict[str, list[dict]]) -> dict[str, 
     return rows_by_epoch
 
 
+_NO_PUPS = "No pup tracks: run the pup pass in Batch Pose"
+
+
+@dataclass
+class _RetrievalState:
+    """One video's retrieval sidecars as read, and what re-scoring can reuse."""
+
+    setup: RetrievalSetup
+    protocol: RetrievalProtocol
+    # Each False when its file exists but could not be read: it is never
+    # overwritten, and the other file stays editable.
+    setup_writable: bool = True
+    setup_error: str = ""
+    protocol_writable: bool = True
+    protocol_error: str = ""
+    # Nose-to-pup distances: the slow part of scoring, and independent of
+    # every setting but the nose keypoint.
+    nose_pup_px: np.ndarray | None = None
+
+
+def _with_scale(setup: RetrievalSetup, view: SessionView) -> RetrievalSetup:
+    """The setup as scored: its own scale, else the session's calibration."""
+    return replace(setup, px_per_mm=setup.px_per_mm or view.px_per_mm)
+
+
+def _retrieval_lanes(result: SessionRetrieval, setup: RetrievalSetup) -> RetrievalLanes:
+    """A score as the timeline draws it: a lane per pup, the nose -> nest line, the setup."""
+    fps = result.fps
+    flags = [(result.t0 / fps, "Trial start", colors.NOSE)]
+    flags += [(p.from_s, f"Nest {i}", colors.NEST) for i, p in enumerate(setup.nests, start=1)]
+    if result.end < result.n_frames:
+        flags.append((result.end / fps, "Cutoff", colors.ERROR))
+    return RetrievalLanes(
+        pups=[(name, result.state_codes(k)) for k, name in enumerate(result.pups)],
+        retrieved_at={
+            name: result.t0 + round(pup.retrieval_latency_s * fps)
+            for name, pup in result.pups.items()
+            if np.isfinite(pup.retrieval_latency_s)
+        },
+        distance=result.nose_nest_cm,
+        flags=flags,
+    )
+
+
 _EDIT_KEYS = {
     Qt.Key.Key_I,
     Qt.Key.Key_O,
@@ -244,6 +315,10 @@ _EDIT_KEYS = {
 
 class AnalysisWindow(QMainWindow):
     """Scrub a session, select a range, and read what is in it."""
+
+    #: The experiment's type, as the user picked it in the top bar. Setting it
+    #: from outside (:meth:`set_experiment_type`) does not announce it.
+    experiment_type_chosen = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -280,6 +355,13 @@ class AnalysisWindow(QMainWindow):
         self._marker_stores: dict[Path, mk.MarkerStore] = {}
         self._cohort_store: mk.MarkerStore | None = None
         self._editor: MarkerEditor | None = None
+        # Pup retrieval, by cohort index and cleared with the cohort: each
+        # video's sidecars, and its score or the reason it has none.
+        self._retrieval_state: dict[int, _RetrievalState] = {}
+        self._retrievals: dict[int, SessionRetrieval | str] = {}
+        # (gate, shown session) the retrieval tab and overlay were last synced
+        # for; see _apply_experiment_type.
+        self._retrieval_synced: tuple[bool, int] | None = None
 
         central = QWidget()
         central.setObjectName("ToolPage")
@@ -357,6 +439,13 @@ class AnalysisWindow(QMainWindow):
         self._inspector.export_markers_btn.clicked.connect(self._export_markers)
         self._timeline_panel.marker_btn.clicked.connect(lambda: self._add_point_marker())
         self._timeline_panel.range_marker_btn.clicked.connect(self._add_range_marker)
+        retrieval = self._inspector.retrieval
+        retrieval.set_trial_start.connect(self._set_trial_start)
+        retrieval.remove_nest.connect(self._remove_nest)
+        retrieval.redraw_nest.connect(self._redraw_nest)
+        retrieval.set_scale.connect(self._set_scale)
+        retrieval.edit_protocol.connect(self._edit_protocol)
+        retrieval.jump_to.connect(lambda s: self._set_frame(round(s * self._view.fps)))
 
         self._restore_layout()
         # Opened with parent=None, so nothing hands it the app theme.
@@ -396,6 +485,51 @@ class AnalysisWindow(QMainWindow):
         button.setMenu(menu)
         return button, actions
 
+    def set_experiment_type(self, experiment_type: str) -> None:
+        """Show *experiment_type* without announcing it (it came from outside)."""
+        experiment_type = experiment_type or ""
+        combo = self._type_combo
+        blocked = combo.blockSignals(True)
+        # A custom type (a Run-tab preset's name) gets one extra row. Drop the
+        # previous one first so switching between presets does not pile them up.
+        while combo.count() > len(EXPERIMENT_TYPES):
+            combo.removeItem(combo.count() - 1)
+        index = combo.findData(experiment_type)
+        if index < 0:
+            combo.addItem(type_label(experiment_type), experiment_type)
+            index = combo.count() - 1
+        combo.setCurrentIndex(index)
+        combo.blockSignals(blocked)
+        self._experiment_type = experiment_type
+        self._apply_experiment_type()
+
+    def _on_type_picked(self, index: int) -> None:
+        self._experiment_type = self._type_combo.itemData(index) or ""
+        self._apply_experiment_type()
+        self.experiment_type_chosen.emit(self._experiment_type)
+
+    def _has_analysis(self, key: str) -> bool:
+        """Whether the experiment's preset unlocks the analysis *key* (the one gate)."""
+        return has_analysis(self._experiment_type, key)
+
+    def _apply_experiment_type(self) -> None:
+        """Show or hide each analysis the experiment's preset unlocks. Later tasks add to this.
+
+        Runs on every keystroke in the Experiment tab's Protocol box, so it does
+        nothing unless the gate's answer or the shown session changed since
+        the last sync (_adopt syncs each session it shows).
+        """
+        gate = self._has_analysis(ANALYSIS_PUP_RETRIEVAL)
+        if (gate, self._shown) == self._retrieval_synced:
+            return
+        if gate != bool(self._retrieval_synced and self._retrieval_synced[0]):
+            for action in (self._export_retrieval_action, self._export_nest_action):
+                action.setVisible(gate)
+            # The per-range retrieval numbers come and go with the gate.
+            self._invalidate_cohort_cache()
+            self._fill_epochs()
+        self._sync_retrieval()
+
     def _build_top_bar(self) -> QFrame:
         bar = QFrame()
         bar.setObjectName("ReviewTopBar")
@@ -416,10 +550,23 @@ class AnalysisWindow(QMainWindow):
         for pill in (self._session_state, self._hw_pill, self._scale_pill):
             row.addWidget(pill)
         row.addStretch(1)
+        self._experiment_type = ""
+        self._type_combo = QComboBox()
+        self._type_combo.setToolTip(
+            "The experiment's protocol. Pup Retrieval shows retrieval scoring."
+        )
+        for experiment_type in EXPERIMENT_TYPES:
+            self._type_combo.addItem(type_label(experiment_type), experiment_type)
+        self._type_combo.currentIndexChanged.connect(self._on_type_picked)
+        type_label_widget = QLabel("Protocol")
+        type_label_widget.setBuddy(self._type_combo)
+        row.addWidget(type_label_widget)
+        row.addWidget(self._type_combo)
         self._open_btn, _ = self._menu_button(
             "Open",
             [
                 ("Open ethogram…", self._open),
+                ("Open video…", self._open_video),
                 ("Open recording folder…", self._open_recording),
                 ("Open folder as cohort…", self._open_folder),
             ],
@@ -440,10 +587,16 @@ class AnalysisWindow(QMainWindow):
                 ("Epoch table, tidy (CSV)…", lambda: self._export_epochs("tidy")),
                 ("Epoch table, wide (CSV)…", lambda: self._export_epochs("wide")),
                 ("Markers (CSV)…", self._export_markers),
+                ("Retrieval tables (CSV)…", self._export_retrieval),
+                ("Nest distance per frame (CSV)…", self._export_nest_distance),
                 ("Heatmap (PNG + CSV)…", self._export_heatmap),
             ],
         )
         self._export_window_action = export_actions[0]
+        self._export_retrieval_action, self._export_nest_action = export_actions[-3:-1]
+        # Shown under a pup-retrieval preset only (_apply_experiment_type).
+        for action in (self._export_retrieval_action, self._export_nest_action):
+            action.setVisible(False)
         self._export_heatmap_btn = export_actions[-1]
         self._export_window_action.setEnabled(False)
         self._export_heatmap_btn.setEnabled(False)
@@ -483,6 +636,8 @@ class AnalysisWindow(QMainWindow):
         )
         t.video_on.toggled.connect(self._canvas.set_show_video)
         t.poses_on.toggled.connect(self._canvas.set_show_poses)
+        t.pups_on.setVisible(False)  # shown for a pup session (_publish_retrieval)
+        t.pups_on.toggled.connect(self._canvas.set_show_pups)
         t.trail_on.toggled.connect(self._apply_trail)
         t.heatmap_on.toggled.connect(self._apply_heatmap)
         t.zones_on.toggled.connect(self._canvas.set_show_zones)
@@ -651,18 +806,25 @@ class AnalysisWindow(QMainWindow):
         if path:
             self.load(Path(path))
 
+    def _open_video(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open video", "", "Videos (*.mp4 *.avi *.mov *.mkv)"
+        )
+        if path:
+            self.load_video(Path(path))
+
     def _open_recording(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Recording folder")
         if folder:
             self.open_path(Path(folder))
 
     def open_path(self, path: Path) -> None:
-        """Open an ethogram CSV, or a recording folder."""
+        """Open an ethogram CSV, a video, or a recording folder."""
         path = Path(path)
         # Reopening must read the disk again: a recording may still be growing.
         self._recordings.clear()
         if path.is_file():
-            self.load(path)
+            (self.load_video if is_video(path) else self.load)(path)
             return
         session = self._recording(path)
         problem = None
@@ -707,6 +869,40 @@ class AnalysisWindow(QMainWindow):
         self._cohort_root = None
         self._set_cohort([(Path(ethogram_csv), view)])
 
+    def load_video(self, video: Path) -> None:
+        """Load a bare video (with its poses and pups, if the batch made them)."""
+        self._recordings.clear()
+        try:
+            view = self._view_for(video)
+        except _UNREADABLE as e:
+            QMessageBox.critical(self, "Open video", str(e))
+            return
+        self._bar.clear_selection()
+        self._cohort_root = None
+        self._set_cohort([(Path(video), view)])
+
+    def _view_for(self, path: Path, *, pose_csv: Path | None = None) -> SessionView:
+        """The one place that decides how a session path is read."""
+        path = Path(path)
+        if path.is_dir():
+            session = self._recording(path)
+            if session is None:
+                raise SessionViewError("not a readable recording")
+            return SessionView.from_recording(session)
+        if is_video(path):
+            view = SessionView.from_video(path, pose_csv=pose_csv)
+            # A scale set in the Retrieval tab is the video's scale, from the
+            # moment it loads and whatever the experiment type: applied later,
+            # cohort numbers would depend on which sessions had been visited.
+            try:
+                scale = load_setup(setup_path(path)).px_per_mm
+            except SidecarError:
+                scale = None  # the Retrieval tab says why the file is unreadable
+            if scale:
+                view.px_per_mm = scale
+            return view
+        return SessionView.load(path, pose_csv=pose_csv)
+
     def _open_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Folder of sessions")
         if folder:
@@ -732,13 +928,7 @@ class AnalysisWindow(QMainWindow):
         loaded, ids, groups, failed = [], [], [], []
         for source in sources:
             try:
-                if source.path.is_dir():
-                    session = self._recording(source.path)
-                    if session is None:
-                        raise SessionViewError("not a readable recording")
-                    view = SessionView.from_recording(session)
-                else:
-                    view = SessionView.load(source.path)
+                view = self._view_for(source.path)
             except _UNREADABLE as e:  # one bad session must not lose the rest
                 failed.append(f"{source.session_id}: {e}")
                 continue
@@ -763,7 +953,7 @@ class AnalysisWindow(QMainWindow):
         failed: list[str] = []
         for path in ethograms:
             try:
-                loaded.append((path, SessionView.load(path)))
+                loaded.append((path, self._view_for(path)))
             except _UNREADABLE as e:  # one bad file must not lose the rest
                 failed.append(f"{path.parent.name}: {e}")
         if not loaded:
@@ -808,6 +998,7 @@ class AnalysisWindow(QMainWindow):
         self._cohort, self._ids, self._groups = loaded, ids, groups
         self._invalidate_cohort_cache()
         self._marker_stores = {}
+        self._retrieval_state, self._retrievals = {}, {}
         self._cohort_store = cohort_store
         self._timelines = [timeline for timeline, _ in built]
         self._recordings_of = [recording for _, recording in built]
@@ -845,12 +1036,15 @@ class AnalysisWindow(QMainWindow):
         index = self._shown
         path, old = self._cohort[index]
         try:
-            view = SessionView.load(path, pose_csv=pose_csv or old.pose_path)
+            view = self._view_for(path, pose_csv=pose_csv or old.pose_path)
         except _UNREADABLE as e:
             QMessageBox.critical(self, "Open session", str(e))
             return
         self._cohort[index] = (path, view)
         self._timelines[index], self._recordings_of[index] = self._timeline_for(path, view)
+        # New poses may move the nose; the scale is re-read with the view.
+        self._retrieval_state.pop(index, None)
+        self._retrievals.pop(index, None)
         self._invalidate_cohort_cache()
         self._fill_pool(index)
         self._show_session(index)
@@ -971,13 +1165,17 @@ class AnalysisWindow(QMainWindow):
         lanes = timeline.lanes if timeline is not None else []
         self._hw_pill.setVisible(bool(lanes))
         self._hw_pill.set_state("ok", f"Hardware · {len(lanes)} lanes")
-        self._scale_pill.setVisible(True)
-        if view.px_per_mm:
-            self._scale_pill.set_state("idle", f"{view.px_per_mm:.2f} px/mm")
-        else:
-            self._scale_pill.set_state("warn", "Uncalibrated")
+        self._sync_retrieval()
+        self._show_scale()
 
-        # Body of the old summary text, unchanged, but set on the Session tab:
+        self._show_session_text(path, view)
+        self._update_status()
+        self._publish_markers()
+
+    def _show_session_text(self, path: Path, view: SessionView) -> None:
+        """The Session tab: what was found for the session, and what is missing."""
+        is_recording = Path(path).is_dir()
+        has_video = view.video_path is not None
         found = f"  Poses: {view.pose_path.name}." if view.pose_path else "  No poses found."
         if is_recording:
             found = (
@@ -999,8 +1197,427 @@ class AnalysisWindow(QMainWindow):
             + found
             + ("" if view.px_per_mm else "  No calibration found: distances unavailable.")
         )
-        self._update_status()
-        self._publish_markers()
+
+    def _show_scale(self) -> None:
+        self._scale_pill.setVisible(True)
+        if self._view.px_per_mm:
+            self._scale_pill.set_state("idle", f"{self._view.px_per_mm:.2f} px/mm")
+        else:
+            self._scale_pill.set_state("warn", "Uncalibrated")
+
+    # ------------------------------------------------------------------
+    # pup retrieval
+
+    def _sync_retrieval(self) -> None:
+        """The Retrieval tab: shown under a pup-retrieval preset, filled for the shown session.
+
+        Runs on every session shown, so it only reads the score cache; nothing
+        is re-scored unless a setup changed.
+        """
+        gate = self._has_analysis(ANALYSIS_PUP_RETRIEVAL)
+        self._retrieval_synced = (gate, self._shown)
+        on = gate and 0 <= self._shown < len(self._cohort)
+        self._inspector.set_retrieval_visible(on)
+        if on:
+            self._show_retrieval()
+        else:
+            self._publish_retrieval()  # takes the last session's pups off the video
+
+    def _retrieval_folder(self, index: int | None = None) -> Path:
+        """Where ``retrieval_protocol.json`` lives: the cohort root, else the video's folder."""
+        if self._cohort_root is not None:
+            return self._cohort_root
+        return self._session_folder(self._shown if index is None else index)
+
+    def _state(self, index: int) -> _RetrievalState:
+        """A video's retrieval sidecars, read once per cohort.
+
+        A file that exists but cannot be read leaves what it holds read-only,
+        with the reason on the tab, and is never written over.
+        """
+        state = self._retrieval_state.get(index)
+        if state is not None:
+            return state
+        state = _RetrievalState(RetrievalSetup(), RetrievalProtocol())
+        try:
+            state.setup = load_setup(setup_path(self._cohort[index][0]))
+        except SidecarError as e:
+            state.setup_writable, state.setup_error = False, str(e)
+        try:
+            state.protocol = load_protocol(self._retrieval_folder(index))
+        except SidecarError as e:
+            state.protocol_writable, state.protocol_error = False, str(e)
+        self._retrieval_state[index] = state
+        return state
+
+    @staticmethod
+    def _nose_xy(view: SessionView, protocol: RetrievalProtocol) -> np.ndarray | None:
+        """The dam's nose, (F, 2) px, or None if the pose has no such keypoint."""
+        if view.xy is None or protocol.nose_keypoint not in view.keypoint_names:
+            return None
+        return view.xy[:, view.keypoint_names.index(protocol.nose_keypoint), :]
+
+    def _retrieval_for(self, index: int) -> SessionRetrieval | None:
+        """The session's score, or None -- ``self._retrievals[index]`` then says why."""
+        if index not in self._retrievals:
+            self._retrievals[index] = self._score(index)
+        result = self._retrievals[index]
+        return None if isinstance(result, str) else result
+
+    def _score_cohort(self) -> None:
+        """Score every pup session not scored yet, under a wait cursor.
+
+        The nose-to-pup pass takes ~0.3 s a session on this thread, so a
+        cohort-wide table or export would otherwise freeze the window for
+        seconds with no sign why -- and a force-quit takes GLIDER with it.
+        ponytail: no worker thread; the score cache makes it once per session.
+        """
+        pending = [
+            index
+            for index, (_path, view) in enumerate(self._cohort)
+            if view.pups is not None and index not in self._retrievals
+        ]
+        if not pending:
+            return
+        text = f"Scoring {len(pending)} session{'s' if len(pending) != 1 else ''}…"
+        bar = self.statusBar()
+        bar.showMessage(text)
+        bar.repaint()  # now: the scoring holds the event loop until it is done
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for index in pending:
+                self._retrieval_for(index)
+        finally:
+            QApplication.restoreOverrideCursor()
+            if bar.currentMessage() == text:
+                bar.clearMessage()
+
+    def _score(self, index: int) -> SessionRetrieval | str:
+        view = self._cohort[index][1]
+        if view.pups is None:
+            return _NO_PUPS
+        state = self._state(index)
+        if not state.protocol_writable:
+            return state.protocol_error  # never scored under rules nobody chose
+        if view.resolution is None:
+            return "No video frame size"
+        setup = _with_scale(state.setup, view)
+        nose = self._nose_xy(view, state.protocol)
+        # The nose-to-pup distances take ~0.5 s, so only for a setup that can
+        # score; otherwise score_session says what is missing without them.
+        ready = setup.nests and setup.trial_start_s is not None and (setup.px_per_mm or 0) > 0
+        if ready and nose is not None and state.nose_pup_px is None:
+            state.nose_pup_px = nose_to_pup_px(view.pups, nose)
+        try:
+            return score_session(
+                view.pups,
+                nose,
+                fps=view.fps,
+                size=view.resolution,
+                setup=setup,
+                protocol=state.protocol,
+                nose_pup_px=state.nose_pup_px,
+            )
+        # NotScorable is one; the rest are a setup that read fine but cannot
+        # be measured (a nest outline that covers no pixel of the frame), and
+        # an exception escaping a Qt slot would end GLIDER.
+        except ValueError as e:
+            return str(e)
+
+    def _show_retrieval(self) -> None:
+        """Fill the Retrieval tab for the shown session, from the score cache."""
+        index = self._shown
+        view = self._cohort[index][1]
+        panel = self._inspector.retrieval
+        result = self._retrieval_for(index)
+        if view.pups is None:
+            panel.show_setup(
+                RetrievalSetup(), RetrievalProtocol(), writable=False, protocol_writable=False
+            )
+        else:
+            state = self._state(index)
+            # An unreadable protocol is the score's reason (_score), not repeated here.
+            panel.show_setup(
+                _with_scale(state.setup, view),
+                state.protocol,
+                writable=state.setup_writable,
+                protocol_writable=state.protocol_writable,
+                error=state.setup_error,
+                n_pups=view.pups.n_pups,
+            )
+        panel.show_result(result, "" if result is not None else self._retrievals[index])
+        self._publish_retrieval()
+
+    def _publish_retrieval(self) -> None:
+        """Hand the shown score to the viewer and the timeline. Later tasks add to this.
+
+        The viewer draws the nest in force, each pup and the nose line, under a
+        pup-retrieval preset for a session with pups only; anything else gets
+        an empty overlay and no Pups toggle. The timeline gets pup lanes only
+        for a scored session under that preset. The HUD is redrawn either way.
+        """
+        shown = 0 <= self._shown < len(self._cohort)
+        view = self._cohort[self._shown][1] if shown else None
+        on = (
+            view is not None
+            and view.pups is not None
+            and self._has_analysis(ANALYSIS_PUP_RETRIEVAL)
+        )
+        self._transport.pups_on.setVisible(on)
+        lanes = None
+        if on:
+            state = self._state(self._shown)
+            result = self._retrievals.get(self._shown)
+            result = None if isinstance(result, str) else result
+
+            def nest_at(frame: int):
+                period = state.setup.nest_at(frame / view.fps)
+                return None if period is None else period.zone
+
+            self._canvas.set_retrieval(view.pups, result, nest_at)
+            if result is not None:
+                lanes = _retrieval_lanes(result, state.setup)
+        else:
+            self._canvas.set_retrieval(None, None, None)
+        self._bar.set_retrieval(lanes)
+        self._canvas.set_hud(self._hud_behavior(), self._hud_chips())
+
+    def _refresh_retrieval(self) -> None:
+        """Re-score the shown session after its setup changed, and show it."""
+        self._retrievals.pop(self._shown, None)
+        self._invalidate_cohort_cache()
+        self._show_retrieval()
+
+    def _editable_state(self) -> _RetrievalState | None:
+        """The shown video's retrieval state if its setup may be changed, else None."""
+        if not 0 <= self._shown < len(self._cohort) or self._view.pups is None:
+            return None
+        state = self._state(self._shown)
+        return state if state.setup_writable else None
+
+    def _save_setup(self, index: int, failures: list[str] | None = None) -> bool:
+        """Write the session's setup file; False if it could not be.
+
+        Why goes in a dialog, or onto *failures* for the caller to show once:
+        a whole-cohort Set scale must not pop one dialog per session.
+        """
+        state = self._state(index)
+        if not state.setup_writable:
+            return False
+        path = setup_path(self._cohort[index][0])
+        try:
+            save_setup(path, state.setup)
+        except OSError as e:
+            reason = f"Could not save {path.name}: {e}"
+            if failures is None:
+                QMessageBox.critical(self, "Retrieval", reason)
+            else:
+                failures.append(reason)
+            return False
+        return True
+
+    def _set_trial_start(self) -> None:
+        """The playhead becomes the trial start, in seconds from the video's first frame."""
+        state = self._editable_state()
+        if state is None:
+            return
+        state.setup.trial_start_s = round(self._frame / self._view.fps, 3)
+        self._save_setup(self._shown)
+        self._refresh_retrieval()
+
+    def _remove_nest(self, period: int) -> None:
+        state = self._editable_state()
+        if state is None or not 0 <= period < len(state.setup.nests):
+            return
+        state.setup.remove_nest(period)
+        self._save_setup(self._shown)
+        self._refresh_retrieval()
+
+    def _run_zone_dialog(self, frame, config):
+        """The zone editor on *frame*: the edited *config*, or None if cancelled."""
+        from glider.gui.dialogs.zone_dialog import ZoneDialog
+
+        dialog = ZoneDialog(None, config, parent=self, frame=frame)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return None
+            return dialog.get_zone_configuration()
+        finally:
+            dialog.deleteLater()
+
+    def _redraw_nest(self) -> None:
+        """The nest outlined on the frame on screen, in force from the playhead on.
+
+        A dam drags her nest, so each redraw adds a period rather than
+        replacing the outline; the first one always runs from 0:00.
+        """
+        state = self._editable_state()
+        if state is None:
+            return
+        frame = self._canvas.current_frame()
+        if frame is None:
+            QMessageBox.warning(
+                self,
+                "Nest",
+                "The nest is drawn on a video frame, and this video could not be read.",
+            )
+            return
+        from glider.vision.zones import Zone, ZoneConfiguration
+
+        t = round(self._frame / self._view.fps, 3)
+        current = state.setup.nest_at(t)
+        # The dialog edits its config in place: hand it a copy, so a
+        # cancelled edit leaves the saved outline as it was.
+        config = ZoneConfiguration(
+            zones=[Zone.from_dict(current.zone.to_dict())] if current else []
+        )
+        result = self._run_zone_dialog(frame, config)
+        if result is None or not result.zones:
+            return
+        # The dialog only adds zones, so the outline just drawn is the last one;
+        # the seeded copy keeps its id, so OK without drawing is no change.
+        drawn = result.zones[-1]
+        if current is not None and drawn.id == current.zone.id:
+            return
+        state.setup.set_nest(t, drawn)
+        self._save_setup(self._shown)
+        self._refresh_retrieval()
+
+    def _run_scale_dialog(self, video: Path) -> tuple[float, bool] | None:
+        """Lines measured on *video*: ``(px_per_mm, for_the_whole_cohort)``, or None."""
+        from glider.gui.dialogs.calibration_dialog import CalibrationDialog
+        from glider.vision.calibration import CameraCalibration
+        from glider.vision.frame_provider import VideoFrameProvider
+
+        provider = VideoFrameProvider(video)
+        if not provider.is_connected:
+            provider.release()
+            QMessageBox.warning(self, "Set scale", f"{video.name} could not be opened.")
+            return None
+        dialog = None
+        try:
+            dialog = CalibrationDialog(
+                frame_provider=provider,
+                calibration=CameraCalibration(),
+                parent=self,
+                show_file_buttons=False,
+            )
+            dialog.setWindowTitle(f"Set scale — {video.name}")
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return None
+            calibration = dialog.get_calibration()
+        finally:
+            if dialog is not None:
+                dialog.deleteLater()
+            provider.release()
+        px_per_mm = float(calibration.pixels_per_mm) if calibration.is_calibrated else 0.0
+        if px_per_mm <= 0:
+            return None
+        # Asked after the measuring rather than as a box inside it: the
+        # calibration dialog is shared with the rig and the batch tool.
+        whole = sum(view.pups is not None for _path, view in self._cohort) > 1 and (
+            QMessageBox.question(
+                self,
+                "Set scale",
+                f"Use {px_per_mm:.2f} px/mm for every session in this cohort?",
+                defaultButton=QMessageBox.StandardButton.Yes,
+            )
+            == QMessageBox.StandardButton.Yes
+        )
+        return px_per_mm, whole
+
+    def _set_scale(self) -> None:
+        """Measure the scale on the shown video, for it or for every pup video in the cohort.
+
+        Each video keeps the scale in its own setup, and its view takes it now:
+        showing a session never applies one (see _view_for).
+        """
+        if self._editable_state() is None:
+            return
+        answer = self._run_scale_dialog(Path(self._cohort[self._shown][0]))
+        if answer is None:
+            return
+        px_per_mm, whole_cohort = answer
+        set_for, kept, unsaved, failures = 0, [], [], []
+        for index in range(len(self._cohort)) if whole_cohort else [self._shown]:
+            view = self._cohort[index][1]
+            if view.pups is None:
+                continue
+            state = self._state(index)
+            if not state.setup_writable:
+                # Its file is never overwritten, and a scale held only in
+                # memory would disagree with that file on the next load.
+                kept.append(self._ids[index])
+                continue
+            old = state.setup.px_per_mm
+            state.setup.px_per_mm = px_per_mm
+            if not self._save_setup(index, failures):
+                state.setup.px_per_mm = old  # likewise: memory agrees with the file
+                unsaved.append(self._ids[index])
+                continue
+            view.px_per_mm = px_per_mm
+            self._retrievals.pop(index, None)
+            set_for += 1
+        self._refresh_retrieval()  # also drops the cohort's rows, measured at the old scale
+        self._show_scale()
+        self._show_session_text(*self._cohort[self._shown])
+        selection = self._bar.selection()
+        if selection is not None:
+            self._on_selection(*selection)  # its distances were in the old scale too
+        else:
+            self._fill_epochs()
+        # After the refill, which may score the cohort under its own message.
+        message = f"Scale set for {set_for} session{'s' if set_for != 1 else ''}"
+        if kept:
+            whose = "its retrieval file" if len(kept) == 1 else "their retrieval files"
+            message += f"; kept the old scale for {', '.join(kept)} ({whose} could not be read)"
+        if unsaved:
+            message += f"; could not save the scale for {', '.join(unsaved)}"
+        self.statusBar().showMessage(message, 15000)
+        if failures:
+            QMessageBox.critical(self, "Set scale", "\n".join(failures))
+
+    def _run_protocol_dialog(self, protocol: RetrievalProtocol, keypoints: list[str]):
+        """The protocol as edited, or None if cancelled."""
+        from glider.gui.review.protocol_dialog import ProtocolDialog
+
+        dialog = ProtocolDialog(protocol, keypoints, self._retrieval_folder(), parent=self)
+        try:
+            return dialog.protocol() if dialog.exec() == QDialog.DialogCode.Accepted else None
+        finally:
+            dialog.deleteLater()
+
+    def _edit_protocol(self) -> None:
+        """Edit the rules every video in the protocol's folder is scored by, and re-score."""
+        if not 0 <= self._shown < len(self._cohort) or self._view.pups is None:
+            return
+        state = self._state(self._shown)
+        if not state.protocol_writable:
+            self.statusBar().showMessage(state.protocol_error, 8000)
+            return
+        new = self._run_protocol_dialog(state.protocol, list(self._view.keypoint_names))
+        if new is None:
+            return
+        folder = self._retrieval_folder()
+        try:
+            save_protocol(folder, new)
+        except OSError as e:
+            QMessageBox.critical(
+                self, "Retrieval thresholds", f"Could not save {PROTOCOL_FILE}: {e}"
+            )
+            return
+        # Sessions opened one by one can come from different folders, each
+        # with its own file; only those read from this one follow it.
+        for index, other in self._retrieval_state.items():
+            if self._retrieval_folder(index) != folder:
+                continue
+            if other.protocol.nose_keypoint != new.nose_keypoint:
+                other.nose_pup_px = None  # measured from the old nose
+            other.protocol = new
+        self._retrievals.clear()
+        self._refresh_retrieval()
+
+    # ------------------------------------------------------------------
 
     def _update_status(self) -> None:
         view = self._view
@@ -1337,19 +1954,49 @@ class AnalysisWindow(QMainWindow):
         return f"{label}  {seconds_in:.2f} s in", behavior_qcolor(label, self._bar.behavior_order())
 
     def _hud_chips(self) -> list:
-        """Every output the rig is driving on this frame. Inputs are not a HUD's job."""
-        timeline = self._bar.timeline()
-        if timeline is None or not self._bar.uses_ms():
-            return []
-        ms = self._bar.axis_of_frame(self._frame)
+        """Every output the rig is driving on this frame, then the pups. Inputs are not a HUD's job."""
         chips = []
-        for lane in timeline.lanes:
-            if lane_role(lane) == "input":
-                continue
-            text, active = describe_value(lane, ms)
-            if active:
-                label = lane.label if is_binary(lane) else f"{lane.label} {text}"
-                chips.append((label, lane_colour(lane)))
+        timeline = self._bar.timeline()
+        if timeline is not None and self._bar.uses_ms():
+            ms = self._bar.axis_of_frame(self._frame)
+            for lane in timeline.lanes:
+                if lane_role(lane) == "input":
+                    continue
+                text, active = describe_value(lane, ms)
+                if active:
+                    label = lane.label if is_binary(lane) else f"{lane.label} {text}"
+                    chips.append((label, lane_colour(lane)))
+        return chips + self._retrieval_chips()
+
+    def _retrieval_chips(self) -> list:
+        """The pups carried on this frame and the nose's distance from the nest.
+
+        Also bolds the carried pups' rows on the Retrieval tab, so the table
+        and the HUD agree on every frame. Read from the score cache only:
+        scrubbing never scores.
+        """
+        f = self._frame
+        r = (
+            self._retrievals.get(self._shown)
+            if self._has_analysis(ANALYSIS_PUP_RETRIEVAL)
+            else None
+        )
+        if isinstance(r, str) or (r is not None and not 0 <= f < r.n_frames):
+            r = None
+        carried = (
+            []
+            if r is None
+            else [name for name, p in r.pups.items() if f < len(p.carried) and p.carried[f]]
+        )
+        self._inspector.retrieval.highlight_carried(set(carried))
+        if r is None:
+            return []
+        chips = [(f"{name} carried", QColor(colors.CARRY)) for name in carried]
+        d = r.nose_nest_cm[f]
+        if np.isfinite(d):
+            # Signed: inside reads as how deep, which "-0.4 cm from" garbles.
+            text = "nose in nest" if d <= 0 else f"nose {d:.1f} cm from nest"
+            chips.append((text, QColor(colors.NEST)))
         return chips
 
     def _choose_pose_csv(self) -> None:
@@ -1454,18 +2101,29 @@ class AnalysisWindow(QMainWindow):
         path = Path(self._cohort[index][0])
         return path if path.is_dir() else path.parent
 
+    def _marker_file(self, index: int) -> Path:
+        """``<stem>.review_markers.json`` for a video; the folder's file otherwise.
+
+        Several videos share a folder (a retrieval pre and post), so a video's
+        markers cannot be the folder's.
+        """
+        path = Path(self._cohort[index][0])
+        if path.is_file() and is_video(path):
+            return path.with_name(f"{path.stem}.{mk.SESSION_FILE}").resolve()
+        return (self._session_folder(index) / mk.SESSION_FILE).resolve()
+
     def _session_store(self, index: int | None = None) -> mk.MarkerStore | None:
         """The shown (or given) session's marker file, opened once per cohort."""
         index = self._shown if index is None else index
         if not 0 <= index < len(self._cohort):
             return None
-        folder = self._session_folder(index).resolve()
-        store = self._marker_stores.get(folder)
+        file = self._marker_file(index)
+        store = self._marker_stores.get(file)
         if store is None:
             timeline = self._timeline_at(index)
             # A file saved on another zero opens read-only and says so.
-            store = self._open_store(folder / mk.SESSION_FILE, t0=mk.t0_of(timeline))
-            self._marker_stores[folder] = store
+            store = self._open_store(file, t0=mk.t0_of(timeline))
+            self._marker_stores[file] = store
         return store
 
     def _shown_markers(self) -> list:
@@ -1963,6 +2621,8 @@ class AnalysisWindow(QMainWindow):
         cached = self._cohort_cache.get(key)
         if cached is not None:
             return cached
+        if self._has_analysis(ANALYSIS_PUP_RETRIEVAL):
+            self._score_cohort()  # each row's retrieval columns need its score
         rows = [self._session_row(i, start_s, end_s) for i in range(len(self._cohort))]
         # An animal that never showed a behaviour in the range showed it for
         # 0 s: a measurement, not a gap.
@@ -2046,7 +2706,20 @@ class AnalysisWindow(QMainWindow):
             },
             **self._zone_columns(start, end, view),
             **self._hardware_columns(timeline, view.fps, start, end),
+            **self._retrieval_columns(index, start, end),
         }
+
+    def _retrieval_columns(self, index: int, start: int, end: int) -> dict:
+        """Pups retrieved, dam in nest and nose to nest over frames ``[start, end]``.
+
+        Only for a scored pup session under a pup-retrieval preset; any other
+        row has no such keys, so the epoch table offers them only when some
+        session can answer.
+        """
+        if not self._has_analysis(ANALYSIS_PUP_RETRIEVAL) or self._cohort[index][1].pups is None:
+            return {}
+        result = self._retrieval_for(index)
+        return {} if result is None else range_values(result, start, end + 1)
 
     @staticmethod
     def _hardware_columns(timeline, fps: float, start: int, end: int) -> dict:
@@ -2113,6 +2786,90 @@ class AnalysisWindow(QMainWindow):
             QMessageBox.critical(self, "Export window", f"Could not write {path}: {e}")
             return
         self.statusBar().showMessage(f"Wrote {path}", 10000)
+
+    def _scored_for_export(self, title: str):
+        """Ask for a folder; then it, each scored pup session by index, and what was skipped.
+
+        None when the dialog is cancelled or nothing is scored. A session with
+        no pups is not a retrieval session and is left out silently; one that
+        has pups but no score is named in the status line with its reason.
+        """
+        folder = QFileDialog.getExistingDirectory(self, f"Export {title.lower()}")
+        if not folder:
+            return None
+        self._score_cohort()
+        scored, skipped = [], []
+        for index, (_path, view) in enumerate(self._cohort):
+            if view.pups is None:
+                continue
+            result = self._retrieval_for(index)
+            if result is None:
+                skipped.append(f"{self._ids[index]} ({self._retrievals[index]})")
+            else:
+                scored.append((index, result))
+        if not scored:
+            QMessageBox.information(self, title, "No session is scored yet.\n" + "\n".join(skipped))
+            return None
+        return Path(folder), scored, f"; skipped {', '.join(skipped)}" if skipped else ""
+
+    def _export_retrieval(self) -> None:
+        """``retrieval.csv``, a row per pup per session; ``retrieval_litter.csv``, one per session."""
+        picked = self._scored_for_export("Retrieval tables")
+        if picked is None:
+            return
+        folder, scored, note = picked
+        import pandas as pd
+
+        pups, litters = [], []
+        for index, result in scored:
+            state = self._state(index)
+            kw = {
+                "session_id": self._ids[index],
+                "group": self._groups[index] if index < len(self._groups) else "",
+                # The scale it was scored with: the setup's, else the calibration.
+                "setup": _with_scale(state.setup, self._cohort[index][1]),
+                "protocol": state.protocol,
+            }
+            pups += pup_rows(result, **kw)
+            litters.append(litter_row(result, **kw))
+        try:
+            pd.DataFrame(pups).to_csv(folder / "retrieval.csv", index=False)
+            pd.DataFrame(litters).to_csv(folder / "retrieval_litter.csv", index=False)
+        except OSError as e:
+            QMessageBox.critical(self, "Retrieval tables", f"Could not write to {folder}: {e}")
+            return
+        self.statusBar().showMessage(
+            f"Wrote retrieval.csv and retrieval_litter.csv to {folder}{note}", 10000
+        )
+
+    def _export_nest_distance(self) -> None:
+        """``<stem>_nest_distance.csv`` per scored session: every frame, the nose and each pup."""
+        picked = self._scored_for_export("Nest distance per frame")
+        if picked is None:
+            return
+        folder, scored, note = picked
+        # run_a/m01.avi and run_b/m01.avi share a stem, and M01 is m01 to APFS
+        # and NTFS: the first scored session keeps its stem, a later one takes
+        # the first " (n)" not yet written in this export -- checked casefolded
+        # and against generated names too, which _unique does not do.
+        taken: set[str] = set()
+        try:
+            for index, result in scored:
+                stem = name = self._cohort[index][0].stem
+                n = 1
+                while name.casefold() in taken:
+                    n += 1
+                    name = f"{stem} ({n})"
+                taken.add(name.casefold())
+                nest_distance_frame(result).to_csv(
+                    folder / f"{name}_nest_distance.csv", index=False
+                )
+        except OSError as e:
+            QMessageBox.critical(self, "Nest distance", f"Could not write to {folder}: {e}")
+            return
+        self.statusBar().showMessage(
+            f"Wrote {len(scored)} nest distance file(s) to {folder}{note}", 10000
+        )
 
     def _epochs(self) -> list[Epoch]:
         """The cohort's range markers in time order, then the current range.

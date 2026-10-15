@@ -1,6 +1,8 @@
 """Writes that must never destroy what was there (review 2026-09-28: A2, A11, A-suspects)."""
 
 import os
+import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -8,6 +10,7 @@ import pytest
 from glider.core import device_library
 from glider.core.data_recorder import DataRecorder
 from glider.core.experiment_session import ExperimentSession, NodeConfig
+from glider.core.fileio import atomic_write_bytes, atomic_write_text
 from glider.core.hardware_manager import HardwareManager
 from glider.core.project import Project, ProjectError
 
@@ -64,3 +67,28 @@ async def test_a_rerun_in_the_same_second_does_not_overwrite_the_csv(tmp_path):
 
     assert a != b
     assert os.path.exists(a) and os.path.exists(b)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_a_rewrite_keeps_the_existing_file_mode(tmp_path):
+    path = tmp_path / "shared.bin"
+    path.write_bytes(b"old")
+    os.chmod(path, 0o640)
+    atomic_write_bytes(path, b"new")
+    assert path.read_bytes() == b"new"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_a_new_file_gets_the_umask_default_mode_not_private(tmp_path):
+    path = tmp_path / "fresh.bin"
+    atomic_write_bytes(path, b"x")
+    umask = os.umask(0)
+    os.umask(umask)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o666 & ~umask
+
+
+def test_atomic_write_text_writes_what_text_mode_wrote(tmp_path):
+    path = tmp_path / "config.json"
+    atomic_write_text(path, "a\nb\n")
+    assert path.read_bytes() == "a\nb\n".replace("\n", os.linesep).encode("utf-8")

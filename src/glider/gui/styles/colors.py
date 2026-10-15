@@ -127,6 +127,14 @@ BEHAVIOR_IMMOBILE = "#FFFF00"
 BEHAVIOR_MOVING = "#00FF00"
 BEHAVIOR_DARTING = "#FF0000"
 
+# === Pup retrieval (Session Review overlays, lanes and the Retrieval tab) ===
+NEST = "#e0b44a"
+PUP = "#ec7fae"
+CARRY = "#a98be8"
+NOSE = "#6fb0e0"
+# One colour per retrieval_session.STATES entry.
+PUP_STATES = {"out": "#2b3746", "contact": "#6fb0e0", "carried": "#a98be8", "in nest": "#e0b44a"}
+
 # === QColor versions for QPainter usage ===
 Q_CANVAS = QColor(CANVAS)
 Q_CHROME = QColor(CHROME)

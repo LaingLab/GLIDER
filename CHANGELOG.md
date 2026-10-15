@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pup retrieval scoring.** A **Pup Retrieval** protocol (picked in the
+  Experiment form's **Protocol** dropdown, by the Run tab's built-in Pup
+  Retrieval preset, or in Session Review's new **Protocol** selector, one value
+  shared by all three) switches on the scoring described below; every other
+  experiment sees none of it. The Experiment form's Protocol box is now that
+  dropdown, with the old Type box merged into it; the free-text protocol it used
+  to hold stays in saved files and recording headers but is no longer shown.
+  Protocols are a table of presets, each listing the analyses it unlocks, so a
+  future analysis (Open Field, say) is one new entry. The Run tab's preset menu
+  ships two built-in presets, **Pup Retrieval** (Dam ID, Postnatal day, Litter
+  size) and **Open Field** (Animal ID, Group), which set the open experiment's
+  protocol and run fields and leave its flow and devices alone. Under Pup
+  Retrieval the Batch Pose window can also run a semantic pup segmentation model
+  and track every pup through each video (`<video>_pups.npz`). Session Review
+  opens a bare video (Open video…, for any protocol) or a folder of them as a
+  cohort, and under Pup Retrieval a new Retrieval tab sets the nest (redrawn from
+  the playhead when the dam moves it), the trial start and the scale, then scores
+  each pup's contact and retrieval latency, carries and drops against cohort-wide
+  thresholds (**Thresholds…**, saved as `retrieval_protocol.json`; default cutoff
+  5 min). Pups,
+  the nest and the dam's nose are drawn on the video; the timeline gets a state
+  lane for each pup and one for the nose's distance to the nest; and pups
+  retrieved, dam in nest and nose-to-nest distance join the epoch table and range
+  CSV. `retrieval.csv`, `retrieval_litter.csv` and per-frame `_nest_distance.csv`
+  export the cohort.
 - **One command installs GLIDER from source**, and running it again updates it:
   `install.sh` on macOS, Linux and the Raspberry Pi, `install.ps1` on Windows.
   It installs uv and git when they are missing, puts GLIDER in `~/glider` (or

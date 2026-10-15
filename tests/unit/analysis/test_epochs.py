@@ -169,3 +169,10 @@ def test_nan_in_state_duration_returns_none_not_nan():
     row = _row("m01", distance=None, freezing_s=math.nan)
     assert metric_value(row, "freezing_pct") is None
     assert metric_text(row, Metric("freezing_pct", "Freezing %", 1)) == "—"
+
+
+def test_retrieval_metrics_join_the_catalog_only_when_present():
+    row = {"pups_retrieved": 1, "dam_in_nest_frac": 0.4, "nose_nest_mean_cm": 3.0}
+    keys = [m.key for m in metric_catalog([row])]
+    assert {"pups_retrieved", "dam_in_nest_frac", "nose_nest_mean_cm"} <= set(keys)
+    assert "pups_retrieved" not in [m.key for m in metric_catalog([{}])]

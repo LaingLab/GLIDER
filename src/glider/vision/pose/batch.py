@@ -616,6 +616,9 @@ def run_batch(
     min_fragment_frames: int = 5,
     identity_min_separation_px: float = 60.0,
     infer_tracks: Callable[..., PoseTracks] | None = None,
+    pup_model: Path | None = None,
+    litter_size: int = 0,
+    track_pups_fn: Callable[..., Path] | None = None,
 ) -> BatchResult:
     """Run a pose model over ``videos``, writing a DLC CSV beside each one.
 
@@ -661,6 +664,18 @@ def run_batch(
         Injection point for tests; defaults to
         :func:`glider.vision.pose.core.infer_video_tracks`. Unused when
         ``n_animals`` is 1.
+    pup_model, litter_size
+        With a model and a litter of at least one, each video the pose pass
+        completed *or skipped* also gets the semantic pup model run over it,
+        writing ``<stem>_pups.npz``. Skipped videos are included so a resumed
+        batch can add pups to footage whose pose is already done. An existing
+        pups file is kept unless ``overwrite``, with a ``SKIPPED`` event whose
+        message starts ``pups: ``. A pup failure is reported
+        (``failed``, ``FAILED`` event, message prefixed ``pups: ``) but never
+        costs the pose output.
+    track_pups_fn
+        Injection point for tests; defaults to
+        :func:`glider.vision.pose.pups.track_video_pups`.
 
     Raises
     ------
@@ -698,6 +713,11 @@ def run_batch(
 
         infer_tracks = infer_video_tracks
 
+    if track_pups_fn is None:
+        from glider.vision.pose.pups import track_video_pups
+
+        track_pups_fn = track_video_pups
+
     # Fail fast: a misconfigured CUDA install or a missing GPU under
     # require_gpu should abort before video one, not after an hour of work.
     from glider.vision.pose import device as device_mod
@@ -714,6 +734,42 @@ def run_batch(
     def emit(kind: EventKind, video: Path, index: int, **kwargs) -> None:
         if on_event is not None:
             on_event(BatchEvent(kind=kind, video=video, index=index, total=total, **kwargs))
+
+    def pup_pass(video: Path, index: int) -> bool:
+        """Run the pup pass for *video*; False if it failed (already recorded)."""
+        from glider.vision.pose.pups import pups_path
+
+        if pup_model is None or litter_size < 1:
+            return True
+        kept = pups_path(video)
+        if kept.exists() and not overwrite:
+            # Said, not silent -- but the video's own tally (result.skipped) is its pose's.
+            emit(
+                EventKind.SKIPPED,
+                video,
+                index,
+                output=kept,
+                message=f"pups: kept existing {kept.name}",
+            )
+            return True
+        try:
+            track_pups_fn(
+                Path(pup_model),
+                video,
+                litter_size=litter_size,
+                device=device,
+                require_gpu=require_gpu,
+                progress_cb=progress_cb,
+                cancel_cb=cancel_cb,
+            )
+        except PoseCancelledError:
+            raise
+        except Exception as e:  # one video's pups must not stop the batch
+            message = f"pups: {e}"
+            result.failed.append((video, message))
+            emit(EventKind.FAILED, video, index, message=message)
+            return False
+        return True
 
     for index, raw_video in enumerate(videos):
         video = Path(raw_video).resolve()
@@ -754,6 +810,13 @@ def run_batch(
         if already_done and not overwrite:
             result.skipped.append(video)
             emit(EventKind.SKIPPED, video, index, output=this_run_output)
+            # A skipped pose still owes its pups: resume must be able to add them.
+            try:
+                pup_pass(video, index)
+            except PoseCancelledError:
+                result.cancelled = True
+                emit(EventKind.CANCELLED, video, index)
+                break
             continue
 
         if cancel_cb is not None and cancel_cb():
@@ -854,6 +917,9 @@ def run_batch(
                 _drop_stale_ungated(primary)
                 _drop_stale_animals_dir(primary)
                 zone_warning = _score_zones(video, pose, zones, zone_keypoint)
+            # After the pose is on disk, so a pup failure can never cost it.
+            # Inside the try so a cancel here takes the same exit as one in pose.
+            pups_ok = pup_pass(video, index)
         except PoseCancelledError:
             result.cancelled = True
             emit(EventKind.CANCELLED, video, index)
@@ -863,6 +929,8 @@ def run_batch(
             emit(EventKind.FAILED, video, index, message=str(e))
             continue
 
+        if not pups_ok:
+            continue  # already recorded as failed; the pose output stays
         result.completed.append(video)
         emit(
             EventKind.WROTE,

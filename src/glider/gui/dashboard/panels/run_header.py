@@ -23,8 +23,10 @@ from glider.gui.dashboard.panels.field_tags import FieldTags, TagField
 _LIVE = ("RUNNING", "PAUSED")
 # Non-live states the pill names as they are instead of READY / NEEDS DETAILS.
 _SHOWN_AS_IS = ("STOPPING", "ERROR", "INITIALIZING")
-# Part 1 tags: (metadata attribute, label).
-_META_TAGS = (("experimenter", "Experimenter"), ("protocol", "Protocol"), ("notes", "Notes"))
+# Part 1 tags: (metadata attribute, label). The old free-text
+# ``metadata.protocol`` is kept in files but not shown: the protocol is now
+# ``experiment_type``, picked from the ▾ menu or the Experiment tab.
+_META_TAGS = (("experimenter", "Experimenter"), ("notes", "Notes"))
 
 
 def _fields(md) -> list:
@@ -41,6 +43,7 @@ def _type(md) -> str:
 class RunHeader(QWidget):
     experiment_name_changed = pyqtSignal(str)
     preset_chosen = pyqtSignal(str)
+    builtin_preset_chosen = pyqtSignal(str)  # its name, which is its protocol
     new_preset_requested = pyqtSignal()
     save_as_preset_requested = pyqtSignal()
     edit_fields_requested = pyqtSignal()
@@ -158,13 +161,25 @@ class RunHeader(QWidget):
     def _rebuild_menu(self) -> None:
         self._menu.clear()
         current = str(getattr(self._core.session, "file_path", None) or "")
-        for info in presets.list_presets():
+        mine = presets.list_presets()
+        from_mine = any(current == str(info.path) for info in mine)
+        self._menu.addAction("Built-in").setEnabled(False)
+        for builtin in presets.BUILTIN_PRESETS:
+            action = self._menu.addAction(builtin.name)
+            action.setToolTip(" · ".join(f.label for f in builtin.fields))
+            action.setCheckable(True)
+            action.setChecked(not from_mine and _type(self._metadata()) == builtin.name)
+            action.triggered.connect(
+                lambda _=False, n=builtin.name: self.builtin_preset_chosen.emit(n)
+            )
+        self._menu.addSeparator()
+        for info in mine:
             action = self._menu.addAction(info.name)
             action.setToolTip(" · ".join(info.field_labels))
             action.setCheckable(True)
             action.setChecked(current == str(info.path))
             action.triggered.connect(lambda _=False, p=str(info.path): self.preset_chosen.emit(p))
-        if not self._menu.actions():
+        if not mine:
             self._menu.addAction("No presets yet").setEnabled(False)
         self._menu.addSeparator()
         for text, signal in (

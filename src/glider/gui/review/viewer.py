@@ -13,7 +13,16 @@ from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
-from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetricsF, QImage, QPainter, QPen
+from PyQt6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QFontMetricsF,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -65,6 +74,12 @@ class KeypointCanvas(QWidget):
         self._show_hud = True
         self._hud: tuple[tuple[str, QColor] | None, list[tuple[str, QColor]]] | None = None
         self._hud_samples: list[str] = []  # what sizes the behaviour chip
+        # Pup retrieval: the tracks, the score (None until scored) and the
+        # nest in force on a frame (frame -> Zone or None).
+        self._pups = None
+        self._retrieval = None
+        self._nest_at = None
+        self._show_pups = True
 
     def set_view(self, view: SessionView | None) -> None:
         self._close_reader()
@@ -268,6 +283,11 @@ class KeypointCanvas(QWidget):
                     painter.setPen(QPen(QColor(colors.CANVAS), 1))
                     painter.drawEllipse(to_widget(point), 5, 5)
 
+        if self._show_pups and self._pups is not None:
+            painter.save()
+            self._paint_pups(painter, to_widget, arena)
+            painter.restore()
+
         if self._hud is None:
             label = self._view.label_at(self._frame)
             painter.setPen(QPen(QColor(colors.TEXT_PRIMARY)))
@@ -288,25 +308,95 @@ class KeypointCanvas(QWidget):
         if self._zones is None:
             return
         for zone in getattr(self._zones, "zones", []):
-            if not zone.vertices:
-                continue
             b, g, r = zone.color
-            painter.setPen(QPen(QColor(r, g, b), 2))
+            self._paint_zone_shape(painter, arena, zone, QPen(QColor(r, g, b), 2))
+
+    @staticmethod
+    def _paint_zone_shape(painter, arena: QRectF, zone, pen: QPen) -> None:
+        """One zone's outline, its normalised vertices mapped onto *arena*."""
+        if not zone.vertices:
+            return
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        points = [
+            QPointF(arena.x() + vx * arena.width(), arena.y() + vy * arena.height())
+            for vx, vy in zone.vertices
+        ]
+        name = str(getattr(zone.shape, "value", zone.shape)).lower()
+        if name == "rectangle" and len(points) >= 2:
+            painter.drawRect(QRectF(points[0], points[1]).normalized())
+        elif name == "circle" and len(points) >= 2:
+            radius = (
+                (points[1].x() - points[0].x()) ** 2 + (points[1].y() - points[0].y()) ** 2
+            ) ** 0.5
+            painter.drawEllipse(points[0], radius, radius)
+        elif len(points) >= 3:
+            painter.drawPolygon(*points)
+
+    @staticmethod
+    def _paint_label(painter, at: QPointF, text: str, colour: QColor) -> None:
+        """Text with a dark edge: it is drawn over video, which may be white."""
+        path = QPainterPath()
+        path.addText(at, painter.font(), text)
+        edge = QPen(QColor(colors.CANVAS), 3)
+        edge.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(edge)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+        painter.fillPath(path, colour)
+
+    def _paint_pups(self, painter, to_widget, arena: QRectF) -> None:
+        """The nest in force, each pup's numbered outline, and the dam's nose.
+
+        A pup carried out of sight is in her mouth, so it is drawn as a dashed
+        ring at her nose; the nose's line to the nest is to the nearest point
+        of the edge the score measured against.
+        """
+        f = self._frame
+        zone = self._nest_at(f) if self._nest_at is not None else None
+        if zone is not None:
+            self._paint_zone_shape(
+                painter, arena, zone, QPen(QColor(colors.NEST), 2, Qt.PenStyle.DashLine)
+            )
+        pup_colour = QColor(colors.PUP)
+        fill = colors.qcolor_with_alpha(pup_colour, 0.55)
+        font = painter.font()
+        font.setBold(True)
+        painter.setFont(font)
+        for k in range(self._pups.n_pups):
+            outline = self._pups.outline_for(k, f)
+            if outline is None:
+                continue
+            painter.setPen(QPen(pup_colour, 1.5))
+            painter.setBrush(fill)
+            painter.drawPolygon(*[to_widget(p) for p in outline])
+            self._paint_label(
+                painter,
+                to_widget(self._pups.xy[k, f]) + QPointF(10, -8),
+                str(k),
+                QColor(colors.TEXT_PRIMARY),
+            )
+        r = self._retrieval
+        if r is None or not 0 <= f < r.n_frames:
+            return
+        nose = r.nose_xy_px[f]
+        if not np.isfinite(nose).all():
+            return
+        hidden = np.flatnonzero(r.hidden[:, f])
+        if hidden.size:
+            painter.setPen(QPen(QColor(colors.CARRY), 2, Qt.PenStyle.DashLine))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            points = [
-                QPointF(arena.x() + vx * arena.width(), arena.y() + vy * arena.height())
-                for vx, vy in zone.vertices
-            ]
-            name = str(getattr(zone.shape, "value", zone.shape)).lower()
-            if name == "rectangle" and len(points) >= 2:
-                painter.drawRect(QRectF(points[0], points[1]).normalized())
-            elif name == "circle" and len(points) >= 2:
-                radius = (
-                    (points[1].x() - points[0].x()) ** 2 + (points[1].y() - points[0].y()) ** 2
-                ) ** 0.5
-                painter.drawEllipse(points[0], radius, radius)
-            elif len(points) >= 3:
-                painter.drawPolygon(*points)
+            painter.drawEllipse(to_widget(nose), 14, 14)
+            self._paint_label(
+                painter,
+                to_widget(nose) + QPointF(-24, 22),
+                ",".join(map(str, hidden)),
+                QColor(colors.CARRY),
+            )
+        field = r.fields[r.period[f]]
+        if len(field.edge):
+            painter.setPen(QPen(QColor(colors.NOSE), 1.5, Qt.PenStyle.DashLine))
+            painter.drawLine(to_widget(nose), to_widget(field.nearest_edge(nose)))
 
     def _why_blank(self) -> str:
         view = self._view
@@ -345,6 +435,17 @@ class KeypointCanvas(QWidget):
 
     def set_show_poses(self, enabled: bool) -> None:
         self._show_poses = bool(enabled)
+        self.update()
+
+    def set_retrieval(self, pups, result, nest_at) -> None:
+        """Draw a pup session: its ``PupTracks``, its ``SessionRetrieval`` (or None,
+        unscored) and ``nest_at(frame)``, the nest ``Zone`` in force on a frame.
+        All None clears it."""
+        self._pups, self._retrieval, self._nest_at = pups, result, nest_at
+        self.update()
+
+    def set_show_pups(self, enabled: bool) -> None:
+        self._show_pups = bool(enabled)
         self.update()
 
     def set_show_zones(self, enabled: bool) -> None:
@@ -506,6 +607,9 @@ class Transport(QFrame):
         row.addWidget(self.bout, 1)
         self.video_on = _toggle("Video", "Draw the session's video", checked=True)
         self.poses_on = _toggle("Poses", "Draw the tracked keypoints", checked=True)
+        self.pups_on = _toggle(
+            "Pups", "Draw the nest, each pup and the dam's nose line", checked=True
+        )
         self.trail_on = _toggle("Trail", "Draw the recent centroid track", checked=True)
         self.heatmap_on = _toggle(
             "Heatmap", "Where the animal spent the selected range", checked=False
@@ -517,6 +621,7 @@ class Transport(QFrame):
         for toggle in (
             self.video_on,
             self.poses_on,
+            self.pups_on,
             self.trail_on,
             self.heatmap_on,
             self.zones_on,

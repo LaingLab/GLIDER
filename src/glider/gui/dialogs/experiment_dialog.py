@@ -32,31 +32,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.core.experiment_types import EXPERIMENT_TYPES, type_label
 from glider.gui.styles import colors, radius
 
 if TYPE_CHECKING:
     from glider.core.experiment_session import ExperimentSession, Subject
 
 logger = logging.getLogger(__name__)
-
-# Common experiment types
-EXPERIMENT_TYPES = [
-    "",
-    "Open Field",
-    "Morris Water Maze",
-    "Elevated Plus Maze",
-    "Rotarod",
-    "Novel Object Recognition",
-    "Fear Conditioning",
-    "Forced Swim Test",
-    "Tail Suspension Test",
-    "Y-Maze",
-    "Barnes Maze",
-    "Radial Arm Maze",
-    "Social Interaction",
-    "Light-Dark Box",
-    "Other",
-]
 
 
 #: Widest the embedded form is allowed to get on the Experiment tab. Wide
@@ -70,7 +52,7 @@ class ExperimentDialog(QDialog):
     Dialog for managing experiment metadata and subjects.
 
     Provides:
-    - Experiment info editing (name, protocol, type, experimenter, etc.)
+    - Experiment info editing (name, protocol, experimenter, etc.)
     - Subject table with add/edit/remove functionality
     - Active subject selection for recordings
 
@@ -141,16 +123,13 @@ class ExperimentDialog(QDialog):
         self._name_edit.setPlaceholderText("Experiment name")
         info_layout.addRow("Name:", self._name_edit)
 
-        # Protocol
-        self._protocol_edit = QLineEdit()
-        self._protocol_edit.setPlaceholderText("e.g., OFT-001")
-        info_layout.addRow("Protocol:", self._protocol_edit)
-
-        # Experiment Type
-        self._type_combo = QComboBox()
-        self._type_combo.setEditable(True)
-        self._type_combo.addItems(EXPERIMENT_TYPES)
-        info_layout.addRow("Type:", self._type_combo)
+        # Protocol: the shared ``experiment_type`` (core/experiment_types.py).
+        # The older free-text ``metadata.protocol`` is kept in the file but
+        # no longer edited here.
+        self._protocol_combo = QComboBox()
+        self._protocol_combo.setEditable(True)
+        self._protocol_combo.addItems([type_label(t) for t in EXPERIMENT_TYPES])
+        info_layout.addRow("Protocol:", self._protocol_combo)
 
         # Experimenter
         self._experimenter_edit = QLineEdit()
@@ -325,7 +304,7 @@ class ExperimentDialog(QDialog):
     def _as_page(group: QWidget) -> QWidget:
         """One group box, reparented into a scroll area that fills a section.
 
-        The scroll area is not optional: the subject table and the seven-field
+        The scroll area is not optional: the subject table and the six-field
         form both outgrow a short window, and a section that clips has no way
         to reach what it clipped.
         """
@@ -351,8 +330,7 @@ class ExperimentDialog(QDialog):
         """Connect internal signals."""
         # Experiment info changes
         self._name_edit.textChanged.connect(self._on_info_changed)
-        self._protocol_edit.textChanged.connect(self._on_info_changed)
-        self._type_combo.currentTextChanged.connect(self._on_info_changed)
+        self._protocol_combo.currentTextChanged.connect(self._on_info_changed)
         self._experimenter_edit.textChanged.connect(self._on_info_changed)
         self._lab_edit.textChanged.connect(self._on_info_changed)
         self._project_edit.textChanged.connect(self._on_info_changed)
@@ -378,14 +356,13 @@ class ExperimentDialog(QDialog):
             metadata = self._session.metadata
 
             self._name_edit.setText(metadata.name)
-            self._protocol_edit.setText(metadata.protocol)
 
-            # Set experiment type in combo
-            idx = self._type_combo.findText(metadata.experiment_type)
+            shown = type_label(metadata.experiment_type)
+            idx = self._protocol_combo.findText(shown)
             if idx >= 0:
-                self._type_combo.setCurrentIndex(idx)
+                self._protocol_combo.setCurrentIndex(idx)
             else:
-                self._type_combo.setCurrentText(metadata.experiment_type)
+                self._protocol_combo.setCurrentText(shown)
 
             self._experimenter_edit.setText(metadata.experimenter)
             self._lab_edit.setText(metadata.lab)
@@ -441,8 +418,9 @@ class ExperimentDialog(QDialog):
 
         metadata = self._session.metadata
         metadata.name = self._name_edit.text()
-        metadata.protocol = self._protocol_edit.text()
-        metadata.experiment_type = self._type_combo.currentText()
+        protocol = self._protocol_combo.currentText().strip()
+        # "None" is the no-protocol row's label, never a protocol of its own.
+        metadata.experiment_type = "" if protocol.casefold() == "none" else protocol
         metadata.experimenter = self._experimenter_edit.text()
         metadata.lab = self._lab_edit.text()
         metadata.project = self._project_edit.text()

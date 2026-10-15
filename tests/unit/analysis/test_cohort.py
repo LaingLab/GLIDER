@@ -117,3 +117,54 @@ def test_a_misshapen_manifest_warns_and_loads_ungrouped(tmp_path):
         sources, warning = discover_sessions(root)
         assert [s.group for s in sources] == [""], raw
         assert warning and "ungrouped" in warning, raw
+
+
+def test_a_video_with_pups_is_a_session_named_by_its_stem(tmp_path):
+    folder = tmp_path / "lab_videos"
+    folder.mkdir()
+    for stem in ("litter1_pre", "litter1_post"):
+        (folder / f"{stem}.avi").write_bytes(b"")
+        (folder / f"{stem}_pups.npz").write_bytes(b"")
+    (folder / "raw_only.avi").write_bytes(b"")  # no pups: not a session
+    sources, _ = discover_sessions(tmp_path)
+    assert sorted((s.path.name, s.recording, s.session_id) for s in sources) == [
+        ("litter1_post.avi", None, "litter1_post"),
+        ("litter1_pre.avi", None, "litter1_pre"),
+    ]
+
+
+def test_session_id_of_a_video_is_its_stem(tmp_path):
+    video = tmp_path / "litter1_pre.avi"
+    video.write_bytes(b"")
+    assert session_id_for(video) == "litter1_pre"
+
+
+def test_a_video_with_pups_in_a_recording_claims_it(tmp_path):
+    """One animal, one session: the pup video, with its recording's name and hardware."""
+    recording = _tracking(tmp_path / "rec", video_stem="mouse01")
+    (recording / "mouse01_pups.npz").write_bytes(b"")
+    sources, _ = discover_sessions(tmp_path)
+    assert [(s.path, s.recording, s.session_id) for s in sources] == [
+        ((recording / "mouse01.mp4").resolve(), recording.resolve(), session_id_for(recording))
+    ]
+
+
+def test_a_pup_video_in_the_canonical_layout_is_one_session(tmp_path):
+    """sessions/<id>/ is how a Run-tab preset records: the name glider_project.json uses."""
+    recording = _tracking(tmp_path / "sessions" / "s7", video_stem="cam0")
+    (recording / "cam0_pups.npz").write_bytes(b"")
+    sources, _ = discover_sessions(tmp_path)
+    assert [s.session_id for s in sources] == ["s7"]
+
+
+def test_a_recording_without_pups_is_still_its_own_session(tmp_path):
+    recording = _tracking(tmp_path / "rec", video_stem="mouse01")
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    (loose / "m2.avi").write_bytes(b"")
+    (loose / "m2_pups.npz").write_bytes(b"")
+    sources, _ = discover_sessions(tmp_path)
+    assert sorted((s.path.name, s.recording) for s in sources) == [
+        ("m2.avi", None),
+        ("rec", recording.resolve()),
+    ]
