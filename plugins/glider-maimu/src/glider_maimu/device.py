@@ -3,13 +3,13 @@
 The Maimu is a Nordic/Zephyr Bluetooth LE peripheral with exactly one writable
 GATT characteristic that accepts three UTF-8 commands::
 
-    on                      turn on and stay on
-    off                     turn off
-    <period_ms>,<duration_s>  toggle every period_ms ms, for duration_s seconds
+    on                                                       turn on and stay on
+    off                                                      turn off
+    <period_ms>,<pulse_width_ms>,<count>,<intensity_pct>     deliver count pulses
 
 Running one through the generic ``BLEWrite`` / ``BLE`` device works, but means
 pasting both UUIDs into the Add Device dialog and then remembering that the
-action is called ``write`` and that a pulse is spelled ``"500,10"``. This device
+action is called ``write`` and that a pulse is spelled ``"50,4,4,100"``. This device
 bakes the protocol in: the UUIDs are defaults and the commands are named actions
 (``on`` / ``off`` / ``pulse``).
 
@@ -102,34 +102,58 @@ class MaimuDevice(BLEDevice):
         },
     ]
 
-    # What the control panels put in front of a pulse button. The bounds are
-    # the same contract _whole_number enforces at call time -- whole numbers,
-    # at least 1 -- because the firmware atoi()s both fields, so a spin box
-    # that offered 0 or a fraction would only produce a legible error later.
-    # The defaults match MaimuNode's, so the number a researcher sees does not
-    # change when they move between the graph and the panel.
+    # What the control panels put in front of a pulse button. The bounds are the
+    # firmware's bounds (src/train.h), so a value the spin box offers is always a
+    # value the parser accepts. The defaults match MaimuNode's, so the number a
+    # researcher sees does not change when they move between the graph and the
+    # panel.
     ACTION_ARGS_SCHEMA = {
         "pulse": [
             {
                 "key": "period_ms",
                 "label": "Period (ms)",
                 "type": "int",
-                "default": 500,
+                "default": 50,
                 "min": 1,
                 "max": 3_600_000,
                 "help": (
-                    "On/off toggle period in milliseconds -- a period, not a "
-                    "frequency. 500 ms toggles about once a second."
+                    "Full cycle period in milliseconds -- a period, not a "
+                    "frequency. 50 ms is 20 Hz."
                 ),
             },
             {
-                "key": "duration_s",
-                "label": "Duration (s)",
+                "key": "pulse_width_ms",
+                "label": "Pulse width (ms)",
                 "type": "int",
-                "default": 10,
+                "default": 5,
                 "min": 1,
-                "max": 86_400,
-                "help": "How long the train runs. The firmware stops on its own.",
+                "max": 3_600_000,
+                "help": (
+                    "On-time within each cycle; cannot exceed the period. Equal "
+                    "to the period means continuous light, which needs Pulses "
+                    "set to 0."
+                ),
+            },
+            {
+                "key": "count",
+                "label": "Pulses",
+                "type": "int",
+                "default": 20,
+                "min": 0,
+                "max": 65_535,
+                "help": "How many pulses to deliver. 0 runs until stopped.",
+            },
+            {
+                "key": "intensity_pct",
+                "label": "Intensity (%)",
+                "type": "int",
+                "default": 100,
+                "min": 0,
+                "max": 100,
+                "help": (
+                    "Relative light output, not calibrated optical power. "
+                    "Per-unit brightness is trimmed in firmware."
+                ),
             },
         ],
     }
@@ -174,28 +198,62 @@ class MaimuDevice(BLEDevice):
         """Turn the stimulator off."""
         await self.write("off")
 
-    async def pulse(self, period_ms: Any, duration_s: Any) -> None:
-        """Toggle every ``period_ms`` milliseconds for ``duration_s`` seconds.
+    async def pulse(
+        self,
+        period_ms: Any,
+        pulse_width_ms: Any,
+        count: Any,
+        intensity_pct: Any,
+    ) -> None:
+        """Deliver ``count`` pulses of ``pulse_width_ms`` every ``period_ms``.
 
-        e.g. ``pulse(500, 10)`` writes ``"500,10"`` -- a 500 ms on/off period
-        (~1 Hz) held for 10 seconds. The firmware runs the pattern itself and
-        stops on its own, so this returns as soon as the write lands.
+        e.g. ``pulse(50, 4, 4, 100)`` writes ``"50,4,4,100"`` -- four 4 ms pulses
+        at 20 Hz, full intensity. The firmware runs the train itself and stops on
+        its own, so this returns as soon as the write lands.
 
-        Note ``period_ms`` is a *period in milliseconds*, not a frequency.
+        ``count`` of 0 runs until stopped. ``pulse_width_ms`` equal to
+        ``period_ms`` is continuous light at that intensity, and is legal only
+        with ``count`` of 0 -- continuous light has exactly one spelling.
         """
-        period = self._whole_number(period_ms, "period_ms")
-        duration = self._whole_number(duration_s, "duration_s")
-        # Two args -> BLEDevice.write comma-joins them: "500,10".
-        await self.write(period, duration)
+        period = self._whole_number(period_ms, "period_ms", 1, 3_600_000)
+        width = self._whole_number(pulse_width_ms, "pulse_width_ms", 1, 3_600_000)
+        pulses = self._whole_number(count, "count", 0, 65_535)
+        intensity = self._whole_number(intensity_pct, "intensity_pct", 0, 100)
+
+        # The firmware rejects this too, but silently -- it has no way to answer
+        # back. Raising here is what turns "the device did nothing" into a
+        # legible node error.
+        if width > period:
+            raise ValueError(
+                f"Maimu.pulse: pulse_width_ms ({width}) cannot exceed "
+                f"period_ms ({period}) -- the pulse would not fit in its cycle"
+            )
+
+        # width == period is continuous light, which must be spelled with
+        # count = 0. With a non-zero count the train has no gap to end on, so
+        # the firmware would run forever while the command reads as bounded --
+        # an implanted LED left lit for the rest of the session. Nothing is
+        # lost: a bounded single 500 ms pulse is pulse(1000, 500, 1, 40), where
+        # count = 1 ends the train at the first pulse end so the trailing gap
+        # never elapses.
+        if width >= period and pulses != 0:
+            raise ValueError(
+                f"Maimu.pulse: pulse_width_ms ({width}) equal to period_ms "
+                f"({period}) is continuous light, which must be spelled with "
+                f"count = 0, not count = {pulses} -- a train with no gap has "
+                f"nothing to end on. For one bounded pulse, make period_ms "
+                f"longer than pulse_width_ms."
+            )
+
+        await self.write(period, width, pulses, intensity)
 
     @staticmethod
-    def _whole_number(value: Any, field: str) -> int:
-        """Coerce a pulse argument to a positive whole number.
+    def _whole_number(value: Any, field: str, minimum: int, maximum: int) -> int:
+        """Coerce a pulse argument to a whole number within the firmware's bounds.
 
-        The firmware ``atoi``s both fields, so a fractional or non-numeric value
-        would be silently truncated into a command that does something other
-        than what the flow asked for. Rejecting it here turns that into a
-        legible node error instead.
+        The firmware's parser is strict: a fractional or non-numeric field is
+        rejected outright and the command silently does nothing. Rejecting it
+        here turns that into a legible node error instead.
         """
         try:
             number = float(value)
@@ -204,8 +262,10 @@ class MaimuDevice(BLEDevice):
         if not number.is_integer():
             raise ValueError(f"Maimu.pulse: {field} must be a whole number, got {value!r}")
         number = int(number)
-        if number < 1:
-            raise ValueError(f"Maimu.pulse: {field} must be at least 1, got {value!r}")
+        if number < minimum or number > maximum:
+            raise ValueError(
+                f"Maimu.pulse: {field} must be between {minimum} and {maximum}, got {value!r}"
+            )
         return number
 
     # --- lifecycle ---
