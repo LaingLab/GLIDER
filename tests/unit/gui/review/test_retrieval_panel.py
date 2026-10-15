@@ -147,6 +147,18 @@ def _fitted_panel(qtbot):
     return panel
 
 
+def _skip_without_a_font(panel):
+    """Text widths mean nothing where the platform has no font to measure.
+
+    Windows CI's offscreen platform reports an empty family and a -1 px size
+    and lays text out 1.6-2.7x wider than any real font; these two tests ask
+    whether real text fits, so they skip there (as the shell tests do).
+    """
+    info = panel.trial_button.fontInfo()
+    if not info.family() or info.pixelSize() <= 0:
+        pytest.skip("no font on this platform: text widths are meaningless")
+
+
 def _widths(panel, area) -> str:
     """What made a row too wide, for a failure on a platform we cannot run."""
     from PyQt6.QtWidgets import QFormLayout
@@ -183,6 +195,7 @@ def test_the_tab_fits_the_default_inspector_without_clipping(qtbot):
     last columns could only be reached by scrolling the table itself.
     """
     panel = _fitted_panel(qtbot)
+    _skip_without_a_font(panel)
     area = panel.findChild(QScrollArea)
     assert not area.horizontalScrollBar().isVisible(), _widths(panel, area)
     for button in (
@@ -221,6 +234,7 @@ def test_setup_rows_wrap_rather_than_overflow_with_wider_text(qtbot):
     under its label, never push past the pane's edge. Simulated here with a
     font about a third larger than the theme's."""
     panel = _fitted_panel(qtbot)
+    _skip_without_a_font(panel)
     # The theme sizes text in its stylesheet, which outranks setFont.
     panel.setStyleSheet(panel.styleSheet() + "\nQLabel, QPushButton { font-size: 17px; }")
     for _ in range(20):
@@ -230,3 +244,20 @@ def test_setup_rows_wrap_rather_than_overflow_with_wider_text(qtbot):
     for button in (panel.trial_button, panel.scale_button, panel.protocol_button):
         right = button.mapTo(area.viewport(), QPoint(button.width(), 0)).x()
         assert right <= area.viewport().width(), f"{button.text()} runs off the pane"
+
+
+def test_setup_rows_are_a_form_that_wraps_long_rows(qtbot):
+    """The overflow fix itself, checked on every platform (fonts or not): the
+    setup rows live in a QFormLayout that wraps a field under its label."""
+    from PyQt6.QtWidgets import QFormLayout
+
+    panel = _panel(qtbot)
+    [form] = panel.findChildren(QFormLayout)
+    assert form.rowWrapPolicy() == QFormLayout.RowWrapPolicy.WrapLongRows
+    fields = set()
+    for row in range(form.rowCount()):
+        cell = form.itemAt(row, QFormLayout.ItemRole.FieldRole)
+        layout = cell.layout() if cell is not None else None
+        for i in range(layout.count() if layout is not None else 0):
+            fields.add(layout.itemAt(i).widget())
+    assert {panel.trial_button, panel.scale_button, panel.protocol_button} <= fields
