@@ -152,8 +152,8 @@ Running an exported model needs `onnxruntime`:
 pip install 'glider[pose-onnx]'
 ```
 
-CPU-only by design. It covers Python 3.11–3.13 on Windows, macOS, Linux, **and**
-ARM, which is what makes exported models viable on the Raspberry Pi runner.
+CPU-only by design. It has wheels for every platform GLIDER runs on, ARM
+included, which is what makes exported models viable on the Raspberry Pi runner.
 
 ## Verifying a model before you trust it
 

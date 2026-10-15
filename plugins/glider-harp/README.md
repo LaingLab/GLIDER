@@ -17,8 +17,8 @@ pip install glider-harp
 Or, from GLIDER 1.1 onwards, through **Tools → Plugins…** in the application
 itself.
 
-Requires Python 3.11–3.13 and an existing GLIDER installation. GLIDER is
-deliberately *not* declared as a dependency: this package is installed into an
+Requires Python 3.12, like GLIDER, and an existing GLIDER installation. GLIDER
+is deliberately *not* declared as a dependency: this package is installed into an
 environment that already has it.
 
 ## What it provides

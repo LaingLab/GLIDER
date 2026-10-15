@@ -63,11 +63,11 @@ set of keypoints, which is what the behaviour classifier downstream expects.
 Multi-animal SLEAP models (the ones with a PAF head) convert but are not
 usefully runnable yet.
 
-Python 3.11 to 3.13, the same range GLIDER supports. Conversion is verified on
-tensorflow-cpu 2.21 with tf2onnx 1.17, and the dependency floors are set so a
-resolver cannot land you below that: earlier TensorFlow has no 3.13 wheels, and
-tf2onnx before 1.17 cannot convert a Keras 3 model, which is what any
-TensorFlow new enough to be worth installing loads a SLEAP checkpoint into.
+Python 3.12, like GLIDER. Conversion is verified on tensorflow-cpu 2.21 with
+tf2onnx 1.17, and the dependency floors are set so a resolver cannot land you
+below that: earlier TensorFlow has no 3.13 wheels, and tf2onnx before 1.17
+cannot convert a Keras 3 model, which is what any TensorFlow new enough to be
+worth installing loads a SLEAP checkpoint into.
 
 ## Converting from the command line
 

@@ -80,9 +80,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, windows-2022, macos-latest]
-        # Pinned to 3.11 for now to save Actions usage; restore the full
-        # ["3.11", "3.12", "3.13"] matrix before release.
-        python-version: ["3.11"]
+        # 3.12 only: it is what .python-version pins and the release builds
+        # ship. The Pi runs its OS's Python instead, which CI does not cover.
+        python-version: ["3.12"]
 
     steps:
       - uses: actions/checkout@v4
@@ -177,8 +177,8 @@ jobs:
             --cov-report=xml \
             --cov-report=term
 
-      - name: Upload coverage (Ubuntu / 3.11 only)
-        if: runner.os == 'Linux' && matrix.python-version == '3.11'
+      - name: Upload coverage (Ubuntu only)
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-xml

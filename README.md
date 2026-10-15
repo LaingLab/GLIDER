@@ -10,7 +10,7 @@ Build, run, and record reproducible experiments without writing code.
 
 [![Documentation](https://img.shields.io/badge/docs-online-2f81f7?style=flat-square)](https://lainglab.github.io/GLIDER/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue?style=flat-square)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.12-blue?style=flat-square)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Raspberry%20Pi-lightgrey?style=flat-square)](#quick-start)
 [![Status](https://img.shields.io/badge/status-beta-orange?style=flat-square)](https://github.com/LaingLab/GLIDER/releases)
 
@@ -129,11 +129,12 @@ group.
    - macOS: `brew install ffmpeg`
    - Linux/Raspberry Pi: `sudo apt install ffmpeg`
 
-> GLIDER requires Python 3.11–3.13 (3.14+ is not supported). **3.12 is the
-> version to use**: it is what the release builds ship, and `.python-version`
-> pins it so `uv venv` picks it for you. Without that pin `uv` takes the newest
-> interpreter on the machine, and a fresh install on 3.13 has been seen to fail
-> at startup with `DLL load failed while importing QtCore` on Windows.
+> GLIDER runs on **Python 3.12**: it is what CI tests, what the release builds
+> ship, and what `.python-version` pins, so `uv` installs it for you. Other
+> versions are untested; a fresh install on 3.13 has been seen to fail at
+> startup with `DLL load failed while importing QtCore` on Windows. The one
+> exception is the Raspberry Pi, which uses the OS's own Python (see
+> [below](#by-hand-raspberry-pi)).
 
 ## Quick start
 
@@ -174,7 +175,8 @@ PyQt6 comes from apt on the Pi (it is intentionally not a core dependency),
 so the venv must be the system Python's, with access to its packages. Install
 with `uv pip` and start the venv's own `glider`: `uv sync` and `uv run` would
 swap the venv for one on the Python that `.python-version` pins, which cannot
-see apt's PyQt6.
+see apt's PyQt6. That makes the Pi's Python the OS's (3.11 on Bookworm), not
+3.12.
 
 ```bash
 sudo apt install python3-pyqt6 python3-pyqt6.qtsvg python3-pyqt6.qtopengl

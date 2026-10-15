@@ -255,6 +255,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Python 3.12 is the supported version.** CI now tests 3.12 instead of 3.11,
+  matching `.python-version` and the release builds, and the README and docs
+  say 3.12. `requires-python` still allows 3.11–3.13, because the Raspberry Pi
+  installs onto the OS's own Python (3.11 on Bookworm) to reach apt's PyQt6;
+  that path is no longer exercised by CI.
 - **Session Review measures a range from each session's own zero.** The
   current range, a cohort range marker and the Range stats export all mean
   the same seconds after each animal's flow start (or first video frame),

@@ -235,7 +235,7 @@ Directory-based plugins are also supported, but they execute Python code and are
 
 ## Installation, environments, and deployment
 
-GLIDER requires Python 3.11 through 3.13. The base package keeps several capability groups optional so an installation can match the machine and experiment:
+GLIDER runs on Python 3.12, the only version CI tests; the Raspberry Pi runs on its operating system's own Python (3.11 on Bookworm) so that the system PyQt6 is visible. The base package keeps several capability groups optional so an installation can match the machine and experiment:
 
 | Extra | Adds |
 | --- | --- |
