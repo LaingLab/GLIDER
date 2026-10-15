@@ -92,5 +92,5 @@ Single animal. sleap-nn 0.3.3 ships nine head types; anything other than
 `single_instance` is refused by name rather than converted into a network GLIDER
 would decode as if it tracked one animal.
 
-Python 3.11 to 3.13, the same range GLIDER supports. The private environment
-pins its own Python, so GLIDER's interpreter does not constrain sleap-nn's.
+Python 3.12, like GLIDER. The private environment pins its own Python, so
+GLIDER's interpreter does not constrain sleap-nn's.

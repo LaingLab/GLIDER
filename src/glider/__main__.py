@@ -71,9 +71,9 @@ except ImportError as e:  # pragma: no cover - depends on the machine's DLLs
     raise ImportError(
         f"{e}\n\n"
         f"GLIDER could not load Qt. Two causes account for this in practice:\n\n"
-        f"  1. An untested Python. The release builds ship 3.12 and CI covers "
-        f"3.11, so 3.13 is allowed by pyproject.toml but exercised nowhere, and "
-        f"has been seen to resolve to PyQt6 wheels that do not load. This "
+        f"  1. An untested Python. CI and the release builds use 3.12 only; "
+        f"3.11 and 3.13 are allowed by pyproject.toml but exercised nowhere, "
+        f"and 3.13 has been seen to resolve to PyQt6 wheels that do not load. This "
         f"project pins 3.12 in .python-version -- delete .venv and re-run "
         f"'uv venv' so that pin is honoured.\n\n"
         f"  2. The Windows torch preload above. torch ships its own copies of "

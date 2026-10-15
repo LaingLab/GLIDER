@@ -9,9 +9,11 @@ There are two ways to install GLIDER:
   develop.
 
 !!! info "Supported Python"
-    GLIDER runs on **Python 3.11–3.13** (3.14+ is not yet supported). If you
-    install from source with `uv`, a compatible Python is installed for you —
-    you don't need to manage Python yourself.
+    GLIDER runs on **Python 3.12**, the version CI tests and the prebuilt apps
+    ship. If you install from source with `uv`, Python 3.12 is installed for
+    you — you don't need to manage Python yourself. The Raspberry Pi is the
+    exception: it uses the OS's own Python (3.11 on Bookworm) so it can see the
+    system's PyQt6.
 
 ## Prebuilt app
 
