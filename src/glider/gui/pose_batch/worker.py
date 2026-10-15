@@ -45,6 +45,8 @@ class PoseBatchWorker(QObject):
         arenas=None,
         gate=None,
         n_animals=1,
+        pup_model=None,
+        litter_size=0,
     ):
         super().__init__()
         self._videos = list(videos)
@@ -65,6 +67,9 @@ class PoseBatchWorker(QObject):
         self._arenas = arenas or {}
         self._gate = gate
         self._n_animals = n_animals
+        # The optional pup segmentation pass; run_batch skips it without a model.
+        self._pup_model = pup_model
+        self._litter_size = litter_size
         self._cancel = threading.Event()
         self._last_emit = 0.0
 
@@ -87,6 +92,8 @@ class PoseBatchWorker(QObject):
             self.log.emit(f"{position} {name}")
         elif event.kind is kind.WROTE:
             self.log.emit(f"    wrote {event.output.name}")
+        elif event.kind is kind.SKIPPED and event.message:
+            self.log.emit(f"    {event.message}")  # a part kept, e.g. its pups file
         elif event.kind is kind.SKIPPED:
             self.log.emit(f"{position} {name} — skipped (output exists)")
         elif event.kind is kind.FAILED:
@@ -119,6 +126,8 @@ class PoseBatchWorker(QObject):
                 arenas=self._arenas,
                 gate=self._gate,
                 n_animals=self._n_animals,
+                pup_model=self._pup_model,
+                litter_size=self._litter_size,
             )
         except Exception as e:  # surface as a UI message, never crash the thread
             self.failed.emit(str(e))

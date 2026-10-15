@@ -541,3 +541,9 @@ def test_master_file_is_written_before_the_batch_starts(window, tmp_path, monkey
     window._start()
     assert (tmp_path / "pose_calibration.json").exists()
     assert started.get("yes") is True
+
+
+def test_experiment_type_is_stored(window):
+    assert window._experiment_type == ""
+    window.set_experiment_type("Pup Retrieval")
+    assert window._experiment_type == "Pup Retrieval"

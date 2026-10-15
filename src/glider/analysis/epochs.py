@@ -59,6 +59,13 @@ _MOVEMENT = (
     Metric("mean_cm_s", "Speed (cm/s)", 2),
     Metric("peak_cm_s", "Peak speed (cm/s)", 2),
 )
+# Pup retrieval's per-range numbers (AnalysisWindow._retrieval_columns). No
+# `_pct` key: metric_value would read it as seconds over the range.
+_RETRIEVAL = (
+    Metric("pups_retrieved", "Pups retrieved", 0),
+    Metric("dam_in_nest_frac", "Dam in nest (fraction)", 2),
+    Metric("nose_nest_mean_cm", "Nose to nest (cm)", 1),
+)
 _THRESHOLDS = (
     Metric("freeze_threshold", "Freeze < (cm/s)", 2),
     Metric("dart_threshold", "Dart > (cm/s)", 2),
@@ -73,8 +80,9 @@ def metric_catalog(rows: Iterable[dict]) -> list[Metric]:
     """Every metric the rows can answer, in reading order.
 
     Movement; each behaviour as seconds and as a share of the range; each
-    zone; each device; then the thresholds each session was scored with.
-    Freezing and darting are always offered -- every row carries them.
+    zone; each device; pup retrieval where a session was scored for it;
+    then the thresholds each session was scored with. Freezing and darting
+    are always offered -- every row carries them.
     """
     rows = list(rows)
     states = sorted({"freezing", "darting"} | {s for r in rows for s in r.get("_states", ())})
@@ -93,6 +101,8 @@ def metric_catalog(rows: Iterable[dict]) -> list[Metric]:
             Metric(f"zone_{zone}_latency_s", f"{zone} latency (s)", 2),
         ]
     out += [Metric(f"hw_{device}_on_s", f"{device} on (s)", 2) for device in devices]
+    if any("pups_retrieved" in row for row in rows):
+        out += list(_RETRIEVAL)
     return out + list(_THRESHOLDS)
 
 

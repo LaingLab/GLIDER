@@ -114,18 +114,83 @@ def test_poses_can_be_hidden(canvas):
     assert canvas.grab().toImage().pixelColor(x, y) != shown
 
 
+def test_pup_outlines_are_drawn_and_can_be_hidden(canvas):
+    from glider.vision.pose.pups import PupTracks
+
+    view = _view()
+    n = len(view.frames)
+    box = np.array([[90, 90], [110, 90], [110, 110], [90, 110]], np.int32)
+    pups = PupTracks(
+        np.full((1, n, 2), 100.0), [[box] for _ in range(n)], np.zeros((1, n), bool), {}
+    )
+    canvas.set_view(view)
+    canvas.set_trail(5.0, False)
+    canvas.set_show_poses(False)
+    canvas.set_frame(10)
+    scale, dx, dy = canvas._transform()
+    x, y = int(100 * scale + dx), int(100 * scale + dy)
+    before = canvas.grab().toImage().pixelColor(x, y)
+    canvas.set_retrieval(pups, None, None)
+    canvas.set_show_pups(True)
+    drawn = canvas.grab().toImage().pixelColor(x, y)
+    assert drawn != before
+    canvas.set_show_pups(False)
+    assert canvas.grab().toImage().pixelColor(x, y) == before
+
+
+def test_pup_numbers_read_on_a_white_arena(canvas):
+    """Found by rendering over a light arena: bare near-white digits vanished into it."""
+    from glider.vision.pose.pups import PupTracks
+
+    class _White(_Reader):
+        def read_frame(self, index):
+            return np.full((48, 64, 3), 255, dtype=np.uint8)
+
+    view = _view(video_path=Path("fake.mp4"))
+    n = len(view.frames)
+    box = np.array([[90, 90], [110, 90], [110, 110], [90, 110]], np.int32)
+    pups = PupTracks(
+        np.full((1, n, 2), 100.0), [[box] for _ in range(n)], np.zeros((1, n), bool), {}
+    )
+    canvas.set_view(view)
+    canvas._reader = _White()
+    canvas.set_trail(5.0, False)
+    canvas.set_show_poses(False)
+    canvas.set_frame(10)
+    canvas.set_retrieval(pups, None, None)
+    scale, dx, dy = canvas._transform()
+    # The label starts 10 px right of and 8 px above the pup's centre (widget px).
+    x, y = int(100 * scale + dx) + 10, int(100 * scale + dy) - 8
+    image = canvas.grab().toImage()
+    darkest = min(
+        image.pixelColor(i, j).lightness()
+        for i in range(x - 2, x + 14)
+        for j in range(y - 16, y + 4)
+    )
+    assert darkest < 100, "the label has no dark edge, so it is invisible on a light frame"
+
+
 def test_the_transport_has_every_toggle(qtbot):
     transport = Transport()
     qtbot.addWidget(transport)
     toggles = [
         transport.video_on,
         transport.poses_on,
+        transport.pups_on,
         transport.trail_on,
         transport.heatmap_on,
         transport.zones_on,
         transport.hud_on,
     ]
-    assert [t.text() for t in toggles] == ["Video", "Poses", "Trail", "Heatmap", "Zones", "HUD"]
+    assert [t.text() for t in toggles] == [
+        "Video",
+        "Poses",
+        "Pups",
+        "Trail",
+        "Heatmap",
+        "Zones",
+        "HUD",
+    ]
     assert transport.heatmap_on.isChecked() is False
     assert transport.video_on.isChecked() is True
     assert "Play" in transport.play.text()

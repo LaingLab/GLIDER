@@ -21,7 +21,8 @@ def test_shows_name_and_metadata_tags(qtbot, mock_core):
     h = _header(qtbot, mock_core, name="OF 3", experimenter="GB", protocol="P-17")
     assert h._title.text() == "OF 3"
     assert h._tags.chip("experimenter").text() == "Experimenter  GB"
-    assert h._tags.chip("protocol").text() == "Protocol  P-17"
+    # The old free-text protocol is kept in the file but no longer shown.
+    assert [f.key for f in h.tag_fields()] == ["experimenter", "notes"]
 
 
 def test_tag_edit_writes_metadata_and_marks_dirty(qtbot, mock_core):
@@ -207,3 +208,51 @@ def test_non_preset_picker_sits_right_after_the_title(qtbot, mock_core):
     assert row.indexOf(h._title) < row.indexOf(h._picker)
     gap = h._picker.geometry().left() - h._title.geometry().right()
     assert gap < 40
+
+
+def _menu_texts(h):
+    h._menu.aboutToShow.emit()
+    return [a.text() for a in h._menu.actions() if a.text()]
+
+
+def test_menu_lists_the_built_ins_first(qtbot, mock_core, tmp_path, monkeypatch):
+    monkeypatch.setattr(presets, "presets_dir", lambda: tmp_path)
+    h = _header(qtbot, mock_core)
+    texts = _menu_texts(h)
+    assert texts[:4] == ["Built-in", "Pup Retrieval", "Open Field", "No presets yet"]
+    header = h._menu.actions()[0]
+    assert not header.isEnabled()
+
+
+def test_a_built_in_announces_its_name(qtbot, mock_core, tmp_path, monkeypatch):
+    monkeypatch.setattr(presets, "presets_dir", lambda: tmp_path)
+    h = _header(qtbot, mock_core)
+    h._menu.aboutToShow.emit()
+    action = next(a for a in h._menu.actions() if a.text() == "Open Field")
+    with qtbot.waitSignal(h.builtin_preset_chosen) as sig:
+        action.trigger()
+    assert sig.args == ["Open Field"]
+
+
+def _checked(h):
+    h._menu.aboutToShow.emit()
+    return [a.text() for a in h._menu.actions() if a.isChecked()]
+
+
+def test_the_built_in_matching_the_protocol_is_checked(qtbot, mock_core, tmp_path, monkeypatch):
+    monkeypatch.setattr(presets, "presets_dir", lambda: tmp_path)
+    h = _header(qtbot, mock_core, experiment_type="Pup Retrieval")
+    assert _checked(h) == ["Pup Retrieval"]
+
+
+def test_a_user_preset_file_is_checked_not_the_built_in(qtbot, mock_core, tmp_path, monkeypatch):
+    monkeypatch.setattr(presets, "presets_dir", lambda: tmp_path)
+    path = presets.save_preset(ExperimentSession(), "Pup Retrieval", tmp_path)
+    h = _header(qtbot, mock_core, experiment_type="Pup Retrieval")
+    mock_core.session._file_path = str(path)
+    texts = _menu_texts(h)
+    assert texts.count("Pup Retrieval") == 2  # the built-in and the user's own
+    assert "No presets yet" not in texts
+    checked = [a for a in h._menu.actions() if a.isChecked()]
+    assert len(checked) == 1
+    assert h._menu.actions().index(checked[0]) > texts.index("Open Field")

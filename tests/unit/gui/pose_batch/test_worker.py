@@ -67,3 +67,38 @@ def test_no_arenas_leaves_the_core_ungated(tmp_path, calls):
     _worker(tmp_path).run()
 
     assert not calls[0]["arenas"]
+
+
+def test_the_pup_pass_reaches_run_batch(tmp_path, calls):
+    """The pup model and litter size are forwarded, not dropped at the seam."""
+    _worker(tmp_path, pup_model=tmp_path / "pups.pt", litter_size=5).run()
+
+    assert calls[0]["pup_model"] == tmp_path / "pups.pt"
+    assert calls[0]["litter_size"] == 5
+
+
+def test_no_pup_model_is_the_default(tmp_path, calls):
+    _worker(tmp_path).run()
+
+    assert calls[0]["pup_model"] is None
+
+
+def test_a_kept_pups_file_is_logged_as_itself(tmp_path):
+    """Not as "skipped (output exists)": the pose may have just been written."""
+    from glider.vision.pose.batch import BatchEvent, EventKind
+
+    worker = _worker(tmp_path)
+    lines: list[str] = []
+    worker.log.connect(lines.append)
+    worker._on_event(
+        BatchEvent(
+            EventKind.SKIPPED,
+            tmp_path / "a.mp4",
+            0,
+            1,
+            output=tmp_path / "a_pups.npz",
+            message="pups: kept existing a_pups.npz",
+        )
+    )
+    worker._on_event(BatchEvent(EventKind.SKIPPED, tmp_path / "a.mp4", 0, 1))
+    assert lines == ["    pups: kept existing a_pups.npz", "[1/1] a.mp4 — skipped (output exists)"]

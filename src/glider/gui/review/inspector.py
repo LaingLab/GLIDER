@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.review.retrieval_panel import RetrievalPanel
 from glider.gui.review.viewer import TRAIL_DEFAULT_S
 from glider.gui.widgets.tool_ui import (
     data_font,
@@ -113,7 +114,7 @@ class _Kpi(QFrame):
 
 
 class Inspector(QTabWidget):
-    """Range and Session tabs. The window fills them."""
+    """Range, Session, Markers and Retrieval tabs. The window fills them."""
 
     marker_picked = pyqtSignal(str)  # marker id
 
@@ -122,9 +123,17 @@ class Inspector(QTabWidget):
         self.setObjectName("Inspector")
         self.setDocumentMode(True)
         self.setMinimumWidth(300)
+        # Four tabs in 300 px: macOS's style would elide every title ("Ra...",
+        # "Sess...") and hide the arrows. Keep whole titles; scroll if needed.
+        self.tabBar().setElideMode(Qt.TextElideMode.ElideNone)
+        self.tabBar().setUsesScrollButtons(True)
         self.addTab(self._build_range(), "Range")
         self.addTab(self._build_session(), "Session")
         self.addTab(self._build_markers(), "Markers")
+        # Shown by the window only under a pup-retrieval experiment.
+        self.retrieval = RetrievalPanel()
+        self.addTab(self.retrieval, "Retrieval")
+        self.set_retrieval_visible(False)
 
     def _build_range(self) -> QWidget:
         scroll, column = scroll_column()
@@ -254,6 +263,9 @@ class Inspector(QTabWidget):
         return page
 
     # ------------------------------------------------------------------
+
+    def set_retrieval_visible(self, on: bool) -> None:
+        self.setTabVisible(self.indexOf(self.retrieval), on)
 
     def set_range(self, title: str, detail: str) -> None:
         self.range_title.setText(title)

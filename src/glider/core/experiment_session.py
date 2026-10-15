@@ -638,6 +638,10 @@ class ExperimentSession:
         """Path to the session file, if saved."""
         return self._file_path
 
+    def detach_file(self) -> None:
+        """Forget the file this session came from, so the next save asks where."""
+        self._file_path = None
+
     @property
     def name(self) -> str:
         """Experiment name."""

@@ -1,6 +1,8 @@
-"""Experiment presets: .glider files in the user's presets folder.
+"""Experiment presets: .glider files in the user's presets folder, plus built-ins.
 
 A preset is an ordinary session file that also carries ``metadata.run_fields``.
+A built-in preset is a protocol and its run fields, defined here rather than
+in a file, and applied to whatever experiment is open.
 Everything here is pure file/str logic so it can be tested without Qt.
 """
 
@@ -10,11 +12,13 @@ import json
 import logging
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 
 from glider.core.config import get_config
+from glider.core.experiment_session import RunField
+from glider.core.experiment_types import OPEN_FIELD, PUP_RETRIEVAL
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,44 @@ class PresetInfo:
     path: Path
     name: str
     field_labels: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class BuiltinPreset:
+    """A protocol GLIDER ships, and the fields it asks for before each run."""
+
+    name: str
+    fields: tuple[RunField, ...]
+
+
+BUILTIN_PRESETS: tuple[BuiltinPreset, ...] = (
+    BuiltinPreset(
+        PUP_RETRIEVAL,
+        (
+            RunField("dam_id", "Dam ID", True),
+            RunField("postnatal_day", "Postnatal day"),
+            RunField("litter_size", "Litter size"),
+        ),
+    ),
+    BuiltinPreset(
+        OPEN_FIELD, (RunField("animal_id", "Animal ID", True), RunField("group", "Group"))
+    ),
+)
+
+
+def apply_builtin(session, name: str) -> None:
+    """Make the open experiment a *name* experiment: its protocol and run fields.
+
+    The flow, devices and camera are the experiment's own and stay as they are.
+    """
+    preset = next((p for p in BUILTIN_PRESETS if p.name == name), None)
+    if preset is None:
+        raise KeyError(name)
+    md = session.metadata
+    md.experiment_type = preset.name
+    md.run_fields = [replace(f) for f in preset.fields]
+    md.reset_run_values()
+    session.mark_dirty()
 
 
 def list_presets(folder: Path | None = None) -> list[PresetInfo]:

@@ -106,3 +106,42 @@ def test_list_skips_non_object_json(tmp_path):
     (tmp_path / "array.glider").write_text("[1, 2]")
     presets.save_preset(ExperimentSession(), "Good", tmp_path)
     assert [p.name for p in presets.list_presets(tmp_path)] == ["Good"]
+
+
+def test_builtin_presets_name_the_protocol_and_ask_for_its_fields():
+    shown = {
+        p.name: [(f.key, f.label, f.required) for f in p.fields] for p in presets.BUILTIN_PRESETS
+    }
+    assert shown == {
+        "Pup Retrieval": [
+            ("dam_id", "Dam ID", True),
+            ("postnatal_day", "Postnatal day", False),
+            ("litter_size", "Litter size", False),
+        ],
+        "Open Field": [("animal_id", "Animal ID", True), ("group", "Group", False)],
+    }
+    for p in presets.BUILTIN_PRESETS:
+        assert [f.key for f in p.fields] == presets.derive_keys([f.label for f in p.fields])
+
+
+def test_apply_builtin_sets_protocol_fields_and_fresh_values():
+    s = ExperimentSession()
+    s.metadata.protocol = "OFT-001"
+    s.metadata.run_fields = [RunField("old", "Old")]
+    s.metadata.run_values = {"old": "x"}
+    s._mark_clean()
+    presets.apply_builtin(s, "Pup Retrieval")
+    md = s.metadata
+    assert md.experiment_type == "Pup Retrieval"
+    assert [f.label for f in md.run_fields] == ["Dam ID", "Postnatal day", "Litter size"]
+    assert md.run_values == {"dam_id": "", "postnatal_day": "", "litter_size": ""}
+    assert md.protocol == "OFT-001"
+    assert s.is_dirty
+    # Copies: editing the session's fields never edits the built-in.
+    md.run_fields[0].label = "Mother"
+    assert presets.BUILTIN_PRESETS[0].fields[0].label == "Dam ID"
+
+
+def test_apply_builtin_refuses_an_unknown_name():
+    with pytest.raises(KeyError):
+        presets.apply_builtin(ExperimentSession(), "Rotarod")

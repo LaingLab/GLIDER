@@ -49,7 +49,9 @@ rpi = [
     "lgpio>=0.2.0",
 ]
 vision = [
-    "ultralytics>=8.0.0",
+    # 8.4.136 is the first release known to load the semantic-segmentation
+    # task (SemanticSegment head) the pup-retrieval models are trained on.
+    "ultralytics>=8.4.136",
     # ByteTrack (model.track(tracker="bytetrack.yaml")) needs `lap` for linear
     # assignment. Ultralytics doesn't declare it because they treat it as
     # opt-in, and they shell out to `pip install` at runtime when it's missing

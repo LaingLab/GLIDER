@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.core.experiment_types import ANALYSIS_PUP_RETRIEVAL, has_analysis
 from glider.gui.pose_batch.calibration_table import CalibrationTable
 from glider.gui.qthreads import retire_thread
 from glider.gui.styles import colors
@@ -190,9 +191,17 @@ class PoseBatchWindow(QMainWindow):
         # the same reasoning as the re-gate: I/O over a handful of CSVs.
         self._export_thread: QThread | None = None
         self._export_worker = None
+        # The open experiment's type, pushed in by whoever owns the experiment
+        # (MainWindow). "" when the window runs standalone.
+        self._experiment_type = ""
 
         self._build_ui()
         self._refresh_videos()
+
+    def set_experiment_type(self, experiment_type: str) -> None:
+        """Follow the open experiment's type (what it unlocks is up to the preset)."""
+        self._experiment_type = experiment_type or ""
+        self._pup_card.setVisible(has_analysis(self._experiment_type, ANALYSIS_PUP_RETRIEVAL))
 
     # ------------------------------------------------------------------
     # construction
@@ -226,6 +235,7 @@ class PoseBatchWindow(QMainWindow):
         # --- left: configuration ----------------------------------------
         area, column = scroll_column()
         column.addWidget(self._build_model_group())
+        column.addWidget(self._build_pup_group())
         # Videos and calibration still share a splitter -- the calibration
         # table is the one thing here whose useful height genuinely depends on
         # the cohort size, and trading rows against it is worth a handle. The
@@ -364,6 +374,36 @@ class PoseBatchWindow(QMainWindow):
             "Prevents a silent CPU fallback turning an overnight batch into a multi-day one."
         )
         card.add(self._require_gpu)
+        return card
+
+    def _build_pup_group(self) -> Card:
+        card = Card("Pup segmentation")
+        self._pup_card = card
+        # Shown only when the experiment type unlocks pup retrieval
+        # (set_experiment_type); every other experiment never sees it.
+        card.setVisible(False)
+
+        self._pup_model_path: Path | None = None
+        self._pup_model_field = QLineEdit()
+        self._pup_model_field.setReadOnly(True)
+        self._pup_model_field.setPlaceholderText("Optional: a semantic pup model (.pt)")
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self._choose_pup_model)
+        self._pup_clear = QPushButton("Clear")
+        set_button_role(self._pup_clear, "ghost")
+        self._pup_clear.clicked.connect(lambda: self._set_pup_model(None))
+        card.add_row("Weights", self._pup_model_field, browse, self._pup_clear)
+
+        self._litter_spin = QSpinBox()
+        self._litter_spin.setRange(1, 20)
+        self._litter_spin.setValue(5)
+        card.add_row("Litter size", self._litter_spin)
+        card.add(
+            hint(
+                "Writes <video>_pups.npz beside each video, for scoring pup retrieval in Session Review."
+            )
+        )
+        self._set_pup_model(None)
         return card
 
     def _build_sources_group(self) -> Card:
@@ -603,6 +643,19 @@ class PoseBatchWindow(QMainWindow):
         self._names_status.setText("Reading keypoints from the model…")
         self._start_meta_read()
         self._validate()
+
+    def _choose_pup_model(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select a pup segmentation model", "", "PyTorch weights (*.pt)"
+        )
+        if path:
+            self._set_pup_model(Path(path))
+
+    def _set_pup_model(self, path: Path | None) -> None:
+        self._pup_model_path = path
+        self._pup_model_field.setText("" if path is None else path.name)
+        # The litter size only means something to a pass that will run.
+        self._litter_spin.setEnabled(path is not None)
 
     def _choose_directory(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Add video directory")
@@ -1380,6 +1433,14 @@ class PoseBatchWindow(QMainWindow):
             # re-ranks multi-detection frames during inference, which is the
             # one part no post-hoc pass can recover.
             gate=ArenaGateSettings(),
+            # A model picked under pup retrieval stays in the hidden card when the
+            # type changes; it must not run a pass the user can no longer see.
+            pup_model=(
+                self._pup_model_path
+                if has_analysis(self._experiment_type, ANALYSIS_PUP_RETRIEVAL)
+                else None
+            ),
+            litter_size=self._litter_spin.value(),
         )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)

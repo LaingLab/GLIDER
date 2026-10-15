@@ -554,3 +554,12 @@ def test_tracker_id_changes_stay_one_animal(synthetic_recording: Path):
     tracking_lanes = [lane for lane in t.behavior if lane.source.startswith("tracking")]
     assert [lane.source for lane in tracking_lanes] == ["tracking"]
     assert len(tracking_lanes[0].labels) == tracking["frame"].nunique()
+
+
+def test_a_view_without_labels_has_no_behavior_lane():
+    """A bare video has a row per frame but nothing scored: no empty lane."""
+    from glider.analysis.behavior.session_view import SessionView
+
+    view = SessionView(labels=[""] * 50, frames=np.arange(50), fps=30.0)
+    assert not view.has_labels
+    assert build_timeline(None, view).behavior == []

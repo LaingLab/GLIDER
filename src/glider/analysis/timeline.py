@@ -421,7 +421,7 @@ def build_timeline(session: Session | None, view: SessionView | None = None) -> 
     lanes. Collapsing them would misrepresent provenance.
     """
     behavior: list[BehaviorLane] = []
-    if view is not None and len(view.labels):
+    if view is not None and view.has_labels:
         behavior.append(
             BehaviorLane(source="ethogram", labels=list(view.labels), frames=view.frames)
         )

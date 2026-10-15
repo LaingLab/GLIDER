@@ -940,3 +940,151 @@ def test_each_video_reports_only_its_own_zone_warning(tmp_path, monkeypatch):
     )
     assert any("boom" in m for m in messages["a.mp4"])
     assert not any("boom" in m for m in messages["b.mp4"])
+
+
+# --------------------------------------------------------------------------
+# the optional pup pass
+# --------------------------------------------------------------------------
+
+
+def _fake_pups(calls):
+    def fn(model_path, video, *, litter_size, device, require_gpu, progress_cb, cancel_cb):
+        calls.append((Path(video).name, litter_size))
+        out = Path(video).with_name(f"{Path(video).stem}_pups.npz")
+        out.write_bytes(b"x")
+        return out
+
+    return fn
+
+
+def test_the_pup_pass_runs_after_pose_for_each_video(videos):
+    calls = []
+    result = batch.run_batch(
+        videos,
+        MODEL,
+        NAMES,
+        infer=_fake_infer,
+        pup_model=Path("pups.pt"),
+        litter_size=5,
+        track_pups_fn=_fake_pups(calls),
+    )
+    assert calls == [(v.name, 5) for v in videos]
+    assert len(result.completed) == len(videos) and not result.failed
+
+
+def test_no_pup_model_means_no_pup_pass(videos):
+    calls = []
+    batch.run_batch(videos, MODEL, NAMES, infer=_fake_infer, track_pups_fn=_fake_pups(calls))
+    assert calls == []
+
+
+def test_existing_pups_are_kept_unless_overwrite(videos):
+    calls = []
+    videos[0].with_name(f"{videos[0].stem}_pups.npz").write_bytes(b"old")
+    batch.run_batch(
+        videos[:1],
+        MODEL,
+        NAMES,
+        infer=_fake_infer,
+        pup_model=Path("pups.pt"),
+        litter_size=5,
+        track_pups_fn=_fake_pups(calls),
+    )
+    assert calls == []
+    batch.run_batch(
+        videos[:1],
+        MODEL,
+        NAMES,
+        infer=_fake_infer,
+        overwrite=True,
+        pup_model=Path("pups.pt"),
+        litter_size=5,
+        track_pups_fn=_fake_pups(calls),
+    )
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("pose_done", [False, True])
+def test_kept_pups_are_reported_not_silent(videos, pose_done):
+    """An event says the pups file was kept; the video's own tally is unchanged."""
+    if pose_done:
+        batch.run_batch(videos[:1], MODEL, NAMES, infer=_fake_infer)
+    npz = videos[0].with_name(f"{videos[0].stem}_pups.npz")
+    npz.write_bytes(b"old")
+    events = []
+    result = batch.run_batch(
+        videos[:1],
+        MODEL,
+        NAMES,
+        infer=_fake_infer,
+        pup_model=Path("pups.pt"),
+        litter_size=5,
+        track_pups_fn=_fake_pups([]),
+        on_event=events.append,
+    )
+    kept = [(e.kind, e.message, e.output) for e in events if e.message.startswith("pups:")]
+    assert kept == [(batch.EventKind.SKIPPED, f"pups: kept existing {npz.name}", npz.resolve())]
+    video = videos[0].resolve()
+    assert (result.skipped, result.completed) == (([video], []) if pose_done else ([], [video]))
+
+
+def test_a_pup_failure_keeps_the_pose_and_is_reported(videos):
+    def boom(*a, **k):
+        raise ValueError("no pup blobs in any frame")
+
+    events = []
+    result = batch.run_batch(
+        videos[:1],
+        MODEL,
+        NAMES,
+        infer=_fake_infer,
+        pup_model=Path("pups.pt"),
+        litter_size=5,
+        track_pups_fn=boom,
+        on_event=events.append,
+    )
+    assert result.failed == [(videos[0].resolve(), "pups: no pup blobs in any frame")]
+    assert batch.dlc_output_path(videos[0].resolve(), MODEL).exists()
+    assert events[-1].kind == batch.EventKind.FAILED
+
+
+def test_a_video_whose_pose_is_already_done_still_gets_its_pup_pass(videos):
+    """A resumed batch must be able to add pups to videos it skips for pose."""
+    batch.run_batch(videos[:1], MODEL, NAMES, infer=_fake_infer)
+    calls = []
+    result = batch.run_batch(
+        videos[:1],
+        MODEL,
+        NAMES,
+        infer=_fake_infer,
+        pup_model=Path("pups.pt"),
+        litter_size=5,
+        track_pups_fn=_fake_pups(calls),
+    )
+    assert result.skipped == [videos[0].resolve()] and not result.completed
+    assert calls == [(videos[0].name, 5)]
+
+
+@pytest.mark.parametrize("pose_done", [False, True])
+def test_cancelling_during_the_pup_pass_cancels_the_batch(videos, pose_done):
+    """Whether the pup pass follows a fresh pose run or a skipped one."""
+    if pose_done:
+        batch.run_batch(videos[:2], MODEL, NAMES, infer=_fake_infer)
+
+    def cancelled(*a, **k):
+        raise PoseCancelledError()
+
+    events = []
+    result = batch.run_batch(
+        videos[:2],
+        MODEL,
+        NAMES,
+        infer=_fake_infer,
+        pup_model=Path("pups.pt"),
+        litter_size=5,
+        track_pups_fn=cancelled,
+        on_event=events.append,
+    )
+    assert result.cancelled and not result.failed
+    assert events[-1].kind == batch.EventKind.CANCELLED
+    assert events[-1].video == videos[0].resolve()  # stopped at the first video

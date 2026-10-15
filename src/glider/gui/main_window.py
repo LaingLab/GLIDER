@@ -376,6 +376,9 @@ class MainWindow(QMainWindow):
 
     # Signals
     session_changed = pyqtSignal()
+    #: The open experiment's type changed (any writer: Experiment tab, a Run-tab
+    #: preset, Session Review). Tool windows follow it; see experiment_types.
+    experiment_type_changed = pyqtSignal(str)
     state_changed = pyqtSignal(str)  # Session state name
     error_occurred = pyqtSignal(str, str)  # source, message
 
@@ -1235,6 +1238,7 @@ class MainWindow(QMainWindow):
         # --- Header (title, state pill, field tags) ---
         self._run_header = RunHeader(self._core)
         self._run_header.preset_chosen.connect(self._on_preset_chosen)
+        self._run_header.builtin_preset_chosen.connect(self._on_builtin_preset_chosen)
         self._run_header.new_preset_requested.connect(self._on_new_preset)
         self._run_header.save_as_preset_requested.connect(self._on_save_as_preset)
         self._run_header.edit_fields_requested.connect(self._on_edit_preset_fields)
@@ -2085,6 +2089,8 @@ class MainWindow(QMainWindow):
 
         if getattr(self, "_pose_batch_window", None) is None:
             self._pose_batch_window = PoseBatchWindow(parent=None)
+            self.experiment_type_changed.connect(self._pose_batch_window.set_experiment_type)
+        self._pose_batch_window.set_experiment_type(self._experiment_type())
         self._pose_batch_window.show()
         self._pose_batch_window.raise_()
         self._pose_batch_window.activateWindow()
@@ -2123,6 +2129,9 @@ class MainWindow(QMainWindow):
 
         if getattr(self, "_session_review_window", None) is None:
             self._session_review_window = AnalysisWindow(parent=None)
+            self.experiment_type_changed.connect(self._session_review_window.set_experiment_type)
+            self._session_review_window.experiment_type_chosen.connect(self._set_experiment_type)
+        self._session_review_window.set_experiment_type(self._experiment_type())
         self._session_review_window.show()
         self._session_review_window.raise_()
         self._session_review_window.activateWindow()
@@ -2351,6 +2360,11 @@ class MainWindow(QMainWindow):
         self.session_changed.connect(self._runner_device_controls.refresh)
         self.session_changed.connect(self._surface_load_warnings)
         self.session_changed.connect(self._refresh_strip_experiment)
+        # The experiment type is one shared value (core/experiment_types.py):
+        # whichever writer changes it, the tool windows hear about it here.
+        self._last_experiment_type: str | None = None
+        self._session_dirtied.connect(self._broadcast_experiment_type)
+        self.session_changed.connect(self._broadcast_experiment_type)
         # A new or newly-opened session is a *new rig*: both paths call
         # ``hardware_manager.clear()``, and File -> Open then registers the
         # boards the file names. Nothing about that is a board changing state,
@@ -3186,6 +3200,25 @@ class MainWindow(QMainWindow):
             self._core.session.metadata.reset_run_values()
             self.session_changed.emit()
 
+    def _on_builtin_preset_chosen(self, name: str) -> None:
+        """Make the open experiment a *name* one. Its flow and rig stay, so no save prompt."""
+        if self._refuse_while_running("switch presets"):
+            return
+        session = self._core.session
+        presets.apply_builtin(session, name)
+        # If the open file is one of my presets, it is no longer that preset:
+        # detach it, so neither Save nor Edit preset fields (which saves
+        # silently) can write the built-in into it. Other files stay attached.
+        path = session.file_path
+        if path and Path(path).resolve().parent == presets.presets_dir().resolve():
+            session.detach_file()
+            self._show_status_message(
+                f"{name} applied. Your preset {Path(path).name} is unchanged; Save asks where."
+            )
+        # session_changed refreshes the run header, and its type broadcast
+        # reaches the Experiment forms, Session Review and Batch Pose.
+        self.session_changed.emit()
+
     def _on_new_preset(self) -> None:
         if self._refuse_while_running("create a preset"):
             return
@@ -3520,6 +3553,42 @@ class MainWindow(QMainWindow):
     def _on_experiment_metadata_changed(self) -> None:
         self._core.session._dirty = True
         self._refresh_strip_experiment()
+        # The form sets ``_dirty`` directly, so no ``on_change`` callback fires.
+        # ``sender()`` is the form that was typed in (None if called directly).
+        self._broadcast_experiment_type(origin=self.sender())
+
+    def _experiment_type(self) -> str:
+        """The open experiment's type: the one value every window shares."""
+        session = self._core.session
+        return getattr(getattr(session, "metadata", None), "experiment_type", "") or ""
+
+    def _broadcast_experiment_type(self, origin=None) -> None:
+        """Bring every view of the type up to date, once per actual change.
+
+        The run header's picker, the Experiment tab's form and the Experiment >
+        Settings dialog each show the type, so each is refreshed -- except
+        *origin*, the form the edit was typed in: refreshing that one mid-keystroke
+        would reset its cursor, and it already shows what was typed. The tool
+        windows hear it through ``experiment_type_changed``.
+        """
+        current = self._experiment_type()
+        if current == self._last_experiment_type:
+            return
+        # Set first: a refresh below can write back and land here again.
+        self._last_experiment_type = current
+        for view in (self._run_header, self._experiment_details, self._experiment_dialog):
+            if view is not None and view is not origin:
+                view.refresh()
+        self.experiment_type_changed.emit(current)
+
+    def _set_experiment_type(self, experiment_type: str) -> None:
+        """The one writer for the shared type outside the Experiment forms."""
+        session = self._core.session
+        if session is None or session.metadata.experiment_type == experiment_type:
+            return
+        session.metadata.experiment_type = experiment_type
+        session.mark_dirty()
+        self._broadcast_experiment_type()
 
     def _on_recording_directory_changed(self, directory: str) -> None:
         if directory:

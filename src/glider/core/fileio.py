@@ -7,17 +7,23 @@ from pathlib import Path
 
 
 def atomic_write_text(path: str | Path, text: str) -> None:
-    """Write ``text`` to ``path`` so a failure never leaves a truncated file.
+    """Text as :func:`atomic_write_bytes`; newlines are CRLF on Windows, as text mode wrote them."""
+    atomic_write_bytes(path, text.replace("\n", os.linesep).encode("utf-8"))
+
+
+def atomic_write_bytes(path: str | Path, data: bytes) -> None:
+    """Write ``data`` to ``path`` so a failure never leaves a truncated file.
 
     Serialize before calling this: the old file is untouched until the new
     one is complete and fsynced beside it, then ``os.replace`` swaps it in.
-    Keeps the existing file's mode (mkstemp would otherwise make it 0600).
+    Keeps the existing file's mode (mkstemp would otherwise make it 0600), and
+    gives a new file the umask default so other lab members can read it.
     """
     path = Path(path)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
             f.flush()
             os.fsync(f.fileno())
         if path.exists():

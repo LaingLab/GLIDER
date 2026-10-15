@@ -19,12 +19,21 @@ def inspector(qtbot):
     return widget
 
 
-def test_it_has_range_session_and_markers_tabs(inspector):
+def test_it_has_range_session_markers_and_retrieval_tabs(inspector):
     assert [inspector.tabText(i) for i in range(inspector.count())] == [
         "Range",
         "Session",
         "Markers",
+        "Retrieval",
     ]
+
+
+def test_the_retrieval_tab_starts_hidden_until_the_window_shows_it(inspector):
+    tab = inspector.indexOf(inspector.retrieval)
+    assert tab == 3
+    assert not inspector.isTabVisible(tab)
+    inspector.set_retrieval_visible(True)
+    assert inspector.isTabVisible(tab)
 
 
 def test_the_range_card_shows_what_it_is_given(inspector):
@@ -152,3 +161,32 @@ def test_a_marker_note_shows_only_when_there_is_one(inspector):
     assert not inspector.marker_note.isHidden()
     inspector.set_marker_note("")
     assert inspector.marker_note.isHidden()
+
+
+def test_tab_titles_scroll_instead_of_eliding(qtbot):
+    """macOS's style elides tab titles and drops the scroll arrows, so four
+    tabs in a 300 px inspector read "Ra... Sess... Mark... Retrie...". The
+    inspector must keep whole titles and scroll, whatever the style prefers."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QApplication, QProxyStyle, QStyle
+
+    class ElidingStyle(QProxyStyle):  # what the native macOS style answers
+        def styleHint(self, hint, option=None, widget=None, data=None):
+            if hint == QStyle.StyleHint.SH_TabBar_ElideMode:
+                return int(Qt.TextElideMode.ElideRight.value)
+            if hint == QStyle.StyleHint.SH_TabBar_PreferNoArrows:
+                return 1
+            return super().styleHint(hint, option, widget, data)
+
+    app = QApplication.instance()
+    previous = app.style().name()
+    style = ElidingStyle(previous)
+    app.setStyle(style)
+    try:
+        widget = Inspector()
+        qtbot.addWidget(widget)
+        bar = widget.tabBar()
+        assert bar.elideMode() == Qt.TextElideMode.ElideNone
+        assert bar.usesScrollButtons()
+    finally:
+        app.setStyle(previous)

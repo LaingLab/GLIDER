@@ -19,11 +19,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
 from glider.analysis.ethogram import UNSCORED
+
+if TYPE_CHECKING:
+    from glider.vision.pose.pups import PupTracks
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +35,18 @@ __all__ = [
     "SegmentStats",
     "SessionView",
     "SessionViewError",
+    "VIDEO_SUFFIXES",
     "find_session_poses",
     "find_session_video",
+    "is_video",
 ]
+
+#: What counts as a bare video when a file is opened as a session.
+VIDEO_SUFFIXES = frozenset({".mp4", ".avi", ".mov", ".mkv"})
+
+
+def is_video(path: Path | str) -> bool:
+    return Path(path).suffix.lower() in VIDEO_SUFFIXES
 
 
 class SessionViewError(ValueError):
@@ -331,6 +344,15 @@ class SessionView:
     applied_dart_px: float | None = None
     applied_freeze_cm_s: float | None = None
     applied_dart_cm_s: float | None = None
+    # The pups a bare video's batch pass found. Kept apart from ``xy`` on
+    # purpose: ``centroid()`` averages every keypoint, so a pup there would
+    # drag the adult's centre toward the litter.
+    pups: PupTracks | None = None
+
+    @property
+    def has_labels(self) -> bool:
+        """False for a video opened without an ethogram: it has no behaviour lane."""
+        return any(label != UNSCORED for label in self.labels)
 
     # ------------------------------------------------------------------
     # loading
@@ -439,6 +461,39 @@ class SessionView:
         if view.px_per_mm and "distance_mm" in rows.columns:
             distance = pd.to_numeric(rows["distance_mm"], errors="coerce").to_numpy(dtype=float)
             view.speed_cm_s = distance * view.fps / _MM_PER_CM
+        return view
+
+    @classmethod
+    def from_video(cls, video: Path | str, *, pose_csv: Path | str | None = None) -> SessionView:
+        """A bare video: its own pose CSV and ``_pups.npz`` if the batch made them.
+
+        Only *this* video's pose CSV is looked for (``find_pose_csv``): the
+        ethogram search would take any ``*DLC_*.csv`` in the folder, and a
+        retrieval folder holds several videos' poses side by side.
+        """
+        from glider.vision.pose.batch import find_pose_csv
+        from glider.vision.pose.pups import load_pups, pups_path
+        from glider.vision.video_source import VideoFileSource
+
+        video = Path(video)
+        source = VideoFileSource()
+        try:
+            if not source.load(video):
+                raise SessionViewError(f"{video.name} could not be opened as a video")
+            n, fps = int(source.frame_count), float(source.fps)
+        finally:
+            source.release()
+        view = cls(labels=[UNSCORED] * n, frames=np.arange(n), fps=fps, source=video)
+        poses = pose_csv if pose_csv is not None else find_pose_csv(video)
+        if poses is not None:
+            view._load_poses(video, poses)
+        view._load_scale(None, video, video)
+        view._load_video(video, video)
+        if pups_path(video).is_file():
+            try:
+                view.pups = load_pups(pups_path(video))
+            except ValueError as e:
+                logger.warning("pups not loaded: %s", e)
         return view
 
     def _load_centroid(self, rows: pd.DataFrame) -> None:

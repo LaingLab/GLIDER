@@ -701,3 +701,66 @@ class TestFromRecording:
             first_video_frame=1,
         )
         assert view.video_is_aligned
+
+
+class TestFromVideo:
+    """A bare video: no GLIDER folder, no ethogram."""
+
+    def _video_with_pups(self, folder, n=40):
+        from glider.vision.pose.pups import PupTracks, save_pups
+
+        video = _clip(folder / "litter1_pre.avi", n=n)
+        xy = np.full((2, n, 2), 10.0)
+        save_pups(
+            folder / "litter1_pre_pups.npz",
+            PupTracks(xy, [[] for _ in range(n)], np.zeros((2, n), bool), {"fps": 30.0}),
+        )
+        return video
+
+    def test_a_bare_video_opens_with_its_pups_and_no_labels(self, tmp_path):
+        video = self._video_with_pups(tmp_path)
+        view = SessionView.from_video(video)
+        assert view.video_path == video and view.video_frames == 40
+        assert len(view.labels) == 40 and not view.has_labels
+        assert view.pups is not None and view.pups.n_pups == 2
+        assert view.xy is None  # no pose CSV beside it; pups never go into xy
+        assert view.resolution == (64, 48)
+
+    def test_its_own_pose_csv_is_found_and_another_videos_is_not(self, tmp_path):
+        video = self._video_with_pups(tmp_path)
+        _write_pose_csv(tmp_path / "litter1_postDLC_exp.csv", n=40)  # a sibling video's poses
+        assert SessionView.from_video(video).xy is None
+        _write_pose_csv(tmp_path / "litter1_preDLC_exp.csv", n=40)
+        view = SessionView.from_video(video)
+        assert view.xy.shape == (40, 4, 2) and view.keypoint_names == NAMES
+
+    def test_an_unreadable_video_raises(self, tmp_path):
+        bad = tmp_path / "x.avi"
+        bad.write_bytes(b"nope")
+        with pytest.raises(SessionViewError):
+            SessionView.from_video(bad)
+
+    def test_an_ethogram_session_still_has_labels(self, tmp_path):
+        assert SessionView.load(_write_session(tmp_path / "s")).has_labels
+
+    def test_a_damaged_pups_file_costs_the_pups_not_the_session(self, tmp_path):
+        video = self._video_with_pups(tmp_path)
+        (tmp_path / "litter1_pre_pups.npz").write_bytes(b"not a zip")
+        view = SessionView.from_video(video)
+        assert view.pups is None and view.video_path == video
+
+    def test_the_scale_is_read_from_a_run_manifest_beside_the_video(self, tmp_path):
+        import json
+
+        video = self._video_with_pups(tmp_path)
+        (tmp_path / "run.json").write_text(json.dumps({"px_per_mm": 2.5}), encoding="utf-8")
+        assert SessionView.from_video(video).px_per_mm == pytest.approx(2.5)
+
+    def test_a_video_with_no_calibration_has_no_scale(self, tmp_path):
+        assert SessionView.from_video(self._video_with_pups(tmp_path)).px_per_mm is None
+
+    def test_video_suffixes(self):
+        from glider.analysis.behavior.session_view import is_video
+
+        assert all(is_video(f"a{s}") for s in (".mp4", ".AVI", ".mov", ".mkv"))
+        assert not is_video("a.csv") and not is_video("a")

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
@@ -11,6 +9,7 @@ pytest.importorskip("PyQt6")
 
 from PyQt6.QtGui import QColor  # noqa: E402
 
+from glider.analysis.behavior.session_view import SessionView  # noqa: E402
 from glider.analysis.timeline import (  # noqa: E402
     BehaviorLane,
     FrameMap,
@@ -24,6 +23,10 @@ from glider.gui.review.timeline import HEADER_W, TimelineView, behavior_qcolor  
 from glider.gui.styles import colors  # noqa: E402
 
 _ORDER = ["groom", "locomote"]
+
+
+def _ethogram_view(labels: list[str]) -> SessionView:
+    return SessionView(labels=labels, frames=np.arange(len(labels)), fps=30.0)
 
 
 def _led_lane() -> Lane:
@@ -154,12 +157,43 @@ def test_behavior_sits_on_the_time_axis_with_everything_else(view):
 
 
 def test_an_ethogram_only_timeline_paints_without_a_view(view):
-    lanes = SimpleNamespace(labels=["groom"] * 150 + ["locomote"] * 151, frames=np.arange(301))
+    lanes = _ethogram_view(["groom"] * 150 + ["locomote"] * 151)
     view.set_timeline(build_timeline(None, lanes))
     assert view.frame_bounds() == (0, 300)
     y = _band_y(view, "ethogram")
     assert _pixel(view, view.x_of_frame(75), y) == behavior_qcolor("groom", _ORDER)
     assert _pixel(view, view.x_of_frame(250), y) == behavior_qcolor("locomote", _ORDER)
+
+
+def test_a_view_without_labels_draws_no_behavior_lane(view):
+    """A bare video has a row per frame and nothing scored: no all-grey lane."""
+    view.set_session(_ethogram_view([""] * 100), None)
+    assert view._behavior_lanes() == []
+
+
+def test_a_view_without_labels_keeps_its_span_and_viewport(view):
+    """No lane to draw must not mean no axis: the playhead, zoom and pan still
+    work on a bare video, which is when a trial start has to be set."""
+    labels = _ethogram_view([""] * 100)
+    view.set_session(labels, build_timeline(None, labels))
+    assert view.frame_bounds() == (0, 99)
+    assert view.viewport is not None
+    assert view._behavior_lanes() == []
+    view.grab()  # paints a time axis with no lane under it
+
+
+def test_a_view_without_lanes_still_draws_its_playhead(view):
+    """An unscored bare video has no row at all -- no behaviour, no hardware,
+    no pup lanes yet -- but it is loaded: it must get its ruler and playhead,
+    not the "Load a session" placeholder, or there is nowhere to set a trial
+    start from."""
+    labels = _ethogram_view([""] * 100)
+    view.set_session(labels, build_timeline(None, labels))
+    view.set_frame(50)
+    x = view.x_of_frame(50)
+    y = view.height() - 10  # below where any lane would be
+    seen = {_pixel(view, x + dx, y).name() for dx in (-1, 0, 1)}
+    assert QColor(colors.PLAYHEAD).name() in seen
 
 
 def test_a_lane_paints_nothing_outside_its_own_frames(view):
@@ -213,7 +247,7 @@ def test_selecting_everything_changes_nothing_inside(view):
 
 def test_zoomed_in_bouts_become_clips(view):
     labels = ["groom", "locomote"] * 1500
-    view.set_timeline(build_timeline(None, SimpleNamespace(labels=labels, frames=np.arange(3000))))
+    view.set_timeline(build_timeline(None, _ethogram_view(labels)))
     lane = view._behavior_lanes()[0]
     assert view._uses_clips(lane) is False
     view.viewport.show(1000, 1060)
@@ -868,3 +902,46 @@ def test_the_frame_after_the_last_is_one_frame_later(view):
     assert view.seconds_of_axis(view.axis_of_frame(301)) == pytest.approx(
         view.seconds_of_frame(301)
     )
+
+
+# ---------------------------------------------------------------------------
+# pup retrieval: pup lanes, the nose -> nest lane and setup flags
+
+from glider.gui.review.timeline import RetrievalLanes  # noqa: E402
+
+
+def _lanes(n=300):
+    codes = np.full(n, 0, np.int8)
+    codes[150:] = 3  # in nest from frame 150
+    distance = np.linspace(10, -2, n)
+    return RetrievalLanes(
+        pups=[("pup_0", codes)],
+        retrieved_at={"pup_0": 150},
+        distance=distance,
+        flags=[(0.0, "Trial start", colors.NOSE)],
+    )
+
+
+def test_pup_lane_is_drawn_in_its_state_colours(view):
+    view.set_timeline(_timeline())
+    view.set_retrieval(_lanes())
+    rect = view.lane_rect("pup_0")
+    y = int(rect.center().y())
+    assert _pixel(view, view.x_of_frame(100), y) == QColor(colors.PUP_STATES["out"])
+    assert _pixel(view, view.x_of_frame(250), y) == QColor(colors.PUP_STATES["in nest"])
+
+
+def test_numeric_lane_exists_and_clears(view):
+    view.set_timeline(_timeline())
+    view.set_retrieval(_lanes())
+    assert view.lane_rect("nose_nest") is not None
+    view.set_retrieval(None)
+    assert view.lane_rect("nose_nest") is None
+
+
+def test_setup_flags_are_drawn_but_not_draggable_markers(view):
+    view.set_timeline(_timeline())
+    view.set_retrieval(_lanes())
+    x = _x_at(view, 0.0)
+    assert view.marker_at(x, RULER_H + 6) is None
+    assert _pixel(view, x + 3, RULER_H + 6) == QColor(colors.NOSE)
