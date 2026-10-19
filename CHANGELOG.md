@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pick cameras, and record them one at a time, in Multi-Camera Recording.**
+  Each row of the status table now has a checkbox and its own **Record** /
+  **Stop** button. Unticking a camera disconnects it, which frees its USB
+  bandwidth, so it is neither previewed nor recorded. The choice is remembered
+  in `~/.glider/camera_selection.json`, and the camera panel's Multi-Camera mode
+  leaves those cameras out too, so an experiment does not record them. A row's
+  button starts or stops that camera alone and leaves the others as they are.
+  Each camera shows its own take time, and its file is finished in the
+  background so the other previews keep running. **Record All** adds any
+  cameras not yet recording to the run that is going, and **Stop All** stops
+  every camera. A camera restarted within the same second gets a `_take2` file
+  instead of overwriting the first, and cameras are listed in number order
+  (cam_2 before cam_10). The preview tiles now show each camera's frame rate
+  instead of "-- FPS".
+
 - **Pup retrieval scoring.** A **Pup Retrieval** protocol (picked in the
   Experiment form's **Protocol** dropdown, by the Run tab's built-in Pup
   Retrieval preset, or in Session Review's new **Protocol** selector, one value

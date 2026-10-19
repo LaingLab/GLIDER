@@ -163,3 +163,33 @@ class TestEarlyStop:
             found = CameraManager.enumerate_cameras(stop_after_misses=None)
         assert max(seen) == MAX_CAMERAS - 1
         assert [c.index for c in found] == [0, 15]
+
+
+class TestSkippingCamerasInUse:
+    """The Multi-Camera window looks for cameras while others are streaming.
+
+    A streaming camera can refuse a second open. Probed, it reads as absent,
+    and a run of those ends the scan before it reaches a switched-off camera
+    further up - which then can never be switched back on.
+    """
+
+    def test_an_index_in_use_is_not_probed(self):
+        fake_cap, seen = TestEarlyStop._fake({0, 1, 2})
+        with patch("cv2.VideoCapture", fake_cap):
+            found = CameraManager.enumerate_cameras(skip_indices={1})
+        assert 1 not in seen
+        assert [c.index for c in found] == [0, 2]
+
+    def test_a_run_of_cameras_in_use_does_not_end_the_scan(self):
+        # Six cameras streaming, a switched-off one at index 6.
+        fake_cap, _ = TestEarlyStop._fake({6})
+        with patch("cv2.VideoCapture", fake_cap):
+            found = CameraManager.enumerate_cameras(skip_indices=range(6))
+        assert [c.index for c in found] == [6]
+
+    def test_the_multi_camera_manager_passes_it_through(self):
+        fake_cap, seen = TestEarlyStop._fake({0, 1})
+        with patch("cv2.VideoCapture", fake_cap):
+            found = MultiCameraManager.enumerate_all_cameras(skip_indices={0})
+        assert 0 not in seen
+        assert [c.index for c in found] == [1]

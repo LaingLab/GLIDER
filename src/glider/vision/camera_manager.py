@@ -20,7 +20,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from queue import Empty, Queue
@@ -1080,6 +1080,7 @@ class CameraManager:
     def enumerate_cameras(
         max_cameras: int = MAX_CAMERAS,
         stop_after_misses: int | None = _STOP_AFTER_MISSES,
+        skip_indices: Iterable[int] = (),
     ) -> list[CameraInfo]:
         """
         Enumerate all available camera devices.
@@ -1091,12 +1092,17 @@ class CameraManager:
             max_cameras: Highest camera index to consider.
             stop_after_misses: Give up after this many consecutive empty
                 indices. ``None`` probes every index up to *max_cameras*.
+            skip_indices: Indices already open elsewhere in this process. They
+                are not probed or returned, but count as present: a camera
+                that is streaming can refuse a second open, and read as a
+                miss that would end the scan before the cameras past it.
 
         Returns:
             List of available cameras
         """
         cameras = []
         found_indices = set()  # Track which indices we've already found
+        skip = set(skip_indices)
 
         # Also suppress OpenCV's internal logging
         old_log_level = os.environ.get("OPENCV_LOG_LEVEL", "")
@@ -1128,6 +1134,10 @@ class CameraManager:
                         # not "stop at the first miss".
                         if stop_after_misses is not None and misses >= stop_after_misses:
                             break
+
+                        if i in skip:
+                            misses = 0
+                            continue
 
                         # Skip if we already found this camera index
                         if i in found_indices:

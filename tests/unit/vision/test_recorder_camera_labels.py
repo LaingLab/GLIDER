@@ -57,13 +57,14 @@ class TestLabelledFilenames:
 
 
 class TestWhenLabelsMayChange:
-    def test_labels_are_refused_mid_recording(self, recorder):
-        # The files are already open; renaming half a set partway through is
-        # worse than not renaming.
+    def test_labels_given_mid_recording_apply_to_the_next_file(self, recorder):
+        # Cameras start one at a time now, so a camera named while another is
+        # recording must not be started under its old name. Files already open
+        # keep theirs: the name is only read when a file is opened.
         recorder.set_camera_labels({"cam_1": "before"})
         recorder._state = RecordingState.RECORDING
         recorder.set_camera_labels({"cam_1": "after"})
-        assert "before" in _name(recorder, "cam_1")
+        assert "after" in _name(recorder, "cam_1")
 
     def test_labels_can_be_cleared_between_runs(self, recorder):
         recorder.set_camera_labels({"cam_1": "arena_B"})

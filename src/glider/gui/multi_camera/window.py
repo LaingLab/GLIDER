@@ -9,6 +9,10 @@ the panel has nowhere to put.
 Follows the same shape as the other tool windows (see
 :mod:`glider.gui.pose_batch.window`): a QMainWindow held on the MainWindow and
 re-surfaced rather than rebuilt, so state survives closing it.
+
+Not every camera has to take part. Each one can be switched off in the status
+table - it is then disconnected, so it costs no USB bandwidth - and each one
+can be recorded on its own, alongside or instead of the rest.
 """
 
 from __future__ import annotations
@@ -33,7 +37,8 @@ from PyQt6.QtWidgets import (
 
 from glider.gui.multi_camera.camera_names import CameraLabels
 from glider.gui.multi_camera.camera_properties import CameraPropertiesPanel
-from glider.gui.multi_camera.status_table import CameraStatusTable
+from glider.gui.multi_camera.camera_selection import CameraSelection
+from glider.gui.multi_camera.status_table import CameraStatusTable, format_elapsed
 from glider.gui.styles import colors
 from glider.gui.widgets.multi_camera_preview import MultiCameraPreviewWidget
 from glider.gui.widgets.tool_ui import Card, apply_tool_theme, hint, set_button_role
@@ -62,6 +67,16 @@ _STREAM_OWNER = "multi_camera_window"
 DEFAULT_EXPERIMENT_NAME = "multicam"
 
 
+def camera_sort_key(camera_id: str) -> tuple[str, int]:
+    """cam_2 before cam_10.
+
+    Plain string sorting put a sixteen-camera rig in the order 0, 1, 10, 11 ...
+    15, 2, 3, which is not the order anyone numbers their arenas in.
+    """
+    prefix, _, number = camera_id.rpartition("_")
+    return (prefix, int(number)) if number.isdigit() else (camera_id, -1)
+
+
 class MultiCameraWindow(QMainWindow):
     """Preview, record and monitor every camera in the rig at once."""
 
@@ -77,6 +92,7 @@ class MultiCameraWindow(QMainWindow):
         base_settings: CameraSettings | None = None,
         experiment_name: str = DEFAULT_EXPERIMENT_NAME,
         labels: CameraLabels | None = None,
+        selection: CameraSelection | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -88,8 +104,14 @@ class MultiCameraWindow(QMainWindow):
         self._base_settings = base_settings or CameraSettings()
         self._default_experiment_name = experiment_name or DEFAULT_EXPERIMENT_NAME
         self._labels = labels if labels is not None else CameraLabels()
+        self._selection = selection if selection is not None else CameraSelection()
         self._subscribed: set[str] = set()
         self._selected_id: str | None = None
+        #: Every camera this window knows exists, connected or switched off,
+        #: and the device index it was found at -- which a switched-off camera
+        #: needs to be connected again, since the manager forgets it entirely.
+        self._known: dict[str, int | None] = {}
+        self._discovered = False
 
         self.setWindowTitle("Multi-Camera Recording")
         self.resize(1400, 900)
@@ -99,6 +121,12 @@ class MultiCameraWindow(QMainWindow):
         self._frame_received.connect(self._show_frame)
         self.preview.primary_changed.connect(self.select_camera)
         self.preview.rename_requested.connect(self.rename_camera)
+        # Queued: switching a camera rebuilds the table, which would delete
+        # the very checkbox item whose change is still being delivered.
+        self.status_table.enabled_toggled.connect(
+            self.set_camera_enabled, Qt.ConnectionType.QueuedConnection
+        )
+        self.status_table.record_toggled.connect(self.toggle_camera_recording)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._poll_status)
@@ -126,12 +154,15 @@ class MultiCameraWindow(QMainWindow):
         controls.addWidget(self.name_edit)
 
         self.record_button = QPushButton("Record All")
-        self.record_button.setToolTip("Start recording on every connected camera")
+        self.record_button.setToolTip(
+            "Start recording every camera that is switched on and not already recording"
+        )
         self.record_button.clicked.connect(self.start_recording)
         set_button_role(self.record_button, "primary")
         controls.addWidget(self.record_button)
 
         self.stop_button = QPushButton("Stop All")
+        self.stop_button.setToolTip("Stop every camera that is recording")
         self.stop_button.clicked.connect(self.stop_recording)
         controls.addWidget(self.stop_button)
 
@@ -143,8 +174,8 @@ class MultiCameraWindow(QMainWindow):
         controls.addWidget(self.elapsed_label)
 
         refresh = QPushButton("Refresh Cameras")
-        refresh.setToolTip("Re-read the camera list from the manager")
-        refresh.clicked.connect(self.refresh_cameras)
+        refresh.setToolTip("Look for cameras plugged in since the window opened")
+        refresh.clicked.connect(self.rediscover_cameras)
         set_button_role(refresh, "ghost")
         controls.addWidget(refresh)
 
@@ -166,6 +197,12 @@ class MultiCameraWindow(QMainWindow):
         )
         self.status_table = CameraStatusTable()
         status_card.add(self.status_table, 1)
+        status_card.add(
+            hint(
+                "Untick a camera to switch it off. Record on a row records that "
+                "camera alone; the others carry on as they are."
+            )
+        )
         status_card.add(
             hint(
                 "Dropped frames mean the writer could not keep up; that file is "
@@ -191,11 +228,17 @@ class MultiCameraWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def camera_ids(self) -> list[str]:
-        return sorted(getattr(self._manager, "cameras", {}) or {})
+        """The cameras switched on: connected, previewed, and recordable."""
+        return sorted(getattr(self._manager, "cameras", {}) or {}, key=camera_sort_key)
+
+    def all_camera_ids(self) -> list[str]:
+        """Every camera this window knows of, switched on or not."""
+        return sorted(set(self._known) | set(self.camera_ids()), key=camera_sort_key)
 
     def refresh_cameras(self) -> None:
         """Rebuild the preview tiles and status rows from the manager."""
         ids = self.camera_ids()
+        everything = self.all_camera_ids()
         primary = getattr(self._manager, "primary_camera_id", None)
 
         for camera_id in list(self.preview._tiles):
@@ -203,7 +246,13 @@ class MultiCameraWindow(QMainWindow):
         for camera_id in ids:
             self.preview.add_camera(camera_id, is_primary=(camera_id == primary))
 
-        self.status_table.set_cameras(ids)
+        # A row is ticked when its camera is connected. Not simply when the
+        # stored selection says "on": a camera that would not connect is not
+        # on, and a ticked row with no picture would say it was.
+        self.status_table.set_cameras(everything)
+        connected = set(ids)
+        for camera_id in everything:
+            self.status_table.set_enabled(camera_id, camera_id in connected)
         self._refresh_names()
         # Something has to be selected for the properties panel to be useful,
         # and the primary is the camera the operator already thinks in terms of.
@@ -215,17 +264,21 @@ class MultiCameraWindow(QMainWindow):
         self._refresh_controls()
 
     def connect_cameras(self) -> None:
-        """Enumerate, register and start every camera, then show them.
+        """Find, register and start every camera that is switched on, then show them.
 
         The window cannot assume someone else has done this. It shares the
         core's manager with CameraPanel, so the cameras may already be there -
         in which case adding them again would stack a second frame callback on
         each one - but nothing guarantees the panel has ever been opened.
+
+        Looks for cameras only the first time, or when the manager has none:
+        probing every index again on each reopen would make reopening slow,
+        and Refresh Cameras is there for a camera plugged in mid-session.
         """
         try:
-            existing = set(getattr(self._manager, "cameras", {}) or {})
-            if not existing:
-                self._add_enumerated_cameras()
+            if not self._discovered or not (getattr(self._manager, "cameras", {}) or {}):
+                self._discover_cameras()
+                self._connect_enabled_cameras()
             for camera_id in self.camera_ids():
                 self._subscribe(camera_id)
             self._manager.start_all_streaming(owner=_STREAM_OWNER)
@@ -233,8 +286,49 @@ class MultiCameraWindow(QMainWindow):
             logger.exception("MultiCameraWindow: could not connect cameras")
         self.refresh_cameras()
 
-    def _add_enumerated_cameras(self) -> None:
-        """Register every camera the manager can see, at the configured settings.
+    def rediscover_cameras(self) -> None:
+        """Look again for cameras, and connect the new ones that are switched on."""
+        self._discovered = False
+        self.connect_cameras()
+
+    def _discover_cameras(self) -> None:
+        """Learn which cameras exist, without disturbing the ones streaming.
+
+        Connected cameras are not probed: a camera streaming here can refuse a
+        second open and read as absent. They are known already, from the
+        manager.
+        """
+        connected = list(getattr(self._manager, "cameras", {}) or {})
+        for camera_id in connected:
+            self._known[camera_id] = self._index_of(camera_id)
+        in_use = {self._known[c] for c in connected if self._known[c] is not None}
+        for info in self._manager.enumerate_all_cameras(skip_indices=in_use) or []:
+            index = getattr(info, "index", None)
+            if index is None:
+                continue
+            self._known[self._manager.camera_id_from_index(index)] = index
+        self._discovered = True
+
+    def _index_of(self, camera_id: str) -> int | None:
+        """The device index a connected camera was opened at."""
+        try:
+            index = getattr(self._manager.get_camera_settings(camera_id), "camera_index", None)
+        except Exception:
+            index = None
+        if isinstance(index, int):
+            return index
+        _, _, number = camera_id.rpartition("_")
+        return int(number) if number.isdigit() else self._known.get(camera_id)
+
+    def _connect_enabled_cameras(self) -> None:
+        """Register every known camera that is switched on and not yet connected."""
+        connected = set(self.camera_ids())
+        for camera_id in self.all_camera_ids():
+            if camera_id not in connected and self._selection.is_enabled(camera_id):
+                self._add_camera(camera_id)
+
+    def _add_camera(self, camera_id: str) -> bool:
+        """Register one camera at the configured settings.
 
         Each gets its own copy via ``replace``: the base settings object is
         shared with the camera panel, so stamping an index onto it in place
@@ -242,12 +336,57 @@ class MultiCameraWindow(QMainWindow):
         """
         from dataclasses import replace
 
-        for info in self._manager.enumerate_all_cameras() or []:
-            index = getattr(info, "index", None)
-            if index is None:
-                continue
-            camera_id = self._manager.camera_id_from_index(index)
-            self._manager.add_camera(camera_id, replace(self._base_settings, camera_index=index))
+        index = self._known.get(camera_id)
+        if index is None:
+            return False
+        try:
+            return bool(
+                self._manager.add_camera(
+                    camera_id, replace(self._base_settings, camera_index=index)
+                )
+            )
+        except Exception:
+            logger.exception("MultiCameraWindow: could not add %s", camera_id)
+            return False
+
+    def set_camera_enabled(self, camera_id: str, enabled: bool) -> None:
+        """Switch one camera on (connect and stream it) or off (disconnect it).
+
+        Off means disconnected, not merely hidden: the point of switching a
+        camera off is usually the USB bandwidth it was taking from the rest.
+        A camera with a file open cannot be switched off -- disconnecting it
+        would cut that file off unfinished.
+        """
+        if not enabled and camera_id in self._recording_ids() | self._saving_ids():
+            self.status_table.set_enabled(camera_id, True)
+            self.statusBar().showMessage(
+                f"Stop recording {self._labels.display_name(camera_id)} before switching it off",
+                5000,
+            )
+            return
+
+        self._selection.set_enabled(camera_id, enabled)
+        if enabled:
+            if camera_id not in self.camera_ids():
+                if self._add_camera(camera_id):
+                    self._subscribe(camera_id)
+                    try:
+                        self._manager.start_streaming(camera_id)
+                    except Exception:
+                        logger.exception("MultiCameraWindow: could not start %s", camera_id)
+                else:
+                    self.statusBar().showMessage(
+                        f"{self._labels.display_name(camera_id)} would not connect", 5000
+                    )
+        else:
+            # The manager drops its callbacks with the camera, so connecting it
+            # again later has to subscribe again.
+            self._subscribed.discard(camera_id)
+            try:
+                self._manager.remove_camera(camera_id)
+            except Exception:
+                logger.exception("MultiCameraWindow: could not remove %s", camera_id)
+        self.refresh_cameras()
 
     def _subscribe(self, camera_id: str) -> None:
         """Register the frame callback once per camera."""
@@ -330,13 +469,15 @@ class MultiCameraWindow(QMainWindow):
             )
 
     def _refresh_names(self) -> None:
-        """Push the current names onto the tiles and into the recorder."""
-        for camera_id in self.camera_ids():
-            self.preview.set_display_name(camera_id, self._labels.display_name(camera_id))
+        """Push the current names onto the tiles, the table and into the recorder."""
+        for camera_id in self.all_camera_ids():
+            name = self._labels.display_name(camera_id)
+            self.preview.set_display_name(camera_id, name)
+            self.status_table.set_display_name(camera_id, name)
         setter = getattr(self._recorder, "set_camera_labels", None)
         if callable(setter):
             try:
-                setter({cid: self._labels.file_fragment(cid) for cid in self.camera_ids()})
+                setter({cid: self._labels.file_fragment(cid) for cid in self.all_camera_ids()})
             except Exception:
                 logger.exception("MultiCameraWindow: could not hand labels to the recorder")
 
@@ -372,18 +513,59 @@ class MultiCameraWindow(QMainWindow):
         typed = self.name_edit.text().strip() if hasattr(self, "name_edit") else ""
         return typed or self._default_experiment_name or DEFAULT_EXPERIMENT_NAME
 
+    def _recording_ids(self) -> set[str]:
+        """The cameras with a file open right now."""
+        try:
+            return set(getattr(self._recorder, "recording_camera_ids", None) or ())
+        except Exception:
+            return set()
+
+    def _saving_ids(self) -> set[str]:
+        """Cameras stopped on their own whose files are still being finished."""
+        try:
+            return set(getattr(self._recorder, "saving_camera_ids", None) or ())
+        except Exception:
+            return set()
+
     def start_recording(self) -> None:
+        """Record every camera that is switched on.
+
+        With nothing recording that is one run of them all. With some already
+        going it adds the rest to that run, rather than doing nothing -- or
+        restarting the ones whose takes are already under way.
+        """
         if self._recorder is None or not self.camera_ids():
             return
-        self._schedule(
-            self._recorder.start(self._experiment_name),
-            "could not start recording",
-        )
+        if not self.is_recording:
+            self._schedule(
+                self._recorder.start(self._experiment_name),
+                "could not start recording",
+            )
+            return
+        recording = self._recording_ids()
+        for camera_id in self.camera_ids():
+            if camera_id not in recording:
+                self._schedule(
+                    self._recorder.start_camera(camera_id, self._experiment_name),
+                    f"could not start {camera_id}",
+                )
 
     def stop_recording(self) -> None:
         if self._recorder is None:
             return
         self._schedule(self._recorder.stop(), "could not stop recording")
+
+    def toggle_camera_recording(self, camera_id: str) -> None:
+        """Start or stop one camera, leaving the rest as they are."""
+        if self._recorder is None or camera_id not in self.camera_ids():
+            return
+        if camera_id in self._recording_ids():
+            self._schedule(self._recorder.stop_camera(camera_id), f"could not stop {camera_id}")
+        elif camera_id not in self._saving_ids():
+            self._schedule(
+                self._recorder.start_camera(camera_id, self._experiment_name),
+                f"could not start {camera_id}",
+            )
 
     def _schedule(self, coro, description: str) -> None:
         """Run one of the recorder's coroutines on the Qt event loop.
@@ -413,6 +595,11 @@ class MultiCameraWindow(QMainWindow):
         A bare ``create_task`` swallows the exception, which would leave Record
         greyed out and Stop enabled with nothing recording -- the window saying
         a run is in flight that never started.
+
+        Refreshes the whole table, not just the top buttons. Waiting for the
+        next poll left a camera's row reading "Saving…", its button disabled,
+        for up to half a second after its file was done, and a click on it in
+        that time did nothing.
         """
         try:
             task.result()
@@ -420,15 +607,12 @@ class MultiCameraWindow(QMainWindow):
             pass
         except Exception:
             logger.exception("MultiCameraWindow: %s", description)
-        self._refresh_controls()
+        self._poll_status()
 
     @staticmethod
     def _format_elapsed(seconds: float) -> str:
         """mm:ss, or h:mm:ss once a session runs past an hour."""
-        seconds = max(0, int(seconds))
-        hours, rest = divmod(seconds, 3600)
-        minutes, secs = divmod(rest, 60)
-        return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+        return format_elapsed(seconds)
 
     def _refresh_elapsed(self) -> None:
         """Show how long this run has been going.
@@ -453,9 +637,15 @@ class MultiCameraWindow(QMainWindow):
             self.elapsed_label.setStyleSheet("font-weight: bold; font-size: 15px;")
 
     def _refresh_controls(self) -> None:
-        recording = self.is_recording
-        self.record_button.setEnabled(bool(self.camera_ids()) and not recording)
-        self.stop_button.setEnabled(recording)
+        ids = self.camera_ids()
+        recording = self._recording_ids()
+        # During a run, Record All stays live while any camera that is on is
+        # not part of it yet.
+        if self.is_recording:
+            self.record_button.setEnabled(any(c not in recording for c in ids))
+        else:
+            self.record_button.setEnabled(bool(ids))
+        self.stop_button.setEnabled(self.is_recording or bool(recording))
 
     # ------------------------------------------------------------------
     # status
@@ -470,7 +660,8 @@ class MultiCameraWindow(QMainWindow):
         try:
             self._refresh_elapsed()
             recorder = self._recorder
-            recording = self.is_recording
+            recording = self._recording_ids()
+            saving = self._saving_ids()
             dropped_all = dict(getattr(recorder, "frames_dropped", {}) or {}) if recorder else {}
             for camera_id in self.camera_ids():
                 fps = 0.0
@@ -483,13 +674,27 @@ class MultiCameraWindow(QMainWindow):
                     fps=fps,
                     queue_depth=self._queue_depth(camera_id),
                     dropped=int(dropped_all.get(camera_id, 0)),
-                    recording=recording,
+                    recording=camera_id in recording,
+                    elapsed=self._camera_elapsed(camera_id),
+                    saving=camera_id in saving,
                 )
+                self.preview.set_camera_recording(camera_id, camera_id in recording)
+                self.preview.update_fps(camera_id, fps)
             flagged = self.status_table.flagged_cameras()
             self.warning_label.setText(f"⚠ losing frames: {', '.join(flagged)}" if flagged else "")
             self._refresh_controls()
         except Exception:
             logger.exception("MultiCameraWindow: status poll failed")
+
+    def _camera_elapsed(self, camera_id: str) -> float | None:
+        """How long this camera's current or last take has run."""
+        getter = getattr(self._recorder, "camera_duration", None)
+        if not callable(getter):
+            return None
+        try:
+            return float(getter(camera_id))
+        except Exception:
+            return None
 
     def _queue_depth(self, camera_id: str) -> int:
         threads = getattr(self._recorder, "_writer_threads", None) or {}
@@ -538,7 +743,7 @@ class MultiCameraWindow(QMainWindow):
 
     def _release_cameras(self) -> None:
         """Drop this window's streaming claim, if a run does not still need it."""
-        if self._recorder is not None and getattr(self._recorder, "is_recording", False):
+        if self.is_recording or self._recording_ids():
             logger.debug("MultiCameraWindow closed mid-recording; leaving cameras streaming")
             return
         try:

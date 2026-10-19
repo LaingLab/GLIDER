@@ -8,7 +8,7 @@ camera for CV processing.
 
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 import numpy as np
 
@@ -103,17 +103,20 @@ class MultiCameraManager:
         return self._camera_settings.get(camera_id)
 
     @staticmethod
-    def enumerate_all_cameras(max_cameras: int = MAX_CAMERAS) -> list[CameraInfo]:
+    def enumerate_all_cameras(
+        max_cameras: int = MAX_CAMERAS, skip_indices: Iterable[int] = ()
+    ) -> list[CameraInfo]:
         """
         Enumerate all available camera devices.
 
         Args:
             max_cameras: Maximum number of camera indices to check
+            skip_indices: Indices already connected, which are not probed
 
         Returns:
             List of available cameras
         """
-        return CameraManager.enumerate_cameras(max_cameras)
+        return CameraManager.enumerate_cameras(max_cameras, skip_indices=skip_indices)
 
     def camera_id_from_index(self, camera_index: int) -> str:
         """Generate a camera ID from a camera index."""
