@@ -61,6 +61,9 @@ def _recorder():
     rec = MagicMock(spec=MultiVideoRecorder)
     rec.is_recording = False
     rec.frames_dropped = {}
+    rec.recording_camera_ids = []
+    rec.saving_camera_ids = []
+    rec.camera_duration.return_value = 0.0
     return rec
 
 
@@ -121,11 +124,19 @@ class TestRecording:
         assert not window.stop_button.isEnabled()
         assert window.record_button.isEnabled()
 
-    def test_record_is_disabled_while_recording(self, window):
+    def test_record_all_is_disabled_once_every_camera_is_recording(self, window):
         window._recorder.is_recording = True
+        window._recorder.recording_camera_ids = ["cam_0", "cam_1", "cam_2", "cam_3"]
         window._refresh_controls()
         assert not window.record_button.isEnabled()
         assert window.stop_button.isEnabled()
+
+    def test_record_all_stays_live_while_a_camera_is_not_recording(self, window):
+        # It adds the rest to the run rather than doing nothing.
+        window._recorder.is_recording = True
+        window._recorder.recording_camera_ids = ["cam_0"]
+        window._refresh_controls()
+        assert window.record_button.isEnabled()
 
 
 class TestStatusPolling:

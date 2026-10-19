@@ -55,6 +55,9 @@ def _recorder():
     rec.is_recording = False
     rec.frames_dropped = {}
     rec.duration = 0.0
+    rec.recording_camera_ids = []
+    rec.saving_camera_ids = []
+    rec.camera_duration.return_value = 0.0
     return rec
 
 

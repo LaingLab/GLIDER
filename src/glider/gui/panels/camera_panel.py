@@ -1282,21 +1282,32 @@ class CameraPanel(QWidget):
 
         from dataclasses import replace
 
+        from glider.gui.multi_camera.camera_selection import CameraSelection
+
         # Get base settings from camera manager (configured via Settings dialog)
         base_settings = self._camera.settings
 
         # Get all available cameras
         cameras = self._camera.enumerate_cameras()
 
-        for i, cam_info in enumerate(cameras):
+        # Cameras switched off in the Multi-Camera window stay off here too:
+        # this manager is what an experiment records from, and a camera the
+        # operator switched off must not turn up in the run's files.
+        switched_off = CameraSelection().disabled()
+
+        for cam_info in cameras:
             camera_id = self._multi_cam.camera_id_from_index(cam_info.index)
+            if camera_id in switched_off:
+                logger.info(f"Skipping {camera_id}: switched off in the Multi-Camera window")
+                continue
             # Copy base settings but change camera index
             settings = replace(base_settings, camera_index=cam_info.index)
 
             # Add camera to manager
             if self._multi_cam.add_camera(camera_id, settings):
-                # Add preview tile
-                is_primary = i == 0
+                # Add preview tile. The manager makes the first camera it is
+                # given the primary, which is not index 0 if that one is off.
+                is_primary = camera_id == self._multi_cam.primary_camera_id
                 self._multi_preview.add_camera(camera_id, is_primary)
 
                 # Register frame callback
