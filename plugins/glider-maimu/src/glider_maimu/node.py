@@ -23,6 +23,7 @@ MODE_PULSE = "pulse"
 MODES = (MODE_ON, MODE_OFF, MODE_PULSE)
 
 DEFAULT_PERIOD_MS = 500
+DEFAULT_OFF_MS = 0  # 0 = same as On: the original symmetric toggle
 DEFAULT_DURATION_S = 10
 
 
@@ -58,15 +59,30 @@ class MaimuNode(HardwareNode):
             "help": "On and Off latch; Pulse runs a train and stops on its own.",
         },
         {
+            # Still saved as period_ms so existing files open unchanged: with
+            # Off at 0 it is the original toggle period, i.e. on time = off time.
             "key": "period_ms",
-            "label": "Period (ms)",
+            "label": "On (ms)",
             "type": "int",
             "default": DEFAULT_PERIOD_MS,
             "min": 1,
             "max": 3_600_000,
             "help": (
-                "Pulse mode only. On/off toggle period in milliseconds -- a "
-                "period, not a frequency. 500 ms toggles about once a second."
+                "Pulse mode only. How long each pulse stays on. With Off at 0 "
+                "the light toggles every On ms. 20 Hz with 10 ms pulses: On 10, Off 40."
+            ),
+        },
+        {
+            "key": "off_ms",
+            "label": "Off (ms)",
+            "type": "int",
+            "default": DEFAULT_OFF_MS,
+            "min": 0,
+            "max": 3_600_000,
+            "help": (
+                "Pulse mode only. Gap between pulses; 0 = same as On. An Off "
+                "different from On needs Maimu firmware 0.1.0+ -- older "
+                "firmware ignores the command and stays dark."
             ),
         },
         {
@@ -109,6 +125,7 @@ class MaimuNode(HardwareNode):
         super().__init__()
         self._mode = MODE_PULSE
         self._period_ms = DEFAULT_PERIOD_MS
+        self._off_ms = DEFAULT_OFF_MS
         self._duration_s = DEFAULT_DURATION_S
 
     @property
@@ -131,6 +148,14 @@ class MaimuNode(HardwareNode):
         self._period_ms = int(value)
 
     @property
+    def off_ms(self) -> int:
+        return self._off_ms
+
+    @off_ms.setter
+    def off_ms(self, value: Any) -> None:
+        self._off_ms = int(value)
+
+    @property
     def duration_s(self) -> int:
         return self._duration_s
 
@@ -140,7 +165,15 @@ class MaimuNode(HardwareNode):
 
     async def hardware_operation(self) -> None:
         """Send the configured command, then trigger the exec output."""
-        if self._mode == MODE_PULSE:
+        off_ms = self._off_ms or self._period_ms
+        if self._mode == MODE_PULSE and off_ms != self._period_ms:
+            # "p<on_ms>,<off_ms>,<duration_s>" (firmware 0.1.0+). The 'p' makes
+            # older firmware ignore it rather than misread "10,40,10" as a
+            # 10 ms toggle for 40 s.
+            await self._device.execute_action(
+                "write", f"p{self._period_ms}", off_ms, self._duration_s
+            )
+        elif self._mode == MODE_PULSE:
             await self._device.execute_action(MODE_PULSE, self._period_ms, self._duration_s)
         else:
             await self._device.execute_action(self._mode)
@@ -151,6 +184,7 @@ class MaimuNode(HardwareNode):
         state = super().get_state()
         state["mode"] = self._mode
         state["period_ms"] = self._period_ms
+        state["off_ms"] = self._off_ms
         state["duration_s"] = self._duration_s
         return state
 
@@ -162,4 +196,5 @@ class MaimuNode(HardwareNode):
         mode = str(state.get("mode", MODE_PULSE)).strip().lower()
         self._mode = mode if mode in MODES else MODE_PULSE
         self._period_ms = int(state.get("period_ms", DEFAULT_PERIOD_MS))
+        self._off_ms = int(state.get("off_ms", DEFAULT_OFF_MS))
         self._duration_s = int(state.get("duration_s", DEFAULT_DURATION_S))

@@ -64,6 +64,33 @@ async def test_pulse_passes_period_and_duration():
     assert node._device.calls == [("pulse", (250, 5))]
 
 
+async def test_off_zero_keeps_the_original_toggle():
+    node = _node(mode="pulse", period_ms=25, duration_s=5)
+    node.off_ms = 0
+    await node.hardware_operation()
+    assert node._device.calls == [("pulse", (25, 5))]
+
+
+async def test_off_sends_the_duty_cycle_command():
+    """10 ms on / 40 ms off is 20 Hz; firmware 0.1.0 parses "p<on>,<off>,<s>"."""
+    node = _node(mode="pulse", period_ms=10, duration_s=10)
+    node.off_ms = 40
+    await node.hardware_operation()
+    assert node._device.calls == [("write", ("p10", 40, 10))]
+
+
+def test_off_round_trips_and_old_files_default_to_symmetric():
+    node = _node(mode="pulse", period_ms=10, duration_s=10)
+    node.off_ms = 40
+    restored = MaimuNode()
+    restored.set_state(node.get_state())
+    assert (restored.period_ms, restored.off_ms) == (10, 40)
+
+    old_file = MaimuNode()
+    old_file.set_state({"mode": "pulse", "period_ms": 25, "duration_s": 5})
+    assert old_file.off_ms == 0
+
+
 async def test_on_calls_bare_action():
     node = _node(mode="on")
     await node.hardware_operation()
