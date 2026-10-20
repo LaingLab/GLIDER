@@ -3,15 +3,17 @@
 The Maimu is a Nordic/Zephyr Bluetooth LE peripheral with exactly one writable
 GATT characteristic that accepts three UTF-8 commands::
 
-    on                      turn on and stay on
-    off                     turn off
-    <period_ms>,<duration_s>  toggle every period_ms ms, for duration_s seconds
+    on                              turn on and stay on
+    off                             turn off
+    <period_ms>,<duration_s>        toggle every period_ms ms, for duration_s seconds
+    p<on_ms>,<off_ms>,<duration_s>  on_ms on / off_ms off, for duration_s seconds
+                                    (firmware 0.1.0+; older firmware ignores it)
 
 Running one through the generic ``BLEWrite`` / ``BLE`` device works, but means
 pasting both UUIDs into the Add Device dialog and then remembering that the
 action is called ``write`` and that a pulse is spelled ``"500,10"``. This device
 bakes the protocol in: the UUIDs are defaults and the commands are named actions
-(``on`` / ``off`` / ``pulse``).
+(``on`` / ``off`` / ``pulse`` / ``train``).
 
 It subclasses :class:`~glider.hal.devices.ble_device.BLEDevice` rather than
 ``BaseDevice`` so it inherits that class's connection plumbing unchanged --
@@ -26,17 +28,22 @@ it. So unlike the generic BLE devices, :meth:`MaimuDevice.shutdown` writes
 ``off`` before it disconnects -- which puts emergency stop, End Experiment and
 app quit all on the same path.
 
-The same reasoning covers a *dropped* link: :meth:`MaimuDevice._on_reconnected`
-writes ``off`` when the automatic reconnect succeeds, so a stimulator that came
-back mid-pattern is put in a known state instead of left running one nobody
-asked for.
+A *dropped* link is different: the firmware turns the light off the moment the
+link goes, but the experiment still wants whatever it last asked for. So the
+device remembers its last command, and :meth:`MaimuDevice._on_reconnected`
+puts it back the moment the link returns -- a train for whatever is left of its
+duration, ``off`` if nothing was asked or the train has run out. Commands that
+arrive while the link is down update that memory and return at once instead of
+holding the flow up behind a reconnect; the newest one is what gets sent.
 """
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from glider.hal.base_board import ConnectionState
 from glider.hal.base_device import DeviceConfig
 from glider.hal.devices.ble_device import BLEDevice
 
@@ -132,6 +139,35 @@ class MaimuDevice(BLEDevice):
                 "help": "How long the train runs. The firmware stops on its own.",
             },
         ],
+        "train": [
+            {
+                "key": "on_ms",
+                "label": "On (ms)",
+                "type": "int",
+                "default": 500,
+                "min": 1,
+                "max": 3_600_000,
+                "help": "How long each pulse stays on. 20 Hz with 10 ms pulses: On 10, Off 40.",
+            },
+            {
+                "key": "off_ms",
+                "label": "Off (ms)",
+                "type": "int",
+                "default": 500,
+                "min": 1,
+                "max": 3_600_000,
+                "help": "Gap between pulses. Unequal On/Off needs firmware 0.1.0+.",
+            },
+            {
+                "key": "duration_s",
+                "label": "Duration (s)",
+                "type": "int",
+                "default": 10,
+                "min": 1,
+                "max": 86_400,
+                "help": "How long the train runs. The firmware stops on its own.",
+            },
+        ],
     }
 
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
@@ -141,6 +177,13 @@ class MaimuDevice(BLEDevice):
         config.settings.setdefault("write_char_uuid", DEFAULT_WRITE_CHAR_UUID)
         config.settings.setdefault("service_uuid", DEFAULT_SERVICE_UUID)
         super().__init__(board, config, name)
+        # The last command the experiment gave, so a reconnect can put it back:
+        # ("on",), ("off",) or ("train", on_ms, off_ms, duration_s, ends_at)
+        # with ends_at on the perf_counter clock. None until the first command.
+        self._desired: tuple | None = None
+        # Serializes "remember a command, send it" against the reconnect hook,
+        # so the hook can never send an older command over a newer one.
+        self._desired_lock = asyncio.Lock()
 
     # --- identity ---
 
@@ -161,6 +204,7 @@ class MaimuDevice(BLEDevice):
             "on": self.on,
             "off": self.off,
             "pulse": self.pulse,
+            "train": self.train,
             "write": self.write,
         }
 
@@ -168,11 +212,11 @@ class MaimuDevice(BLEDevice):
 
     async def on(self) -> None:
         """Turn the stimulator on and leave it on."""
-        await self.write("on")
+        await self._command(("on",))
 
     async def off(self) -> None:
         """Turn the stimulator off."""
-        await self.write("off")
+        await self._command(("off",))
 
     async def pulse(self, period_ms: Any, duration_s: Any) -> None:
         """Toggle every ``period_ms`` milliseconds for ``duration_s`` seconds.
@@ -185,12 +229,76 @@ class MaimuDevice(BLEDevice):
         """
         period = self._whole_number(period_ms, "period_ms")
         duration = self._whole_number(duration_s, "duration_s")
-        # Two args -> BLEDevice.write comma-joins them: "500,10".
-        await self.write(period, duration)
+        await self._command(("train", period, period, duration, self._deadline(duration)))
+
+    async def train(self, on_ms: Any, off_ms: Any, duration_s: Any) -> None:
+        """Pulse ``on_ms`` on / ``off_ms`` off for ``duration_s`` seconds.
+
+        e.g. ``train(10, 40, 10)`` writes ``"p10,40,10"`` -- 10 ms pulses at
+        20 Hz for 10 seconds. Equal on and off times go out as the original
+        ``<period_ms>,<duration_s>`` command, which every firmware understands.
+        """
+        on = self._whole_number(on_ms, "on_ms")
+        off = self._whole_number(off_ms, "off_ms")
+        duration = self._whole_number(duration_s, "duration_s")
+        await self._command(("train", on, off, duration, self._deadline(duration)))
+
+    # --- remembered command ---
+
+    @staticmethod
+    def _deadline(duration_s: int) -> float:
+        return time.perf_counter() + duration_s
+
+    @staticmethod
+    def _wire(desired: tuple, *, resume: bool = False) -> tuple:
+        """The write() arguments for a remembered command.
+
+        A first send uses the train's full duration. A resend after a reconnect
+        uses what is left of it, rounded down so the train never outlasts the
+        one that was asked for, and turns into ``off`` once under a second is
+        left.
+        """
+        if desired[0] != "train":
+            return desired
+        _, on, off, duration, ends_at = desired
+        if resume:
+            left = ends_at - time.perf_counter()
+            if left < 1:
+                return ("off",)
+            duration = int(left)
+        # Two or three args -> BLEDevice.write comma-joins them: "500,10".
+        return (on, duration) if on == off else (f"p{on}", off, duration)
+
+    def _link_is_down(self) -> bool:
+        return self._initialized and self.link_state in (
+            ConnectionState.DISCONNECTED,
+            ConnectionState.RECONNECTING,
+        )
+
+    async def _command(self, desired: tuple) -> None:
+        """Remember ``desired``, then send it -- unless the link is down.
+
+        With the link down a write would block the flow behind a reconnect of
+        several seconds, and every command queued up that way used to land in a
+        burst once it came back, oldest first. Remembering the newest and
+        returning means the reconnect sends exactly one command: the current one.
+        """
+        async with self._desired_lock:
+            self._desired = desired
+            if self._link_is_down():
+                logger.warning(
+                    "Maimu %s: link is down; %s will be sent as soon as it reconnects",
+                    self._name,
+                    ",".join(str(a) for a in self._wire(desired)),
+                )
+                # Normally already running; this covers a drop no callback reported.
+                self._start_reconnect()
+                return
+            await self.write(*self._wire(desired))
 
     @staticmethod
     def _whole_number(value: Any, field: str) -> int:
-        """Coerce a pulse argument to a positive whole number.
+        """Coerce a pulse or train argument to a positive whole number.
 
         The firmware ``atoi``s both fields, so a fractional or non-numeric value
         would be silently truncated into a command that does something other
@@ -200,35 +308,43 @@ class MaimuDevice(BLEDevice):
         try:
             number = float(value)
         except (TypeError, ValueError) as e:
-            raise ValueError(f"Maimu.pulse: {field} must be a number, got {value!r}") from e
+            raise ValueError(f"Maimu: {field} must be a number, got {value!r}") from e
         if not number.is_integer():
-            raise ValueError(f"Maimu.pulse: {field} must be a whole number, got {value!r}")
+            raise ValueError(f"Maimu: {field} must be a whole number, got {value!r}")
         number = int(number)
         if number < 1:
-            raise ValueError(f"Maimu.pulse: {field} must be at least 1, got {value!r}")
+            raise ValueError(f"Maimu: {field} must be at least 1, got {value!r}")
         return number
 
     # --- lifecycle ---
 
     async def _on_reconnected(self) -> None:
-        """Come back off.
+        """Put back the last command the experiment gave.
 
-        The firmware runs a pulse autonomously, so a link that dropped
-        mid-train left the stimulator running with nothing attached to stop
-        it. Whatever it is doing, it has been doing it unsupervised, and this
-        is the first moment anyone can say otherwise -- so the device is put
-        in a known state rather than resumed in an unknown one.
+        The firmware turns the light off when the link drops, so whatever the
+        experiment asked for has been interrupted, not continued. A train that
+        still has time left is resent for that remaining time; ``on`` is resent
+        as ``on``; anything else -- ``off``, a train that ran out, or no command
+        yet -- writes ``off``, so the device is always left in a known state.
 
-        Same reasoning as :meth:`shutdown`, and the same best-effort
-        treatment: BLEDevice logs a failure here and leaves the link up,
-        because the link genuinely did reconnect.
+        Held under the command lock so a command the flow sends at the same
+        moment is never overwritten by an older one from here.
 
-        This and :meth:`shutdown` are independent safety paths that can both
-        fire for the same event -- a reconnect landing just as a shutdown
-        begins -- so ``off`` may be written twice in a row. That duplication
-        is safety-neutral and deliberate; it is not a bug to collapse.
+        Best-effort, like :meth:`shutdown`: BLEDevice logs a failure here and
+        leaves the link up, because the link genuinely did reconnect. This and
+        :meth:`shutdown` can both fire for the same event, so ``off`` may be
+        written twice in a row; that is safety-neutral and deliberate.
         """
-        await self.write("off")
+        async with self._desired_lock:
+            desired = self._desired
+            wire = self._wire(desired, resume=True) if desired is not None else ("off",)
+            if wire != ("off",):
+                logger.warning(
+                    "Maimu %s: link restored; resuming %s",
+                    self._name,
+                    ",".join(str(a) for a in wire),
+                )
+            await self.write(*wire)
 
     async def shutdown(self) -> None:
         """Stop the stimulator, then disconnect.
@@ -253,6 +369,9 @@ class MaimuDevice(BLEDevice):
         state. That is the same news as a failed write, so it gets the same
         warning.
         """
+        # Forget the last command first, so a reconnect landing during the
+        # shutdown can only ever put the device back to off.
+        self._desired = None
         try:
             if self._initialized and self._client is not None:
                 try:

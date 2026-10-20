@@ -121,7 +121,7 @@ def test_device_type_is_maimu():
 
 
 def test_actions_are_the_command_set():
-    assert set(_make_device().actions) == {"on", "off", "pulse", "write"}
+    assert set(_make_device().actions) == {"on", "off", "pulse", "train", "write"}
 
 
 def test_read_is_not_offered():
@@ -212,6 +212,20 @@ async def test_pulse_writes_whole_numbers_from_floats(fake_bleak):
     _module, created = fake_bleak
     device = await _initialized()
     await device.pulse(500.0, 10.0)
+    assert created["client"].written == [b"500,10"]
+
+
+async def test_train_writes_the_on_off_command(fake_bleak):
+    _module, created = fake_bleak
+    device = await _initialized()
+    await device.train(10, 40, 10)
+    assert created["client"].written == [b"p10,40,10"]
+
+
+async def test_a_symmetric_train_uses_the_original_command(fake_bleak):
+    _module, created = fake_bleak
+    device = await _initialized()
+    await device.train(500, 500, 10)
     assert created["client"].written == [b"500,10"]
 
 

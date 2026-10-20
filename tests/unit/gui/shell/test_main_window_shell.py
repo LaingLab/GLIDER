@@ -658,8 +658,8 @@ def test_a_device_drop_during_a_run_notifies_without_pausing_or_the_dialog(
 
 
 def test_error_and_disconnected_get_different_wording(qtbot, main_window_factory, monkeypatch):
-    """ERROR is the reconnect loop's own terminal give-up state (12 attempts --
-    see BLEDevice.MAX_RECONNECT_ATTEMPTS): retrying is over by the time it
+    """ERROR is the reconnect loop's own terminal give-up state (only with a
+    finite BLEDevice.MAX_RECONNECT_ATTEMPTS): retrying is over by the time it
     fires, so it must not tell the operator to sit tight the way a fresh
     DISCONNECTED does."""
     from glider.core.experiment_session import SessionState

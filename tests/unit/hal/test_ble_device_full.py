@@ -6,6 +6,7 @@ tests inject fake ``serial``/``smbus2``. (BLEWriteDevice's own tests live in
 test_ble_device.py; this file covers the read/notify superset.)
 """
 
+import asyncio
 import sys
 import time
 
@@ -703,3 +704,48 @@ async def test_the_name_is_preferred_over_the_service(rotating_bleak, monkeypatc
 
     assert rotating_bleak.attempts == ["BB:NEW"]
     assert scanned == [], "the service scan ran even though the name resolved"
+
+
+async def _reconnected(device, timeout=5.0):
+    from glider.hal.base_board import ConnectionState
+
+    deadline = time.monotonic() + timeout
+    while device.link_state is not ConnectionState.CONNECTED or device._reconnect_task:
+        assert time.monotonic() < deadline, "never reconnected"
+        await asyncio.sleep(0.001)
+
+
+async def test_a_reconnect_looks_for_the_name_before_the_address_that_dropped(rotating_bleak):
+    """A private address re-rolls every time the peripheral re-advertises,
+    which is after every drop. Scanning for the address that just went away
+    cost every reconnect a full scan for nothing; the name finds the peripheral
+    at whatever address it has now."""
+    device = _make_device(
+        settings={"address": "AA:OLD", "name": "maimu_ezurio", "write_char_uuid": "c"}
+    )
+    await device.initialize()  # the name rescued AA:OLD -> BB:NEW
+    rotating_bleak.lookups.clear()
+    rotating_bleak.old_address, rotating_bleak.new_address = "BB:NEW", "CC:NEWER"
+
+    device._client.is_connected = False
+    device._on_disconnected(device._client)
+    await _reconnected(device)
+
+    assert "BB:NEW" not in [a for a, _ in rotating_bleak.lookups]
+    assert rotating_bleak.attempts[-1] == "CC:NEWER"
+    assert rotating_bleak.scans == 2
+    await device.shutdown()
+
+
+async def test_a_name_never_heard_does_not_cost_a_reconnect_a_scan(fake_bleak):
+    """A peripheral whose name never reaches this host would pay an extra,
+    failing scan on every attempt."""
+    _module, created = fake_bleak
+    device = await _initialized({"address": "AA:BB", "name": "n", "write_char_uuid": "c"})
+
+    device._client.is_connected = False
+    device._on_disconnected(device._client)
+    await _reconnected(device)
+
+    assert "scanned_name" not in created
+    await device.shutdown()

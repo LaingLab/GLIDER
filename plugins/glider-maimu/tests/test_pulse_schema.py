@@ -28,9 +28,15 @@ def test_pulse_declares_both_arguments():
     ]
 
 
-def test_pulse_is_the_only_declared_action():
+def test_pulse_and_train_are_the_only_declared_actions():
     """on/off/write need nothing; declaring them would only add empty forms."""
-    assert set(MaimuDevice.ACTION_ARGS_SCHEMA) == {"pulse"}
+    assert set(MaimuDevice.ACTION_ARGS_SCHEMA) == {"pulse", "train"}
+
+
+def test_train_declares_its_arguments_in_signature_order():
+    """The panels pass these positionally; a swap would invert on and off."""
+    params = list(inspect.signature(MaimuDevice.train).parameters)[1:]
+    assert [f["key"] for f in _device().action_args_schema("train")] == params
 
 
 def test_the_declared_order_matches_the_signature():

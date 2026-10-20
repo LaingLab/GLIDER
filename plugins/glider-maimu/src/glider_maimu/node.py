@@ -167,12 +167,10 @@ class MaimuNode(HardwareNode):
         """Send the configured command, then trigger the exec output."""
         off_ms = self._off_ms or self._period_ms
         if self._mode == MODE_PULSE and off_ms != self._period_ms:
-            # "p<on_ms>,<off_ms>,<duration_s>" (firmware 0.1.0+). The 'p' makes
-            # older firmware ignore it rather than misread "10,40,10" as a
-            # 10 ms toggle for 40 s.
-            await self._device.execute_action(
-                "write", f"p{self._period_ms}", off_ms, self._duration_s
-            )
+            # Sent as "p<on_ms>,<off_ms>,<duration_s>" (firmware 0.1.0+). The
+            # 'p' makes older firmware ignore it rather than misread "10,40,10"
+            # as a 10 ms toggle for 40 s.
+            await self._device.execute_action("train", self._period_ms, off_ms, self._duration_s)
         elif self._mode == MODE_PULSE:
             await self._device.execute_action(MODE_PULSE, self._period_ms, self._duration_s)
         else:
