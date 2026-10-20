@@ -263,37 +263,49 @@ async def test_no_reconnect_after_shutdown(fake_bleak):
     assert device.link_state is ConnectionState.DISCONNECTED
 
 
-async def test_poll_link_recovers_a_drop_that_lands_mid_hook(fake_bleak):
+async def test_a_drop_that_lands_mid_hook_is_retried_by_the_loop(fake_bleak):
     """A drop that lands while _on_reconnected() is still awaiting must not
-    strand the device.
+    strand the device -- the bench case is a USB plug that bounces.
 
     _start_reconnect() correctly no-ops while the current loop task is still
-    (briefly) alive, but once that loop returns and its own `finally` clears
-    the task handle, the device is left resting at DISCONNECTED with nothing
-    left to retry it -- poll_link()'s backstop is the only thing that can
-    still notice and re-arm it.
+    alive, so the drop's own callback starts nothing. The loop has to notice
+    the link died under the hook and keep going, and then run the hook again
+    on the link that finally holds.
     """
     _module, created = fake_bleak
     device = await _initialized()
-    dropped_once = {"done": False}
+    hook_runs = []
 
     async def _drop_mid_hook():
+        hook_runs.append(created["client"])
         await asyncio.sleep(0)  # yield so the drop below lands mid-await
-        if not dropped_once["done"]:
-            dropped_once["done"] = True
+        if len(hook_runs) == 1:
             created["client"].drop()
 
     device._on_reconnected = _drop_mid_hook
     created["client"].drop()
     task = device._reconnect_task
-    await task  # run the whole loop, including the hook's own drop, to completion
+    await asyncio.wait_for(task, timeout=5)
 
-    assert device.link_state is ConnectionState.DISCONNECTED
-    assert device._reconnect_task is None
-
-    await device.poll_link()
-    await _settle(device)
     assert device.link_state is ConnectionState.CONNECTED
+    assert device._reconnect_task is None
+    assert len(hook_runs) == 2, "the hook did not run again on the link that held"
+    assert hook_runs[1] is device._client
+    await device.shutdown()
+
+
+async def test_a_single_shot_write_never_connects(fake_bleak):
+    """retry=False is for a caller that owns its recovery: no link, no write,
+    and no reconnect started from inside it."""
+    _module, created = fake_bleak
+    device = await _initialized(write_char_uuid="c")
+    device._client.is_connected = False
+    before = len(created["clients"])
+
+    with pytest.raises(ConnectionError):
+        await device.write("on", retry=False)
+
+    assert len(created["clients"]) == before
     await device.shutdown()
 
 

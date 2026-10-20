@@ -285,16 +285,33 @@ class MaimuDevice(BLEDevice):
         """
         async with self._desired_lock:
             self._desired = desired
+            wire = self._wire(desired)
             if self._link_is_down():
                 logger.warning(
                     "Maimu %s: link is down; %s will be sent as soon as it reconnects",
                     self._name,
-                    ",".join(str(a) for a in self._wire(desired)),
+                    ",".join(str(a) for a in wire),
                 )
                 # Normally already running; this covers a drop no callback reported.
                 self._start_reconnect()
                 return
-            await self.write(*self._wire(desired))
+            # Once, with no reconnect inside the write: the command is
+            # remembered, so if the link died under it the reconnect sends it --
+            # and an in-band reconnect would hold this lock, and the flow behind
+            # it, for seconds.
+            try:
+                await self.write(*wire, retry=False)
+            except Exception:
+                client = self._client
+                if not self._initialized or (client is not None and client.is_connected):
+                    raise  # the link is up (or we are shutting down): a real failure
+                logger.warning(
+                    "Maimu %s: link dropped while sending %s; it will be sent as soon "
+                    "as it reconnects",
+                    self._name,
+                    ",".join(str(a) for a in wire),
+                )
+                self._start_reconnect()
 
     @staticmethod
     def _whole_number(value: Any, field: str) -> int:
@@ -328,7 +345,11 @@ class MaimuDevice(BLEDevice):
         yet -- writes ``off``, so the device is always left in a known state.
 
         Held under the command lock so a command the flow sends at the same
-        moment is never overwritten by an older one from here.
+        moment is never overwritten by an older one from here. Sent once, with
+        no reconnect inside the write: if the link dies again before it lands,
+        the reconnect loop carries on and calls this again, which then works out
+        what is left of the train at that later moment rather than sending a
+        figure that went stale while it waited.
 
         Best-effort, like :meth:`shutdown`: BLEDevice logs a failure here and
         leaves the link up, because the link genuinely did reconnect. This and
@@ -344,7 +365,7 @@ class MaimuDevice(BLEDevice):
                     self._name,
                     ",".join(str(a) for a in wire),
                 )
-            await self.write(*wire)
+            await self.write(*wire, retry=False)
 
     async def shutdown(self) -> None:
         """Stop the stimulator, then disconnect.

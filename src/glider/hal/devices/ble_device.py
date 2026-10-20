@@ -429,16 +429,32 @@ class BLEDevice(BaseDevice):
                     "" if attempt == 0 else "s",
                 )
                 self._set_link(ConnectionState.CONNECTED)
+                hook_error = None
                 try:
                     await self._on_reconnected()
                 except asyncio.CancelledError:
                     raise
-                except Exception as e:  # noqa: BLE001 - the link is still up
+                except Exception as e:  # noqa: BLE001 - reported below
+                    hook_error = e
+                client = self._client
+                if self._initialized and (client is None or not client.is_connected):
+                    # The link died again while the hook ran -- a plug that
+                    # bounced, a peripheral at the edge of range. Its disconnect
+                    # callback found this loop still running and so started
+                    # nothing; carry on here rather than leave the device
+                    # resting at DISCONNECTED with no one retrying it.
+                    logger.info(
+                        "BLE %s: link dropped again right after reconnecting; retrying",
+                        self._name,
+                    )
+                    self._set_link(ConnectionState.RECONNECTING)
+                    continue
+                if hook_error is not None:
                     logger.warning(
                         "BLE %s: post-reconnect hook failed (%s); the link is up "
                         "but the device may not be in its safe state",
                         self._name,
-                        e,
+                        hook_error,
                     )
                 return
 
@@ -860,11 +876,17 @@ class BLEDevice(BaseDevice):
             await self._ensure_ready()
             return await op()
 
-    async def write(self, *args: Any) -> None:
+    async def write(self, *args: Any, retry: bool = True) -> None:
         """Write a command to ``write_char_uuid`` (comma-joins multiple args).
 
-        Auto-detects the write mode from the characteristic and retries once
-        after a reconnect if the link dropped.
+        Auto-detects the write mode from the characteristic and, by default,
+        retries once after a reconnect if the link dropped.
+
+        ``retry=False`` sends once over the link as it stands -- no connect, no
+        retry -- and raises ConnectionError if there is no live link. That is for
+        a caller that owns its own recovery: a device whose reconnect hook puts
+        its state back has nothing to gain from a reconnect inside a write, which
+        would only hold that caller (and anything waiting on it) up for seconds.
         """
         if not args or all(a is None for a in args):
             raise ValueError("BLE.write: command is required")
@@ -875,11 +897,19 @@ class BLEDevice(BaseDevice):
         async with self._lock:
             if not self._initialized:
                 raise RuntimeError(f"BLE device {self._name} is not initialized")
-            await self._with_retry(
-                lambda: self._client.write_gatt_char(
+
+            def op():
+                return self._client.write_gatt_char(
                     self._write_char, data, response=self._effective_response()
                 )
-            )
+
+            if retry:
+                await self._with_retry(op)
+            else:
+                client = self._client
+                if client is None or not client.is_connected:
+                    raise ConnectionError(f"BLE device {self._name}: link is down")
+                await op()
         logger.info("BLE: wrote %r to %s", command, self._write_char)
 
     async def read(self) -> Any:

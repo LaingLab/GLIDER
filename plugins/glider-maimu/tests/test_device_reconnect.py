@@ -135,41 +135,56 @@ async def test_off_is_the_first_thing_on_the_new_link(fake_bleak):
     await device.shutdown()
 
 
-async def test_a_write_retry_does_not_write_off(fake_bleak):
-    """The retry path carries the caller's own command; 'off' would cancel it."""
+async def test_a_command_whose_write_dies_with_the_link_is_sent_on_reconnect(fake_bleak, clock):
+    """No reconnect inside the write: it held the command lock, and the flow
+    behind it, for seconds. The command is remembered, the call returns, and the
+    reconnect delivers it -- once, and never behind an 'off'."""
     _module, created = fake_bleak
     device = await _initialized()
     original = device._client
-    failing = {"first": True}
     calls = {"n": 0}
 
-    async def _flaky(char, data, response=False):
+    async def _dies(char, data, response=False):
         calls["n"] += 1
-        if failing["first"]:
-            failing["first"] = False
-            original.is_connected = False  # a real drop: retries only fire when the link is down
-            raise OSError("link dropped mid-write")
-        original.written.append(bytes(data))
+        original.is_connected = False  # the link went down under this write
+        raise OSError("link dropped mid-write")
 
-    device._client.write_gatt_char = _flaky
-    # original.is_connected is still True here, so _ensure_connected()'s first,
-    # unconditional call short-circuits and op() runs straight into _flaky,
-    # which drops the link and raises -- that drives _with_retry into its
-    # reconnect branch, the reconnect-inside-a-write path this test polices.
+    original.write_gatt_char = _dies
     clients_before = len(created["clients"])
 
-    await device.pulse(500, 10)
-    await asyncio.sleep(0)
+    await asyncio.wait_for(device.pulse(500, 10), timeout=0.5)
+    await _settle(device)
+    written = await _first_write_on_the_new_link(device)
 
-    # Prove the retry path was actually taken, not skipped: _flaky was entered
-    # (and raised) exactly once, and a fresh client was built to carry the
-    # retried write -- so the write that landed did not go through _flaky
-    # again.
     assert calls["n"] == 1
     assert len(created["clients"]) == clients_before + 1
-    assert device._client is not original
-    assert b"off" not in device._client.written
-    assert device._client.written == [b"500,10"]
+    assert written == [b"500,10"]
+    await device.shutdown()
+
+
+async def test_a_bounced_link_resends_what_is_left_at_that_later_moment(fake_bleak, clock):
+    """The resend is worked out when it is sent, not before a second drop: a
+    figure computed before the bounce would run the train past its end."""
+    _module, created = fake_bleak
+    device = await _initialized()
+    await device.train(10, 40, 1200)
+    first_resend = {"done": False}
+    original_hook = device._on_reconnected
+
+    async def _bounce_once():
+        if not first_resend["done"]:
+            first_resend["done"] = True
+            clock[0] += 30  # the bounce costs time
+            device._client.drop()
+        await original_hook()
+
+    device._on_reconnected = _bounce_once
+    clock[0] += 100
+    created["client"].drop()
+    await asyncio.wait_for(device._reconnect_task, timeout=5)
+
+    assert device.link_state is ConnectionState.CONNECTED
+    assert device._client.written == [b"p10,40,1070"]
     await device.shutdown()
 
 
