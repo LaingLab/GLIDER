@@ -92,12 +92,14 @@ therefore writes `off` before it disconnects, bounded so it cannot eat GLIDER's
 emergency-stop budget. Emergency stop, End Experiment and app quit all stop the
 device through that one path.
 
-The same reasoning covers a link that drops on its own — out of range, out of
-power, claimed by another central. GLIDER reconnects it with bounded backoff
-(5, 10, 20, 40 and 60 seconds, up to twelve attempts) and, the moment it is
-back, writes `off` before anything else touches the device. A stimulator that
-reconnected mid-pattern comes back in a known state instead of resuming one
-nobody is watching — re-issue the pulse yourself if you still want it.
+A link that drops on its own — out of range, out of power, claimed by another
+central — is different. The firmware turns the light off the moment the link
+goes, and GLIDER starts reconnecting straight away, then every few seconds at
+most, without giving up. The device remembers the last command it was given and
+resends it the moment the link is back: a train for whatever is left of its
+duration, `on` as `on`, and `off` if nothing was asked or the train has run
+out. Commands that arrive while the link is down return immediately instead of
+holding up the flow, and only the newest is sent on reconnect.
 
 ## Development
 

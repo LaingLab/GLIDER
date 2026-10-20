@@ -26,6 +26,7 @@ existing files; this device (``"BLE"``) is the superset for new work.
 """
 
 import asyncio
+import itertools
 import logging
 import time
 from collections.abc import Callable
@@ -118,6 +119,9 @@ class BLEDevice(BaseDevice):
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         super().__init__(board, config, name)
         self._resolved_address: str | None = None
+        # True once the advertised name has been heard on this host, which is
+        # what makes looking for it first on a reconnect worth the scan.
+        self._name_seen = False
         self._apply_setting_caches(config.settings)  # validates; sets the caches
 
         self._client = None  # BleakClient, created in initialize()
@@ -268,16 +272,25 @@ class BLEDevice(BaseDevice):
 
     # --- reconnect ---
 
-    #: Backoff base, doubling per attempt. Deliberately the same numbers as
-    #: BaseBoard._attempt_reconnect: a peripheral and a board that drop for the
-    #: same reason should not retry on two different rhythms.
-    RECONNECT_BASE_S: float = 5.0
-    RECONNECT_MAX_BACKOFF_S: float = 60.0
-    MAX_RECONNECT_ATTEMPTS: int = 12
+    #: Backoff base, doubling per attempt after an immediate first try. Much
+    #: tighter than BaseBoard._attempt_reconnect on purpose: a peripheral worn
+    #: by an animal drops for a second at a time, mid-run, and every second
+    #: spent waiting is a second of stimulus the animal did not get. A failed
+    #: attempt is itself a scan of several seconds, so this cannot hammer the
+    #: adapter.
+    RECONNECT_BASE_S: float = 0.5
+    RECONNECT_MAX_BACKOFF_S: float = 2.0
+    #: None = keep trying for as long as the device is initialized. A limit
+    #: gave up mid-experiment and left the device dead until someone noticed.
+    MAX_RECONNECT_ATTEMPTS: int | None = None
 
     def _backoff_for(self, attempt: int) -> float:
-        """Seconds to wait before ``attempt`` (0-based): 5, 10, 20, 40, 60, 60…"""
-        return min(self.RECONNECT_BASE_S * (2**attempt), self.RECONNECT_MAX_BACKOFF_S)
+        """Seconds to wait before ``attempt`` (0-based): 0, 0.5, 1, 2, 2, 2…"""
+        if attempt == 0:
+            return 0.0
+        # Exponent capped so an endless retry never overflows the float.
+        doubling = 2 ** min(attempt - 1, 30)
+        return min(self.RECONNECT_BASE_S * doubling, self.RECONNECT_MAX_BACKOFF_S)
 
     async def _on_reconnected(self) -> None:
         """Hook: the link is back up and any subscription has been restored.
@@ -317,13 +330,17 @@ class BLEDevice(BaseDevice):
         self._reconnect_task.add_done_callback(log_task_exception)
 
     async def _reconnect_loop(self) -> None:
-        """Retry with bounded exponential backoff; give up into ERROR.
+        """Retry at once, then on a short backoff, until the link is back.
 
-        Mirrors BaseBoard._attempt_reconnect, including clearing the task
-        handle in ``finally`` so a later drop can start a fresh one.
+        Only a finite ``MAX_RECONNECT_ATTEMPTS`` gives up into ERROR. Clears
+        the task handle in ``finally``, as BaseBoard._attempt_reconnect does, so
+        a later drop can start a fresh one.
         """
+        limit = self.MAX_RECONNECT_ATTEMPTS
+        attempts = itertools.count() if limit is None else range(limit)
+        started = time.perf_counter()
         try:
-            for attempt in range(self.MAX_RECONNECT_ATTEMPTS):
+            for attempt in attempts:
                 try:
                     await asyncio.sleep(self._backoff_for(attempt))
                 except asyncio.CancelledError:
@@ -365,6 +382,7 @@ class BLEDevice(BaseDevice):
                             self._set_link(ConnectionState.CONNECTED)
                             return
                         self._client = None
+                        await self._look_for_name_first()
                         await self._ensure_connected()
                         # _ensure_connected() publishes CONNECTED itself the moment the
                         # socket is up, but the required order is subscribe-then-publish:
@@ -388,11 +406,14 @@ class BLEDevice(BaseDevice):
                     # genuinely is connected. A half-usable client is worse than
                     # none, so the next attempt has to rebuild from nothing.
                     self._client = None
-                    logger.info(
-                        "BLE %s: reconnect attempt %d/%d failed (%s)",
+                    # Every attempt for the first few, then one line in thirty:
+                    # a retry that never gives up must not bury the log.
+                    logger.log(
+                        logging.INFO if attempt < 5 or attempt % 30 == 0 else logging.DEBUG,
+                        "BLE %s: reconnect attempt %d%s failed (%s)",
                         self._name,
                         attempt + 1,
-                        self.MAX_RECONNECT_ATTEMPTS,
+                        "" if limit is None else f"/{limit}",
                         e,
                     )
                     self._set_link(ConnectionState.RECONNECTING)
@@ -400,28 +421,73 @@ class BLEDevice(BaseDevice):
 
                 # The link is up. Say so before running the hook: it is true,
                 # and an override that writes needs write() to work.
+                logger.info(
+                    "BLE %s: reconnected after %.1f s (%d attempt%s)",
+                    self._name,
+                    time.perf_counter() - started,
+                    attempt + 1,
+                    "" if attempt == 0 else "s",
+                )
                 self._set_link(ConnectionState.CONNECTED)
+                hook_error = None
                 try:
                     await self._on_reconnected()
                 except asyncio.CancelledError:
                     raise
-                except Exception as e:  # noqa: BLE001 - the link is still up
+                except Exception as e:  # noqa: BLE001 - reported below
+                    hook_error = e
+                client = self._client
+                if self._initialized and (client is None or not client.is_connected):
+                    # The link died again while the hook ran -- a plug that
+                    # bounced, a peripheral at the edge of range. Its disconnect
+                    # callback found this loop still running and so started
+                    # nothing; carry on here rather than leave the device
+                    # resting at DISCONNECTED with no one retrying it.
+                    logger.info(
+                        "BLE %s: link dropped again right after reconnecting; retrying",
+                        self._name,
+                    )
+                    self._set_link(ConnectionState.RECONNECTING)
+                    continue
+                if hook_error is not None:
                     logger.warning(
                         "BLE %s: post-reconnect hook failed (%s); the link is up "
                         "but the device may not be in its safe state",
                         self._name,
-                        e,
+                        hook_error,
                     )
                 return
 
             logger.error(
                 "BLE %s: gave up reconnecting after %d attempts",
                 self._name,
-                self.MAX_RECONNECT_ATTEMPTS,
+                limit,
             )
             self._set_link(ConnectionState.ERROR)
         finally:
             self._reconnect_task = None
+
+    async def _look_for_name_first(self) -> None:
+        """On a reconnect, find the peripheral by name before trying its address.
+
+        A peripheral using BLE privacy picks a fresh random address every time
+        it starts advertising -- which is every time a link drops -- so the
+        address that just went away is the one most certain to be gone, and
+        looking for it first cost every reconnect a full scan for nothing. The
+        name does not change, and a scan for it returns the moment the
+        peripheral is heard, at whatever address it has now.
+
+        Only for a name this session has actually seen advertised: a
+        peripheral whose name never reaches this host would otherwise pay an
+        extra scan per attempt. Failure is not an error here; the address and
+        service paths in _ensure_connected() still run.
+        """
+        if not (self._adv_name and self._name_seen):
+            return
+        try:
+            await self._find_by_name()
+        except Exception as e:  # noqa: BLE001 - fall through to the other paths
+            logger.debug("BLE %s: name %r not heard yet (%s)", self._name, self._adv_name, e)
 
     async def _resubscribe(self) -> None:
         """Restore the notify subscription on a freshly built client.
@@ -566,6 +632,7 @@ class BLEDevice(BaseDevice):
                 f"advertising -- or out of range."
             )
         self._resolved_address = dev.address
+        self._name_seen = True
         logger.info("BLE: resolved name %r -> %s", self._adv_name, dev.address)
         return dev.address
 
@@ -593,6 +660,8 @@ class BLEDevice(BaseDevice):
                 target = await BleakScanner.find_device_by_address(address, timeout=RESOLVE_SCAN_S)
                 if target is None:
                     raise RuntimeError(f"Device with address {address} was not found")
+                if self._adv_name and getattr(target, "name", None) == self._adv_name:
+                    self._name_seen = True
             client = BleakClient(target, disconnected_callback=self._on_disconnected)
             await client.connect()
         except Exception as exc:
@@ -807,11 +876,17 @@ class BLEDevice(BaseDevice):
             await self._ensure_ready()
             return await op()
 
-    async def write(self, *args: Any) -> None:
+    async def write(self, *args: Any, retry: bool = True) -> None:
         """Write a command to ``write_char_uuid`` (comma-joins multiple args).
 
-        Auto-detects the write mode from the characteristic and retries once
-        after a reconnect if the link dropped.
+        Auto-detects the write mode from the characteristic and, by default,
+        retries once after a reconnect if the link dropped.
+
+        ``retry=False`` sends once over the link as it stands -- no connect, no
+        retry -- and raises ConnectionError if there is no live link. That is for
+        a caller that owns its own recovery: a device whose reconnect hook puts
+        its state back has nothing to gain from a reconnect inside a write, which
+        would only hold that caller (and anything waiting on it) up for seconds.
         """
         if not args or all(a is None for a in args):
             raise ValueError("BLE.write: command is required")
@@ -822,11 +897,19 @@ class BLEDevice(BaseDevice):
         async with self._lock:
             if not self._initialized:
                 raise RuntimeError(f"BLE device {self._name} is not initialized")
-            await self._with_retry(
-                lambda: self._client.write_gatt_char(
+
+            def op():
+                return self._client.write_gatt_char(
                     self._write_char, data, response=self._effective_response()
                 )
-            )
+
+            if retry:
+                await self._with_retry(op)
+            else:
+                client = self._client
+                if client is None or not client.is_connected:
+                    raise ConnectionError(f"BLE device {self._name}: link is down")
+                await op()
         logger.info("BLE: wrote %r to %s", command, self._write_char)
 
     async def read(self) -> Any:

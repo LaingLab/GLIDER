@@ -55,21 +55,24 @@ A BLE peripheral that goes out of range, loses power, or is claimed by another
 central is noticed straight away, not at the next write. Its row in the
 [Hardware panel](../building/devices.md) and its own dot on the status strip
 (shown beside the board dots for any peripheral that tracks its own link) both
-move to **Disconnected**, and GLIDER starts retrying on its own: 5 seconds,
-then 10, 20, 40 and 60, up to twelve attempts, before it gives up and shows
-**Error**.
+move to **Disconnected**, and GLIDER starts retrying on its own: straight
+away, then after half a second, a second, and every two seconds from then on,
+for as long as the device is in use. It does not give up. A peripheral with an
+advertised name is looked for by that name first, because a peripheral using
+BLE privacy comes back at a new address after every drop.
 
 - The Bluetooth **board**'s own dot stays green throughout. That is the host
   adapter, and it is genuinely fine — it is the peripheral that went away,
   which is why a peripheral that owns its link gets a dot of its own.
 - A run is not paused by a dropped peripheral. You get a warning notification
-  and the retries continue underneath it; only **Error** — retries exhausted —
-  needs you to go and look.
-- **A Maimu comes back off.** The stimulator runs a pulse train in its own
-  firmware, so a link that died mid-train left it stimulating with nothing
-  attached to stop it. When the reconnect succeeds, GLIDER writes `off` before
-  anything else, so the device returns in a known state instead of resuming a
-  pattern nobody is watching. Re-issue the pulse yourself if you still want it.
+  and the retries continue underneath it.
+- **A Maimu comes back doing what it was last told.** Its firmware turns the
+  light off the moment the link drops. When the reconnect succeeds, GLIDER
+  resends the last command: a pulse train for whatever is left of its
+  duration, `on` as `on`, and `off` if nothing was asked or the train has run
+  out. Commands the flow sends while the link is down do not hold the flow up;
+  the newest one is what goes out on reconnect. The log says when a train was
+  resumed, so the gap in stimulation is on record.
 
 !!! tip "Two stimulators with the same name"
     A strip dot is labelled with the device's name, since that is usually more

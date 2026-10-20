@@ -76,7 +76,7 @@ async def test_off_sends_the_duty_cycle_command():
     node = _node(mode="pulse", period_ms=10, duration_s=10)
     node.off_ms = 40
     await node.hardware_operation()
-    assert node._device.calls == [("write", ("p10", 40, 10))]
+    assert node._device.calls == [("train", (10, 40, 10))]
 
 
 def test_off_round_trips_and_old_files_default_to_symmetric():

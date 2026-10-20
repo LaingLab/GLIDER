@@ -373,6 +373,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A dropped Bluetooth peripheral comes back in seconds, and never stops
+  trying.** The first retry is immediate, then half a second, a second, and
+  every two seconds after that, for as long as the device is in use; before,
+  retries started after 5 seconds, backed off to a minute and gave up after
+  twelve. A peripheral with an advertised name is looked for by name first,
+  because a peripheral using BLE privacy re-advertises at a new address after
+  every drop, and scanning for the old one cost each reconnect several seconds
+  for nothing.
+- **A Maimu resumes its pulse train after a dropout.** It used to come back
+  `off`. It now resends its last command, a train for whatever is left of its
+  duration. Commands sent while the link is down no longer block the flow and
+  then replay in a burst; the newest one is sent on reconnect. The node's
+  duty-cycle setting now goes through a `train(on_ms, off_ms, duration_s)`
+  action, which the device control panel offers as well.
+
 - **Three examples would not start** (`box_new`, `box_pi_side`, `dispense`):
   they held connections to nodes that no longer existed. Those connections are
   removed; they never loaded, so the experiments behave as before.

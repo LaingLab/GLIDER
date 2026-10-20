@@ -1,15 +1,16 @@
-"""A Maimu comes back off.
+"""A Maimu comes back doing what the experiment last asked for.
 
-The firmware runs a pulse autonomously, so a link that died mid-train left a
-stimulator running with nothing attached to stop it. The reconnect is the
-first chance anyone has had to say otherwise, and it takes it -- the device
-never silently resumes whatever it was doing.
-
-Same reasoning as shutdown(), which writes 'off' before it disconnects.
+The firmware turns the light off the moment the link drops, so a train cut off
+by a drop has been interrupted, not continued. The reconnect puts the last
+command back -- a train for whatever is left of it -- and with nothing asked,
+or the train run out, it writes 'off', so the device is always in a known state.
+Commands that arrive while the link is down must not hold the flow up; the
+newest one is what the reconnect sends.
 """
 
 import asyncio
 import sys
+import types
 
 import pytest
 
@@ -33,6 +34,8 @@ class _FakeClient:
         self.disconnected_callback = disconnected_callback
 
     async def connect(self):
+        if getattr(self, "connect_error", None):
+            raise self.connect_error
         self.is_connected = True
 
     async def disconnect(self):
@@ -55,6 +58,7 @@ def fake_bleak(monkeypatch):
 
     def make_client(address, *a, disconnected_callback=None, **k):
         client = _FakeClient(address, disconnected_callback)
+        client.connect_error = created.get("connect_error")
         created["client"] = client
         created["clients"].append(client)
         return client
@@ -131,39 +135,160 @@ async def test_off_is_the_first_thing_on_the_new_link(fake_bleak):
     await device.shutdown()
 
 
-async def test_a_write_retry_does_not_write_off(fake_bleak):
-    """The retry path carries the caller's own command; 'off' would cancel it."""
+async def test_a_command_whose_write_dies_with_the_link_is_sent_on_reconnect(fake_bleak, clock):
+    """No reconnect inside the write: it held the command lock, and the flow
+    behind it, for seconds. The command is remembered, the call returns, and the
+    reconnect delivers it -- once, and never behind an 'off'."""
     _module, created = fake_bleak
     device = await _initialized()
     original = device._client
-    failing = {"first": True}
     calls = {"n": 0}
 
-    async def _flaky(char, data, response=False):
+    async def _dies(char, data, response=False):
         calls["n"] += 1
-        if failing["first"]:
-            failing["first"] = False
-            original.is_connected = False  # a real drop: retries only fire when the link is down
-            raise OSError("link dropped mid-write")
-        original.written.append(bytes(data))
+        original.is_connected = False  # the link went down under this write
+        raise OSError("link dropped mid-write")
 
-    device._client.write_gatt_char = _flaky
-    # original.is_connected is still True here, so _ensure_connected()'s first,
-    # unconditional call short-circuits and op() runs straight into _flaky,
-    # which drops the link and raises -- that drives _with_retry into its
-    # reconnect branch, the reconnect-inside-a-write path this test polices.
+    original.write_gatt_char = _dies
     clients_before = len(created["clients"])
 
-    await device.pulse(500, 10)
-    await asyncio.sleep(0)
+    await asyncio.wait_for(device.pulse(500, 10), timeout=0.5)
+    await _settle(device)
+    written = await _first_write_on_the_new_link(device)
 
-    # Prove the retry path was actually taken, not skipped: _flaky was entered
-    # (and raised) exactly once, and a fresh client was built to carry the
-    # retried write -- so the write that landed did not go through _flaky
-    # again.
     assert calls["n"] == 1
     assert len(created["clients"]) == clients_before + 1
-    assert device._client is not original
-    assert b"off" not in device._client.written
-    assert device._client.written == [b"500,10"]
+    assert written == [b"500,10"]
     await device.shutdown()
+
+
+async def test_a_bounced_link_resends_what_is_left_at_that_later_moment(fake_bleak, clock):
+    """The resend is worked out when it is sent, not before a second drop: a
+    figure computed before the bounce would run the train past its end."""
+    _module, created = fake_bleak
+    device = await _initialized()
+    await device.train(10, 40, 1200)
+    first_resend = {"done": False}
+    original_hook = device._on_reconnected
+
+    async def _bounce_once():
+        if not first_resend["done"]:
+            first_resend["done"] = True
+            clock[0] += 30  # the bounce costs time
+            device._client.drop()
+        await original_hook()
+
+    device._on_reconnected = _bounce_once
+    clock[0] += 100
+    created["client"].drop()
+    await asyncio.wait_for(device._reconnect_task, timeout=5)
+
+    assert device.link_state is ConnectionState.CONNECTED
+    assert device._client.written == [b"p10,40,1070"]
+    await device.shutdown()
+
+
+# --- putting the last command back ---------------------------------------------
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    """The device's view of time, moved by hand: [now] in seconds."""
+    now = [1000.0]
+    monkeypatch.setattr(
+        "glider_maimu.device.time", types.SimpleNamespace(perf_counter=lambda: now[0])
+    )
+    return now
+
+
+async def _first_write_on_the_new_link(device):
+    for _ in range(200):
+        if device._client.written:
+            return device._client.written
+        await asyncio.sleep(0)
+    raise AssertionError("nothing was written after the reconnect")
+
+
+async def test_a_train_cut_off_by_a_drop_resumes_for_what_is_left(fake_bleak, clock):
+    _module, created = fake_bleak
+    device = await _initialized()
+    await device.train(10, 40, 1200)
+    assert created["client"].written == [b"p10,40,1200"]
+
+    clock[0] += 200.4
+    created["client"].drop()
+    await _settle(device)
+
+    assert await _first_write_on_the_new_link(device) == [b"p10,40,999"]
+    await device.shutdown()
+
+
+async def test_a_symmetric_train_resumes_in_the_original_form(fake_bleak, clock):
+    _module, created = fake_bleak
+    device = await _initialized()
+    await device.pulse(500, 10)
+
+    clock[0] += 3.5
+    created["client"].drop()
+    await _settle(device)
+
+    assert await _first_write_on_the_new_link(device) == [b"500,6"]
+    await device.shutdown()
+
+
+@pytest.mark.parametrize("elapsed", [1200.0, 1199.5, 5000.0])
+async def test_a_train_with_under_a_second_left_comes_back_off(fake_bleak, clock, elapsed):
+    _module, created = fake_bleak
+    device = await _initialized()
+    await device.train(10, 40, 1200)
+
+    clock[0] += elapsed
+    created["client"].drop()
+    await _settle(device)
+
+    assert await _first_write_on_the_new_link(device) == [b"off"]
+    await device.shutdown()
+
+
+@pytest.mark.parametrize("command, expected", [("on", b"on"), ("off", b"off")])
+async def test_on_and_off_are_put_back_as_they_were(fake_bleak, command, expected):
+    _module, created = fake_bleak
+    device = await _initialized()
+    await getattr(device, command)()
+
+    created["client"].drop()
+    await _settle(device)
+
+    assert await _first_write_on_the_new_link(device) == [expected]
+    await device.shutdown()
+
+
+async def test_commands_during_a_drop_return_at_once_and_the_newest_wins(fake_bleak, clock):
+    """Zone enter/exit kept firing while the link was down. Each used to block
+    the flow behind the reconnect and then land in a burst, oldest first."""
+    _module, created = fake_bleak
+    device = await _initialized()
+    created["connect_error"] = OSError("out of range")
+    created["client"].drop()
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert device.link_state is ConnectionState.RECONNECTING
+
+    await asyncio.wait_for(device.train(10, 40, 1200), timeout=0.5)  # mouse enters
+    await asyncio.wait_for(device.off(), timeout=0.5)  # mouse leaves
+    await asyncio.wait_for(device.train(10, 40, 1200), timeout=0.5)  # and back in
+
+    assert all(client.written == [] for client in created["clients"][1:])
+
+    created["connect_error"] = None  # back in range
+    await _settle(device)
+    assert await _first_write_on_the_new_link(device) == [b"p10,40,1200"]
+    await device.shutdown()
+
+
+async def test_shutdown_forgets_the_last_command(fake_bleak):
+    _module, created = fake_bleak
+    device = await _initialized()
+    await device.train(10, 40, 1200)
+    await device.shutdown()
+    assert device._desired is None

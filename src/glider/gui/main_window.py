@@ -2554,10 +2554,10 @@ class MainWindow(QMainWindow):
         if self._core.state != SessionState.RUNNING:
             return
         if state is BoardConnectionState.ERROR:
-            # ERROR is the bounded reconnect loop's own terminal give-up state
-            # (12 attempts -- see BLEDevice.MAX_RECONNECT_ATTEMPTS), reached
-            # only after retrying is already over, so unlike DISCONNECTED this
-            # is not "hang on" -- it is "go and look at this".
+            # ERROR is the reconnect loop's own terminal give-up state, reached
+            # only when a device sets a finite MAX_RECONNECT_ATTEMPTS and
+            # retrying is already over, so unlike DISCONNECTED this is not
+            # "hang on" -- it is "go and look at this".
             body = (
                 f"{label} could not be reconnected and needs attention. "
                 "GLIDER has stopped retrying; the experiment has not been paused."

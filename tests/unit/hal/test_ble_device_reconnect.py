@@ -96,7 +96,7 @@ def fake_bleak(monkeypatch):
 def instant_backoff(monkeypatch):
     """Collapse the backoff so the suite runs in milliseconds, not minutes.
 
-    The 5/10/20/40/60 schedule itself is asserted separately by
+    The 0/0.5/1/2/2 schedule itself is asserted separately by
     test_backoff_doubles_to_the_cap, which calls _backoff_for directly --
     unbound, passing the class in for self -- and reads the computed values
     off undisturbed RECONNECT_BASE_S/RECONNECT_MAX_BACKOFF_S. It never lives
@@ -164,7 +164,31 @@ async def test_reconnect_builds_a_fresh_client(fake_bleak):
     await device.shutdown()
 
 
-async def test_giving_up_lands_in_error(fake_bleak):
+async def test_by_default_it_never_gives_up(fake_bleak):
+    """A limit gave up mid-experiment and left an animal's stimulator dead until
+    someone noticed. Keep retrying for as long as the device is in use, and
+    take the link back the moment the peripheral answers again."""
+    _module, created = fake_bleak
+    device = await _initialized()
+    created["connect_error"] = OSError("peripheral is out of range")
+    before = len(created["clients"])
+    created["client"].drop()
+
+    deadline = time.monotonic() + 5
+    while len(created["clients"]) - before < 20:
+        assert time.monotonic() < deadline, "the loop stopped retrying"
+        await asyncio.sleep(0.001)
+    assert device.link_state is ConnectionState.RECONNECTING
+    assert not device._reconnect_task.done()
+
+    created["connect_error"] = None  # back in range
+    await _settle(device)
+    assert device.link_state is ConnectionState.CONNECTED
+    await device.shutdown()
+
+
+async def test_a_finite_limit_still_lands_in_error(fake_bleak, monkeypatch):
+    monkeypatch.setattr(BLEDevice, "MAX_RECONNECT_ATTEMPTS", 12)
     _module, created = fake_bleak
     device = await _initialized()
     created["connect_error"] = OSError("peripheral is gone")
@@ -175,7 +199,8 @@ async def test_giving_up_lands_in_error(fake_bleak):
     await device.shutdown()
 
 
-async def test_attempts_are_bounded(fake_bleak):
+async def test_a_finite_limit_bounds_the_attempts(fake_bleak, monkeypatch):
+    monkeypatch.setattr(BLEDevice, "MAX_RECONNECT_ATTEMPTS", 12)
     _module, created = fake_bleak
     device = await _initialized()
     created["connect_error"] = OSError("gone")
@@ -184,16 +209,23 @@ async def test_attempts_are_bounded(fake_bleak):
     task = device._reconnect_task
     await asyncio.wait_for(task, timeout=5)
     attempts = len(created["clients"]) - before
-    assert attempts == BLEDevice.MAX_RECONNECT_ATTEMPTS
+    assert attempts == 12
     await device.shutdown()
 
 
 async def test_backoff_doubles_to_the_cap(monkeypatch):
-    """5 -> 10 -> 20 -> 40 -> 60 -> 60, matching BaseBoard._attempt_reconnect."""
-    monkeypatch.setattr(BLEDevice, "RECONNECT_BASE_S", 5.0)
-    monkeypatch.setattr(BLEDevice, "RECONNECT_MAX_BACKOFF_S", 60.0)
+    """Straight away, then 0.5 -> 1 -> 2 and 2 from there on: a dropped link
+    on an animal costs stimulus for every second it stays down."""
+    # instant_backoff collapsed these for the rest of the suite; put them back.
+    monkeypatch.setattr(BLEDevice, "RECONNECT_BASE_S", 0.5)
+    monkeypatch.setattr(BLEDevice, "RECONNECT_MAX_BACKOFF_S", 2.0)
     delays = [BLEDevice._backoff_for(BLEDevice, attempt) for attempt in range(6)]
-    assert delays == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0]
+    assert delays == [0.0, 0.5, 1.0, 2.0, 2.0, 2.0]
+
+
+async def test_backoff_survives_an_endless_retry():
+    """An unbounded loop reaches attempt numbers whose 2**n overflows a float."""
+    assert BLEDevice._backoff_for(BLEDevice, 100_000) == BLEDevice.RECONNECT_MAX_BACKOFF_S
 
 
 async def test_shutdown_during_backoff_cancels_the_task(fake_bleak):
@@ -231,37 +263,49 @@ async def test_no_reconnect_after_shutdown(fake_bleak):
     assert device.link_state is ConnectionState.DISCONNECTED
 
 
-async def test_poll_link_recovers_a_drop_that_lands_mid_hook(fake_bleak):
+async def test_a_drop_that_lands_mid_hook_is_retried_by_the_loop(fake_bleak):
     """A drop that lands while _on_reconnected() is still awaiting must not
-    strand the device.
+    strand the device -- the bench case is a USB plug that bounces.
 
     _start_reconnect() correctly no-ops while the current loop task is still
-    (briefly) alive, but once that loop returns and its own `finally` clears
-    the task handle, the device is left resting at DISCONNECTED with nothing
-    left to retry it -- poll_link()'s backstop is the only thing that can
-    still notice and re-arm it.
+    alive, so the drop's own callback starts nothing. The loop has to notice
+    the link died under the hook and keep going, and then run the hook again
+    on the link that finally holds.
     """
     _module, created = fake_bleak
     device = await _initialized()
-    dropped_once = {"done": False}
+    hook_runs = []
 
     async def _drop_mid_hook():
+        hook_runs.append(created["client"])
         await asyncio.sleep(0)  # yield so the drop below lands mid-await
-        if not dropped_once["done"]:
-            dropped_once["done"] = True
+        if len(hook_runs) == 1:
             created["client"].drop()
 
     device._on_reconnected = _drop_mid_hook
     created["client"].drop()
     task = device._reconnect_task
-    await task  # run the whole loop, including the hook's own drop, to completion
+    await asyncio.wait_for(task, timeout=5)
 
-    assert device.link_state is ConnectionState.DISCONNECTED
-    assert device._reconnect_task is None
-
-    await device.poll_link()
-    await _settle(device)
     assert device.link_state is ConnectionState.CONNECTED
+    assert device._reconnect_task is None
+    assert len(hook_runs) == 2, "the hook did not run again on the link that held"
+    assert hook_runs[1] is device._client
+    await device.shutdown()
+
+
+async def test_a_single_shot_write_never_connects(fake_bleak):
+    """retry=False is for a caller that owns its recovery: no link, no write,
+    and no reconnect started from inside it."""
+    _module, created = fake_bleak
+    device = await _initialized(write_char_uuid="c")
+    device._client.is_connected = False
+    before = len(created["clients"])
+
+    with pytest.raises(ConnectionError):
+        await device.write("on", retry=False)
+
+    assert len(created["clients"]) == before
     await device.shutdown()
 
 
