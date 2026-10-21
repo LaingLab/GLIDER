@@ -64,6 +64,9 @@ class DeviceCardGrid(QWidget):
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setWidget(body)
+        # The cards give up their room first when the page is short (800x480
+        # landscape), so the run bar under them stays on the screen.
+        self._scroll.setMinimumHeight(1)
         # Let the page behind show through, as the old runner list did.
         self._scroll.viewport().setAutoFillBackground(False)
         body.setAutoFillBackground(False)

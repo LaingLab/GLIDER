@@ -33,6 +33,10 @@ class PiDashboard(QWidget):
         self._tabs.setObjectName("piDashboardTabs")
         self._tabs.setDocumentMode(True)
         self._tabs.tabBar().setExpanding(True)
+        # Not the tallest panel's height: in 800x480 landscape that would push
+        # the window past the screen. A taller panel scrolls, or the grip gives
+        # it room.
+        self._tabs.setMinimumHeight(140)
 
         self._splitter.addWidget(graph)
         self._splitter.addWidget(self._tabs)

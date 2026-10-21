@@ -108,6 +108,8 @@ def test_switch_to_desktop_rehosts_without_duplicates(qtbot, main_window_factory
     assert w._tab_bar.buttons()["analyze"].isVisibleTo(w)
     assert not w._gear_button.isVisibleTo(w)
     assert graph.dragMode().name == "RubberBandDrag" and not graph.is_locked()
+    # The Pi lowered the graph's floor for landscape; the desktop gets its own back.
+    assert (graph.minimumWidth(), graph.minimumHeight()) == (400, 300)
 
 
 def test_switch_to_desktop_restores_the_desktop_chrome(qtbot, main_window_factory):

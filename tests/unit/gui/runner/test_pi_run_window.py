@@ -7,6 +7,7 @@ are elsewhere, and the camera box only appears when a stream is running.
 
 from __future__ import annotations
 
+from PyQt6.QtCore import QPoint
 from PyQt6.QtWidgets import QStatusBar
 
 from glider.gui.main_window import PAGE_OPERATOR
@@ -125,3 +126,38 @@ def test_camera_status_still_reaches_the_desktop_status_bar(qtbot, main_window_f
     w.switch_to_builder()
     w._camera_panel._show_status("Camera settings saved")
     assert w.statusBar().currentMessage() == "Camera settings saved"
+
+
+def test_landscape_800x480_fits_and_start_is_on_the_screen(qtbot, main_window_factory, monkeypatch):
+    """Landscape is not tuned, but nothing may push the window past 480 px.
+
+    The stack is as tall as its tallest page, so every page counts, whichever
+    is showing. A window pushed taller does not shrink back afterwards.
+    """
+    w = main_window_factory(desktop_mode=False)
+    w.resize(800, 480)
+    w.show()
+    qtbot.waitUntil(w._pi_header.isVisible)
+    for go in (w._show_experiment_tab, w.switch_to_builder, w._enter_dashboard):
+        go()
+        qtbot.wait(10)
+        hint = w.minimumSizeHint()
+        assert hint.height() <= 480 and hint.width() <= 800
+    for key in w._pi_dashboard.keys():
+        w._pi_dashboard.set_current(key)
+        assert w.minimumSizeHint().height() <= 480
+    w._enter_dashboard()
+    # The Run page with a critical notice up, then with the camera streaming.
+    w._notify_user("UNSAFE STATE", "Hardware may still be active. " * 6, level="critical")
+    qtbot.wait(10)
+    assert w.minimumSizeHint().height() <= 480
+    w._notice_bar.dismiss()
+    monkeypatch.setattr(type(w._core.camera_manager), "is_streaming", property(lambda _: True))
+    w._enter_dashboard()
+    qtbot.wait(10)
+    assert w._pi_run_page.camera_slot.isVisibleTo(w)
+    assert w.minimumSizeHint().height() <= 480
+    assert w.size().height() == 480
+    start = w._pi_run_page.control._start_btn
+    assert start.isVisible()
+    assert start.mapTo(w, QPoint(0, start.height())).y() <= w.height()

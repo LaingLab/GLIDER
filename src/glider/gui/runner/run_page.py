@@ -38,6 +38,8 @@ class PiRunPage(QWidget):
         self.devices = DeviceCardGrid(core)
         self.camera_slot = QWidget()
         QVBoxLayout(self.camera_slot).setContentsMargins(0, 0, 0, 0)
+        # Like the cards, the video gives way on a short screen (it clips).
+        self.camera_slot.setMinimumHeight(1)
         self.camera_slot.hide()
         self.control = RunControlPanel(core, touch=True)
 

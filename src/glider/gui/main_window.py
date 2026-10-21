@@ -90,6 +90,10 @@ _RUN_FOLDER_STATES = ("RUNNING", "PAUSED", "STOPPING")
 # On the Pi these hold the graph locked, and make the header pill a way to Run.
 _PI_LOCKED_STATES = ("RUNNING", "PAUSED", "INITIALIZING", "STOPPING")
 
+# The node graph's floor in the desktop frame. The Pi lowers the height, and
+# Switch to Desktop puts this back.
+_GRAPH_MIN_SIZE = (400, 300)
+
 # QSettings flag, namespaced alongside the existing first_run/* keys and kept
 # separate from ``first_run/tour_complete``: one shared flag would mean sitting
 # through the walkthrough silences the setup form nobody has seen yet.
@@ -1270,7 +1274,7 @@ class MainWindow(QMainWindow):
         ``_populate_builder_panels`` fills them once the panel widgets exist.
         """
         self._graph_view = NodeGraphView()
-        self._graph_view.setMinimumSize(400, 300)
+        self._graph_view.setMinimumSize(*_GRAPH_MIN_SIZE)
 
         # Create node editor controller
         self._node_editor = NodeEditorController(
@@ -1781,6 +1785,9 @@ class MainWindow(QMainWindow):
         graph = self._graph_view
         graph.set_touch_mode(True)
         graph.set_locked(True)
+        # The desktop's 300 px floor plus the panel tabs made the window 642 px
+        # tall at the least, past the bottom of an 800x480 screen held landscape.
+        graph.setMinimumHeight(120)
         graph.locked_changed.connect(self._apply_pi_lock)
         self._apply_pi_lock(True)
 
@@ -3122,6 +3129,7 @@ class MainWindow(QMainWindow):
             graph.node_selected.disconnect(dashboard._on_node_selected)
             graph.set_locked(False)
             graph.set_touch_mode(False)
+            graph.setMinimumSize(*_GRAPH_MIN_SIZE)
             # A scroller swallows the mouse moves that desktop drags need.
             self._finger_scroll.release()
             self._experiment_page.release_finger_scrolling()
