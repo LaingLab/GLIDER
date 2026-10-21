@@ -6,13 +6,13 @@ from glider.gui.dashboard.panels.run_header import RunHeader
 pytestmark = pytest.mark.usefixtures("qtbot")
 
 
-def _header(qtbot, mock_core, **meta):
+def _header(qtbot, mock_core, touch=False, **meta):
     session = ExperimentSession()
     for k, v in meta.items():
         setattr(session.metadata, k, v)
     session._mark_clean()
     mock_core.session = session
-    h = RunHeader(mock_core)
+    h = RunHeader(mock_core, touch=touch)
     qtbot.addWidget(h)
     return h
 
@@ -256,3 +256,29 @@ def test_a_user_preset_file_is_checked_not_the_built_in(qtbot, mock_core, tmp_pa
     checked = [a for a in h._menu.actions() if a.isChecked()]
     assert len(checked) == 1
     assert h._menu.actions().index(checked[0]) > texts.index("Open Field")
+
+
+def test_touch_header_hides_title_and_picker(qtbot, mock_core):
+    h = _header(qtbot, mock_core, touch=True)
+    assert not h._title.isVisibleTo(h) and not h._picker.isVisibleTo(h)
+
+
+def test_touch_header_stays_without_title_after_a_refresh(qtbot, mock_core):
+    h = _header(qtbot, mock_core, touch=True, name="OF 3")
+    h.refresh()
+    assert not h._title.isVisibleTo(h)
+
+
+def test_touch_header_lays_tags_out_in_two_columns(qtbot, mock_core):
+    from PyQt6.QtWidgets import QGridLayout
+
+    h = _header(qtbot, mock_core, touch=True)
+    assert isinstance(h._tags.layout(), QGridLayout)
+
+
+def test_desktop_header_keeps_title_picker_and_one_row(qtbot, mock_core):
+    from PyQt6.QtWidgets import QHBoxLayout
+
+    h = _header(qtbot, mock_core)
+    assert h._title.isVisibleTo(h) and h._picker.isVisibleTo(h)
+    assert isinstance(h._tags.layout(), QHBoxLayout)

@@ -99,3 +99,57 @@ def test_rebuild_leaves_only_current_chips(tags):
     tags.set_fields([TagField("a", "A"), TagField("b", "B"), TagField("c", "C")])
     tags.set_fields([TagField("a", "A")])
     assert len(tags.findChildren(QPushButton)) == 1
+
+
+def _three(qtbot):
+    w = FieldTags(columns=2)
+    qtbot.addWidget(w)
+    w.set_fields(
+        [
+            TagField("dam_id", "Dam ID", "", True),
+            TagField("pnd", "Postnatal day"),
+            TagField("litter", "Litter size"),
+        ]
+    )
+    return w
+
+
+def test_two_column_grid_keeps_editing(qtbot):
+    w = _three(qtbot)
+    grid = w.layout()
+    assert grid.getItemPosition(grid.indexOf(w.chip("litter")))[:2] == (1, 0)
+    w.chip("dam_id").click()
+    assert w.editor() is not None
+    assert grid.getItemPosition(grid.indexOf(w.editor()))[:2] == (0, 0)
+
+
+@pytest.mark.parametrize("key, cell", [("pnd", (0, 1)), ("litter", (1, 0))])
+def test_the_editor_takes_the_clicked_chips_cell(qtbot, key, cell):
+    w = _three(qtbot)
+    w.chip(key).click()
+    grid = w.layout()
+    assert grid.getItemPosition(grid.indexOf(w.editor()))[:2] == cell
+
+
+def test_two_column_grid_puts_the_trailing_label_on_its_own_row(qtbot):
+    w = _three(qtbot)
+    grid = w.layout()
+    assert grid.getItemPosition(grid.indexOf(w._trailing)) == (2, 0, 1, 2)
+    assert grid.getItemPosition(grid.indexOf(w.chip("pnd")))[:2] == (0, 1)
+
+
+def test_grid_survives_a_rebuild_and_a_cancelled_edit(qtbot):
+    w = _three(qtbot)
+    w.chip("pnd").click()
+    qtbot.keyClick(w.editor(), Qt.Key.Key_Escape)
+    assert w.editor() is None and w.chip("pnd").isVisibleTo(w)
+    w.set_fields([TagField("only", "Only one")])
+    grid = w.layout()
+    assert grid.getItemPosition(grid.indexOf(w.chip("only")))[:2] == (0, 0)
+    assert grid.getItemPosition(grid.indexOf(w._trailing)) == (1, 0, 1, 2)
+
+
+def test_default_is_still_a_single_row(qtbot, tags):
+    from PyQt6.QtWidgets import QHBoxLayout
+
+    assert isinstance(tags.layout(), QHBoxLayout)

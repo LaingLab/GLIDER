@@ -44,9 +44,13 @@ class RunControlPanel(QWidget):
     # READY / NOT READY pill so it never contradicts a disabled Start.
     readiness_changed = pyqtSignal(bool)
 
-    def __init__(self, core: "GliderCore", parent=None):
+    def __init__(self, core: "GliderCore", parent=None, *, touch: bool = False):
+        """``touch``: the Pi's run box. The page shows the clock itself, so this
+        one hides its own label (``elapsed_updated`` still fires), and the
+        hints name the ⚙ menu rather than the desktop's Hardware menu."""
         super().__init__(parent)
         self._core = core
+        self._touch = touch
 
         self._experiment_start_time: float | None = None
         self._state_name = "IDLE"
@@ -68,6 +72,8 @@ class RunControlPanel(QWidget):
 
         self._timer = QLabel("00:00.00")
         self._timer.setProperty("timer", True)
+        if self._touch:
+            self._timer.hide()
         layout.addWidget(self._timer)
         self.elapsed_updated.connect(self._timer.setText)
 
@@ -197,7 +203,11 @@ class RunControlPanel(QWidget):
         if missing:
             self._not_ready_hint.setText(f"Fill in {missing} to start.")
         elif not r.board_ready:
-            self._not_ready_hint.setText("Connect the board to start (Hardware > Connect All).")
+            self._not_ready_hint.setText(
+                "Connect a board to start (⚙ › Connect boards…)."
+                if self._touch
+                else "Connect the board to start (Hardware > Connect All)."
+            )
         else:
             self._not_ready_hint.setText("Add a Start Experiment node to the flow to start.")
         self._not_ready_hint.setVisible(not ready and not live)

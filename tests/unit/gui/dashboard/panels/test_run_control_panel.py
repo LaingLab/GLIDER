@@ -6,7 +6,7 @@ from glider.gui.dashboard.panels.run_control_panel import RunControlPanel
 pytestmark = pytest.mark.usefixtures("qtbot")
 
 
-def _panel(qtbot, mock_core, *, board=False, has_start=False, name="Exp"):
+def _panel(qtbot, mock_core, *, board=False, has_start=False, name="Exp", touch=False):
     mock_core.hardware_manager.is_any_board_connected = lambda: board
     session = ExperimentSession()
     nodes = [NodeConfig(id="s", node_type="StartExperiment")] if has_start else []
@@ -14,7 +14,7 @@ def _panel(qtbot, mock_core, *, board=False, has_start=False, name="Exp"):
     session.metadata.name = name
     mock_core.session = session
     mock_core.last_flow_duration_s = None
-    p = RunControlPanel(mock_core)
+    p = RunControlPanel(mock_core, touch=touch)
     qtbot.addWidget(p)
     return p
 
@@ -193,3 +193,28 @@ def test_run_clock_uses_the_ui_font_with_steady_digits(qtbot, mock_core):
     metrics = panel._timer.fontMetrics()
     widths = {metrics.horizontalAdvance(d) for d in "0123456789"}
     assert len(widths) == 1, widths
+
+
+def test_touch_panel_hides_its_clock_and_names_the_gear(qtbot, mock_core):
+    panel = _panel(qtbot, mock_core, board=False, has_start=True, touch=True)
+    mock_core.session.hardware.boards.append(object())  # a board is configured, none connected
+    panel.refresh()
+    assert not panel._timer.isVisibleTo(panel)
+    assert "⚙ › Connect boards" in panel._not_ready_hint.text()
+    assert panel._not_ready_hint.text() == "Connect a board to start (⚙ › Connect boards…)."
+    assert panel._not_ready_hint.isVisibleTo(panel)
+
+
+def test_touch_panel_still_publishes_the_elapsed_time(qtbot, mock_core):
+    panel = _panel(qtbot, mock_core, touch=True)
+    with qtbot.waitSignal(panel.elapsed_updated, timeout=1000) as blocker:
+        panel._set_timer_display(12.34)
+    assert blocker.args == ["00:12.34"]
+
+
+def test_desktop_panel_keeps_its_clock_and_hint(qtbot, mock_core):
+    panel = _panel(qtbot, mock_core, board=False, has_start=True)
+    mock_core.session.hardware.boards.append(object())  # a board is configured
+    panel.refresh()
+    assert panel._timer.isVisibleTo(panel)
+    assert "Hardware > Connect All" in panel._not_ready_hint.text()
