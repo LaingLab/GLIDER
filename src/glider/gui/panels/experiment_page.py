@@ -21,7 +21,10 @@ zone editor wants a live camera preview beside its table; stacked, the page
 would be several screens deep and the preview would routinely be off-screen
 while you drew into it. A rail on the left switches between them, each entry
 carrying a glyph painted by :class:`_SectionGlyphEngine` so the four are
-distinguishable at a glance rather than by reading four labels.
+distinguishable at a glance rather than by reading four labels. On the Pi's
+480px screen the rail does not fit beside an editor, so ``compact=True`` swaps
+it for a row of text chips across the top and gives each section the full width
+below, scrolling vertically.
 
 **Sections are built on first visit, and dropped when the session changes.**
 Two reasons, and the second is the load-bearing one:
@@ -54,6 +57,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QToolButton,
@@ -107,28 +111,42 @@ class ExperimentPage(QWidget):
             section per session; a builder that raises costs its own section a
             placeholder and leaves the rest of the page working.
         parent: Standard Qt parent.
+        compact: Lay the page out for the Pi's 480px portrait screen: a row of
+            section chips across the top instead of the 168px rail, and each
+            section in a vertical scroll area of its own so it is the width of
+            the screen and never wider. Off by default; the desktop page is
+            the same widget tree it always was.
     """
 
     def __init__(
         self,
         builders: dict[str, Callable[[], QWidget]],
         parent: QWidget | None = None,
+        *,
+        compact: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("experimentPage")
+        self._compact = compact
         self._builders = dict(builders)
         self._built: dict[str, QWidget] = {}
+        # What actually sits in the stack for each built section: the section
+        # itself, or in compact mode the scroll area it was put in.
+        self._holders: dict[str, QWidget] = {}
         self._buttons: dict[str, QToolButton] = {}
 
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(0)
-
-        row.addWidget(self._build_rail())
+        if compact:
+            layout: QHBoxLayout | QVBoxLayout = QVBoxLayout(self)
+            layout.addWidget(self._build_chips())
+        else:
+            layout = QHBoxLayout(self)
+            layout.addWidget(self._build_rail())
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         self._stack = QStackedWidget(self)
         self._stack.setObjectName("experimentSections")
-        row.addWidget(self._stack, 1)
+        layout.addWidget(self._stack, 1)
 
         # Index 0 is a permanent placeholder the stack falls back to while a
         # section is being built (and if one fails). Without it, the first
@@ -182,6 +200,31 @@ class ExperimentPage(QWidget):
         column.addStretch(1)
         return rail
 
+    def _build_chips(self) -> QWidget:
+        """The compact page's section switcher: one chip per section, in a row.
+
+        Text only, no glyphs: at 480px five chips and their icons do not share
+        a row, and the label is what you read anyway.
+        """
+        bar = QFrame(self)
+        bar.setObjectName("experimentChips")
+
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(8, 8, 8, 8)
+        row.setSpacing(6)
+
+        for key in SECTION_KEYS:
+            chip = QToolButton(bar)
+            chip.setObjectName("experimentChip")
+            chip.setText(SECTION_LABELS[key])
+            chip.setCheckable(True)
+            chip.setAutoExclusive(True)
+            chip.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            chip.clicked.connect(lambda _checked, k=key: self.show_section(k))
+            row.addWidget(chip)
+            self._buttons[key] = chip
+        return bar
+
     # --------------------------------------------------------------- sections
 
     def show_section(self, key: str) -> None:
@@ -199,15 +242,12 @@ class ExperimentPage(QWidget):
             button.setChecked(True)
             button.blockSignals(was_blocked)
 
-        widget = self._built.get(key)
-        if widget is None:
-            widget = self._build_section(key)
-        if widget is None:
-            self._stack.setCurrentWidget(self._placeholder)
-            return
-        self._stack.setCurrentWidget(widget)
+        if key not in self._built:
+            self._build_section(key)
+        holder = self._holders.get(key)
+        self._stack.setCurrentWidget(holder if holder is not None else self._placeholder)
 
-    def _build_section(self, key: str) -> QWidget | None:
+    def _build_section(self, key: str) -> None:
         """Run the builder for ``key`` once, and remember the result.
 
         A builder that raises is caught and reported into the placeholder
@@ -224,10 +264,21 @@ class ExperimentPage(QWidget):
                 f"The {SECTION_LABELS[key].replace('&&', '&')} section could not be opened.\n"
                 "See the log for details."
             )
-            return None
-        self._stack.addWidget(widget)
+            return
+        holder = widget
+        if self._compact:
+            # Never wider than the screen: a section that wants more width than
+            # the viewport is clipped (horizontal bar off), so each section has
+            # to fit 480px on its own, and taller than the screen scrolls.
+            holder = QScrollArea(self)
+            holder.setObjectName("experimentSection")
+            holder.setWidgetResizable(True)
+            holder.setFrameShape(QFrame.Shape.NoFrame)
+            holder.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            holder.setWidget(widget)
+        self._stack.addWidget(holder)
         self._built[key] = widget
-        return widget
+        self._holders[key] = holder
 
     def reset(self) -> None:
         """Drop every built section so the next visit rebuilds against the
@@ -238,11 +289,12 @@ class ExperimentPage(QWidget):
         hold camera frames and Qt signal connections to session objects that
         are about to be replaced.
         """
-        for key, widget in list(self._built.items()):
-            self._stack.removeWidget(widget)
-            widget.setParent(None)
-            widget.deleteLater()
-            del self._built[key]
+        for holder in list(self._holders.values()):
+            self._stack.removeWidget(holder)
+            holder.setParent(None)
+            holder.deleteLater()
+        self._built.clear()
+        self._holders.clear()
         self._stack.setCurrentWidget(self._placeholder)
         self._placeholder.setText("")
 
@@ -262,9 +314,13 @@ class ExperimentPage(QWidget):
         return self._current
 
     def built_sections(self) -> dict[str, QWidget]:
-        """The sections built so far, by key. For tests."""
+        """The sections built so far, by key. For tests.
+
+        The sections themselves, also in compact mode where each sits in a
+        scroll area: that wrapper's size hint says nothing about the content.
+        """
         return dict(self._built)
 
     def rail_buttons(self) -> dict[str, QToolButton]:
-        """The rail buttons by key. For tests."""
+        """The rail buttons (the chips, when compact) by key. For tests."""
         return dict(self._buttons)

@@ -756,6 +756,7 @@ class MainWindow(QMainWindow):
                 "plugins": self._build_plugins_section,
             },
             parent=self,
+            compact=self._view_manager.is_runner_mode,
         )
 
     def _experiment_detail_pages(self) -> tuple[QWidget, QWidget]:
@@ -789,7 +790,9 @@ class MainWindow(QMainWindow):
             # dropping this reference would collect the editor out from under
             # its own widgets.
             self._experiment_details = dialog
-            self._experiment_detail_widgets = dialog.detach_sections()
+            self._experiment_detail_widgets = dialog.detach_sections(
+                compact=self._view_manager.is_runner_mode
+            )
         return self._experiment_detail_widgets
 
     def _reset_experiment_page(self) -> None:
@@ -816,7 +819,7 @@ class MainWindow(QMainWindow):
             camera_manager=self._core.camera_manager,
             zone_config=self._zone_config,
             parent=self._experiment_page,
-        ).embed()
+        ).embed(compact=self._view_manager.is_runner_mode)
         editor.zones_changed.connect(self._on_zones_changed)
         return editor
 
@@ -839,7 +842,7 @@ class MainWindow(QMainWindow):
         return LabSetupDialog(
             parent=self._experiment_page,
             is_touch_mode=self._view_manager.is_runner_mode,
-        ).embed()
+        ).embed(compact=self._view_manager.is_runner_mode)
 
     def _on_zones_changed(self) -> None:
         """Push the current zone set to everything that reads it.

@@ -258,10 +258,14 @@ class LabSetupDialog(QDialog):
         self.skip_button.clicked.connect(self.reject)
         layout.addWidget(buttons)
 
-    def embed(self) -> "LabSetupDialog":
+    def embed(self, *, compact: bool = False) -> "LabSetupDialog":
         """Turn this form into a plain widget for the Experiment tab.
 
         Returns ``self`` so it can be added to a layout in one expression.
+
+        ``compact`` drops the dialog's 480x560 minimum: on the Pi's 480px
+        screen a vertical scroll bar takes some of that width, and a widget
+        that insists on 480 of it is clipped on the right instead.
 
         *Skip* goes -- it means "close without saving", and there is nothing to
         close. *Done* stays, relabelled, because it is not a dialog button at
@@ -278,6 +282,8 @@ class LabSetupDialog(QDialog):
         self.setWindowFlags(Qt.WindowType.Widget)
         self.skip_button.hide()
         self.done_button.setText("Save Lab Vocabulary")
+        if compact:
+            self.setMinimumSize(0, 0)
         return self
 
     def accept(self) -> None:  # noqa: D102 - see embed()
