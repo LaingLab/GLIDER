@@ -6,7 +6,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtGui import QPalette
-from PyQt6.QtWidgets import QScrollArea, QScroller, QTreeView
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QAbstractScrollArea,
+    QScrollArea,
+    QScroller,
+    QTreeView,
+)
 
 from glider.gui.styles import colors, load_stylesheet
 
@@ -87,24 +93,27 @@ def test_vocabulary_rows_and_remove_buttons_are_44px_on_the_pi(qtbot):
     assert desk.editors["groups"].remove_button("control").minimumSize().height() < 44
 
 
+def _scroll_areas(panel):
+    """The panel's scroll areas, less combo-box popup lists (they scroll themselves)."""
+    from glider.gui.runner.finger_scroll import _in_combo
+
+    return [a for a in panel.findChildren(QAbstractScrollArea) if not _in_combo(a)]
+
+
 def _finger_scrolled(w) -> dict[str, list[bool]]:
     """Whether each scrollable viewport of the Pi's panels has a scroller."""
     page = w._experiment_page
-    page.show_section("metadata")
-    page.show_section("vocabulary")
-    page.show_section("zones")
+    for key in ("metadata", "mice", "vocabulary", "zones"):
+        page.show_section(key)
     panels = {
         "nodes": w._node_library_panel,
+        "properties": w._properties_host,
         "hardware": w._hardware_panel,
         "camera": w._camera_panel,
-        "metadata": page.built_sections()["metadata"],
-        "vocabulary": page.built_sections()["vocabulary"],
+        **{key: page.built_sections()[key] for key in ("metadata", "mice", "vocabulary", "zones")},
     }
     found = {
-        key: [
-            QScroller.hasScroller(area.viewport())
-            for area in panel.findChildren((QScrollArea, QTreeView))
-        ]
+        key: [QScroller.hasScroller(area.viewport()) for area in _scroll_areas(panel)]
         for key, panel in panels.items()
     }
     holders = page._holders
@@ -115,15 +124,82 @@ def _finger_scrolled(w) -> dict[str, list[bool]]:
 
 
 def test_the_pi_scrolls_its_panels_by_finger_and_desktop_does_not(qtbot, main_window_factory):
-    pi = _finger_scrolled(_pi(qtbot, main_window_factory))
-    for key in ("nodes", "hardware", "camera", "vocabulary"):
+    w = _pi(qtbot, main_window_factory)
+    pi = _finger_scrolled(w)
+    # Every scroll area and item view: the Mice table and the Zones table,
+    # the vocabulary lists, the hardware tree, and Properties' own area too.
+    for key in ("nodes", "properties", "hardware", "camera", "mice", "vocabulary", "zones"):
         assert pi[key] and all(pi[key]), key
     assert pi["metadata_wrapper"] == [True]
-    # Zones is drawn on by dragging: a scroller would take the drags.
+    # The Zones section itself: its preview is drawn on by dragging.
     assert pi["zones_wrapper"] == [False]
+    mice = w._experiment_page.built_sections()["mice"].findChild(QAbstractItemView)
+    assert mice.verticalScrollMode() == QAbstractItemView.ScrollMode.ScrollPerPixel
 
     desk = _finger_scrolled(main_window_factory(desktop_mode=True))
     assert not any(any(flags) for flags in desk.values())
+
+
+def _moves_reach(qtbot, widget) -> int:
+    """Mouse moves a quick drag across ``widget`` delivers to it."""
+    from PyQt6.QtCore import QEvent, QObject, QPoint, Qt
+
+    class _Count(QObject):
+        moves = 0
+
+        def eventFilter(self, _obj, event):  # noqa: N802 (Qt override)
+            if event.type() == QEvent.Type.MouseMove:
+                self.moves += 1
+            return False
+
+    counter = _Count()
+    widget.installEventFilter(counter)
+    start = QPoint(10, widget.height() // 2)
+    qtbot.mousePress(widget, Qt.MouseButton.LeftButton, pos=start)
+    for step in range(1, 6):
+        qtbot.mouseMove(widget, start + QPoint(0, 6 * step), delay=20)
+    qtbot.mouseRelease(widget, Qt.MouseButton.LeftButton, pos=start + QPoint(0, 30), delay=20)
+    qtbot.wait(300)
+    widget.removeEventFilter(counter)
+    return counter.moves
+
+
+def test_the_desktop_switch_releases_the_pi_scrollers(qtbot, main_window_factory):
+    from PyQt6.QtWidgets import QLabel
+
+    w = _pi(qtbot, main_window_factory)
+    w.switch_to_builder()
+    library = w._node_library_panel
+    label = next(lab for lab in library.findChildren(QLabel) if lab.isVisible())
+    tree = w._hardware_panel.findChild(QTreeView)
+    assert tree.verticalScrollMode() == QAbstractItemView.ScrollMode.ScrollPerPixel
+    assert _moves_reach(qtbot, label) == 0  # the scroller takes a quick drag
+
+    w._switch_to_desktop_mode()
+    w.switch_to_builder()
+    qtbot.waitUntil(label.isVisible)
+    # Desktop drag-and-drop needs the moves, starting from the library.
+    assert _moves_reach(qtbot, label) > 0
+    default = QTreeView()
+    qtbot.addWidget(default)
+    assert tree.verticalScrollMode() == default.verticalScrollMode()
+
+
+def test_a_tall_properties_form_scrolls_rather_than_being_crushed(qtbot, main_window_factory):
+    w = _pi(qtbot, main_window_factory)
+    assert w._load_experiment_path(str(_EXAMPLE))
+    w.switch_to_builder()
+    w._graph_view.set_locked(False)
+    wait = next(n for n in w._graph_view.nodes if n.lower().startswith("waitforinput"))
+    w._graph_view.node_selected.emit(wait)
+    host = w._properties_host
+    form = host.widget()
+    qtbot.waitUntil(form.isVisible)
+    area = host.findChild(QScrollArea)
+    assert area is not None and area.widget() is form
+    assert form.height() >= form.minimumSizeHint().height()  # laid out whole
+    assert area.verticalScrollBar().maximum() > 0  # and reachable by scrolling
+    assert QScroller.hasScroller(area.viewport())
 
 
 def test_an_opened_flow_is_fitted_clear_of_the_lock(qtbot, main_window_factory):

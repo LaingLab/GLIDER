@@ -58,7 +58,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
-    QScroller,
     QSizePolicy,
     QStackedWidget,
     QToolButton,
@@ -66,6 +65,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from glider.gui.runner.finger_scroll import FingerScroll
 from glider.gui.widgets.pastel_glyphs import glyph_icon
 
 logger = logging.getLogger(__name__)
@@ -91,8 +91,8 @@ SECTION_LABELS: dict[str, str] = {
     "plugins": "Plugins",
 }
 
-#: Compact sections with a surface that is drawn on by dragging; they keep
-#: their scroll bar and get no finger scrolling.
+#: Compact sections with a surface that is drawn on by dragging: the section's
+#: own scroll area keeps its bar and gets no finger scrolling.
 _DRAWN_ON = frozenset({"zones"})
 
 #: Rail icon edge length in pixels. 20 rather than a more conventional 16
@@ -133,6 +133,7 @@ class ExperimentPage(QWidget):
         super().__init__(parent)
         self.setObjectName("experimentPage")
         self._compact = compact
+        self._finger_scroll = FingerScroll() if compact else None
         self._builders = dict(builders)
         self._built: dict[str, QWidget] = {}
         # What actually sits in the stack for each built section: the section
@@ -281,14 +282,12 @@ class ExperimentPage(QWidget):
             holder.setFrameShape(QFrame.Shape.NoFrame)
             holder.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             holder.setWidget(widget)
-            # Finger scrolling: a drag on the content scrolls it. Not on Zones,
-            # whose preview is drawn on by dragging, and a scroller would take
-            # every quick drag for itself.
-            if key not in _DRAWN_ON:
-                for area in (holder, *widget.findChildren(QScrollArea)):
-                    QScroller.grabGesture(
-                        area.viewport(), QScroller.ScrollerGestureType.LeftMouseButtonGesture
-                    )
+            # Finger scrolling: a drag on the content scrolls it. Not on the
+            # Zones wrapper, whose preview is drawn on by dragging, and a
+            # scroller there would take every quick drag; its table still gets
+            # one.
+            if self._finger_scroll is not None:
+                self._finger_scroll.add(widget if key in _DRAWN_ON else holder)
         self._stack.addWidget(holder)
         self._built[key] = widget
         self._holders[key] = holder
@@ -310,6 +309,16 @@ class ExperimentPage(QWidget):
         self._holders.clear()
         self._stack.setCurrentWidget(self._placeholder)
         self._placeholder.setText("")
+
+    def release_finger_scrolling(self) -> None:
+        """Drop drag-scrolling from every section, now and for later builds.
+
+        For Switch to Desktop: the page stays compact, but a mouse drag must
+        reach the editors again.
+        """
+        if self._finger_scroll is not None:
+            self._finger_scroll.release()
+            self._finger_scroll = None
 
     def refresh(self) -> None:
         """Re-show the current section, building it if it is not up yet.

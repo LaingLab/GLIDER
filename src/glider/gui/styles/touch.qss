@@ -275,12 +275,13 @@ QComboBox QAbstractItemView::item {
 }
 
 /* Spin boxes put a finger-sized − and + either side of the value, rather than
- * two half-height arrows stacked on the right. */
+ * two half-height arrows stacked on the right. Qt's size hint counts only one
+ * button, so the floor is set high enough for the value or a "No timeout" kind
+ * of special text to show whole between the two. */
 QSpinBox,
 QDoubleSpinBox {
     padding: 0 4px;
-    min-width: 150px;
-    max-width: 150px;
+    min-width: 110px;
     qproperty-alignment: AlignCenter;
 }
 

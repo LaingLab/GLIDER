@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QStatusBar,
@@ -54,6 +55,7 @@ from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController, node_category_for_type
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
 from glider.gui.panels.tools_page import ToolsPage
+from glider.gui.runner.finger_scroll import FingerScroll
 from glider.gui.runner.notice_bar import NoticeBar
 from glider.gui.runner.pi_dashboard import PiDashboard
 from glider.gui.runner.readiness import compute_readiness
@@ -332,13 +334,22 @@ class PropertiesHost(QWidget):
     the user ever clicked; nothing referenced them again.
     """
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, scroll: bool = False) -> None:
+        """``scroll``: hold the form in a vertical scroll area (the Pi's half-
+        height tab cannot fit a tall form, which would otherwise be crushed)."""
         super().__init__(parent)
         self.setObjectName("propertiesHost")
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(0)
         self._widget: QWidget | None = None
+        self._scroll: QScrollArea | None = None
+        if scroll:
+            self._scroll = QScrollArea(self)
+            self._scroll.setWidgetResizable(True)
+            self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+            self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self._layout.addWidget(self._scroll)
 
     def widget(self) -> QWidget | None:
         """The form currently on show, or ``None`` before the first one."""
@@ -350,11 +361,17 @@ class PropertiesHost(QWidget):
         if previous is widget:
             return
         if previous is not None:
-            self._layout.removeWidget(previous)
+            if self._scroll is not None:
+                self._scroll.takeWidget()
+            else:
+                self._layout.removeWidget(previous)
             previous.setParent(None)
             previous.deleteLater()
         self._widget = widget
-        self._layout.addWidget(widget)
+        if self._scroll is not None:
+            self._scroll.setWidget(widget)
+        else:
+            self._layout.addWidget(widget)
 
 
 def lab_setup_complete(
@@ -465,6 +482,7 @@ class MainWindow(QMainWindow):
         # _builder_view and drops this off the stack, but the attribute stays
         # set -- test is_runner_mode, not this, for "on the Pi".
         self._pi_dashboard: PiDashboard | None = None
+        self._finger_scroll: FingerScroll | None = None  # runner mode
         # The editor behind the Metadata and Mice sections, and the two pages
         # it was split into. Both are rebuilt per session; see
         # _experiment_detail_pages.
@@ -1625,7 +1643,7 @@ class MainWindow(QMainWindow):
         # --- Properties ---
         # The node editor replaces this form on every selection, so the tab
         # hosts a container and the form lives inside it. See PropertiesHost.
-        self._properties_host = PropertiesHost()
+        self._properties_host = PropertiesHost(scroll=self._view_manager.is_runner_mode)
         self._properties_widget = QWidget()
         properties_layout = QVBoxLayout(self._properties_widget)
         properties_layout.addWidget(QLabel("Select a node to view properties"))
@@ -1792,12 +1810,15 @@ class MainWindow(QMainWindow):
         dashboard.tabs().currentChanged.connect(_on_tab_changed)
 
         # Finger scrolling: a drag on the content scrolls it, and the thin bars
-        # are only indicators. (Control scrolls this way already.)
-        from PyQt6.QtWidgets import QScrollArea, QTreeView
-
-        for panel in (self._node_library_panel, self._hardware_panel, self._camera_panel):
-            for area in panel.findChildren((QScrollArea, QTreeView)):
-                self._view_manager.configure_widget_for_touch(area.viewport())
+        # are only indicators. (Control scrolls this way already.) Kept, so the
+        # desktop switch can release it from the panels it re-hosts.
+        self._finger_scroll = FingerScroll()
+        self._finger_scroll.add(
+            self._node_library_panel,
+            self._properties_host,
+            self._hardware_panel,
+            self._camera_panel,
+        )
         return dashboard
 
     def _fit_pi_graph(self) -> None:
@@ -3101,6 +3122,9 @@ class MainWindow(QMainWindow):
             graph.node_selected.disconnect(dashboard._on_node_selected)
             graph.set_locked(False)
             graph.set_touch_mode(False)
+            # A scroller swallows the mouse moves that desktop drags need.
+            self._finger_scroll.release()
+            self._experiment_page.release_finger_scrolling()
             self._builder_view.set_centre(graph)
             self._stack.removeWidget(dashboard)
             self._stack.insertWidget(PAGE_BUILDER, self._builder_view)
