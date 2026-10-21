@@ -148,3 +148,40 @@ def test_switch_to_desktop_is_refused_mid_run(qtbot, main_window_factory, monkey
     assert w.is_runner_mode
     assert _is_descendant(w._graph_view, w._pi_dashboard)
     assert w._notice_bar.text().startswith("Experiment running")
+
+
+def test_startup_with_a_file_draws_its_graph_on_the_pi(qtbot, tmp_path):
+    """``glider --runner --file X`` showed an empty graph: only the desktop
+    branch opened the file the core had already loaded."""
+    import asyncio
+    import shutil
+    from pathlib import Path
+
+    from PyQt6.QtCore import QSettings
+    from PyQt6.QtWidgets import QApplication
+
+    from glider.core.glider_core import GliderCore
+    from glider.gui.main_window import PAGE_OPERATOR, MainWindow
+    from glider.gui.view_manager import ViewManager, ViewMode
+
+    experiment = tmp_path / "box_pi_side.glider"
+    shutil.copy(Path(__file__).parents[4] / "examples" / "box_pi_side.glider", experiment)
+    core = GliderCore()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(core.initialize(load_plugins=False))
+    try:
+        loop.run_until_complete(core.load_experiment(experiment))  # what --file does
+        vm = ViewManager(QApplication.instance())
+        vm.mode = ViewMode.RUNNER
+        settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+        window = MainWindow(core, view_manager=vm, settings=settings)
+        qtbot.addWidget(window, before_close_func=lambda _w: core.session._mark_clean())
+
+        expected = {n.id for n in core.session.flow.nodes}
+        assert expected
+        assert set(window._graph_view.nodes) == expected
+        assert window._stack.currentIndex() == PAGE_OPERATOR  # still opens on Run
+    finally:
+        loop.run_until_complete(core.shutdown())
+        loop.close()

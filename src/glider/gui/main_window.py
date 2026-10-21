@@ -150,7 +150,7 @@ MENU_BAR_TITLES = ("File", "Edit", "Experiment", "View", "Help")
 #
 # Hardware and Run satisfy it for the actions anyone reaches for. The Hardware
 # panel carries Add Board and Add Device; the toolbar carries Connect, Start and
-# Stop; Stop is on the run banner and the Runner panel besides.
+# Stop; on the Pi, Stop is on the Run page besides.
 #
 # Experiment and Tools did not satisfy it at all, which is the bug this list now
 # exists to prevent. Experiment Settings, Add Subject and Lab Setup have exactly
@@ -729,13 +729,13 @@ class MainWindow(QMainWindow):
         else:
             self._stack.setCurrentIndex(PAGE_BUILDER)
             self._populate_builder_panels()
-            if self._has_open_experiment():
-                # --file loaded the experiment into the core before this
-                # window existed, so nothing has drawn its graph, zones or
-                # panels yet. Open it the way File > Open does.
-                self._load_experiment_path(self._core.session.file_path)
-            else:
-                self._show_landing()
+        if self._has_open_experiment():
+            # --file loaded the experiment into the core before this window
+            # existed, so nothing has drawn its graph, zones or panels yet.
+            # Open it the way File > Open does.
+            self._load_experiment_path(self._core.session.file_path)
+        elif not self._view_manager.is_runner_mode:
+            self._show_landing()
 
         self._install_palette_shortcut()
 
@@ -1809,8 +1809,8 @@ class MainWindow(QMainWindow):
         dashboard.add_tab("camera", "Camera", self._camera_tab_slot)
         dashboard.add_tab("control", "Control", self._runner_device_controls)
 
-        # Re-sync the manual controls each time their tab is shown, as the old
-        # Manual tab did: a board may have connected since they were last seen.
+        # Re-sync the manual controls each time their tab is shown: a board may
+        # have connected since they were last seen.
         def _on_tab_changed(index: int) -> None:
             if dashboard.tabs().widget(index) is self._runner_device_controls:
                 self._runner_device_controls.refresh()
@@ -4019,7 +4019,7 @@ class MainWindow(QMainWindow):
         if self._manual_run_busy:
             self._notify_user(
                 "Function running",
-                "A function is running on the Manual tab. Let it finish before starting.",
+                "A function is running on the Control tab. Let it finish before starting.",
                 level="warning",
             )
             return
