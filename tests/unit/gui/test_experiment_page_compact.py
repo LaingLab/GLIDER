@@ -89,6 +89,11 @@ def test_compact_zone_editor_is_a_column_and_keeps_its_delete_label(qtbot):
     editor = ZoneDialog(camera_manager=None, zone_config=_one_zone()).embed(compact=True)
     qtbot.addWidget(editor)
     assert _width_needed(editor) <= 480
+    # Rows of three stack on the Pi, so a wide platform font cannot push them past 480 px.
+    from PyQt6.QtWidgets import QBoxLayout
+
+    for row in (editor._shape_layout, editor._draw_layout, editor._file_layout):
+        assert row.direction() == QBoxLayout.Direction.TopToBottom
     # Fixed at 40px it is narrower than the touch button's own padding.
     assert editor._table.cellWidget(0, 3).maximumWidth() > 40
 
@@ -98,3 +103,6 @@ def test_desktop_zone_editor_embed_is_unchanged(qtbot):
     qtbot.addWidget(editor)
     assert editor.minimumWidth() == 1000
     assert editor._table.cellWidget(0, 3).maximumWidth() == 40
+    from PyQt6.QtWidgets import QBoxLayout
+
+    assert editor._shape_layout.direction() == QBoxLayout.Direction.LeftToRight

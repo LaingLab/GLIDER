@@ -458,7 +458,7 @@ class ZoneDialog(QDialog):
 
         # Shape selector
         shape_group = QGroupBox("Zone Shape")
-        shape_layout = QHBoxLayout(shape_group)
+        shape_layout = self._shape_layout = QHBoxLayout(shape_group)
 
         self._shape_group = QButtonGroup(self)
 
@@ -875,9 +875,9 @@ class ZoneDialog(QDialog):
             self.setMinimumSize(0, 0)
             self._preview.setMinimumSize(240, 180)
             self._preview.refit_on_resize = True
-            # Three buttons abreast are wider than 480px in a wide platform
-            # font at touch padding; stacked they never clip.
-            for row in (self._draw_layout, self._file_layout):
+            # Three buttons (or shapes) abreast are wider than 480px in a wide
+            # platform font at touch padding; stacked they never clip.
+            for row in (self._shape_layout, self._draw_layout, self._file_layout):
                 row.setDirection(QBoxLayout.Direction.TopToBottom)
             self._update_table()  # rows built in __init__ have the desktop delete button
         return self

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QFontMetrics, QPainter, QPalette
+from PyQt6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from glider.gui.dashboard.panels.run_control_panel import RunControlPanel
 from glider.gui.dashboard.panels.run_header import RunHeader
@@ -18,6 +19,40 @@ from glider.gui.runner.device_grid import DeviceCardGrid
 
 if TYPE_CHECKING:
     from glider.core.glider_core import GliderCore
+
+
+class _FitClock(QLabel):
+    """The big clock: its digits shrink to fit rather than widening the page.
+
+    The stylesheet asks for 64 px of a monospace face, and how wide eight digits
+    of that are depends on which face the platform has; a page that took its
+    minimum width from them could be pushed past the screen. So the clock asks
+    for no width of its own and, when the width it gets is too little, paints
+    the text at the largest size that fits.
+    """
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return QSize(1, super().minimumSizeHint().height())
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
+        area = self.contentsRect()
+        font = self.font()
+        width = QFontMetrics(font).horizontalAdvance(self.text())
+        if width <= area.width() or width <= 0:
+            super().paintEvent(event)
+            return
+        if font.pixelSize() > 0:
+            font.setPixelSize(max(1, font.pixelSize() * area.width() // width))
+        else:
+            font.setPointSizeF(max(1.0, font.pointSizeF() * area.width() / width))
+        painter = QPainter(self)
+        painter.setFont(font)
+        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+        painter.drawText(area, int(self.alignment()), self.text())
 
 
 class PiRunPage(QWidget):
@@ -31,7 +66,7 @@ class PiRunPage(QWidget):
         self.setObjectName("piRunPage")
 
         self.header = RunHeader(core, touch=True)
-        self.clock = QLabel("00:00.00")
+        self.clock = _FitClock("00:00.00")
         self.clock.setObjectName("piRunClock")
         self.clock.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.clock.setProperty("live", False)

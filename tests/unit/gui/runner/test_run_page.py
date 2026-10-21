@@ -143,3 +143,17 @@ def test_long_run_field_values_do_not_widen_the_page_past_480(qtbot, mock_core):
     qtbot.waitExposed(page)
     assert page.minimumSizeHint().width() <= 480
     assert page.width() == 480
+
+
+def test_the_clock_shrinks_to_fit_instead_of_widening_the_page(qtbot, mock_core):
+    """How wide 64 px of digits are depends on the platform's monospace face."""
+    _real_session(mock_core)
+    page = _page(qtbot, mock_core)
+    page.clock.setStyleSheet("font-size: 200px;")  # far wider than 480 px
+    page.clock.setText("12:41.36")
+    page.resize(480, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    assert page.minimumSizeHint().width() <= 480
+    assert page.clock.width() <= 480
+    assert not page.grab().isNull()  # the shrunk text paints
