@@ -1,7 +1,7 @@
 """The two device-card panels read the link, not "has this been set up".
 
 Task 6 converted the hardware tree and the Device Control panel; these two
-were missed. RunnerPanel's cards repaint on a timer, so they went on asserting
+were missed. The Run page's cards repaint on a timer, so they went on asserting
 a green "Ready" for a peripheral whose link was down -- while the status strip
 showed a red dot for the same device two inches away. That is the exact
 disagreement glider.gui.device_status exists to prevent, and the Runner card
