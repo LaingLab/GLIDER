@@ -58,6 +58,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
+    QScroller,
     QSizePolicy,
     QStackedWidget,
     QToolButton,
@@ -89,6 +90,10 @@ SECTION_LABELS: dict[str, str] = {
     "vocabulary": "Lab Vocabulary",
     "plugins": "Plugins",
 }
+
+#: Compact sections with a surface that is drawn on by dragging; they keep
+#: their scroll bar and get no finger scrolling.
+_DRAWN_ON = frozenset({"zones"})
 
 #: Rail icon edge length in pixels. 20 rather than a more conventional 16
 #: because these are illustrations, not symbols: the mouse has an ear, an eye
@@ -276,6 +281,14 @@ class ExperimentPage(QWidget):
             holder.setFrameShape(QFrame.Shape.NoFrame)
             holder.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             holder.setWidget(widget)
+            # Finger scrolling: a drag on the content scrolls it. Not on Zones,
+            # whose preview is drawn on by dragging, and a scroller would take
+            # every quick drag for itself.
+            if key not in _DRAWN_ON:
+                for area in (holder, *widget.findChildren(QScrollArea)):
+                    QScroller.grabGesture(
+                        area.viewport(), QScroller.ScrollerGestureType.LeftMouseButtonGesture
+                    )
         self._stack.addWidget(holder)
         self._built[key] = widget
         self._holders[key] = holder

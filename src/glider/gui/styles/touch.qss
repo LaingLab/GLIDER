@@ -2,9 +2,10 @@
  * GLIDER Touch Stylesheet -- Deep Navy palette, Raspberry Pi 480x800 portrait.
  *
  * One quiet visual language: neutral surfaces, cyan only for the selected or
- * primary thing, green for START and red for STOP / REC. Every tap target is
- * at least 44 px. In this sheet a widget's min-height is its *content* height,
- * so a 1 px-bordered control asks for 42 px to land on 44.
+ * primary thing, green for START and red for STOP / REC. The controls this
+ * sheet sizes are at least 44 px tall; a few shared widgets size their own.
+ * In this sheet a widget's min-height is its *content* height, so a 1 px
+ * bordered control asks for 42 px to land on 44.
  *
  * Colour tokens (glider/gui/styles/colors.py; QSS cannot import them):
  *   CANVAS        #0a0e13     BORDER         #1e2530
@@ -129,6 +130,30 @@ QPushButton[buttonRole="secondary"] {
 QPushButton[secondary="true"]:pressed,
 QPushButton[buttonRole="secondary"]:pressed {
     background-color: #111820;                      /* SURFACE_1 */
+}
+
+/* Tool buttons get the same neutral look, so none falls back to the native
+ * bevel. Named ones (tabs, chips, the gear) override it below. Their size is
+ * the caller's: some sit in rows sized before this sheet reaches them. */
+QToolButton {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_MEDIUM@;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+}
+
+QToolButton:pressed {
+    background-color: #111820;                      /* SURFACE_1 */
+}
+
+QToolButton:checked {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    border-color: rgba(56, 189, 248, 0.50);
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+QToolButton:disabled {
+    color: #718096;                                 /* TEXT_MUTED */
 }
 
 /* === Run controls (RunControlPanel) === */

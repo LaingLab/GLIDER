@@ -97,10 +97,13 @@ class VocabularyListEditor(QGroupBox):
         title: str,
         placeholder: str,
         parent: QWidget | None = None,
+        *,
+        touch: bool = False,
     ):
         super().__init__(title, parent)
         self._vocabulary = vocabulary
         self._name = name
+        self._touch = touch
         self._remove_buttons: dict[str, QToolButton] = {}
 
         layout = QVBoxLayout(self)
@@ -112,7 +115,8 @@ class VocabularyListEditor(QGroupBox):
         layout.addWidget(self.entry)
 
         self.list_widget = QListWidget()
-        self.list_widget.setMinimumHeight(90)
+        # Three rows before the list scrolls: 28 px rows here, 48 px on the Pi.
+        self.list_widget.setMinimumHeight(150 if touch else 90)
         layout.addWidget(self.list_widget)
 
         self._rebuild()
@@ -170,6 +174,10 @@ class VocabularyListEditor(QGroupBox):
         button = QToolButton()
         button.setText("✕")
         button.setToolTip(f"Remove {value}")
+        if self._touch:
+            # A fingertip target. Sized here, not by the stylesheet: the item's
+            # height is taken from the row below, before any sheet reaches it.
+            button.setFixedSize(44, 44)
         button.clicked.connect(lambda _checked=False, v=value: self._on_remove(v))
         row_layout.addWidget(button)
 
@@ -234,7 +242,9 @@ class LabSetupDialog(QDialog):
 
         for name in LISTS:
             title, placeholder = LIST_PRESENTATION.get(name, (name.replace("_", " ").title(), ""))
-            editor = VocabularyListEditor(self.vocabulary, name, title, placeholder)
+            editor = VocabularyListEditor(
+                self.vocabulary, name, title, placeholder, touch=self._is_touch_mode
+            )
             self.editors[name] = editor
             contents_layout.addWidget(editor)
 

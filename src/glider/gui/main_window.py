@@ -1790,7 +1790,20 @@ class MainWindow(QMainWindow):
                 self._runner_device_controls.refresh()
 
         dashboard.tabs().currentChanged.connect(_on_tab_changed)
+
+        # Finger scrolling: a drag on the content scrolls it, and the thin bars
+        # are only indicators. (Control scrolls this way already.)
+        from PyQt6.QtWidgets import QScrollArea, QTreeView
+
+        for panel in (self._node_library_panel, self._hardware_panel, self._camera_panel):
+            for area in panel.findChildren((QScrollArea, QTreeView)):
+                self._view_manager.configure_widget_for_touch(area.viewport())
         return dashboard
+
+    def _fit_pi_graph(self) -> None:
+        """On the Pi, put a freshly opened or new flow in view."""
+        if self._view_manager.is_runner_mode and self._pi_dashboard is not None:
+            self._pi_dashboard.fit_graph()
 
     def _apply_pi_lock(self, locked: bool) -> None:
         """Extend the graph's lock to the properties form and the hardware map."""
@@ -3207,6 +3220,7 @@ class MainWindow(QMainWindow):
         # sections hold the session and ZoneConfiguration that were just
         # thrown away.
         self._reset_experiment_page()
+        self._fit_pi_graph()
         return True
 
     def _on_open(self) -> None:
@@ -3268,6 +3282,7 @@ class MainWindow(QMainWindow):
             # tab editing objects nothing reads any more.
             self._reset_experiment_page()
             self._watch_open_experiment()
+            self._fit_pi_graph()
             self._show_status_message(f"Opened: {file_path}")
             return True
         except Exception as e:

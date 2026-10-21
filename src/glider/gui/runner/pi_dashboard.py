@@ -8,7 +8,7 @@ colours come from ``touch.qss`` through the object names.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QSplitter, QTabWidget, QVBoxLayout, QWidget
 
 from glider.gui.node_graph.graph_view import NodeGraphView
@@ -22,6 +22,8 @@ class PiDashboard(QWidget):
         self.setObjectName("piDashboard")
         self._keys: list[str] = []
         self._sized = False
+        self._graph = graph
+        self._fit_pending = True  # frame the flow on the first show
 
         self._splitter = QSplitter(Qt.Orientation.Vertical)
         self._splitter.setObjectName("piDashboardSplitter")
@@ -51,6 +53,21 @@ class PiDashboard(QWidget):
             self._sized = True
             half = self._splitter.height() // 2
             self._splitter.setSizes([half, half])
+        if self._fit_pending:
+            self._fit_pending = False
+            # After this layout pass, so the fit sees the graph's real size.
+            QTimer.singleShot(0, self._graph.fit_to_screen)
+
+    def fit_graph(self) -> None:
+        """Frame the whole flow now, or on the next show if this is hidden.
+
+        A kiosk has no wheel to go looking for a flow with, so a freshly opened
+        one is put in view rather than wherever the last one left the camera.
+        """
+        if self.isVisible():
+            self._graph.fit_to_screen()
+        else:
+            self._fit_pending = True
 
     def _on_node_selected(self, _node_id: str) -> None:
         self.set_current("properties")

@@ -18,6 +18,7 @@ from PyQt6.QtGui import (
     QMouseEvent,
     QPainter,
     QPen,
+    QTransform,
     QWheelEvent,
 )
 from PyQt6.QtWidgets import (
@@ -241,6 +242,7 @@ class NodeGraphView(QGraphicsView):
         self._selected_nodes: list[str] = []
         # Edit lock: when set the graph is look-and-pan only (see set_locked).
         self._locked = False
+        self._touch = False
 
         # Zoom settings
         self._zoom = 1.0
@@ -284,6 +286,7 @@ class NodeGraphView(QGraphicsView):
         rubber band), makes the zoom buttons finger-sized and shows the edit-lock
         toggle. Desktop is the default and is left exactly as it was.
         """
+        self._touch = enabled
         self.setDragMode(
             QGraphicsView.DragMode.ScrollHandDrag
             if enabled
@@ -520,7 +523,10 @@ class NodeGraphView(QGraphicsView):
             # we hand to fitInView is interpreted in scene coordinates, so
             # 40 px of padding survives any zoom level.
             padded = items_rect.adjusted(-40, -40, 40, 40)
-            self.fitInView(padded, Qt.AspectRatioMode.KeepAspectRatio)
+            if self._touch:
+                self._fit_below_lock(padded)
+            else:
+                self.fitInView(padded, Qt.AspectRatioMode.KeepAspectRatio)
             # fitInView clamps the transform regardless of our zoom limits, so
             # update the cached value from the actual transform matrix.
             self._zoom = self.transform().m11()
@@ -528,6 +534,22 @@ class NodeGraphView(QGraphicsView):
             self.resetTransform()
             self._zoom = 1.0
             self.centerOn(0, 0)
+
+    def _fit_below_lock(self, rect: QRectF) -> None:
+        """Fit ``rect`` into the part of the viewport under the lock pill.
+
+        The pill floats over the top-left corner, so a plain fit can leave a
+        node under it. This fits into the band below the pill instead.
+        """
+        view = QRectF(self.viewport().rect())
+        free = view.adjusted(0, self._overlay.lock_btn.geometry().bottom() + 1, 0, 0)
+        if free.height() < 1 or rect.isEmpty():
+            self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+            return
+        scale = min(free.width() / rect.width(), free.height() / rect.height())
+        self.setTransform(QTransform.fromScale(scale, scale))
+        # centerOn aims at the viewport's centre; shift by the band's offset.
+        self.centerOn(rect.center() - (free.center() - view.center()) / scale)
 
     def _zoom_by(self, factor: float, *, anchor_under_mouse: bool) -> None:
         """Apply a zoom factor, respecting min/max bounds.
