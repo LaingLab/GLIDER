@@ -220,7 +220,7 @@ class NodeLibraryPanel(QWidget):
             for node_type, node_name, tooltip in nodes:
                 node_btn = DraggableNodeButton(node_type, node_name, category)
                 node_btn.setToolTip(tooltip)
-                node_btn.clicked.connect(lambda checked, nt=node_type: self._add_node_to_center(nt))
+                node_btn.clicked.connect(lambda _=False, t=node_type: self._on_node_tapped(t))
                 self._apply_node_btn_style(node_btn, color)
                 category_layout.addWidget(node_btn)
 
@@ -303,9 +303,7 @@ class NodeLibraryPanel(QWidget):
                 btn = DraggableNodeButton(f"FunctionCall:{start_node_id}", func_name, "Functions")
                 btn.setToolTip(f"Call function '{func_name}'")
                 btn.clicked.connect(
-                    lambda checked, nid=start_node_id, name=func_name: self._add_function_call_node(
-                        nid, name
-                    )
+                    lambda _=False, t=f"FunctionCall:{start_node_id}": self._on_node_tapped(t)
                 )
                 self._apply_node_btn_style(btn, colors.LIB_FUNCTIONS)
                 self._flow_functions_layout.addWidget(btn)
@@ -339,7 +337,7 @@ class NodeLibraryPanel(QWidget):
             description = getattr(definition, "description", "") or ""
             btn = DraggableNodeButton(node_type, label, "Plugins")
             btn.setToolTip(f"{description}\n\nFrom plugin: {entries[node_type]}".strip())
-            btn.clicked.connect(lambda checked, nt=node_type: self._add_node_to_center(nt))
+            btn.clicked.connect(lambda _=False, t=node_type: self._on_node_tapped(t))
             self._apply_node_btn_style(btn, colors.LIB_PLUGINS)
             self._plugin_nodes_layout.addWidget(btn)
 
@@ -367,7 +365,9 @@ class NodeLibraryPanel(QWidget):
                     f"Monitor zone '{zone.name}' for object occupancy\n"
                     f"Outputs: Occupied (bool), Object Count (int), On Enter, On Exit"
                 )
-                btn.clicked.connect(lambda checked, zid=zone.id: self._add_zone_node(zid))
+                btn.clicked.connect(
+                    lambda _=False, t=f"ZoneInput:{zone.id}": self._on_node_tapped(t)
+                )
                 self._apply_node_btn_style(btn, colors.LIB_ZONES)
                 self._zones_layout.addWidget(btn)
         else:
@@ -473,11 +473,6 @@ class NodeLibraryPanel(QWidget):
 
         parent_layout.addWidget(category_widget)
 
-    def _add_zone_node(self, zone_id: str) -> None:
-        """Add a zone input node to the graph."""
-        center = self._graph_view.mapToScene(self._graph_view.viewport().rect().center())
-        self._graph_view.node_created.emit(f"ZoneInput:{zone_id}", center.x(), center.y())
-
     def _detect_graph_functions(self) -> list:
         """Detect complete function definitions in the graph."""
         from glider.core.graph_functions import list_graph_functions
@@ -491,12 +486,12 @@ class NodeLibraryPanel(QWidget):
             if info.has_end
         ]
 
-    def _add_function_call_node(self, start_node_id: str, func_name: str) -> None:
-        """Add a FunctionCall node to the graph."""
-        center = self._graph_view.mapToScene(self._graph_view.viewport().rect().center())
-        self._graph_view.node_created.emit(f"FunctionCall:{start_node_id}", center.x(), center.y())
+    def _on_node_tapped(self, node_type: str) -> None:
+        """Drop a node in the middle of the visible graph (a button click or tap).
 
-    def _add_node_to_center(self, node_type: str) -> None:
-        """Add a node to the center of the graph view."""
+        Refused while the graph is locked to view-only.
+        """
+        if self._graph_view.is_locked():
+            return
         center = self._graph_view.mapToScene(self._graph_view.viewport().rect().center())
         self._graph_view.node_created.emit(node_type, center.x(), center.y())

@@ -46,6 +46,9 @@ logger = logging.getLogger(__name__)
 #: to travel the width of a 27-inch display from a label to its field.
 EMBEDDED_FORM_MAX_WIDTH = 900
 
+#: Qt's ``QWIDGETSIZE_MAX``: what ``setMaximumWidth`` takes to mean "no limit".
+_NO_MAX_WIDTH = 16777215
+
 
 class ExperimentDialog(QDialog):
     """
@@ -168,6 +171,7 @@ class ExperimentDialog(QDialog):
         # Subjects group
         self._subjects_group = QGroupBox("Subjects")
         subjects_layout = QVBoxLayout(self._subjects_group)
+        self._subjects_layout = subjects_layout
         subjects_layout.setSpacing(8)
         subjects_layout.setContentsMargins(12, 20, 12, 12)
 
@@ -199,6 +203,7 @@ class ExperimentDialog(QDialog):
 
         # Subject buttons
         btn_layout = QHBoxLayout()
+        self._subject_buttons = btn_layout
         btn_layout.setSpacing(6)
 
         self._add_btn = QPushButton("Add")
@@ -265,7 +270,7 @@ class ExperimentDialog(QDialog):
 
         main_layout.addWidget(button_box)
 
-    def detach_sections(self) -> tuple[QWidget, QWidget]:
+    def detach_sections(self, *, compact: bool = False) -> tuple[QWidget, QWidget]:
         """Take the two halves out and hand each back as its own page.
 
         Returns ``(metadata, subjects)`` -- the experiment-info form and the
@@ -278,11 +283,19 @@ class ExperimentDialog(QDialog):
         the point -- the alternative was two new widgets reimplementing a form
         and a table that already work.
 
+        ``compact`` is the Pi's 480px screen; see :meth:`_fit_480`.
+
         **Call this at most once per instance, and never on one you also mean
         to** ``exec()``. It empties the dialog: what is left is a window with a
         scroll area containing nothing.
         """
         self.setWindowFlags(Qt.WindowType.Widget)
+        # The empty shell is left behind as a child of the Experiment page, and
+        # a child that was never explicitly hidden is shown whenever its parent
+        # next is. Reparenting hides it only if the parent is visible at that
+        # moment, and in runner mode the page is not yet: the shell then came
+        # up as a 600px blank panel over both sections.
+        self.hide()
         self._button_box.hide()
 
         # The macOS style defaults QFormLayout to FieldsStayAtSizeHint and
@@ -298,7 +311,27 @@ class ExperimentDialog(QDialog):
         # but the subject table is a table, and a table wants the width.
         self._info_group.setMaximumWidth(EMBEDDED_FORM_MAX_WIDTH)
 
+        if compact:
+            self._fit_480()
+
         return self._as_page(self._info_group), self._as_page(self._subjects_group)
+
+    def _fit_480(self) -> None:
+        """Make the two pages fit a 480px screen at touch size.
+
+        The buttons' fixed widths were picked for the desktop font, and at
+        touch padding "Browse" and "Remove" are clipped, so they size to their
+        labels instead. Four buttons at that size are wider than the screen,
+        so Set Active drops to a row of its own. The form's labels go above
+        their fields, so the label column never takes width from a field
+        whatever the platform's font makes of "Experimenter:".
+        """
+        self._info_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        for button in (self._browse_dir_btn, self._add_btn, self._edit_btn, self._remove_btn):
+            button.setMinimumWidth(0)
+            button.setMaximumWidth(_NO_MAX_WIDTH)
+        self._subject_buttons.removeWidget(self._set_active_btn)
+        self._subjects_layout.insertWidget(2, self._set_active_btn)  # under the button row
 
     @staticmethod
     def _as_page(group: QWidget) -> QWidget:

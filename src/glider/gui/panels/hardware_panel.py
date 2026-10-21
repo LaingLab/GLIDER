@@ -60,15 +60,18 @@ class HardwarePanel(QWidget):
             hardware_manager: HardwareManager instance
             session_fn: Callable that returns the current ExperimentSession (or None)
             run_async_fn: Callable to schedule async coroutines
-            show_add_buttons: Whether to show the "+ Board"/"+ Device" buttons.
-                The Runner (Pi) UI hides these since the hardware map cannot be
-                edited on-device; the desktop dock keeps the default of True.
+            show_add_buttons: Whether to build the "+ Board"/"+ Device" buttons.
+                Only the desktop Run page's hidden panel passes False; the Pi
+                builds them and hides them while the graph is locked (see
+                :meth:`set_editable`).
         """
         super().__init__(parent)
         self._hardware_manager = hardware_manager
         self._session_fn = session_fn
         self._run_async = run_async_fn
         self._show_add_buttons = show_add_buttons
+        self._editable = True
+        self._add_row: QWidget | None = None
         self._setup_ui()
 
     @property
@@ -87,10 +90,11 @@ class HardwarePanel(QWidget):
         self._hardware_tree.customContextMenuRequested.connect(self._on_hardware_context_menu)
         layout.addWidget(self._hardware_tree)
 
-        # Hardware buttons (hidden on the Runner/Pi UI, which cannot edit the
-        # hardware map on-device).
+        # Hardware buttons (hidden while not editable; see set_editable).
         if self._show_add_buttons:
-            hw_btn_layout = QHBoxLayout()
+            self._add_row = QWidget()
+            hw_btn_layout = QHBoxLayout(self._add_row)
+            hw_btn_layout.setContentsMargins(0, 0, 0, 0)
             add_board_btn = QPushButton("+ Board")
             add_board_btn.clicked.connect(self._on_add_board)
             hw_btn_layout.addWidget(add_board_btn)
@@ -99,9 +103,21 @@ class HardwarePanel(QWidget):
             add_device_btn.clicked.connect(self._on_add_device)
             hw_btn_layout.addWidget(add_device_btn)
 
-            layout.addLayout(hw_btn_layout)
+            layout.addWidget(self._add_row)
 
     # --- Public API ---
+
+    def set_editable(self, editable: bool) -> None:
+        """Allow or refuse changes to the hardware map.
+
+        While not editable the ``+ Board``/``+ Device`` row is hidden and the
+        context menu drops its Edit/Remove items; Connect and Disconnect stay,
+        since they act on the link, not the map. The Pi ties this to the node
+        graph's lock.
+        """
+        self._editable = editable
+        if self._add_row is not None:
+            self._add_row.setVisible(editable)
 
     def refresh_tree(self):
         """Refresh the hardware tree widget."""
@@ -1274,21 +1290,24 @@ class HardwarePanel(QWidget):
             disconnect_action = menu.addAction("Disconnect")
             disconnect_action.triggered.connect(lambda: self._disconnect_board(item_id))
 
-            menu.addSeparator()
+            if self._editable:
+                menu.addSeparator()
 
-            edit_action = menu.addAction("Edit Board")
-            edit_action.triggered.connect(lambda: self._on_edit_board(item_id))
+                edit_action = menu.addAction("Edit Board")
+                edit_action.triggered.connect(lambda: self._on_edit_board(item_id))
 
-            remove_action = menu.addAction("Remove Board")
-            remove_action.triggered.connect(lambda: self._remove_board(item_id))
+                remove_action = menu.addAction("Remove Board")
+                remove_action.triggered.connect(lambda: self._remove_board(item_id))
 
-        elif item_type == "device":
+        elif item_type == "device" and self._editable:
             edit_action = menu.addAction("Edit Device")
             edit_action.triggered.connect(lambda: self._on_edit_device(item_id))
 
             remove_action = menu.addAction("Remove Device")
             remove_action.triggered.connect(lambda: self._remove_device(item_id))
 
+        if menu.isEmpty():
+            return
         menu.exec(self._hardware_tree.viewport().mapToGlobal(position))
 
     def _connect_board(self, board_id: str) -> None:

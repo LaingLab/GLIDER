@@ -1,7 +1,7 @@
 """The two device-card panels read the link, not "has this been set up".
 
 Task 6 converted the hardware tree and the Device Control panel; these two
-were missed. RunnerPanel's cards repaint on a timer, so they went on asserting
+were missed. The Run page's cards repaint on a timer, so they went on asserting
 a green "Ready" for a peripheral whose link was down -- while the status strip
 showed a red dot for the same device two inches away. That is the exact
 disagreement glider.gui.device_status exists to prevent, and the Runner card
@@ -12,8 +12,6 @@ same card and the requirement on them is identical, so a fix that lands on one
 and not the other should fail here.
 """
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from glider.gui.styles import colors
@@ -23,12 +21,12 @@ from glider.hal.value_spec import KIND_SWITCH, ActionValueSpec
 pytestmark = pytest.mark.usefixtures("qtbot")
 
 
-def _runner_panel(qtbot, core):
-    from glider.gui.panels.runner_panel import RunnerPanel
+def _device_grid(qtbot, core):
+    from glider.gui.runner.device_grid import DeviceCardGrid
 
-    panel = RunnerPanel(core, MagicMock())
+    panel = DeviceCardGrid(core)
     qtbot.addWidget(panel)
-    return panel, panel._update_runner_device_states
+    return panel, panel.update_states
 
 
 def _controls_panel(qtbot, core):
@@ -40,7 +38,7 @@ def _controls_panel(qtbot, core):
 
 
 PANELS = [
-    pytest.param(_runner_panel, id="runner"),
+    pytest.param(_device_grid, id="device-grid"),
     pytest.param(_controls_panel, id="device-controls"),
 ]
 
@@ -57,7 +55,7 @@ def _card(qtbot, core, device, build, state):
     panel, repaint = build(qtbot, core)
     if hasattr(panel, "refresh_devices"):
         panel.refresh_devices()
-        return panel, repaint, panel._runner_device_cards["stim"]._ready_label
+        return panel, repaint, panel.cards()["stim"]._ready_label
     panel.refresh()
     return panel, repaint, _RowLabel(panel._rows["stim"])
 

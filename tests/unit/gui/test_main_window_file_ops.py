@@ -43,6 +43,7 @@ def _window(state=SessionState.IDLE, busy=False):
         data_recorder=_Recorder(),
     )
     w._cleared = cleared
+    w._view_manager = types.SimpleNamespace(is_runner_mode=False)
     w._graph_view = types.SimpleNamespace(clear_graph=lambda: None)
     w._undo_stack = UndoStack()
     for attr in (

@@ -79,10 +79,12 @@ change to it, even one that ends on the same term, counts as you choosing the
 term, and it is learned again.
 
 !!! note "Runner mode"
-    The setup form is a desktop feature. It is never offered on the Raspberry Pi
-    runner screen — a 480-pixel touch surface with no menu bar is the wrong
-    shape for five editable lists. A runner uses whatever vocabulary was defined
-    on the desktop side.
+    The one-time setup form is a desktop feature. It is never offered at first
+    launch on the Raspberry Pi runner screen — a 480-pixel touch surface is the
+    wrong place to meet five editable lists unprompted. The lists are still
+    there when you want them: the Runner's **Experiment** tab has a **Lab
+    Vocabulary** section, and a runner otherwise uses whatever vocabulary was
+    defined on the desktop side.
 
 !!! warning "If saving fails"
     If GLIDER cannot write the file — a read-only home directory, a missing

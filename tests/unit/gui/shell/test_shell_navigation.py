@@ -181,8 +181,11 @@ def test_desktop_startup_lands_on_the_landing_page(qtbot, main_window_factory):
 
 def test_runner_startup_skips_the_landing_page(qtbot, main_window_factory):
     """The Pi is a kiosk beside a rig: it opens on the run, never on a chooser."""
+    from glider.gui.runner.run_page import PiRunPage
+
     window = main_window_factory(desktop_mode=False)
     assert window._stack.currentIndex() == PAGE_OPERATOR
+    assert isinstance(window._stack.currentWidget(), PiRunPage)
 
 
 def test_new_from_landing_enters_the_experiment_tab(qtbot, main_window_factory):

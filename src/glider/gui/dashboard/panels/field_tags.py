@@ -4,6 +4,9 @@ Each tag reads "Label  value". Clicking one swaps it for a one-line editor;
 Return or focus loss commits (``value_edited``), Escape cancels. Locking, a
 field change and ``commit_pending`` commit an open edit first, so typed text
 is never lost. Locked while a run is live.
+
+``columns=n`` lays the tags in an n-column grid instead of one row (the Pi's
+480 px screen), with the trailing label on its own full-width row.
 """
 
 from __future__ import annotations
@@ -11,7 +14,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
+from PyQt6.QtWidgets import (
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSizePolicy,
+    QStyle,
+    QStyleOptionButton,
+    QWidget,
+)
 
 _MAX_VALUE_CHARS = 40
 
@@ -34,22 +47,52 @@ class _Editor(QLineEdit):
         super().keyPressEvent(event)
 
 
+class _ElidedChip(QPushButton):
+    """A grid-mode chip: takes whatever width its column gives it and elides
+    its text to fit, so a 40-character value cannot widen a 480 px page. The
+    full value stays in the tooltip."""
+
+    def __init__(self, text: str):
+        super().__init__(text)
+        self._full = text
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def resizeEvent(self, event):  # noqa: N802 (Qt override)
+        super().resizeEvent(event)
+        self.ensurePolished()  # the stylesheet sets the font and padding
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
+        room = self.style().subElementRect(QStyle.SubElement.SE_PushButtonContents, opt, self)
+        shown = self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, room.width())
+        if shown != self.text():
+            self.setText(shown)
+
+
 class FieldTags(QWidget):
     value_edited = pyqtSignal(str, str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, columns: int = 0):
         super().__init__(parent)
+        self._columns = columns
         self._fields: list[TagField] = []
         self._chips: dict[str, QPushButton] = {}
         self._editor: _Editor | None = None
         self._editing_key = ""
         self._locked = False
-        self._row = QHBoxLayout(self)
+        self._row: QGridLayout | QHBoxLayout = QGridLayout(self) if columns else QHBoxLayout(self)
         self._row.setContentsMargins(0, 0, 0, 0)
         self._row.setSpacing(6)
         self._trailing = QLabel()
         self._trailing.setProperty("textRole", "muted")
         self._trailing.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        if isinstance(self._row, QGridLayout):
+            for col in range(columns):
+                self._row.setColumnStretch(col, 1)  # columns split the width evenly
+        if columns:
+            # A run-folder path has no spaces to wrap at; let it clip (the
+            # tooltip has the whole text) rather than widen the 480 px page.
+            self._trailing.setWordWrap(True)
+            self._trailing.setMinimumWidth(1)
 
     # --- public API ---
 
@@ -95,8 +138,9 @@ class FieldTags(QWidget):
                 w.setParent(None)
                 w.deleteLater()
         self._chips.clear()
-        for f in self._fields:
-            chip = QPushButton(self._chip_text(f))
+        for i, f in enumerate(self._fields):
+            text = self._chip_text(f)
+            chip = _ElidedChip(text) if self._columns else QPushButton(text)
             chip.setProperty("fieldTag", True)
             chip.setProperty("need", f.required and not f.value)
             chip.setProperty("locked", self._locked)
@@ -104,8 +148,15 @@ class FieldTags(QWidget):
             chip.setCursor(Qt.CursorShape.IBeamCursor)
             chip.clicked.connect(lambda _=False, key=f.key: self._open_editor(key))
             self._chips[f.key] = chip
-            self._row.addWidget(chip)
-        self._row.addWidget(self._trailing, 1)
+            if isinstance(self._row, QGridLayout):
+                self._row.addWidget(chip, *divmod(i, self._columns))
+            else:
+                self._row.addWidget(chip)
+        if isinstance(self._row, QGridLayout):
+            rows = -(-len(self._fields) // self._columns)
+            self._row.addWidget(self._trailing, rows, 0, 1, self._columns)
+        else:
+            self._row.addWidget(self._trailing, 1)
 
     @staticmethod
     def _chip_text(f: TagField) -> str:
@@ -128,9 +179,13 @@ class FieldTags(QWidget):
         # editingFinished covers Return and focus loss.
         editor.editingFinished.connect(lambda: self._commit(key))
         editor.cancelled.connect(self._close_editor)
-        index = self._row.indexOf(chip)
         chip.hide()
-        self._row.insertWidget(index, editor)
+        if isinstance(self._row, QGridLayout):
+            # The editor takes the chip's grid cell.
+            row, col = self._row.getItemPosition(self._row.indexOf(chip))[:2]
+            self._row.addWidget(editor, row, col)
+        else:
+            self._row.insertWidget(self._row.indexOf(chip), editor)
         self._editor = editor
         self._editing_key = key
         editor.setFocus()

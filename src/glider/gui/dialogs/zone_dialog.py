@@ -13,8 +13,9 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 from PyQt6.QtCore import QPoint, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QImage, QMouseEvent, QPixmap
+from PyQt6.QtGui import QColor, QImage, QMouseEvent, QPixmap, QResizeEvent
 from PyQt6.QtWidgets import (
+    QBoxLayout,
     QButtonGroup,
     QColorDialog,
     QDialog,
@@ -91,6 +92,18 @@ class ZonePreviewWidget(QLabel):
         self._current_point: QPoint | None = None  # Mouse position
         self._image_rect = None  # Actual image area within widget
         self._close_threshold = 15  # Pixels - snap to close polygon
+
+        #: Re-fit the frame to the widget whenever it is resized. Off: the
+        #: frame is scaled once, to the size the widget has when it is set,
+        #: which is what the desktop window always did. The embedded compact
+        #: editor turns it on -- it is built before layout gives the preview
+        #: its real, much smaller, size, and would otherwise show a crop.
+        self.refit_on_resize = False
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self.refit_on_resize:
+            self._update_display()
 
     def set_frame(self, frame: np.ndarray) -> None:
         """Set the current frame to display."""
@@ -409,6 +422,7 @@ class ZoneDialog(QDialog):
         self._color_index = len(zone_config.zones) % len(DEFAULT_COLORS)
         self._custom_color: tuple[int, int, int] | None = None
         self._pending_zone: Zone | None = None
+        self._compact = False  # set by embed(compact=True)
 
         self._setup_ui()
         self._update_table()
@@ -432,6 +446,7 @@ class ZoneDialog(QDialog):
         self.setMinimumSize(1000, 700)
 
         layout = QHBoxLayout(self)
+        self._main_layout = layout
 
         # Left side - preview
         left_layout = QVBoxLayout()
@@ -443,7 +458,7 @@ class ZoneDialog(QDialog):
 
         # Shape selector
         shape_group = QGroupBox("Zone Shape")
-        shape_layout = QHBoxLayout(shape_group)
+        shape_layout = self._shape_layout = QHBoxLayout(shape_group)
 
         self._shape_group = QButtonGroup(self)
 
@@ -464,7 +479,7 @@ class ZoneDialog(QDialog):
         left_layout.addWidget(shape_group)
 
         # Drawing controls
-        draw_layout = QHBoxLayout()
+        draw_layout = self._draw_layout = QHBoxLayout()
 
         self._draw_btn = QPushButton("Draw Zone")
         self._draw_btn.setCheckable(True)
@@ -555,7 +570,7 @@ class ZoneDialog(QDialog):
         right_layout.addWidget(info_group)
 
         # File operations
-        file_layout = QHBoxLayout()
+        file_layout = self._file_layout = QHBoxLayout()
 
         self._save_btn = QPushButton("Save...")
         self._save_btn.clicked.connect(self._save_config)
@@ -753,7 +768,10 @@ class ZoneDialog(QDialog):
 
             # Delete button
             delete_btn = QPushButton("X")
-            delete_btn.setFixedWidth(40)
+            if not self._compact:
+                # Desktop font. At touch padding 40px is narrower than the
+                # button's own padding and the X disappears.
+                delete_btn.setFixedWidth(40)
             delete_btn.clicked.connect(lambda checked, idx=i: self._remove_zone(idx))
             self._table.setCellWidget(i, 3, delete_btn)
 
@@ -828,10 +846,15 @@ class ZoneDialog(QDialog):
             self._preview._update_display()
             self.zones_changed.emit()
 
-    def embed(self) -> "ZoneDialog":
+    def embed(self, *, compact: bool = False) -> "ZoneDialog":
         """Turn this editor into a plain widget for the Experiment tab.
 
         Returns ``self`` so it can be added to a layout in one expression.
+
+        ``compact`` is the Pi's 480px screen: the preview goes above the
+        controls instead of beside them, and the 1000x700 / 640x480 minimums
+        that make a comfortable desktop window go, so the editor is as wide as
+        the screen and the page scrolls to reach the rest.
 
         ``Qt.WindowType.Widget`` stops Qt giving it a window of its own; the
         OK/Cancel pair goes because neither means anything here. *Cancel* is
@@ -846,6 +869,17 @@ class ZoneDialog(QDialog):
         self.setWindowFlags(Qt.WindowType.Widget)
         self._ok_btn.hide()
         self._cancel_dialog_btn.hide()
+        if compact:
+            self._compact = True
+            self._main_layout.setDirection(QBoxLayout.Direction.TopToBottom)
+            self.setMinimumSize(0, 0)
+            self._preview.setMinimumSize(240, 180)
+            self._preview.refit_on_resize = True
+            # Three buttons (or shapes) abreast are wider than 480px in a wide
+            # platform font at touch padding; stacked they never clip.
+            for row in (self._shape_layout, self._draw_layout, self._file_layout):
+                row.setDirection(QBoxLayout.Direction.TopToBottom)
+            self._update_table()  # rows built in __init__ have the desktop delete button
         return self
 
     def get_zone_configuration(self) -> ZoneConfiguration:

@@ -1,4 +1,4 @@
-"""Pure elapsed-time formatting shared by the Dashboard header and run banner."""
+"""Pure elapsed-time formatting for the run clock (desktop Dashboard and Pi Run page)."""
 
 from __future__ import annotations
 

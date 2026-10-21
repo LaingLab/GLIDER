@@ -51,9 +51,12 @@ class RunHeader(QWidget):
     show_presets_folder_requested = pyqtSignal()
     run_values_changed = pyqtSignal()
 
-    def __init__(self, core, parent=None):
+    def __init__(self, core, parent=None, *, touch: bool = False):
+        """``touch``: the Pi's header. No title or preset picker; the field tags
+        sit in two columns."""
         super().__init__(parent)
         self._core = core
+        self._touch = touch
         self._state_name = "IDLE"
         self._missing: str | None = None
         self._ready = True  # board + flow, fed by RunControlPanel.readiness_changed
@@ -79,6 +82,8 @@ class RunHeader(QWidget):
         self._picker.setMenu(self._menu)
         top.addWidget(self._title)
         top.addWidget(self._picker)
+        if touch:
+            self._picker.hide()
         # Takes the slack, so the title, ▾ and pill keep their size hints.
         top.addStretch()
         self._run_label = QLabel()
@@ -89,7 +94,7 @@ class RunHeader(QWidget):
         top.addWidget(self._pill)
         col.addLayout(top)
 
-        self._tags = FieldTags()
+        self._tags = FieldTags(columns=2 if touch else 0)
         self._tags.value_edited.connect(self._on_tag_edited)
         col.addWidget(self._tags)
 
@@ -105,7 +110,7 @@ class RunHeader(QWidget):
         self._title.blockSignals(False)
         self._fit_title()
         preset = self._is_preset()
-        self._title.setVisible(not preset)
+        self._title.setVisible(not preset and not self._touch)
         self._picker.setText(f"{_type(md) or md.name} ▾" if preset else "▾")
         self._tags.set_fields(self.tag_fields())
         self._apply_state()

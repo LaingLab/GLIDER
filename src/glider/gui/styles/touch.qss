@@ -1,622 +1,995 @@
 /*
- * GLIDER Touch Stylesheet — Deep Navy palette
- * High-contrast theme for Raspberry Pi 480x800 touchscreen
- * Optimized for touch with large targets (min 80px)
+ * GLIDER Touch Stylesheet -- Deep Navy palette, Raspberry Pi 480x800 portrait.
  *
- * Color tokens:
- *   BASE        #0f1419
- *   CHROME      #0b0f14
- *   CANVAS      #0a0e13
- *   BORDER      #1e2530
- *   ACCENT      #38bdf8
- *   ACCENT_HOVER #0ea5e9
- *   TEXT_PRIMARY #e2e8f0
- *   TEXT_MUTED   #718096
- *   TEXT_DISABLED #475569
+ * One quiet visual language: neutral surfaces, cyan only for the selected or
+ * primary thing, green for START and red for STOP / REC. The controls this
+ * sheet sizes are at least 44 px tall; a few shared widgets size their own.
+ * In this sheet a widget's min-height is its *content* height, so a 1 px
+ * bordered control asks for 42 px to land on 44.
+ *
+ * Colour tokens (glider/gui/styles/colors.py; QSS cannot import them):
+ *   CANVAS        #0a0e13     BORDER         #1e2530
+ *   CHROME        #0b0f14     TEXT_PRIMARY   #e2e8f0
+ *   BASE          #0f1419     TEXT_TERTIARY  #94a3b8
+ *   SURFACE_1     #111820     TEXT_MUTED     #718096
+ *   SURFACE_2     #151c25     ACCENT         #38bdf8
+ *   SUCCESS       #34d399     WARNING        #fbbf24
+ *   ERROR         #f87171
  */
 
 /* === Global === */
 QWidget {
-    background-color: #0a0e13;
-    color: #e2e8f0;
+    background-color: #0f1419;                      /* BASE */
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
     font-family: -apple-system, BlinkMacSystemFont, "Roboto", "Segoe UI", "Helvetica Neue", sans-serif;
     font-size: 14px;
 }
 
-/* === Main Window === */
-QMainWindow {
-    background-color: #0a0e13;
+QMainWindow,
+QDialog,
+QMessageBox {
+    background-color: #0f1419;                      /* BASE */
 }
 
-/* === Status Bar === */
-QStatusBar {
-    background-color: #0b0f14;
-    border-top: 2px solid #1e2530;
-    min-height: 40px;
-    font-size: 14px;
+QLabel {
+    background-color: transparent;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
 }
 
-/* === Scroll Area === */
+/* === Scrolling === */
 QScrollArea {
     border: none;
     background-color: transparent;
 }
 
 QScrollBar:vertical {
-    background-color: #0b0f14;
+    background-color: transparent;
     width: 20px;
-    border-radius: 10px;  /* geometric */
     margin: 4px;
 }
 
 QScrollBar::handle:vertical {
-    background-color: #1e2530;
-    border-radius: 8px;  /* geometric */
+    background-color: #1e2530;                      /* BORDER */
+    border-radius: 6px;  /* geometric: half of the 12 px handle */
     min-height: 60px;
 }
 
-QScrollBar::handle:vertical:pressed {
-    background-color: #0ea5e9;
-}
-
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0;
-}
-
 QScrollBar:horizontal {
-    background-color: #0b0f14;
+    background-color: transparent;
     height: 20px;
-    border-radius: 10px;  /* geometric */
     margin: 4px;
 }
 
 QScrollBar::handle:horizontal {
-    background-color: #1e2530;
-    border-radius: 8px;  /* geometric */
+    background-color: #1e2530;                      /* BORDER */
+    border-radius: 6px;  /* geometric: half of the 12 px handle */
     min-width: 60px;
 }
 
-QScrollBar::handle:horizontal:pressed {
-    background-color: #0ea5e9;
+QScrollBar::handle:pressed {
+    background-color: #718096;                      /* TEXT_MUTED */
 }
 
-QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
+QScrollBar::add-line,
+QScrollBar::sub-line,
+QScrollBar::add-page,
+QScrollBar::sub-page {
     width: 0;
+    height: 0;
+    background: none;
 }
 
-/* === Push Button === */
+/* === Push buttons ===
+ * Neutral by default. A solid fill means something: cyan for the one primary
+ * action on a screen, green START, red STOP.
+ */
 QPushButton {
-    background-color: #38bdf8;
-    color: #e2e8f0;
-    border: none;
+    background-color: #151c25;                      /* SURFACE_2 */
+    border: 1px solid #1e2530;                      /* BORDER */
     border-radius: @RADIUS_MEDIUM@;
-    padding: 12px 20px;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
     font-size: 14px;
-    font-weight: bold;
-    min-height: 44px;
+    font-weight: 600;
+    padding: 0 16px;
+    min-height: 42px;
 }
 
 QPushButton:pressed {
-    background-color: #0ea5e9;
+    background-color: #111820;                      /* SURFACE_1 */
+    border-color: rgba(56, 189, 248, 0.50);
+}
+
+QPushButton:checked {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    border-color: rgba(56, 189, 248, 0.50);
+    color: #38bdf8;                                 /* ACCENT */
 }
 
 QPushButton:disabled {
-    background-color: #1e2530;
-    /* Muted but still legible (was #475569, ~1.9:1) so a disconnected control's
-       label can be read by a gloved operator. */
-    color: #718096;
+    background-color: #111820;                      /* SURFACE_1 */
+    border-color: #1e2530;
+    color: #718096;                                 /* TEXT_MUTED: still legible */
 }
 
-/* Runner Manual status strip: persistent icon+text notice. Level is set as a
-   dynamic property; each variant pairs a distinct tint with a text glyph so it
-   never relies on color alone. */
-QLabel#runnerStatusStrip {
-    padding: 10px 14px;
-    border-radius: @RADIUS_MEDIUM@;
-    font-size: 15px;
-    font-weight: 600;
-    color: #e2e8f0;
-    background-color: #1e2530;
-}
-QLabel#runnerStatusStrip[level="error"] {
-    background-color: rgba(248, 113, 113, 0.20);
-    color: #f87171;
-}
-QLabel#runnerStatusStrip[level="warn"] {
-    background-color: rgba(251, 191, 36, 0.20);
-    color: #fbbf24;
-}
-QLabel#runnerStatusStrip[level="info"] {
-    background-color: rgba(96, 165, 250, 0.18);
-    color: #93c5fd;
-}
-
-/* Primary action button */
 QPushButton[primary="true"] {
-    background-color: #34d399;
+    background-color: #38bdf8;                      /* ACCENT */
+    border-color: #38bdf8;
+    color: #0a0e13;                                 /* CANVAS: dark ink on cyan */
 }
 
 QPushButton[primary="true"]:pressed {
-    background-color: #22a57a;
+    background-color: rgba(56, 189, 248, 0.80);
 }
 
-/* Danger button */
-QPushButton[danger="true"] {
-    background-color: rgba(248, 113, 113, 0.2);
-    color: #f87171;
-    border: 2px solid #f87171;
-}
-
-QPushButton[danger="true"]:pressed {
-    background-color: rgba(248, 113, 113, 0.35);
-}
-
-/* Secondary button */
-QPushButton[secondary="true"] {
-    background-color: #1e2530;
-    color: #94a3b8;
-}
-
-QPushButton[secondary="true"]:pressed {
-    background-color: #2a3440;
-}
-
-/* === Label === */
-QLabel {
+QPushButton[secondary="true"],
+QPushButton[buttonRole="secondary"] {
     background-color: transparent;
-    color: #e2e8f0;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
 }
 
-QLabel[title="true"] {
-    font-size: 18px;
+QPushButton[secondary="true"]:pressed,
+QPushButton[buttonRole="secondary"]:pressed {
+    background-color: #111820;                      /* SURFACE_1 */
+}
+
+/* Tool buttons get the same neutral look, so none falls back to the native
+ * bevel. Named ones (tabs, chips, the gear) override it below. Their size is
+ * the caller's: some sit in rows sized before this sheet reaches them. */
+QToolButton {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_MEDIUM@;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+}
+
+QToolButton:pressed {
+    background-color: #111820;                      /* SURFACE_1 */
+}
+
+QToolButton:checked {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    border-color: rgba(56, 189, 248, 0.50);
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+QToolButton:disabled {
+    color: #718096;                                 /* TEXT_MUTED */
+}
+
+/* === Run controls (RunControlPanel) === */
+QPushButton[runnerAction="start"],
+QPushButton[runnerAction="stop"],
+QPushButton[runnerAction="pause"] {
+    border-radius: @RADIUS_LARGE@;
+    font-size: 20px;
     font-weight: bold;
 }
 
-QLabel[subtitle="true"] {
-    font-size: 14px;
-    color: #94a3b8;
+QPushButton[runnerAction="start"] {
+    background-color: #34d399;                      /* SUCCESS */
+    border-color: #34d399;
+    color: #0a0e13;                                 /* CANVAS */
 }
 
-QLabel[value="true"] {
-    font-size: 22px;
-    font-weight: bold;
-    color: #38bdf8;
+QPushButton[runnerAction="start"]:pressed {
+    background-color: rgba(52, 211, 153, 0.80);
 }
 
-QLabel[muted="true"] {
-    font-size: 14px;
-    color: #718096;
+QPushButton[runnerAction="stop"] {
+    background-color: #f87171;                      /* ERROR */
+    border-color: #f87171;
+    color: #0a0e13;                                 /* CANVAS */
 }
 
-/* === Slider === */
-QSlider {
-    min-height: 60px;
+QPushButton[runnerAction="stop"]:pressed {
+    background-color: rgba(248, 113, 113, 0.80);
 }
 
-QSlider::groove:horizontal {
-    height: 24px;
-    background-color: #1e2530;
-    border-radius: 12px;  /* geometric */
+QPushButton[runnerAction="start"]:disabled,
+QPushButton[runnerAction="stop"]:disabled {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border-color: #1e2530;
+    color: #718096;                                 /* TEXT_MUTED */
 }
 
-QSlider::handle:horizontal {
-    width: 48px;
-    height: 48px;
-    margin: -12px 0;
-    background-color: #38bdf8;
-    border-radius: 24px;  /* geometric */
-    border: 4px solid #0ea5e9;
+/* The Pi's run bar: a card at the foot of the Run page. */
+QWidget#runControlPanel {
+    background-color: #0b0f14;                      /* CHROME */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_LARGE@;
 }
 
-QSlider::handle:horizontal:pressed {
-    background-color: #0ea5e9;
-    border-color: #0284c7;
-}
-
-QSlider::sub-page:horizontal {
-    background-color: #38bdf8;
-    border-radius: 12px;  /* geometric */
-}
-
-QSlider::groove:vertical {
-    width: 24px;
-    background-color: #1e2530;
-    border-radius: 12px;  /* geometric */
-}
-
-QSlider::handle:vertical {
-    width: 48px;
-    height: 48px;
-    margin: 0 -12px;
-    background-color: #38bdf8;
-    border-radius: 24px;  /* geometric */
-    border: 4px solid #0ea5e9;
-}
-
-/* === Spin Box === */
+/* === Text inputs === */
+QLineEdit,
+QComboBox,
 QSpinBox,
 QDoubleSpinBox {
-    background-color: #0f1419;
-    border: 2px solid #1e2530;
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
     border-radius: @RADIUS_MEDIUM@;
-    padding: 8px;
-    font-size: 16px;
-    min-height: 40px;
+    color: #e2e8f0;
+    font-size: 14px;
+    padding: 0 12px;
+    min-height: 42px;
+    selection-background-color: rgba(56, 189, 248, 0.35);
 }
 
+QTextEdit,
+QPlainTextEdit {
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_MEDIUM@;
+    color: #e2e8f0;
+    font-size: 14px;
+    padding: 6px 8px;
+    selection-background-color: rgba(56, 189, 248, 0.35);
+}
+
+QLineEdit:focus,
+QComboBox:focus,
 QSpinBox:focus,
-QDoubleSpinBox:focus {
-    border-color: #38bdf8;
+QDoubleSpinBox:focus,
+QTextEdit:focus,
+QPlainTextEdit:focus {
+    border-color: #38bdf8;                          /* ACCENT */
+}
+
+QLineEdit:disabled,
+QComboBox:disabled,
+QSpinBox:disabled,
+QDoubleSpinBox:disabled,
+QTextEdit:disabled,
+QPlainTextEdit:disabled {
+    color: #718096;                                 /* TEXT_MUTED */
+}
+
+QComboBox::drop-down {
+    subcontrol-origin: border;
+    subcontrol-position: center right;
+    border: none;
+    width: 40px;
+}
+
+QComboBox::down-arrow {
+    image: url(@ICONS@/chevron-down.svg);
+    width: 12px;
+    height: 12px;
+}
+
+QComboBox::down-arrow:disabled {
+    image: url(@ICONS@/chevron-down-disabled.svg);
+}
+
+QComboBox QAbstractItemView {
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_MEDIUM@;
+    outline: none;
+    selection-background-color: rgba(56, 189, 248, 0.13);
+    selection-color: #38bdf8;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height: 44px;
+    padding: 0 12px;
+}
+
+/* Spin boxes put a finger-sized − and + either side of the value, rather than
+ * two half-height arrows stacked on the right. Qt's size hint counts only one
+ * button, so the floor is set high enough for the value or a "No timeout" kind
+ * of special text to show whole between the two. */
+QSpinBox,
+QDoubleSpinBox {
+    padding: 0 4px;
+    min-width: 110px;
+    qproperty-alignment: AlignCenter;
+}
+
+QSpinBox::up-button,
+QDoubleSpinBox::up-button,
+QSpinBox::down-button,
+QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    background-color: #151c25;                      /* SURFACE_2 */
+    border: none;
+    width: 44px;
 }
 
 QSpinBox::up-button,
 QDoubleSpinBox::up-button {
-    background-color: #34d399;
-    width: 50px;
-    border-top-right-radius: 6px;
-}
-
-QSpinBox::up-button:pressed,
-QDoubleSpinBox::up-button:pressed {
-    background-color: #22a57a;
+    subcontrol-position: center right;
+    border-left: 1px solid #1e2530;
+    border-top-right-radius: @RADIUS_MEDIUM@;
+    border-bottom-right-radius: @RADIUS_MEDIUM@;
 }
 
 QSpinBox::down-button,
 QDoubleSpinBox::down-button {
-    background-color: rgba(248, 113, 113, 0.4);
-    width: 50px;
-    border-bottom-right-radius: 6px;
+    subcontrol-position: center left;
+    border-right: 1px solid #1e2530;
+    border-top-left-radius: @RADIUS_MEDIUM@;
+    border-bottom-left-radius: @RADIUS_MEDIUM@;
 }
 
+QSpinBox::up-button:pressed,
+QDoubleSpinBox::up-button:pressed,
 QSpinBox::down-button:pressed,
 QDoubleSpinBox::down-button:pressed {
-    background-color: rgba(248, 113, 113, 0.6);
+    background-color: #1e2530;                      /* BORDER */
 }
 
-/* === Line Edit === */
-QLineEdit {
-    background-color: #0f1419;
-    border: 2px solid #1e2530;
-    border-radius: @RADIUS_MEDIUM@;
-    padding: 8px;
-    font-size: 14px;
-    min-height: 36px;
-    selection-background-color: #38bdf8;
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+    image: url(@ICONS@/plus.svg);
+    width: 14px;
+    height: 14px;
 }
 
-QLineEdit:focus {
-    border-color: #38bdf8;
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+    image: url(@ICONS@/minus.svg);
+    width: 14px;
+    height: 14px;
 }
 
-/* === Combo Box === */
-QComboBox {
-    background-color: #0f1419;
-    border: 2px solid #1e2530;
-    border-radius: @RADIUS_MEDIUM@;
-    padding: 8px;
-    font-size: 14px;
-    min-height: 40px;
+/* === Check box === */
+QCheckBox,
+QRadioButton {
+    background-color: transparent;
+    spacing: 12px;
+    min-height: 44px;
 }
 
-QComboBox:focus {
-    border-color: #38bdf8;
-}
-
-QComboBox::drop-down {
-    border: none;
-    width: 48px;
-}
-
-QComboBox QAbstractItemView {
-    background-color: #0f1419;
-    border: 2px solid #38bdf8;
-    border-radius: @RADIUS_LARGE@;
-    selection-background-color: #38bdf8;
-}
-
-QComboBox QAbstractItemView::item {
-    min-height: 50px;
-    padding: 12px;
-}
-
-/* === Check Box === */
-QCheckBox {
-    spacing: 16px;
-    min-height: 60px;
+QCheckBox::indicator,
+QRadioButton::indicator {
+    width: 22px;
+    height: 22px;
+    border: 1px solid #718096;                      /* TEXT_MUTED */
+    background-color: #111820;                      /* SURFACE_1 */
 }
 
 QCheckBox::indicator {
-    width: 36px;
-    height: 36px;
-    border: 3px solid #1e2530;
-    border-radius: @RADIUS_MEDIUM@;
-    background-color: #0f1419;
+    border-radius: @RADIUS_SMALL@;
+}
+
+QRadioButton::indicator {
+    border-radius: 12px;  /* geometric: a circle, 22 px + 1 px border */
 }
 
 QCheckBox::indicator:checked {
-    background-color: #38bdf8;
+    background-color: #38bdf8;                      /* ACCENT */
     border-color: #38bdf8;
+    image: url(@ICONS@/check.svg);
 }
 
-/* === Progress Bar === */
-QProgressBar {
+QRadioButton::indicator:checked {
+    border-color: #38bdf8;                          /* ACCENT: a dot in a ring */
+    background-color: qradialgradient(cx: 0.5, cy: 0.5, radius: 0.5, fx: 0.5, fy: 0.5,
+        stop: 0 #38bdf8, stop: 0.45 #38bdf8, stop: 0.5 #111820, stop: 1 #111820);
+}
+
+/* === Slider: a 44 px knob on a slim track === */
+QSlider {
+    background-color: transparent;
+    min-height: 44px;
+}
+
+QSlider::groove:horizontal {
+    height: 8px;
+    background-color: #1e2530;                      /* BORDER */
+    border-radius: 4px;  /* geometric */
+}
+
+QSlider::sub-page:horizontal {
+    background-color: #38bdf8;                      /* ACCENT */
+    border-radius: 4px;  /* geometric */
+}
+
+QSlider::handle:horizontal {
+    width: 40px;
+    height: 40px;
+    margin: -18px 0;
+    background-color: #e2e8f0;                      /* TEXT_PRIMARY */
+    border: 2px solid #38bdf8;                      /* ACCENT */
+    border-radius: 22px;  /* geometric */
+}
+
+QSlider::groove:vertical {
+    width: 8px;
     background-color: #1e2530;
+    border-radius: 4px;  /* geometric */
+}
+
+QSlider::handle:vertical {
+    width: 40px;
+    height: 40px;
+    margin: 0 -18px;
+    background-color: #e2e8f0;
+    border: 2px solid #38bdf8;
+    border-radius: 22px;  /* geometric */
+}
+
+QSlider::handle:pressed {
+    background-color: #38bdf8;                      /* ACCENT */
+}
+
+/* === Progress bar === */
+QProgressBar {
+    background-color: #1e2530;                      /* BORDER */
     border: none;
     border-radius: 12px;  /* geometric */
     height: 24px;
     text-align: center;
-    font-size: 14px;
+    font-size: 13px;
 }
 
 QProgressBar::chunk {
-    background-color: #38bdf8;
+    background-color: #38bdf8;                      /* ACCENT */
     border-radius: 12px;  /* geometric */
 }
 
-/* === Frame === */
-QFrame[class="card"] {
-    background-color: #0f1419;
-    border: 2px solid #1e2530;
-    border-radius: @RADIUS_LARGE@;
-    padding: 16px;
+/* === Separator lines === */
+QFrame[frameShape="4"] { /* HLine */
+    background-color: #1e2530;                      /* BORDER */
+    border: none;
+    max-height: 1px;
 }
 
-QFrame[class="separator"] {
-    background-color: #1e2530;
-    max-height: 2px;
+QFrame[frameShape="5"] { /* VLine */
+    background-color: #1e2530;                      /* BORDER */
+    border: none;
+    max-width: 1px;
 }
 
-/* === Group Box === */
+/* === Group box === */
 QGroupBox {
-    border: 2px solid #1e2530;
+    border: 1px solid #1e2530;                      /* BORDER */
     border-radius: @RADIUS_LARGE@;
-    margin-top: 20px;
-    padding: 16px;
-    padding-top: 24px;
+    margin-top: 22px;
+    padding: 12px;
+    padding-top: 18px;
 }
 
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    padding: 4px 16px;
-    font-size: 16px;
-    font-weight: bold;
-    color: #94a3b8;
+    left: 12px;
+    padding: 0 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
 }
 
-/* === List Widget === */
+/* === Lists and trees === */
 QListWidget {
-    background-color: #0f1419;
-    border: 2px solid #1e2530;
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
     border-radius: @RADIUS_LARGE@;
+    outline: none;
 }
 
+/* No padding: rows that carry their own widget (a label and a remove button)
+ * fill the item rect, and padding would crush them. */
 QListWidget::item {
-    padding: 16px;
+    min-height: 44px;
     border-bottom: 1px solid #1e2530;
-    min-height: 50px;
 }
 
-QListWidget::item:selected {
-    background-color: #38bdf8;
+QTreeView {
+    background-color: #0f1419;                      /* BASE */
+    border: none;
+    outline: none;
 }
 
-QListWidget::item:hover {
-    background-color: #1e2530;
+QTreeView::item {
+    min-height: 44px;
 }
 
-/* === Tab Widget === */
+QListWidget::item:selected,
+QTreeView::item:selected {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+QHeaderView::section {
+    background-color: #0b0f14;                      /* CHROME */
+    color: #718096;                                 /* TEXT_MUTED */
+    border: none;
+    border-bottom: 1px solid #1e2530;               /* BORDER */
+    padding: 8px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* === Tabs (anything but the Pi dashboard's own, below) === */
 QTabWidget::pane {
-    border: 2px solid #1e2530;
+    border: 1px solid #1e2530;                      /* BORDER */
     border-radius: @RADIUS_LARGE@;
-    background-color: #0f1419;
+    background-color: #0f1419;                      /* BASE */
 }
 
 QTabBar::tab {
-    background-color: #0b0f14;
-    color: #718096;
-    padding: 8px 12px;
-    font-size: 12px;
-    min-width: 60px;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
+    background-color: #0b0f14;                      /* CHROME */
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 0 14px;
+    min-height: 42px;
+    font-size: 13px;
+    font-weight: 500;
 }
 
 QTabBar::tab:selected {
-    background-color: #0f1419;
-    color: #e2e8f0;
-    border-bottom: 3px solid #38bdf8;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    border-bottom-color: #38bdf8;                   /* ACCENT */
 }
 
-/* === Dock Widget Tab Bar (compact for Pi screen) === */
 QMainWindow::separator {
-    background-color: #1e2530;
+    background-color: #1e2530;                      /* BORDER */
     width: 4px;
     height: 4px;
 }
 
-QTabBar[tabPosition="South"]::tab,
-QTabBar[tabPosition="North"]::tab {
-    padding: 6px 10px;
-    font-size: 11px;
-    min-width: 50px;
-    max-width: 80px;
+/* === Menus: the ⚙ menu and every popup === */
+QMenu {
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_MEDIUM@;
+    padding: 6px;
 }
 
-/* === Tool Tip === */
+QMenu::item {
+    background-color: transparent;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    font-size: 15px;
+    min-height: 44px;
+    padding: 0 32px 0 16px;
+    border-radius: @RADIUS_SMALL@;
+}
+
+QMenu::item:selected {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+QMenu::item:disabled {
+    color: #718096;                                 /* TEXT_MUTED */
+}
+
+QMenu::separator {
+    height: 1px;
+    background-color: #1e2530;                      /* BORDER */
+    margin: 6px 8px;
+}
+
+/* === Tool tip === */
 QToolTip {
-    background-color: #1e2530;
+    background-color: #151c25;                      /* SURFACE_2 */
     color: #e2e8f0;
-    border: 2px solid #38bdf8;
-    border-radius: @RADIUS_LARGE@;
-    padding: 12px;
-    font-size: 14px;
-}
-
-/* === Message Box === */
-QMessageBox {
-    background-color: #0f1419;
+    border: 1px solid #1e2530;
+    border-radius: @RADIUS_MEDIUM@;
+    padding: 8px;
+    font-size: 13px;
 }
 
 QMessageBox QLabel {
-    font-size: 18px;
-    min-height: 60px;
+    font-size: 16px;
 }
 
 QMessageBox QPushButton {
     min-width: 120px;
 }
 
-/* === Dialog === */
-QDialog {
-    background-color: #0f1419;
+/* ============================================================================
+ * The Pi header: row one is the status strip beside the ⚙ button, row two the
+ * tabs. CHROME ground, a 1 px BORDER under each row.
+ * ========================================================================= */
+
+QWidget#piHeader {
+    background-color: #0b0f14;                      /* CHROME */
 }
 
-/* === Header Bar (Runner) === */
-.HeaderBar {
-    background-color: #0b0f14;
-    border-bottom: 2px solid #1e2530;
-    min-height: 60px;
+QFrame#statusStrip,
+QFrame#statusStripDevices {
+    background-color: #0b0f14;                      /* CHROME */
+    border: none;
 }
 
-/* === Dashboard Widget Container === */
-.DashboardWidget {
-    background-color: #0f1419;
-    border: 2px solid #1e2530;
-    border-radius: @RADIUS_LARGE@;
-    margin: 8px;
-    padding: 16px;
-}
-
-.DashboardWidget:hover {
-    border-color: #2a3440;
-}
-
-/* === Control Panel === */
-.ControlPanel {
-    background-color: #0b0f14;
-    border-top: 2px solid #1e2530;
-    min-height: 80px;
-}
-
-.ControlPanel QPushButton {
-    min-width: 100px;
-    min-height: 70px;
-}
-
-/* Start button */
-.ControlPanel QPushButton[action="start"] {
-    background-color: #34d399;
-}
-
-.ControlPanel QPushButton[action="start"]:pressed {
-    background-color: #22a57a;
-}
-
-/* Stop button */
-.ControlPanel QPushButton[action="stop"] {
-    background-color: #718096;
-}
-
-.ControlPanel QPushButton[action="stop"]:pressed {
-    background-color: #5a6878;
-}
-
-/* Pause button */
-.ControlPanel QPushButton[action="pause"] {
-    background-color: #fbbf24;
-}
-
-.ControlPanel QPushButton[action="pause"]:pressed {
-    background-color: #d69e10;
-}
-
-/* === Status Indicators === */
-.StatusIndicator {
-    min-height: 40px;
-    padding: 8px 16px;
-    border-radius: 20px;  /* geometric */
+QLabel#statusStripExperiment {
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
     font-size: 14px;
+    font-weight: 600;
+}
+
+QLabel#statusStripDirty {
+    color: #fbbf24;                                 /* WARNING */
+    font-size: 12px;
+}
+
+/* The run pill. It is a tap target (back to Run mid-run), so the label keeps
+ * the strip's full 44 px and the margin insets only the painted pill. */
+QLabel#statusStripPill {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 11px;  /* geometric: half of the 22 px pill */
+    margin: 11px 0;
+    padding: 0 8px;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 11px;
     font-weight: bold;
 }
 
-.StatusIndicator[status="running"] {
-    background-color: rgba(52, 211, 153, 0.15);
+QLabel#statusStripPill[state="running"] {
+    background-color: rgba(52, 211, 153, 0.13);     /* SUCCESS @ 13% */
+    border-color: rgba(52, 211, 153, 0.40);
+    color: #34d399;                                 /* SUCCESS */
+}
+
+QLabel#statusStripPill[state="recording"] {
+    background-color: rgba(248, 113, 113, 0.15);    /* ERROR @ 15% */
+    border-color: rgba(248, 113, 113, 0.40);
+    color: #f87171;                                 /* ERROR */
+}
+
+/* Error is the only filled thing in the header: nothing can out-shout it. */
+QLabel#statusStripPill[state="error"] {
+    background-color: #f87171;                      /* ERROR */
+    border-color: #f87171;
+    color: #0a0e13;                                 /* CANVAS */
+}
+
+/* A healthy board is a quiet dot and a name; a down one becomes a tinted
+ * chip, so it differs from the boards beside it. Padding stays small: five
+ * boards, the name and the pill share 436 px. */
+QFrame#statusStripDevice {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 11px;  /* geometric: half of the 22 px chip */
+    margin: 11px 0;
+    padding: 0 2px;
+}
+
+QFrame#statusStripDevice[state="warn"] {
+    background-color: rgba(251, 191, 36, 0.13);     /* WARNING @ 13% */
+    border-color: rgba(251, 191, 36, 0.30);
+    padding: 0 4px;
+}
+
+QFrame#statusStripDevice[state="error"] {
+    background-color: rgba(248, 113, 113, 0.13);    /* ERROR @ 13% */
+    border-color: rgba(248, 113, 113, 0.30);
+    padding: 0 4px;
+}
+
+/* The name stays neutral: a chip's state can change after it was polished,
+ * and only the chip and its dot are re-polished, so a state colour here would
+ * go stale. The dot and the chip's tint carry the state. */
+QLabel#statusStripDeviceName {
+    background-color: transparent;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 12px;
+}
+
+QLabel#statusStripDot {
+    background-color: #718096;                      /* TEXT_MUTED */
+    color: #718096;
+    border-radius: 4px;  /* geometric: half of the 8 px side */
+}
+
+QLabel#statusStripDot[state="ok"] {
+    background-color: #34d399;                      /* SUCCESS */
     color: #34d399;
 }
 
-.StatusIndicator[status="stopped"] {
-    background-color: #1e2530;
-    color: #718096;
-}
-
-.StatusIndicator[status="paused"] {
-    background-color: rgba(251, 191, 36, 0.15);
+QLabel#statusStripDot[state="warn"] {
+    background-color: #fbbf24;                      /* WARNING */
     color: #fbbf24;
 }
 
-.StatusIndicator[status="error"] {
-    background-color: rgba(248, 113, 113, 0.15);
+QLabel#statusStripDot[state="error"] {
+    background-color: #f87171;                      /* ERROR */
     color: #f87171;
 }
 
-/* === Keyboard (Virtual) === */
-.VirtualKeyboard {
-    background-color: #0b0f14;
-    border-top: 2px solid #1e2530;
+QToolButton#piGearButton {
+    background-color: #0b0f14;                      /* CHROME */
+    border: none;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 22px;
+    padding: 0;
 }
 
-.VirtualKeyboard QPushButton {
-    min-height: 60px;
-    min-width: 50px;
-    font-size: 20px;
-    margin: 2px;
-}
-
-/* === Runner Status Colors === */
-QLabel[runnerStatus="true"] {
-    padding: 6px 14px;
-    border-radius: @RADIUS_LARGE@;
-    font-size: 14px;
-    font-weight: bold;
+QToolButton#piGearButton:pressed,
+QToolButton#piGearButton:open {
+    background-color: #151c25;                      /* SURFACE_2 */
     color: #e2e8f0;
 }
 
-QLabel[statusState="IDLE"] {
-    background-color: #1e2530;
+QToolButton#piGearButton::menu-indicator {
+    image: none;
+    width: 0;
+}
+
+/* Row two: Experiment · Dashboard · Run, equal width, underlined when current. */
+QFrame#shellTabBar {
+    background-color: #0b0f14;                      /* CHROME */
+}
+
+QWidget#piHeader QFrame#shellTabBar {
+    border-top: 1px solid #1e2530;                  /* BORDER */
+    border-bottom: 1px solid #1e2530;
+}
+
+QToolButton#shellTab {
+    background-color: transparent;
+    border: none;
+    border-bottom: 3px solid transparent;
+    border-radius: 0;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 15px;
+    font-weight: 500;
+    padding: 0 16px;
+    min-height: 42px;
+}
+
+QToolButton#shellTab:checked {
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    border-bottom-color: #38bdf8;                   /* ACCENT */
+}
+
+/* The notice bar under the header: tinted by level, tap (or ✕) to dismiss. */
+QFrame#piNoticeBar {
+    border: none;
+    border-bottom: 1px solid #1e2530;
+    min-height: 44px;
+    padding: 0 6px;
+}
+
+QFrame#piNoticeBar QLabel {
+    font-size: 13px;
+}
+
+QFrame#piNoticeBar QToolButton#piNoticeClose {
+    background-color: transparent;
+    border: none;
+    font-size: 16px;
+    padding: 0;
+}
+
+QFrame#piNoticeBar[level="info"] {
+    background-color: rgba(56, 189, 248, 0.10);     /* ACCENT @ 10% */
+    border-bottom-color: rgba(56, 189, 248, 0.30);
+}
+
+QFrame#piNoticeBar[level="info"] QLabel,
+QFrame#piNoticeBar[level="info"] QToolButton#piNoticeClose {
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+QFrame#piNoticeBar[level="warning"] {
+    background-color: rgba(251, 191, 36, 0.12);     /* WARNING @ 12% */
+    border-bottom-color: rgba(251, 191, 36, 0.35);
+}
+
+QFrame#piNoticeBar[level="warning"] QLabel,
+QFrame#piNoticeBar[level="warning"] QToolButton#piNoticeClose {
+    color: #fbbf24;                                 /* WARNING */
+}
+
+QFrame#piNoticeBar[level="critical"] {
+    background-color: rgba(248, 113, 113, 0.18);    /* ERROR @ 18% */
+    border-bottom-color: rgba(248, 113, 113, 0.45);
+}
+
+QFrame#piNoticeBar[level="critical"] QLabel {
+    color: #f87171;                                 /* ERROR */
+    font-weight: 600;
+}
+
+QFrame#piNoticeBar[level="critical"] QToolButton#piNoticeClose {
+    color: #f87171;                                 /* ERROR */
+}
+
+/* ============================================================================
+ * Dashboard: the graph over the panel tabs.
+ * ========================================================================= */
+
+QSplitter#piDashboardSplitter::handle:vertical {
+    background-color: #0b0f14;                      /* CHROME */
+    border-top: 1px solid #1e2530;                  /* BORDER */
+    height: 14px;
+    image: url(@ICONS@/grip.svg);
+}
+
+QTabWidget#piDashboardTabs::pane {
+    border: none;
+    background-color: #0f1419;                      /* BASE */
+}
+
+QTabWidget#piDashboardTabs QTabBar {
+    background-color: #0b0f14;                      /* CHROME */
+}
+
+QTabWidget#piDashboardTabs QTabBar::tab {
+    background-color: #0b0f14;                      /* CHROME */
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    border: none;
+    border-bottom: 1px solid #1e2530;               /* BORDER */
+    padding: 0 4px;
+    height: 47px;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+QTabWidget#piDashboardTabs QTabBar::tab:selected {
+    color: #38bdf8;                                 /* ACCENT */
+    border-bottom: 2px solid #38bdf8;
+    height: 46px;
+}
+
+/* The edit lock on the graph: a quiet pill while locked, cyan while editing. */
+QPushButton#graphLockButton {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 22px;  /* geometric: half of the 44 px height */
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 13px;
+    font-weight: 600;
+    padding: 0 16px;
+    min-height: 42px;
+}
+
+/* Opaque, like the locked look: a tint would let the graph show through. */
+QPushButton#graphLockButton[locked="false"] {
+    border-color: #38bdf8;                          /* ACCENT */
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+QPushButton#graphLockButton:disabled {
+    color: #718096;                                 /* TEXT_MUTED */
+}
+
+/* ============================================================================
+ * Run page
+ * ========================================================================= */
+
+QLabel#piRunClock {
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    font-family: "DejaVu Sans Mono", "Liberation Mono", Menlo, "SF Mono", monospace;
+    font-size: 64px;
+    font-weight: 600;
+    padding: 8px 0;
+}
+
+QLabel#piRunClock[live="true"] {
+    color: #34d399;                                 /* SUCCESS */
+}
+
+/* Run fields: tap to edit in place. */
+QPushButton[fieldTag="true"] {
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_MEDIUM@;
+    color: #e2e8f0;                                 /* TEXT_PRIMARY */
+    font-size: 13px;
+    font-weight: 500;
+    padding: 0 12px;
+    min-height: 42px;
+}
+
+QPushButton[fieldTag="true"][need="true"] {
+    background-color: rgba(251, 191, 36, 0.10);     /* WARNING @ 10% */
+    border-color: rgba(251, 191, 36, 0.55);
+    color: #fbbf24;                                 /* WARNING */
+}
+
+QPushButton[fieldTag="true"][locked="true"] {
+    background-color: transparent;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+}
+
+QLineEdit[fieldTagEditor="true"] {
+    border-color: #38bdf8;                          /* ACCENT */
+}
+
+/* READY / NOT READY / NEEDS DETAILS, and the live states. */
+QLabel[runnerStatus="true"],
+QLabel[statusIndicator="true"] {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border-radius: 11px;  /* geometric: half of the 23 px pill, rounded down */
+    padding: 4px 12px;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 12px;
+    font-weight: bold;
 }
 
 QLabel[statusState="READY"] {
-    background-color: rgba(52, 211, 153, 0.15);
+    background-color: rgba(52, 211, 153, 0.13);     /* SUCCESS @ 13% */
     color: #34d399;
 }
 
-QLabel[statusState="RUNNING"] {
-    background-color: rgba(56, 189, 248, 0.15);
+QLabel[statusState="RUNNING"],
+QLabel[statusState="INITIALIZING"] {
+    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
     color: #38bdf8;
 }
 
 QLabel[statusState="PAUSED"],
-QLabel[statusState="STOPPING"] {
-    background-color: rgba(251, 191, 36, 0.15);
+QLabel[statusState="STOPPING"],
+QLabel[statusState="NEEDS_DETAILS"] {
+    background-color: rgba(251, 191, 36, 0.13);     /* WARNING @ 13% */
     color: #fbbf24;
 }
 
 QLabel[statusState="ERROR"] {
-    background-color: rgba(248, 113, 113, 0.15);
+    background-color: rgba(248, 113, 113, 0.15);    /* ERROR @ 15% */
     color: #f87171;
 }
 
-QLabel[statusState="INITIALIZING"] {
-    background-color: rgba(167, 139, 250, 0.15);
-    color: #a78bfa;
+/* Device cards: name and type; the state badge keeps its per-state colour. */
+QWidget[deviceCard="true"] {
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: @RADIUS_LARGE@;
 }
 
-/* === Recording Indicator === */
+QLabel#deviceCardName {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+QLabel#deviceCardType {
+    color: #718096;                                 /* TEXT_MUTED */
+    font-size: 12px;
+}
+
+/* ============================================================================
+ * Experiment page: section chips across the top.
+ * ========================================================================= */
+
+QToolButton#experimentChip {
+    background-color: #111820;                      /* SURFACE_1 */
+    border: 1px solid #1e2530;                      /* BORDER */
+    border-radius: 22px;  /* geometric: half of the 44 px chip */
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
+    font-size: 13px;
+    padding: 0 8px;
+    min-height: 42px;
+}
+
+QToolButton#experimentChip:checked {
+    background-color: rgba(56, 189, 248, 0.12);     /* ACCENT @ 12% */
+    border-color: rgba(56, 189, 248, 0.50);
+    color: #38bdf8;                                 /* ACCENT */
+}
+
+/* A form label is as tall as the 44 px field beside it, so its text sits on
+ * the field's centre line rather than at its top edge. */
+QWidget#experimentSection QGroupBox > QLabel {
+    min-height: 44px;
+}
+
+/* ============================================================================
+ * Shared roles
+ * ========================================================================= */
+
+QLabel[textRole="muted"] { color: #718096; font-size: 13px; }
+QLabel[textRole="section"] { color: #718096; font-size: 12px; font-weight: bold; }
+QLabel[textRole="secondary"] { color: #94a3b8; }
+QLabel[textRole="primary"] { color: #e2e8f0; }
+QLabel[textRole="disabled"] { color: #718096; }
+QLabel[textRole="warning"] { color: #fbbf24; font-size: 13px; }
+
+QLabel[inputValue="true"] {
+    background-color: #151c25;                      /* SURFACE_2 */
+    border-radius: @RADIUS_MEDIUM@;
+    color: #34d399;                                 /* SUCCESS */
+    padding: 4px 8px;
+}
+
 QLabel[recording="true"] {
-    background-color: rgba(248, 113, 113, 0.2);
+    background-color: rgba(248, 113, 113, 0.15);    /* ERROR @ 15% */
     color: #f87171;
     padding: 4px 12px;
     border-radius: @RADIUS_MEDIUM@;
@@ -624,184 +997,50 @@ QLabel[recording="true"] {
     font-weight: bold;
 }
 
-/* === Runner Control Buttons === */
-QPushButton[runnerAction="start"] {
-    background-color: #34d399;
-    color: #e2e8f0;
-    font-size: 20px;
-    font-weight: bold;
-    border-radius: @RADIUS_LARGE@;
-    border: none;
-}
-
-QPushButton[runnerAction="start"]:pressed {
-    background-color: #22a57a;
-}
-
-QPushButton[runnerAction="stop"] {
-    background-color: #718096;
-    color: #e2e8f0;
-    font-size: 20px;
-    font-weight: bold;
-    border-radius: @RADIUS_LARGE@;
-    border: none;
-}
-
-QPushButton[runnerAction="stop"]:pressed {
-    background-color: #5a6878;
-}
-
-QPushButton[runnerAction="start"]:disabled,
-QPushButton[runnerAction="stop"]:disabled {
-    background-color: #2d3748;
-    color: #718096;
-}
-
-QPushButton[runnerAction="emergency"] {
-    background-color: rgba(248, 113, 113, 0.2);
-    color: #f87171;
-    font-size: 18px;
-    font-weight: bold;
-    border-radius: @RADIUS_LARGE@;
-    border: 2px solid #f87171;
-}
-
-QPushButton[runnerAction="emergency"]:pressed {
-    background-color: rgba(248, 113, 113, 0.35);
-}
-
-/* === Runner View === */
-QWidget[runnerHeader="true"] {
-    background-color: #0b0f14;
-    border-radius: @RADIUS_LARGE@;
-}
-
-/* === Persistent Run Banner (shown across Runner pages during a live run) === */
-QWidget[runnerRunBanner="true"] {
-    background-color: #0b0f14;
-    border-top: 1px solid #1e2530;
-    border-bottom: 1px solid #1e2530;
-}
-
-QWidget[runnerRunBanner="true"] QLabel[timer="true"] {
-    color: #34d399;
-}
-
-/* === Readiness Strip (Dashboard) === */
-QWidget[readinessStrip="true"] {
-    background-color: transparent;
-}
-
-/* Blocked gate: tall, amber, tappable — the row demands attention. */
-QPushButton[readinessRow="blocked"] {
-    background-color: #fbbf24;
-    color: #1a1400;
-    font-size: 15px;
-    font-weight: bold;
-    min-height: 60px;
-    border-radius: @RADIUS_MEDIUM@;
-    border: none;
-    text-align: left;
-    padding-left: 16px;
-}
-
-QPushButton[readinessRow="blocked"]:pressed {
-    background-color: #e0a91a;
-}
-
-/* Satisfied gate: slim green confirmation — no longer needs a tap. */
-QPushButton[readinessRow="ok"] {
-    background-color: rgba(52, 211, 153, 0.12);
-    color: #34d399;
-    font-size: 13px;
-    font-weight: bold;
-    min-height: 32px;
-    max-height: 32px;
-    border-radius: @RADIUS_MEDIUM@;
-    border: 1px solid rgba(52, 211, 153, 0.3);
-    text-align: left;
-    padding-left: 16px;
-}
-
-QPushButton[readinessRow="ok"]:pressed {
-    background-color: rgba(52, 211, 153, 0.2);
-}
-
-QWidget[runnerControls="true"] {
-    background-color: #0b0f14;
-    border-radius: @RADIUS_LARGE@;
-}
-
-/* === Dynamic Property Selectors (touch sizes: +2px from desktop) === */
-
-/* Text roles */
-QLabel[textRole="muted"] { color: #718096; font-size: 13px; }
-QLabel[textRole="section"] { color: #718096; font-size: 12px; font-weight: bold; }
-QLabel[textRole="secondary"] { color: #94a3b8; }
-QLabel[textRole="disabled"] { color: #475569; }
-QLabel[textRole="primary"] { color: #e2e8f0; }
-
-/* Button roles */
-QPushButton[buttonRole="secondary"] { background-color: #1e2530; color: #94a3b8; }
-QPushButton[buttonRole="secondary"]:hover { background-color: #2a3440; }
-QPushButton[buttonRole="danger"] { background-color: rgba(248, 113, 113, 0.15); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.3); }
-
-/* Input value display */
-QLabel[inputValue="true"] { background-color: #151c25; border-radius: @RADIUS_MEDIUM@; color: #34d399; padding: 4px 8px; }
-
-/* Properties panel section headers */
+/* Properties panel section headers and dividers */
 QLabel[class="props-section-header"] {
-    color: #718096;
+    color: #718096;                                 /* TEXT_MUTED */
     font-size: 12px;
     font-weight: bold;
     padding-top: 4px;
     padding-bottom: 2px;
 }
 
-/* Properties panel dividers */
 QFrame[class="props-divider"] {
-    color: #1e2530;
+    color: #1e2530;                                 /* BORDER */
     margin-top: 4px;
     margin-bottom: 4px;
 }
 
-/* Device card */
-QWidget[deviceCard="true"] { background-color: #0f1419; border: 2px solid #1e2530; border-radius: @RADIUS_LARGE@; }
+/* The Control tab's status strip: a persistent notice, a glyph and a tint per
+ * level so it never relies on colour alone. */
+QLabel#runnerStatusStrip {
+    padding: 10px 14px;
+    border-radius: @RADIUS_MEDIUM@;
+    font-size: 14px;
+    font-weight: 600;
+    color: #e2e8f0;
+    background-color: #151c25;                      /* SURFACE_2 */
+}
 
-/* Status indicator (dynamic property version) */
-QLabel[statusIndicator="true"] { color: #e2e8f0; padding: 4px 12px; border-radius: @RADIUS_MEDIUM@; font-weight: bold; margin: 2px; }
+QLabel#runnerStatusStrip[level="error"] {
+    background-color: rgba(248, 113, 113, 0.15);
+    color: #f87171;                                 /* ERROR */
+}
+
+QLabel#runnerStatusStrip[level="warn"] {
+    background-color: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;                                 /* WARNING */
+}
+
+QLabel#runnerStatusStrip[level="info"] {
+    background-color: rgba(56, 189, 248, 0.12);
+    color: #38bdf8;                                 /* ACCENT */
+}
 
 /* Drag-and-drop target: the camera panel accepts pose models, behavior
-   models and videos, routed by type. The accent border is the only
-   feedback that a drop will land somewhere. */
+ * models and videos. The accent border is the only feedback that a drop will
+ * land somewhere. */
 CameraPanel[dropActive="true"] {
     border: 2px dashed #38bdf8;
-}
-
-/* ============================================================================
- * Top-level navigation on the Pi.
- *
- * The tab bar exists in runner mode too -- the operator does occasionally need
- * the Experiment tab to pick a subject -- but 480px is not a desktop, so the
- * tabs get touch-sized targets and nothing else from the desktop sheet.
- * ========================================================================= */
-
-QFrame#shellTabBar {
-    background-color: #0b0f14;                      /* CHROME */
-}
-
-QToolButton#shellTab {
-    background-color: transparent;
-    border: 1px solid transparent;
-    border-radius: @RADIUS_SMALL@;
-    color: #94a3b8;                                 /* TEXT_TERTIARY */
-    font-size: 15px;
-    font-weight: 500;
-    padding: 9px 16px;
-}
-
-QToolButton#shellTab:checked {
-    background-color: rgba(56, 189, 248, 0.13);     /* ACCENT @ 13% */
-    border-color: rgba(56, 189, 248, 0.40);
-    color: #38bdf8;                                 /* ACCENT */
 }

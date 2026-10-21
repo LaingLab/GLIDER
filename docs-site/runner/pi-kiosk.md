@@ -75,8 +75,8 @@ easier.
   The `--runner` flag forces the [touchscreen layout](runner.md) regardless of
   the detected screen size.
 - If GLIDER **crashes**, systemd restarts it after a few seconds. If GLIDER
-  **exits cleanly** (you quit it on purpose), systemd leaves it closed rather
-  than fighting you.
+  **exits cleanly** (you quit it on purpose, for example with **⚙ › Exit** on
+  the touchscreen), systemd leaves it closed rather than fighting you.
 - All of GLIDER's log output goes to the system journal.
 
 ### Handy commands

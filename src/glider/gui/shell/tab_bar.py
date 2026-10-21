@@ -22,6 +22,11 @@ as a rendering bug, because it is not obvious there is anything over there.
 Status belongs on :class:`~glider.gui.shell.status_strip.StatusStrip`, one row
 below, which is built to carry it.
 
+**Touch mode** (:meth:`ShellTabBar.set_touch_mode`, off by default) is the Pi's
+version of the row: no Analyze tab, and the other three share the full width
+instead of huddling in the middle. It is reversible, and ``False`` restores the
+centred desktop row.
+
 **No colour is set from Python here**, following the rest of ``shell/``: every
 part carries an ``objectName`` and ``desktop.qss`` owns the appearance.
 """
@@ -33,6 +38,7 @@ from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
     QHBoxLayout,
+    QSizePolicy,
     QToolButton,
     QWidget,
 )
@@ -86,6 +92,7 @@ class ShellTabBar(QFrame):
         self.setMinimumHeight(TAB_BAR_HEIGHT)
 
         row = QHBoxLayout(self)
+        self._row = row
         row.setContentsMargins(8, 0, 8, 0)
         row.setSpacing(4)
         row.addStretch(1)
@@ -110,8 +117,35 @@ class ShellTabBar(QFrame):
             self._buttons[key] = button
 
         row.addStretch(1)
+        self._desktop_policy = self._buttons[TAB_KEYS[0]].sizePolicy()
+        # Ignored, not Expanding: the stretch alone sets the width, so the
+        # three tabs split the row evenly whatever the platform's font makes
+        # of each label (Expanding still floors each tab at its text width).
+        self._touch_policy = QSizePolicy(
+            QSizePolicy.Policy.Ignored, self._desktop_policy.verticalPolicy()
+        )
         self._buttons[TAB_KEYS[0]].setChecked(True)
         self._current = TAB_KEYS[0]
+
+    # ------------------------------------------------------------ touch mode
+
+    def set_touch_mode(self, enabled: bool) -> None:
+        """Drop Analyze and stretch the other tabs across the row, or undo it.
+
+        The two end stretches go to zero and the tabs take stretch one, so the
+        tabs are the only thing that can take the width (a zero-stretch spacer
+        still expands, and would otherwise claim a share of it); an Ignored
+        width and equal stretch make the shares equal.
+        """
+        for key, button in self._buttons.items():
+            if key == "analyze":
+                button.setVisible(not enabled)
+            else:
+                button.setSizePolicy(self._touch_policy if enabled else self._desktop_policy)
+        spacer, tab = (0, 1) if enabled else (1, 0)
+        last = self._row.count() - 1
+        for index in range(last + 1):
+            self._row.setStretch(index, spacer if index in (0, last) else tab)
 
     # ------------------------------------------------------------- selection
 

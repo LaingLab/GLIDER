@@ -59,15 +59,15 @@ behavior rig.
 - **Tracking & behavior analysis.** With optional extras, GLIDER runs pose
   tracking on your video and helps you cluster and classify behavior.
 - **Touchscreen Runner.** Flip into a large-button kiosk mode for running
-  experiments at the bench, with manual device controls and one-tap function
-  buttons.
+  experiments at the bench, with a view-only graph, manual device controls, and
+  one-tap function buttons.
 
 ## Two ways to use it
 
 | | Desktop mode | Runner mode |
 |---|---|---|
 | **Best for** | Designing experiments | Running them at the bench |
-| **Interface** | Full node-graph editor, two collapsible side panels, a command palette | Four big touch tabs: Setup, Run, Manual, Camera |
+| **Interface** | Full node-graph editor, two collapsible side panels, a command palette | Three big touch tabs: Experiment, Dashboard, Run |
 | **Typical device** | Laptop / workstation | Touchscreen or Raspberry Pi kiosk |
 
 You design an experiment once in desktop mode, save it as a `.glider` file, and

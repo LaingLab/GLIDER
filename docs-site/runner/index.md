@@ -1,9 +1,10 @@
 # Runner Mode
 
 Runner mode is GLIDER's touchscreen "kiosk" layout for running experiments at
-the bench. It replaces the full desktop editor with four large, finger-friendly
-tabs so an operator can load an experiment, drive hardware by hand, and start a
-recorded run without a keyboard or mouse.
+the bench. It replaces the full desktop editor with a compact header and three
+finger-friendly tabs — **Experiment**, **Dashboard**, and **Run** — so an
+operator can load an experiment, look it over, drive hardware by hand, and start
+a recorded run without a keyboard or mouse.
 
 Runner mode is designed for a small touchscreen — typically a Raspberry Pi with
 the official 480×800 display — but it runs on any machine. GLIDER picks the
@@ -12,14 +13,14 @@ command-line flag.
 
 <figure markdown="span">
   ![The Runner touchscreen layout with large tap targets](../assets/screenshots/runner.png)
-  <figcaption>Runner mode: large, finger-friendly controls and a four-tab bottom bar, built for a bench touchscreen.</figcaption>
+  <figcaption>Runner mode: large, finger-friendly controls under a header with a ⚙ menu and three tabs, built for a bench touchscreen.</figcaption>
 </figure>
 
 ## In this section
 
-- **[The Runner Screen](runner.md)** — the four tabs (Setup, Run, Manual,
-  Camera), the run banner, the auto-generated manual device controls, the
-  Functions buttons, and how to run an experiment from the touchscreen.
+- **[The Runner Screen](runner.md)** — the header and ⚙ menu, the Experiment,
+  Dashboard (graph, panels, manual device controls, Functions), and Run tabs,
+  and how to run an experiment from the touchscreen.
 - **[Raspberry Pi Kiosk](pi-kiosk.md)** — the prebuilt Raspberry Pi SD-card
   image, the systemd service that auto-launches GLIDER in Runner mode on boot,
   and the update script that moves a kiosk to a newer release.
@@ -45,9 +46,10 @@ glider --builder    # Force Desktop (Builder / editor) mode
 
 !!! note "One mode per launch"
     GLIDER runs in a single mode for the life of the process. You can switch
-    from Runner to Desktop while it is running (**⚙ → Switch to Desktop** on the
-    Setup tab), but you cannot switch back to Runner without restarting the app.
-    On a dedicated Pi kiosk you normally never leave Runner mode.
+    from Runner to Desktop while it is running (**⚙ › Switch to Desktop**; it is
+    refused while a run is live), but you cannot switch back to Runner without
+    restarting the app. On a dedicated Pi kiosk you normally never leave Runner
+    mode.
 
 ## Where to start
 

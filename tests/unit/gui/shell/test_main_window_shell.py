@@ -314,7 +314,7 @@ def test_camera_returns_to_the_builder_from_runner_mode(qtbot, main_window_facto
     assert _is_descendant(camera, window._builder_view.right)
 
     window.switch_to_runner()
-    assert _is_descendant(camera, window._runner_shell)
+    assert _is_descendant(camera, window._pi_run_page.camera_slot)
 
     window._switch_to_desktop_mode()  # repeat: panels exist, camera must still move
     assert _is_descendant(camera, window._builder_view.right)
