@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QStackedWidget,
+    QStatusBar,
     QVBoxLayout,
     QWidget,
 )
@@ -1934,16 +1935,16 @@ class CameraPanel(QWidget):
             style.polish(self)
 
     def _show_status(self, message: str) -> None:
-        """Surface a short message; falls back to the log when there's no bar."""
-        window = self.window()
-        bar = getattr(window, "statusBar", None)
-        if callable(bar):
-            try:
-                bar().showMessage(message, 5000)
-                return
-            except Exception:
-                pass
-        logger.info("%s", message)
+        """Surface a short message; falls back to the log when there's no bar.
+
+        Looks the bar up rather than calling ``QMainWindow.statusBar()``, which
+        would create one on a window built without it (the Pi's).
+        """
+        bar = self.window().findChild(QStatusBar, options=Qt.FindChildOption.FindDirectChildrenOnly)
+        if bar is None:
+            logger.info("%s", message)
+            return
+        bar.showMessage(message, 5000)
 
     def _parse_keypoint_names(self) -> list[str]:
         """Split the keypoint-names field into a trimmed, non-empty name list."""

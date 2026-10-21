@@ -78,12 +78,15 @@ from glider.vision.zones import ZoneConfiguration
 
 if TYPE_CHECKING:
     from glider.core.glider_core import GliderCore
+    from glider.gui.runner.run_page import PiRunPage
 
 logger = logging.getLogger(__name__)
 
 _LIVE_STATES = ("RUNNING", "PAUSED")
 # States during which the current run's folder is still the one in use.
 _RUN_FOLDER_STATES = ("RUNNING", "PAUSED", "STOPPING")
+# On the Pi these hold the graph locked, and make the header pill a way to Run.
+_PI_LOCKED_STATES = ("RUNNING", "PAUSED", "INITIALIZING", "STOPPING")
 
 # QSettings flag, namespaced alongside the existing first_run/* keys and kept
 # separate from ``first_run/tour_complete``: one shared flag would mean sitting
@@ -457,8 +460,10 @@ class MainWindow(QMainWindow):
         self._pi_header: QWidget | None = None
         self._gear_button: QToolButton | None = None
         self._notice_bar: NoticeBar | None = None
-        # Runner mode only: stack page 0, the graph over the Builder's panels as
-        # tabs. Switch to Desktop takes those widgets back into _builder_view.
+        # Built in runner mode only: stack page 0, the graph over the Builder's
+        # panels as tabs. Switch to Desktop takes those widgets back into
+        # _builder_view and drops this off the stack, but the attribute stays
+        # set -- test is_runner_mode, not this, for "on the Pi".
         self._pi_dashboard: PiDashboard | None = None
         # The editor behind the Metadata and Mice sections, and the two pages
         # it was split into. Both are rebuilt per session; see
@@ -535,12 +540,14 @@ class MainWindow(QMainWindow):
         self._plugins_task = None  # asyncio.Task for the open in progress
 
         # Operator (non-Builder) view. Exactly ONE of these is built, chosen by
-        # startup mode: the 4-tab RunnerShell in runner mode (Pi touchscreen),
-        # the camera-cockpit DashboardView in desktop mode. The other stays None, so every
-        # site that touches a mode-specific widget must guard on it.
+        # startup mode: the Pi Run page in runner mode (Pi touchscreen), the
+        # camera-cockpit DashboardView in desktop mode. The other stays None, so
+        # every site that touches a mode-specific widget must guard on it. The
+        # Pi page stays page 1 after Switch to Desktop.
         self._dashboard_view = None  # DashboardView (desktop mode)
-        self._run_control_panel = None  # RunControlPanel (dashboard)
-        self._run_header = None  # RunHeader (dashboard)
+        self._pi_run_page: PiRunPage | None = None  # runner mode
+        self._run_control_panel = None  # RunControlPanel (either view)
+        self._run_header = None  # RunHeader (either view)
         # The current run's numbered folder, shown while it records (preset runs).
         self._live_run_folder: Path | None = None
         # A run went live since the last reset; READY/IDLE then resets run values.
@@ -548,9 +555,6 @@ class MainWindow(QMainWindow):
         # Rehearse is starting the experiment / started the one now running.
         self._rehearsal_starting = False
         self._rehearsal_started_run = False
-        self._runner_shell = None  # RunnerShell (runner mode)
-        self._runner_panel = None  # RunnerPanel — Run tab (runner mode)
-        self._runner_setup_page = None  # RunnerSetupPage — Setup tab (runner mode)
 
         # Experiment dialog
         self._experiment_dialog: ExperimentDialog | None = None
@@ -681,9 +685,9 @@ class MainWindow(QMainWindow):
             # the stack, for Switch to Desktop.
             self._pi_dashboard = self._build_pi_dashboard()
         self._stack.addWidget(self._pi_dashboard or self._builder_view)  # Index 0 -- PAGE_BUILDER
-        # Index 1 is the operator view: RunnerShell (runner) or DashboardView
+        # Index 1 is the operator view: the Pi Run page (runner) or DashboardView
         # (desktop). _create_runner_view built exactly one of them.
-        self._operator_view = self._runner_shell or self._dashboard_view
+        self._operator_view = self._pi_run_page or self._dashboard_view
         self._stack.addWidget(self._operator_view)  # Index 1 -- PAGE_OPERATOR
 
         self._create_experiment_page()
@@ -1315,13 +1319,13 @@ class MainWindow(QMainWindow):
     def _create_runner_view(self) -> None:
         """Build the operator (non-Builder) view for the detected mode.
 
-        Runner mode (Pi touchscreen) gets the 4-tab RunnerShell — one full-width
-        page at a time, which fits the 480px screen. Desktop mode gets the
-        camera-first DashboardView. Exactly one is built, so the panels they share
-        (CameraPanel, RunnerDeviceControls, HardwarePanel) are never double-owned.
+        Runner mode (Pi touchscreen) gets the Pi Run page, which fits the 480px
+        screen. Desktop mode gets the camera-first DashboardView. Exactly one is
+        built, so the panels they share (CameraPanel, RunnerDeviceControls,
+        HardwarePanel) are never double-owned.
         """
         if self._view_manager.is_runner_mode:
-            self._create_runner_shell_view()
+            self._create_pi_run_view()
         else:
             self._create_dashboard_view()
 
@@ -1432,23 +1436,32 @@ class MainWindow(QMainWindow):
         self._health_timer.timeout.connect(self._refresh_run_health)
         self._health_timer.start()
 
-    def _create_runner_shell_view(self) -> None:
-        """Create the Pi 4-tab RunnerShell view (Setup / Run / Manual / Camera).
+    def _create_pi_run_view(self) -> None:
+        """Create the Pi Run page, and the panels the Pi dashboard hosts.
 
-        One full-width page at a time behind a bottom tab bar, so it fits the
-        480px touchscreen. Builds the shared HardwarePanel, CameraPanel and
-        RunnerDeviceControls; the Pi dashboard hosts them, and Switch to Desktop
-        re-hosts the first two in the desktop frame (no duplicates).
+        The page is stack page 1. Its header and run box stand in for the
+        desktop ones (``_run_header``, ``_run_control_panel``) and its camera
+        slot for the desktop camera stage, so the session, run-info and camera
+        wiring the desktop uses applies unchanged. Also builds the shared
+        HardwarePanel, CameraPanel and RunnerDeviceControls; the Pi dashboard
+        hosts them, and Switch to Desktop re-hosts the first two in the desktop
+        frame (no duplicates).
         """
-        from glider.gui.panels.runner_panel import RunnerPanel
         from glider.gui.runner.device_controls import RunnerDeviceControls
-        from glider.gui.runner.runner_setup_page import RunnerSetupPage
-        from glider.gui.runner.runner_shell import RunnerShell
+        from glider.gui.runner.run_page import PiRunPage
 
         # --- Run page ---
-        self._runner_panel = RunnerPanel(self._core, self._view_manager)
-        self._runner_panel.start_requested.connect(self._on_start_clicked)
-        self._runner_panel.stop_requested.connect(self._on_stop_clicked)
+        page = self._pi_run_page = PiRunPage(self._core)
+        page.start_requested.connect(self._on_start_clicked)
+        page.stop_requested.connect(self._on_stop_clicked)
+        page.pause_requested.connect(self._on_pause_clicked)
+        page.resume_requested.connect(self._on_resume_clicked)
+        page.header.run_values_changed.connect(self._refresh_run_info)
+        page.control.elapsed_updated.connect(self._on_pi_elapsed)
+        self._run_header = page.header
+        self._run_control_panel = page.control
+        self._camera_slot = page.camera_slot
+        self._status_strip.pill_clicked.connect(self._on_pi_pill_clicked)
 
         # --- Shared Hardware panel (the Pi dashboard's Hardware tab). Its
         # +Board/+Device row follows the graph lock; see _apply_pi_lock.
@@ -1460,10 +1473,12 @@ class MainWindow(QMainWindow):
         )
         self._hardware_panel.status_message.connect(self._show_status_message)
 
-        # --- Shared Camera panel (the single reparented CameraPanel) ---
+        # --- Shared Camera panel (the single reparented CameraPanel), parked
+        # video-only in the Run page's slot until the Dashboard tab takes it.
         self._camera_panel = self._build_camera_panel()
+        self._move_camera_to_operator_view()
 
-        # --- Manual page ---
+        # --- Manual controls (the Pi dashboard's Control tab) ---
         self._runner_device_controls = RunnerDeviceControls(
             self._core.hardware_manager, session_fn=lambda: self._core.session
         )
@@ -1487,41 +1502,32 @@ class MainWindow(QMainWindow):
         # two overlapping runs would corrupt each other's saved state.
         self._manual_run_busy = False
 
-        # --- Setup page ---
-        self._runner_setup_page = RunnerSetupPage(self._core, hardware_widget=self._hardware_panel)
-
-        # --- Shell (owns the bottom tab bar + run banner). The manual controls
-        # live on the Pi dashboard's Control tab, so Manual is a placeholder that
-        # keeps the shell's page indices (Camera is 3) where it expects them.
-        self._runner_shell = RunnerShell(
-            self._core,
-            self._runner_setup_page,
-            self._runner_panel,
-            QWidget(),
-            self._camera_panel,
-        )
-        self._runner_panel.elapsed_updated.connect(self._runner_shell.set_banner_time)
-        self._runner_shell.stop_requested.connect(self._on_stop_clicked)
-
-        # Setup page file-action wiring (without these the buttons are dead).
-        self._runner_setup_page.new_requested.connect(self._on_new)
-        self._runner_setup_page.open_requested.connect(self._on_open)
-        self._runner_setup_page.save_requested.connect(self._on_save)
-        self._runner_setup_page.save_as_requested.connect(self._on_save_as)
-        self._runner_setup_page.help_requested.connect(self._on_help)
-        self._runner_setup_page.close_requested.connect(self.close)
-        self._runner_setup_page.switch_to_desktop_requested.connect(self._switch_to_desktop_mode)
-        self._runner_setup_page.board_settings_requested.connect(
-            self._hardware_panel.show_board_settings_dialog
-        )
-
         # Hardware-change fan-out (owned here since the runner-mode Hardware
-        # Panel is constructed here; _setup_dock_widgets reuses this instance
-        # and must NOT re-wire these, to avoid double-firing).
-        self._hardware_panel.hardware_changed.connect(self._runner_panel.refresh_devices)
-        self._hardware_panel.hardware_changed.connect(self._runner_setup_page.refresh)
+        # Panel is constructed here; _build_builder_panels reuses this instance
+        # and adds only the strip readouts, so nothing fires twice).
+        self._hardware_panel.hardware_changed.connect(page.devices.refresh_devices)
         self._hardware_panel.hardware_changed.connect(self._runner_device_controls.refresh)
         self._hardware_panel.refresh_tree()
+
+    def _on_pi_elapsed(self, text: str) -> None:
+        """Put the run clock's mm:ss on the header pill while a run is going.
+
+        The pill keeps the state ``_refresh_strip_run_state`` gave it (REC when
+        recording); it is restyled only when the minutes or seconds change.
+        """
+        state = getattr(self, "_last_session_state", None)
+        if not self._view_manager.is_runner_mode or state != "RUNNING":
+            return
+        strip = self._status_strip
+        detail = text.rsplit(".", 1)[0]
+        if detail != strip.run_detail():
+            strip.set_run_state(strip.run_state(), detail)
+
+    def _on_pi_pill_clicked(self) -> None:
+        """A tap on the header pill mid-run goes back to the Run page."""
+        state = getattr(self, "_last_session_state", None)
+        if self._view_manager.is_runner_mode and state in _PI_LOCKED_STATES:
+            self._enter_dashboard()
 
     def _build_camera_panel(self) -> CameraPanel:
         """Construct and fully configure a CameraPanel.
@@ -1560,19 +1566,15 @@ class MainWindow(QMainWindow):
     def _move_camera_to_operator_view(self) -> None:
         """Host the single CameraPanel in the active operator view.
 
-        Desktop mode has a dashboard camera slot; runner mode has the
-        RunnerShell's Camera tab. Only one exists, so this targets whichever is
-        built — used on entry to the operator view (including after a
-        desktop->operator switch that had moved the camera into the dock).
+        ``_camera_slot`` is the desktop dashboard's camera stage or the Pi Run
+        page's camera slot, whichever was built -- used on entry to the
+        operator view (including after a desktop->operator switch that had
+        moved the camera into the Builder).
         """
-        if self._camera_panel is None:
+        if self._camera_panel is None or self._camera_slot is None:
             return
-        if self._camera_slot is not None:
-            self._camera_slot.layout().addWidget(self._camera_panel)  # dashboard slot
-            self._camera_panel.set_controls_visible(False)  # the cockpit shows video only
-        elif self._runner_shell is not None:
-            self._camera_panel.set_controls_visible(True)
-            self._runner_shell.rehost_camera()  # RunnerShell Camera tab
+        self._camera_slot.layout().addWidget(self._camera_panel)
+        self._camera_panel.set_controls_visible(False)  # the operator view shows video only
 
     def _move_camera_to_builder(self) -> None:
         """Host the single CameraPanel in the Builder's Camera tab slot.
@@ -2551,14 +2553,12 @@ class MainWindow(QMainWindow):
         # so without this the readouts would keep describing the previous
         # experiment's boards -- green -- over an empty manager.
         self.session_changed.connect(self._refresh_hardware_readouts)
-        # Dashboard-only panels (desktop mode).
+        # The operator view's header and run box (the desktop dashboard's, or
+        # the Pi Run page's).
         if self._run_control_panel is not None:
             self.session_changed.connect(self._run_header.refresh)
             self.session_changed.connect(self._refresh_run_info)
             self.session_changed.connect(self._run_control_panel.refresh)
-        # Runner-only Setup page (runner mode).
-        if self._runner_setup_page is not None:
-            self.session_changed.connect(self._runner_setup_page.refresh)
 
         # Backstop for a bleak disconnect callback that never fires (spec §5).
         # __init__ runs before qasync starts the loop, so this no-ops here;
@@ -2604,11 +2604,21 @@ class MainWindow(QMainWindow):
             self._dashboard_view.update_state(
                 state_name, recording=bool(self._core.data_recorder.is_recording)
             )
-        if self._runner_shell is not None:
-            self._runner_shell.update_state(state_name)
-        if self._pi_dashboard is not None:
-            # The manual controls sit on the Pi dashboard, not in RunnerShell.
+        if self._pi_run_page is not None:
+            # Still page 1 after Switch to Desktop, so not gated on the mode.
+            self._pi_run_page.update_state(state_name)
+            self._pi_run_page.set_camera_visible(self._core.camera_manager.is_streaming)
+        if self._view_manager.is_runner_mode:
+            # The manual controls sit on the Pi dashboard's Control tab.
             self._runner_device_controls.update_state(state_name)
+            # A run holds the graph locked; it stays locked after, but the
+            # toggle is free again.
+            graph = self._graph_view
+            if state_name in _PI_LOCKED_STATES:
+                graph.set_locked(True)
+                graph.set_lock_enabled(False)
+            else:
+                graph.set_lock_enabled(True)
 
         self._refresh_strip_run_state(state_name)
 
@@ -2957,6 +2967,9 @@ class MainWindow(QMainWindow):
         toggle and programmatic switches."""
         self._stack.setCurrentIndex(PAGE_OPERATOR)
         self._move_camera_to_operator_view()
+        if self._pi_run_page is not None:
+            # No empty camera box: the slot shows only while a stream runs.
+            self._pi_run_page.set_camera_visible(self._core.camera_manager.is_streaming)
         # Everything the Builder shows is inside the stack page that just went
         # away -- except the Analysis dock, which is a dock on the window and so
         # is painted over the operator view exactly as the Builder docks used to
@@ -3071,6 +3084,8 @@ class MainWindow(QMainWindow):
         dashboard = self._pi_dashboard
         if dashboard is not None and self._stack.widget(PAGE_BUILDER) is dashboard:
             graph = self._graph_view
+            # Off the stack, the dashboard must not follow selections any more.
+            graph.node_selected.disconnect(dashboard._on_node_selected)
             graph.set_locked(False)
             graph.set_touch_mode(False)
             self._builder_view.set_centre(graph)
