@@ -7,6 +7,7 @@ are elsewhere, and the camera box only appears when a stream is running.
 
 from __future__ import annotations
 
+import pytest
 from PyQt6.QtCore import QPoint
 from PyQt6.QtWidgets import QStatusBar
 
@@ -42,14 +43,34 @@ def test_run_page_is_the_runs_header_and_controls(qtbot, main_window_factory):
     assert w._camera_slot is page.camera_slot
 
 
-def test_a_run_forces_the_lock_and_frees_the_toggle_after(qtbot, main_window_factory):
+@pytest.mark.parametrize("live", ["RUNNING", "PAUSED", "INITIALIZING", "STOPPING"])
+def test_a_run_forces_the_lock_and_frees_the_toggle_after(qtbot, main_window_factory, live):
     w = _pi(qtbot, main_window_factory)
     g = w._graph_view
     g.set_locked(False)
-    w._on_core_state_change(_state("RUNNING"))
+    w._on_core_state_change(_state(live))
     assert g.is_locked() and not g._overlay.lock_btn.isEnabled()
     w._on_core_state_change(_state("READY"))
     assert g.is_locked() and g._overlay.lock_btn.isEnabled()
+
+
+def test_pause_and_resume_reach_the_core(qtbot, main_window_factory, monkeypatch):
+    w = _pi(qtbot, main_window_factory)
+    sent = []
+    monkeypatch.setattr(w, "_run_async", sent.append)
+    monkeypatch.setattr(w._core, "pause_experiment", lambda: "pause")
+    monkeypatch.setattr(w._core, "resume_experiment", lambda: "resume")
+    w._pi_run_page.control.pause_requested.emit()
+    w._pi_run_page.control.resume_requested.emit()
+    assert sent == ["pause", "resume"]
+
+
+def test_editing_a_run_value_refreshes_the_run_info(qtbot, main_window_factory, monkeypatch):
+    w = _pi(qtbot, main_window_factory)
+    seen = []
+    monkeypatch.setattr(w._run_header, "set_run_info", lambda *args: seen.append(args))
+    w._pi_run_page.header.run_values_changed.emit()
+    assert seen
 
 
 def test_run_state_reaches_the_page_and_the_manual_controls(qtbot, main_window_factory):
