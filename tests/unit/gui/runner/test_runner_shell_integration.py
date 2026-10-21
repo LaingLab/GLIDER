@@ -1,10 +1,9 @@
 """Integration test: RunnerShell wired into MainWindow.
 
 Builds a real GliderCore + MainWindow in runner mode to verify the
-single-tab Runner shell boots on Setup and that switching to desktop mode
-reuses (rather than duplicates) the shared HardwarePanel/CameraPanel
-instances built by ``_create_runner_view`` -- re-hosting them into the
-Builder shell's side panels rather than building a second pair.
+single-tab Runner shell boots on Setup. The desktop-switch reuse of the shared
+HardwarePanel/CameraPanel, and the manual controls' home, are covered in
+``test_pi_dashboard_window.py`` now that the Pi dashboard hosts them.
 
 CameraPanel starts a CV QThread in its constructor and only stops it from
 ``closeEvent``/``destroyed``. Since it is now nested inside RunnerShell's
@@ -54,27 +53,5 @@ def test_boots_on_setup_tab(qtbot):
     w, core, loop = _runner_window(qtbot)
     try:
         assert w._runner_shell._stack.currentIndex() == 0
-    finally:
-        _teardown(core, loop)
-
-
-def test_desktop_switch_no_duplicate_hardware_panel(qtbot):
-    w, core, loop = _runner_window(qtbot)
-    try:
-        hp_id = id(w._hardware_panel)
-        cam_id = id(w._camera_panel)
-        w._switch_to_desktop_mode()
-        assert id(w._hardware_panel) == hp_id
-        assert w._builder_view.left.widget_for("hardware") is w._hardware_panel
-        assert id(w._camera_panel) == cam_id
-        assert w._camera_panel.parent() is w._camera_tab_slot
-    finally:
-        _teardown(core, loop)
-
-
-def test_manual_tab_is_device_controls(qtbot):
-    w, core, loop = _runner_window(qtbot)
-    try:
-        assert w._runner_shell._stack.widget(2) is w._runner_device_controls
     finally:
         _teardown(core, loop)

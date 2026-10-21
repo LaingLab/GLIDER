@@ -60,9 +60,10 @@ class HardwarePanel(QWidget):
             hardware_manager: HardwareManager instance
             session_fn: Callable that returns the current ExperimentSession (or None)
             run_async_fn: Callable to schedule async coroutines
-            show_add_buttons: Whether to show the "+ Board"/"+ Device" buttons.
-                The Runner (Pi) UI hides these since the hardware map cannot be
-                edited on-device; the desktop dock keeps the default of True.
+            show_add_buttons: Whether to build the "+ Board"/"+ Device" buttons.
+                Only the desktop Run page's hidden panel passes False; the Pi
+                builds them and hides them while the graph is locked (see
+                :meth:`set_editable`).
         """
         super().__init__(parent)
         self._hardware_manager = hardware_manager
@@ -89,8 +90,7 @@ class HardwarePanel(QWidget):
         self._hardware_tree.customContextMenuRequested.connect(self._on_hardware_context_menu)
         layout.addWidget(self._hardware_tree)
 
-        # Hardware buttons (hidden on the Runner/Pi UI, which cannot edit the
-        # hardware map on-device).
+        # Hardware buttons (hidden while not editable; see set_editable).
         if self._show_add_buttons:
             self._add_row = QWidget()
             hw_btn_layout = QHBoxLayout(self._add_row)
