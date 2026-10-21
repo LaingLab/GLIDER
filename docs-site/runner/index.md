@@ -46,7 +46,7 @@ glider --builder    # Force Desktop (Builder / editor) mode
 
 !!! note "One mode per launch"
     GLIDER runs in a single mode for the life of the process. You can switch
-    from Runner to Desktop while it is running (**⚙ → Switch to Desktop**; it is
+    from Runner to Desktop while it is running (**⚙ › Switch to Desktop**; it is
     refused while a run is live), but you cannot switch back to Runner without
     restarting the app. On a dedicated Pi kiosk you normally never leave Runner
     mode.

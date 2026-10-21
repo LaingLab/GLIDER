@@ -61,8 +61,9 @@ Open**, then confirm. You only need to do this once. See
 
 Runner mode is one-mode-per-process by design. To get back to the desktop
 editor, use **⚙ › Switch to Desktop** (it is refused while a run is live, so
-stop the run first), or relaunch without the `--runner` flag. On a Raspberry Pi kiosk you can log in as the `pi` user over
-SSH to recover. See [Raspberry Pi Kiosk](../runner/pi-kiosk.md).
+stop the run first), or relaunch without the `--runner` flag. On a Raspberry
+Pi kiosk you can log in as the `pi` user over SSH to recover. See
+[Raspberry Pi Kiosk](../runner/pi-kiosk.md).
 
 ## Still stuck?
 

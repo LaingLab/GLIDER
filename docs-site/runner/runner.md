@@ -14,16 +14,22 @@ experiment start to finish without a keyboard.
 
 The header is on every page, so you never lose the essentials. It has two rows.
 
-**Row one** carries, left to right:
+**Row one** carries, on the left:
 
-- The **experiment name**, with a small dot beside it while there is unsaved
-  work.
+- The **experiment name**, followed by an amber **— edited** while there is
+  unsaved work.
+- The **run-state pill**, just after the name. It is hidden while GLIDER is
+  idle and appears once a run is under way: **Running Starting** as it starts,
+  **Running 03:12** while a run is live, **Recording 12:41** when data is being
+  recorded, **Running Paused** while paused, **Running Stopping** as it stops,
+  and **Error** if the session errors. While a run is live (starting, running,
+  paused, or stopping), **tap the pill to jump to the Run tab** from any other
+  tab.
+
+and on the right:
+
 - **One dot per board**, labelled with the board's ID — green when the board
   is connected.
-- The **run-state pill**. It is hidden while GLIDER is idle and appears once a
-  run is under way: **Running 03:12** while a run is live, **Recording 12:41**
-  when data is being recorded, **Running Paused** while paused, and **Error**
-  if the session errors. **Tap the pill to jump to the Run tab** from anywhere.
 - The **⚙ menu** (below).
 
 **Row two** is the tabs: **Experiment**, **Dashboard**, **Run**. There is no
@@ -40,7 +46,7 @@ The gear opens a menu with everything that used to be a button on a file page:
 | **Open…** | Load an existing experiment file. |
 | **Save** | Save the current experiment. |
 | **Save As…** | Save the current experiment under a new name. |
-| **Connect boards…** | Open the board/port settings to connect your hardware. |
+| **Connect boards…** | Open the board/port settings; when you close them, GLIDER connects every board (not while a run is live). |
 | **Help** | Opens the in-app help. |
 | **Switch to Desktop** | Opens the desktop editor (see [below](#switch-to-desktop)). |
 | **Exit** | Closes GLIDER. |
@@ -55,7 +61,14 @@ Warnings and errors appear in a bar just under the header — a board that lost
 its connection mid-run, a connection or start error, a New, Open, or Switch to
 Desktop that was refused because a run is live. The bar is deliberately sticky:
 a touchscreen operator never sees a small status-bar message that vanishes, so
-**a notice stays until you tap it**.
+**a notice stays until you tap it** — anywhere on the bar, or the **✕** at its
+right end.
+
+Each notice starts with a glyph for its level — **ⓘ** for information, **⚠** for
+a warning or a critical notice — and is tinted to match: blue, amber, or red.
+An information or warning notice takes one line; if it is longer than the bar,
+it ends in "…". A critical notice wraps onto a second line instead, so more of
+it is readable.
 
 A **critical** notice — the "UNSAFE STATE" warning after a run ends in an error,
 for example, which means a heater, relay, PWM output, valve, or motor may still
@@ -120,7 +133,7 @@ that. Tap it again to lock the graph.
 | --- | --- |
 | **Nodes** | The node library. **Tap a node to drop it in the middle of the graph.** Dragging one onto a precise spot needs a press-and-hold first. Both are refused while the graph is locked. |
 | **Properties** | The selected node's settings. **Tapping a node on the graph while editing opens this tab.** Read-only while the graph is locked. |
-| **Hardware** | Your boards and devices. **Connect boards…** at the top opens the board/port settings. While the graph is unlocked, **+ Board** and **+ Device** appear and boards and devices can be edited or removed; while it is locked those are off (connecting and disconnecting still work). For what the device types mean and how to wire them, see [Devices & Hardware](../building/devices.md). |
+| **Hardware** | Your boards and devices. **Connect boards…** at the top opens the board/port settings and then connects every board, the same as the ⚙ menu item. While the graph is unlocked, **+ Board** and **+ Device** appear and boards and devices can be edited or removed; while it is locked those are off (connecting and disconnecting still work). For what the device types mean and how to wire them, see [Devices & Hardware](../building/devices.md). |
 | **Camera** | The live camera view and recording controls. For how the camera, recording, and behavior tracking work, see [Camera & Recording](../camera-behavior/camera.md) and [Tracking](../camera-behavior/tracking.md). |
 | **Control** | Drive hardware by hand, and run your saved functions. See [below](#the-control-tab). |
 
@@ -206,10 +219,13 @@ bottom:
   filled in. (The fields come from the experiment file you opened; there is no
   preset picker on the Pi, so choose or edit presets on the desktop.) The
   details lock while a run is live.
-- **A status pill** at the right of the details: **NOT READY** (no board
-  connected, or no runnable flow), **NEEDS DETAILS** (a required field is
-  empty), or **READY**. While a run is live it shows the state instead —
-  **RUNNING**, **PAUSED**.
+- **A status pill** at the top right, above the details: **NOT READY** (no
+  board connected, or no runnable flow), **NEEDS DETAILS** (a required field is
+  empty), or **READY**. An experiment with no boards configured (video only,
+  say) needs no board, so it can be **READY** with nothing connected. While a
+  run is under way the pill shows the state instead — **INITIALIZING**,
+  **RUNNING**, **PAUSED**, or **STOPPING** — and **ERROR** if the session
+  errors.
 - **The clock.** A large clock counts up while a run is live and freezes while
   paused.
 - **Device cards.** A card per device, in two columns, showing the device's name,
@@ -223,14 +239,15 @@ bottom:
 ### Start, Pause, and Stop
 
 When idle, the run bar shows a big **▶ Start run** button. It is enabled only
-when you're ready: a board is connected, the experiment has a Start Experiment
-node, and every required run field is filled in. Until then it is greyed out and
-a hint under it says what's missing:
+when you're ready: a board is connected (or the experiment configures no
+boards), the experiment has a Start Experiment node, and every required run
+field is filled in. Until then it is greyed out and a hint under it says what's
+missing:
 
 | Hint | What to do |
 | --- | --- |
 | **Fill in Dam ID to start.** (or whichever field is required) | Tap the field in the run details and enter a value. |
-| **Connect a board to start (⚙ › Connect boards…).** | Open the ⚙ menu and choose **Connect boards…**. |
+| **Connect a board to start (⚙ › Connect boards…).** | Open the ⚙ menu, choose **Connect boards…**, check each board's port, and tap **Save**; GLIDER then connects the boards. |
 | **Add a Start Experiment node to the flow to start.** | Open the **Dashboard** tab, unlock the graph, and add one. |
 
 While a run is live the bar becomes **Pause** (which turns into **Resume** when
@@ -261,11 +278,12 @@ stays the Pi's run page.
 
 Here's the whole loop:
 
-1. **Connect your hardware.** Tap **⚙ › Connect boards…** and connect your board.
-   Its dot in the header turns green.
-2. **Load your experiment.** Tap **⚙ › Open…** and choose your experiment file
+1. **Load your experiment.** Tap **⚙ › Open…** and choose your experiment file
    (or **New** to start fresh). Check the details on the **Experiment** tab if
-   you like.
+   you like. The experiment says which boards it uses, so load it first.
+2. **Connect your hardware.** Tap **⚙ › Connect boards…**, check each board's
+   port, and tap **Save**. GLIDER connects the boards, and each board's dot in
+   the header turns green.
 3. **(Optional) Look over the flow.** On the **Dashboard** tab the graph is
    locked, so you can pan, zoom, and fit it without changing anything.
 4. **(Optional) Check your rig by hand.** On the Dashboard, open **Control** and

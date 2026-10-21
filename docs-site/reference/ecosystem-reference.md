@@ -59,7 +59,7 @@ This distinction matters in explanations of GLIDER: data flow alone does not tri
 
 ### Runner is the touch-first operating workspace
 
-Runner is intended for an operator at a bench or a Raspberry Pi touchscreen. It can load the same `.glider` file but uses larger controls, a header with a ⚙ menu (New, Open, Save, Connect boards, Switch to Desktop), and three tabs:
+Runner is intended for an operator at a bench or a Raspberry Pi touchscreen. It can load the same `.glider` file but uses larger controls, a header with a ⚙ menu (New, Open, Save, Save As, Connect boards, Help, Switch to Desktop, Exit), and three tabs:
 
 - **Experiment** edits metadata, mice, zones, lab vocabulary, and plugins.
 - **Dashboard** shows the node graph (view-only until unlocked) over panels for nodes, properties, hardware, camera, and manual **Control**, which generates controls from a device's declared actions and ranges.
