@@ -69,9 +69,11 @@ menu bar, no title bar) the strip is the first row of the header, beside a gear
 button. :meth:`StatusStrip.set_touch_mode` drops what a finger cannot use and a
 480 px row cannot afford -- the panel toggles and the ``Ctrl K`` hint -- shows
 the dirty marker (a frameless window has no title bar to carry the modified
-mark), and lets long names elide instead of widening the window. It only flips
-visibility, a minimum width and the gaps between parts; ``set_touch_mode(False)``
-puts every one of them back, so the desktop strip is exactly what it was.
+mark), and lets long names elide instead of widening the window. The strip also
+grows from :data:`STRIP_HEIGHT` to 44 px, because the pill is a tap target and a
+finger needs the room. It only flips visibility, a height, a minimum width and the
+gaps between parts; ``set_touch_mode(False)`` puts every one of them back, so the
+desktop strip is exactly what it was.
 """
 
 from __future__ import annotations
@@ -151,6 +153,10 @@ _DIRTY_MARK = "— edited"
 #: do not shrink. With room to spare the names take it.
 _TOUCH_NAME_MIN = 32
 _TOUCH_DEVICE_MIN = 12
+
+#: The strip's fixed height in touch mode: a 44 px tap target, to match the gear
+#: button beside it.
+_TOUCH_HEIGHT = 44
 
 #: ``(side margin, gap between the strip's parts, gap between device chips)`` in
 #: pixels, on desktop and in touch mode. Touch packs tighter because the same
@@ -504,10 +510,10 @@ class StatusStrip(QFrame):
         """Fit the strip to the Pi header, or back to the desktop.
 
         Touch mode hides the panel toggles and the ``Ctrl K`` hint, shows the
-        dirty marker, and lets the experiment name and the device names elide so
-        a long name and five boards still fit in 480 px. Reversible: ``False``
-        restores every one of them, the hidden controls to whatever visibility
-        they had when touch mode was switched on.
+        dirty marker, makes the strip 44 px tall, and lets the experiment name and
+        the device names elide so a long name and five boards still fit in
+        480 px. Reversible: ``False`` restores every one of them, the hidden
+        controls to whatever visibility they had when touch mode was switched on.
         """
         enabled = bool(enabled)
         if enabled != self._touch:
@@ -522,6 +528,7 @@ class StatusStrip(QFrame):
                 else:
                     widget.setVisible(self._desktop_visible.pop(widget, True))
         self._set_gaps(_TOUCH_GAPS if enabled else _GAPS)
+        self.setFixedHeight(_TOUCH_HEIGHT if enabled else STRIP_HEIGHT)
         self._dirty.setVisible(self._touch and self._is_dirty)
         self._name.set_elide_min(_TOUCH_NAME_MIN if self._touch else None)
         for label in self._names:

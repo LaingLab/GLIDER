@@ -10,7 +10,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QLabel
 
-from glider.gui.shell.status_strip import StatusStrip
+from glider.gui.shell.status_strip import STRIP_HEIGHT, StatusStrip
 from glider.gui.shell.tab_bar import ShellTabBar
 
 #: The header's first row, less the gear button beside the strip.
@@ -178,3 +178,13 @@ def test_tab_bar_touch_mode_is_reversible(qtbot):
     bar.layout().activate()
 
     assert {k: (b.geometry(), b.sizePolicy()) for k, b in bar.buttons().items()} == before
+
+
+def test_touch_strip_is_a_tap_target_tall_and_desktop_stays_40(qtbot):
+    strip = StatusStrip()
+    qtbot.addWidget(strip)
+    assert strip.height() == STRIP_HEIGHT == 40
+    strip.set_touch_mode(True)
+    assert strip.minimumHeight() == strip.maximumHeight() == 44
+    strip.set_touch_mode(False)
+    assert strip.minimumHeight() == strip.maximumHeight() == STRIP_HEIGHT

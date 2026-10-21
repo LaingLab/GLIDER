@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QStatusBar,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -53,6 +54,7 @@ from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController, node_category_for_type
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
 from glider.gui.panels.tools_page import ToolsPage
+from glider.gui.runner.notice_bar import NoticeBar
 from glider.gui.runner.readiness import compute_readiness
 from glider.gui.shell import (
     AppShell,
@@ -448,6 +450,12 @@ class MainWindow(QMainWindow):
         # tab is showing -- and so they still report in runner mode, where
         # there is no Builder frame at all.
         self._status_strip: StatusStrip | None = None
+        # Runner mode only: the two-row header that holds the strip and the tabs
+        # in place of the desktop chrome row, its gear menu, and the bar that
+        # carries notifications now that there is no status bar.
+        self._pi_header: QWidget | None = None
+        self._gear_button: QToolButton | None = None
+        self._notice_bar: NoticeBar | None = None
         # The editor behind the Metadata and Mice sections, and the two pages
         # it was split into. Both are rebuilt per session; see
         # _experiment_detail_pages.
@@ -638,7 +646,13 @@ class MainWindow(QMainWindow):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
 
-        column.addWidget(self._build_chrome_row(container))
+        if self._view_manager.is_runner_mode:
+            self._pi_header = self._build_pi_header(container)
+            column.addWidget(self._pi_header)
+            self._notice_bar = NoticeBar(container)
+            column.addWidget(self._notice_bar)
+        else:
+            column.addWidget(self._build_chrome_row(container))
 
         # Created before the pages: --file opens the experiment while the
         # window is still being built, and that open arms the watcher.
@@ -727,6 +741,63 @@ class MainWindow(QMainWindow):
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
         )
         return row
+
+    def _build_pi_header(self, parent: QWidget) -> QWidget:
+        """The Pi's header: status strip and gear menu over the tabs.
+
+        The desktop chrome row overlays the tabs on the strip, which at 480 px
+        covers the experiment name, so here the two are rows. Row one is the
+        strip (stretching, its name eliding) beside a gear button that carries
+        what the desktop's menus do; row two is the tabs, less Analyze. Both
+        widgets keep their attribute names, since a lot of code refreshes them.
+
+        The gear's "Connect boards" resolves ``self._hardware_panel`` at click
+        time: the runner-mode panel is built after this header is.
+        """
+        header = QWidget(parent)
+        header.setObjectName("piHeader")
+        rows = QVBoxLayout(header)
+        rows.setContentsMargins(0, 0, 0, 0)
+        rows.setSpacing(0)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(0)
+        self._status_strip = StatusStrip(header)
+        self._status_strip.set_touch_mode(True)
+        top.addWidget(self._status_strip, 1)
+
+        self._gear_button = QToolButton(header)
+        self._gear_button.setObjectName("piGearButton")
+        self._gear_button.setText("⚙")
+        self._gear_button.setAccessibleName("Menu")
+        self._gear_button.setFixedSize(44, 44)
+        self._gear_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(self._gear_button)
+        for entry in (
+            ("New", self._on_new),
+            ("Open…", self._on_open),
+            ("Save", self._on_save),
+            ("Save As…", self._on_save_as),
+            None,
+            ("Connect boards…", lambda: self._hardware_panel.show_board_settings_dialog()),
+            None,
+            ("Help", self._on_help),
+            ("Switch to Desktop", self._switch_to_desktop_mode),
+            ("Exit", self.close),
+        ):
+            if entry is None:
+                menu.addSeparator()
+            else:
+                menu.addAction(entry[0]).triggered.connect(entry[1])
+        self._gear_button.setMenu(menu)
+        top.addWidget(self._gear_button)
+        rows.addLayout(top)
+
+        self._tab_bar = ShellTabBar(header)
+        self._tab_bar.set_touch_mode(True)
+        rows.addWidget(self._tab_bar)
+        return header
 
     def _has_open_experiment(self) -> bool:
         """Whether something was already opened before the window was built.
@@ -1042,9 +1113,12 @@ class MainWindow(QMainWindow):
         # Builder's side panels -- which only exist on the Dashboard. Left up
         # elsewhere they are buttons that collapse something you cannot see.
         if self._status_strip is not None:
-            on_dashboard = index == PAGE_BUILDER
-            self._status_strip.left_toggle().setVisible(on_dashboard)
-            self._status_strip.right_toggle().setVisible(on_dashboard)
+            # Runner mode has no Builder panels, and touch mode keeps the
+            # toggles hidden on every page.
+            if not self._view_manager.is_runner_mode:
+                on_dashboard = index == PAGE_BUILDER
+                self._status_strip.left_toggle().setVisible(on_dashboard)
+                self._status_strip.right_toggle().setVisible(on_dashboard)
             # Nothing is open on the landing page, so there is no name, no run
             # state and no rig to report on.
             self._status_strip.setVisible(index != PAGE_LANDING)
@@ -2275,15 +2349,16 @@ class MainWindow(QMainWindow):
         Qt event-loop tick (so it can't freeze an in-flight async coroutine).
         In runner mode (touch kiosk, usually on the Pi) we avoid modal popups
         entirely — runner mode is responsiveness-sensitive and dialogs don't
-        work well with touch input — and instead post to the status bar +
-        log at the appropriate level.
+        work well with touch input — and instead post to the notice bar under
+        the header + log at the appropriate level.
 
         Args:
             title: Short title for the notification.
             message: Body text.
             level: "info", "warning", or "critical" — affects log level and,
                 in desktop mode, the QMessageBox icon.
-            timeout_ms: How long to show the status message in runner mode.
+            timeout_ms: Unused now. It timed the runner-mode status message; the
+                notice bar stays up until it is tapped (or a critical replaces it).
         """
         log_message = f"{title}: {message}"
         if level == "critical":
@@ -2294,13 +2369,9 @@ class MainWindow(QMainWindow):
             logger.info(log_message)
 
         if self._view_manager.is_runner_mode:
-            # No modal dialogs on the touch dashboard — just the status bar.
-            try:
-                self.statusBar().showMessage(f"{title}: {message}", timeout_ms)
-            except Exception:
-                # Runner mode may not have a conventional status bar; the log
-                # above is still the source of truth.
-                pass
+            # No modal dialogs on the touch dashboard, and no status bar: the
+            # notice bar under the header carries it.
+            self._notice_bar.show_notice(title, message, level)
             return
 
         # Desktop mode: schedule the dialog on the next event-loop tick so the
