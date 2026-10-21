@@ -63,14 +63,33 @@ the right property. The toggle's icon keeps the same promise a different way:
 it is painted, not stencilled from a file, and every paint reads
 ``self.palette()`` fresh rather than a colour captured once -- the same
 reason the arrow it replaced never needed a colour of its own.
+
+**Touch mode is a reversible flag, off by default.** On the Pi (480 px wide, no
+menu bar, no title bar) the strip is the first row of the header, beside a gear
+button. :meth:`StatusStrip.set_touch_mode` drops what a finger cannot use and a
+480 px row cannot afford -- the panel toggles and the ``Ctrl K`` hint -- shows
+the dirty marker (a frameless window has no title bar to carry the modified
+mark), and lets long names elide instead of widening the window. It only flips
+visibility, a minimum width and the gaps between parts; ``set_touch_mode(False)``
+puts every one of them back, so the desktop strip is exactly what it was.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 
-from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QIcon, QIconEngine, QPainter, QPainterPath, QPalette, QPen, QPixmap
+from PyQt6.QtCore import QEvent, QObject, QPointF, QRect, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import (
+    QIcon,
+    QIconEngine,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPaintEvent,
+    QPalette,
+    QPen,
+    QPixmap,
+)
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -125,6 +144,19 @@ _UNNAMED = "Untitled"
 #: stylesheet can grey it without greying the name and so a caller reading the
 #: name back gets the name.
 _DIRTY_MARK = "— edited"
+
+#: Narrowest an eliding name may get in touch mode, in pixels. Deliberately tiny:
+#: it is only the floor the layout can squeeze to, reached when the dirty marker,
+#: a running pill and five boards all compete for 480 px, and the pill and marker
+#: do not shrink. With room to spare the names take it.
+_TOUCH_NAME_MIN = 32
+_TOUCH_DEVICE_MIN = 12
+
+#: ``(side margin, gap between the strip's parts, gap between device chips)`` in
+#: pixels, on desktop and in touch mode. Touch packs tighter because the same
+#: worst case has to share 480 px with whatever styling the Pi's stylesheet adds.
+_GAPS = (12, 12, 10)
+_TOUCH_GAPS = (8, 6, 6)
 
 
 def _fit_aspect(box: QRectF, ratio: float) -> QRectF:
@@ -319,6 +351,37 @@ class _PanelToggle(QToolButton):
         self.setAccessibleName(f"{self._side.capitalize()} panel, {state_word}")
 
 
+class _ElidedLabel(QLabel):
+    """A label that can paint "abc…" in place of text wider than it is.
+
+    The text itself is never shortened, so :meth:`text` stays the full string for
+    anyone reading it back. What changes is the layout's view of it: a QLabel
+    refuses to be narrower than its text, so :meth:`set_elide_min` sets an
+    explicit minimum width (which outranks the size hint) and starts painting the
+    elided form; ``None`` undoes both.
+    """
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self._elide = False
+
+    def set_elide_min(self, width: int | None) -> None:
+        self._elide = width is not None
+        self.setMinimumWidth(width or 0)
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent | None) -> None:  # noqa: N802 - Qt override
+        if not self._elide:
+            super().paintEvent(event)
+            return
+        painter = QPainter(self)
+        self.drawFrame(painter)
+        area = self.contentsRect()
+        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+        text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, area.width())
+        painter.drawText(area, int(self.alignment()), text)
+
+
 def _as_device(device: Sequence[str]) -> tuple[str, str, str]:
     """``(name, state)`` or ``(name, state, detail)`` as a full triple.
 
@@ -349,6 +412,8 @@ class StatusStrip(QFrame):
     left_toggled = pyqtSignal()
     right_toggled = pyqtSignal()
     palette_requested = pyqtSignal()
+    #: The pill was tapped. Emitted in any mode; only the Pi header listens.
+    pill_clicked = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -359,19 +424,20 @@ class StatusStrip(QFrame):
 
         self._run_state = "idle"
         self._run_detail = ""
+        self._touch = False
+        self._is_dirty = False
+        self._desktop_visible: dict[QWidget, bool] = {}
         self._device_names: list[str] = []
         self._chips: list[QFrame] = []
         self._dots: list[QLabel] = []
         self._names: list[QLabel] = []
 
-        outer = QHBoxLayout(self)
-        outer.setContentsMargins(12, 0, 12, 0)
-        outer.setSpacing(12)
+        outer = self._outer = QHBoxLayout(self)
 
         self._left_toggle = self._build_toggle("left", self.left_toggled)
         outer.addWidget(self._left_toggle)
 
-        self._name = QLabel(_UNNAMED, self)
+        self._name = _ElidedLabel(_UNNAMED, self)
         self._name.setObjectName("statusStripExperiment")
         outer.addWidget(self._name)
 
@@ -392,6 +458,7 @@ class StatusStrip(QFrame):
         self._pill.setObjectName("statusStripPill")
         self._pill.setProperty("state", "idle")
         self._pill.setVisible(False)
+        self._pill.installEventFilter(self)
         outer.addWidget(self._pill)
 
         outer.addStretch(1)
@@ -401,7 +468,7 @@ class StatusStrip(QFrame):
         self._devices.setFrameShape(QFrame.Shape.NoFrame)
         self._device_layout = QHBoxLayout(self._devices)
         self._device_layout.setContentsMargins(0, 0, 0, 0)
-        self._device_layout.setSpacing(10)
+        self._set_gaps(_GAPS)
         outer.addWidget(self._devices)
 
         self._palette_hint = QToolButton(self)
@@ -425,6 +492,41 @@ class StatusStrip(QFrame):
         button.clicked.connect(lambda _checked=False: signal.emit())
         return button
 
+    # ------------------------------------------------------------ touch mode
+
+    def _set_gaps(self, gaps: tuple[int, int, int]) -> None:
+        margin, gap, device_gap = gaps
+        self._outer.setContentsMargins(margin, 0, margin, 0)
+        self._outer.setSpacing(gap)
+        self._device_layout.setSpacing(device_gap)
+
+    def set_touch_mode(self, enabled: bool) -> None:
+        """Fit the strip to the Pi header, or back to the desktop.
+
+        Touch mode hides the panel toggles and the ``Ctrl K`` hint, shows the
+        dirty marker, and lets the experiment name and the device names elide so
+        a long name and five boards still fit in 480 px. Reversible: ``False``
+        restores every one of them, the hidden controls to whatever visibility
+        they had when touch mode was switched on.
+        """
+        enabled = bool(enabled)
+        if enabled != self._touch:
+            self._touch = enabled
+            # Put back what the desktop had, not "shown": the window hides the
+            # panel toggles on every page but the Dashboard, and forcing them
+            # visible here would undo that on the way out.
+            for widget in (self._left_toggle, self._right_toggle, self._palette_hint):
+                if enabled:
+                    self._desktop_visible[widget] = not widget.isHidden()
+                    widget.setVisible(False)
+                else:
+                    widget.setVisible(self._desktop_visible.pop(widget, True))
+        self._set_gaps(_TOUCH_GAPS if enabled else _GAPS)
+        self._dirty.setVisible(self._touch and self._is_dirty)
+        self._name.set_elide_min(_TOUCH_NAME_MIN if self._touch else None)
+        for label in self._names:
+            label.set_elide_min(_TOUCH_DEVICE_MIN if self._touch else None)
+
     # ------------------------------------------------------------ experiment
 
     def set_experiment(self, name: str, dirty: bool = False) -> None:
@@ -435,12 +537,15 @@ class StatusStrip(QFrame):
         session rather than a broken one.
         """
         self._name.setText(name.strip() or _UNNAMED)
-        # Deliberately not shown. The marker is kept and kept up to date so
+        # Not shown on desktop. The marker is kept and kept up to date so
         # dirty_label() still reports honestly to anything that asks, but a
         # strip that appends "- edited" to a name the moment you type in it is
         # telling you something you already know. Nothing is lost: _check_save
-        # still stops a close, a New or an Open over unsaved work.
-        self._dirty.setVisible(False)
+        # still stops a close, a New or an Open over unsaved work. Touch mode
+        # is the exception: a frameless kiosk window has no title-bar modified
+        # mark, so this is the only place the Pi can say "unsaved".
+        self._is_dirty = bool(dirty)
+        self._dirty.setVisible(self._touch and self._is_dirty)
 
     def name_label(self) -> QLabel:
         """The label carrying the experiment name."""
@@ -500,6 +605,18 @@ class StatusStrip(QFrame):
         """The run-state pill."""
         return self._pill
 
+    def eventFilter(self, watched: QObject | None, event: QEvent | None) -> bool:  # noqa: N802
+        """Turn a left-button release over the pill into :attr:`pill_clicked`."""
+        if (
+            watched is self._pill
+            and isinstance(event, QMouseEvent)
+            and event.type() == QEvent.Type.MouseButtonRelease
+            and event.button() == Qt.MouseButton.LeftButton
+            and self._pill.rect().contains(event.position().toPoint())
+        ):
+            self.pill_clicked.emit()
+        return super().eventFilter(watched, event)
+
     # ---------------------------------------------------------------- devices
 
     def set_devices(self, devices: Iterable[Sequence[str]]) -> None:
@@ -551,8 +668,10 @@ class StatusStrip(QFrame):
             dot.setFixedSize(_DOT, _DOT)
             layout.addWidget(dot)
 
-            label = QLabel(name, chip)
+            label = _ElidedLabel(name, chip)
             label.setObjectName("statusStripDeviceName")
+            if self._touch:
+                label.set_elide_min(_TOUCH_DEVICE_MIN)
             layout.addWidget(label)
 
             self._apply_device(chip, dot, name, raw, detail)
