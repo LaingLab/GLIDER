@@ -8,7 +8,11 @@ A recording directory contains one or more of:
   - ``<name>_<ts>_events.csv``    — DeviceEventLogger output (pin edges +
                                     output writes + flow_marker rows)
   - ``<name>_<ts>.mp4``           — raw video
-  - ``<name>_<ts>_annotated.mp4`` — annotated video (tracking overlays)
+  - ``<name>_annotated_<ts>.mp4`` — annotated video (tracking overlays), as
+                                    VideoRecorder names it; a renamed
+                                    ``<name>_<ts>_annotated.mp4`` counts too
+  - ``<name>_<ts>_keypoints.csv`` — the pose model's keypoints, logged live
+                                    beside the tracking CSV (no header marker)
 
 Discovery is via the ``# GLIDER ...`` header marker on row 1 of each
 CSV rather than filename suffix, so renamed/copied files still classify
@@ -24,6 +28,7 @@ CSVs that don't start with a recognized marker are ignored.
 from __future__ import annotations
 
 import io
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -52,6 +57,39 @@ class Artifacts:
     events: Path | None = None
     video: Path | None = None
     annotated_video: Path | None = None
+
+
+# VideoRecorder names the overlay video ``<name>_annotated_<YYYYMMDD>_<HHMMSS>``:
+# the timestamp comes after the marker, so a plain ``endswith`` never sees it.
+_ANNOTATED_STAMPED = re.compile(r"_annotated(?=_\d{8}_\d{6}$)")
+
+
+def is_annotated_video(path: Path) -> bool:
+    """Whether a video is the tracking-overlay copy rather than the raw recording."""
+    stem = Path(path).stem
+    return stem.endswith("_annotated") or _ANNOTATED_STAMPED.search(stem) is not None
+
+
+def raw_video_stem(path: Path) -> str:
+    """A video's stem with any annotated marker removed: the recording's own name."""
+    return _ANNOTATED_STAMPED.sub("", Path(path).stem).removesuffix("_annotated")
+
+
+def keypoints_beside(tracking_csv: Path | None) -> Path | None:
+    """The live keypoints CSV written beside a tracking CSV, if there is one.
+
+    Same rule TrackingDataLogger._keypoints_path writes by: ``<base>_tracking.csv``
+    sits beside ``<base>_keypoints.csv``. Keyed on the tracking CSV rather than
+    the video because the two loggers stamp their names separately, a second
+    apart as often as not.
+    """
+    if tracking_csv is None:
+        return None
+    name = Path(tracking_csv).name
+    suffix = "_tracking.csv"
+    base = name[: -len(suffix)] if name.endswith(suffix) else Path(tracking_csv).stem
+    candidate = Path(tracking_csv).with_name(f"{base}_keypoints.csv")
+    return candidate if candidate.is_file() else None
 
 
 def discover(directory: Path) -> Artifacts:
@@ -89,7 +127,7 @@ def discover(directory: Path) -> Artifacts:
 
     # Video discovery by stem suffix.
     for mp4_path in sorted(directory.glob("*.mp4")):
-        if mp4_path.stem.endswith("_annotated"):
+        if is_annotated_video(mp4_path):
             if (
                 art.annotated_video is None
                 or mp4_path.stat().st_mtime > art.annotated_video.stat().st_mtime

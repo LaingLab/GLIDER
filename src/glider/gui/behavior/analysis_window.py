@@ -1140,8 +1140,8 @@ class AnalysisWindow(QMainWindow):
         self._apply_trail()
         self._inspector.clear_range()
         self._set_frame(self._bar.frame_bounds()[0])
-        # A recording has no pose sidecar to repair -- its poses are the
-        # tracked centroid, and its resolution comes from the rig, not a CSV.
+        # A recording has no pose sidecar to repair -- its poses are what the
+        # rig logged live, and its resolution comes from the rig, not a CSV.
         is_recording = Path(path).is_dir()
         self._pick_poses.setVisible(view.xy is None and not is_recording)
         self._fix_resolution.setVisible(
@@ -1178,10 +1178,12 @@ class AnalysisWindow(QMainWindow):
         has_video = view.video_path is not None
         found = f"  Poses: {view.pose_path.name}." if view.pose_path else "  No poses found."
         if is_recording:
-            found = (
-                "  Live recording: labels are the rig's behavioral_state; "
-                "position is the tracked centroid." + found
+            position = (
+                "position is the tracked centroid"
+                if view.keypoint_names == ["centroid"]
+                else "poses are the keypoints the rig's pose model logged live"
             )
+            found = f"  Live recording: labels are the rig's behavioral_state; {position}." + found
         if has_video:
             found += f"  Video: {view.video_path.name}."
             # An empty ethogram has no last frame to compare against.

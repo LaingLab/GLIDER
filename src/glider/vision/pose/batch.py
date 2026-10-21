@@ -353,6 +353,24 @@ def _drop_orphaned_animal_slots(out_dir: Path, kept_slots: set[int]) -> None:
         )
 
 
+def _is_glider_recording_csv(path: Path) -> bool:
+    """Whether a CSV is one of GLIDER's own recording files, not poses.
+
+    A live recording's DataRecorder output is named ``<video stem>.csv`` --
+    exactly the hand-placed pose name -- and opening that video in Session
+    Review handed its sensor traces to the pose loader. Every such file opens
+    with a ``# GLIDER`` header line, which no pose CSV does.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.strip():
+                    return line.lstrip().startswith("# GLIDER")
+    except OSError:
+        return False
+    return False
+
+
 def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Path | None:
     """The pose CSV belonging to *video*, or ``None`` if there isn't one.
 
@@ -363,7 +381,8 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
 
     ``<stem>.csv``
         A hand-placed file, or one exported from DeepLabCut proper. This is
-        what the annotate and train paths have always expected.
+        what the annotate and train paths have always expected. A GLIDER
+        recording's own data CSV shares the name and is skipped.
     ``<stem>DLC_<model>.csv``
         What :func:`run_batch` writes. Companions that share this prefix but
         are not pose data are skipped (see
@@ -413,7 +432,7 @@ def find_pose_csv(video: Path | str, search_dir: Path | str | None = None) -> Pa
         return None
 
     exact = directory / f"{video.stem}.csv"
-    if exact.exists():
+    if exact.exists() and not _is_glider_recording_csv(exact):
         return exact
 
     matches = [

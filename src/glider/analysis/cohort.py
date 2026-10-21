@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from glider.analysis._io import discover
+from glider.analysis._io import discover, raw_video_stem
 from glider.analysis.behavior.session_view import (
     _SEARCH_LEVELS,
     VIDEO_SUFFIXES,
@@ -99,7 +99,7 @@ def session_id_for(path: Path) -> str:
         return folder.name
     video = artifacts.video or artifacts.annotated_video
     if video is not None:
-        return video.stem.removesuffix("_annotated")
+        return raw_video_stem(video)
     return folder.name
 
 

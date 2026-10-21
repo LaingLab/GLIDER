@@ -419,9 +419,11 @@ class SessionView:
         """A live recording as a view, so a rig run opens without an ethogram.
 
         The tracking CSV already carries what the viewer and the range stats
-        need: a behaviour per frame (``behavioral_state``), a position
-        (``center_x``/``center_y``, used as a one-keypoint pose) and, on a
-        calibrated rig, the distance moved (``distance_mm``).
+        need: a behaviour per frame (``behavioral_state``), a position and, on
+        a calibrated rig, the distance moved (``distance_mm``). The pose is the
+        keypoints the rig's pose model logged live beside it, when it ran one;
+        otherwise the tracked centre (``center_x``/``center_y``) stands in as a
+        one-keypoint pose.
         """
         tracking = session.tracking
         if tracking.empty or "frame" not in tracking.columns:
@@ -451,7 +453,13 @@ class SessionView:
             source=Path(session.directory),
             first_video_frame=1 if len(every_frame) and every_frame.min() >= 1 else 0,
         )
-        view._load_centroid(rows)
+        from glider.analysis._io import keypoints_beside
+
+        keypoints_csv = keypoints_beside(getattr(session, "tracking_path", None))
+        if keypoints_csv is not None:
+            view._load_live_keypoints(keypoints_csv, rows)
+        if view.xy is None:
+            view._load_centroid(rows)
         video = session.raw_video_path or session.annotated_video_path
         if video is not None:
             view._load_video(Path(session.directory), video)
@@ -495,6 +503,58 @@ class SessionView:
             except ValueError as e:
                 logger.warning("pups not loaded: %s", e)
         return view
+
+    def _load_live_keypoints(self, csv_path: Path, rows: pd.DataFrame) -> None:
+        """The pose model's keypoints, as the rig logged them live, by frame.
+
+        The CSV is long -- one row per (frame, object_id, keypoint) -- with an
+        undetected keypoint written as blank x/y, which reads as NaN. Only the
+        subject's rows are kept: the (frame, object_id) pairs _subject_rows
+        chose from the tracking CSV, so a second animal never mixes in.
+        Keypoints keep the labels the logger wrote, in its order: the
+        operator's bodypart names, or the model's indices when none were set.
+        Leaves ``xy`` unset when nothing usable is there, so the caller falls
+        back to the tracked centre.
+        """
+        try:
+            kp = pd.read_csv(csv_path)
+        except (OSError, ValueError) as e:  # pandas' parse errors are ValueErrors
+            logger.info("live keypoints in %s are not readable: %s", csv_path.name, e)
+            return
+        if kp.empty or not {"frame", "keypoint", "x", "y"}.issubset(kp.columns):
+            return
+        if not len(self.frames):
+            return
+        kp = kp.assign(frame=pd.to_numeric(kp["frame"], errors="coerce"))
+        kp = kp.dropna(subset=["frame"])
+        if "object_id" in kp.columns and "object_id" in rows.columns:
+            subject = pd.DataFrame(
+                {
+                    "frame": pd.to_numeric(rows["frame"], errors="coerce"),
+                    "object_id": pd.to_numeric(rows["object_id"], errors="coerce"),
+                }
+            ).dropna()
+            kp = kp.assign(object_id=pd.to_numeric(kp["object_id"], errors="coerce"))
+            kp = kp.dropna(subset=["object_id"]).astype({"frame": "int64", "object_id": "int64"})
+            kp = kp.merge(subject.astype("int64"), on=["frame", "object_id"], how="inner")
+        n = int(self.frames.max()) + 1
+        frame = kp["frame"].to_numpy(dtype="int64")
+        kp = kp[(frame >= 0) & (frame < n)]
+        if kp.empty:
+            return
+        labels = kp["keypoint"].astype(str)
+        names = list(dict.fromkeys(labels))
+        index = labels.map({name: i for i, name in enumerate(names)}).to_numpy(dtype="int64")
+        xy = np.full((n, len(names), 2), np.nan)
+        rows_at = kp["frame"].to_numpy(dtype="int64")
+        xy[rows_at, index, 0] = pd.to_numeric(kp["x"], errors="coerce").to_numpy(float)
+        xy[rows_at, index, 1] = pd.to_numeric(kp["y"], errors="coerce").to_numpy(float)
+        if not np.isfinite(xy).any():
+            return
+        self.xy = xy
+        self.keypoint_names = names
+        self.body_axis = (0, len(names) - 1)
+        self.pose_path = Path(csv_path)
 
     def _load_centroid(self, rows: pd.DataFrame) -> None:
         """The tracked centre as a one-keypoint pose, indexed by frame."""

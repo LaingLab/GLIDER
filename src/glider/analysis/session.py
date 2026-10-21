@@ -166,6 +166,11 @@ class Session:
         return self._artifacts.video
 
     @property
+    def tracking_path(self) -> Path | None:
+        """The tracking CSV this session was read from."""
+        return self._artifacts.tracking
+
+    @property
     def annotated_video_path(self) -> Path | None:
         return self._artifacts.annotated_video
 

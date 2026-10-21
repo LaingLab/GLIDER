@@ -317,6 +317,34 @@ def test_exact_stem_wins_over_a_batch_output(tmp_path):
     assert batch.find_pose_csv(video) == plain
 
 
+@pytest.mark.parametrize(
+    "header", ["# GLIDER Experiment Data", "# GLIDER Tracking Data", "# GLIDER Device Event Log"]
+)
+def test_a_glider_recordings_own_csv_is_not_poses(tmp_path, header):
+    """A live recording names its DataRecorder CSV <video stem>.csv. Opening
+    that video in Session Review handed its sensor traces to the pose loader,
+    which found nothing and reported no poses."""
+    video = tmp_path / "Maimu_RTPP_20261020_163942.mp4"
+    video.touch()
+    (tmp_path / "Maimu_RTPP_20261020_163942.csv").write_text(
+        f"{header}\n# Experiment,Maimu RTPP\n", encoding="utf-8"
+    )
+
+    assert batch.find_pose_csv(video) is None
+
+
+def test_a_glider_csv_does_not_shadow_a_batch_output(tmp_path):
+    video = tmp_path / "rec_20261020_163942.mp4"
+    video.touch()
+    (tmp_path / "rec_20261020_163942.csv").write_text(
+        "# GLIDER Experiment Data\n", encoding="utf-8"
+    )
+    poses = tmp_path / "rec_20261020_163942DLC_exp-6.csv"
+    poses.touch()
+
+    assert batch.find_pose_csv(video) == poses
+
+
 def test_skips_the_raw_companion(tmp_path):
     """_raw is the unsmoothed inference — never the one to analyze."""
     video = tmp_path / "session01.mp4"
