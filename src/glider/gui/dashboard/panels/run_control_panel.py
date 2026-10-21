@@ -17,7 +17,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from glider.core.config import get_config
@@ -61,6 +61,10 @@ class RunControlPanel(QWidget):
         self._paused_total = 0.0  # seconds paused so far in this run
 
         self.setObjectName("runControlPanel")
+        if touch:
+            # touch.qss gives the Pi's run bar a card; a QWidget subclass paints
+            # a stylesheet background only with this set.
+            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._setup_ui()
         self.refresh()
 
@@ -79,6 +83,9 @@ class RunControlPanel(QWidget):
 
         self._sub = QLabel()
         self._sub.setProperty("textRole", "muted")
+        if self._touch:
+            # A long board description wraps rather than widening the 480 px page.
+            self._sub.setWordWrap(True)
         layout.addWidget(self._sub)
 
         self._start_btn = QPushButton("▶  Start run")

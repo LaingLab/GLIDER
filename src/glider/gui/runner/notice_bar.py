@@ -12,6 +12,8 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
+from glider.gui.styles import restyle
+
 _RANK = {"info": 0, "warning": 1, "critical": 2}
 
 
@@ -32,8 +34,10 @@ class NoticeBar(QFrame):
             return
         self._label.setText(f"{title}: {message}")
         self.setProperty("level", level)
-        self.style().unpolish(self)
-        self.style().polish(self)
+        # The label too: touch.qss colours it by the bar's level, and Qt
+        # re-resolves a descendant selector only when the descendant is polished.
+        restyle(self)
+        restyle(self._label)
         self.show()
 
     def text(self) -> str:

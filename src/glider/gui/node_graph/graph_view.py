@@ -595,6 +595,10 @@ class NodeGraphView(QGraphicsView):
         x = viewport.width() - overlay_size.width() - margin
         y = viewport.height() - overlay_size.height() - margin
         self._overlay.move(max(margin, x), max(margin, y))
+        # Re-fit here too: the window's stylesheet (touch.qss: 44 px tall, its
+        # own font and padding) lands after the button was first sized, and a
+        # resize is the first event that comes after it.
+        self._overlay.lock_btn.adjustSize()
         self._overlay.lock_btn.move(margin, margin)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
