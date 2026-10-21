@@ -737,7 +737,7 @@ QToolButton#shellTab:checked {
     border-bottom-color: #38bdf8;                   /* ACCENT */
 }
 
-/* The notice bar under the header: tinted by level, tap to dismiss. */
+/* The notice bar under the header: tinted by level, tap (or ✕) to dismiss. */
 QFrame#piNoticeBar {
     border: none;
     border-bottom: 1px solid #1e2530;
@@ -749,12 +749,20 @@ QFrame#piNoticeBar QLabel {
     font-size: 13px;
 }
 
+QFrame#piNoticeBar QToolButton#piNoticeClose {
+    background-color: transparent;
+    border: none;
+    font-size: 16px;
+    padding: 0;
+}
+
 QFrame#piNoticeBar[level="info"] {
     background-color: rgba(56, 189, 248, 0.10);     /* ACCENT @ 10% */
     border-bottom-color: rgba(56, 189, 248, 0.30);
 }
 
-QFrame#piNoticeBar[level="info"] QLabel {
+QFrame#piNoticeBar[level="info"] QLabel,
+QFrame#piNoticeBar[level="info"] QToolButton#piNoticeClose {
     color: #38bdf8;                                 /* ACCENT */
 }
 
@@ -763,7 +771,8 @@ QFrame#piNoticeBar[level="warning"] {
     border-bottom-color: rgba(251, 191, 36, 0.35);
 }
 
-QFrame#piNoticeBar[level="warning"] QLabel {
+QFrame#piNoticeBar[level="warning"] QLabel,
+QFrame#piNoticeBar[level="warning"] QToolButton#piNoticeClose {
     color: #fbbf24;                                 /* WARNING */
 }
 
@@ -775,6 +784,10 @@ QFrame#piNoticeBar[level="critical"] {
 QFrame#piNoticeBar[level="critical"] QLabel {
     color: #f87171;                                 /* ERROR */
     font-weight: 600;
+}
+
+QFrame#piNoticeBar[level="critical"] QToolButton#piNoticeClose {
+    color: #f87171;                                 /* ERROR */
 }
 
 /* ============================================================================

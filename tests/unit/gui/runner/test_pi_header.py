@@ -97,3 +97,12 @@ def test_long_name_does_not_widen_the_window(qtbot, main_window_factory):
     w._core.session.metadata.name = "x" * 60
     w._refresh_strip_experiment()
     assert w._pi_header.minimumSizeHint().width() <= 480
+
+
+def test_a_long_critical_notice_does_not_widen_the_window(qtbot, main_window_factory):
+    w = _pi(qtbot, main_window_factory)
+    w._notify_user("Connection Error", "/dev/" + "x" * 120, level="critical")
+    qtbot.waitUntil(w._notice_bar.isVisible)
+    assert w.minimumSizeHint().width() <= 480
+    assert w.width() == 480
+    assert w._notice_bar.width() <= 480
