@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from glider.gui.styles import colors, radius
+from glider.gui.styles import colors, radius, restyle
 
 if TYPE_CHECKING:
     from glider.core.flow_engine import FlowEngine
@@ -138,6 +138,31 @@ class _GraphOverlayControls(QWidget):
         layout.addWidget(self.fit_btn)
         self.adjustSize()
 
+        # The edit-lock toggle (touch mode only). It belongs to the viewport, not
+        # to this widget, because it sits in the opposite corner; the view
+        # positions it. It carries no inline stylesheet: touch.qss styles it by
+        # object name and by the dynamic ``locked`` property.
+        self.lock_btn = QPushButton(parent)
+        self.lock_btn.setObjectName("graphLockButton")
+        self.lock_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.set_locked_look(False)
+        self.lock_btn.hide()
+
+    def set_locked_look(self, locked: bool) -> None:
+        """Make the lock button say what tapping it will do next."""
+        self.lock_btn.setProperty("locked", locked)
+        self.lock_btn.setText(
+            "View only \u00b7 tap to edit" if locked else "Editing \u00b7 tap to lock"
+        )
+        restyle(self.lock_btn)
+        self.lock_btn.adjustSize()
+
+    def set_button_size(self, side: int) -> None:
+        """Resize the zoom/fit buttons (32 for a mouse, 44 for a fingertip)."""
+        for btn in (self.zoom_in_btn, self.zoom_out_btn, self.fit_btn):
+            btn.setFixedSize(side, side)
+        self.adjustSize()
+
     @staticmethod
     def _make_button(label: str, tooltip: str) -> QPushButton:
         btn = QPushButton(label)
@@ -189,6 +214,7 @@ class NodeGraphView(QGraphicsView):
         str, int, str, int, str
     )  # from_node, from_port, to_node, to_port, conn_type
     connection_deleted = pyqtSignal(str)  # connection_id
+    locked_changed = pyqtSignal(bool)  # emitted only when the lock actually flips
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -213,6 +239,8 @@ class NodeGraphView(QGraphicsView):
         self._connection_start_port = None
         self._connection_start_node = None
         self._selected_nodes: list[str] = []
+        # Edit lock: when set the graph is look-and-pan only (see set_locked).
+        self._locked = False
 
         # Zoom settings
         self._zoom = 1.0
@@ -228,6 +256,7 @@ class NodeGraphView(QGraphicsView):
         self._overlay.zoom_in_btn.clicked.connect(self.zoom_in)
         self._overlay.zoom_out_btn.clicked.connect(self.zoom_out)
         self._overlay.fit_btn.clicked.connect(self.fit_to_screen)
+        self._overlay.lock_btn.clicked.connect(lambda: self.set_locked(not self._locked))
         self._overlay.show()
         self._reposition_overlay()
 
@@ -247,6 +276,43 @@ class NodeGraphView(QGraphicsView):
     def set_flow_engine(self, engine: "FlowEngine") -> None:
         """Set the flow engine for node management."""
         self._flow_engine = engine
+
+    def set_touch_mode(self, enabled: bool) -> None:
+        """Switch between mouse and fingertip interaction.
+
+        Touch mode pans on a one-finger drag over empty canvas (a mouse keeps its
+        rubber band), makes the zoom buttons finger-sized and shows the edit-lock
+        toggle. Desktop is the default and is left exactly as it was.
+        """
+        self.setDragMode(
+            QGraphicsView.DragMode.ScrollHandDrag
+            if enabled
+            else QGraphicsView.DragMode.RubberBandDrag
+        )
+        self._overlay.set_button_size(44 if enabled else 32)
+        self._overlay.lock_btn.setVisible(enabled)
+        self._reposition_overlay()
+
+    def set_locked(self, locked: bool) -> None:
+        """Lock the graph to look-and-pan, or unlock it for editing.
+
+        A locked view takes no item interaction (no node drags, selection or
+        wiring), no library drops, no Delete and no context menu. Zoom, fit, Home
+        and the middle-button pan stay. Emits ``locked_changed`` on a change.
+        """
+        if locked == self._locked:
+            return
+        self._locked = locked
+        self.setInteractive(not locked)
+        self._overlay.set_locked_look(locked)
+        self.locked_changed.emit(locked)
+
+    def is_locked(self) -> bool:
+        return self._locked
+
+    def set_lock_enabled(self, enabled: bool) -> None:
+        """Enable or grey out the lock toggle (e.g. while a run is in progress)."""
+        self._overlay.lock_btn.setEnabled(enabled)
 
     @property
     def nodes(self) -> dict[str, "NodeItem"]:
@@ -518,7 +584,7 @@ class NodeGraphView(QGraphicsView):
         self._reposition_overlay()
 
     def _reposition_overlay(self) -> None:
-        """Move the floating zoom/fit controls into the bottom-right corner."""
+        """Move the zoom/fit controls to the bottom-right and the lock to the top-left."""
         if not hasattr(self, "_overlay") or self._overlay is None:
             return
         margin = 12
@@ -529,6 +595,7 @@ class NodeGraphView(QGraphicsView):
         x = viewport.width() - overlay_size.width() - margin
         y = viewport.height() - overlay_size.height() - margin
         self._overlay.move(max(margin, x), max(margin, y))
+        self._overlay.lock_btn.move(margin, margin)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Handle mouse press for panning and connection creation."""
@@ -543,7 +610,7 @@ class NodeGraphView(QGraphicsView):
 
             from glider.gui.node_graph.port_item import PortItem
 
-            if isinstance(item, PortItem):
+            if isinstance(item, PortItem) and not self._locked:
                 # Start connection from this port
                 self._start_connection_from_port(item)
                 event.accept()
@@ -673,6 +740,9 @@ class NodeGraphView(QGraphicsView):
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and not isinstance(
             self._scene.focusItem(), QGraphicsProxyWidget
         ):
+            if self._locked:
+                event.ignore()
+                return
             # Delete selected connections first
             from glider.gui.node_graph.connection_item import ConnectionItem
 
@@ -700,6 +770,8 @@ class NodeGraphView(QGraphicsView):
 
     def contextMenuEvent(self, event) -> None:
         """Show context menu."""
+        if self._locked:
+            return
         menu = QMenu(self)
 
         # Add node submenu
@@ -759,6 +831,9 @@ class NodeGraphView(QGraphicsView):
     # Drag and drop handlers
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         """Handle drag enter event."""
+        if self._locked:
+            event.ignore()
+            return
         if event.mimeData().hasText():
             text = event.mimeData().text()
             if text.startswith("node:"):
@@ -768,6 +843,9 @@ class NodeGraphView(QGraphicsView):
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
         """Handle drag move event."""
+        if self._locked:
+            event.ignore()
+            return
         if event.mimeData().hasText():
             text = event.mimeData().text()
             if text.startswith("node:"):
@@ -777,6 +855,9 @@ class NodeGraphView(QGraphicsView):
 
     def dropEvent(self, event: QDropEvent) -> None:
         """Handle drop event to create a new node."""
+        if self._locked:
+            event.ignore()
+            return
         if event.mimeData().hasText():
             text = event.mimeData().text()
             if text.startswith("node:"):
