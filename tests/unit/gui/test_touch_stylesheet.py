@@ -94,10 +94,10 @@ def test_vocabulary_rows_and_remove_buttons_are_44px_on_the_pi(qtbot):
 
 
 def _scroll_areas(panel):
-    """The panel's scroll areas, less combo-box popup lists (they scroll themselves)."""
-    from glider.gui.runner.finger_scroll import _in_combo
+    """The panel's scroll areas, less headers and combo-box popup lists."""
+    from glider.gui.runner.finger_scroll import _skipped
 
-    return [a for a in panel.findChildren(QAbstractScrollArea) if not _in_combo(a)]
+    return [a for a in panel.findChildren(QAbstractScrollArea) if not _skipped(a)]
 
 
 def _finger_scrolled(w) -> dict[str, list[bool]]:
@@ -135,6 +135,13 @@ def test_the_pi_scrolls_its_panels_by_finger_and_desktop_does_not(qtbot, main_wi
     assert pi["zones_wrapper"] == [False]
     mice = w._experiment_page.built_sections()["mice"].findChild(QAbstractItemView)
     assert mice.verticalScrollMode() == QAbstractItemView.ScrollMode.ScrollPerPixel
+    # Headers are left alone: a drag on one resizes a column.
+    from PyQt6.QtWidgets import QHeaderView, QScroller
+
+    headers = w._hardware_panel.findChildren(QHeaderView) + mice.parentWidget().findChildren(
+        QHeaderView
+    )
+    assert headers and not any(QScroller.hasScroller(h.viewport()) for h in headers)
 
     desk = _finger_scrolled(main_window_factory(desktop_mode=True))
     assert not any(any(flags) for flags in desk.values())

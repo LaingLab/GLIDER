@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
     QComboBox,
+    QHeaderView,
     QScroller,
     QWidget,
 )
@@ -21,8 +22,15 @@ from PyQt6.QtWidgets import (
 _GESTURE = QScroller.ScrollerGestureType.LeftMouseButtonGesture
 
 
-def _in_combo(widget: QWidget) -> bool:
-    """A combo box's popup list: it scrolls itself, and is not a panel."""
+def _skipped(widget: QWidget) -> bool:
+    """Not a panel to drag-scroll.
+
+    A table's or tree's header is a scroll area too, but dragging on it
+    resizes columns; and setting a scroll mode on a header that has not laid
+    out its sections crashes on macOS. A combo box's popup list scrolls itself.
+    """
+    if isinstance(widget, QHeaderView):
+        return True
     parent = widget.parentWidget()
     while parent is not None:
         if isinstance(parent, QComboBox):
@@ -50,7 +58,7 @@ class FingerScroll:
             if isinstance(root, QAbstractScrollArea):
                 areas.insert(0, root)
             for area in areas:
-                if id(area) in done or _in_combo(area):
+                if id(area) in done or _skipped(area):
                     continue
                 done.add(id(area))
                 QScroller.grabGesture(area.viewport(), _GESTURE)
