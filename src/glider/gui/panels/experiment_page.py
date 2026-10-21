@@ -107,6 +107,24 @@ ICON_PX = 20
 RAIL_WIDTH = 168
 
 
+class _ChipStrip(QScrollArea):
+    """A one-row scroll area exactly as tall as the row it holds.
+
+    A plain scroll area asks for the default scroll-area height, which left a
+    band of empty space above and below the chips.
+    """
+
+    def _row_height(self) -> int:
+        row = self.widget()
+        return (row.sizeHint().height() if row is not None else 0) + 2 * self.frameWidth()
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return QSize(super().sizeHint().width(), self._row_height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        return QSize(super().minimumSizeHint().width(), self._row_height())
+
+
 class ExperimentPage(QWidget):
     """A section rail beside a stack of lazily-built editors.
 
@@ -211,6 +229,10 @@ class ExperimentPage(QWidget):
 
         Text only, no glyphs: at 480px five chips and their icons do not share
         a row, and the label is what you read anyway.
+
+        The row sits in a strip that scrolls sideways by finger, so the full
+        labels never set the page's minimum width: with a wider platform font
+        the last chip slides off the edge instead of the page outgrowing 480px.
         """
         bar = QFrame(self)
         bar.setObjectName("experimentChips")
@@ -229,7 +251,18 @@ class ExperimentPage(QWidget):
             chip.clicked.connect(lambda _checked, k=key: self.show_section(k))
             row.addWidget(chip)
             self._buttons[key] = chip
-        return bar
+
+        strip = _ChipStrip(self)
+        strip.setObjectName("experimentChipsStrip")
+        strip.setWidgetResizable(True)
+        strip.setFrameShape(QFrame.Shape.NoFrame)
+        strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        strip.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        strip.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        strip.setWidget(bar)
+        if self._finger_scroll is not None:
+            self._finger_scroll.add(strip)
+        return strip
 
     # --------------------------------------------------------------- sections
 

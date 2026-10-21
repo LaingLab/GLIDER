@@ -118,8 +118,11 @@ class ShellTabBar(QFrame):
 
         row.addStretch(1)
         self._desktop_policy = self._buttons[TAB_KEYS[0]].sizePolicy()
+        # Ignored, not Expanding: the stretch alone sets the width, so the
+        # three tabs split the row evenly whatever the platform's font makes
+        # of each label (Expanding still floors each tab at its text width).
         self._touch_policy = QSizePolicy(
-            QSizePolicy.Policy.Expanding, self._desktop_policy.verticalPolicy()
+            QSizePolicy.Policy.Ignored, self._desktop_policy.verticalPolicy()
         )
         self._buttons[TAB_KEYS[0]].setChecked(True)
         self._current = TAB_KEYS[0]
@@ -131,8 +134,8 @@ class ShellTabBar(QFrame):
 
         The two end stretches go to zero and the tabs take stretch one, so the
         tabs are the only thing that can take the width (a zero-stretch spacer
-        still expands, and would otherwise claim a share of it); Expanding and
-        equal stretch make the shares equal.
+        still expands, and would otherwise claim a share of it); an Ignored
+        width and equal stretch make the shares equal.
         """
         for key, button in self._buttons.items():
             if key == "analyze":

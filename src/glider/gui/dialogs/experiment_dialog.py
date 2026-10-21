@@ -322,8 +322,11 @@ class ExperimentDialog(QDialog):
         The buttons' fixed widths were picked for the desktop font, and at
         touch padding "Browse" and "Remove" are clipped, so they size to their
         labels instead. Four buttons at that size are wider than the screen,
-        so Set Active drops to a row of its own.
+        so Set Active drops to a row of its own. The form's labels go above
+        their fields, so the label column never takes width from a field
+        whatever the platform's font makes of "Experimenter:".
         """
+        self._info_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         for button in (self._browse_dir_btn, self._add_btn, self._edit_btn, self._remove_btn):
             button.setMinimumWidth(0)
             button.setMaximumWidth(_NO_MAX_WIDTH)

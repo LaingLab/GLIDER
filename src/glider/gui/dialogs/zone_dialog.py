@@ -479,7 +479,7 @@ class ZoneDialog(QDialog):
         left_layout.addWidget(shape_group)
 
         # Drawing controls
-        draw_layout = QHBoxLayout()
+        draw_layout = self._draw_layout = QHBoxLayout()
 
         self._draw_btn = QPushButton("Draw Zone")
         self._draw_btn.setCheckable(True)
@@ -570,7 +570,7 @@ class ZoneDialog(QDialog):
         right_layout.addWidget(info_group)
 
         # File operations
-        file_layout = QHBoxLayout()
+        file_layout = self._file_layout = QHBoxLayout()
 
         self._save_btn = QPushButton("Save...")
         self._save_btn.clicked.connect(self._save_config)
@@ -875,6 +875,10 @@ class ZoneDialog(QDialog):
             self.setMinimumSize(0, 0)
             self._preview.setMinimumSize(240, 180)
             self._preview.refit_on_resize = True
+            # Three buttons abreast are wider than 480px in a wide platform
+            # font at touch padding; stacked they never clip.
+            for row in (self._draw_layout, self._file_layout):
+                row.setDirection(QBoxLayout.Direction.TopToBottom)
             self._update_table()  # rows built in __init__ have the desktop delete button
         return self
 

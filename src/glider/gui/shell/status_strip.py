@@ -134,6 +134,12 @@ RUN_STATE_TEXT = {
     "error": "Error",
 }
 
+#: The same words in touch mode, where the pill shares 480 px with five boards
+#: and whatever font the platform falls back to. Only recording is shortened:
+#: the mockup's "● REC" is the Pi's word for it, and the clock after it is what
+#: the operator reads.
+_TOUCH_RUN_STATE_TEXT = {**RUN_STATE_TEXT, "recording": "\u25cf REC"}
+
 #: The device states this strip knows how to paint. Anything else becomes
 #: ``"unknown"``; see the module docstring for why that is never ``"ok"``.
 DEVICE_STATES = ("ok", "warn", "error", "unknown")
@@ -147,12 +153,18 @@ _UNNAMED = "Untitled"
 #: name back gets the name.
 _DIRTY_MARK = "— edited"
 
+#: The dirty marker in touch mode: a dot, because "— edited" costs a board's
+#: worth of width on the Pi header and a frameless kiosk shows nothing else.
+_TOUCH_DIRTY_MARK = "\u25cf"
+
 #: Narrowest an eliding name may get in touch mode, in pixels. Deliberately tiny:
 #: it is only the floor the layout can squeeze to, reached when the dirty marker,
 #: a running pill and five boards all compete for 480 px, and the pill and marker
-#: do not shrink. With room to spare the names take it.
+#: do not shrink. With room to spare the names take it. A device name may go all
+#: the way to (almost) nothing, leaving its dot: how wide names are depends on the
+#: platform's fallback font, and the dots are what have to stay.
 _TOUCH_NAME_MIN = 32
-_TOUCH_DEVICE_MIN = 12
+_TOUCH_DEVICE_MIN = 1  # not 0: a zero minimum falls back to the text width
 
 #: The strip's fixed height in touch mode: a 44 px tap target, to match the gear
 #: button beside it.
@@ -529,7 +541,9 @@ class StatusStrip(QFrame):
                     widget.setVisible(self._desktop_visible.pop(widget, True))
         self._set_gaps(_TOUCH_GAPS if enabled else _GAPS)
         self.setFixedHeight(_TOUCH_HEIGHT if enabled else STRIP_HEIGHT)
+        self._dirty.setText(_TOUCH_DIRTY_MARK if self._touch else _DIRTY_MARK)
         self._dirty.setVisible(self._touch and self._is_dirty)
+        self.set_run_state(self._run_state, self._run_detail or None)
         self._name.set_elide_min(_TOUCH_NAME_MIN if self._touch else None)
         for label in self._names:
             label.set_elide_min(_TOUCH_DEVICE_MIN if self._touch else None)
@@ -597,7 +611,7 @@ class StatusStrip(QFrame):
             )
         self._run_state = state
         self._run_detail = str(detail).strip() if detail else ""
-        text = RUN_STATE_TEXT[state]
+        text = (_TOUCH_RUN_STATE_TEXT if self._touch else RUN_STATE_TEXT)[state]
         self._pill.setText(f"{text} {self._run_detail}" if self._run_detail else text)
         self._pill.setProperty("state", state)
         # Shown only when it has something to say. Idle is the state the app is

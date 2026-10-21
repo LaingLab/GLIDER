@@ -16,11 +16,11 @@ The header is on every page, so you never lose the essentials. It has two rows.
 
 **Row one** carries, on the left:
 
-- The **experiment name**, followed by an amber **— edited** while there is
+- The **experiment name**, followed by an amber **●** while there is
   unsaved work.
 - The **run-state pill**, just after the name. It is hidden while GLIDER is
   idle and appears once a run is under way: **Running Starting** as it starts,
-  **Running 03:12** while a run is live, **Recording 12:41** when data is being
+  **Running 03:12** while a run is live, **● REC 12:41** when data is being
   recorded, **Running Paused** while paused, **Running Stopping** as it stops,
   and **Error** if the session errors. While a run is live (starting, running,
   paused, or stopping), **tap the pill to jump to the Run tab** from any other
@@ -294,7 +294,7 @@ Here's the whole loop:
    experiment asks for (a Dam ID, say). The pill changes from **NEEDS DETAILS**
    to **READY**.
 6. **Start the run.** Tap **▶ Start run**. The clock starts, the pill turns to
-   **RUNNING**, and the header pill shows **Running** (or **Recording**) with the
+   **RUNNING**, and the header pill shows **Running** (or **● REC**) with the
    elapsed time.
 7. **Watch it go.** Stay on the Run tab, or move to another tab — the header pill
    keeps the state and time with you, and the graph is locked so nothing can be

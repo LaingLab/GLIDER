@@ -192,11 +192,15 @@ def test_grid_chips_elide_to_their_column_and_keep_the_full_value_in_the_tooltip
         chip = w.chip(key)
         assert chip.width() < 160  # two columns share 300 px
         assert chip.text().endswith("…") and chip.text() != _FULL[key]
-        assert chip.text().startswith(_LABEL[key])  # the label stays readable
+        # Elided from the right, so what shows is the start of the full text:
+        # the label first. How much of it fits is up to the platform's font.
+        assert _FULL[key].startswith(chip.text()[:-1])
         assert chip.fontMetrics().horizontalAdvance(chip.text()) <= chip.width()
         assert chip.toolTip() == ch * 40
-    # Plenty of room: nothing is elided.
-    w.resize(1400, 120)
+    # Plenty of room: nothing is elided. "Plenty" is measured in the font in
+    # use, which is wider on some platforms than others.
+    chip = w.chip("a")
+    w.resize(2 * chip.fontMetrics().horizontalAdvance(_FULL["a"]) + 400, 120)
     assert w.chip("a").text() == _FULL["a"]
 
 
