@@ -74,6 +74,7 @@ def test_connect_boards_resolves_the_panel_when_clicked(qtbot, main_window_facto
     w = _pi(qtbot, main_window_factory)
     opened = []
     monkeypatch.setattr(w._hardware_panel, "show_board_settings_dialog", lambda: opened.append(1))
+    monkeypatch.setattr(w, "_on_connect_hardware", lambda: None)
     connect = next(a for a in w._gear_button.menu().actions() if a.text() == "Connect boards…")
     connect.trigger()
     assert opened == [1]

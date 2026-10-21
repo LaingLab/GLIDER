@@ -7,6 +7,7 @@ the desktop frame; nothing is built twice.
 
 from __future__ import annotations
 
+import pytest
 from PyQt6.QtWidgets import QPushButton
 
 from glider.gui.main_window import PAGE_BUILDER
@@ -58,14 +59,28 @@ def test_panel_tabs_hold_the_real_widgets(qtbot, main_window_factory):
     assert connect.minimumHeight() >= 44
 
 
-def test_connect_boards_opens_the_board_dialog(qtbot, main_window_factory, monkeypatch):
+@pytest.mark.parametrize("live", [False, True])
+def test_connect_boards_sets_the_ports_then_connects_unless_live(
+    qtbot, main_window_factory, monkeypatch, live
+):
+    """Both doors, the gear item and the Hardware tab's button, connect.
+
+    The board dialog only edits ports; START waits for a connected board.
+    """
     w = _pi(qtbot, main_window_factory)
-    opened = []
-    monkeypatch.setattr(w._hardware_panel, "show_board_settings_dialog", lambda: opened.append(1))
+    calls = []
+    monkeypatch.setattr(
+        w._hardware_panel, "show_board_settings_dialog", lambda: calls.append("dialog")
+    )
+    monkeypatch.setattr(w, "_on_connect_hardware", lambda: calls.append("connect"))
+    monkeypatch.setattr(w, "_run_is_live", lambda: live)
+    gear = next(a for a in w._gear_button.menu().actions() if a.text() == "Connect boards…")
     hardware = w._pi_dashboard.tabs().widget(2)
-    (connect,) = [b for b in hardware.findChildren(QPushButton) if b.text() == "Connect boards…"]
-    connect.click()
-    assert opened == [1]
+    (button,) = [b for b in hardware.findChildren(QPushButton) if b.text() == "Connect boards…"]
+    for tap in (gear.trigger, button.click):
+        calls.clear()
+        tap()
+        assert calls == (["dialog"] if live else ["dialog", "connect"])
 
 
 def test_control_tab_refreshes_the_manual_controls_when_shown(

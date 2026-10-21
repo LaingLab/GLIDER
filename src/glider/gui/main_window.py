@@ -792,7 +792,8 @@ class MainWindow(QMainWindow):
         widgets keep their attribute names, since a lot of code refreshes them.
 
         The gear's "Connect boards" resolves ``self._hardware_panel`` at click
-        time: the runner-mode panel is built after this header is.
+        time (in ``_on_pi_connect_boards``): the runner-mode panel is built
+        after this header is.
         """
         header = QWidget(parent)
         header.setObjectName("piHeader")
@@ -820,7 +821,7 @@ class MainWindow(QMainWindow):
             ("Save", self._on_save),
             ("Save As…", self._on_save_as),
             None,
-            ("Connect boards…", lambda: self._hardware_panel.show_board_settings_dialog()),
+            ("Connect boards…", self._on_pi_connect_boards),
             None,
             ("Help", self._on_help),
             ("Switch to Desktop", self._switch_to_desktop_mode),
@@ -1797,7 +1798,7 @@ class MainWindow(QMainWindow):
         connect = QPushButton("Connect boards…")
         connect.setObjectName("piConnectBoardsButton")
         connect.setMinimumHeight(44)
-        connect.clicked.connect(lambda: self._hardware_panel.show_board_settings_dialog())
+        connect.clicked.connect(self._on_pi_connect_boards)
         hardware_layout.addWidget(connect)
         hardware_layout.addWidget(self._hardware_panel, 1)
 
@@ -1837,6 +1838,17 @@ class MainWindow(QMainWindow):
         """Extend the graph's lock to the properties form and the hardware map."""
         self._properties_host.setEnabled(not locked)
         self._hardware_panel.set_editable(not locked)
+
+    def _on_pi_connect_boards(self) -> None:
+        """⚙ › Connect boards… and the Hardware tab's button: ports, then connect.
+
+        The board dialog only edits the port each board uses, and START waits
+        for a connected board, so this is the Pi's one tap path to connecting.
+        Not while a run is live: connecting sets the hardware up again.
+        """
+        self._hardware_panel.show_board_settings_dialog()
+        if not self._run_is_live():
+            self._on_connect_hardware()
 
     def _heal_stale_paint(self, *_args) -> None:
         """Schedule a deferred full-window repaint after a central relayout.
