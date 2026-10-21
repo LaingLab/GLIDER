@@ -19,7 +19,7 @@ def _button(panel, node_type):
 
 
 def test_tap_adds_the_node_at_the_visible_centre(qtbot):
-    graph, _panel_, button = _panel(qtbot, tap_to_add=True)
+    graph, _panel_, button = _panel(qtbot)
     with qtbot.waitSignal(graph.node_created) as sig:
         qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
     centre = graph.mapToScene(graph.viewport().rect().center())
@@ -28,7 +28,7 @@ def test_tap_adds_the_node_at_the_visible_centre(qtbot):
 
 def test_click_still_adds_the_node_on_desktop(qtbot):
     # Clicking a library button already dropped the node mid-graph before the
-    # Pi layout existed; the default (desktop) behaviour must stay that way.
+    # Pi layout existed; desktop never locks, so that must stay that way.
     graph, _p, button = _panel(qtbot)
     with qtbot.waitSignal(graph.node_created) as sig:
         qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
@@ -36,14 +36,14 @@ def test_click_still_adds_the_node_on_desktop(qtbot):
 
 
 def test_tap_is_refused_while_the_graph_is_locked(qtbot):
-    graph, _p, button = _panel(qtbot, tap_to_add=True)
+    graph, _p, button = _panel(qtbot)
     graph.set_locked(True)
     with qtbot.assertNotEmitted(graph.node_created):
         qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
 
 
 def test_zone_button_taps_its_own_zone_type(qtbot):
-    graph, panel, _b = _panel(qtbot, tap_to_add=True)
+    graph, panel, _b = _panel(qtbot)
     panel.refresh_zones(SimpleNamespace(zones=[SimpleNamespace(id="z1", name="Nest")]))
     with qtbot.waitSignal(graph.node_created) as sig:
         qtbot.mouseClick(_button(panel, "ZoneInput:z1"), Qt.MouseButton.LeftButton)

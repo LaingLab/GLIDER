@@ -115,21 +115,15 @@ class NodeLibraryPanel(QWidget):
 
     status_message = pyqtSignal(str, int)  # message, timeout_ms
 
-    def __init__(
-        self, session_fn, graph_view: "NodeGraphView", parent=None, *, tap_to_add: bool = False
-    ):
+    def __init__(self, session_fn, graph_view: "NodeGraphView", parent=None):
         """
         Args:
             session_fn: Callable that returns the current ExperimentSession (or None)
             graph_view: NodeGraphView instance for adding nodes
-            tap_to_add: Touch layout. A tap on a node button still drops the node in the
-                middle of the graph (a click always has), but is refused while the graph
-                is locked to view-only.
         """
         super().__init__(parent)
         self._session_fn = session_fn
         self._graph_view = graph_view
-        self._tap_to_add = tap_to_add
 
         # Zone configuration reference (set externally)
         self._zone_config = None
@@ -493,8 +487,11 @@ class NodeLibraryPanel(QWidget):
         ]
 
     def _on_node_tapped(self, node_type: str) -> None:
-        """Drop a node in the middle of the visible graph (a button click)."""
-        if self._tap_to_add and self._graph_view.is_locked():
+        """Drop a node in the middle of the visible graph (a button click or tap).
+
+        Refused while the graph is locked to view-only.
+        """
+        if self._graph_view.is_locked():
             return
         center = self._graph_view.mapToScene(self._graph_view.viewport().rect().center())
         self._graph_view.node_created.emit(node_type, center.x(), center.y())
