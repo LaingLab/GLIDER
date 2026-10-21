@@ -14,7 +14,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
+from PyQt6.QtWidgets import (
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSizePolicy,
+    QStyle,
+    QStyleOptionButton,
+    QWidget,
+)
 
 _MAX_VALUE_CHARS = 40
 
@@ -37,6 +47,27 @@ class _Editor(QLineEdit):
         super().keyPressEvent(event)
 
 
+class _ElidedChip(QPushButton):
+    """A grid-mode chip: takes whatever width its column gives it and elides
+    its text to fit, so a 40-character value cannot widen a 480 px page. The
+    full value stays in the tooltip."""
+
+    def __init__(self, text: str):
+        super().__init__(text)
+        self._full = text
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def resizeEvent(self, event):  # noqa: N802 (Qt override)
+        super().resizeEvent(event)
+        self.ensurePolished()  # the stylesheet sets the font and padding
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
+        room = self.style().subElementRect(QStyle.SubElement.SE_PushButtonContents, opt, self)
+        shown = self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, room.width())
+        if shown != self.text():
+            self.setText(shown)
+
+
 class FieldTags(QWidget):
     value_edited = pyqtSignal(str, str)
 
@@ -54,6 +85,9 @@ class FieldTags(QWidget):
         self._trailing = QLabel()
         self._trailing.setProperty("textRole", "muted")
         self._trailing.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        if isinstance(self._row, QGridLayout):
+            for col in range(columns):
+                self._row.setColumnStretch(col, 1)  # columns split the width evenly
         if columns:
             # A run-folder path has no spaces to wrap at; let it clip (the
             # tooltip has the whole text) rather than widen the 480 px page.
@@ -105,7 +139,8 @@ class FieldTags(QWidget):
                 w.deleteLater()
         self._chips.clear()
         for i, f in enumerate(self._fields):
-            chip = QPushButton(self._chip_text(f))
+            text = self._chip_text(f)
+            chip = _ElidedChip(text) if self._columns else QPushButton(text)
             chip.setProperty("fieldTag", True)
             chip.setProperty("need", f.required and not f.value)
             chip.setProperty("locked", self._locked)

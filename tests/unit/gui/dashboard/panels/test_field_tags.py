@@ -153,3 +153,70 @@ def test_default_is_still_a_single_row(qtbot, tags):
     from PyQt6.QtWidgets import QHBoxLayout
 
     assert isinstance(tags.layout(), QHBoxLayout)
+
+
+_LABEL = {"a": "Experimenter", "b": "Postnatal day"}
+_FULL = {"a": "Experimenter  " + "A" * 40, "b": "Postnatal day  " + "B" * 40}
+
+
+def _long(qtbot, columns=2):
+    w = FieldTags(columns=columns)
+    qtbot.addWidget(w)
+    w.set_fields(
+        [
+            TagField("a", "Experimenter", "A" * 40),
+            TagField("b", "Postnatal day", "B" * 40),
+        ]
+    )
+    return w
+
+
+def test_long_values_do_not_widen_the_two_column_grid(qtbot):
+    from glider.gui.styles import load_stylesheet
+
+    w = _long(qtbot)
+    assert w.minimumSizeHint().width() <= 480
+    w.setStyleSheet(load_stylesheet("touch"))
+    w.ensurePolished()
+    for chip in w.findChildren(type(w.chip("a"))):
+        chip.ensurePolished()
+    assert w.minimumSizeHint().width() <= 480
+
+
+def test_grid_chips_elide_to_their_column_and_keep_the_full_value_in_the_tooltip(qtbot):
+    w = _long(qtbot)
+    w.resize(300, 120)
+    w.show()
+    qtbot.waitExposed(w)
+    for key, ch in (("a", "A"), ("b", "B")):
+        chip = w.chip(key)
+        assert chip.width() < 160  # two columns share 300 px
+        assert chip.text().endswith("…") and chip.text() != _FULL[key]
+        assert chip.text().startswith(_LABEL[key])  # the label stays readable
+        assert chip.fontMetrics().horizontalAdvance(chip.text()) <= chip.width()
+        assert chip.toolTip() == ch * 40
+    # Plenty of room: nothing is elided.
+    w.resize(1400, 120)
+    assert w.chip("a").text() == _FULL["a"]
+
+
+def test_the_two_columns_split_the_width_evenly(qtbot):
+    w = _long(qtbot)
+    w.resize(400, 120)
+    w.show()
+    qtbot.waitExposed(w)
+    assert abs(w.chip("a").width() - w.chip("b").width()) <= 1
+    # Still even with an editor open in one of them.
+    w.chip("a").click()
+    qtbot.waitUntil(lambda: w.editor().isVisible(), timeout=1000)
+    qtbot.waitUntil(lambda: w.editor().width() < 400, timeout=1000)
+    assert abs(w.editor().width() - w.chip("b").width()) <= 1
+    assert w.width() == 400
+
+
+def test_row_mode_chips_are_not_elided(qtbot):
+    w = _long(qtbot, columns=0)
+    w.resize(200, 60)
+    w.show()
+    qtbot.waitExposed(w)
+    assert w.chip("a").text() == _FULL["a"]

@@ -14,6 +14,7 @@ def _real_session(core, *, board=True, start_node=True):
     session._flow = FlowConfig(nodes=nodes)
     core.session = session
     core.hardware_manager.is_any_board_connected = lambda: board
+    core.hardware_manager.connected_board_description = lambda: "Arduino Uno"
     core.last_flow_duration_s = None
     return session
 
@@ -127,3 +128,18 @@ def test_refresh_refreshes_all_three(qtbot, mock_core, monkeypatch):
     monkeypatch.setattr(page.devices, "refresh_devices", lambda: calls.append("devices"))
     page.refresh()
     assert calls == ["header", "control", "devices"]
+
+
+def test_long_run_field_values_do_not_widen_the_page_past_480(qtbot, mock_core):
+    from glider.gui.styles import load_stylesheet
+
+    session = _real_session(mock_core)
+    session.metadata.run_fields = [RunField("a", "Experimenter"), RunField("b", "Postnatal day")]
+    session.metadata.run_values = {"a": "A" * 40, "b": "B" * 40}
+    page = _page(qtbot, mock_core)
+    page.setStyleSheet(load_stylesheet("touch"))
+    page.resize(480, 800)
+    page.show()
+    qtbot.waitExposed(page)
+    assert page.minimumSizeHint().width() <= 480
+    assert page.width() == 480
