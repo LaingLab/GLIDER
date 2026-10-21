@@ -602,6 +602,21 @@ def _recording(folder, rows, *, calibrated=True, fps=30.0):
     return folder
 
 
+def _keypoints(folder, rows, *, names=("0", "1", "2")):
+    """The live keypoints CSV beside rec_tracking.csv, as TrackingDataLogger writes it.
+
+    rows: (frame, object_id, [(x, y) or None per keypoint]); None is an
+    undetected keypoint, which the logger writes as blank x/y.
+    """
+    with open(folder / "rec_keypoints.csv", "w", encoding="utf-8") as f:
+        f.write("frame,timestamp,elapsed_ms,flow_elapsed_ms,object_id,keypoint,x,y,confidence\n")
+        for frame, obj, points in rows:
+            for name, point in zip(names, points, strict=True):
+                x, y = ("", "") if point is None else point
+                f.write(f"{frame},t,{frame * 33.3:.1f},,{obj},{name},{x},{y},0.9\n")
+    return folder
+
+
 def _walk(n, *, start=1, obj=0, state="walk"):
     return [(f, obj, state, 100.0 + f, 200.0, 0.5) for f in range(start, start + n)]
 
@@ -630,6 +645,59 @@ class TestFromRecording:
         assert np.isnan(view.xy[0]).all()
         assert view.xy[1, 0].tolist() == [101.0, 200.0]
         assert view.keypoint_names == ["centroid"]
+
+    def test_the_live_keypoints_are_the_pose(self, tmp_path):
+        """A rig that ran a pose model logged its keypoints beside the tracking
+        CSV; Session Review used to ignore them and say no poses were found."""
+        folder = _recording(tmp_path / "r", _walk(3))
+        _keypoints(
+            folder, [(f, 0, [(10.0 + f, 20.0), (30.0, 40.0), (50.0, 60.0)]) for f in (1, 2, 3)]
+        )
+        view = _open(folder)
+        assert view.keypoint_names == ["0", "1", "2"]
+        assert view.xy.shape == (4, 3, 2)
+        assert view.xy[2, 0].tolist() == [12.0, 20.0]
+        assert view.pose_path == folder / "rec_keypoints.csv"
+        assert view.body_axis == (0, 2)
+
+    def test_bodypart_names_are_kept_in_logged_order(self, tmp_path):
+        folder = _recording(tmp_path / "r", _walk(2))
+        names = ("nose", "neck", "tail_base")
+        _keypoints(folder, [(f, 0, [(1.0, 1.0)] * 3) for f in (1, 2)], names=names)
+        assert _open(folder).keypoint_names == list(names)
+
+    def test_an_undetected_keypoint_is_a_gap(self, tmp_path):
+        folder = _recording(tmp_path / "r", _walk(2))
+        _keypoints(folder, [(1, 0, [(1.0, 2.0), None, (5.0, 6.0)]), (2, 0, [(1.0, 2.0)] * 3)])
+        view = _open(folder)
+        assert np.isnan(view.xy[1, 1]).all()
+        assert view.xy[1, 2].tolist() == [5.0, 6.0]
+
+    def test_only_the_subjects_keypoints_are_kept(self, tmp_path):
+        """Two animals in one frame: the keypoints follow the object the
+        tracking rows chose, never a mix of both."""
+        rows = _walk(3, obj=1, state="b") + _walk(3, obj=0, state="a")
+        folder = _recording(tmp_path / "r", rows)
+        _keypoints(
+            folder,
+            [(f, 0, [(1.0, 1.0)] * 3) for f in (1, 2, 3)]
+            + [(f, 1, [(99.0, 99.0)] * 3) for f in (1, 2, 3)],
+        )
+        view = _open(folder)
+        assert set(view.labels) == {"a"}
+        assert view.xy[2, 0].tolist() == [1.0, 1.0]
+
+    def test_an_unreadable_keypoints_file_falls_back_to_the_centroid(self, tmp_path):
+        folder = _recording(tmp_path / "r", _walk(3))
+        (folder / "rec_keypoints.csv").write_text("not,a,keypoints,file\n", encoding="utf-8")
+        view = _open(folder)
+        assert view.keypoint_names == ["centroid"]
+        assert view.pose_path is None
+
+    def test_keypoints_with_no_coordinates_fall_back_to_the_centroid(self, tmp_path):
+        folder = _recording(tmp_path / "r", _walk(2))
+        _keypoints(folder, [(f, 0, [None, None, None]) for f in (1, 2)])
+        assert _open(folder).keypoint_names == ["centroid"]
 
     def test_a_dropped_frame_is_nan_not_shifted(self, tmp_path):
         rows = [r for r in _walk(10) if r[0] != 5]

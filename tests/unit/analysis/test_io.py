@@ -169,3 +169,47 @@ def test_extra_events_round_trip_device_columns(tmp_path: Path):
     assert row["pin"] == 5.0
     assert row["pin_type"] == "DIGITAL"
     assert str(row["value"]) == "1"
+
+
+def test_discover_knows_the_recorders_annotated_naming(tmp_path: Path):
+    """VideoRecorder writes <name>_annotated_<ts>.mp4. Read as a raw video,
+    the overlay copy -- written last, so newest -- won, and Session Review
+    played the boxes-and-skeleton video as if it were the recording."""
+    rec_dir = tmp_path / "rec"
+    write_synthetic_recording(rec_dir, RecordingSpec())
+    raw = rec_dir / "test_experiment_20260525_140030.mp4"
+    annotated = rec_dir / "test_experiment_annotated_20260525_140031.mp4"
+    raw.write_bytes(b"")
+    annotated.write_bytes(b"")
+
+    art = discover(rec_dir)
+    assert art.video == raw
+    assert art.annotated_video == annotated
+
+
+@pytest.mark.parametrize(
+    "name, raw",
+    [
+        ("Maimu_RTPP_annotated_20261020_163943.mp4", "Maimu_RTPP_20261020_163943"),
+        ("rec_20260525_140030_annotated.mp4", "rec_20260525_140030"),
+        ("rec_20260525_140030.mp4", "rec_20260525_140030"),
+        ("annotated_study_20260525_140030.mp4", "annotated_study_20260525_140030"),
+    ],
+)
+def test_raw_video_stem(name, raw):
+    from glider.analysis._io import is_annotated_video, raw_video_stem
+
+    assert raw_video_stem(Path(name)) == raw
+    assert is_annotated_video(Path(name)) == (raw != Path(name).stem)
+
+
+def test_keypoints_beside_a_tracking_csv(tmp_path: Path):
+    from glider.analysis._io import keypoints_beside
+
+    tracking = tmp_path / "run_20261020_172145_tracking.csv"
+    tracking.write_text("# GLIDER Tracking Data\n", encoding="utf-8")
+    assert keypoints_beside(tracking) is None
+    keypoints = tmp_path / "run_20261020_172145_keypoints.csv"
+    keypoints.write_text("frame\n", encoding="utf-8")
+    assert keypoints_beside(tracking) == keypoints
+    assert keypoints_beside(None) is None
