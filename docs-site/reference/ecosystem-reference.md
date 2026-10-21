@@ -59,12 +59,11 @@ This distinction matters in explanations of GLIDER: data flow alone does not tri
 
 ### Runner is the touch-first operating workspace
 
-Runner is intended for an operator at a bench or a Raspberry Pi touchscreen. It can load the same `.glider` file but uses larger controls and a four-tab structure:
+Runner is intended for an operator at a bench or a Raspberry Pi touchscreen. It can load the same `.glider` file but uses larger controls, a header with a ⚙ menu (New, Open, Save, Connect boards, Switch to Desktop), and three tabs:
 
-- **Setup** loads/saves experiments and connects hardware.
-- **Run** starts and stops a ready experiment and shows run state.
-- **Manual** generates controls from a device's declared actions and ranges.
-- **Camera** provides the camera and recording interface.
+- **Experiment** edits metadata, mice, zones, lab vocabulary, and plugins.
+- **Dashboard** shows the node graph (view-only until unlocked) over panels for nodes, properties, hardware, camera, and manual **Control**, which generates controls from a device's declared actions and ranges.
+- **Run** shows the per-run fields, the clock, and live device cards, and starts and stops a ready experiment.
 
 Runner does not create a separate kind of experiment. It is another view over the same experiment session and hardware model. Manual functions are deliberately prevented from overlapping an active experiment because both could drive the same hardware.
 

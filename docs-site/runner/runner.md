@@ -1,154 +1,147 @@
 # The Runner Screen
 
-The Runner screen is GLIDER's touchscreen layout. Everything happens on four
-tabs behind a persistent bottom tab bar: **Setup**, **Run**, **Manual**, and
-**Camera**. This page walks through each tab, the controls you'll find there,
-and how to run an experiment start to finish without a keyboard.
-
-## Getting oriented
-
-Two elements are always available no matter which tab you're on:
-
-- **The bottom tab bar.** A row of four large buttons — **Setup**, **Run**,
-  **Manual**, **Camera** — pinned to the bottom of the screen. Tap one to switch
-  tabs. The buttons are tall (sized for fingertips, not a mouse), and the
-  current tab stays highlighted.
-- **The run banner.** A slim strip that appears at the top of the screen while
-  an experiment is live (running or paused) and you are on a tab *other than*
-  Run. It carries the essentials with you so you never lose them: the elapsed
-  **timer**, the current **state**, a **● REC** indicator when recording, and a
-  **■ STOP** button. On the Run tab itself the banner is hidden, because the Run
-  tab already shows all of that full-size.
-
-!!! note "Where is the emergency stop?"
-    There is deliberately no separate emergency-stop button in Runner mode. Use
-    **STOP** (on the Run tab or in the run banner) to end a run. A full
-    emergency-stop is a Desktop-mode menu action.
-
-## The Setup tab
-
-Setup is the landing tab and your home base between runs. It's a single
-scrollable page with four parts, top to bottom.
+The Runner screen is GLIDER's touchscreen layout. A header runs across the top
+of every page, and under it sit three tabs: **Experiment**, **Dashboard**, and
+**Run**. This page walks through the header and each tab, and how to run an
+experiment start to finish without a keyboard.
 
 <figure markdown="span">
-  ![The Runner Setup tab: status line, large file buttons, and a hardware roster](../assets/screenshots/runner.png)
-  <figcaption>The Setup tab — status line up top, finger-sized file and connect buttons, the hardware roster, and the persistent bottom tab bar.</figcaption>
+  ![The Runner Run tab: header with experiment name, board dots and the gear menu, the Experiment / Dashboard / Run tabs, run details, the clock, device cards and the Start run bar](../assets/screenshots/runner.png)
+  <figcaption>The Run tab before a run — the header and tabs on top, the run details, the clock and a card per device, and the Start run bar at the bottom with a hint about what's still missing.</figcaption>
 </figure>
 
-### Status line
+## The header
 
-At the top, two short status readouts tell you whether you're ready to run:
+The header is on every page, so you never lose the essentials. It has two rows.
 
-- **Board:** either `✓` with the connected board's description, or
-  `✗ not connected`.
-- **Experiment:** either `✓` with the experiment's name, or `✗ none loaded`.
+**Row one** carries, left to right:
 
-These refresh automatically about twice a second, so if you plug in a board or
-open a file the status updates on its own — you don't have to reload anything.
+- The **experiment name**, with a small dot beside it while there is unsaved
+  work.
+- **One dot per board**, labelled with the board's ID — green when the board
+  is connected.
+- The **run-state pill**. It is hidden while GLIDER is idle and appears once a
+  run is under way: **Running 03:12** while a run is live, **Recording 12:41**
+  when data is being recorded, **Running Paused** while paused, and **Error**
+  if the session errors. **Tap the pill to jump to the Run tab** from anywhere.
+- The **⚙ menu** (below).
 
-### The housekeeping menu (⚙)
+**Row two** is the tabs: **Experiment**, **Dashboard**, **Run**. There is no
+**Analyze** tab on the Pi — the analysis tools are a desktop feature (see
+[Switch to Desktop](#switch-to-desktop)).
 
-The gear button in the top-right corner opens a small menu with three items:
+### The ⚙ menu
+
+The gear opens a menu with everything that used to be a button on a file page:
 
 | Item | What it does |
 | --- | --- |
+| **New** | Start a fresh, empty experiment. |
+| **Open…** | Load an existing experiment file. |
+| **Save** | Save the current experiment. |
+| **Save As…** | Save the current experiment under a new name. |
+| **Connect boards…** | Open the board/port settings to connect your hardware. |
 | **Help** | Opens the in-app help. |
-| **Switch to Desktop** | Leaves Runner mode for the full Desktop editor (see the caution below). |
+| **Switch to Desktop** | Opens the desktop editor (see [below](#switch-to-desktop)). |
 | **Exit** | Closes GLIDER. |
 
-!!! warning "Switching to Desktop is one-way"
-    Once you switch to Desktop mode you cannot return to the Runner screen
-    without restarting GLIDER. On a dedicated bench kiosk you normally leave this
-    alone. See [Runner Mode](index.md#how-glider-chooses-runner-mode) for why.
+**New** and **Open…** are refused while an experiment is running or paused —
+they would clear the flow and hardware out from under the run. GLIDER says so on
+the notice bar instead.
 
-### Experiment file actions
+### The notice bar
 
-Below the experiment name is a grid of large buttons for working with
-experiment files, plus a full-width connect button:
+Warnings and errors appear in a bar just under the header — a board that lost
+its connection mid-run, a connection or start error, a New, Open, or Switch to
+Desktop that was refused because a run is live. The bar is deliberately sticky:
+a touchscreen operator never sees a small status-bar message that vanishes, so
+**a notice stays until you tap it**.
 
-| Button | What it does |
+A **critical** notice — the "UNSAFE STATE" warning after a run ends in an error,
+for example, which means a heater, relay, PWM output, valve, or motor may still
+be active — is never replaced by a lesser one. A "Saved" or an informational
+message won't bury it; tap it once you've read it.
+
+!!! note "Where is the emergency stop?"
+    There is deliberately no separate emergency-stop button in Runner mode. Use
+    **Stop** on the Run tab (tap the run pill to get there from another tab). A
+    full emergency-stop is a Desktop-mode menu action.
+
+## The Experiment tab
+
+The Experiment tab is where you say what this experiment *is*. A row of
+**section chips** runs across the top — **Metadata**, **Mice**, **Zones**, **Lab
+Vocabulary**, and **Plugins** — and tapping one shows that section at full width
+below. Each section scrolls by dragging with a finger.
+
+These are the same editors the desktop's **Experiment** tab uses, so what you
+change here is saved in the same `.glider` file. See
+[Subjects & Lab Vocabulary](../building/subjects.md) for the mice and the
+vocabulary lists and [Plugins](../building/plugins.md) for the plugin catalogue;
+zones are covered under [Camera & Recording](../camera-behavior/camera.md#zones-regions-of-interest).
+
+## The Dashboard tab
+
+The Dashboard tab is the experiment's node graph with the panels you need
+beside it. The graph takes the top half of the screen; under it, a **panel
+tabs** row switches between **Nodes**, **Properties**, **Hardware**,
+**Camera**, and **Control**. The **grip** between the two halves is draggable —
+pull it up for more panel, down for more graph.
+
+<figure markdown="span">
+  ![The Runner Dashboard tab: the node graph on top, a View only pill and zoom buttons over it, and the Nodes panel under the grip](../assets/screenshots/runner-dashboard.png)
+  <figcaption>The Dashboard tab — the graph on the top half (locked, with its zoom and fit buttons), the grip, and the panel tabs with the Nodes list underneath.</figcaption>
+</figure>
+
+### Viewing and editing the graph
+
+The graph starts **locked**: a pill in its top-left corner reads **View only ·
+tap to edit**. While it is locked you can:
+
+- **Pan** with a one-finger drag over empty canvas.
+- **Zoom** with the **+** and **−** buttons, and **fit** the whole flow to the
+  view with the third button.
+
+You cannot move, connect, delete, or add nodes. **Properties** is read-only and
+**Hardware** hides its add, edit, and remove controls, so an accidental tap
+can't change the experiment.
+
+Tap the pill to switch it to **Editing · tap to lock**, which unlocks all of
+that. Tap it again to lock the graph.
+
+!!! note "A running experiment locks the graph"
+    While an experiment is running or paused the lock is forced on and the pill
+    can't be changed. The graph stays locked after the run ends; unlock it when
+    you want to edit again.
+
+### The panel tabs
+
+| Tab | What it holds |
 | --- | --- |
-| **New** | Start a fresh, empty experiment. |
-| **Open** | Load an existing experiment file. |
-| **Save** | Save the current experiment. |
-| **Save As** | Save the current experiment under a new name. |
-| **Connect / Ports** | Open the board/port settings to connect your hardware. |
+| **Nodes** | The node library. **Tap a node to drop it in the middle of the graph.** Dragging one onto a precise spot needs a press-and-hold first. Both are refused while the graph is locked. |
+| **Properties** | The selected node's settings. **Tapping a node on the graph while editing opens this tab.** Read-only while the graph is locked. |
+| **Hardware** | Your boards and devices. **Connect boards…** at the top opens the board/port settings. While the graph is unlocked, **+ Board** and **+ Device** appear and boards and devices can be edited or removed; while it is locked those are off (connecting and disconnecting still work). For what the device types mean and how to wire them, see [Devices & Hardware](../building/devices.md). |
+| **Camera** | The live camera view and recording controls. For how the camera, recording, and behavior tracking work, see [Camera & Recording](../camera-behavior/camera.md) and [Tracking](../camera-behavior/tracking.md). |
+| **Control** | Drive hardware by hand, and run your saved functions. See [below](#the-control-tab). |
 
-An experiment is the node graph you built in Desktop mode — see
-[Building Experiments](../building/index.md). In Runner mode you load and run
-these files; you don't edit the graph.
+Every panel scrolls by dragging with a finger; the thin bar at the edge is only
+an indicator.
 
-### Hardware panel
+### The Control tab
 
-The bottom of the Setup tab embeds the hardware panel, where connected devices
-appear. Use **Connect / Ports** to open the port settings if your board isn't
-showing up. For what the device types mean and how to wire them, see
-[Devices & Hardware](../building/devices.md).
+Control lets you drive hardware by hand — turn an output on, nudge a value, take
+a reading, or run a saved function — without starting a recorded experiment. The
+controls are **generated automatically** from whatever devices are connected:
+GLIDER inspects each device's actions and builds the right control for each one.
+That means custom and plugin devices get correct, range-aware controls with no
+extra work.
 
-## The Run tab
+!!! note "Control reflects your current hardware"
+    Every time you open the Control tab, its controls rebuild to match what's
+    connected right now. If you connect a board from **Hardware** and then tap
+    **Control**, the new device's controls appear.
 
-The Run tab is where you start, watch, and stop a recorded experiment.
-
-### Header
-
-Across the top:
-
-- **Experiment name** on the left (read-only here — set it when you build or
-  save the experiment).
-- A large **elapsed timer** in the middle, counting up while a run is live.
-- A **state pill** on the right showing the current state (for example `IDLE`,
-  `RUNNING`, `PAUSED`).
-
-A **● REC** indicator appears while data is being recorded.
-
-### Device status cards
-
-The middle of the tab is a scrollable list of device cards, one per connected
-device. Each card shows the device's name, its type, a live state readout, and a
-**Ready** marker once the device is initialized. The readout depends on the
-device:
-
-- A digital output reads **HIGH** or **LOW**.
-- An analog input shows its raw reading and the equivalent voltage (for example
-  `512` / `2.50V`).
-- Other devices show their current value.
-
-If nothing is connected you'll see "Connect hardware to see devices."
-
-### START and STOP
-
-At the bottom are two big buttons:
-
-- **▶ START** begins the experiment and starts recording. It is **enabled only
-  when you're ready** — that means a board is connected *and* a runnable
-  experiment is loaded. Until both are true, START is greyed out and a
-  **"Not ready — check Setup"** hint appears; go back to the Setup tab to see
-  which piece is missing.
-- **■ STOP** ends the run at any time.
-
-While a run is live the header timer hands off to the run banner, so the timer
-keeps following you if you switch to another tab.
-
-!!! tip "Stopping loads a clean time"
-    When a flow finishes, the timer snaps to the experiment's true logical
-    duration rather than the last timer tick, so repeated runs of the same flow
-    report a consistent elapsed time.
-
-## The Manual tab
-
-The Manual tab lets you drive hardware by hand — turn an output on, nudge a
-value, take a reading, or run a saved function — without starting a recorded
-experiment. The controls here are **generated automatically** from whatever
-devices are connected: GLIDER inspects each device's actions and builds the
-right control for each one. That means custom and plugin devices get correct,
-range-aware controls with no extra work.
-
-!!! note "The Manual tab reflects your current hardware"
-    Every time you open the Manual tab, its controls rebuild to match what's
-    connected right now. If you connect a board from the Setup tab and then tap
-    Manual, the new device's controls appear.
-
-### Per-device controls
+#### Per-device controls
 
 For each device you'll see a heading with the device's name, followed by one
 control per action:
@@ -168,7 +161,7 @@ output shows one slider rather than duplicate controls.
 All values are clamped to each device's declared safe range before they're sent,
 and commands to a single device are sent one at a time.
 
-### The Functions section
+#### The Functions section
 
 If the loaded experiment defines any **functions** — reusable action sequences
 built as a `StartFunction → … → EndFunction` chain in the graph — a
@@ -194,43 +187,103 @@ can never overlap a real experiment:
 
 To learn how functions are built, see [Functions](../building/functions.md).
 
-### The status strip
+#### The status strip
 
-A status strip sits at the bottom of the Manual tab. Because a touchscreen
-operator never sees the small status-bar messages a desktop user would, this
-strip shows failures and warnings as an icon plus text and **keeps them visible
-until something replaces them** — for example, if a command fails, if a value
-had to be clamped, or if a function couldn't run. If you tap an ON/OFF switch and
-the command fails, the switch flips back to its real state and the reason
-appears here.
+A status strip sits at the bottom of the Control tab. It shows failures and
+warnings as an icon plus text and **keeps them visible until something replaces
+them** — for example, if a command fails, if a value had to be clamped, or if a
+function couldn't run. If you tap an ON/OFF switch and the command fails, the
+switch flips back to its real state and the reason appears here.
 
-## The Camera tab
+## The Run tab
 
-The Camera tab holds GLIDER's live camera view and recording controls in the
-touchscreen layout. For how the camera, recording, and behavior tracking work,
-see [Camera & Recording](../camera-behavior/camera.md) and
-[Tracking](../camera-behavior/tracking.md).
+The Run tab is where you start, watch, and stop a recorded experiment. Top to
+bottom:
+
+- **Run details.** The per-run fields your experiment asks for — **Dam ID** or
+  **Animal ID** and **Group**, say, plus **Experimenter** and **Notes**. Tap a
+  field to type its value. Fields marked required **block Start** until they're
+  filled in. (The fields come from the experiment file you opened; there is no
+  preset picker on the Pi, so choose or edit presets on the desktop.) The
+  details lock while a run is live.
+- **A status pill** at the right of the details: **NOT READY** (no board
+  connected, or no runnable flow), **NEEDS DETAILS** (a required field is
+  empty), or **READY**. While a run is live it shows the state instead —
+  **RUNNING**, **PAUSED**.
+- **The clock.** A large clock counts up while a run is live and freezes while
+  paused.
+- **Device cards.** A card per device, in two columns, showing the device's name,
+  its type, a live value badge (an output's level, an input's reading), and a
+  link word under it — **Ready** once the device is initialized, **Disconnected**
+  while its board isn't connected.
+- **The camera video.** When the camera is streaming, its live view appears
+  between the cards and the run bar.
+- **The run bar.** At the bottom, a line about the board and the buttons.
+
+### Start, Pause, and Stop
+
+When idle, the run bar shows a big **▶ Start run** button. It is enabled only
+when you're ready: a board is connected, the experiment has a Start Experiment
+node, and every required run field is filled in. Until then it is greyed out and
+a hint under it says what's missing:
+
+| Hint | What to do |
+| --- | --- |
+| **Fill in Dam ID to start.** (or whichever field is required) | Tap the field in the run details and enter a value. |
+| **Connect a board to start (⚙ › Connect boards…).** | Open the ⚙ menu and choose **Connect boards…**. |
+| **Add a Start Experiment node to the flow to start.** | Open the **Dashboard** tab, unlock the graph, and add one. |
+
+While a run is live the bar becomes **Pause** (which turns into **Resume** when
+paused) and **■ Stop**. Stop ends the run at any time.
+
+To stop from another tab, **tap the run pill in the header** — that jumps to the
+Run tab — and tap **Stop**.
+
+!!! tip "Stopping loads a clean time"
+    When a flow finishes, the clock snaps to the experiment's true logical
+    duration rather than the last timer tick, so repeated runs of the same flow
+    report a consistent elapsed time.
+
+## Switch to Desktop
+
+**⚙ › Switch to Desktop** opens the desktop editor in place: the normal header
+with the **Analyze** tab, and the node graph with its side panels. Nothing is
+reloaded — your experiment, hardware, and camera carry over. The **Run** tab
+stays the Pi's run page.
+
+- It is **refused while a run is live** — GLIDER tells you to stop the
+  experiment first.
+- It is **one-way**. You cannot return to the Runner layout without restarting
+  GLIDER. On a dedicated bench kiosk you normally leave this alone. See
+  [Runner Mode](index.md#how-glider-chooses-runner-mode) for why.
 
 ## Running an experiment from the touchscreen
 
-Here's the whole loop, tab by tab:
+Here's the whole loop:
 
-1. **Connect your hardware.** On the **Setup** tab, tap **Connect / Ports** and
-   connect your board. The **Board** status line should turn to `✓`.
-2. **Load your experiment.** Still on Setup, tap **Open** and choose your
-   experiment file (or **New** to start fresh). The **Experiment** status line
-   should turn to `✓`.
-3. **(Optional) Check your rig by hand.** Tap **Manual** and use the
-   auto-generated controls — toggle an output, nudge a value, take a reading, or
-   run a Function — to confirm everything responds before you record.
-4. **Start the run.** Tap **Run**. When both Board and Experiment are ready,
-   **▶ START** lights up. Tap it. The timer begins, the state pill shows
-   `RUNNING`, and **● REC** appears while recording.
-5. **Watch it go.** Stay on the Run tab, or move to **Manual** or **Camera** —
-   the run banner carries the timer, state, REC indicator, and **STOP** button
-   with you.
-6. **Stop when done.** Tap **■ STOP** (on the Run tab or in the banner). The run
-   ends and the timer settles on the experiment's final duration.
+1. **Connect your hardware.** Tap **⚙ › Connect boards…** and connect your board.
+   Its dot in the header turns green.
+2. **Load your experiment.** Tap **⚙ › Open…** and choose your experiment file
+   (or **New** to start fresh). Check the details on the **Experiment** tab if
+   you like.
+3. **(Optional) Look over the flow.** On the **Dashboard** tab the graph is
+   locked, so you can pan, zoom, and fit it without changing anything.
+4. **(Optional) Check your rig by hand.** On the Dashboard, open **Control** and
+   use the auto-generated controls — toggle an output, nudge a value, take a
+   reading, or run a Function — to confirm everything responds before you
+   record.
+5. **Fill in the run details.** On the **Run** tab, tap each field the
+   experiment asks for (a Dam ID, say). The pill changes from **NEEDS DETAILS**
+   to **READY**.
+6. **Start the run.** Tap **▶ Start run**. The clock starts, the pill turns to
+   **RUNNING**, and the header pill shows **Running** (or **Recording**) with the
+   elapsed time.
+7. **Watch it go.** Stay on the Run tab, or move to another tab — the header pill
+   keeps the state and time with you, and the graph is locked so nothing can be
+   changed by accident.
+8. **Stop when done.** Tap **■ Stop** on the Run tab (or tap the header pill to
+   jump there first). The run ends and the clock settles on the experiment's
+   final duration.
 
 !!! tip "First launch"
     The very first time GLIDER starts, it shows a short welcome dialog and tells

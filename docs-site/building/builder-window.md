@@ -225,7 +225,7 @@ about.
 | Menu | Its commands | How to reach them now |
 |---|---|---|
 | **Hardware** | Add Board…, Add Device…, New Custom Device Type…, Connect All, Disconnect All | **Add Board** and **Add Device** are buttons in the **Hardware** tab, which is where you were probably already looking. The rest: ++ctrl+k++ |
-| **Run** | Start (++f5++), Stop (++shift+f5++), Emergency Stop (++ctrl+shift+escape++) | The toolbar, the run banner, the shortcuts, or ++ctrl+k++ |
+| **Run** | Start (++f5++), Stop (++shift+f5++), Emergency Stop (++ctrl+shift+escape++) | The toolbar, the **Run** tab, the shortcuts, or ++ctrl+k++ |
 | **Tools** | Behavior Analysis…, Batch Pose Tracking…, Session Review…, Multi-Camera Recording…, GPU / Device Check… | The **Analyze** tab, which has a card for each — including, when a tool needs an optional dependency stack, the exact install line. **Plugins** moved to the **Experiment** tab instead |
 
 Every row in the palette names the menu it came from, so if you remember that

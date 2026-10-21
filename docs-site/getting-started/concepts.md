@@ -91,10 +91,11 @@ See [Camera & Recording](../camera-behavior/camera.md).
   collapsible panel either side of the canvas and a
   [command palette](../building/builder-window.md#command-palette) on
   ++ctrl+k++.
-- **Runner mode** is where you *operate* — a touch-first, four-tab kiosk
-  (**Setup, Run, Manual, Camera**) meant for a bench touchscreen or a Raspberry
-  Pi. It runs the same `.glider` experiments, adds big manual device controls,
-  and lets you trigger saved [functions](../building/functions.md) with one tap.
+- **Runner mode** is where you *operate* — a touch-first kiosk with three tabs
+  (**Experiment, Dashboard, Run**) and a ⚙ menu, meant for a bench touchscreen
+  or a Raspberry Pi. It runs the same `.glider` experiments, shows the graph
+  view-only by default, adds big manual device controls, and lets you trigger
+  saved [functions](../building/functions.md) with one tap.
 
 Design once, run anywhere. Ready to build something? Continue to
 [Your First Experiment](first-experiment.md).
