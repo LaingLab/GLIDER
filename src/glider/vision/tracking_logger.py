@@ -37,7 +37,7 @@ class TrackingDataLogger:
     Output format matches DataRecorder pattern with columns:
     frame, timestamp, elapsed_ms, object_id, class, x, y, w, h, confidence,
     center_x, center_y, distance_px, distance_mm, cumulative_mm, zone_ids,
-    behavioral_state, velocity_px_frame
+    velocity_px_frame
 
     Pose backends additionally produce a sibling ``*_keypoints.csv`` in long
     format — one row per keypoint per object per frame:
@@ -679,7 +679,6 @@ class TrackingDataLogger:
                 "distance_mm",
                 "cumulative_mm",
                 "zone_ids",
-                "behavioral_state",
                 "velocity_px_frame",
             ]
         )
@@ -786,8 +785,6 @@ class TrackingDataLogger:
             # Get zone IDs for this object's position
             zone_ids = self._get_zones_for_point(center_x, center_y)
 
-            # Get behavioral state and velocity from tracked object
-            behavioral_state = getattr(obj, "behavioral_state", "unknown")
             velocity = getattr(obj, "velocity", 0.0)
 
             if not self._safe_writerow(
@@ -809,7 +806,6 @@ class TrackingDataLogger:
                     f"{distance_mm:.2f}",
                     f"{cumulative_mm:.2f}",
                     zone_ids,
-                    behavioral_state,
                     f"{velocity:.2f}",
                 ],
                 context="log_frame[object]",
@@ -843,7 +839,6 @@ class TrackingDataLogger:
                     "",
                     "",  # Empty distance fields
                     "",  # Empty zone_ids
-                    "",  # Empty behavioral_state
                     "",  # Empty velocity
                 ],
                 context="log_frame[motion]",
@@ -873,7 +868,6 @@ class TrackingDataLogger:
                         "",
                         "",  # Empty distance fields
                         "",  # Empty zone_ids
-                        "",  # Empty behavioral_state
                         "",  # Empty velocity
                     ],
                     context="log_frame[heartbeat]",
