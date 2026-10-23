@@ -126,7 +126,11 @@ class CalibrationTable(QTableWidget):
         except DegenerateArenaError as exc:
             return "⚠ unusable", str(exc)
 
-        size = f"{arena.width_cm:g}x{arena.height_cm:g} cm"
+        size = (
+            f"⌀{arena.width_cm:g} cm"
+            if arena.shape == "ellipse"
+            else f"{arena.width_cm:g}x{arena.height_cm:g} cm"
+        )
         lines = [
             f"{size} floor",
             f"opposite edges {residuals['edge_ratio']:.2f}x",

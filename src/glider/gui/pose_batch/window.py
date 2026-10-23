@@ -780,8 +780,7 @@ class PoseBatchWindow(QMainWindow):
             dialog = ArenaDialog(frame, title=video.name, parent=self)
             existing = self._calibrations.get_arena(video)
             if existing is not None:
-                dialog.arena_spin.setValue(existing.width_cm)
-                dialog.canvas.set_corners(existing.corners)
+                dialog.set_arena(existing)
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 arena = dialog.calibration()
                 if arena is not None:

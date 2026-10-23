@@ -46,7 +46,14 @@ logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
-__all__ = ["SCHEMA_VERSION", "ArenaCalibration", "DegenerateArenaError"]
+__all__ = ["SCHEMA_VERSION", "SHAPES", "ArenaCalibration", "DegenerateArenaError"]
+
+#: ``rectangle``: the corners are the floor's corners. ``ellipse``: the floor is
+#: the ellipse inscribed in the corners' parallelogram -- a round arena, seen
+#: under a mild tilt. An ellipse is the affine image of a circle, so the same
+#: homography maps it onto a ``width_cm`` x ``height_cm`` box with the floor as
+#: that box's inscribed ellipse; only containment and the centre zone differ.
+SHAPES = ("rectangle", "ellipse")
 
 #: Corner order, as the operator is asked to click them.
 CORNER_NAMES = ("top-left", "top-right", "bottom-right", "bottom-left")
@@ -78,7 +85,7 @@ def _cross(o, a, b) -> float:
 
 @dataclass
 class ArenaCalibration:
-    """The floor of a rectangular arena, located in one camera's image.
+    """The floor of a rectangular or round arena, located in one camera's image.
 
     Args:
         corners: Four image points in normalized (0-1) coordinates, in the order
@@ -95,6 +102,7 @@ class ArenaCalibration:
     width_cm: float = 30.0
     height_cm: float = 30.0
     frame_size: tuple[int, int] = (640, 480)
+    shape: str = "rectangle"
 
     _homography: np.ndarray | None = field(default=None, init=False, repr=False, compare=False)
 
@@ -104,6 +112,51 @@ class ArenaCalibration:
             raise ValueError(f"An arena needs exactly four corners, got {len(self.corners)}")
         if self.width_cm <= 0 or self.height_cm <= 0:
             raise ValueError("Arena dimensions must be positive")
+        if self.shape not in SHAPES:
+            raise ValueError(f"Arena shape must be one of {SHAPES}, got {self.shape!r}")
+
+    @classmethod
+    def from_ellipse(
+        cls,
+        centre: tuple[float, float],
+        axis_u: tuple[float, float],
+        axis_v: tuple[float, float],
+        *,
+        width_cm: float,
+        height_cm: float | None = None,
+        frame_size: tuple[int, int] = (640, 480),
+    ) -> ArenaCalibration:
+        """A round arena from its centre and the ends of two semi-axes.
+
+        All three points are normalized image coordinates. The axes need not be
+        perpendicular in the image (conjugate diameters describe the same
+        ellipse), which is what lets a tilted view be fitted by dragging.
+        """
+        c, u, v = (np.asarray(p, dtype=np.float64) for p in (centre, axis_u, axis_v))
+        du, dv = u - c, v - c
+        corners = [c - du - dv, c + du - dv, c + du + dv, c - du + dv]
+        return cls(
+            corners=[tuple(p) for p in corners],
+            width_cm=width_cm,
+            height_cm=width_cm if height_cm is None else height_cm,
+            frame_size=frame_size,
+            shape="ellipse",
+        )
+
+    def ellipse_handles(self) -> list[tuple[float, float]]:
+        """``[centre, axis_u end, axis_v end]``: the inverse of :meth:`from_ellipse`."""
+        tl, tr, br, bl = _as_array(self.corners)
+        c = (tl + tr + br + bl) / 4
+        return [tuple(map(float, p)) for p in (c, (tr + br) / 2, (bl + br) / 2)]
+
+    def outside_cm(self, x, y, margin_cm: float = 0.0):
+        """Whether floor points (in cm, arrays allowed) lie beyond the arena plus *margin_cm*."""
+        w, h = self.width_cm, self.height_cm
+        if self.shape == "ellipse":
+            return ((x - w / 2) / (w / 2 + margin_cm)) ** 2 + (
+                (y - h / 2) / (h / 2 + margin_cm)
+            ) ** 2 > 1
+        return (x < -margin_cm) | (x > w + margin_cm) | (y < -margin_cm) | (y > h + margin_cm)
 
     # ------------------------------------------------------------------
     # geometry
@@ -208,6 +261,14 @@ class ArenaCalibration:
             )
         cx, cy = self.width_cm / 2, self.height_cm / 2
         half = size_cm / 2
+        if self.shape == "ellipse":
+            # A round arena gets a round centre zone, as a 48-gon.
+            return self.to_image(
+                [
+                    (cx + half * math.cos(t), cy + half * math.sin(t))
+                    for t in np.linspace(0, 2 * math.pi, 48, endpoint=False)
+                ]
+            )
         square = [
             (cx - half, cy - half),
             (cx + half, cy - half),
@@ -320,6 +381,7 @@ class ArenaCalibration:
             "width_cm": self.width_cm,
             "height_cm": self.height_cm,
             "frame_size": list(self.frame_size),
+            "shape": self.shape,
         }
 
     @classmethod
@@ -329,4 +391,5 @@ class ArenaCalibration:
             width_cm=float(data.get("width_cm", 30.0)),
             height_cm=float(data.get("height_cm", 30.0)),
             frame_size=tuple(data.get("frame_size", (640, 480))),
+            shape=str(data.get("shape", "rectangle")),
         )

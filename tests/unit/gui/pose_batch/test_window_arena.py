@@ -87,8 +87,10 @@ def _accept_arena_dialog(monkeypatch, *, returning):
 
     class _Dialog:
         def __init__(self, frame, title="", parent=None, **kwargs):
-            self.arena_spin = SimpleNamespace(setValue=lambda value: None)
-            self.canvas = SimpleNamespace(set_corners=lambda corners: None)
+            pass
+
+        def set_arena(self, arena):
+            pass
 
         def exec(self):
             return QDialog.DialogCode.Accepted

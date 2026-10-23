@@ -291,7 +291,7 @@ def main() -> int:
         dialog.arena_spin.setValue(args.arena_cm)
         dialog.zone_spin.setValue(args.zone_cm)
         if video.stem in arenas:
-            dialog.canvas.set_corners(arenas[video.stem].corners)
+            dialog.set_arena(arenas[video.stem])
 
         if dialog.exec() != dialog.DialogCode.Accepted:
             print("Stopped. Progress saved.")
