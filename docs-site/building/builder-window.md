@@ -15,7 +15,7 @@ of the window:
 | **Experiment** | Metadata, mice, zones, lab vocabulary and plugins. Where you say what this experiment *is*. |
 | **Dashboard** | This page: the node graph, hardware, camera and properties. |
 | **Run** | The operator view — run control, device states, camera, experiment info. |
-| **Analyze** | Behavior Analysis, Batch Pose Tracking, Session Review, Multi-Camera Recording and the device check. Each opens in its own window. |
+| **Analyze** | Batch Pose Tracking, Behavior Analysis, Session Review, Multi-Camera Recording and the device check. Each opens in its own window. |
 
 New and Open both land you on **Experiment**, because naming the experiment and
 entering its animals comes before wiring anything up.
@@ -226,7 +226,7 @@ about.
 |---|---|---|
 | **Hardware** | Add Board…, Add Device…, New Custom Device Type…, Connect All, Disconnect All | **Add Board** and **Add Device** are buttons in the **Hardware** tab, which is where you were probably already looking. The rest: ++ctrl+k++ |
 | **Run** | Start (++f5++), Stop (++shift+f5++), Emergency Stop (++ctrl+shift+escape++) | The toolbar, the **Run** tab, the shortcuts, or ++ctrl+k++ |
-| **Tools** | Behavior Analysis…, Batch Pose Tracking…, Session Review…, Multi-Camera Recording…, GPU / Device Check… | The **Analyze** tab, which has a card for each — including, when a tool needs an optional dependency stack, the exact install line. **Plugins** moved to the **Experiment** tab instead |
+| **Tools** | Batch Pose Tracking…, Behavior Analysis…, Session Review…, Multi-Camera Recording…, GPU / Device Check… | The **Analyze** tab, which has a card for each — including, when a tool needs an optional dependency stack, the exact install line. **Plugins** moved to the **Experiment** tab instead |
 
 Every row in the palette names the menu it came from, so if you remember that
 something "was under Tools", the palette still tells you so.

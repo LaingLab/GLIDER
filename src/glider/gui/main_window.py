@@ -1038,17 +1038,6 @@ class MainWindow(QMainWindow):
 
         cards = [
             ToolCard(
-                key="behavior",
-                title="Behavior Analysis",
-                description=(
-                    "Cluster and label behaviour from pose tracks, and train a "
-                    "classifier on what you label."
-                ),
-                glyph="behavior",
-                available=has_behavior,
-                unavailable_reason=behavior_reason,
-            ),
-            ToolCard(
                 key="pose",
                 title="Batch Pose Tracking",
                 description=(
@@ -1059,6 +1048,17 @@ class MainWindow(QMainWindow):
                 unavailable_reason=(
                     "" if has_pose else _install_line("vision", missing_pose_batch_deps())
                 ),
+            ),
+            ToolCard(
+                key="behavior",
+                title="Behavior Analysis",
+                description=(
+                    "Cluster and label behaviour from pose tracks, and train a "
+                    "classifier on what you label."
+                ),
+                glyph="behavior",
+                available=has_behavior,
+                unavailable_reason=behavior_reason,
             ),
             ToolCard(
                 key="review",
@@ -2178,7 +2178,6 @@ class MainWindow(QMainWindow):
                 "Install the behavior extra: pip install glider[behavior] "
                 f"(missing: {', '.join(missing_behavior_deps())})"
             )
-        tools_menu.addAction(behavior_action)
 
         pose_batch_action = QAction("Batch &Pose Tracking…", self)
         pose_batch_action.setStatusTip(
@@ -2197,7 +2196,9 @@ class MainWindow(QMainWindow):
                 "Install the vision extra: pip install glider[vision] "
                 f"(missing: {', '.join(missing_pose_batch_deps())})"
             )
+        # Pose first: Behavior Analysis consumes the keypoints it writes.
         tools_menu.addAction(pose_batch_action)
+        tools_menu.addAction(behavior_action)
 
         multi_camera_action = QAction("&Multi-Camera Recording…", self)
         multi_camera_action.setStatusTip(
