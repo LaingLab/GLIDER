@@ -520,7 +520,12 @@ class CommandPalette(QFrame):
 
         layout.addStretch(1)
 
-        shortcut = QLabel(command.shortcut, row)
+        # Stored portable ("Ctrl+N") so it compares the same everywhere; shown
+        # native, so a Mac reads "⌘N" rather than a Ctrl key it does not have.
+        shortcut = QLabel(
+            QKeySequence(command.shortcut).toString(QKeySequence.SequenceFormat.NativeText),
+            row,
+        )
         shortcut.setObjectName("commandPaletteRowShortcut")
         shortcut.setVisible(bool(command.shortcut))
         layout.addWidget(shortcut)
