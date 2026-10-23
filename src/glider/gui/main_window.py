@@ -495,7 +495,6 @@ class MainWindow(QMainWindow):
         # The node editor's properties form lives inside this; see PropertiesHost.
         self._properties_host: PropertiesHost | None = None
         self._properties_widget: QWidget | None = None
-        self._files_panel: QWidget | None = None
         # View menu panel toggles, kept as attributes so their checked state can
         # follow a panel collapsed by any other route.
         self._left_panel_action: QAction | None = None
@@ -1619,7 +1618,7 @@ class MainWindow(QMainWindow):
 
         Each widget here is the same object the Builder's dock widgets used to
         wrap — this method re-hosts rather than rewrites. Left panel: Nodes,
-        Hardware, Control, Files. Right panel: Properties, Camera.
+        Hardware, Control. Right panel: Properties, Camera.
         """
         self._build_builder_panels()
         self._host_builder_panels_in_shell()
@@ -1693,10 +1692,10 @@ class MainWindow(QMainWindow):
             self._move_camera_to_builder()
 
     def _host_builder_panels_in_shell(self) -> None:
-        """Put the shared panels in the desktop frame, with Control and Files.
+        """Put the shared panels in the desktop frame, with Control.
 
-        Control and Files are desktop-only and are built here, on the first
-        call; later calls do nothing.
+        Control is desktop-only and is built here, on the first call; later
+        calls do nothing.
         """
         if self._device_control_panel is not None:
             return
@@ -1712,52 +1711,12 @@ class MainWindow(QMainWindow):
         # to the Builder's own _device_control_panel (and the strip, above).
         self._hardware_panel.hardware_changed.connect(self._device_control_panel.refresh_devices)
 
-        # --- Files ---
-        from PyQt6.QtWidgets import QFrame, QPushButton, QScrollArea
-
-        files_scroll = QScrollArea()
-        files_scroll.setWidgetResizable(True)
-        files_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        files_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        files_widget = QWidget()
-        files_layout = QVBoxLayout(files_widget)
-        files_layout.setContentsMargins(4, 4, 4, 4)
-        files_layout.setSpacing(4)
-
-        new_btn = QPushButton("New")
-        new_btn.setFixedHeight(36)
-        new_btn.clicked.connect(self._on_new)
-        files_layout.addWidget(new_btn)
-
-        open_btn = QPushButton("Open")
-        open_btn.setFixedHeight(36)
-        open_btn.clicked.connect(self._on_open)
-        files_layout.addWidget(open_btn)
-
-        save_btn = QPushButton("Save")
-        save_btn.setFixedHeight(36)
-        save_btn.clicked.connect(self._on_save)
-        files_layout.addWidget(save_btn)
-
-        save_as_btn = QPushButton("Save As...")
-        save_as_btn.setFixedHeight(36)
-        save_as_btn.clicked.connect(self._on_save_as)
-        files_layout.addWidget(save_as_btn)
-
-        files_layout.addStretch()
-
-        files_scroll.setWidget(files_widget)
-        self._files_panel = files_scroll
-
-        # --- Into the shell. Files was a dock the desktop kept hidden by
-        # default; as a tab it costs nothing to leave in place, and the rail
-        # keeps it discoverable rather than hidden behind a menu item.
+        # --- Into the shell. No Files tab: the desktop has File in the menu
+        # bar and the palette; only the Pi runner, which has neither, needs one.
         left = self._builder_view.left
         left.add_tab("nodes", "Nodes", self._node_library_panel, "N")
         left.add_tab("hardware", "Hardware", self._hardware_panel, "H")
         left.add_tab("control", "Control", self._device_control_panel, "D")
-        left.add_tab("files", "Files", self._files_panel, "F")
 
         right = self._builder_view.right
         right.add_tab("properties", "Properties", self._properties_host, "P")
