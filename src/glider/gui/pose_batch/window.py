@@ -58,7 +58,6 @@ from glider.gui.widgets.tool_ui import (
     set_text_role,
 )
 from glider.vision.arena import ArenaCalibration, DegenerateArenaError
-from glider.vision.calibration import CameraCalibration
 from glider.vision.calibration_set import CalibrationSet, CalibrationSetError
 from glider.vision.pose import batch as batch_core
 from glider.vision.pose.spec import read_pose_model_meta
@@ -447,48 +446,33 @@ class PoseBatchWindow(QMainWindow):
         return card
 
     def _build_calibration_group(self) -> Card:
-        card = Card("Pixel-to-distance calibration", "required for every video")
+        card = Card("Arena", "required for every video")
         self._calibration_card = card
         card.setToolTip(
-            "Every video needs its floor perimeter drawn before the batch can "
-            "run; the arena carries the scale, so a measurement line is optional. "
-            "The DLC CSVs stay in pixels; the scale is written to the master "
-            "calibration file."
+            "Every video needs its arena floor outlined before the batch can "
+            "run; the arena carries the scale. The DLC CSVs stay in pixels; the "
+            "scale is written to the master calibration file."
         )
 
         self._cal_table = CalibrationTable()
         self._cal_table.set_calibration_set(self._calibrations)
-        self._cal_table.calibrate_requested.connect(self._open_calibration)
         self._cal_table.arena_requested.connect(self._open_arena)
         # ~4-5 rows: enough to see calibration status at a glance even if the
         # splitter above gets dragged down to its floor.
         self._cal_table.setMinimumHeight(140)
         card.add(self._cal_table, 1)
 
-        # The arena leads this row: it is what Run requires, and it supplies the
-        # scale as a by-product. The line is the optional cross-check now.
+        # The arena is the calibration: it is what Run requires, and it supplies
+        # the scale as a by-product (#212 retired the separate line tool here).
         arena = QPushButton("Arena…")
         set_button_role(arena, "primary")
         arena.setToolTip(
-            "Required. Draw the floor perimeter of the selected video (or "
-            "double-click its Arena cell).\nGives a centre zone that means the "
+            "Required. Outline the arena floor of the selected video, square or "
+            "round (or double-click its row).\nGives a centre zone that means the "
             "same patch of floor in every video, and a scale that accounts for "
             "perspective."
         )
         arena.clicked.connect(self._arena_selected)
-        calibrate = QPushButton("Calibrate…")
-        calibrate.setToolTip(
-            "Optional. Draw a measurement line on the selected video (or "
-            "double-click its row).\nThe arena already carries the scale; a line "
-            "is a second opinion, not a substitute."
-        )
-        calibrate.clicked.connect(self._calibrate_selected)
-        copy_btn = QPushButton("Copy to Selected")
-        copy_btn.setToolTip(
-            "Stamp one measurement line onto the other selected videos — for "
-            "videos shot on the same rig at the same camera height."
-        )
-        copy_btn.clicked.connect(self._copy_calibration_to_selected)
         copy_arena_btn = QPushButton("Copy Arena…")
         copy_arena_btn.setToolTip(
             "Stamp one video's floor perimeter onto the other selected videos.\n"
@@ -503,7 +487,7 @@ class PoseBatchWindow(QMainWindow):
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
-        for button in (arena, copy_arena_btn, calibrate, copy_btn, clear_btn):
+        for button in (arena, copy_arena_btn, clear_btn):
             buttons.addWidget(button)
         buttons.addStretch(1)
         card.add(buttons)
@@ -693,65 +677,6 @@ class PoseBatchWindow(QMainWindow):
     # calibration
     # ------------------------------------------------------------------
 
-    def _open_calibration(self, video: Path) -> None:
-        """Draw measurement lines on a frame scrubbed out of *video*."""
-        from glider.gui.dialogs.calibration_dialog import CalibrationDialog
-        from glider.vision.frame_provider import VideoFrameProvider
-
-        provider = VideoFrameProvider(video)
-        if not provider.is_connected:
-            provider.release()
-            QMessageBox.warning(
-                self,
-                "Cannot Open Video",
-                f"{video.name} could not be opened for calibration.",
-            )
-            return
-
-        # Edit a copy: Cancel must leave the stored calibration untouched.
-        existing = self._calibrations.get(video)
-        working = (
-            CameraCalibration.from_dict(existing.to_dict())
-            if existing is not None
-            else CameraCalibration()
-        )
-        dialog = None
-        try:
-            dialog = CalibrationDialog(
-                frame_provider=provider,
-                calibration=working,
-                parent=self,
-                show_file_buttons=False,
-            )
-            dialog.setWindowTitle(f"Calibrate — {video.name}")
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                self._calibrations.set(video, dialog.get_calibration())
-                ppm = self._calibrations.px_per_mm(video)
-                self._log.appendPlainText(
-                    f"{video.name}: {ppm:.3f} px/mm"
-                    if ppm
-                    else f"{video.name}: no usable scale drawn"
-                )
-        finally:
-            if dialog is not None:
-                # parent=self hands ownership to the window, so dropping the
-                # Python reference leaves the C++ dialog — and the full-res
-                # frame and pixmap it holds — alive for the session.
-                dialog.deleteLater()
-            provider.release()
-
-        self._cal_table.refresh()
-        self._validate()
-
-    def _calibrate_selected(self) -> None:
-        selected = self._cal_table.selected_videos()
-        if not selected:
-            QMessageBox.information(
-                self, "Calibrate", "Select a video in the calibration table first."
-            )
-            return
-        self._open_calibration(selected[0])
-
     def _open_arena(self, video: Path) -> None:
         """Click the four floor corners of *video*'s arena on a scrubbed frame."""
         from glider.gui.dialogs.arena_dialog import ArenaDialog
@@ -859,94 +784,13 @@ class PoseBatchWindow(QMainWindow):
             configs[Path(video).resolve()] = config
         return configs
 
-    def _retarget_calibration(
-        self, template: CameraCalibration, video: Path
-    ) -> CameraCalibration | None:
-        """A copy of *template* reconstructed at *video*'s own resolution.
-
-        Lines are stored normalized, so on a same-rig video the ruler spans the
-        same fraction of the frame whatever the recording resolution — but
-        ``pixels_per_mm`` reconstructs pixels at ``calibration_width``. Carrying
-        the source's resolution over would report the source's scale for a video
-        that does not have it. Returns None when the video will not open, since
-        guessing its resolution is exactly the error being fixed.
-        """
-        from glider.vision.video_source import VideoFileSource
-
-        reader = VideoFileSource()
-        try:
-            if not reader.load(video):
-                return None
-            width, height = reader.resolution
-        finally:
-            reader.release()
-        if width <= 0 or height <= 0:
-            return None
-
-        # from_dict(to_dict()) is a deep copy: the videos must not share
-        # a CameraCalibration, or editing one silently edits the others.
-        copy = CameraCalibration.from_dict(template.to_dict())
-        copy.calibration_width = width
-        copy.calibration_height = height
-        return copy
-
-    def _copy_calibration_to_selected(self) -> None:
-        """Stamp the one calibrated selected video onto the rest of the selection."""
-        selected = self._cal_table.selected_videos()
-        sources = [v for v in selected if self._calibrations.px_per_mm(v) is not None]
-        if not sources:
-            QMessageBox.information(
-                self,
-                "Copy Calibration",
-                "Select one calibrated video plus the videos to copy it to.",
-            )
-            return
-
-        source = sources[0]
-        template = self._calibrations.get(source)
-        targets = [v for v in selected if v != source]
-        already = {v for v in targets if self._calibrations.px_per_mm(v) is not None}
-
-        if already and not self._confirm_overwrite(source, len(already)):
-            # Declined: filling the blanks is what "copy to selected" is for,
-            # and it is the half of the job that cannot destroy anything.
-            targets = [v for v in targets if v not in already]
-
-        filled = 0
-        overwritten = 0
-        skipped: list[Path] = []
-        for video in targets:
-            retargeted = self._retarget_calibration(template, video)
-            if retargeted is None:
-                skipped.append(video)
-                continue
-            self._calibrations.set(video, retargeted)
-            if video in already:
-                overwritten += 1
-            else:
-                filled += 1
-
-        self._log.appendPlainText(
-            f"Copied {source.name}'s calibration: {filled} uncalibrated video(s) filled, "
-            f"{overwritten} existing calibration(s) overwritten."
-        )
-        if skipped:
-            names = ", ".join(v.name for v in skipped)
-            self._log.appendPlainText(
-                f"Not copied to {len(skipped)} video(s) that could not be opened to "
-                f"read their resolution: {names}"
-            )
-        self._cal_table.refresh()
-        self._validate()
-
     def _copy_arena_to_selected(self) -> None:
         """Stamp the first selected video's arena onto the rest of the selection.
 
         The copies land unconfirmed, so Run stays blocked until each has been
         opened and checked — see :func:`arena_actions.copy_arena_to` for why.
 
-        Asks before replacing an arena that is already there, the way
-        :meth:`_copy_calibration_to_selected` does. Selecting a whole cohort
+        Asks before replacing an arena that is already there. Selecting a whole cohort
         and clicking Copy is one action with no undo, and what it would
         otherwise destroy is exactly the per-video human judgement this window
         now makes mandatory.

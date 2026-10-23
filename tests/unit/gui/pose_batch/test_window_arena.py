@@ -371,7 +371,7 @@ class TestCopyingAnArena:
     def test_a_copy_does_not_silently_destroy_drawn_arenas(self, window, tmp_path, monkeypatch):
         """selectAll() + Copy Arena is one click away, and there is no undo.
 
-        Its sibling ``_copy_calibration_to_selected`` has asked before
+        The line-calibration copy it replaced had asked before
         replacing drawn work since it shipped; the arena path had no guard at
         all, so it replaced per-video human judgement -- the thing this branch
         makes mandatory -- with unconfirmed copies of the first video's.
