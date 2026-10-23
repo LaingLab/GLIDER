@@ -71,7 +71,7 @@ buttons**, one per tab, down the outside edge of the window:
 
 | Panel | Rail buttons |
 |---|---|
-| Left | **N** Nodes, **H** Hardware, **D** Control, **F** Files |
+| Left | **N** Nodes, **H** Hardware, **D** Control |
 | Right | **P** Properties, **C** Camera |
 
 Hovering a rail button names the tab. Clicking one does two things at once: it
