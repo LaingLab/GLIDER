@@ -103,7 +103,7 @@ def test_the_rail_switches_sections(qtbot, counting_builders):
 
 
 def test_experiment_dialog_splits_into_two_pages(qtbot, main_window_factory):
-    """Metadata and Mice are separate pages backed by one editor -- so a
+    """Metadata and Animals are separate pages backed by one editor -- so a
     subject added on one and a protocol typed on the other reach the session
     through a single object that knows about both."""
     from glider.gui.dialogs.experiment_dialog import ExperimentDialog
@@ -165,16 +165,16 @@ def test_the_window_builds_the_metadata_section_on_first_visit(qtbot, main_windo
     assert "metadata" in window._experiment_page.built_sections()
 
 
-def test_metadata_and_mice_share_one_editor(qtbot, main_window_factory):
+def test_metadata_and_animals_share_one_editor(qtbot, main_window_factory):
     """Two rail entries, one ExperimentDialog underneath."""
     window = main_window_factory(desktop_mode=True)
     window.show()
     window._show_experiment_tab()
-    window._experiment_page.show_section("mice")
+    window._experiment_page.show_section("animals")
 
     built = window._experiment_page.built_sections()
-    assert {"metadata", "mice"} <= set(built)
-    assert built["metadata"] is not built["mice"]
+    assert {"metadata", "animals"} <= set(built)
+    assert built["metadata"] is not built["animals"]
     assert window._experiment_details is not None
 
 
@@ -281,7 +281,7 @@ def test_the_rail_offers_plugins(qtbot, counting_builders):
 def test_every_rail_entry_is_the_full_width_of_the_rail(qtbot, counting_builders):
     """The reported miss: a QToolButton sizes itself to its label, so each entry
     was a different width and most of the rail looked clickable but was inert.
-    You aim at "Mice" and hit nothing, because the button stops with the text.
+    You aim at "Animals" and hit nothing, because the button stops with the text.
     """
     _calls, builders = counting_builders
     page = ExperimentPage(builders)

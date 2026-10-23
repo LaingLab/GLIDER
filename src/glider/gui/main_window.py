@@ -487,7 +487,7 @@ class MainWindow(QMainWindow):
         # set -- test is_runner_mode, not this, for "on the Pi".
         self._pi_dashboard: PiDashboard | None = None
         self._finger_scroll: FingerScroll | None = None  # runner mode
-        # The editor behind the Metadata and Mice sections, and the two pages
+        # The editor behind the Metadata and Animals sections, and the two pages
         # it was split into. Both are rebuilt per session; see
         # _experiment_detail_pages.
         self._experiment_details: ExperimentDialog | None = None
@@ -880,7 +880,7 @@ class MainWindow(QMainWindow):
         self._experiment_page = ExperimentPage(
             {
                 "metadata": lambda: self._experiment_detail_pages()[0],
-                "mice": lambda: self._experiment_detail_pages()[1],
+                "animals": lambda: self._experiment_detail_pages()[1],
                 "zones": self._build_zones_section,
                 "vocabulary": self._build_vocabulary_section,
                 "plugins": self._build_plugins_section,
@@ -890,11 +890,11 @@ class MainWindow(QMainWindow):
         )
 
     def _experiment_detail_pages(self) -> tuple[QWidget, QWidget]:
-        """The Metadata and Mice pages, from one shared dialog.
+        """The Metadata and Animals pages, from one shared dialog.
 
         Both come out of a single :class:`ExperimentDialog`, built on first
         use: the two group boxes are separate pages on the rail but the same
-        editor underneath, so a subject added on Mice and the protocol typed on
+        editor underneath, so a subject added on Animals and the protocol typed on
         Metadata reach the session through one object that knows about both.
         Two dialogs would mean two ``set_session`` targets and two ideas of
         which subject is active.

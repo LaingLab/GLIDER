@@ -156,7 +156,7 @@ Q_SUCCESS = QColor(SUCCESS)
 # For small illustrative icons -- currently the Experiment tab's section rail.
 # Deliberately apart from every palette above, and the one place in the theme
 # where colour identifies a *thing* rather than a state: the point of these is
-# that you find "Mice" by its pink mouse without reading four labels, which is
+# that you find "Animals" by its pink glyph without reading four labels, which is
 # how a rail of icons earns its space over a rail of words.
 #
 # Each is a pair: a soft fill and a deeper line of the same hue, so a glyph can

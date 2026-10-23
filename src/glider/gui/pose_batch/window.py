@@ -350,7 +350,7 @@ class PoseBatchWindow(QMainWindow):
         self._animals_spin.setToolTip(
             "How many animals are in each video. This is not detected -- it is "
             "the constraint that lets tracking stitch a fragmented track back "
-            "into one animal. Too high and one mouse is split into two that "
+            "into one animal. Too high and one animal is split into two that "
             "each vanish for half the video; too low and a real animal is "
             "dropped entirely."
         )
