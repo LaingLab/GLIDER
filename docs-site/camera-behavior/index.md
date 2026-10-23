@@ -43,9 +43,3 @@ only install them if you need them:
     followed the [Installation](../getting-started/installation.md) guide you
     already have it. Preview, tracking, and data logging work without it.
 
-!!! tip "Two different things are called 'Behavior Analysis'"
-    GLIDER has a **live, movement-based** behavior classifier (built into the
-    camera settings, described in [Tracking](tracking.md)) and a **supervised
-    machine-learning** workflow (a separate window, described in
-    [Behavior Analysis](behavior.md)). They are unrelated tools. The pages below
-    point out which is which so you don't confuse them.

@@ -145,35 +145,38 @@ The `source` column tells you what kind of event each row is:
 The `frame` column holds the most recent camera frame seen when the event fired,
 so events line up with the video too.
 
-## Calibration
+## Arena (calibration)
 
-Calibration teaches GLIDER how many pixels correspond to a real-world distance, so
-tracking can report movement in millimeters instead of pixels.
+The arena tells GLIDER where the floor is and how big it is. That one outline
+also sets the scale, so tracking reports movement in millimeters instead of
+pixels. There is no separate measuring step.
 
-Open the camera settings dialog, go to the **Tools** tab, and click **Open
-Calibration…**. In the calibration window:
+Open the camera settings dialog, go to the **Tools** tab, and click **Arena…**.
+In the arena window:
 
-1. Click **Capture Frame** to grab a still from the camera (an object of known
-   size should be visible — for example the width of your arena).
-2. Click **Draw Line**, then click two points to draw a measurement line across
-   that known distance. Clicking near an existing endpoint snaps to it.
-3. Enter a **Name** (for example `Apparatus Width`), the real **Length**, and the
-   **Unit**. Supported units are millimeters (`mm`), centimeters (`cm`), meters
-   (`m`), inches (`in`), and feet (`ft`).
-4. Click **Add Line**. You can add several lines; GLIDER averages them to compute
-   a **pixels/mm** ratio, shown in the info panel.
+1. Pick the **Shape**: **Rectangle** or **Circle**.
+2. Enter the floor's real size: **Width** and **Height** for a rectangle, or the
+   **Diameter** for a circle.
+3. Outline the floor on the live frame, clicking where the bedding meets the
+   wall:
+    - **Rectangle:** click the four corners in order (top-left, top-right,
+      bottom-right, bottom-left). Corners outside the picture can be placed in
+      the margin around it.
+    - **Circle:** click the centre, then a point on the edge, then a second edge
+      point about a quarter-turn round. The outline is an ellipse, so it still
+      fits a camera that is slightly tilted. Drag the centre to move it, or an
+      edge point to fit it.
+4. Check the status line. It shows the scale at the centre, and for a rectangle
+   it warns when the corners look misplaced.
 
-Use **Save…** / **Load…** to store a calibration as a JSON file and reuse it later.
+The arena is remembered between sessions. Once it is set, the tracking CSV's
+`distance_mm` and `cumulative_mm` columns are filled with real distances.
+Without one, those columns simply mirror the pixel values.
 
-Once a calibration is active, the tracking CSV's `distance_mm` and `cumulative_mm`
-columns are filled with real distances. Without calibration, those columns simply
-mirror the pixel values.
-
-!!! note "Calibration is tied to resolution, not to a specific camera"
-    A calibration is stored against the frame size it was drawn at and scales if
-    the resolution changes. There is a single active calibration per session
-    rather than one per camera, so in multi-camera setups it applies to the view
-    you drew it on.
+!!! note "The scale is tied to resolution, not to a specific camera"
+    An arena is stored against the frame size it was drawn at and scales if the
+    resolution changes. There is a single arena per session rather than one per
+    camera, so in multi-camera setups it applies to the view you drew it on.
 
 ## Zones (regions of interest)
 

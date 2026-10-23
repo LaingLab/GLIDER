@@ -84,6 +84,7 @@ from PyQt6.QtCore import QEvent, QObject, QPointF, QRect, QRectF, QSize, Qt, pyq
 from PyQt6.QtGui import (
     QIcon,
     QIconEngine,
+    QKeySequence,
     QMouseEvent,
     QPainter,
     QPainterPath,
@@ -491,8 +492,9 @@ class StatusStrip(QFrame):
 
         self._palette_hint = QToolButton(self)
         self._palette_hint.setObjectName("statusStripPaletteHint")
-        self._palette_hint.setText("Ctrl K")
-        self._palette_hint.setToolTip("Command palette (Ctrl+K)")
+        native = QKeySequence("Ctrl+K").toString(QKeySequence.SequenceFormat.NativeText)
+        self._palette_hint.setText(native.replace("+", " "))
+        self._palette_hint.setToolTip(f"Command palette ({native})")
         self._palette_hint.setCursor(Qt.CursorShape.PointingHandCursor)
         self._palette_hint.clicked.connect(lambda _checked=False: self.palette_requested.emit())
         outer.addWidget(self._palette_hint)

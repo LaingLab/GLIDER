@@ -22,8 +22,7 @@ from glider.vision.calibration_set import CalibrationSet
 
 _COLUMNS = ("Video", "Resolution", "px/mm", "Arena", "Status")
 
-#: Index of the arena column. Double-clicking it asks for the perimeter rather
-#: than the line, so both dialogs are reachable without a modifier key.
+#: Index of the arena column.
 ARENA_COLUMN = 3
 _STATUS_COLUMN = 4
 
@@ -31,7 +30,6 @@ _STATUS_COLUMN = 4
 class CalibrationTable(QTableWidget):
     """One row per video: resolution, scale, and whether it still needs work."""
 
-    calibrate_requested = pyqtSignal(object)  # Path
     arena_requested = pyqtSignal(object)  # Path
 
     def __init__(self, parent=None):
@@ -126,7 +124,11 @@ class CalibrationTable(QTableWidget):
         except DegenerateArenaError as exc:
             return "⚠ unusable", str(exc)
 
-        size = f"{arena.width_cm:g}x{arena.height_cm:g} cm"
+        size = (
+            f"⌀{arena.width_cm:g} cm"
+            if arena.shape == "ellipse"
+            else f"{arena.width_cm:g}x{arena.height_cm:g} cm"
+        )
         lines = [
             f"{size} floor",
             f"opposite edges {residuals['edge_ratio']:.2f}x",
@@ -158,7 +160,4 @@ class CalibrationTable(QTableWidget):
     def _on_double_click(self, item: QTableWidgetItem) -> None:
         row = item.row()
         if 0 <= row < len(self._videos):
-            signal = (
-                self.arena_requested if item.column() == ARENA_COLUMN else self.calibrate_requested
-            )
-            signal.emit(self._videos[row])
+            self.arena_requested.emit(self._videos[row])

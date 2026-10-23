@@ -164,12 +164,8 @@ def _outside(arena, xy_px, resolution, margin_cm) -> np.ndarray:
     w = projected[2]
     with np.errstate(invalid="ignore", divide="ignore"):
         x, y = projected[0] / w, projected[1] / w
-        beyond = (
-            (x < -margin_cm)
-            | (x > arena.width_cm + margin_cm)
-            | (y < -margin_cm)
-            | (y > arena.height_cm + margin_cm)
-        )
+        # An ellipse lies inside its bounding box, so the argument above holds.
+        beyond = arena.outside_cm(x, y, margin_cm)
     return beyond.reshape(np.asarray(xy_px).shape[:2])
 
 

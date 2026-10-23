@@ -115,7 +115,6 @@ async def test_tracking_csv_is_unchanged_by_pose_data(tmp_path):
         "distance_mm",
         "cumulative_mm",
         "zone_ids",
-        "behavioral_state",
         "velocity_px_frame",
     ]
 

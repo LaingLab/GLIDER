@@ -16,7 +16,7 @@ maintenance burden nobody asked for.
 each icon is recoloured to a pastel from :mod:`~glider.gui.styles.colors` on the
 way to the painter. That is not decoration:
 
-* Colour is what makes the rail readable at a glance. You find Mice by the pink
+* Colour is what makes the rail readable at a glance. You find Animals by the pink
   rat rather than by reading five labels, which is the whole reason an icon
   beats a word there.
 * It is deliberately *not* a state. The icon keeps its hue when its row is
@@ -69,7 +69,7 @@ ICON_DIR = Path(__file__).resolve().parent.parent / "styles" / "icons" / "lucide
 GLYPH_COLOURS: dict[str, str] = {
     # Experiment rail
     "metadata": colors.PASTEL_LILAC,
-    "mice": colors.PASTEL_ROSE,
+    "animals": colors.PASTEL_ROSE,
     "zones": colors.PASTEL_MINT,
     "vocabulary": colors.PASTEL_PEACH,
     "plugins": colors.PASTEL_SKY,

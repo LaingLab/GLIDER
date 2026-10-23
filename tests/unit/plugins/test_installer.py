@@ -20,8 +20,10 @@ from glider.plugins.installer import (
     MalformedEntryError,
     NoInstallerError,
     _default_runner,
+    extra_requirements,
     incompatibility_message,
     install,
+    install_extra,
     installer_command,
     is_compatible,
 )
@@ -669,3 +671,40 @@ class TestExternallyManagedEnvironments:
             pip_available=lambda: True,
         )
         assert args[1:4] == ["-m", "pip", "install"]
+
+
+def test_an_extra_is_read_from_glider_metadata_not_pypi(monkeypatch):
+    """`pip install glider[x]` would resolve `glider` on PyPI, a different
+    project; the extra's own requirements are installed instead (#206)."""
+    import importlib.metadata
+
+    monkeypatch.setattr(
+        importlib.metadata,
+        "requires",
+        lambda dist: [
+            "numpy>=1.24",
+            'ultralytics>=8.4; extra == "vision"',
+            'spidev>=3.5; platform_system == "Nowhere" and extra == "vision"',
+            'GLIDER[audio]; extra == "vision"',
+            'umap-learn; extra == "behavior"',
+        ],
+    )
+
+    assert extra_requirements("vision") == ["ultralytics>=8.4"]
+
+
+async def test_install_extra_hands_the_requirements_to_the_installer(monkeypatch):
+    import glider.plugins.installer as installer
+
+    monkeypatch.setattr(installer, "extra_requirements", lambda extra: ["a>=1", "b"])
+    monkeypatch.setattr(installer, "installer_command", lambda pkg, reqs: ["pip", pkg, *reqs])
+    seen = []
+
+    async def run(args, on_output=None):
+        seen.append(args)
+        return 0, ""
+
+    result = await install_extra("vision", runner=run)
+
+    assert result.ok
+    assert seen == [["pip", "a>=1", "b"]]

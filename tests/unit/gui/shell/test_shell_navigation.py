@@ -386,6 +386,28 @@ def test_an_unavailable_tool_card_opens_nothing(qtbot):
     assert chosen == ["ok"]
 
 
+def test_an_unavailable_card_offers_to_install_its_extra(qtbot):
+    """Issue #206: the card names what is missing *and* fixes it in a click."""
+    from glider.gui.panels.tools_page import ToolCard, ToolsPage
+
+    page = ToolsPage(
+        [
+            ToolCard("ok", "Fine", "works", "devices", install_extra="vision"),
+            ToolCard("no", "Pose", "", "pose", available=False, install_extra="vision"),
+        ]
+    )
+    qtbot.addWidget(page)
+    asked: list[str] = []
+    page.install_requested.connect(asked.append)
+
+    assert page.install_button("ok") is None  # nothing to install for a working tool
+    page.install_button("no").click()
+    assert asked == ["vision"]
+
+    page.set_install_status("vision", "Installing…", busy=True)
+    assert not page.install_button("no").isEnabled()
+
+
 def test_landing_title_has_no_subtitle_or_letter_spacing(qtbot, tmp_path):
     from PyQt6.QtCore import QSettings
     from PyQt6.QtWidgets import QLabel

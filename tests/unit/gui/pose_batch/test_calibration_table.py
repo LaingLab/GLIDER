@@ -79,9 +79,9 @@ def test_selected_videos_reports_the_selection(table, tmp_path):
     assert table.selected_videos() == [b]
 
 
-def test_double_click_requests_calibration(table, qtbot, tmp_path):
+def test_double_click_requests_the_arena(table, qtbot, tmp_path):
     video = tmp_path / "a.mp4"
     table.set_videos([video])
-    with qtbot.waitSignal(table.calibrate_requested, timeout=1000) as blocker:
+    with qtbot.waitSignal(table.arena_requested, timeout=1000) as blocker:
         table.itemDoubleClicked.emit(table.item(0, 0))
     assert blocker.args[0] == video

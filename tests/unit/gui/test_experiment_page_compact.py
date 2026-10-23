@@ -35,8 +35,8 @@ def test_compact_page_has_chips_above_the_sections(qtbot):
 def test_compact_sections_scroll_vertically_only(qtbot):
     page = ExperimentPage({k: (lambda k=k: QLabel(k)) for k in SECTION_KEYS}, compact=True)
     qtbot.addWidget(page)
-    page.show_section("mice")
-    section = page.built_sections()["mice"]  # the section itself, not its wrapper
+    page.show_section("animals")
+    section = page.built_sections()["animals"]  # the section itself, not its wrapper
     assert isinstance(section, QLabel)
     wrapper = section.parentWidget().parentWidget()
     assert isinstance(wrapper, QScrollArea)

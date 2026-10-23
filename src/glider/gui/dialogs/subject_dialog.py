@@ -204,7 +204,7 @@ class SubjectDialog(QDialog):
 
         # Name
         self._name_edit = QLineEdit()
-        self._name_edit.setPlaceholderText("e.g., Mouse 1")
+        self._name_edit.setPlaceholderText("e.g., Animal 1")
         form.addRow("Name:", self._name_edit)
 
         # Group/Treatment

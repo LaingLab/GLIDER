@@ -6,8 +6,10 @@ and signal wiring between extracted panel components.
 """
 
 import asyncio
+import json
 import logging
 import re
+import sys
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -41,7 +43,6 @@ from glider.core import presets
 from glider.core.config import get_config
 from glider.gui.commands import UndoStack
 from glider.gui.device_status import link_status_text, link_strip_state
-from glider.gui.dialogs.calibration_dialog import CalibrationDialog
 from glider.gui.dialogs.camera_settings_dialog import CameraSettingsDialog
 from glider.gui.dialogs.experiment_dialog import ExperimentDialog
 from glider.gui.dialogs.help_dialog import HelpDialog
@@ -487,7 +488,7 @@ class MainWindow(QMainWindow):
         # set -- test is_runner_mode, not this, for "on the Pi".
         self._pi_dashboard: PiDashboard | None = None
         self._finger_scroll: FingerScroll | None = None  # runner mode
-        # The editor behind the Metadata and Mice sections, and the two pages
+        # The editor behind the Metadata and Animals sections, and the two pages
         # it was split into. Both are rebuilt per session; see
         # _experiment_detail_pages.
         self._experiment_details: ExperimentDialog | None = None
@@ -495,7 +496,6 @@ class MainWindow(QMainWindow):
         # The node editor's properties form lives inside this; see PropertiesHost.
         self._properties_host: PropertiesHost | None = None
         self._properties_widget: QWidget | None = None
-        self._files_panel: QWidget | None = None
         # View menu panel toggles, kept as attributes so their checked state can
         # follow a panel collapsed by any other route.
         self._left_panel_action: QAction | None = None
@@ -881,7 +881,7 @@ class MainWindow(QMainWindow):
         self._experiment_page = ExperimentPage(
             {
                 "metadata": lambda: self._experiment_detail_pages()[0],
-                "mice": lambda: self._experiment_detail_pages()[1],
+                "animals": lambda: self._experiment_detail_pages()[1],
                 "zones": self._build_zones_section,
                 "vocabulary": self._build_vocabulary_section,
                 "plugins": self._build_plugins_section,
@@ -891,11 +891,11 @@ class MainWindow(QMainWindow):
         )
 
     def _experiment_detail_pages(self) -> tuple[QWidget, QWidget]:
-        """The Metadata and Mice pages, from one shared dialog.
+        """The Metadata and Animals pages, from one shared dialog.
 
         Both come out of a single :class:`ExperimentDialog`, built on first
         use: the two group boxes are separate pages on the rail but the same
-        editor underneath, so a subject added on Mice and the protocol typed on
+        editor underneath, so a subject added on Animals and the protocol typed on
         Metadata reach the session through one object that knows about both.
         Two dialogs would mean two ``set_session`` targets and two ideas of
         which subject is active.
@@ -1027,28 +1027,16 @@ class MainWindow(QMainWindow):
         )
 
         def _install_line(extra: str, missing) -> str:
-            return (
-                f"Needs the {extra} extra. Install it with:\n"
-                f"    pip install 'glider[{extra}]'\n"
-                f"Missing: {', '.join(missing)}"
-            )
+            return f"Needs the {extra} extra. Missing: {', '.join(missing)}"
+
+        # A frozen build has no pip to install with, so no button to offer.
+        installable = not getattr(sys, "frozen", False)
 
         has_behavior = behavior_available()
         has_pose = pose_batch_available()
         behavior_reason = "" if has_behavior else _install_line("behavior", missing_behavior_deps())
 
         cards = [
-            ToolCard(
-                key="behavior",
-                title="Behavior Analysis",
-                description=(
-                    "Cluster and label behaviour from pose tracks, and train a "
-                    "classifier on what you label."
-                ),
-                glyph="behavior",
-                available=has_behavior,
-                unavailable_reason=behavior_reason,
-            ),
             ToolCard(
                 key="pose",
                 title="Batch Pose Tracking",
@@ -1060,6 +1048,19 @@ class MainWindow(QMainWindow):
                 unavailable_reason=(
                     "" if has_pose else _install_line("vision", missing_pose_batch_deps())
                 ),
+                install_extra="vision" if installable else "",
+            ),
+            ToolCard(
+                key="behavior",
+                title="Behavior Analysis",
+                description=(
+                    "Cluster and label behaviour from pose tracks, and train a "
+                    "classifier on what you label."
+                ),
+                glyph="behavior",
+                available=has_behavior,
+                unavailable_reason=behavior_reason,
+                install_extra="behavior" if installable else "",
             ),
             ToolCard(
                 key="review",
@@ -1071,6 +1072,7 @@ class MainWindow(QMainWindow):
                 available=has_behavior,
                 # The same probe: this reads the behavior tool's own outputs.
                 unavailable_reason=behavior_reason,
+                install_extra="behavior" if installable else "",
             ),
             ToolCard(
                 key="multicam",
@@ -1091,6 +1093,58 @@ class MainWindow(QMainWindow):
 
         self._analyze_page = ToolsPage(cards, parent=self)
         self._analyze_page.tool_chosen.connect(self._on_tool_chosen)
+        self._analyze_page.install_requested.connect(self._on_install_extra)
+
+    def _on_install_extra(self, extra: str) -> None:
+        """Install an extra from its card, then offer the restart that loads it.
+
+        A restart rather than a live re-probe: the availability probes are
+        memoized, and the tool windows import their stacks once.
+        """
+        from glider.plugins.installer import install_extra
+
+        page = self._analyze_page
+        page.set_install_status(extra, f"Installing the {extra} extra…", busy=True)
+
+        async def _install() -> None:
+            result = await install_extra(
+                extra,
+                on_output=lambda line: page.set_install_status(extra, line[-120:], busy=True),
+            )
+            if not result.ok:
+                page.set_install_status(extra, f"Install failed: {result.message}", busy=False)
+                box = QMessageBox(
+                    QMessageBox.Icon.Warning, "Install failed", result.message, parent=self
+                )
+                box.setDetailedText(result.output[-8000:])
+                box.exec()
+                return
+            page.set_install_status(extra, "Installed. Restart GLIDER to use it.", busy=True)
+            answer = QMessageBox.question(
+                self,
+                "Restart GLIDER?",
+                f"The {extra} extra is installed. GLIDER needs a restart to load it. Restart now?",
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self._restart()
+
+        self._run_async(_install())
+
+    def _restart(self) -> None:
+        """Close through the normal path (save prompt included), then relaunch.
+
+        The relaunch waits for interpreter exit, so the old process has let go
+        of its serial ports and cameras before the new one reaches for them.
+        """
+        if self.close():
+            import atexit
+            import subprocess
+
+            atexit.register(
+                subprocess.Popen,
+                [sys.executable, "-m", "glider", *sys.argv[1:]],
+                start_new_session=True,
+            )
 
     def _on_tool_chosen(self, key: str) -> None:
         """Open the window a card stands for.
@@ -1581,6 +1635,8 @@ class MainWindow(QMainWindow):
         camera_panel.set_event_logger(self._core.event_logger)
         # Lets Behavior Input nodes in the flow react to live classification.
         camera_panel.set_live_signals(self._core.live_signals)
+        if self._core.calibration is None:
+            self._restore_camera_arena()
         camera_panel.set_calibration(self._core.calibration)
         camera_panel._preview.set_calibration(self._core.calibration)
         camera_panel.set_zone_configuration(self._zone_config)
@@ -1619,7 +1675,7 @@ class MainWindow(QMainWindow):
 
         Each widget here is the same object the Builder's dock widgets used to
         wrap — this method re-hosts rather than rewrites. Left panel: Nodes,
-        Hardware, Control, Files. Right panel: Properties, Camera.
+        Hardware, Control. Right panel: Properties, Camera.
         """
         self._build_builder_panels()
         self._host_builder_panels_in_shell()
@@ -1693,10 +1749,10 @@ class MainWindow(QMainWindow):
             self._move_camera_to_builder()
 
     def _host_builder_panels_in_shell(self) -> None:
-        """Put the shared panels in the desktop frame, with Control and Files.
+        """Put the shared panels in the desktop frame, with Control.
 
-        Control and Files are desktop-only and are built here, on the first
-        call; later calls do nothing.
+        Control is desktop-only and is built here, on the first call; later
+        calls do nothing.
         """
         if self._device_control_panel is not None:
             return
@@ -1712,52 +1768,12 @@ class MainWindow(QMainWindow):
         # to the Builder's own _device_control_panel (and the strip, above).
         self._hardware_panel.hardware_changed.connect(self._device_control_panel.refresh_devices)
 
-        # --- Files ---
-        from PyQt6.QtWidgets import QFrame, QPushButton, QScrollArea
-
-        files_scroll = QScrollArea()
-        files_scroll.setWidgetResizable(True)
-        files_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        files_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        files_widget = QWidget()
-        files_layout = QVBoxLayout(files_widget)
-        files_layout.setContentsMargins(4, 4, 4, 4)
-        files_layout.setSpacing(4)
-
-        new_btn = QPushButton("New")
-        new_btn.setFixedHeight(36)
-        new_btn.clicked.connect(self._on_new)
-        files_layout.addWidget(new_btn)
-
-        open_btn = QPushButton("Open")
-        open_btn.setFixedHeight(36)
-        open_btn.clicked.connect(self._on_open)
-        files_layout.addWidget(open_btn)
-
-        save_btn = QPushButton("Save")
-        save_btn.setFixedHeight(36)
-        save_btn.clicked.connect(self._on_save)
-        files_layout.addWidget(save_btn)
-
-        save_as_btn = QPushButton("Save As...")
-        save_as_btn.setFixedHeight(36)
-        save_as_btn.clicked.connect(self._on_save_as)
-        files_layout.addWidget(save_as_btn)
-
-        files_layout.addStretch()
-
-        files_scroll.setWidget(files_widget)
-        self._files_panel = files_scroll
-
-        # --- Into the shell. Files was a dock the desktop kept hidden by
-        # default; as a tab it costs nothing to leave in place, and the rail
-        # keeps it discoverable rather than hidden behind a menu item.
+        # --- Into the shell. No Files tab: the desktop has File in the menu
+        # bar and the palette; only the Pi runner, which has neither, needs one.
         left = self._builder_view.left
         left.add_tab("nodes", "Nodes", self._node_library_panel, "N")
         left.add_tab("hardware", "Hardware", self._hardware_panel, "H")
         left.add_tab("control", "Control", self._device_control_panel, "D")
-        left.add_tab("files", "Files", self._files_panel, "F")
 
         right = self._builder_view.right
         right.add_tab("properties", "Properties", self._properties_host, "P")
@@ -2219,7 +2235,6 @@ class MainWindow(QMainWindow):
                 "Install the behavior extra: pip install glider[behavior] "
                 f"(missing: {', '.join(missing_behavior_deps())})"
             )
-        tools_menu.addAction(behavior_action)
 
         pose_batch_action = QAction("Batch &Pose Tracking…", self)
         pose_batch_action.setStatusTip(
@@ -2238,7 +2253,9 @@ class MainWindow(QMainWindow):
                 "Install the vision extra: pip install glider[vision] "
                 f"(missing: {', '.join(missing_pose_batch_deps())})"
             )
+        # Pose first: Behavior Analysis consumes the keypoints it writes.
         tools_menu.addAction(pose_batch_action)
+        tools_menu.addAction(behavior_action)
 
         multi_camera_action = QAction("&Multi-Camera Recording…", self)
         multi_camera_action.setStatusTip(
@@ -3648,19 +3665,50 @@ class MainWindow(QMainWindow):
                 logger.exception("Could not apply the Computer Vision settings")
                 QMessageBox.warning(self, "Computer Vision", str(exc))
 
+    #: QSettings key for the live camera's arena. The rig's camera stays put
+    #: between sessions, so its arena should too.
+    _ARENA_KEY = "camera/arena"
+
     def _on_camera_calibration(self) -> None:
-        dialog = CalibrationDialog(
-            frame_provider=CameraFrameProvider(self._core.camera_manager),
-            calibration=self._core.calibration,
-            parent=self,
-        )
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            calibration = dialog.get_calibration()
-            if calibration.is_calibrated:
-                logger.info(
-                    f"Camera calibrated: {calibration.pixels_per_mm:.2f} pixels/mm "
-                    f"({len(calibration.lines)} lines)"
+        """Outline the live camera's arena; it supplies the px/mm scale (#212)."""
+        from glider.gui.dialogs.arena_dialog import ArenaDialog
+
+        grabbed = CameraFrameProvider(self._core.camera_manager).get_frame()
+        if grabbed is None:
+            QMessageBox.information(
+                self, "Arena", "Connect the camera first: the arena is drawn on a live frame."
+            )
+            return
+        dialog = ArenaDialog(grabbed[0], title="Live camera", parent=self)
+        if self._core.calibration is not None:
+            dialog.set_arena(self._core.calibration)
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted and dialog.calibration():
+                self._set_camera_arena(dialog.calibration())
+                self._settings.setValue(
+                    self._ARENA_KEY, json.dumps(self._core.calibration.to_dict())
                 )
+                logger.info("Camera arena set: %.2f px/mm", self._core.calibration.pixels_per_mm)
+        finally:
+            dialog.deleteLater()
+
+    def _set_camera_arena(self, arena) -> None:
+        self._core.calibration = arena
+        if self._camera_panel is not None:
+            self._camera_panel.set_calibration(arena)
+            self._camera_panel._preview.set_calibration(arena)
+
+    def _restore_camera_arena(self) -> None:
+        """The arena saved last session, if there is a readable one."""
+        from glider.vision.arena import ArenaCalibration
+
+        raw = self._settings.value(self._ARENA_KEY)
+        if not raw:
+            return
+        try:
+            self._core.calibration = ArenaCalibration.from_dict(json.loads(raw))
+        except (ValueError, KeyError, TypeError):
+            logger.warning("Ignoring an unreadable saved camera arena")
 
     def _on_zones_requested(self) -> None:
         self._open_zone_dialog(frame=None)
@@ -3794,6 +3842,13 @@ class MainWindow(QMainWindow):
             return
         self._plugins_dialog = dialog
         dialog.finished.connect(self._on_plugins_window_closed)
+        # An install registers its nodes in place; the library lists them only
+        # when asked, so without this they appeared only after a restart (#205).
+        dialog.plugins_changed.connect(self._on_plugins_changed)
+
+    def _on_plugins_changed(self) -> None:
+        if self._node_library_panel is not None:
+            self._node_library_panel.refresh_plugin_nodes()
 
     def _on_plugins_window_closed(self, _result: int = 0) -> None:
         self._plugins_dialog = None

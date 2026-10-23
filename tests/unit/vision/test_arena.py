@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pytest
 
 from glider.vision.arena import ArenaCalibration, DegenerateArenaError
@@ -202,3 +203,43 @@ class TestSerialization:
         import json
 
         json.dumps(_cal().to_dict())
+
+
+# ---------------------------------------------------------------- round arenas
+
+
+def test_a_round_arena_seen_from_above_scales_and_contains_like_a_circle():
+    """Issue #212: a 40 cm circle drawn as a 400 px-wide ellipse on 800x800."""
+    arena = ArenaCalibration.from_ellipse(
+        (0.5, 0.5), (0.75, 0.5), (0.5, 0.75), width_cm=40.0, frame_size=(800, 800)
+    )
+
+    assert arena.px_per_cm_centre == pytest.approx(10.0)
+    # The box corner is inside the bounding square but outside the floor.
+    assert arena.outside_cm(np.array([2.0]), np.array([2.0]))[0]
+    assert not arena.outside_cm(np.array([20.0]), np.array([1.0]))[0]
+    assert len(arena.centre_zone_vertices(10.0)) == 48
+
+
+def test_a_round_arena_survives_a_round_trip_and_reopens_on_its_handles():
+    arena = ArenaCalibration.from_ellipse(
+        (0.4, 0.5), (0.7, 0.55), (0.42, 0.8), width_cm=35.0, frame_size=(640, 480)
+    )
+    again = ArenaCalibration.from_dict(arena.to_dict())
+
+    assert again.shape == "ellipse"
+    handles = np.array(again.ellipse_handles())
+    assert handles == pytest.approx(np.array([(0.4, 0.5), (0.7, 0.55), (0.42, 0.8)]))
+
+
+def test_an_arena_stands_in_for_the_line_calibration_the_logger_reads():
+    """#212: the live rig's scale comes from its arena, through the same calls."""
+    arena = ArenaCalibration.from_ellipse(
+        (0.5, 0.5), (0.75, 0.5), (0.5, 0.75), width_cm=40.0, frame_size=(800, 800)
+    )
+
+    assert arena.is_calibrated
+    assert arena.pixels_per_mm == pytest.approx(1.0)
+    assert arena.pixels_to_mm(10.0, 800) == pytest.approx(10.0)
+    assert arena.pixels_to_mm(10.0, 400) == pytest.approx(20.0)  # half-res frame
+    assert arena.draw(np.zeros((800, 800, 3), np.uint8)).any()

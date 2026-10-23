@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pytest
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPalette
+from PyQt6.QtGui import QKeySequence, QPalette
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
 
 from glider.gui.shell.status_strip import STRIP_HEIGHT, StatusStrip
@@ -398,10 +398,10 @@ def test_the_palette_hint_is_a_button_and_not_a_decoration(strip, qtbot):
 
 
 def test_the_palette_hint_names_the_shortcut(strip):
-    text = strip.palette_hint().text()
+    native = QKeySequence("Ctrl+K").toString(QKeySequence.SequenceFormat.NativeText)
 
-    assert "Ctrl" in text
-    assert "K" in text
+    assert strip.palette_hint().text() == native.replace("+", " ")
+    assert native in strip.palette_hint().toolTip()
 
 
 # --------------------------------------------------------------- the toggles

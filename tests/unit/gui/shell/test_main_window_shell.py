@@ -28,7 +28,7 @@ from glider.hal.base_board import BoardConnectionState
 pytestmark = pytest.mark.usefixtures("qtbot")
 
 
-LEFT_KEYS = ["nodes", "hardware", "control", "files"]
+LEFT_KEYS = ["nodes", "hardware", "control"]
 RIGHT_KEYS = ["properties", "camera"]
 
 
@@ -129,7 +129,6 @@ def test_panels_are_re_hosted_not_rebuilt(qtbot, main_window_factory):
     assert shell.left.widget_for("nodes") is window._node_library_panel
     assert shell.left.widget_for("hardware") is window._hardware_panel
     assert shell.left.widget_for("control") is window._device_control_panel
-    assert shell.left.widget_for("files") is window._files_panel
 
     # Properties is hosted behind a swappable container -- the node editor
     # replaces its contents on every selection -- so identity is asserted on
@@ -250,7 +249,6 @@ def test_nothing_lingers_over_the_operator_view(qtbot, main_window_factory):
         window._node_library_panel,
         window._hardware_panel,
         window._device_control_panel,
-        window._files_panel,
         window._properties_host,
         window._camera_panel,
     )
