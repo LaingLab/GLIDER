@@ -1,10 +1,8 @@
 """A single frame-source interface over the live camera and recorded video.
 
-:class:`glider.gui.dialogs.calibration_dialog.CalibrationDialog` needs one
-still frame to draw measurement lines on. It used to reach into CameraManager
-directly, which made it unusable for a batch over recorded files. These
-adapters expose the two members it actually needs, plus an optional seek
-capability so a video source can be scrubbed for a frame worth measuring.
+The arena dialog needs one still frame to outline the floor on, from the live
+camera or from a recording. These adapters expose the two members that takes,
+plus an optional seek capability so a video can be scrubbed for a good frame.
 
 The Protocols are for typing only — deliberately not runtime_checkable.
 Consumers test for seekability with ``hasattr(provider, "seek")``.

@@ -23,7 +23,7 @@ _FSYNC_INTERVAL_FRAMES = 300
 
 if TYPE_CHECKING:
     from glider.core.experiment_session import ExperimentSession
-    from glider.vision.calibration import CameraCalibration
+    from glider.vision.arena import ArenaCalibration
     from glider.vision.cv_processor import TrackedObject
     from glider.vision.zones import ZoneConfiguration
 
@@ -85,7 +85,7 @@ class TrackingDataLogger:
         self._flow_anchor: float | None = None
         self._frame_count = 0
         self._recording = False
-        self._calibration: CameraCalibration | None = None
+        self._calibration: ArenaCalibration | None = None
         self._zone_config: ZoneConfiguration | None = None
         self._frame_width: int = 0
         self._frame_height: int = 0
@@ -257,12 +257,11 @@ class TrackingDataLogger:
         """
         self._flow_anchor = float(timestamp)
 
-    def set_calibration(self, calibration: "CameraCalibration") -> None:
-        """
-        Set calibration for real-world distance calculations.
+    def set_calibration(self, calibration: "ArenaCalibration | None") -> None:
+        """Set the arena whose scale converts distances to millimetres.
 
-        Args:
-            calibration: CameraCalibration instance
+        Anything with the same scalar interface works (``is_calibrated``,
+        ``pixels_per_mm``, ``calibration_width/height``, ``pixels_to_mm``).
         """
         self._calibration = calibration
 

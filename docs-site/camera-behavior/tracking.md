@@ -116,13 +116,13 @@ Key columns:
 | `x, y, w, h` | Bounding box in pixels (top-left corner, width, height) |
 | `center_x, center_y` | Bounding-box center, in pixels |
 | `distance_px` | Distance moved since the previous frame, in pixels |
-| `distance_mm`, `cumulative_mm` | The same distances in millimeters, when a [calibration](camera.md#calibration) is active (otherwise they mirror pixels) |
+| `distance_mm`, `cumulative_mm` | The same distances in millimeters, when an [arena](camera.md#arena-calibration) is set (otherwise they mirror pixels) |
 | `zone_ids` | Names of the [zones](camera.md#zones-regions-of-interest) containing the object |
 | `velocity_px_frame` | Speed in pixels per frame |
 
 !!! note "Coordinates are in pixels"
     Positions and box sizes are always in pixels. The millimeter columns are only
-    real-world distances when you have [calibrated](camera.md#calibration) the
+    real-world distances when you have [set an arena](camera.md#arena-calibration) for the
     camera; otherwise they carry the pixel values unchanged.
 
 A row with `object_id` of `-1` and class `motion` marks a frame where motion was

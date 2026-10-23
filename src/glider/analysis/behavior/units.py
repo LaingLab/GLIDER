@@ -223,7 +223,8 @@ def _borrow_from_folder_mate(cal_set, video: Path) -> float | None:
 
     folder = _folder_name(video)
     candidates = []
-    for stored, calibration in cal_set.entries.items():
+    # An arena carries the same scale interface as a line, and wins where both exist.
+    for stored, calibration in {**cal_set.entries, **cal_set.arenas}.items():
         if not folder or _folder_name(stored) != folder:
             continue
         if (calibration.calibration_width, calibration.calibration_height) != resolution:

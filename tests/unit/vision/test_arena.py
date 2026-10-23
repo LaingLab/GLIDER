@@ -230,3 +230,16 @@ def test_a_round_arena_survives_a_round_trip_and_reopens_on_its_handles():
     assert again.shape == "ellipse"
     handles = np.array(again.ellipse_handles())
     assert handles == pytest.approx(np.array([(0.4, 0.5), (0.7, 0.55), (0.42, 0.8)]))
+
+
+def test_an_arena_stands_in_for_the_line_calibration_the_logger_reads():
+    """#212: the live rig's scale comes from its arena, through the same calls."""
+    arena = ArenaCalibration.from_ellipse(
+        (0.5, 0.5), (0.75, 0.5), (0.5, 0.75), width_cm=40.0, frame_size=(800, 800)
+    )
+
+    assert arena.is_calibrated
+    assert arena.pixels_per_mm == pytest.approx(1.0)
+    assert arena.pixels_to_mm(10.0, 800) == pytest.approx(10.0)
+    assert arena.pixels_to_mm(10.0, 400) == pytest.approx(20.0)  # half-res frame
+    assert arena.draw(np.zeros((800, 800, 3), np.uint8)).any()

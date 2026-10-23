@@ -6,6 +6,7 @@ and signal wiring between extracted panel components.
 """
 
 import asyncio
+import json
 import logging
 import re
 import sys
@@ -42,7 +43,6 @@ from glider.core import presets
 from glider.core.config import get_config
 from glider.gui.commands import UndoStack
 from glider.gui.device_status import link_status_text, link_strip_state
-from glider.gui.dialogs.calibration_dialog import CalibrationDialog
 from glider.gui.dialogs.camera_settings_dialog import CameraSettingsDialog
 from glider.gui.dialogs.experiment_dialog import ExperimentDialog
 from glider.gui.dialogs.help_dialog import HelpDialog
@@ -1635,6 +1635,8 @@ class MainWindow(QMainWindow):
         camera_panel.set_event_logger(self._core.event_logger)
         # Lets Behavior Input nodes in the flow react to live classification.
         camera_panel.set_live_signals(self._core.live_signals)
+        if self._core.calibration is None:
+            self._restore_camera_arena()
         camera_panel.set_calibration(self._core.calibration)
         camera_panel._preview.set_calibration(self._core.calibration)
         camera_panel.set_zone_configuration(self._zone_config)
@@ -3663,19 +3665,50 @@ class MainWindow(QMainWindow):
                 logger.exception("Could not apply the Computer Vision settings")
                 QMessageBox.warning(self, "Computer Vision", str(exc))
 
+    #: QSettings key for the live camera's arena. The rig's camera stays put
+    #: between sessions, so its arena should too.
+    _ARENA_KEY = "camera/arena"
+
     def _on_camera_calibration(self) -> None:
-        dialog = CalibrationDialog(
-            frame_provider=CameraFrameProvider(self._core.camera_manager),
-            calibration=self._core.calibration,
-            parent=self,
-        )
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            calibration = dialog.get_calibration()
-            if calibration.is_calibrated:
-                logger.info(
-                    f"Camera calibrated: {calibration.pixels_per_mm:.2f} pixels/mm "
-                    f"({len(calibration.lines)} lines)"
+        """Outline the live camera's arena; it supplies the px/mm scale (#212)."""
+        from glider.gui.dialogs.arena_dialog import ArenaDialog
+
+        grabbed = CameraFrameProvider(self._core.camera_manager).get_frame()
+        if grabbed is None:
+            QMessageBox.information(
+                self, "Arena", "Connect the camera first: the arena is drawn on a live frame."
+            )
+            return
+        dialog = ArenaDialog(grabbed[0], title="Live camera", parent=self)
+        if self._core.calibration is not None:
+            dialog.set_arena(self._core.calibration)
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted and dialog.calibration():
+                self._set_camera_arena(dialog.calibration())
+                self._settings.setValue(
+                    self._ARENA_KEY, json.dumps(self._core.calibration.to_dict())
                 )
+                logger.info("Camera arena set: %.2f px/mm", self._core.calibration.pixels_per_mm)
+        finally:
+            dialog.deleteLater()
+
+    def _set_camera_arena(self, arena) -> None:
+        self._core.calibration = arena
+        if self._camera_panel is not None:
+            self._camera_panel.set_calibration(arena)
+            self._camera_panel._preview.set_calibration(arena)
+
+    def _restore_camera_arena(self) -> None:
+        """The arena saved last session, if there is a readable one."""
+        from glider.vision.arena import ArenaCalibration
+
+        raw = self._settings.value(self._ARENA_KEY)
+        if not raw:
+            return
+        try:
+            self._core.calibration = ArenaCalibration.from_dict(json.loads(raw))
+        except (ValueError, KeyError, TypeError):
+            logger.warning("Ignoring an unreadable saved camera arena")
 
     def _on_zones_requested(self) -> None:
         self._open_zone_dialog(frame=None)

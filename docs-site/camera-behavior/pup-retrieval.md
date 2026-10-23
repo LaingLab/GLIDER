@@ -119,8 +119,8 @@ click one to jump to it, or select it and press **Remove**.
 **Trial start.** Scrub to the moment the dam is released and press **Set at
 playhead**. Everything is timed from here.
 
-**Scale.** **Set scale…** opens the calibration tool on a frame of the video:
-measure something of known length. The scale lives in that video's setup. If
+**Scale.** **Set scale…** opens the [arena](camera.md#arena-calibration) tool on a
+frame of the video: outline the floor and give its real size. The scale lives in that video's setup. If
 more than one pup video is open it asks whether to use it for every session in
 the cohort, and afterwards tells you about any session whose file couldn't be
 read and so kept its old scale.

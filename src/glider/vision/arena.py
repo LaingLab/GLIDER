@@ -316,6 +316,50 @@ class ArenaCalibration:
         """Centre scale in the units :mod:`glider.analysis.behavior.units` uses."""
         return self.px_per_cm_centre / 10.0
 
+    # The scalar interface the tracking logger reads off a calibration, so a
+    # live rig's arena drops in where a measurement line used to (#212).
+
+    is_calibrated = True
+
+    @property
+    def pixels_per_mm(self) -> float:
+        return self.px_per_mm_centre
+
+    @property
+    def calibration_width(self) -> int:
+        return int(self.frame_size[0])
+
+    @property
+    def calibration_height(self) -> int:
+        return int(self.frame_size[1])
+
+    def pixels_to_mm(self, pixels: float, current_width: int | None = None, _height=None) -> float:
+        """*pixels* at the centre scale, rescaled if the frame is not the one drawn on."""
+        ppm = self.pixels_per_mm
+        if current_width:
+            ppm *= current_width / self.calibration_width
+        return pixels / ppm
+
+    def outline(self, width: int, height: int) -> list[tuple[int, int]]:
+        """The floor's outline as pixel points on a *width* x *height* frame."""
+        if self.shape == "ellipse":
+            c, u, v = (np.array(p) for p in self.ellipse_handles())
+            norm = [
+                c + (u - c) * math.cos(t) + (v - c) * math.sin(t)
+                for t in np.linspace(0, 2 * math.pi, 72, endpoint=False)
+            ]
+        else:
+            norm = self.corners
+        return [(int(round(x * width)), int(round(y * height))) for x, y in norm]
+
+    def draw(self, frame: np.ndarray, colour=(248, 189, 56)) -> np.ndarray:
+        """A copy of *frame* with the arena outline drawn on it (BGR)."""
+        out = frame.copy()
+        h, w = out.shape[:2]
+        points = np.array(self.outline(w, h), dtype=np.int32).reshape(-1, 1, 2)
+        cv2.polylines(out, [points], True, colour, 2, cv2.LINE_AA)
+        return out
+
     # ------------------------------------------------------------------
     # quality
     # ------------------------------------------------------------------
