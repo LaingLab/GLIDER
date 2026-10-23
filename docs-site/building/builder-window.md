@@ -28,7 +28,7 @@ From top to bottom:
 |---|---|
 | **Menu bar** | Five menus: **File**, **Edit**, **Experiment**, **View**, **Help**. |
 | **Chrome strip** | One row carrying the experiment name, one dot per board, the centred tabs, the run-state pill once a run is under way, and the ++ctrl+k++ hint. The two panel toggles appear on this tab only, since they drive the panels below. |
-| **Left panel** | Tabs: **Nodes**, **Hardware**, **Control**, **Files**. |
+| **Left panel** | Tabs: **Nodes**, **Hardware**, **Control**. |
 | **The canvas** | The node graph itself. Everything else gets out of its way. |
 | **Right panel** | Tabs: **Properties**, **Camera**. |
 | **Status bar** | The thin line along the bottom: connection indicator, session state, and transient messages. |
@@ -47,7 +47,7 @@ panels, one on each side of the canvas.
 
 | Panel | Tabs |
 |---|---|
-| Left | **Nodes** (the node library), **Hardware** (boards and devices), **Control** (drive a device by hand), **Files** (New, Open, Save, Save As) |
+| Left | **Nodes** (the node library), **Hardware** (boards and devices), **Control** (drive a device by hand) |
 | Right | **Properties** (settings for the selected node), **Camera** (the live camera panel) |
 
 Click a tab at the top of a panel to switch to it. Only one tab per side is
