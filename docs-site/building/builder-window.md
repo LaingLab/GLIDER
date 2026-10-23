@@ -226,7 +226,7 @@ about.
 |---|---|---|
 | **Hardware** | Add Board…, Add Device…, New Custom Device Type…, Connect All, Disconnect All | **Add Board** and **Add Device** are buttons in the **Hardware** tab, which is where you were probably already looking. The rest: ++ctrl+k++ |
 | **Run** | Start (++f5++), Stop (++shift+f5++), Emergency Stop (++ctrl+shift+escape++) | The toolbar, the **Run** tab, the shortcuts, or ++ctrl+k++ |
-| **Tools** | Batch Pose Tracking…, Behavior Analysis…, Session Review…, Multi-Camera Recording…, GPU / Device Check… | The **Analyze** tab, which has a card for each — including, when a tool needs an optional dependency stack, the exact install line. **Plugins** moved to the **Experiment** tab instead |
+| **Tools** | Batch Pose Tracking…, Behavior Analysis…, Session Review…, Multi-Camera Recording…, GPU / Device Check… | The **Analyze** tab, which has a card for each — including, when a tool needs an optional dependency stack, an **Install** button that adds it and offers to restart GLIDER. **Plugins** moved to the **Experiment** tab instead |
 
 Every row in the palette names the menu it came from, so if you remember that
 something "was under Tools", the palette still tells you so.

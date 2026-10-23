@@ -8,6 +8,7 @@ and signal wiring between extracted panel components.
 import asyncio
 import logging
 import re
+import sys
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -1026,11 +1027,10 @@ class MainWindow(QMainWindow):
         )
 
         def _install_line(extra: str, missing) -> str:
-            return (
-                f"Needs the {extra} extra. Install it with:\n"
-                f"    pip install 'glider[{extra}]'\n"
-                f"Missing: {', '.join(missing)}"
-            )
+            return f"Needs the {extra} extra. Missing: {', '.join(missing)}"
+
+        # A frozen build has no pip to install with, so no button to offer.
+        installable = not getattr(sys, "frozen", False)
 
         has_behavior = behavior_available()
         has_pose = pose_batch_available()
@@ -1048,6 +1048,7 @@ class MainWindow(QMainWindow):
                 unavailable_reason=(
                     "" if has_pose else _install_line("vision", missing_pose_batch_deps())
                 ),
+                install_extra="vision" if installable else "",
             ),
             ToolCard(
                 key="behavior",
@@ -1059,6 +1060,7 @@ class MainWindow(QMainWindow):
                 glyph="behavior",
                 available=has_behavior,
                 unavailable_reason=behavior_reason,
+                install_extra="behavior" if installable else "",
             ),
             ToolCard(
                 key="review",
@@ -1070,6 +1072,7 @@ class MainWindow(QMainWindow):
                 available=has_behavior,
                 # The same probe: this reads the behavior tool's own outputs.
                 unavailable_reason=behavior_reason,
+                install_extra="behavior" if installable else "",
             ),
             ToolCard(
                 key="multicam",
@@ -1090,6 +1093,58 @@ class MainWindow(QMainWindow):
 
         self._analyze_page = ToolsPage(cards, parent=self)
         self._analyze_page.tool_chosen.connect(self._on_tool_chosen)
+        self._analyze_page.install_requested.connect(self._on_install_extra)
+
+    def _on_install_extra(self, extra: str) -> None:
+        """Install an extra from its card, then offer the restart that loads it.
+
+        A restart rather than a live re-probe: the availability probes are
+        memoized, and the tool windows import their stacks once.
+        """
+        from glider.plugins.installer import install_extra
+
+        page = self._analyze_page
+        page.set_install_status(extra, f"Installing the {extra} extra…", busy=True)
+
+        async def _install() -> None:
+            result = await install_extra(
+                extra,
+                on_output=lambda line: page.set_install_status(extra, line[-120:], busy=True),
+            )
+            if not result.ok:
+                page.set_install_status(extra, f"Install failed: {result.message}", busy=False)
+                box = QMessageBox(
+                    QMessageBox.Icon.Warning, "Install failed", result.message, parent=self
+                )
+                box.setDetailedText(result.output[-8000:])
+                box.exec()
+                return
+            page.set_install_status(extra, "Installed. Restart GLIDER to use it.", busy=True)
+            answer = QMessageBox.question(
+                self,
+                "Restart GLIDER?",
+                f"The {extra} extra is installed. GLIDER needs a restart to load it. Restart now?",
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self._restart()
+
+        self._run_async(_install())
+
+    def _restart(self) -> None:
+        """Close through the normal path (save prompt included), then relaunch.
+
+        The relaunch waits for interpreter exit, so the old process has let go
+        of its serial ports and cameras before the new one reaches for them.
+        """
+        if self.close():
+            import atexit
+            import subprocess
+
+            atexit.register(
+                subprocess.Popen,
+                [sys.executable, "-m", "glider", *sys.argv[1:]],
+                start_new_session=True,
+            )
 
     def _on_tool_chosen(self, key: str) -> None:
         """Open the window a card stands for.

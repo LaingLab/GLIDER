@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import importlib.metadata
 import importlib.util
 import logging
 import re
@@ -360,3 +361,51 @@ async def install(
     return InstallResult(
         ok=True, message=f"Installed {entry.get('name') or package}.", output=output
     )
+
+
+def extra_requirements(extra: str, distribution: str = "GLIDER") -> list[str]:
+    """What GLIDER's own metadata lists for *extra*, as plain requirements.
+
+    Read from the installed distribution rather than asking pip for
+    ``glider[extra]``: that would resolve the name ``glider`` against PyPI,
+    which is not this project, and reinstall GLIDER itself on the way. Markers
+    are resolved here, so a Linux-only requirement is dropped elsewhere.
+    """
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
+    requirements = []
+    for line in importlib.metadata.requires(distribution) or ():
+        req = Requirement(line)
+        if req.marker is None or not req.marker.evaluate({"extra": extra}):
+            continue
+        # ponytail: a nested self-extra (`GLIDER[audio]`) is skipped, not
+        # expanded; none of the extras the Analyze cards install uses one.
+        if canonicalize_name(req.name) == canonicalize_name(distribution):
+            continue
+        requirements.append(f"{req.name}{req.specifier}")
+    return requirements
+
+
+async def install_extra(
+    extra: str,
+    runner=None,
+    on_output: Callable[[str], None] | None = None,
+) -> InstallResult:
+    """Install one of GLIDER's optional extras into this interpreter."""
+    requirements = extra_requirements(extra)
+    if not requirements:
+        return InstallResult(ok=False, message=f"GLIDER lists nothing to install for {extra!r}.")
+    try:
+        args = installer_command(requirements[0], requirements[1:])
+    except (NoInstallerError, MalformedEntryError) as exc:
+        return InstallResult(ok=False, message=str(exc))
+
+    returncode, output = await (runner or _default_runner)(args, on_output)
+    if returncode != 0:
+        tool = "uv" if args[0] != sys.executable else "pip"
+        return InstallResult(
+            ok=False, message=f"{tool} exited with code {returncode}.", output=output
+        )
+    importlib.invalidate_caches()
+    return InstallResult(ok=True, message=f"Installed the {extra} extra.", output=output)
