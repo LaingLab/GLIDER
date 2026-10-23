@@ -3754,6 +3754,13 @@ class MainWindow(QMainWindow):
             return
         self._plugins_dialog = dialog
         dialog.finished.connect(self._on_plugins_window_closed)
+        # An install registers its nodes in place; the library lists them only
+        # when asked, so without this they appeared only after a restart (#205).
+        dialog.plugins_changed.connect(self._on_plugins_changed)
+
+    def _on_plugins_changed(self) -> None:
+        if self._node_library_panel is not None:
+            self._node_library_panel.refresh_plugin_nodes()
 
     def _on_plugins_window_closed(self, _result: int = 0) -> None:
         self._plugins_dialog = None

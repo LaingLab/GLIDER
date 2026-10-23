@@ -268,6 +268,24 @@ async def test_a_plugin_that_installs_but_will_not_import_does_not_read_as_enabl
     assert manager.loads == 1
 
 
+async def test_an_install_announces_that_plugins_changed(qtbot, monkeypatch):
+    """Issue #205: the node library lists plugin nodes only when asked, so an
+    install that never said so left a new node invisible until a restart."""
+    manager = _FakeManager([PluginInfo(name="harp", enabled=True, loaded=True)])
+    _fake_pip(monkeypatch, InstallResult(ok=True, message="Installed glider-harp.", output="done"))
+    _fake_site_packages(monkeypatch, versions={"glider-harp": "0.1.0"}, entry_points=["harp"])
+
+    dialog = PluginManagerDialog(index=INDEX, installed={}, plugin_manager=manager)
+    qtbot.addWidget(dialog)
+    seen = []
+    dialog.plugins_changed.connect(lambda: seen.append(manager.loads))
+
+    _card(dialog, "glider-harp").buttons()[0].click()
+    await _drain(dialog)
+
+    assert seen == [1]  # once, and only after the load
+
+
 async def test_the_load_error_is_shown_on_the_row_that_owns_it(qtbot, monkeypatch):
     """`load_plugin` writes the diagnosis onto `PluginInfo.error` and the window
     threw it away, so it died in `logger.error` where nobody was looking."""
