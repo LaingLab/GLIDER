@@ -419,3 +419,33 @@ def test_landing_title_has_no_subtitle_or_letter_spacing(qtbot, tmp_path):
     assert page.findChild(QLabel, "landingSubtitle") is None
     rule = load_stylesheet("desktop").split("QLabel#landingTitle", 1)[1].split("}", 1)[0]
     assert "letter-spacing" not in rule
+
+
+def test_an_extra_install_reports_outside_its_task(qtbot, main_window_factory, monkeypatch):
+    """The result dialogs run a nested event loop and Restart closes the window.
+    Run inside the install task, both broke qasync ("Cannot enter into task")
+    and left shutdown waiting out its 10 s timeout (#206). The task must hand
+    them to the Qt loop instead of calling them."""
+    import asyncio
+
+    import glider.gui.main_window as main_window_module
+    import glider.plugins.installer as installer
+
+    async def fake_install(extra, on_output=None):
+        return installer.InstallResult(ok=True, message="done")
+
+    monkeypatch.setattr(installer, "install_extra", fake_install)
+    deferred = []
+    monkeypatch.setattr(main_window_module.QTimer, "singleShot", lambda ms, fn: deferred.append(fn))
+    window = main_window_factory(desktop_mode=True)
+    called = []
+    monkeypatch.setattr(window, "_after_install_extra", lambda *args: called.append(args))
+    tasks = []
+    monkeypatch.setattr(window, "_run_async", tasks.append)
+
+    window._on_install_extra("vision")
+    asyncio.run(tasks[0])
+
+    assert called == []  # nothing modal ran inside the task
+    deferred[-1]()
+    assert [(extra, result.ok) for extra, result in called] == [("vision", True)]

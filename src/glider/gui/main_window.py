@@ -1111,24 +1111,32 @@ class MainWindow(QMainWindow):
                 extra,
                 on_output=lambda line: page.set_install_status(extra, line[-120:], busy=True),
             )
-            if not result.ok:
-                page.set_install_status(extra, f"Install failed: {result.message}", busy=False)
-                box = QMessageBox(
-                    QMessageBox.Icon.Warning, "Install failed", result.message, parent=self
-                )
-                box.setDetailedText(result.output[-8000:])
-                box.exec()
-                return
-            page.set_install_status(extra, "Installed. Restart GLIDER to use it.", busy=True)
-            answer = QMessageBox.question(
-                self,
-                "Restart GLIDER?",
-                f"The {extra} extra is installed. GLIDER needs a restart to load it. Restart now?",
-            )
-            if answer == QMessageBox.StandardButton.Yes:
-                self._restart()
+            # The dialogs run a nested event loop, and the restart closes the
+            # window; inside this task both deadlock qasync ("Cannot enter into
+            # task"), so they run on the next turn of the Qt loop instead.
+            QTimer.singleShot(0, lambda: self._after_install_extra(extra, result))
 
         self._run_async(_install())
+
+    def _after_install_extra(self, extra: str, result) -> None:
+        """Report an extra's install, and offer the restart if it worked."""
+        page = self._analyze_page
+        if not result.ok:
+            page.set_install_status(extra, f"Install failed: {result.message}", busy=False)
+            box = QMessageBox(
+                QMessageBox.Icon.Warning, "Install failed", result.message, parent=self
+            )
+            box.setDetailedText(result.output[-8000:])
+            box.exec()
+            return
+        page.set_install_status(extra, "Installed. Restart GLIDER to use it.", busy=True)
+        answer = QMessageBox.question(
+            self,
+            "Restart GLIDER?",
+            f"The {extra} extra is installed. GLIDER needs a restart to load it. Restart now?",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._restart()
 
     def _restart(self) -> None:
         """Close through the normal path (save prompt included), then relaunch.
