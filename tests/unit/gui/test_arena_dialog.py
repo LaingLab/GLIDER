@@ -146,3 +146,31 @@ def _press(pos: QPoint):
         _Qt.MouseButton.LeftButton,
         _Qt.KeyboardModifier.NoModifier,
     )
+
+
+class TestRoundArena:
+    """Issue #212: a round apparatus is outlined as an ellipse, not four corners."""
+
+    def test_three_clicks_make_a_circle_with_its_diameter(self, qtbot, frame):
+        dialog = ArenaDialog(frame)
+        qtbot.addWidget(dialog)
+        dialog.shape_combo.setCurrentIndex(dialog.shape_combo.findData("ellipse"))
+        dialog.arena_spin.setValue(40.0)
+
+        dialog.canvas.set_corners([(0.5, 0.5), (0.8, 0.5), (0.5, 0.9)])
+
+        arena = dialog.calibration()
+        assert arena.shape == "ellipse"
+        assert (arena.width_cm, arena.height_cm) == (40.0, 40.0)
+        assert dialog.height_spin.isHidden() or not dialog.height_spin.isVisibleTo(dialog)
+
+    def test_reopening_restores_shape_and_size(self, qtbot, frame):
+        from glider.vision.arena import ArenaCalibration
+
+        dialog = ArenaDialog(frame)
+        qtbot.addWidget(dialog)
+        dialog.set_arena(
+            ArenaCalibration(corners=SQUARE, width_cm=40.0, height_cm=25.0, frame_size=(640, 480))
+        )
+
+        assert dialog.calibration().height_cm == 25.0  # the old "Side" box lost this

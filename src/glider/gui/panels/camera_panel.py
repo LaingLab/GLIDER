@@ -40,7 +40,7 @@ from glider.gui.panels.fps_meter import FpsMeter
 from glider.gui.qthreads import retire_thread
 
 if TYPE_CHECKING:
-    from glider.vision.calibration import CameraCalibration
+    from glider.vision.arena import ArenaCalibration
     from glider.vision.camera_manager import CameraManager
     from glider.vision.cv_processor import CVProcessor
     from glider.vision.multi_camera_manager import MultiCameraManager
@@ -159,7 +159,7 @@ class CameraPreviewWidget(QLabel):
         self._calibration = calibration
 
     def set_show_calibration(self, show: bool) -> None:
-        """Toggle calibration line display."""
+        """Toggle the arena outline."""
         self._show_calibration = show
 
     def set_zone_configuration(self, config: "ZoneConfiguration") -> None:
@@ -219,29 +219,10 @@ class CameraPreviewWidget(QLabel):
         """Update display with new frame."""
         self._placeholder = False
 
-        # Draw calibration lines if enabled
+        # Draw the arena outline if enabled
         display_frame = frame
-        if self._show_calibration and self._calibration and self._calibration.lines:
-            display_frame = frame.copy()
-            h, w = display_frame.shape[:2]
-            for line in self._calibration.lines:
-                x1, y1, x2, y2 = line.get_pixel_coords(w, h)
-                cv2.line(display_frame, (x1, y1), (x2, y2), line.color, 2)
-                cv2.circle(display_frame, (x1, y1), 4, line.color, -1)
-                cv2.circle(display_frame, (x2, y2), 4, line.color, -1)
-                # Draw label
-                mid_x = (x1 + x2) // 2
-                mid_y = (y1 + y2) // 2
-                label = f"{line.length:.1f}{line.unit.value}"
-                cv2.putText(
-                    display_frame,
-                    label,
-                    (mid_x + 5, mid_y - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.4,
-                    line.color,
-                    1,
-                )
+        if self._show_calibration and self._calibration is not None:
+            display_frame = self._calibration.draw(frame)
 
         # Draw zones if enabled
         if self._show_zones and self._zone_config and self._zone_config.zones:
@@ -354,7 +335,7 @@ class CameraPanel(QWidget):
         # same reason as the two above: standalone panels and unit tests build
         # a CameraPanel without a core.
         self._live_signals: Any | None = None
-        self._calibration: CameraCalibration | None = None
+        self._calibration: ArenaCalibration | None = None
         self._zone_config: ZoneConfiguration | None = None
         self._preview_active = False
         self._multi_camera_mode = False
@@ -1081,7 +1062,7 @@ class CameraPanel(QWidget):
         # Write annotated frame to video recorder if recording
         if annotated_frame is not None and self._video_recorder is not None:
             # Draw calibration lines on the annotated frame for the video
-            if self._calibration and self._calibration.lines:
+            if self._calibration is not None:
                 annotated_frame = self._draw_calibration_lines(annotated_frame)
             self._video_recorder.write_annotated_frame(annotated_frame)
 
@@ -1094,8 +1075,7 @@ class CameraPanel(QWidget):
         if self._tracking_logger is not None and self._tracking_logger.is_recording:
             h, w = frame.shape[:2]
             self._tracking_logger.set_frame_size(w, h)
-            if self._calibration:
-                self._tracking_logger.set_calibration(self._calibration)
+            self._tracking_logger.set_calibration(self._calibration)
 
             motion_detected = motion.motion_detected if motion else False
             motion_area = motion.motion_area if motion else 0.0
@@ -1150,29 +1130,10 @@ class CameraPanel(QWidget):
             self._process_frame_on_main_thread(frame_data, detections, tracked, motion)
 
     def _draw_calibration_lines(self, frame: np.ndarray) -> np.ndarray:
-        """Draw calibration lines on a frame for video recording."""
-        if not self._calibration or not self._calibration.lines:
+        """Draw the arena outline on a frame for video recording."""
+        if self._calibration is None:
             return frame
-
-        output = frame.copy()
-        h, w = output.shape[:2]
-
-        for line in self._calibration.lines:
-            x1, y1, x2, y2 = line.get_pixel_coords(w, h)
-            # Draw the line
-            cv2.line(output, (x1, y1), (x2, y2), line.color, 2)
-            # Draw endpoint circles
-            cv2.circle(output, (x1, y1), 4, line.color, -1)
-            cv2.circle(output, (x2, y2), 4, line.color, -1)
-            # Draw measurement label at midpoint
-            mid_x = (x1 + x2) // 2
-            mid_y = (y1 + y2) // 2
-            label = f"{line.length:.1f}{line.unit.value}"
-            cv2.putText(
-                output, label, (mid_x + 5, mid_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, line.color, 1
-            )
-
-        return output
+        return self._calibration.draw(frame)
 
     def _update_fps_display(self) -> None:
         """Update FPS display."""
@@ -1427,11 +1388,11 @@ class CameraPanel(QWidget):
             # Write annotated frame to video recorder if recording
             if annotated_frame is not None:
                 if self._multi_video_recorder is not None:
-                    if self._calibration and self._calibration.lines:
+                    if self._calibration is not None:
                         annotated_frame = self._draw_calibration_lines(annotated_frame)
                     self._multi_video_recorder.write_annotated_frame(annotated_frame)
                 elif self._video_recorder is not None:
-                    if self._calibration and self._calibration.lines:
+                    if self._calibration is not None:
                         annotated_frame = self._draw_calibration_lines(annotated_frame)
                     self._video_recorder.write_annotated_frame(annotated_frame)
 
@@ -1444,8 +1405,7 @@ class CameraPanel(QWidget):
             if self._tracking_logger is not None and self._tracking_logger.is_recording:
                 h, w = frame.shape[:2]
                 self._tracking_logger.set_frame_size(w, h)
-                if self._calibration:
-                    self._tracking_logger.set_calibration(self._calibration)
+                self._tracking_logger.set_calibration(self._calibration)
 
                 motion_detected = motion.motion_detected if motion else False
                 motion_area = motion.motion_area if motion else 0.0
@@ -1540,8 +1500,8 @@ class CameraPanel(QWidget):
             except Exception:
                 logger.exception("event_logger.set_current_frame failed")
 
-    def set_calibration(self, calibration: "CameraCalibration") -> None:
-        """Set the camera calibration for real-world measurements."""
+    def set_calibration(self, calibration: "ArenaCalibration | None") -> None:
+        """Set the arena that gives the camera its real-world scale."""
         self._calibration = calibration
 
     def set_zone_configuration(self, zone_config: "ZoneConfiguration") -> None:

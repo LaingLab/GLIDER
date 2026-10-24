@@ -75,17 +75,17 @@ __all__ = ["SECTION_KEYS", "SECTION_LABELS", "ExperimentPage"]
 #: The sections, in rail order. These strings are the API: the window supplies
 #: one builder per key.
 #:
-#: Metadata and Mice were one section, and splitting them is what the rail is
+#: Metadata and Animals were one section, and splitting them is what the rail is
 #: for: they are edited at different times by different people -- the protocol
 #: and experimenter once when the experiment is designed, the animal list again
 #: before every cohort -- and stacking them meant scrolling past seven fields
 #: you were not there to change to reach the table you were.
-SECTION_KEYS: tuple[str, ...] = ("metadata", "mice", "zones", "vocabulary", "plugins")
+SECTION_KEYS: tuple[str, ...] = ("metadata", "animals", "zones", "vocabulary", "plugins")
 
 #: What each section is called on the rail.
 SECTION_LABELS: dict[str, str] = {
     "metadata": "Metadata",
-    "mice": "Mice",
+    "animals": "Animals",
     "zones": "Zones",
     "vocabulary": "Lab Vocabulary",
     "plugins": "Plugins",
@@ -212,7 +212,7 @@ class ExperimentPage(QWidget):
             # Full rail width, so the hit target is the row rather than the
             # words. A QToolButton sizes itself to its label by default, which
             # made every entry a different width and left most of the rail
-            # looking clickable but inert -- you aim at "Mice" and hit nothing,
+            # looking clickable but inert -- you aim at "Animals" and hit nothing,
             # because the button stops where the text does.
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             button.setIcon(glyph_icon(button, key, ICON_PX))

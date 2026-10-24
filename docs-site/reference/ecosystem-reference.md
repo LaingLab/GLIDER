@@ -200,14 +200,6 @@ The Camera panel can process a recorded video without a live camera. The batch r
 
 ## Behavior analysis: annotation, training, and application
 
-GLIDER has two distinct behavior features that should not be conflated.
-
-### Live movement-state labels
-
-The camera settings support a light-weight, rule-based live state classifier. It uses movement thresholds to label tracked objects as states such as freezing, immobile, moving, or darting. These labels are useful for immediate feedback and are stored in tracking output when enabled. They are not a trained model for complex behavior categories.
-
-### Supervised behavior workflow
-
 The Behavior Analysis tool is an optional workflow built around pose data. It proceeds in three stages:
 
 1. **Annotate:** create a vocabulary and label selected video clips. Labels are saved alongside pose data.

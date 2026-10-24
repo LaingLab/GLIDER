@@ -15,7 +15,7 @@ of the window:
 | **Experiment** | Metadata, mice, zones, lab vocabulary and plugins. Where you say what this experiment *is*. |
 | **Dashboard** | This page: the node graph, hardware, camera and properties. |
 | **Run** | The operator view — run control, device states, camera, experiment info. |
-| **Analyze** | Behavior Analysis, Batch Pose Tracking, Session Review, Multi-Camera Recording and the device check. Each opens in its own window. |
+| **Analyze** | Batch Pose Tracking, Behavior Analysis, Session Review, Multi-Camera Recording and the device check. Each opens in its own window. |
 
 New and Open both land you on **Experiment**, because naming the experiment and
 entering its animals comes before wiring anything up.
@@ -28,7 +28,7 @@ From top to bottom:
 |---|---|
 | **Menu bar** | Five menus: **File**, **Edit**, **Experiment**, **View**, **Help**. |
 | **Chrome strip** | One row carrying the experiment name, one dot per board, the centred tabs, the run-state pill once a run is under way, and the ++ctrl+k++ hint. The two panel toggles appear on this tab only, since they drive the panels below. |
-| **Left panel** | Tabs: **Nodes**, **Hardware**, **Control**, **Files**. |
+| **Left panel** | Tabs: **Nodes**, **Hardware**, **Control**. |
 | **The canvas** | The node graph itself. Everything else gets out of its way. |
 | **Right panel** | Tabs: **Properties**, **Camera**. |
 | **Status bar** | The thin line along the bottom: connection indicator, session state, and transient messages. |
@@ -47,7 +47,7 @@ panels, one on each side of the canvas.
 
 | Panel | Tabs |
 |---|---|
-| Left | **Nodes** (the node library), **Hardware** (boards and devices), **Control** (drive a device by hand), **Files** (New, Open, Save, Save As) |
+| Left | **Nodes** (the node library), **Hardware** (boards and devices), **Control** (drive a device by hand) |
 | Right | **Properties** (settings for the selected node), **Camera** (the live camera panel) |
 
 Click a tab at the top of a panel to switch to it. Only one tab per side is
@@ -71,7 +71,7 @@ buttons**, one per tab, down the outside edge of the window:
 
 | Panel | Rail buttons |
 |---|---|
-| Left | **N** Nodes, **H** Hardware, **D** Control, **F** Files |
+| Left | **N** Nodes, **H** Hardware, **D** Control |
 | Right | **P** Properties, **C** Camera |
 
 Hovering a rail button names the tab. Clicking one does two things at once: it
@@ -226,7 +226,7 @@ about.
 |---|---|---|
 | **Hardware** | Add Board…, Add Device…, New Custom Device Type…, Connect All, Disconnect All | **Add Board** and **Add Device** are buttons in the **Hardware** tab, which is where you were probably already looking. The rest: ++ctrl+k++ |
 | **Run** | Start (++f5++), Stop (++shift+f5++), Emergency Stop (++ctrl+shift+escape++) | The toolbar, the **Run** tab, the shortcuts, or ++ctrl+k++ |
-| **Tools** | Behavior Analysis…, Batch Pose Tracking…, Session Review…, Multi-Camera Recording…, GPU / Device Check… | The **Analyze** tab, which has a card for each — including, when a tool needs an optional dependency stack, the exact install line. **Plugins** moved to the **Experiment** tab instead |
+| **Tools** | Batch Pose Tracking…, Behavior Analysis…, Session Review…, Multi-Camera Recording…, GPU / Device Check… | The **Analyze** tab, which has a card for each — including, when a tool needs an optional dependency stack, an **Install** button that adds it and offers to restart GLIDER. **Plugins** moved to the **Experiment** tab instead |
 
 Every row in the palette names the menu it came from, so if you remember that
 something "was under Tools", the palette still tells you so.

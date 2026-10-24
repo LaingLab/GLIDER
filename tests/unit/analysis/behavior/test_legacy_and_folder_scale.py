@@ -92,6 +92,24 @@ class TestFolderMateScale:
 
         assert load_px_per_mm(master, uncalibrated) == pytest.approx(4.0, abs=0.05)
 
+    def test_borrows_from_a_folder_mate_that_has_only_an_arena(self, tmp_path):
+        """#212: Batch Pose now draws arenas, not lines; borrowing must see them."""
+        from glider.vision.arena import ArenaCalibration
+
+        folder = tmp_path / "rig"
+        folder.mkdir()
+        drawn = _clip(folder / "a.avi", 64, 48)
+        bare = _clip(folder / "b.avi", 64, 48)
+        cal_set = CalibrationSet()
+        arena = ArenaCalibration.from_ellipse(
+            (0.5, 0.5), (0.75, 0.5), (0.5, 0.75), width_cm=4.0, frame_size=(64, 48)
+        )
+        cal_set.set_arena(drawn, arena, confirmed=True)
+        master = folder / "pose_calibration.json"
+        cal_set.save(master)
+
+        assert load_px_per_mm(master, bare) == pytest.approx(arena.px_per_mm_centre, rel=1e-6)
+
     def test_an_exact_entry_still_wins(self, tmp_path):
         folder = tmp_path / "rig"
         folder.mkdir()

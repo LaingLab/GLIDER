@@ -134,8 +134,9 @@ class TestRequests:
             table.itemDoubleClicked.emit(table.item(0, ARENA_COLUMN))
         assert blocker.args == [video]
 
-    def test_double_click_elsewhere_still_asks_for_the_line(self, table, video, qtbot):
+    def test_double_click_elsewhere_asks_for_the_arena_too(self, table, video, qtbot):
+        """#212: there is no separate line tool left to ask for."""
         table.set_videos([video])
-        with qtbot.waitSignal(table.calibrate_requested, timeout=500) as blocker:
+        with qtbot.waitSignal(table.arena_requested, timeout=500) as blocker:
             table.itemDoubleClicked.emit(table.item(0, 0))
         assert blocker.args == [video]

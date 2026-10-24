@@ -1486,37 +1486,45 @@ class AnalysisWindow(QMainWindow):
         self._refresh_retrieval()
 
     def _run_scale_dialog(self, video: Path) -> tuple[float, bool] | None:
-        """Lines measured on *video*: ``(px_per_mm, for_the_whole_cohort)``, or None."""
-        from glider.gui.dialogs.calibration_dialog import CalibrationDialog
-        from glider.vision.calibration import CameraCalibration
+        """The arena outlined on *video*: ``(px_per_mm, for_the_whole_cohort)``, or None."""
+        from glider.gui.dialogs.arena_dialog import ArenaDialog
         from glider.vision.frame_provider import VideoFrameProvider
 
         provider = VideoFrameProvider(video)
-        if not provider.is_connected:
+        grabbed = provider.get_frame() if provider.is_connected else None
+        if grabbed is None:
             provider.release()
             QMessageBox.warning(self, "Set scale", f"{video.name} could not be opened.")
             return None
+
+        def scrub(index: int):
+            provider.seek(index)
+            frame = provider.get_frame()
+            return None if frame is None else frame[0]
+
         dialog = None
         try:
-            dialog = CalibrationDialog(
-                frame_provider=provider,
-                calibration=CameraCalibration(),
+            dialog = ArenaDialog(
+                grabbed[0],
+                title=video.name,
                 parent=self,
-                show_file_buttons=False,
+                frame_count=provider.frame_count,
+                on_scrub=scrub,
             )
-            dialog.setWindowTitle(f"Set scale — {video.name}")
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return None
-            calibration = dialog.get_calibration()
+            calibration = dialog.calibration()
         finally:
             if dialog is not None:
                 dialog.deleteLater()
             provider.release()
+        if calibration is None:
+            return None
         px_per_mm = float(calibration.pixels_per_mm) if calibration.is_calibrated else 0.0
         if px_per_mm <= 0:
             return None
         # Asked after the measuring rather than as a box inside it: the
-        # calibration dialog is shared with the rig and the batch tool.
+        # arena dialog is shared with the rig and the batch tool.
         whole = sum(view.pups is not None for _path, view in self._cohort) > 1 and (
             QMessageBox.question(
                 self,

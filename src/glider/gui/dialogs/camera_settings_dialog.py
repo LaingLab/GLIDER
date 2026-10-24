@@ -557,7 +557,7 @@ class CameraSettingsDialog(QDialog):
         # Touch mode applied via QSS property
 
         # Calibration group
-        calibration_group = QGroupBox("Camera Calibration")
+        calibration_group = QGroupBox("Arena")
         self._apply_touch_group_property(calibration_group)
         calibration_layout = QVBoxLayout(calibration_group)
         if self._is_touch_mode:
@@ -565,14 +565,14 @@ class CameraSettingsDialog(QDialog):
             calibration_layout.setContentsMargins(12, 20, 12, 12)
 
         calibration_desc = QLabel(
-            "Draw measurement lines on the camera view to calibrate\n"
-            "pixel-to-distance conversion for tracking data."
+            "Outline the arena floor (square or round) and give its size.\n"
+            "It sets the pixel-to-distance scale for tracking data."
         )
         calibration_desc.setWordWrap(True)
         calibration_desc.setProperty("textRole", "muted")
         calibration_layout.addWidget(calibration_desc)
 
-        self._calibrate_btn = QPushButton("Open Calibration...")
+        self._calibrate_btn = QPushButton("Arena...")
         if self._is_touch_mode:
             self._calibrate_btn.setMinimumHeight(50)
             self._calibrate_btn.setProperty("touchMode", True)

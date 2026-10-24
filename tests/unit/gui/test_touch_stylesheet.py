@@ -103,14 +103,17 @@ def _scroll_areas(panel):
 def _finger_scrolled(w) -> dict[str, list[bool]]:
     """Whether each scrollable viewport of the Pi's panels has a scroller."""
     page = w._experiment_page
-    for key in ("metadata", "mice", "vocabulary", "zones"):
+    for key in ("metadata", "animals", "vocabulary", "zones"):
         page.show_section(key)
     panels = {
         "nodes": w._node_library_panel,
         "properties": w._properties_host,
         "hardware": w._hardware_panel,
         "camera": w._camera_panel,
-        **{key: page.built_sections()[key] for key in ("metadata", "mice", "vocabulary", "zones")},
+        **{
+            key: page.built_sections()[key]
+            for key in ("metadata", "animals", "vocabulary", "zones")
+        },
     }
     found = {
         key: [QScroller.hasScroller(area.viewport()) for area in _scroll_areas(panel)]
@@ -126,19 +129,19 @@ def _finger_scrolled(w) -> dict[str, list[bool]]:
 def test_the_pi_scrolls_its_panels_by_finger_and_desktop_does_not(qtbot, main_window_factory):
     w = _pi(qtbot, main_window_factory)
     pi = _finger_scrolled(w)
-    # Every scroll area and item view: the Mice table and the Zones table,
+    # Every scroll area and item view: the Animals table and the Zones table,
     # the vocabulary lists, the hardware tree, and Properties' own area too.
-    for key in ("nodes", "properties", "hardware", "camera", "mice", "vocabulary", "zones"):
+    for key in ("nodes", "properties", "hardware", "camera", "animals", "vocabulary", "zones"):
         assert pi[key] and all(pi[key]), key
     assert pi["metadata_wrapper"] == [True]
     # The Zones section itself: its preview is drawn on by dragging.
     assert pi["zones_wrapper"] == [False]
-    mice = w._experiment_page.built_sections()["mice"].findChild(QAbstractItemView)
-    assert mice.verticalScrollMode() == QAbstractItemView.ScrollMode.ScrollPerPixel
+    animals = w._experiment_page.built_sections()["animals"].findChild(QAbstractItemView)
+    assert animals.verticalScrollMode() == QAbstractItemView.ScrollMode.ScrollPerPixel
     # Headers are left alone: a drag on one resizes a column.
     from PyQt6.QtWidgets import QHeaderView, QScroller
 
-    headers = w._hardware_panel.findChildren(QHeaderView) + mice.parentWidget().findChildren(
+    headers = w._hardware_panel.findChildren(QHeaderView) + animals.parentWidget().findChildren(
         QHeaderView
     )
     assert headers and not any(QScroller.hasScroller(h.viewport()) for h in headers)
@@ -283,7 +286,7 @@ def test_taps_still_reach_controls_inside_the_finger_scrolled_areas(
 
     # Experiment: a chip tap switches the section.
     w._show_experiment_tab()
-    chip = w._experiment_page._buttons["mice"]
+    chip = w._experiment_page._buttons["animals"]
     qtbot.waitUntil(chip.isVisible)
     qtbot.mouseClick(chip, Qt.MouseButton.LeftButton)
-    qtbot.waitUntil(lambda: w._experiment_page.current_section() == "mice")
+    qtbot.waitUntil(lambda: w._experiment_page.current_section() == "animals")

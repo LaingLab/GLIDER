@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -65,6 +66,8 @@ class ToolCard:
         unavailable_reason: Shown in place of the description when
             ``available`` is False. Say what to install, not that something is
             missing -- the card exists to end the question, not to restate it.
+        install_extra: The GLIDER extra that makes an unavailable tool
+            available. When set, the card offers an Install button for it.
     """
 
     key: str
@@ -73,6 +76,7 @@ class ToolCard:
     glyph: str
     available: bool = True
     unavailable_reason: str = ""
+    install_extra: str = ""
 
 
 class ToolsPage(QWidget):
@@ -85,15 +89,19 @@ class ToolsPage(QWidget):
     Signals:
         tool_chosen: Emitted with a card's ``key`` when an *available* card is
             clicked. An unavailable one never emits: it has nothing to open.
+        install_requested: Emitted with an extra's name when a card's Install
+            button is pressed.
     """
 
     tool_chosen = pyqtSignal(str)
+    install_requested = pyqtSignal(str)
 
     def __init__(self, cards: list[ToolCard], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("toolsPage")
         self._cards = list(cards)
         self._frames: dict[str, QFrame] = {}
+        self._install_rows: dict[str, tuple[QLabel, QPushButton]] = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -170,7 +178,28 @@ class ToolsPage(QWidget):
         text.addWidget(body)
 
         row.addLayout(text, 1)
+        if not card.available and card.install_extra:
+            button = QPushButton("Install")
+            button.setObjectName("toolCardInstall")
+            button.clicked.connect(
+                lambda _=False, extra=card.install_extra: self.install_requested.emit(extra)
+            )
+            row.addWidget(button, 0, Qt.AlignmentFlag.AlignTop)
+            self._install_rows[card.key] = (body, button)
         return frame
+
+    def set_install_status(self, extra: str, message: str, *, busy: bool) -> None:
+        """Show an install's progress on every card waiting on *extra*."""
+        for card in self._cards:
+            if card.install_extra == extra and card.key in self._install_rows:
+                body, button = self._install_rows[card.key]
+                body.setText(message)
+                button.setEnabled(not busy)
+
+    def install_button(self, key: str) -> QPushButton | None:
+        """The card's Install button, if it has one. For tests."""
+        row = self._install_rows.get(key)
+        return row[1] if row else None
 
     # ------------------------------------------------------------- selection
 

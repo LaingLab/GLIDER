@@ -83,13 +83,13 @@ message won't bury it; tap it once you've read it.
 ## The Experiment tab
 
 The Experiment tab is where you say what this experiment *is*. A row of
-**section chips** runs across the top — **Metadata**, **Mice**, **Zones**, **Lab
+**section chips** runs across the top — **Metadata**, **Animals**, **Zones**, **Lab
 Vocabulary**, and **Plugins** — and tapping one shows that section at full width
 below. Each section scrolls by dragging with a finger.
 
 These are the same editors the desktop's **Experiment** tab uses, so what you
 change here is saved in the same `.glider` file. See
-[Subjects & Lab Vocabulary](../building/subjects.md) for the mice and the
+[Subjects & Lab Vocabulary](../building/subjects.md) for the animals and the
 vocabulary lists and [Plugins](../building/plugins.md) for the plugin catalogue;
 zones are covered under [Camera & Recording](../camera-behavior/camera.md#zones-regions-of-interest).
 

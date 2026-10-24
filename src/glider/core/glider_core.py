@@ -26,8 +26,8 @@ from glider.core.experiment_session import (
 from glider.core.flow_engine import FlowEngine
 from glider.core.hardware_manager import HardwareManager
 from glider.core.live_signals import LiveSignalBus
+from glider.vision.arena import ArenaCalibration
 from glider.vision.audio_recorder import AudioRecorder, mux_audio_video
-from glider.vision.calibration import CameraCalibration
 from glider.vision.camera_manager import CameraManager
 from glider.vision.cv_processor import CVProcessor, CVSettings
 from glider.vision.multi_camera_manager import MultiCameraManager
@@ -90,7 +90,7 @@ class GliderCore:
         self._video_recorder = VideoRecorder(self._camera_manager)
         self._tracking_logger = TrackingDataLogger()
         self._audio_recorder = AudioRecorder()
-        self._calibration = CameraCalibration()
+        self._calibration: ArenaCalibration | None = None
 
         # Multi-camera support
         self._multi_camera_manager = MultiCameraManager()
@@ -232,9 +232,13 @@ class GliderCore:
         return self._event_logger
 
     @property
-    def calibration(self) -> CameraCalibration:
-        """Camera calibration instance."""
+    def calibration(self) -> ArenaCalibration | None:
+        """The live camera's arena, which carries its real-world scale (#212)."""
         return self._calibration
+
+    @calibration.setter
+    def calibration(self, arena: ArenaCalibration | None) -> None:
+        self._calibration = arena
 
     @property
     def multi_camera_manager(self) -> MultiCameraManager:

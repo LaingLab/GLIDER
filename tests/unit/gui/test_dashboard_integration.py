@@ -128,7 +128,6 @@ def _builder_panels(window):
         window._node_library_panel,
         window._hardware_panel,
         window._device_control_panel,
-        window._files_panel,
         window._properties_host,
     )
 
@@ -153,20 +152,18 @@ def test_builder_panels_do_not_linger_over_the_operator_view(qtbot, main_window_
 def test_switch_to_runner_preserves_the_chosen_panel_tabs(qtbot, main_window_factory):
     """A round trip must not rearrange the Builder the user set up.
 
-    The predecessor of this test guarded a Files *dock* the desktop kept hidden
-    by default. Files is a tab now and costs nothing to leave in place, so the
-    arrangement worth preserving is which tab each panel is showing.
+    The arrangement worth preserving is which tab each panel is showing.
     """
     window = main_window_factory(desktop_mode=True)
     window.show()
     window.switch_to_builder()
-    window._builder_view.left.set_current("files")
+    window._builder_view.left.set_current("control")
     window._builder_view.right.set_current("camera")
 
     window.switch_to_runner()
     window.switch_to_builder()
 
-    assert window._builder_view.left.current_key() == "files"
+    assert window._builder_view.left.current_key() == "control"
     assert window._builder_view.right.current_key() == "camera"
 
 

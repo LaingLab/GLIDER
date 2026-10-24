@@ -48,13 +48,23 @@ def _tracked_with_keypoints(keypoints: np.ndarray) -> TrackedObject:
     )
 
 
+def test_velocity_is_the_mean_step_over_the_smoothing_window():
+    """Speed is the mean of the last ``smoothing_window`` trail steps, in px/frame."""
+    proc = CVProcessor(CVSettings(smoothing_window=2))
+    obj = _tracked_with_keypoints(None)
+    proc._trail_history[obj.track_id] = [(0, 0), (100, 0), (103, 4), (103, 6)]
+
+    proc._update_velocities([obj])
+
+    assert obj.velocity == 3.5  # steps 5 and 2; the 100 px one is out of window
+
+
 def test_draw_overlays_renders_keypoint_dots():
     """A confident keypoint paints a dot of keypoint_color at its location."""
     settings = CVSettings(
         keypoint_color=(0, 0, 255),
         keypoint_radius=4,
         show_labels=False,
-        behavior_enabled=False,
     )
     proc = CVProcessor(settings)
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -72,7 +82,6 @@ def test_draw_overlays_skips_low_confidence_keypoints():
     settings = CVSettings(
         keypoint_min_confidence=0.5,
         show_labels=False,
-        behavior_enabled=False,
     )
     proc = CVProcessor(settings)
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -86,7 +95,7 @@ def test_draw_overlays_skips_low_confidence_keypoints():
 
 def test_draw_overlays_skips_zero_keypoints():
     """(0, 0) placeholder keypoints (undetected) are not drawn at the origin."""
-    settings = CVSettings(show_labels=False, behavior_enabled=False)
+    settings = CVSettings(show_labels=False)
     proc = CVProcessor(settings)
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
     kp = np.array([[0.0, 0.0, 0.99]], dtype=np.float32)
@@ -102,7 +111,6 @@ def test_draw_overlays_respects_show_keypoints_toggle():
     settings = CVSettings(
         show_keypoints=False,
         show_labels=False,
-        behavior_enabled=False,
     )
     proc = CVProcessor(settings)
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -120,7 +128,6 @@ def test_draw_overlays_handles_ultralytics_instance_shape():
         keypoint_color=(0, 0, 255),
         keypoint_radius=4,
         show_labels=False,
-        behavior_enabled=False,
     )
     proc = CVProcessor(settings)
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
@@ -140,7 +147,6 @@ def test_draw_overlays_handles_2d_keypoints_without_confidence():
         keypoint_color=(0, 0, 255),
         keypoint_radius=4,
         show_labels=False,
-        behavior_enabled=False,
     )
     proc = CVProcessor(settings)
     frame = np.zeros((100, 100, 3), dtype=np.uint8)

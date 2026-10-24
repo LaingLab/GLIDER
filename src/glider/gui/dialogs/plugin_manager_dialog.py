@@ -30,7 +30,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QDialog,
@@ -169,6 +169,10 @@ class PluginManagerDialog(QDialog):
             rediscovery. Optional so tests can build the window without one.
         glider_version: The running version, for the compatibility gate.
     """
+
+    #: Emitted after plugins were (re)loaded, so views listing plugin
+    #: components can rebuild without a restart.
+    plugins_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -425,6 +429,7 @@ class PluginManagerDialog(QDialog):
             await self._plugin_manager.load_plugins()
         except Exception as exc:
             logger.warning("Rediscovery after install failed: %s", exc)
+        self.plugins_changed.emit()
 
     def _refresh_row(self, name: str, *, fallback_message: str = "") -> None:
         """Recompute one row from disk. Deliberately not a full rebuild --
@@ -487,6 +492,7 @@ class PluginManagerDialog(QDialog):
             await self._plugin_manager.load_plugins()
         except Exception as exc:
             logger.warning("Loading newly enabled plugins failed: %s", exc)
+        self.plugins_changed.emit()
 
     def _on_reload_requested(self, name: str) -> None:
         card = self._cards_by_name.get(name)
@@ -523,6 +529,7 @@ class PluginManagerDialog(QDialog):
             except Exception as exc:
                 logger.warning("Reloading %s failed: %s", plugin, exc)
                 failures.append(plugin)
+        self.plugins_changed.emit()
         if failures:
             card.set_message(f"Could not reload: {', '.join(failures)}. A restart will.")
         else:

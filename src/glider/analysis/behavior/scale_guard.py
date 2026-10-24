@@ -165,7 +165,8 @@ def calibration_spread_warning(
         return None
 
     by_resolution: dict[tuple[int, int], list[float]] = {}
-    for calibration in cal_set.entries.values():
+    # Arenas carry the line's scale interface, and win where a video has both.
+    for calibration in {**cal_set.entries, **cal_set.arenas}.values():
         scale = float(getattr(calibration, "pixels_per_mm", 0.0) or 0.0)
         width = int(getattr(calibration, "calibration_width", 0) or 0)
         height = int(getattr(calibration, "calibration_height", 0) or 0)

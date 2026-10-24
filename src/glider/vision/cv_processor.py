@@ -15,6 +15,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
+from itertools import pairwise
 from typing import TYPE_CHECKING, Any
 
 # Disable Ultralytics' runtime auto-installer BEFORE the package is imported
@@ -31,12 +32,6 @@ os.environ.setdefault("YOLO_AUTOINSTALL", "False")
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 from scipy.spatial import distance as dist  # noqa: E402
-
-from glider.vision.behavior_analyzer import (  # noqa: E402
-    BehaviorAnalyzer,
-    BehaviorSettings,
-    BehaviorState,
-)
 
 if TYPE_CHECKING:
     from glider.vision.zones import ZoneConfiguration, ZoneState, ZoneTracker
@@ -252,7 +247,6 @@ class TrackedObject:
     centroid: tuple[int, int]
     age: int = 0  # Frames since first seen
     disappeared: int = 0  # Frames since last seen
-    behavioral_state: str = "unknown"  # Current behavioral state
     velocity: float = 0.0  # Current velocity in pixels/frame
     keypoints: np.ndarray | None = None  # Nx2 or Nx3 array of keypoint coords
 
@@ -264,7 +258,6 @@ class TrackedObject:
             "confidence": self.confidence,
             "centroid": self.centroid,
             "age": self.age,
-            "behavioral_state": self.behavioral_state,
             "velocity": self.velocity,
         }
         if self.keypoints is not None:
@@ -312,12 +305,6 @@ class CVSettings:
     # count — the logger falls back to the positional index.
     keypoint_names: list[str] = field(default_factory=list)
     process_every_n_frames: int = 1  # Process CV every N frames (1 = every frame)
-    # Behavior analysis settings
-    behavior_enabled: bool = True
-    freeze_threshold: float = 1.0  # Max pixels/frame for freeze
-    immobile_threshold: float = 5.0  # Max pixels/frame for immobile
-    dart_threshold: float = 50.0  # Min pixels/frame for darting
-    freeze_duration: int = 15  # Frames required to confirm freeze
     smoothing_window: int = 5  # Frames for velocity smoothing
     # Vision cone settings
     vision_cone_enabled: bool = False
@@ -359,11 +346,6 @@ class CVSettings:
             "keypoint_min_confidence": self.keypoint_min_confidence,
             "keypoint_names": list(self.keypoint_names),
             "process_every_n_frames": self.process_every_n_frames,
-            "behavior_enabled": self.behavior_enabled,
-            "freeze_threshold": self.freeze_threshold,
-            "immobile_threshold": self.immobile_threshold,
-            "dart_threshold": self.dart_threshold,
-            "freeze_duration": self.freeze_duration,
             "smoothing_window": self.smoothing_window,
             "vision_cone_enabled": self.vision_cone_enabled,
             "vision_cone_fov": self.vision_cone_fov,
@@ -401,11 +383,6 @@ class CVSettings:
             keypoint_min_confidence=data.get("keypoint_min_confidence", 0.3),
             keypoint_names=[str(n) for n in data.get("keypoint_names", [])],
             process_every_n_frames=data.get("process_every_n_frames", 1),
-            behavior_enabled=data.get("behavior_enabled", True),
-            freeze_threshold=data.get("freeze_threshold", 1.0),
-            immobile_threshold=data.get("immobile_threshold", 5.0),
-            dart_threshold=data.get("dart_threshold", 50.0),
-            freeze_duration=data.get("freeze_duration", 15),
             smoothing_window=data.get("smoothing_window", 5),
             vision_cone_enabled=data.get("vision_cone_enabled", False),
             vision_cone_fov=data.get("vision_cone_fov", 120.0),
@@ -539,7 +516,7 @@ class ObjectTracker:
         Unmatched tracks are kept (up to ``max_disappeared``) so the ID
         survives a brief occlusion, but they are not reported: their bbox is
         where the animal *was*, and logging it as live froze the position,
-        zeroed velocity (-> FREEZE) and kept the animal in its last zone.
+        zeroed velocity and kept the animal in its last zone.
         """
         return [obj for obj in self._objects.values() if obj.disappeared == 0]
 
@@ -615,9 +592,6 @@ class CVProcessor:
         self._zone_config: ZoneConfiguration | None = None
         self._zone_callbacks: list[Callable[[dict[str, ZoneState]], None]] = []
 
-        # Behavior analysis
-        self._behavior_analyzer = BehaviorAnalyzer(self._get_behavior_settings())
-
     @property
     def settings(self) -> CVSettings:
         """The operator's CV configuration. Safe to persist and to display.
@@ -675,22 +649,6 @@ class CVProcessor:
                 cb(self._degradation)
             except Exception:
                 logger.exception("Backend degradation callback raised")
-
-    @property
-    def behavior_analyzer(self) -> BehaviorAnalyzer:
-        """Get the behavior analyzer instance."""
-        return self._behavior_analyzer
-
-    def _get_behavior_settings(self) -> BehaviorSettings:
-        """Create BehaviorSettings from CVSettings."""
-        return BehaviorSettings(
-            enabled=self._settings.behavior_enabled,
-            freeze_threshold=self._settings.freeze_threshold,
-            immobile_threshold=self._settings.immobile_threshold,
-            dart_threshold=self._settings.dart_threshold,
-            freeze_duration=self._settings.freeze_duration,
-            smoothing_window=self._settings.smoothing_window,
-        )
 
     @property
     def is_initialized(self) -> bool:
@@ -957,8 +915,7 @@ class CVProcessor:
                 # Update trail history
                 self._update_trails(tracked)
 
-                # Analyze behavioral states
-                self._analyze_behavior(tracked)
+                self._update_velocities(tracked)
 
             # Run motion detection (reuse fg_mask to avoid double-apply)
             motion = self._detect_motion(fg_mask)
@@ -1244,16 +1201,14 @@ class CVProcessor:
         for track_id in list(self._trail_history.keys()):
             if track_id not in current_ids:
                 del self._trail_history[track_id]
-                # Also remove from behavior analyzer
-                self._behavior_analyzer.remove_object(track_id)
 
-    def _analyze_behavior(self, tracked: list[TrackedObject]) -> None:
-        """Analyze behavioral states for tracked objects."""
+    def _update_velocities(self, tracked: list[TrackedObject]) -> None:
+        """Set each object's speed: mean step length over the last few trail points."""
+        window = max(1, self._settings.smoothing_window)
         for obj in tracked:
-            trail = self._trail_history.get(obj.track_id, [])
-            state, velocity = self._behavior_analyzer.analyze(obj.track_id, trail)
-            obj.behavioral_state = str(state)
-            obj.velocity = velocity
+            trail = self._trail_history.get(obj.track_id, [])[-(window + 1) :]
+            steps = [math.dist(a, b) for a, b in pairwise(trail)]
+            obj.velocity = sum(steps) / len(steps) if steps else 0.0
 
     def draw_overlays(
         self,
@@ -1325,10 +1280,6 @@ class CVProcessor:
         # Draw vision cones based on keypoints
         if tracked and self._settings.vision_cone_enabled:
             self._draw_vision_cones(output, tracked)
-
-        # Draw behavioral state overlay in top-left corner
-        if tracked and self._settings.behavior_enabled:
-            self._draw_behavior_overlay(output, tracked)
 
         return output
 
@@ -1417,73 +1368,6 @@ class CVProcessor:
 
         cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
 
-    def _draw_behavior_overlay(self, frame: np.ndarray, tracked: list[TrackedObject]) -> None:
-        """
-        Draw behavioral state information in corner of frame.
-
-        Args:
-            frame: Frame to draw on (modified in place)
-            tracked: List of tracked objects with behavioral states
-        """
-        if not tracked:
-            return
-
-        # Get the primary tracked object (first one, or could be most prominent)
-        obj = tracked[0]
-
-        # Parse behavior state from string
-        try:
-            state = BehaviorState[obj.behavioral_state]
-        except (KeyError, ValueError):
-            state = BehaviorState.UNKNOWN
-
-        # Get color for state
-        state_color = self._behavior_analyzer.get_state_color(state)
-
-        # Draw background box
-        label = f"{state.name}"
-        velocity_label = f"{obj.velocity:.1f} px/f"
-
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.7
-        font_thickness = 2
-
-        # Calculate text sizes
-        (label_w, label_h), _ = cv2.getTextSize(label, font, font_scale, font_thickness)
-        (vel_w, vel_h), _ = cv2.getTextSize(velocity_label, font, 0.5, 1)
-
-        # Position in top-left corner with padding
-        padding = 10
-        box_w = max(label_w, vel_w) + padding * 2
-        box_h = label_h + vel_h + padding * 3
-
-        # Draw semi-transparent background
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (5, 5), (5 + box_w, 5 + box_h), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-
-        # Draw state label with color
-        cv2.putText(
-            frame,
-            label,
-            (5 + padding, 5 + padding + label_h),
-            font,
-            font_scale,
-            state_color,
-            font_thickness,
-        )
-
-        # Draw velocity below
-        cv2.putText(
-            frame,
-            velocity_label,
-            (5 + padding, 5 + padding * 2 + label_h + vel_h),
-            font,
-            0.5,
-            (200, 200, 200),
-            1,
-        )
-
     def on_detection(self, callback: Callable[[list[Detection], float], None]) -> None:
         """Register callback for detection results."""
         self._detection_callbacks.append(callback)
@@ -1527,9 +1411,6 @@ class CVProcessor:
         if self._tracker:
             self._tracker._max_disappeared = settings.max_disappeared
 
-        # Update behavior analyzer settings
-        self._behavior_analyzer.update_settings(self._get_behavior_settings())
-
     def reset(self) -> None:
         """Reset the processor state."""
         if self._tracker:
@@ -1549,8 +1430,6 @@ class CVProcessor:
         # Reset zone tracker
         if self._zone_tracker:
             self._zone_tracker.reset()
-        # Reset behavior analyzer
-        self._behavior_analyzer.clear()
         if self._bg_subtractor:
             # Recreate background subtractor to reset learning
             self._bg_subtractor = cv2.createBackgroundSubtractorMOG2(

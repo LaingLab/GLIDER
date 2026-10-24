@@ -1,6 +1,7 @@
-"""Arena Dialog - click the floor perimeter to calibrate perspective.
+"""Arena Dialog - outline the floor to calibrate scale and perspective.
 
-The operator clicks the four floor corners of an arena of known size. That
+The operator clicks the four floor corners of an arena of known size, or, for
+a round arena, its centre and the ends of two radii. That
 fixes a homography (see :mod:`glider.vision.arena`), which in turn gives a
 centre zone meaning the same patch of floor in every video, and a scale that
 varies correctly across the floor instead of being one number for all of it.
@@ -31,6 +32,7 @@ import numpy as np
 from PyQt6.QtCore import QPoint, QRect, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QImage, QMouseEvent, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -65,6 +67,12 @@ _ZONE_COLOUR = QColor("#34d399")
 _CORNER_COLOUR = QColor("#fbbf24")
 _SUSPECT_COLOUR = QColor("#f87171")
 
+#: What each click places, per shape, in order.
+_POINT_NAMES = {
+    "rectangle": CORNER_NAMES,
+    "ellipse": ("centre", "one edge", "a second edge, about a quarter-turn round"),
+}
+
 
 class ArenaCanvas(QWidget):
     """Frame plus a draggable four-corner overlay.
@@ -89,6 +97,7 @@ class ArenaCanvas(QWidget):
         self._dragging: int | None = None
         self._zone_cm = 10.0
         self._arena_cm = (30.0, 30.0)
+        self._shape = "rectangle"
 
     # -- state ---------------------------------------------------------
 
@@ -98,9 +107,24 @@ class ArenaCanvas(QWidget):
         self.update()
 
     def set_corners(self, corners) -> None:
-        self._corners = [(float(x), float(y)) for x, y in corners][:4]
+        self._corners = [(float(x), float(y)) for x, y in corners][: self.needed]
         self.update()
         self.corners_changed.emit()
+
+    def set_shape(self, shape: str) -> None:
+        """Switch between a rectangle and a round arena. Clears the points."""
+        if shape != self._shape:
+            self._shape = shape
+            self.clear()
+
+    @property
+    def shape(self) -> str:
+        return self._shape
+
+    @property
+    def needed(self) -> int:
+        """Clicks this shape takes: four corners, or centre plus two radii."""
+        return len(_POINT_NAMES[self._shape])
 
     def set_arena_size(self, width_cm: float, height_cm: float) -> None:
         self._arena_cm = (width_cm, height_cm)
@@ -116,7 +140,7 @@ class ArenaCanvas(QWidget):
 
     @property
     def is_complete(self) -> bool:
-        return len(self._corners) == 4
+        return len(self._corners) == self.needed
 
     def clear(self) -> None:
         self._corners = []
@@ -135,6 +159,13 @@ class ArenaCanvas(QWidget):
         if not self.is_complete or self._frame is None:
             return None
         h, w = self._frame.shape[:2]
+        if self._shape == "ellipse":
+            return ArenaCalibration.from_ellipse(
+                *self._corners,
+                width_cm=self._arena_cm[0],
+                height_cm=self._arena_cm[1],
+                frame_size=(w, h),
+            )
         return ArenaCalibration(
             corners=self._corners,
             width_cm=self._arena_cm[0],
@@ -189,7 +220,7 @@ class ArenaCanvas(QWidget):
             if (self._to_canvas(corner) - pos).manhattanLength() <= _GRAB_RADIUS:
                 self._dragging = i
                 return
-        if len(self._corners) < 4:
+        if len(self._corners) < self.needed:
             norm = self._to_norm(pos)
             if norm is not None:
                 self._corners.append(norm)
@@ -201,6 +232,11 @@ class ArenaCanvas(QWidget):
             return super().mouseMoveEvent(event)
         norm = self._to_norm(event.pos())
         if norm is not None:
+            if self._shape == "ellipse" and self._dragging == 0:
+                # Moving the centre carries the whole ellipse with it.
+                dx = norm[0] - self._corners[0][0]
+                dy = norm[1] - self._corners[0][1]
+                self._corners = [(x + dx, y + dy) for x, y in self._corners]
             self._corners[self._dragging] = norm
             self.update()
             self.corners_changed.emit()
@@ -244,10 +280,23 @@ class ArenaCanvas(QWidget):
 
         colour = _SUSPECT_COLOUR if suspect else _ARENA_COLOUR
         painter.setPen(QPen(colour, 2))
-        for i in range(len(points) - 1):
-            painter.drawLine(points[i], points[i + 1])
-        if self.is_complete:
-            painter.drawLine(points[-1], points[0])
+        if self._shape == "ellipse":
+            if cal is not None:
+                c, u, v = (np.array(p) for p in self._corners)
+                rim = [
+                    self._to_canvas(c + (u - c) * np.cos(t) + (v - c) * np.sin(t))
+                    for t in np.linspace(0, 2 * np.pi, 72, endpoint=False)
+                ]
+                for i in range(len(rim)):
+                    painter.drawLine(rim[i], rim[(i + 1) % len(rim)])
+            else:
+                for point in points[1:]:
+                    painter.drawLine(points[0], point)
+        else:
+            for i in range(len(points) - 1):
+                painter.drawLine(points[i], points[i + 1])
+            if self.is_complete:
+                painter.drawLine(points[-1], points[0])
 
         if cal is None:
             return
@@ -256,8 +305,8 @@ class ArenaCanvas(QWidget):
         except (DegenerateArenaError, ValueError):
             return
         painter.setPen(QPen(_ZONE_COLOUR, 2))
-        for i in range(4):
-            painter.drawLine(zone[i], zone[(i + 1) % 4])
+        for i in range(len(zone)):
+            painter.drawLine(zone[i], zone[(i + 1) % len(zone)])
 
     def _paint_corners(self, painter: QPainter) -> None:
         font = QFont()
@@ -271,35 +320,30 @@ class ArenaCanvas(QWidget):
             painter.drawLine(point.x() - 9, point.y(), point.x() + 9, point.y())
             painter.drawLine(point.x(), point.y() - 9, point.x(), point.y() + 9)
             painter.setPen(QColor(colors.TEXT_PRIMARY))
-            painter.drawText(point.x() + 10, point.y() - 8, str(i + 1))
+            label = ("C", "1", "2")[i] if self._shape == "ellipse" else str(i + 1)
+            painter.drawText(point.x() + 10, point.y() - 8, label)
 
 
 class ArenaDialog(QDialog):
-    """Click the four floor corners of one video's arena."""
+    """Outline one video's arena floor: four corners, or a circle's rim."""
 
     def __init__(self, frame: np.ndarray, title: str = "", parent=None, **kwargs):
         super().__init__(parent)
-        self.setWindowTitle(f"Arena perimeter - {title}" if title else "Arena perimeter")
+        self.setWindowTitle(f"Arena - {title}" if title else "Arena")
         self.setModal(True)
         self._on_scrub = kwargs.pop("on_scrub", None)
         self._frame_count = kwargs.pop("frame_count", 0)
         self._build_ui()
         self.canvas.set_frame(frame)
-        self._refresh()
+        self._shape_changed()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        instructions = QLabel(
-            "Click the four floor corners in order: "
-            + ", ".join(CORNER_NAMES)
-            + ".\nClick where the bedding meets the wall, not the top of the wall. "
-            "Corners outside the picture can be clicked in the margin. "
-            "Drag any corner to adjust."
-        )
-        instructions.setWordWrap(True)
-        instructions.setStyleSheet(f"color: {colors.TEXT_SECONDARY};")
-        layout.addWidget(instructions)
+        self.instructions = QLabel()
+        self.instructions.setWordWrap(True)
+        self.instructions.setStyleSheet(f"color: {colors.TEXT_SECONDARY};")
+        layout.addWidget(self.instructions)
 
         self.canvas = ArenaCanvas(self)
         self.canvas.corners_changed.connect(self._refresh)
@@ -314,12 +358,25 @@ class ArenaDialog(QDialog):
         controls = QHBoxLayout()
         size_box = QGroupBox("Arena")
         form = QFormLayout(size_box)
+        self._form = form
+        self.shape_combo = QComboBox()
+        self.shape_combo.addItem("Rectangle", "rectangle")
+        self.shape_combo.addItem("Circle", "ellipse")
+        self.shape_combo.currentIndexChanged.connect(self._shape_changed)
+        form.addRow("Shape", self.shape_combo)
+        # `arena_spin` is the width, or the diameter of a circle.
         self.arena_spin = QDoubleSpinBox()
         self.arena_spin.setRange(1.0, 500.0)
         self.arena_spin.setValue(30.0)
         self.arena_spin.setSuffix(" cm")
         self.arena_spin.valueChanged.connect(self._size_changed)
-        form.addRow("Side", self.arena_spin)
+        form.addRow("Width", self.arena_spin)
+        self.height_spin = QDoubleSpinBox()
+        self.height_spin.setRange(1.0, 500.0)
+        self.height_spin.setValue(30.0)
+        self.height_spin.setSuffix(" cm")
+        self.height_spin.valueChanged.connect(self._size_changed)
+        form.addRow("Height", self.height_spin)
         self.zone_spin = QDoubleSpinBox()
         self.zone_spin.setRange(0.5, 500.0)
         self.zone_spin.setValue(10.0)
@@ -348,10 +405,44 @@ class ArenaDialog(QDialog):
         buttons.addWidget(self.box)
         layout.addLayout(buttons)
 
+    def _shape_changed(self) -> None:
+        shape = self.shape_combo.currentData()
+        self.canvas.set_shape(shape)
+        round_arena = shape == "ellipse"
+        self._form.labelForField(self.arena_spin).setText("Diameter" if round_arena else "Width")
+        self._form.setRowVisible(self.height_spin, not round_arena)
+        if round_arena:
+            self.instructions.setText(
+                "Click the centre of the floor, then a point on its edge, then a second "
+                "edge point about a quarter-turn round. Click where the bedding meets "
+                "the wall. Drag the centre to move the circle, an edge point to fit it."
+            )
+        else:
+            self.instructions.setText(
+                "Click the four floor corners in order: "
+                + ", ".join(CORNER_NAMES)
+                + ".\nClick where the bedding meets the wall, not the top of the wall. "
+                "Corners outside the picture can be clicked in the margin. "
+                "Drag any corner to adjust."
+            )
+        self._size_changed()
+
     def _size_changed(self) -> None:
-        self.canvas.set_arena_size(self.arena_spin.value(), self.arena_spin.value())
+        height = (
+            self.arena_spin.value() if self.canvas.shape == "ellipse" else self.height_spin.value()
+        )
+        self.canvas.set_arena_size(self.arena_spin.value(), height)
         self.canvas.set_zone_size(self.zone_spin.value())
         self._refresh()
+
+    def set_arena(self, arena: ArenaCalibration) -> None:
+        """Reopen an existing arena: its shape, its size and its points."""
+        self.shape_combo.setCurrentIndex(self.shape_combo.findData(arena.shape))
+        self.arena_spin.setValue(arena.width_cm)
+        self.height_spin.setValue(arena.height_cm)
+        self.canvas.set_corners(
+            arena.ellipse_handles() if arena.shape == "ellipse" else arena.corners
+        )
 
     def _scrub_to(self) -> None:
         frame = self._on_scrub(self.scrub.value())
@@ -362,8 +453,9 @@ class ArenaDialog(QDialog):
         ok_button = self.box.button(QDialogButtonBox.StandardButton.Ok)
         cal = self.canvas.calibration()
         if cal is None:
-            remaining = 4 - len(self.canvas.corners)
-            self.status.setText(f"Click {remaining} more corner(s): {CORNER_NAMES[4 - remaining]}")
+            names = _POINT_NAMES[self.canvas.shape]
+            placed = len(self.canvas.corners)
+            self.status.setText(f"Click {len(names) - placed} more point(s): {names[placed]}")
             self.status.setStyleSheet(f"color: {colors.TEXT_SECONDARY};")
             ok_button.setEnabled(False)
             return
@@ -376,11 +468,12 @@ class ArenaDialog(QDialog):
             ok_button.setEnabled(False)
             return
 
-        lines = [
-            f"Scale at centre: {scale:.2f} px/cm",
-            f"Opposite edges: {residuals['edge_ratio']:.2f}x",
-            f"Scale across floor: {residuals['scale_ratio']:.2f}x",
-        ]
+        lines = [f"Scale at centre: {scale:.2f} px/cm"]
+        if cal.shape == "rectangle":  # an ellipse's fit is affine: both are 1.00x
+            lines += [
+                f"Opposite edges: {residuals['edge_ratio']:.2f}x",
+                f"Scale across floor: {residuals['scale_ratio']:.2f}x",
+            ]
         if residuals["clipped"]:
             lines.append("Arena extends beyond the frame (expected on some videos).")
         if residuals["suspect"]:

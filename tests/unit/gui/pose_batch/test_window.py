@@ -10,8 +10,6 @@ import types
 from pathlib import Path
 
 import pytest
-from PyQt6.QtCore import QEvent
-from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from glider.gui.pose_batch.window import PoseBatchWindow, _DropList
 
@@ -293,121 +291,6 @@ def test_table_lists_the_discovered_videos(window, tmp_path):
 # --------------------------------------------------------------------------
 # calibration actions and master file
 # --------------------------------------------------------------------------
-
-
-def test_copy_calibration_stamps_the_other_selected_videos(window, tmp_path):
-    a = _clip(tmp_path / "a.avi")
-    b = _clip(tmp_path / "b.avi")
-    window._sources.add_paths([tmp_path])
-    assert window._videos == [a, b]
-    window._calibrations.set(a, _cal(640, 100.0))
-    window._cal_table.selectAll()
-    window._copy_calibration_to_selected()
-    assert window._calibrations.px_per_mm(b) is not None
-    # A copy, not a shared object — editing one must not mutate the other.
-    assert window._calibrations.get(b) is not window._calibrations.get(a)
-
-
-def test_copy_does_not_silently_destroy_drawn_calibrations(window, tmp_path, monkeypatch):
-    """Four individually calibrated videos must survive selectAll() + Copy."""
-    for name in ("v1.avi", "v2.avi", "v3.avi", "v4.avi"):
-        _clip(tmp_path / name)
-    window._sources.add_paths([tmp_path])
-    scales = (1.0, 2.0, 3.0, 4.0)
-    for video, scale in zip(window._videos, scales, strict=True):
-        window._calibrations.set(video, _cal(640, 640.0 / scale))
-
-    prompts = _answer_overwrite(monkeypatch, QMessageBox.StandardButton.No)
-    window._cal_table.selectAll()
-    window._copy_calibration_to_selected()
-
-    assert prompts, "the operator must be asked before calibrations are replaced"
-    for video, scale in zip(window._videos, scales, strict=True):
-        assert window._calibrations.px_per_mm(video) == pytest.approx(scale)
-
-
-def test_copy_still_fills_the_uncalibrated_videos_when_overwrite_is_declined(
-    window, tmp_path, monkeypatch
-):
-    source = _clip(tmp_path / "a.avi")
-    drawn = _clip(tmp_path / "b.avi")
-    blank = _clip(tmp_path / "c.avi")
-    window._sources.add_paths([tmp_path])
-    window._calibrations.set(source, _cal(640, 640.0))  # 1.0 px/mm
-    window._calibrations.set(drawn, _cal(640, 320.0))  # 2.0 px/mm
-
-    _answer_overwrite(monkeypatch, QMessageBox.StandardButton.No)
-    window._cal_table.selectAll()
-    window._copy_calibration_to_selected()
-
-    assert window._calibrations.px_per_mm(drawn) == pytest.approx(2.0)
-    assert window._calibrations.px_per_mm(blank) == pytest.approx(1.0)
-    log = window._log.toPlainText()
-    assert "1 uncalibrated video(s) filled" in log
-    assert "0 existing calibration(s) overwritten" in log
-
-
-def test_copy_overwrites_only_when_the_operator_confirms(window, tmp_path, monkeypatch):
-    source = _clip(tmp_path / "a.avi")
-    drawn = _clip(tmp_path / "b.avi")
-    window._sources.add_paths([tmp_path])
-    window._calibrations.set(source, _cal(640, 640.0))  # 1.0 px/mm
-    window._calibrations.set(drawn, _cal(640, 320.0))  # 2.0 px/mm
-
-    _answer_overwrite(monkeypatch, QMessageBox.StandardButton.Yes)
-    window._cal_table.selectAll()
-    window._copy_calibration_to_selected()
-
-    assert window._calibrations.px_per_mm(drawn) == pytest.approx(1.0)
-    assert "1 existing calibration(s) overwritten" in window._log.toPlainText()
-
-
-def test_copy_retargets_the_calibration_to_the_destination_resolution(window, tmp_path):
-    """Same rig, different recording resolution: the scale must follow the pixels."""
-    a = _clip(tmp_path / "a.avi", 640, 480)
-    b = _clip(tmp_path / "b.avi", 1280, 960)
-    window._sources.add_paths([tmp_path])
-    window._calibrations.set(a, _cal(320, 100.0, (640, 480)))  # 3.2 px/mm
-
-    window._cal_table.selectAll()
-    window._copy_calibration_to_selected()
-
-    copied = window._calibrations.get(b)
-    assert (copied.calibration_width, copied.calibration_height) == (1280, 960)
-    assert window._calibrations.px_per_mm(b) == pytest.approx(2 * window._calibrations.px_per_mm(a))
-    # The source itself is untouched by the retarget.
-    assert window._calibrations.px_per_mm(a) == pytest.approx(3.2)
-
-
-def test_copy_skips_targets_whose_resolution_cannot_be_read(window, tmp_path):
-    a = _clip(tmp_path / "a.avi")
-    broken = _touch(tmp_path / "b.avi").resolve()  # zero bytes: not decodable
-    window._sources.add_paths([tmp_path])
-    window._calibrations.set(a, _cal(640, 100.0))
-
-    window._cal_table.selectAll()
-    window._copy_calibration_to_selected()
-
-    # Guessing a resolution is exactly the error being avoided.
-    assert window._calibrations.get(broken) is None
-    assert "could not be opened" in window._log.toPlainText()
-    assert "b.avi" in window._log.toPlainText()
-
-
-def test_calibration_dialogs_are_not_retained(window, tmp_path, monkeypatch):
-    """Each dialog holds a full-res frame and pixmap; 50 of them is GBs."""
-    _clip(tmp_path / "a.avi", 320, 240)
-    window._sources.add_paths([tmp_path])
-    from glider.gui.dialogs.calibration_dialog import CalibrationDialog
-
-    monkeypatch.setattr(CalibrationDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
-    for _ in range(6):
-        window._open_calibration(window._videos[0])
-    QApplication.processEvents()
-    # No event loop is running here, and DeferredDelete is only delivered by one;
-    # in the app the deletion happens as soon as the slot returns to it.
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    assert window.findChildren(QDialog) == []
 
 
 def test_clear_removes_the_selected_calibration(window, tmp_path):

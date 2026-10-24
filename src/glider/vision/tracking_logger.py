@@ -23,7 +23,7 @@ _FSYNC_INTERVAL_FRAMES = 300
 
 if TYPE_CHECKING:
     from glider.core.experiment_session import ExperimentSession
-    from glider.vision.calibration import CameraCalibration
+    from glider.vision.arena import ArenaCalibration
     from glider.vision.cv_processor import TrackedObject
     from glider.vision.zones import ZoneConfiguration
 
@@ -37,7 +37,7 @@ class TrackingDataLogger:
     Output format matches DataRecorder pattern with columns:
     frame, timestamp, elapsed_ms, object_id, class, x, y, w, h, confidence,
     center_x, center_y, distance_px, distance_mm, cumulative_mm, zone_ids,
-    behavioral_state, velocity_px_frame
+    velocity_px_frame
 
     Pose backends additionally produce a sibling ``*_keypoints.csv`` in long
     format — one row per keypoint per object per frame:
@@ -85,7 +85,7 @@ class TrackingDataLogger:
         self._flow_anchor: float | None = None
         self._frame_count = 0
         self._recording = False
-        self._calibration: CameraCalibration | None = None
+        self._calibration: ArenaCalibration | None = None
         self._zone_config: ZoneConfiguration | None = None
         self._frame_width: int = 0
         self._frame_height: int = 0
@@ -257,12 +257,11 @@ class TrackingDataLogger:
         """
         self._flow_anchor = float(timestamp)
 
-    def set_calibration(self, calibration: "CameraCalibration") -> None:
-        """
-        Set calibration for real-world distance calculations.
+    def set_calibration(self, calibration: "ArenaCalibration | None") -> None:
+        """Set the arena whose scale converts distances to millimetres.
 
-        Args:
-            calibration: CameraCalibration instance
+        Anything with the same scalar interface works (``is_calibrated``,
+        ``pixels_per_mm``, ``calibration_width/height``, ``pixels_to_mm``).
         """
         self._calibration = calibration
 
@@ -679,7 +678,6 @@ class TrackingDataLogger:
                 "distance_mm",
                 "cumulative_mm",
                 "zone_ids",
-                "behavioral_state",
                 "velocity_px_frame",
             ]
         )
@@ -786,8 +784,6 @@ class TrackingDataLogger:
             # Get zone IDs for this object's position
             zone_ids = self._get_zones_for_point(center_x, center_y)
 
-            # Get behavioral state and velocity from tracked object
-            behavioral_state = getattr(obj, "behavioral_state", "unknown")
             velocity = getattr(obj, "velocity", 0.0)
 
             if not self._safe_writerow(
@@ -809,7 +805,6 @@ class TrackingDataLogger:
                     f"{distance_mm:.2f}",
                     f"{cumulative_mm:.2f}",
                     zone_ids,
-                    behavioral_state,
                     f"{velocity:.2f}",
                 ],
                 context="log_frame[object]",
@@ -843,7 +838,6 @@ class TrackingDataLogger:
                     "",
                     "",  # Empty distance fields
                     "",  # Empty zone_ids
-                    "",  # Empty behavioral_state
                     "",  # Empty velocity
                 ],
                 context="log_frame[motion]",
@@ -873,7 +867,6 @@ class TrackingDataLogger:
                         "",
                         "",  # Empty distance fields
                         "",  # Empty zone_ids
-                        "",  # Empty behavioral_state
                         "",  # Empty velocity
                     ],
                     context="log_frame[heartbeat]",

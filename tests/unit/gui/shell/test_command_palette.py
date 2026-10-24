@@ -285,7 +285,9 @@ def test_a_row_carries_its_source_menu_and_its_shortcut(palette):
 
     assert palette.row_text(row) == "New"
     assert palette.row_category(row) == "File"
-    assert palette.row_shortcut(row) == "Ctrl+N"
+    # Native, so a Mac reads "⌘N" rather than a Ctrl key it does not have.
+    native = QKeySequence("Ctrl+N").toString(QKeySequence.SequenceFormat.NativeText)
+    assert palette.row_shortcut(row) == native
 
 
 def test_enter_triggers_the_selected_command_exactly_once(qtbot, palette):
