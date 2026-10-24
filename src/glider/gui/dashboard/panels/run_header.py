@@ -88,9 +88,12 @@ class RunHeader(QWidget):
         # Takes the slack, so the title, ▾ and pill keep their size hints.
         top.addStretch()
         # Which animal from Experiment > Animals this run is of (#215).
-        animal_label = QLabel("Animal")
-        animal_label.setProperty("textRole", "muted")
-        top.addWidget(animal_label)
+        # No caption on the Pi: at 480 px portrait it pushed the window past the
+        # screen, and the combo's own text ("No animal" or the ID) says enough.
+        if not touch:
+            animal_label = QLabel("Animal")
+            animal_label.setProperty("textRole", "muted")
+            top.addWidget(animal_label)
         self.animal = AnimalPicker(lambda: self._core.session)
         # Styled to the pill's height on the Pi: a full 42 px touch combo pushed
         # the run page past an 800x480 screen. Its popup rows stay full size.

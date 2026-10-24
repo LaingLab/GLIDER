@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import plistlib
 import sys
 
@@ -16,7 +17,8 @@ def test_macos_gets_an_app_in_the_users_applications(tmp_path):
         info = plistlib.load(f)
     assert info["CFBundleExecutable"] == "GLIDER"
     launcher = app / "Contents" / "MacOS" / "GLIDER"
-    assert launcher.stat().st_mode & 0o111  # executable
+    if os.name == "posix":  # Windows files carry no executable bit
+        assert launcher.stat().st_mode & 0o111
     assert sys.executable in launcher.read_text()
     assert "-m glider" in launcher.read_text()
 
