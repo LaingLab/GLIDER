@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 
 from glider.core import presets
 from glider.gui.dashboard.panels.field_tags import FieldTags, TagField
+from glider.gui.widgets.animal_picker import AnimalPicker
 
 _LIVE = ("RUNNING", "PAUSED")
 # Non-live states the pill names as they are instead of READY / NEEDS DETAILS.
@@ -86,6 +87,15 @@ class RunHeader(QWidget):
             self._picker.hide()
         # Takes the slack, so the title, ▾ and pill keep their size hints.
         top.addStretch()
+        # Which animal from Experiment > Animals this run is of (#215).
+        animal_label = QLabel("Animal")
+        animal_label.setProperty("textRole", "muted")
+        top.addWidget(animal_label)
+        self.animal = AnimalPicker(lambda: self._core.session)
+        # Styled to the pill's height on the Pi: a full 42 px touch combo pushed
+        # the run page past an 800x480 screen. Its popup rows stay full size.
+        self.animal.setProperty("runHeaderAnimal", True)
+        top.addWidget(self.animal)
         self._run_label = QLabel()
         self._run_label.setProperty("textRole", "muted")
         top.addWidget(self._run_label)
@@ -113,6 +123,7 @@ class RunHeader(QWidget):
         self._title.setVisible(not preset and not self._touch)
         self._picker.setText(f"{_type(md) or md.name} ▾" if preset else "▾")
         self._tags.set_fields(self.tag_fields())
+        self.animal.refresh()
         self._apply_state()
 
     def tag_fields(self) -> list[TagField]:
@@ -221,6 +232,7 @@ class RunHeader(QWidget):
         self._pill.style().unpolish(self._pill)
         self._pill.style().polish(self._pill)
         self._picker.setEnabled(not live)
+        self.animal.setEnabled(not live)
         self._title.setReadOnly(live)
         self._tags.set_locked(live)
 

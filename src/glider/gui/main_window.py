@@ -2373,6 +2373,7 @@ class MainWindow(QMainWindow):
                 self._core.multi_camera_manager,
                 recorder=self._core.multi_video_recorder,
                 base_settings=self._core.camera_manager.settings,
+                session=lambda: self._core.session,
                 parent=None,
             )
         # Nothing to re-attach here: the window reconnects and re-enumerates in

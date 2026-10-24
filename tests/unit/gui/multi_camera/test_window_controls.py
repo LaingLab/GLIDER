@@ -240,3 +240,35 @@ class TestPanelStandalone:
         panel._brightness.setValue(200)
         panel._emit_settings()
         assert original.brightness == 100
+
+
+class TestAnimalAssignment:
+    """#215: a multi-camera run can be of an animal from Experiment > Animals."""
+
+    def _window(self, qtbot, tmp_path, session):
+        win = MultiCameraWindow(
+            _manager(2),
+            recorder=_recorder(),
+            labels=CameraLabels(tmp_path / "labels.json"),
+            session=lambda: session,
+            parent=None,
+        )
+        qtbot.addWidget(win)
+        return win
+
+    def test_the_chosen_animal_names_the_files(self, qtbot, tmp_path):
+        from glider.core.experiment_session import ExperimentSession, Subject
+
+        session = ExperimentSession()
+        dam = Subject(subject_id="D07")
+        session.metadata.add_subject(dam)
+        win = self._window(qtbot, tmp_path, session)
+        win.name_edit.setText("retrieval")
+
+        assert win._experiment_name == "retrieval_D07"
+        win.animal_picker.setCurrentIndex(0)  # "No animal"
+        assert win._experiment_name == "retrieval"
+        assert session.metadata.active_subject_id is None
+
+    def test_without_a_session_there_is_no_picker(self, window):
+        assert window.animal_picker is None
