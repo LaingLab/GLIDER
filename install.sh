@@ -92,6 +92,13 @@ else
     GLIDER="uv run glider"
 fi
 
+# A launcher where Spotlight (or the desktop's app menu) looks, so GLIDER can be
+# opened by searching for it. Not on the Pi, whose image ships its own.
+if ! $PI; then
+    say "Adding GLIDER to your applications"
+    $GLIDER shortcut || echo "Could not add the launcher; GLIDER still runs from the command below."
+fi
+
 say "Checking the install"
 if $GLIDER doctor; then
     say "Done. Start GLIDER with:"
@@ -99,3 +106,4 @@ else
     say "Installed, but doctor found problems (above). Once they are fixed, start GLIDER with:"
 fi
 echo "    cd $DIR && $GLIDER"
+$PI || echo "or search for GLIDER in Spotlight / your app menu."

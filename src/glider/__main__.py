@@ -10,6 +10,7 @@ Usage:
     python -m glider --runner     # Force Runner (touch) mode
     python -m glider --file path  # Open an experiment file
     python -m glider doctor       # Check this install can run GLIDER
+    python -m glider shortcut     # Make GLIDER openable from Spotlight / Start
 """
 
 import os
@@ -48,6 +49,12 @@ if sys.argv[1:2] == ["doctor"] or "--check-deps" in sys.argv[1:]:
     from glider.env_doctor import run_doctor
 
     sys.exit(run_doctor())
+
+# `glider shortcut`: put a launcher where Spotlight / Windows Search look (#216).
+if sys.argv[1:2] == ["shortcut"]:
+    from glider.shortcut import main as make_shortcut
+
+    sys.exit(make_shortcut())
 
 import argparse
 import asyncio

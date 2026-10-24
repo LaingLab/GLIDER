@@ -61,6 +61,11 @@ function Install-Glider([string[]]$Extra) {
     foreach ($name in $Extra) { $sync += @("--extra", $name) }
     Run uv @sync
 
+    # A Start Menu shortcut, so GLIDER can be opened by searching for it.
+    Say "Adding GLIDER to the Start Menu"
+    & uv run --directory $dir glider shortcut
+    if ($LASTEXITCODE -ne 0) { Write-Host "Could not add the shortcut; GLIDER still runs from the command below." }
+
     Say "Checking the install"
     & uv run --directory $dir glider doctor
     if ($LASTEXITCODE -eq 0) {
@@ -69,6 +74,7 @@ function Install-Glider([string[]]$Extra) {
         Say "Installed, but doctor found problems (above). Once they are fixed, start GLIDER with:"
     }
     Write-Host "    cd $dir; uv run glider"
+    Write-Host "or search for GLIDER in the Start Menu."
 }
 
 Install-Glider $Extra
