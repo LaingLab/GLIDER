@@ -40,6 +40,7 @@ from glider.gui.multi_camera.camera_properties import CameraPropertiesPanel
 from glider.gui.multi_camera.camera_selection import CameraSelection
 from glider.gui.multi_camera.status_table import CameraStatusTable, format_elapsed
 from glider.gui.styles import colors
+from glider.gui.widgets.animal_picker import AnimalPicker
 from glider.gui.widgets.multi_camera_preview import MultiCameraPreviewWidget
 from glider.gui.widgets.tool_ui import Card, apply_tool_theme, hint, set_button_role
 from glider.vision.camera_manager import CameraSettings
@@ -93,9 +94,13 @@ class MultiCameraWindow(QMainWindow):
         experiment_name: str = DEFAULT_EXPERIMENT_NAME,
         labels: CameraLabels | None = None,
         selection: CameraSelection | None = None,
+        session=None,
         parent=None,
     ):
+        """``session``: a callable returning the experiment session, whose
+        Animals list the run can be assigned from (#215). None hides the picker."""
         super().__init__(parent)
+        self._session = session
         self._manager = multi_camera_manager
         self._recorder = recorder
         # What the operator configured in the Settings dialog. Registering
@@ -152,6 +157,14 @@ class MultiCameraWindow(QMainWindow):
         self.name_edit.setToolTip("Prefix for every file this run writes")
         self.name_edit.setMaximumWidth(220)
         controls.addWidget(self.name_edit)
+
+        # The animal from Experiment > Animals this run is of. Its ID joins the
+        # file prefix, since these recordings are video only (#215).
+        self.animal_picker = None
+        if self._session is not None:
+            controls.addWidget(QLabel("Animal"))
+            self.animal_picker = AnimalPicker(self._session)
+            controls.addWidget(self.animal_picker)
 
         self.record_button = QPushButton("Record All")
         self.record_button.setToolTip(
@@ -511,7 +524,10 @@ class MultiCameraWindow(QMainWindow):
         writing files that begin with an underscore.
         """
         typed = self.name_edit.text().strip() if hasattr(self, "name_edit") else ""
-        return typed or self._default_experiment_name or DEFAULT_EXPERIMENT_NAME
+        name = typed or self._default_experiment_name or DEFAULT_EXPERIMENT_NAME
+        animal = self.animal_picker.active_subject() if self.animal_picker else None
+        tag = animal and (animal.subject_id or animal.name)
+        return f"{name}_{tag}" if tag else name
 
     def _recording_ids(self) -> set[str]:
         """The cameras with a file open right now."""
@@ -722,6 +738,8 @@ class MultiCameraWindow(QMainWindow):
         super().showEvent(event)
         self._timer.start(_POLL_MS)
         self.connect_cameras()
+        if self.animal_picker is not None:
+            self.animal_picker.refresh()
 
     def closeEvent(self, event):  # noqa: N802 - Qt override
         """Stop polling and let the cameras go, unless a recording needs them.

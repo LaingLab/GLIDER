@@ -219,6 +219,9 @@ bottom:
   filled in. (The fields come from the experiment file you opened; there is no
   preset picker on the Pi, so choose or edit presets on the desktop.) The
   details lock while a run is live.
+- **Animal.** Beside the pill, pick which animal from the experiment's
+  **Animals** list this run is of. Its details are written into the run's CSV
+  headers. The choice locks while a run is live.
 - **A status pill** at the top right, above the details: **NOT READY** (no
   board connected, or no runnable flow), **NEEDS DETAILS** (a required field is
   empty), or **READY**. An experiment with no boards configured (video only,

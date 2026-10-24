@@ -894,6 +894,13 @@ QLineEdit[fieldTagEditor="true"] {
 }
 
 /* READY / NOT READY / NEEDS DETAILS, and the live states. */
+/* The run header's animal picker sits on the pill's row; at the 42 px touch
+ * height it pushed the Pi run page past 480 px. */
+QComboBox[runHeaderAnimal="true"] {
+    min-height: 0;
+    padding: 2px 12px;
+}
+
 QLabel[runnerStatus="true"],
 QLabel[statusIndicator="true"] {
     background-color: #151c25;                      /* SURFACE_2 */

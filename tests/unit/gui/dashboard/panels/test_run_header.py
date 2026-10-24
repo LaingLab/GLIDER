@@ -282,3 +282,30 @@ def test_desktop_header_keeps_title_picker_and_one_row(qtbot, mock_core):
     h = _header(qtbot, mock_core)
     assert h._title.isVisibleTo(h) and h._picker.isVisibleTo(h)
     assert isinstance(h._tags.layout(), QHBoxLayout)
+
+
+def test_the_run_can_be_assigned_an_animal_from_the_animals_list(qtbot, mock_core):
+    """#215: the animal picked here is the session's active subject, which the
+    recorders already write into every CSV header."""
+    from glider.core.experiment_session import Subject
+
+    h = _header(qtbot, mock_core)
+    md = mock_core.session.metadata
+    first, second = Subject(subject_id="M001", group="Control"), Subject(subject_id="M002")
+    md.add_subject(first)
+    md.add_subject(second)
+    h.refresh()
+
+    assert [h.animal.itemText(i) for i in range(h.animal.count())] == [
+        "No animal",
+        "M001 (Control)",
+        "M002",
+    ]
+    assert h.animal.currentData() == first.id  # the first animal starts active
+
+    h.animal.setCurrentIndex(2)
+    assert md.get_active_subject() is second
+    assert mock_core.session.is_dirty
+
+    h.update_state("RUNNING")
+    assert not h.animal.isEnabled()  # a live run's animal is fixed

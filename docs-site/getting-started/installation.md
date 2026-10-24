@@ -142,6 +142,21 @@ and Python version.
 `uv run glider` launches the app. The first time you run it, GLIDER offers a
 short interactive tour — take it or skip it.
 
+### Open GLIDER by searching for it
+
+The install script adds GLIDER to your applications, so you can open it
+from **Spotlight** (macOS), the **Start Menu** search (Windows) or your
+desktop's app menu (Linux), like any other app. If you installed by hand,
+or the step was skipped, add the launcher yourself from the GLIDER folder:
+
+```bash
+uv run glider shortcut
+```
+
+On macOS this creates `GLIDER.app` in your home folder's **Applications**;
+on Windows, a **GLIDER** Start Menu shortcut. Both start GLIDER from the
+install they were made from.
+
 !!! tip "Launch straight into Runner mode"
     Add the `--runner` flag to start in the touchscreen
     [Runner](../runner/index.md): `uv run glider --runner`.
