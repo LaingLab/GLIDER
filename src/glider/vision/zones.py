@@ -201,6 +201,109 @@ class Zone:
         )
 
 
+def clamp_translation(zone: Zone, dx: float, dy: float) -> tuple[float, float]:
+    """The part of a normalized move ``(dx, dy)`` that keeps *zone* on the frame.
+
+    A zone dragged off the image can no longer be grabbed to drag it back, so
+    moves stop at the frame edge. Rectangles and polygons keep their whole
+    outline inside; a circle keeps its centre inside, because its outline
+    depends on the frame's aspect ratio, which this module does not know.
+
+    A zone that already hangs over an edge (loaded from elsewhere, or placed
+    at a fixed size next to the border) is never pushed further out, but may
+    always move back in.
+    """
+    if not zone.vertices:
+        return (0.0, 0.0)
+    if zone.shape == ZoneShape.CIRCLE:
+        pts = [zone.vertices[0]]
+    else:
+        pts = zone.vertices
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+
+    def _clamp(delta: float, lo_edge: float, hi_edge: float) -> float:
+        lo = min(-lo_edge, 0.0)
+        hi = max(1.0 - hi_edge, 0.0)
+        return max(lo, min(hi, delta))
+
+    return (_clamp(dx, min(xs), max(xs)), _clamp(dy, min(ys), max(ys)))
+
+
+def translate_zone(zone: Zone, dx: float, dy: float, clamp: bool = True) -> None:
+    """Move every vertex of *zone* by ``(dx, dy)`` normalized units, in place.
+
+    In place because the zone editor and everything downstream of it share the
+    one :class:`ZoneConfiguration`; a moved zone keeps its id, so occupancy
+    states and node-graph references follow it.
+    """
+    if clamp:
+        dx, dy = clamp_translation(zone, dx, dy)
+    zone.vertices = [(x + dx, y + dy) for x, y in zone.vertices]
+
+
+def sized_zone_vertices(
+    shape: ZoneShape,
+    centre: tuple[float, float],
+    width_px: float,
+    height_px: float,
+    frame_size: tuple[int, int],
+) -> list[tuple[float, float]]:
+    """Normalized vertices of a rectangle or circle of a given pixel size.
+
+    ``centre`` is normalized; ``frame_size`` is ``(width, height)`` in pixels.
+    A circle uses ``width_px`` as its diameter and stores its radius point
+    straight to the right of the centre, so its pixel radius -- which is how
+    :func:`draw_zones` and :func:`circle_contains` measure it -- is exact on
+    any aspect ratio.
+    """
+    w, h = frame_size
+    if w <= 0 or h <= 0:
+        raise ValueError("Frame size must be positive")
+    if width_px <= 0 or (shape == ZoneShape.RECTANGLE and height_px <= 0):
+        raise ValueError("Zone size must be positive")
+    cx, cy = centre
+    if shape == ZoneShape.CIRCLE:
+        return [(cx, cy), (cx + width_px / 2 / w, cy)]
+    if shape == ZoneShape.RECTANGLE:
+        hw, hh = width_px / 2 / w, height_px / 2 / h
+        return [(cx - hw, cy - hh), (cx + hw, cy + hh)]
+    raise ValueError(f"A {shape.value} zone has no fixed size")
+
+
+def arena_sized_zone_vertices(
+    arena: Any,
+    shape: ZoneShape,
+    centre: tuple[float, float],
+    width_cm: float,
+    height_cm: float,
+) -> list[tuple[float, float]]:
+    """A rectangle or circle of a real size on an arena floor, as a polygon.
+
+    ``arena`` is anything with ``to_arena_cm``/``to_image`` (an
+    :class:`glider.vision.arena.ArenaCalibration`). The shape is laid out in
+    centimetres around the floor point under ``centre`` and mapped back to the
+    image, so under perspective a square comes out as the quadrilateral the
+    camera actually sees -- the same correction ``centre_zone_vertices`` makes.
+    A circle becomes a 48-gon for the same reason.
+    """
+    if width_cm <= 0 or (shape == ZoneShape.RECTANGLE and height_cm <= 0):
+        raise ValueError("Zone size must be positive")
+    ((cx, cy),) = arena.to_arena_cm([centre])
+    if shape == ZoneShape.CIRCLE:
+        r = width_cm / 2
+        floor = [
+            (cx + r * math.cos(t), cy + r * math.sin(t))
+            for t in np.linspace(0, 2 * math.pi, 48, endpoint=False)
+        ]
+    elif shape == ZoneShape.RECTANGLE:
+        hw, hh = width_cm / 2, height_cm / 2
+        floor = [(cx - hw, cy - hh), (cx + hw, cy - hh), (cx + hw, cy + hh), (cx - hw, cy + hh)]
+    else:
+        raise ValueError(f"A {shape.value} zone has no fixed size")
+    return [(float(x), float(y)) for x, y in arena.to_image(floor)]
+
+
 @dataclass
 class ZoneState:
     """Current state of a zone during tracking."""
@@ -309,6 +412,17 @@ class ZoneConfiguration:
             List of zone names containing the point
         """
         return [zone.name for zone in self.zones if zone.contains_point(x, y, aspect)]
+
+    def zone_at(self, x: float, y: float, aspect: float = 1.0) -> Zone | None:
+        """The topmost zone containing a normalized point, or None.
+
+        Topmost is the last one: :func:`draw_zones` paints in list order, so
+        where zones overlap a click picks the one the user sees on top.
+        """
+        for zone in reversed(self.zones):
+            if zone.contains_point(x, y, aspect):
+                return zone
+        return None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""

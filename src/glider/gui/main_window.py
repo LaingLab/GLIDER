@@ -950,8 +950,12 @@ class MainWindow(QMainWindow):
             camera_manager=self._core.camera_manager,
             zone_config=self._zone_config,
             parent=self._experiment_page,
+            calibration=self._core.calibration,
+            settings=self._settings,
         ).embed(compact=self._view_manager.is_runner_mode)
         editor.zones_changed.connect(self._on_zones_changed)
+        # Kept so a later arena calibration reaches its fixed-size inputs.
+        self._zone_editor = editor
         return editor
 
     def _build_plugins_section(self) -> QWidget:
@@ -3706,6 +3710,9 @@ class MainWindow(QMainWindow):
         if self._camera_panel is not None:
             self._camera_panel.set_calibration(arena)
             self._camera_panel._preview.set_calibration(arena)
+        zone_editor = getattr(self, "_zone_editor", None)
+        if zone_editor is not None:
+            zone_editor.set_calibration(arena)
 
     def _restore_camera_arena(self) -> None:
         """The arena saved last session, if there is a readable one."""
@@ -3732,6 +3739,8 @@ class MainWindow(QMainWindow):
             zone_config=self._zone_config,
             parent=self,
             frame=frame,
+            calibration=self._core.calibration,
+            settings=self._settings,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._zone_config = dialog.get_zone_configuration()
