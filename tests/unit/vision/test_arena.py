@@ -243,3 +243,112 @@ def test_an_arena_stands_in_for_the_line_calibration_the_logger_reads():
     assert arena.pixels_to_mm(10.0, 800) == pytest.approx(10.0)
     assert arena.pixels_to_mm(10.0, 400) == pytest.approx(20.0)  # half-res frame
     assert arena.draw(np.zeros((800, 800, 3), np.uint8)).any()
+
+
+# ---------------------------------------------------------------- plus mazes
+
+# A 75 cm EPM seen straight down on an 800x800 frame at 10 px/cm, centred:
+# arm ends at the middles of a 750 px box.
+_EPM_ENDS = [(0.5, 25 / 800), (775 / 800, 0.5), (0.5, 775 / 800), (25 / 800, 0.5)]
+
+
+def _epm(ends=_EPM_ENDS, **kw):
+    kw = {"width_cm": 75.0, "arm_width_cm": 5.0, "frame_size": (800, 800), **kw}
+    return ArenaCalibration.from_plus(ends, **kw)
+
+
+class TestPlusMaze:
+    """Issue #217: an elevated plus maze, outlined by the ends of its arms."""
+
+    def test_arm_ends_fix_the_bounding_square(self):
+        arena = _epm()
+        assert arena.shape == "plus"
+        expected = [(25 / 800, 25 / 800), (775 / 800, 25 / 800), (775 / 800, 775 / 800)]
+        assert np.array(arena.corners[:3]) == pytest.approx(np.array(expected))
+        assert arena.px_per_cm_centre == pytest.approx(10.0)
+
+    def test_handles_round_trip_under_perspective(self):
+        ends = [(0.5, 0.12), (0.84, 0.52), (0.5, 0.93), (0.15, 0.52)]
+        arena = _epm(ends)
+        assert np.array(arena.plus_handles()) == pytest.approx(np.array(ends))
+        assert np.array(arena.to_arena_cm(ends)) == pytest.approx(
+            np.array([(37.5, 0.0), (75.0, 37.5), (37.5, 75.0), (0.0, 37.5)]), abs=1e-9
+        )
+
+    def test_containment_is_the_cross_not_the_box(self):
+        arena = _epm()
+        # centre, left arm, top arm, right arm, empty corner, gap between arms, arm edge
+        x = np.array([37.5, 2.0, 37.5, 73.0, 2.0, 30.0, 37.5])
+        y = np.array([37.5, 37.5, 2.0, 37.5, 2.0, 30.0, 39.9])
+        outside = arena.outside_cm(x, y)
+        assert outside.tolist() == [False, False, False, False, True, True, False]
+
+    def test_margin_widens_each_arm(self):
+        arena = _epm()
+        # 2 cm beside the top arm's edge: a head-dip over the side.
+        assert arena.outside_cm(42.0, 10.0)
+        assert not arena.outside_cm(42.0, 10.0, margin_cm=3.0)
+        # The middle of an empty quadrant stays off the maze under that margin.
+        assert arena.outside_cm(15.0, 15.0, margin_cm=3.0)
+
+    def test_centre_zone_is_where_the_arms_cross(self):
+        arena = _epm()
+        centre = arena.to_arena_cm(arena.centre_zone_vertices(10.0))
+        assert np.array(centre) == pytest.approx(np.array([(35, 35), (40, 35), (40, 40), (35, 40)]))
+
+    def test_regions_tile_the_maze(self):
+        regions = _epm().plus_regions_cm()
+        assert set(regions) == {"top", "right", "bottom", "left", "centre"}
+
+        def area(poly):
+            (x0, y0), _, (x1, y1), _ = poly
+            return (x1 - x0) * (y1 - y0)
+
+        total = sum(area(p) for p in regions.values())
+        assert total == pytest.approx(2 * 75 * 5 - 5 * 5)  # two arms, crossing once
+
+    def test_epm_zones_follow_which_arms_are_open(self):
+        arena = _epm()
+        zones = arena.epm_zone_vertices("horizontal")
+        assert set(zones) == {"open_1", "open_2", "closed_1", "closed_2", "centre"}
+        xs = [x for x, _ in arena.to_arena_cm(zones["open_1"])]
+        assert max(xs) == pytest.approx(35.0)  # the left arm
+        swapped = arena.epm_zone_vertices("vertical")
+        ys = [y for _, y in arena.to_arena_cm(swapped["open_1"])]
+        assert max(ys) == pytest.approx(35.0)  # the top arm
+        with pytest.raises(ValueError):
+            arena.epm_zone_vertices("diagonal")
+        with pytest.raises(ValueError):
+            _cal().epm_zone_vertices()
+
+    def test_outline_is_the_twelve_point_cross(self):
+        arena = _epm()
+        assert len(arena.outline(800, 800)) == 12
+        drawn = arena.draw(np.zeros((800, 800, 3), np.uint8))
+        assert drawn[400, 25].any()  # the left arm's end edge
+        assert not drawn[100, 100].any()  # an empty quadrant
+
+    def test_arms_must_be_narrower_than_the_maze(self):
+        with pytest.raises(ValueError):
+            _epm(arm_width_cm=80.0)
+        with pytest.raises(ValueError):
+            _epm(arm_width_cm=0.0)
+
+    def test_arm_ends_out_of_order_are_refused(self):
+        ends = [_EPM_ENDS[0], _EPM_ENDS[2], _EPM_ENDS[1], _EPM_ENDS[3]]
+        with pytest.raises(DegenerateArenaError):
+            _epm(ends)
+
+    def test_round_trips_with_its_arm_width(self):
+        arena = _epm(arm_width_cm=7.5)
+        data = arena.to_dict()
+        assert data["arm_width_cm"] == 7.5
+        again = ArenaCalibration.from_dict(data)
+        assert again.shape == "plus" and again.arm_width_cm == 7.5
+        assert np.array(again.corners) == pytest.approx(np.array(arena.corners))
+
+    def test_other_shapes_still_save_without_an_arm_width(self):
+        # Older GLIDERs read these files, and old files lack the key.
+        data = _cal().to_dict()
+        assert "arm_width_cm" not in data
+        assert ArenaCalibration.from_dict(data).shape == "rectangle"

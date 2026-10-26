@@ -1,7 +1,8 @@
 """Arena Dialog - outline the floor to calibrate scale and perspective.
 
 The operator clicks the four floor corners of an arena of known size, or, for
-a round arena, its centre and the ends of two radii. That
+a round arena, its centre and the ends of two radii, or, for an elevated plus
+maze, the far ends of its four arms. That
 fixes a homography (see :mod:`glider.vision.arena`), which in turn gives a
 centre zone meaning the same patch of floor in every video, and a scale that
 varies correctly across the floor instead of being one number for all of it.
@@ -48,7 +49,13 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.gui.styles import colors
-from glider.vision.arena import CORNER_NAMES, ArenaCalibration, DegenerateArenaError
+from glider.vision.arena import (
+    ARM_END_NAMES,
+    CORNER_NAMES,
+    DEFAULT_ARM_WIDTH_CM,
+    ArenaCalibration,
+    DegenerateArenaError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +78,12 @@ _SUSPECT_COLOUR = QColor("#f87171")
 _POINT_NAMES = {
     "rectangle": CORNER_NAMES,
     "ellipse": ("centre", "one edge", "a second edge, about a quarter-turn round"),
+    "plus": tuple(f"end of the {name}" for name in ARM_END_NAMES),
 }
+
+#: Size a plus maze starts at when the operator has not typed one: a standard
+#: mouse EPM is two 35 cm arms either side of a 5 cm centre.
+_PLUS_DEFAULT_CM = 75.0
 
 
 class ArenaCanvas(QWidget):
@@ -98,6 +110,7 @@ class ArenaCanvas(QWidget):
         self._zone_cm = 10.0
         self._arena_cm = (30.0, 30.0)
         self._shape = "rectangle"
+        self._arm_cm = DEFAULT_ARM_WIDTH_CM
 
     # -- state ---------------------------------------------------------
 
@@ -112,7 +125,7 @@ class ArenaCanvas(QWidget):
         self.corners_changed.emit()
 
     def set_shape(self, shape: str) -> None:
-        """Switch between a rectangle and a round arena. Clears the points."""
+        """Switch between a rectangle, a round arena and a plus maze. Clears the points."""
         if shape != self._shape:
             self._shape = shape
             self.clear()
@@ -123,11 +136,15 @@ class ArenaCanvas(QWidget):
 
     @property
     def needed(self) -> int:
-        """Clicks this shape takes: four corners, or centre plus two radii."""
+        """Clicks this shape takes: four corners or arm ends, or centre plus two radii."""
         return len(_POINT_NAMES[self._shape])
 
     def set_arena_size(self, width_cm: float, height_cm: float) -> None:
         self._arena_cm = (width_cm, height_cm)
+        self.update()
+
+    def set_arm_width(self, width_cm: float) -> None:
+        self._arm_cm = width_cm
         self.update()
 
     def set_zone_size(self, size_cm: float) -> None:
@@ -155,10 +172,24 @@ class ArenaCanvas(QWidget):
             self.corners_changed.emit()
 
     def calibration(self) -> ArenaCalibration | None:
-        """The calibration these corners describe, or None if incomplete."""
+        """The calibration these corners describe, or None if incomplete.
+
+        Raises :class:`ValueError` (a :class:`DegenerateArenaError` for bad
+        points) when a plus maze's arm ends or arm width cannot describe one:
+        unlike the other shapes, its corners are derived from the clicks, so
+        the check cannot wait for :meth:`ArenaCalibration.homography`.
+        """
         if not self.is_complete or self._frame is None:
             return None
         h, w = self._frame.shape[:2]
+        if self._shape == "plus":
+            return ArenaCalibration.from_plus(
+                self._corners,
+                width_cm=self._arena_cm[0],
+                height_cm=self._arena_cm[1],
+                arm_width_cm=self._arm_cm,
+                frame_size=(w, h),
+            )
         if self._shape == "ellipse":
             return ArenaCalibration.from_ellipse(
                 *self._corners,
@@ -271,12 +302,12 @@ class ArenaCanvas(QWidget):
         points = [self._to_canvas(c) for c in self._corners]
 
         suspect = False
-        cal = self.calibration()
-        if cal is not None:
-            try:
+        try:
+            cal = self.calibration()
+            if cal is not None:
                 suspect = cal.residuals()["suspect"]
-            except DegenerateArenaError:
-                suspect = True
+        except ValueError:  # DegenerateArenaError included
+            cal, suspect = None, True
 
         colour = _SUSPECT_COLOUR if suspect else _ARENA_COLOUR
         painter.setPen(QPen(colour, 2))
@@ -292,6 +323,13 @@ class ArenaCanvas(QWidget):
             else:
                 for point in points[1:]:
                     painter.drawLine(points[0], point)
+        elif self._shape == "plus" and cal is not None:
+            try:
+                cross = [self._to_canvas(p) for p in cal.to_image(cal.plus_polygon_cm())]
+            except DegenerateArenaError:
+                cross = points
+            for i in range(len(cross)):
+                painter.drawLine(cross[i], cross[(i + 1) % len(cross)])
         else:
             for i in range(len(points) - 1):
                 painter.drawLine(points[i], points[i + 1])
@@ -320,12 +358,17 @@ class ArenaCanvas(QWidget):
             painter.drawLine(point.x() - 9, point.y(), point.x() + 9, point.y())
             painter.drawLine(point.x(), point.y() - 9, point.x(), point.y() + 9)
             painter.setPen(QColor(colors.TEXT_PRIMARY))
-            label = ("C", "1", "2")[i] if self._shape == "ellipse" else str(i + 1)
+            if self._shape == "ellipse":
+                label = ("C", "1", "2")[i]
+            elif self._shape == "plus":
+                label = ("T", "R", "B", "L")[i]
+            else:
+                label = str(i + 1)
             painter.drawText(point.x() + 10, point.y() - 8, label)
 
 
 class ArenaDialog(QDialog):
-    """Outline one video's arena floor: four corners, or a circle's rim."""
+    """Outline one video's arena floor: four corners, a circle's rim, or a plus maze."""
 
     def __init__(self, frame: np.ndarray, title: str = "", parent=None, **kwargs):
         super().__init__(parent)
@@ -362,6 +405,7 @@ class ArenaDialog(QDialog):
         self.shape_combo = QComboBox()
         self.shape_combo.addItem("Rectangle", "rectangle")
         self.shape_combo.addItem("Circle", "ellipse")
+        self.shape_combo.addItem("Plus maze (EPM)", "plus")
         self.shape_combo.currentIndexChanged.connect(self._shape_changed)
         form.addRow("Shape", self.shape_combo)
         # `arena_spin` is the width, or the diameter of a circle.
@@ -377,6 +421,12 @@ class ArenaDialog(QDialog):
         self.height_spin.setSuffix(" cm")
         self.height_spin.valueChanged.connect(self._size_changed)
         form.addRow("Height", self.height_spin)
+        self.arm_spin = QDoubleSpinBox()
+        self.arm_spin.setRange(0.5, 100.0)
+        self.arm_spin.setValue(DEFAULT_ARM_WIDTH_CM)
+        self.arm_spin.setSuffix(" cm")
+        self.arm_spin.valueChanged.connect(self._size_changed)
+        form.addRow("Arm width", self.arm_spin)
         self.zone_spin = QDoubleSpinBox()
         self.zone_spin.setRange(0.5, 500.0)
         self.zone_spin.setValue(10.0)
@@ -409,9 +459,26 @@ class ArenaDialog(QDialog):
         shape = self.shape_combo.currentData()
         self.canvas.set_shape(shape)
         round_arena = shape == "ellipse"
+        plus = shape == "plus"
         self._form.labelForField(self.arena_spin).setText("Diameter" if round_arena else "Width")
         self._form.setRowVisible(self.height_spin, not round_arena)
-        if round_arena:
+        self._form.setRowVisible(self.arm_spin, plus)
+        # A plus maze's centre zone is where its arms cross, not a size to pick.
+        self._form.setRowVisible(self.zone_spin, not plus)
+        if plus and self.arena_spin.value() == 30.0 and self.height_spin.value() == 30.0:
+            # Still on the open-field default, which no EPM is: start at a
+            # standard mouse maze rather than a 30 cm cross of 5 cm arms.
+            self.arena_spin.setValue(_PLUS_DEFAULT_CM)
+            self.height_spin.setValue(_PLUS_DEFAULT_CM)
+        if plus:
+            self.instructions.setText(
+                "Click the far end of each arm, in the middle of its edge: "
+                + ", ".join(ARM_END_NAMES)
+                + ".\nWidth and height are tip to tip across the left-right and top-bottom "
+                "arms. Ends outside the picture can be clicked in the margin. "
+                "Drag any point to adjust."
+            )
+        elif round_arena:
             self.instructions.setText(
                 "Click the centre of the floor, then a point on its edge, then a second "
                 "edge point about a quarter-turn round. Click where the bedding meets "
@@ -432,6 +499,7 @@ class ArenaDialog(QDialog):
             self.arena_spin.value() if self.canvas.shape == "ellipse" else self.height_spin.value()
         )
         self.canvas.set_arena_size(self.arena_spin.value(), height)
+        self.canvas.set_arm_width(self.arm_spin.value())
         self.canvas.set_zone_size(self.zone_spin.value())
         self._refresh()
 
@@ -440,9 +508,13 @@ class ArenaDialog(QDialog):
         self.shape_combo.setCurrentIndex(self.shape_combo.findData(arena.shape))
         self.arena_spin.setValue(arena.width_cm)
         self.height_spin.setValue(arena.height_cm)
-        self.canvas.set_corners(
-            arena.ellipse_handles() if arena.shape == "ellipse" else arena.corners
-        )
+        if arena.shape == "plus":
+            self.arm_spin.setValue(arena.arm_width_cm)
+            self.canvas.set_corners(arena.plus_handles())
+        elif arena.shape == "ellipse":
+            self.canvas.set_corners(arena.ellipse_handles())
+        else:
+            self.canvas.set_corners(arena.corners)
 
     def _scrub_to(self) -> None:
         frame = self._on_scrub(self.scrub.value())
@@ -451,7 +523,13 @@ class ArenaDialog(QDialog):
 
     def _refresh(self) -> None:
         ok_button = self.box.button(QDialogButtonBox.StandardButton.Ok)
-        cal = self.canvas.calibration()
+        try:
+            cal = self.canvas.calibration()
+        except ValueError as exc:  # DegenerateArenaError included
+            self.status.setText(str(exc))
+            self.status.setStyleSheet(f"color: {colors.ERROR};")
+            ok_button.setEnabled(False)
+            return
         if cal is None:
             names = _POINT_NAMES[self.canvas.shape]
             placed = len(self.canvas.corners)
@@ -469,7 +547,7 @@ class ArenaDialog(QDialog):
             return
 
         lines = [f"Scale at centre: {scale:.2f} px/cm"]
-        if cal.shape == "rectangle":  # an ellipse's fit is affine: both are 1.00x
+        if cal.shape != "ellipse":  # an ellipse's fit is affine: both are 1.00x
             lines += [
                 f"Opposite edges: {residuals['edge_ratio']:.2f}x",
                 f"Scale across floor: {residuals['scale_ratio']:.2f}x",

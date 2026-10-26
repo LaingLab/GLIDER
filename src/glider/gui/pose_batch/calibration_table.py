@@ -124,13 +124,17 @@ class CalibrationTable(QTableWidget):
         except DegenerateArenaError as exc:
             return "⚠ unusable", str(exc)
 
-        size = (
-            f"⌀{arena.width_cm:g} cm"
-            if arena.shape == "ellipse"
-            else f"{arena.width_cm:g}x{arena.height_cm:g} cm"
-        )
+        if arena.shape == "ellipse":
+            size = f"⌀{arena.width_cm:g} cm floor"
+        elif arena.shape == "plus":
+            size = (
+                f"{arena.width_cm:g}x{arena.height_cm:g} cm plus maze, "
+                f"{arena.arm_width_cm:g} cm arms"
+            )
+        else:
+            size = f"{arena.width_cm:g}x{arena.height_cm:g} cm floor"
         lines = [
-            f"{size} floor",
+            size,
             f"opposite edges {residuals['edge_ratio']:.2f}x",
             f"scale across floor {residuals['scale_ratio']:.2f}x",
         ]

@@ -71,6 +71,17 @@ class TestArenaColumn:
         table.set_videos([video])
         assert table.item(0, ARENA_COLUMN) is not None
 
+    def test_a_plus_maze_is_described_with_its_arms(self, table, video):
+        cal_set = CalibrationSet()
+        ends = [(0.5, 0.1), (0.8, 0.5), (0.5, 0.9), (0.2, 0.5)]
+        cal_set.set_arena(
+            video, ArenaCalibration.from_plus(ends, width_cm=75.0, frame_size=(640, 480))
+        )
+        table.set_calibration_set(cal_set)
+        table.set_videos([video])
+        tip = table.item(0, ARENA_COLUMN).toolTip()
+        assert "plus maze" in tip and "5 cm arms" in tip
+
 
 class TestScaleSource:
     def test_an_arena_supplies_the_scale_column(self, table, video):
