@@ -39,6 +39,8 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from glider.vision.pose.batch import VIDEO_EXTS
+
 MOTION_COLUMNS: list[str] = [
     "motion_total",
     "motion_anterior",
@@ -56,13 +58,44 @@ CACHE_DIR = Path("motion_cache")
 _EPS = 1e-6
 
 
+def _video_beside(folder: Path, stem: str) -> Path | None:
+    for ext in sorted(VIDEO_EXTS):
+        for candidate in (folder / f"{stem}{ext}", folder / f"{stem}{ext.upper()}"):
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 def video_path_for(pose_csv: Path) -> Path:
-    """Resolve the source video for a pose CSV by project convention:
-    ``.../poses/<stem>.csv`` -> ``.../videos/<stem>.mp4`` (a sibling
-    ``videos/`` dir). Works for both the local repo layout and the Z: share.
+    """Resolve the source video for a pose CSV.
+
+    Tried in order, first existing file wins:
+
+    * Batch Pose Tracking output beside its video:
+      ``<video stem>DLC_<model>[_raw].csv`` -> ``<video stem>.<ext>``
+    * multi-animal split: ``<video stem>_animals/animal<N>.csv`` ->
+      ``<video stem>.<ext>`` beside the ``_animals`` folder
+    * same stem beside the CSV: ``<stem>.csv`` -> ``<stem>.<ext>``
+    * sibling dirs: ``.../poses/<stem>.csv`` -> ``.../videos/<stem>.mp4``
+
+    When none exists the last path is returned so the caller's
+    missing-video error names something.
     """
     pose_csv = Path(pose_csv)
-    return pose_csv.parent.parent / "videos" / f"{pose_csv.stem}.mp4"
+    stem, folder = pose_csv.stem, pose_csv.parent
+    marker = stem.rfind("DLC_")
+    if marker > 0:
+        found = _video_beside(folder, stem[:marker])
+        if found:
+            return found
+    if folder.name.endswith("_animals"):
+        found = _video_beside(folder.parent, folder.name[: -len("_animals")])
+        if found:
+            return found
+    found = _video_beside(folder, stem) or _video_beside(folder.parent / "videos", stem)
+    if found:
+        return found
+    return folder.parent / "videos" / f"{stem}.mp4"
 
 
 def egocentric_patch(
