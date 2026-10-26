@@ -98,3 +98,33 @@ def test_load_or_compute_motion_uses_cache(tmp_path, monkeypatch):
     assert calls["n"] == 1  # computed once, then cached
     assert list(a.columns) == motion.MOTION_COLUMNS
     np.testing.assert_allclose(a.to_numpy(), b.to_numpy())
+
+
+@pytest.mark.parametrize(
+    ("csv_rel", "video_rel"),
+    [
+        # Batch Pose Tracking writes <video>DLC_<model>.csv beside the video
+        ("s/m_11DLC_exp-16.csv", "s/m_11.mp4"),
+        ("s/m_11DLC_exp-16_raw.csv", "s/m_11.mp4"),
+        ("s/m_animals/animal0.csv", "s/m.avi"),
+        ("s/m.csv", "s/m.mp4"),
+        ("poses/m.csv", "videos/m.mp4"),
+    ],
+)
+def test_video_path_for_finds_the_video(tmp_path, csv_rel, video_rel):
+    from glider.analysis.behavior.motion import video_path_for
+
+    csv, video = tmp_path / csv_rel, tmp_path / video_rel
+    for p in (csv, video):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"")
+    assert video_path_for(csv) == video
+
+
+def test_video_path_for_ignores_non_video_siblings(tmp_path):
+    from glider.analysis.behavior.motion import video_path_for
+
+    csv = tmp_path / "m_11DLC_exp-16.csv"
+    csv.write_bytes(b"")
+    (tmp_path / "m_11.json").write_bytes(b"")
+    assert not video_path_for(csv).exists()
