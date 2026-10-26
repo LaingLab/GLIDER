@@ -125,7 +125,10 @@ dev = [
 ]
 pc = [
     "PyQt6>=6.4.0",
-    "GLIDER[audio]",
+    # Tracking is the reason most labs install GLIDER, so a desktop install
+    # comes with YOLO rather than asking for it on first use (#220). The Pi
+    # installs [rpi], not [pc], and stays without torch.
+    "GLIDER[audio,vision]",
 ]
 
 [project.scripts]

@@ -100,6 +100,14 @@ _GRAPH_MIN_SIZE = (400, 300)
 # through the walkthrough silences the setup form nobody has seen yet.
 LAB_SETUP_COMPLETE_KEY = "first_run/setup_complete"
 
+#: Set once the GPU offer has been made, whatever the answer (#221). The device
+#: check offers the same install for anyone who said no.
+GPU_SETUP_OFFERED_KEY = "first_run/gpu_offered"
+
+#: Where "Create Your Own Pose Model" goes: labelling and training happen there,
+#: and the YOLO pose model it exports loads in GLIDER as it is.
+POSE_MODEL_PLATFORM_URL = "https://platform.ultralytics.com"
+
 # --- Stack pages -------------------------------------------------------------
 #
 # The window's QStackedWidget, by index. The Builder and operator indices are 0
@@ -1051,6 +1059,15 @@ class MainWindow(QMainWindow):
                 install_extra="vision" if installable else "",
             ),
             ToolCard(
+                key="pose_model",
+                title="Create Your Own Pose Model",
+                description=(
+                    "Label frames and train a pose model on the Ultralytics "
+                    "Platform, then load it here. Opens in your browser."
+                ),
+                glyph="pose",
+            ),
+            ToolCard(
                 key="behavior",
                 title="Behavior Analysis",
                 description=(
@@ -1086,6 +1103,15 @@ class MainWindow(QMainWindow):
                 description=(
                     "What inference will actually run on, and why. Worth opening "
                     "precisely when something is missing."
+                ),
+                glyph="devices",
+            ),
+            ToolCard(
+                key="gpu_install",
+                title="Install GPU Support",
+                description=(
+                    "Swap a CPU-only PyTorch for the CUDA build your NVIDIA card can "
+                    "run, so tracking and pose models use the GPU."
                 ),
                 glyph="devices",
             ),
@@ -1163,9 +1189,11 @@ class MainWindow(QMainWindow):
         opener = {
             "behavior": self._open_behavior_analysis,
             "pose": self._open_pose_batch,
+            "pose_model": self._open_pose_model_platform,
             "review": self._open_session_review,
             "multicam": self._open_multi_camera,
             "devices": self._on_gpu_check,
+            "gpu_install": self._on_install_gpu_support,
         }.get(key)
         if opener is None:  # pragma: no cover - a card with no handler
             logger.warning("No handler for tool card %r", key)
@@ -1300,6 +1328,12 @@ class MainWindow(QMainWindow):
             return
         if self._load_experiment_path(path):
             self._leave_landing()
+
+    def _open_pose_model_platform(self) -> None:
+        """Send the user to Ultralytics Platform to train a pose model (#222)."""
+        from PyQt6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl(POSE_MODEL_PLATFORM_URL))
 
     def _on_landing_guide(self) -> None:
         from PyQt6.QtGui import QDesktopServices
@@ -2291,6 +2325,11 @@ class MainWindow(QMainWindow):
         gpu_check_action = QAction("&GPU / Device Check…", self)
         gpu_check_action.triggered.connect(self._on_gpu_check)
         tools_menu.addAction(gpu_check_action)
+
+        gpu_install_action = QAction("Install GPU &Support…", self)
+        gpu_install_action.setStatusTip("Install the CUDA build of PyTorch for an NVIDIA GPU")
+        gpu_install_action.triggered.connect(self._on_install_gpu_support)
+        tools_menu.addAction(gpu_install_action)
 
         plugins_action = QAction("&Plugins…", self)
         plugins_action.setStatusTip("Browse the plugin catalogue and install from it")
@@ -4443,7 +4482,121 @@ class MainWindow(QMainWindow):
         box.setText("GLIDER GPU / device check")
         box.setInformativeText("\n".join(lines))
         box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        from glider.vision.gpu_setup import needs_cuda_torch
+
+        driver = needs_cuda_torch()
+        enable = None
+        if driver is not None:
+            enable = box.addButton("Enable GPU Support…", QMessageBox.ButtonRole.ActionRole)
         box.exec()
+        if enable is not None and box.clickedButton() is enable:
+            self._install_cuda_torch(driver)
+
+    def offer_gpu_setup_once(self, settings: QSettings | None = None) -> bool:
+        """On a machine with an NVIDIA GPU and a CPU-only torch, offer the CUDA build.
+
+        Asked once (#221): on Windows ``uv sync`` installs PyPI's CPU-only torch,
+        so a fresh install on a GPU machine tracks on the CPU without saying so.
+        Returns True if the offer was shown.
+
+        Waits, rather than stacking, while another modal (the welcome, lab
+        setup) or the walkthrough is up: this is queued at launch alongside both.
+        """
+        from glider.first_run import is_first_run
+        from glider.vision.gpu_setup import needs_cuda_torch
+
+        s = settings if settings is not None else self._settings
+        if s.value(GPU_SETUP_OFFERED_KEY, False, type=bool):
+            return False
+        if self._view_manager.is_runner_mode:
+            return False
+        if (
+            QApplication.activeModalWidget() is not None
+            or getattr(self, "_active_tour", None) is not None
+            or is_first_run(s)
+        ):
+            QTimer.singleShot(2000, lambda: self.offer_gpu_setup_once(settings))
+            return False
+        driver = needs_cuda_torch()
+        if driver is None:
+            return False
+
+        s.setValue(GPU_SETUP_OFFERED_KEY, True)
+        self._ask_install_gpu(
+            driver, later="You can do this later from Install GPU Support on the Analyze tab."
+        )
+        return True
+
+    def _on_install_gpu_support(self) -> None:
+        """Install GPU support on request: the Analyze card and the Tools menu.
+
+        The launch offer is asked once; this is the way back for anyone who said
+        no, or whose torch went back to the CPU build when the installer re-ran.
+        It always answers, saying why there is nothing to install when there is
+        not, so it is never a button that silently does nothing.
+        """
+        from glider.vision.gpu_setup import gpu_support
+
+        driver, reason = gpu_support()
+        if driver is None:
+            QMessageBox.information(self, "Install GPU Support", reason)
+            return
+        self._ask_install_gpu(driver)
+
+    def _ask_install_gpu(self, driver: tuple[int, int], later: str = "") -> None:
+        answer = QMessageBox.question(
+            self,
+            "Enable GPU support?",
+            "This computer has an NVIDIA GPU, but the PyTorch GLIDER installed "
+            "runs on the CPU only, so tracking and pose models will be slow.\n\n"
+            f"GLIDER can install the PyTorch build for your driver (CUDA "
+            f"{driver[0]}.{driver[1]}). It is a download of about 3 GB and needs "
+            "a restart afterwards." + (f"\n\n{later}" if later else ""),
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._install_cuda_torch(driver)
+
+    def _install_cuda_torch(self, driver: tuple[int, int]) -> None:
+        """Install the CUDA torch build in the background, then offer a restart."""
+        from PyQt6.QtWidgets import QProgressDialog
+
+        from glider.vision.gpu_setup import install_cuda_torch
+
+        progress = QProgressDialog("Installing GPU support…", "", 0, 0, self)
+        progress.setWindowTitle("Enable GPU Support")
+        # No Cancel: killing pip mid-install leaves a half-replaced torch.
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.setMinimumWidth(480)
+        progress.show()
+
+        async def _install() -> None:
+            result = await install_cuda_torch(
+                driver, on_output=lambda line: progress.setLabelText(line[-120:])
+            )
+            # Dialogs and the restart cannot run inside this task (see
+            # _on_install_extra), so they wait for the next turn of the loop.
+            QTimer.singleShot(0, lambda: self._after_cuda_torch(progress, result))
+
+        self._run_async(_install())
+
+    def _after_cuda_torch(self, progress, result) -> None:
+        progress.close()
+        if not result.ok:
+            box = QMessageBox(
+                QMessageBox.Icon.Warning, "GPU support not installed", result.message, parent=self
+            )
+            if result.output:
+                box.setDetailedText(result.output[-8000:])
+            box.exec()
+            return
+        answer = QMessageBox.question(
+            self,
+            "Restart GLIDER?",
+            f"{result.message} GLIDER needs a restart to use the GPU. Restart now?",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._restart()
 
     def _on_about(self) -> None:
         # Pull from the single source of truth so the About box never drifts

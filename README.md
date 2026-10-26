@@ -153,8 +153,12 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/LaingLab/glider/main/install.ps1 | iex
 ```
 
-Add extras with `| sh -s -- --extra vision --extra behavior`, or on Windows
-`& ([scriptblock]::Create((irm https://raw.githubusercontent.com/LaingLab/glider/main/install.ps1))) -Extra vision,behavior`.
+YOLO tracking (the `vision` extra) comes with every desktop install. Add other
+extras with `| sh -s -- --extra behavior`, or on Windows
+`& ([scriptblock]::Create((irm https://raw.githubusercontent.com/LaingLab/glider/main/install.ps1))) -Extra behavior`.
+GLIDER opens when the install finishes; set `GLIDER_NO_LAUNCH=1` to stop that.
+On a computer with an NVIDIA GPU, the first launch offers to install the CUDA
+build of PyTorch (or later from Install GPU Support on the Analyze tab).
 
 `glider doctor` checks an install at any time: Python, Qt, each extra, FFmpeg
 and the inference device, each with the fix for whatever is wrong.
@@ -190,11 +194,11 @@ uv pip install -e ".[rpi,i2c]"
 ## Optional extras
 
 Add any of these to the sync command with additional `--extra` flags,
-e.g. `uv sync --extra pc --extra vision`:
+e.g. `uv sync --extra pc --extra behavior`:
 
 | Extra       | What it adds                                                          |
 | ----------- | --------------------------------------------------------------------- |
-| `pc`        | PyQt6 + audio — the standard desktop install                          |
+| `pc`        | PyQt6 + audio + vision — the standard desktop install                 |
 | `rpi`       | Raspberry Pi GPIO (gpiozero, lgpio)                                   |
 | `vision`    | YOLO tracking (ultralytics)                                           |
 | `pose-onnx` | DeepLabCut and SLEAP pose models, run through onnxruntime             |

@@ -474,6 +474,15 @@ def main() -> int:
                     try:
                         from PyQt6.QtCore import QTimer
 
+                        # The one-time CUDA offer (#221); it waits out any
+                        # dialog the welcome left up.
+                        QTimer.singleShot(1500, window.offer_gpu_setup_once)
+                    except Exception:
+                        logger.debug("Could not schedule the GPU offer", exc_info=True)
+
+                    try:
+                        from PyQt6.QtCore import QTimer
+
                         # Delay so the update check doesn't race first-paint or
                         # compete with hardware enumeration on slow machines.
                         QTimer.singleShot(3000, lambda: window.check_for_updates(silent=True))
