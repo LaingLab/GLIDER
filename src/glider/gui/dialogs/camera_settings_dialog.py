@@ -512,6 +512,17 @@ class CameraSettingsDialog(QDialog):
         )
         detection_layout.addRow("Skip Frames:", self._frame_skip_spin)
 
+        # Single-animal mode (issue #218). A checkbox rather than a "max
+        # animals" count: live tracking has no notion of a fixed animal count,
+        # and the only behaviour asked for is "one, the most confident".
+        self._single_animal_cb = QCheckBox("Track a single animal (most confident only)")
+        self._single_animal_cb.setToolTip(
+            "Keep only the highest-confidence detection in each frame, so exactly one\n"
+            "animal is tracked, logged and drawn. Use when other animals, people or\n"
+            "reflections in view would otherwise be tracked too."
+        )
+        detection_layout.addRow(self._single_animal_cb)
+
         layout.addWidget(detection_group)
 
         # Overlay group
@@ -784,6 +795,7 @@ class CameraSettingsDialog(QDialog):
         self._confidence_spin.setValue(self._cv_settings.confidence_threshold)
         self._min_area_spin.setValue(self._cv_settings.min_detection_area)
         self._frame_skip_spin.setValue(self._cv_settings.process_every_n_frames)
+        self._single_animal_cb.setChecked(self._cv_settings.single_animal)
         self._draw_overlays_cb.setChecked(self._cv_settings.draw_overlays)
         self._show_keypoints_cb.setChecked(self._cv_settings.show_keypoints)
 
@@ -802,6 +814,7 @@ class CameraSettingsDialog(QDialog):
         self._confidence_spin.setEnabled(enabled)
         self._min_area_spin.setEnabled(enabled)
         self._frame_skip_spin.setEnabled(enabled)
+        self._single_animal_cb.setEnabled(enabled)
         self._draw_overlays_cb.setEnabled(enabled)
         self._show_keypoints_cb.setEnabled(enabled)
         self._draw_tracks_cb.setEnabled(enabled)
@@ -858,6 +871,11 @@ class CameraSettingsDialog(QDialog):
         # only YOLO: a pose model's bodypart names label the keypoints CSV too.
         self._keypoint_names_edit.setVisible(is_model_backed)
         self._keypoint_names_label.setVisible(is_model_backed)
+        # Motion Only produces no detections, and the pose backend already
+        # emits at most one animal per frame, so the option would do nothing.
+        self._single_animal_cb.setVisible(
+            backend not in (DetectionBackend.MOTION_ONLY, DetectionBackend.POSE_MODEL)
+        )
 
     def _on_miniscope_mode_toggle(self, enabled: bool):
         """Handle miniscope mode toggle - auto-set recommended values."""
@@ -1022,6 +1040,7 @@ class CameraSettingsDialog(QDialog):
         self._cv_settings.confidence_threshold = self._confidence_spin.value()
         self._cv_settings.min_detection_area = self._min_area_spin.value()
         self._cv_settings.process_every_n_frames = self._frame_skip_spin.value()
+        self._cv_settings.single_animal = self._single_animal_cb.isChecked()
         self._cv_settings.draw_overlays = self._draw_overlays_cb.isChecked()
         self._cv_settings.show_keypoints = self._show_keypoints_cb.isChecked()
 

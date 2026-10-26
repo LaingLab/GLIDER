@@ -288,6 +288,11 @@ class CVSettings:
     motion_area_threshold: float = 0.01  # 1% of frame for motion trigger
     tracking_enabled: bool = True
     max_disappeared: int = 50  # Frames before dropping track
+    # Keep only the most confident detection per frame, so exactly one animal
+    # is tracked, logged and drawn. Off by default: multi-animal rigs (pup
+    # retrieval, dyads) rely on every detection being tracked, and files saved
+    # before this setting existed must keep behaving as they did.
+    single_animal: bool = False
     draw_overlays: bool = True
     overlay_color: tuple[int, int, int] = (0, 255, 0)  # BGR green
     overlay_thickness: int = 2
@@ -335,6 +340,7 @@ class CVSettings:
             "motion_area_threshold": self.motion_area_threshold,
             "tracking_enabled": self.tracking_enabled,
             "max_disappeared": self.max_disappeared,
+            "single_animal": self.single_animal,
             "draw_overlays": self.draw_overlays,
             "overlay_color": self.overlay_color,
             "overlay_thickness": self.overlay_thickness,
@@ -372,6 +378,7 @@ class CVSettings:
             motion_area_threshold=data.get("motion_area_threshold", 0.01),
             tracking_enabled=data.get("tracking_enabled", True),
             max_disappeared=data.get("max_disappeared", 50),
+            single_animal=bool(data.get("single_animal", False)),
             draw_overlays=data.get("draw_overlays", True),
             overlay_color=tuple(data.get("overlay_color", [0, 255, 0])),
             overlay_thickness=data.get("overlay_thickness", 2),
@@ -389,6 +396,30 @@ class CVSettings:
             vision_cone_color=tuple(data.get("vision_cone_color", [0, 255, 255])),
             vision_cone_alpha=data.get("vision_cone_alpha", 0.3),
         )
+
+
+# The track ID the single animal is reported under when ByteTrack is running.
+# ByteTrack mints a new ID every time it loses and re-acquires a target, and in
+# single-animal mode the most confident box can hop between its tracks from one
+# frame to the next; either would split one animal's trajectory across several
+# IDs in the log. 1 is ByteTrack's own first ID, so a clean single-animal run
+# reads the same with or without the pin.
+SINGLE_ANIMAL_TRACK_ID = 1
+
+
+def keep_most_confident(detections: list[Detection]) -> list[Detection]:
+    """Reduce a frame's detections to the single most confident one.
+
+    Used when ``CVSettings.single_animal`` is on. A filter on detections
+    rather than ``max_det=1`` on the model: ByteTrack needs every candidate to
+    keep its tracks alive, and background subtraction has no such knob. Ties
+    keep the earliest detection, so the choice is deterministic for a given
+    model output. Detections carry their keypoints, so pose results are
+    filtered by the same rule.
+    """
+    if len(detections) <= 1:
+        return list(detections)
+    return [max(detections, key=lambda d: d.confidence)]
 
 
 class ObjectTracker:
@@ -901,6 +932,8 @@ class CVProcessor:
 
             # Run detection
             detections = self._detect(frame, fg_mask)
+            if self._settings.single_animal:
+                detections = self._keep_single_animal(detections)
 
             # Run tracking
             tracked = []
@@ -1006,6 +1039,22 @@ class CVProcessor:
                     det._keypoints = keypoints_to_array(r.keypoints[i])
                 detections.append(det)
         return detections
+
+    def _keep_single_animal(self, detections: list[Detection]) -> list[Detection]:
+        """Apply single-animal mode to one frame's detections.
+
+        Filtering happens before tracking, so the centroid tracker only ever
+        sees one detection and keeps matching it to the same track. ByteTrack
+        IDs are pinned to :data:`SINGLE_ANIMAL_TRACK_ID` for the reason given
+        there. A box ByteTrack has not assigned an ID to is left without one,
+        so ``_bytetrack_to_tracked`` drops it exactly as it would have before.
+        """
+        kept = keep_most_confident(detections)
+        if self._active_backend == DetectionBackend.YOLO_BYTETRACK:
+            for det in kept:
+                if det.track_id is not None:
+                    det.track_id = SINGLE_ANIMAL_TRACK_ID
+        return kept
 
     def _bytetrack_to_tracked(self, detections: list[Detection]) -> list[TrackedObject]:
         """
