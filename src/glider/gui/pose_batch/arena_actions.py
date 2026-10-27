@@ -76,6 +76,7 @@ def copy_arena_to(
                 height_cm=arena.height_cm,
                 frame_size=resolution,
                 shape=arena.shape,
+                arm_width_cm=arena.arm_width_cm,
             ),
             confirmed=False,
         )

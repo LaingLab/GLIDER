@@ -174,3 +174,83 @@ class TestRoundArena:
         )
 
         assert dialog.calibration().height_cm == 25.0  # the old "Side" box lost this
+
+
+ARM_ENDS = [(0.5, 0.1), (0.8, 0.5), (0.5, 0.9), (0.2, 0.5)]
+
+
+class TestPlusMaze:
+    """Issue #217: an elevated plus maze is outlined by the ends of its four arms."""
+
+    def _plus_dialog(self, qtbot, frame):
+        dialog = ArenaDialog(frame)
+        qtbot.addWidget(dialog)
+        dialog.shape_combo.setCurrentIndex(dialog.shape_combo.findData("plus"))
+        return dialog
+
+    def test_four_arm_ends_make_a_plus_maze(self, qtbot, frame):
+        from PyQt6.QtWidgets import QDialogButtonBox
+
+        dialog = self._plus_dialog(qtbot, frame)
+        dialog.arm_spin.setValue(6.0)
+        dialog.canvas.set_corners(ARM_ENDS)
+
+        arena = dialog.calibration()
+        assert arena.shape == "plus"
+        assert arena.arm_width_cm == 6.0
+        assert dialog.box.button(QDialogButtonBox.StandardButton.Ok).isEnabled()
+        assert np.array(arena.plus_handles()) == pytest.approx(np.array(ARM_ENDS))
+
+    def test_switching_to_plus_starts_at_a_maze_size(self, qtbot, frame):
+        dialog = self._plus_dialog(qtbot, frame)
+        assert dialog.arena_spin.value() == 75.0
+        assert dialog.arm_spin.isVisibleTo(dialog)
+        assert not dialog.zone_spin.isVisibleTo(dialog)  # the centre is the crossing
+
+    def test_arm_width_is_hidden_for_other_shapes(self, qtbot, frame):
+        dialog = ArenaDialog(frame)
+        qtbot.addWidget(dialog)
+        assert not dialog.arm_spin.isVisibleTo(dialog)
+
+    def test_arms_wider_than_the_maze_disable_ok(self, qtbot, frame):
+        from PyQt6.QtWidgets import QDialogButtonBox
+
+        dialog = self._plus_dialog(qtbot, frame)
+        dialog.arena_spin.setValue(20.0)
+        dialog.height_spin.setValue(20.0)
+        dialog.arm_spin.setValue(25.0)
+        dialog.canvas.set_corners(ARM_ENDS)
+
+        assert not dialog.box.button(QDialogButtonBox.StandardButton.Ok).isEnabled()
+        assert "narrower" in dialog.status.text()
+
+    def test_a_crossed_click_order_disables_ok_without_crashing_the_paint(self, qtbot, frame):
+        from PyQt6.QtWidgets import QDialogButtonBox
+
+        dialog = self._plus_dialog(qtbot, frame)
+        dialog.canvas.set_corners([ARM_ENDS[0], ARM_ENDS[2], ARM_ENDS[1], ARM_ENDS[3]])
+        dialog.canvas.repaint()
+
+        assert not dialog.box.button(QDialogButtonBox.StandardButton.Ok).isEnabled()
+
+    def test_reopening_restores_arm_ends_and_width(self, qtbot, frame):
+        from glider.vision.arena import ArenaCalibration
+
+        saved = ArenaCalibration.from_plus(
+            ARM_ENDS, width_cm=60.0, arm_width_cm=8.0, frame_size=(640, 480)
+        )
+        dialog = ArenaDialog(frame)
+        qtbot.addWidget(dialog)
+        dialog.set_arena(saved)
+
+        again = dialog.calibration()
+        assert again.shape == "plus"
+        assert (again.width_cm, again.arm_width_cm) == (60.0, 8.0)
+        assert np.array(dialog.canvas.corners) == pytest.approx(np.array(ARM_ENDS))
+
+    def test_the_canvas_paints_a_finished_maze(self, canvas):
+        canvas.set_shape("plus")
+        canvas.set_arena_size(75.0, 75.0)
+        canvas.set_corners(ARM_ENDS)
+        canvas.repaint()  # must not raise
+        assert canvas.calibration().shape == "plus"
