@@ -244,6 +244,8 @@ def classify_pose_data(
     freeze_min_frames: int = 30,
     dart_min_frames: int = 3,
     frame_range: tuple[int, int] | None = None,
+    video: Path | str | None = None,
+    pose_csv: Path | str | None = None,
 ) -> EthogramRows:
     """Score every frame of *pose* with *model*, as the streaming path would.
 
@@ -271,6 +273,14 @@ def classify_pose_data(
     non-social model, so every single-animal caller is untouched.
     :func:`classify_pose_tracks` supplies it; it is the only caller that
     holds every animal's track.
+
+    Spectral (``--freq-features``), motion (``--motion-features``) and
+    trajectory (``--traj-features``) columns are computed here the way
+    training computed them. The streaming path cannot do motion or
+    trajectory at all, so for those models this is the only way to apply
+    them. Motion needs ``video``, the recording ``pose`` was tracked from;
+    ``pose_csv``, when given, lets it reuse the per-session cache training
+    wrote instead of decoding the video again.
     """
     from glider.analysis.behavior.classify.features_stream import derive_stream_columns
     from glider.analysis.behavior.classify.smoothing import (
@@ -278,24 +288,33 @@ def classify_pose_data(
         centered_majority_vote,
     )
     from glider.analysis.behavior.features import compute_features
-    from glider.analysis.behavior.windowing import apply_rolling
+    from glider.analysis.behavior.trajectory import apply_trajectory_rolling
+    from glider.analysis.behavior.windowing import apply_rolling, apply_spectral_rolling
 
     predict_every = max(1, int(predict_every))
     lag = _stream_lag()
     warn_on_fps_mismatch(getattr(pose, "fps", None), getattr(model, "fps", None))
 
     per_frame_names, spectral = derive_stream_columns(model)
-    if spectral:
-        # __domfreq columns come from a rolling FFT the offline windowing
-        # helper does not produce. Rather than score a model on silently
-        # missing columns, hand it back to the caller to run the streaming
-        # path, which does compute them.
+    uses_motion = any(c.startswith("motion_") for c in per_frame_names)
+    uses_traj = any(c.startswith("traj_") for c in model.feature_names)
+    if uses_motion and video is None:
+        # motion_* is frame differencing on the source video. Scoring without
+        # it would blank every row, so decline and let the caller say why.
         raise NotImplementedError(
-            "this model uses rolling spectral features (--freq-features), which "
-            "the batch path does not compute; use the streaming pipeline"
+            "this model uses motion features (--motion-features), which need the "
+            "source video, and none was given"
         )
 
     features = compute_features(pose, model.spec, others=others)
+    if uses_motion:
+        # Per-frame, joined before the rolling step -- the same place
+        # training's _append_motion puts it -- so the motion columns get the
+        # same windowing and spectral columns as every other feature.
+        features = pd.concat(
+            [features, _motion_features(pose, model.spec, video, pose_csv, features.index)],
+            axis=1,
+        )
     # Column order is fixed by the model, not by whatever compute_features
     # happened to emit, so a reordering upstream cannot silently shuffle
     # values into the wrong feature.
@@ -309,6 +328,15 @@ def classify_pose_data(
     # min_periods=1 matches the live SlidingFeatureBuffer, which emits from
     # its very first row rather than waiting for a full window.
     rolled = apply_rolling(features, window=model.window, stats=model.stats, min_periods=1)
+    if spectral:
+        # Same helper training used. It needs a full window, so the first
+        # window-1 rows score blank rather than on a partial FFT.
+        rolled = pd.concat([rolled, apply_spectral_rolling(features, window=model.window)], axis=1)
+    if uses_traj:
+        ba = model.spec.with_resolved_body_axis(pose.n_keypoints).body_axis
+        traj = apply_trajectory_rolling(pose.xy, body_axis=ba, window=model.window).iloc[lag:]
+        traj.index = rolled.index
+        rolled = pd.concat([rolled, traj], axis=1)
     windowed = rolled.reindex(columns=model.feature_names)
 
     # Rows are tagged with the middle frame they describe, so row i of `windowed` is
@@ -390,6 +418,21 @@ def classify_pose_data(
         speed_px=speed_px_out,
         n_source_frames=n_frames,
     )
+
+
+def _motion_features(pose, spec, video, pose_csv, index) -> pd.DataFrame:
+    """Per-frame egocentric motion columns for ``pose``, aligned to ``index``."""
+    from pathlib import Path
+
+    from glider.analysis.behavior.motion import compute_motion_for_video, load_or_compute_motion
+
+    ba = spec.with_resolved_body_axis(pose.n_keypoints).body_axis
+    if pose_csv is not None:
+        motion = load_or_compute_motion(Path(pose_csv), Path(video), pose.xy, ba)
+    else:
+        motion = compute_motion_for_video(Path(video), pose.xy, ba)
+    motion.index = index
+    return motion
 
 
 def classify_pose_tracks(tracks: PoseTracks, model, **kw) -> dict[int, EthogramRows]:
@@ -545,7 +588,8 @@ def batch_apply(config, ethogram_csv, model, frame_range=None, pose=None) -> boo
     video and would otherwise write keypoints out only to read them back.
 
     Returns False when this run needs the streaming pipeline after all — an
-    annotated video, a CNN sequence model, or spectral features. Never
+    annotated video, a CNN sequence model, or a motion-feature model whose
+    source video cannot be found. Never
     silently degrades: the caller falls back to the streaming path, which
     produces the same artifacts more slowly.
 
@@ -626,6 +670,8 @@ def batch_apply(config, ethogram_csv, model, frame_range=None, pose=None) -> boo
             freeze_min_frames=config.freeze_min_frames,
             dart_min_frames=config.dart_min_frames,
             frame_range=frame_range,
+            video=_source_video(config),
+            pose_csv=config.pose_csv_in,
         )
     except NotImplementedError as e:
         logger.info("batch apply not usable (%s); falling back to the streaming path", e)
@@ -639,6 +685,27 @@ def batch_apply(config, ethogram_csv, model, frame_range=None, pose=None) -> boo
         cm_s_per_px_frame=config.cm_s_per_px_frame,
     )
     return True
+
+
+def _source_video(config) -> Path | None:
+    """The recording a batch run's poses came from, or None if there is none.
+
+    ``config.source`` is the video for an offline apply, but it can also be a
+    camera index, so it only counts when it is a file. Failing that, the video
+    beside the pose CSV -- the lookup training used to find it.
+    """
+    from pathlib import Path
+
+    source = getattr(config, "source", None)
+    if source is not None and Path(str(source)).is_file():
+        return Path(str(source))
+    if config.pose_csv_in is not None:
+        from glider.analysis.behavior.motion import video_path_for
+
+        found = video_path_for(Path(config.pose_csv_in))
+        if found.is_file():
+            return found
+    return None
 
 
 def _predict(model, frame: pd.DataFrame, confidence_threshold, class_thresholds):

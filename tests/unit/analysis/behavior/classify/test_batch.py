@@ -207,13 +207,107 @@ class TestWhenBatchDeclines:
 
         assert batch_apply(self._Config(), tmp_path / "e.csv", Sequenceish()) is False
 
-    def test_spectral_features_are_refused_not_silently_dropped(self):
-        """__domfreq columns come from a rolling FFT this path does not do."""
+    def test_a_motion_model_without_its_video_is_declined(self):
+        """motion_* is frame differencing; with no video every row would blank."""
         pose = _pose()
         model = _model(pose)
-        model.feature_names = [*model.feature_names, "speed_nose__domfreq"]
-        with pytest.raises(NotImplementedError, match="spectral"):
+        model.feature_names = [*model.feature_names, "motion_total__mean"]
+        with pytest.raises(NotImplementedError, match="motion"):
             classify_pose_data(pose, model, predict_every=1)
+
+
+def _training_rows(pose, *, spectral=False, traj=False, motion=None):
+    """Windowed features exactly as training's _assemble_sessions builds them."""
+    from glider.analysis.behavior.trajectory import apply_trajectory_rolling
+    from glider.analysis.behavior.windowing import apply_rolling, apply_spectral_rolling
+
+    spec = FeatureSpec()
+    feats = compute_features(pose, spec)
+    if motion is not None:
+        motion = motion.copy()
+        motion.index = feats.index
+        feats = pd.concat([feats, motion], axis=1)
+    rolled = apply_rolling(feats, window=WINDOW, stats=STATS)
+    if spectral:
+        rolled = pd.concat([rolled, apply_spectral_rolling(feats, window=WINDOW)], axis=1)
+    if traj:
+        ba = spec.with_resolved_body_axis(pose.n_keypoints).body_axis
+        t = apply_trajectory_rolling(pose.xy, body_axis=ba, window=WINDOW)
+        t.index = rolled.index
+        rolled = pd.concat([rolled, t], axis=1)
+    return rolled
+
+
+def _model_on(rows):
+    from sklearn.tree import DecisionTreeClassifier
+
+    fit = rows.dropna()
+    y = np.random.default_rng(0).choice(["groom", "locomote", "rear"], size=len(fit))
+    clf = DecisionTreeClassifier(random_state=0, max_depth=8).fit(fit, y)
+    return BehaviorModel(
+        classifier=clf,
+        feature_names=list(rows.columns),
+        spec=FeatureSpec(),
+        window=WINDOW,
+        stats=STATS,
+        fps=30.0,
+        classes=sorted(set(y)),
+    )
+
+
+def _assert_scores_like_training(got, model, rows):
+    """Every frame with a full window scores what the training row predicts."""
+    want = dict(zip(rows.index, model.classifier.predict(rows.fillna(0)), strict=True))
+    full = rows.notna().all(axis=1)
+    checked = 0
+    for frame, label in zip(got.frames, got.labels, strict=True):
+        if frame >= 2 * WINDOW and full.iloc[frame]:
+            assert label == want[frame], frame
+            checked += 1
+    assert checked > 50
+
+
+class TestFeaturesTheStreamCannotCompute:
+    """Spectral, trajectory and motion models apply offline, matching training.
+
+    The streaming pipeline refuses motion and trajectory models outright, so
+    for those this path is the only way to apply them at all.
+    """
+
+    def test_a_spectral_model_scores_as_training_saw_it(self):
+        pose = _pose(n=200)
+        rows = _training_rows(pose, spectral=True)
+        assert any(c.endswith("__domfreq") for c in rows.columns)
+        model = _model_on(rows)
+        _assert_scores_like_training(classify_pose_data(pose, model, predict_every=1), model, rows)
+
+    def test_a_trajectory_model_scores_as_training_saw_it(self):
+        pose = _pose(n=200)
+        rows = _training_rows(pose, traj=True)
+        model = _model_on(rows)
+        _assert_scores_like_training(classify_pose_data(pose, model, predict_every=1), model, rows)
+
+    def test_a_motion_model_scores_from_its_video(self, tmp_path):
+        cv2 = pytest.importorskip("cv2")
+        from glider.analysis.behavior.motion import compute_motion_for_video
+
+        pose = _pose(n=200)
+        video = tmp_path / "session.avi"
+        writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 30, (400, 300))
+        rng = np.random.default_rng(3)
+        for i in range(pose.n_frames):
+            img = rng.integers(0, 255, size=(300, 400, 3), dtype=np.uint8)
+            c = pose.xy[i, KP.index("body_center")].astype(int)
+            cv2.circle(img, (int(c[0]), int(c[1])), 15, (0, 0, 0), -1)
+            writer.write(img)
+        writer.release()
+
+        ba = FeatureSpec().with_resolved_body_axis(pose.n_keypoints).body_axis
+        motion = compute_motion_for_video(video, pose.xy, ba)
+        rows = _training_rows(pose, spectral=True, traj=True, motion=motion)
+        model = _model_on(rows)
+        got = classify_pose_data(pose, model, predict_every=1, video=video)
+        _assert_scores_like_training(got, model, rows)
 
 
 class TestEthogramFile:
