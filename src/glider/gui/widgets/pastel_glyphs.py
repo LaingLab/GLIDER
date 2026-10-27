@@ -62,7 +62,7 @@ ICON_DIR = Path(__file__).resolve().parent.parent / "styles" / "icons" / "lucide
 
 #: Stroke colour per glyph key.
 #:
-#: The Analyze tab's five reuse the Experiment rail's hues rather than
+#: The Analyze tab's six reuse the Experiment rail's hues rather than
 #: multiplying them: the two pages are never on screen together, so a shared hue
 #: costs nothing, and ten distinct pastels would be a colour wheel rather than a
 #: palette.
@@ -79,6 +79,7 @@ GLYPH_COLOURS: dict[str, str] = {
     "review": colors.PASTEL_PEACH,
     "multicam": colors.PASTEL_SKY,
     "devices": colors.PASTEL_MINT,
+    "annotator": colors.PASTEL_PEACH,
 }
 
 #: Every glyph that can be drawn.

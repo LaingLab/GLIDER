@@ -1049,6 +1049,15 @@ class MainWindow(QMainWindow):
         behavior_reason = "" if has_behavior else _install_line("behavior", missing_behavior_deps())
 
         cards = [
+            # First: it is where a pose model starts, before Batch Pose runs one.
+            ToolCard(
+                key="annotator",
+                title="Animal Annotator",
+                description=(
+                    "Label keypoints on frames from your videos and export a YOLO pose dataset."
+                ),
+                glyph="annotator",
+            ),
             ToolCard(
                 key="pose",
                 title="Batch Pose Tracking",
@@ -1195,6 +1204,7 @@ class MainWindow(QMainWindow):
             "pose": self._open_pose_batch,
             "pose_model": self._open_pose_model_platform,
             "review": self._open_session_review,
+            "annotator": self._open_animal_annotator,
             "multicam": self._open_multi_camera,
             "devices": self._on_gpu_check,
             "gpu_install": self._on_install_gpu_support,
@@ -2265,6 +2275,16 @@ class MainWindow(QMainWindow):
         # Tools menu
         tools_menu = self._menu("&Tools")
 
+        # First: making a pose model comes before running one. Labelling needs
+        # only OpenCV, so it is never greyed out; training (#224 phase 2) will
+        # carry the vision-extra probe.
+        animal_annotator_action = QAction("&Animal Annotator…", self)
+        animal_annotator_action.setStatusTip(
+            "Label keypoints on frames from your videos and export a YOLO pose dataset"
+        )
+        animal_annotator_action.triggered.connect(self._open_animal_annotator)
+        tools_menu.addAction(animal_annotator_action)
+
         behavior_action = QAction("&Behavior Analysis…", self)
         behavior_action.triggered.connect(self._open_behavior_analysis)
         # Lazy import: keep GLIDER startup free of the behavior/PyQt-heavy
@@ -2383,6 +2403,18 @@ class MainWindow(QMainWindow):
         self._behavior_window.show()
         self._behavior_window.raise_()
         self._behavior_window.activateWindow()
+
+    def _open_animal_annotator(self) -> None:
+        """Open (or re-surface) the Animal Annotator window (#224)."""
+        from glider.gui.animal_annotator.window import AnimalAnnotatorWindow
+
+        if getattr(self, "_animal_annotator_window", None) is None:
+            self._animal_annotator_window = AnimalAnnotatorWindow(
+                parent=None, settings=self._settings
+            )
+        self._animal_annotator_window.show()
+        self._animal_annotator_window.raise_()
+        self._animal_annotator_window.activateWindow()
 
     def _open_pose_batch(self) -> None:
         """Open (or re-surface) the Batch Pose Tracking window.
