@@ -156,7 +156,7 @@ class SessionMetadata:
     lab: str = ""
     project: str = ""
     notes: str = ""
-    recording_directory: str = ""  # Save directory for experiment data (empty = cwd)
+    recording_directory: str = ""  # Runs get numbered folders here (empty = data dir)
 
     # Subject management
     subjects: list[Subject] = field(default_factory=list)
