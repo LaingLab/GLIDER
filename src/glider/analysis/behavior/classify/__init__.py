@@ -752,6 +752,9 @@ def classify(
             freeze_min_frames=config.freeze_min_frames,
             dart_min_frames=config.dart_min_frames,
             frame_range=frame_range,
+            # A motion-feature model differences this video around each
+            # animal in turn; every other model ignores it.
+            video=video,
         )
         _write_run_manifest(
             output_dir,
