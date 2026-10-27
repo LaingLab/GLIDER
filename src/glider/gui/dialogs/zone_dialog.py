@@ -8,17 +8,20 @@ on the camera preview and assign labels for use in the node graph.
 import logging
 import math
 import uuid
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QImage, QMouseEvent, QPixmap, QResizeEvent
+from PyQt6.QtCore import QPoint, QSettings, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPixmap, QResizeEvent
 from PyQt6.QtWidgets import (
     QBoxLayout,
     QButtonGroup,
+    QCheckBox,
     QColorDialog,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -37,7 +40,15 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.gui.styles import colors, radius
-from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape, draw_zones
+from glider.vision.zones import (
+    Zone,
+    ZoneConfiguration,
+    ZoneShape,
+    arena_sized_zone_vertices,
+    draw_zones,
+    sized_zone_vertices,
+    translate_zone,
+)
 
 if TYPE_CHECKING:
     from glider.vision.camera_manager import CameraManager
@@ -57,15 +68,52 @@ DEFAULT_COLORS = [
     (255, 255, 0),  # Cyan
 ]
 
+#: Outline drawn around the selected zone (BGR). White reads on every zone colour.
+SELECTION_COLOR = (255, 255, 255)
+
+#: Arrow-key nudge in frame pixels; Shift multiplies it.
+NUDGE_PX = 1
+NUDGE_FAST_PX = 10
+
+#: Where the fixed-size controls remember their state between uses.
+SETTINGS_GROUP = "zone_editor"
+
+#: Default fixed sizes per unit, chosen to be a plausible zone on a mouse arena
+#: (cm) and on a 640x480 frame (px).
+DEFAULT_SIZE = {"cm": (10.0, 10.0), "px": (100.0, 100.0)}
+
+#: A stamp turns a normalized click position and the frame size into the shape
+#: and vertices of a fixed-size zone; ValueError means "nothing to place".
+Stamp = Callable[[tuple[float, float], tuple[int, int]], tuple[ZoneShape, list]]
+
+
+def _draw_outline(frame: np.ndarray, zone: Zone, color, thickness: int) -> None:
+    """Stroke *zone*'s outline onto *frame* (pixel space), in place."""
+    h, w = frame.shape[:2]
+    pts = zone.get_pixel_vertices(w, h)
+    if zone.shape == ZoneShape.RECTANGLE and len(pts) >= 2:
+        cv2.rectangle(frame, pts[0], pts[1], color, thickness)
+    elif zone.shape == ZoneShape.CIRCLE and len(pts) >= 2:
+        (cx, cy), (rx, ry) = pts[0], pts[1]
+        cv2.circle(frame, (cx, cy), int(math.hypot(rx - cx, ry - cy)), color, thickness)
+    elif zone.shape == ZoneShape.POLYGON and len(pts) >= 3:
+        cv2.polylines(frame, [np.array(pts, dtype=np.int32)], True, color, thickness)
+
 
 class ZonePreviewWidget(QLabel):
     """
     Widget for drawing zones on camera preview.
 
-    Handles mouse events for drawing different zone shapes.
+    Handles mouse events for drawing different zone shapes. Outside drawing
+    mode a click selects the zone under the cursor, dragging moves it, and the
+    arrow keys nudge it (Shift for bigger steps).
     """
 
     zone_defined = pyqtSignal(object)  # Emits Zone object
+    #: The selected zone's id, or None when the selection is cleared.
+    zone_selected = pyqtSignal(object)
+    #: A zone's id after a drag or nudge has moved it.
+    zone_moved = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -92,6 +140,18 @@ class ZonePreviewWidget(QLabel):
         self._current_point: QPoint | None = None  # Mouse position
         self._image_rect = None  # Actual image area within widget
         self._close_threshold = 15  # Pixels - snap to close polygon
+
+        # Selection / move state
+        self._selected_id: str | None = None
+        self._drag_press: QPoint | None = None  # widget pos the drag started at
+        self._drag_vertices: list[tuple[float, float]] | None = None  # before the drag
+        self._dragged = False
+
+        #: Fixed-size placement: when set, rectangles and circles are placed
+        #: with one click instead of drawn with two.
+        self._stamp: Stamp | None = None
+
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
 
         #: Re-fit the frame to the widget whenever it is resized. Off: the
         #: frame is scaled once, to the size the widget has when it is set,
@@ -122,6 +182,8 @@ class ZonePreviewWidget(QLabel):
             self._current_shape = shape
         self._points.clear()
         self._current_point = None
+        self._drag_press = None
+        self._drag_vertices = None
 
         if enabled:
             self.setCursor(Qt.CursorShape.CrossCursor)
@@ -132,6 +194,61 @@ class ZonePreviewWidget(QLabel):
     def set_current_color(self, color: tuple[int, int, int]) -> None:
         """Set the color for new zones."""
         self._current_color = color
+
+    def set_stamp(self, stamp: "Stamp | None") -> None:
+        """Place fixed-size zones with one click (``None``: draw them freehand)."""
+        self._stamp = stamp
+        self._update_display()
+
+    def _stamping(self) -> bool:
+        return (
+            self._drawing_mode
+            and self._stamp is not None
+            and self._current_shape in (ZoneShape.RECTANGLE, ZoneShape.CIRCLE)
+        )
+
+    def selected_zone(self) -> Zone | None:
+        """The selected zone, if it is still in the configuration."""
+        if self._selected_id is None or self._zone_config is None:
+            return None
+        return self._zone_config.get_zone(self._selected_id)
+
+    def select_zone(self, zone_id: str | None) -> None:
+        """Select a zone by id without emitting :attr:`zone_selected`."""
+        self._selected_id = zone_id
+        self._update_display()
+
+    def _frame_size(self) -> tuple[int, int]:
+        h, w = self._frame.shape[:2]
+        return (w, h)
+
+    def _draw_overlays(self, frame: np.ndarray) -> None:
+        """Selection outline and fixed-size placement preview, in place."""
+        zone = self.selected_zone()
+        if zone is not None:
+            _draw_outline(frame, zone, SELECTION_COLOR, 3)
+        if self._stamping() and self._current_point is not None:
+            coords = self._widget_to_image_coords(self._current_point)
+            if coords is not None:
+                ghost = self._stamp_zone(coords)
+                if ghost is not None:
+                    _draw_outline(frame, ghost, (255, 0, 255), 2)
+
+    def _stamp_zone(self, coords: tuple[int, int]) -> Zone | None:
+        """The fixed-size zone a click at image *coords* would place."""
+        w, h = self._frame_size()
+        try:
+            shape, vertices = self._stamp((coords[0] / w, coords[1] / h), (w, h))
+        except ValueError as e:
+            logger.debug("Fixed-size zone not placed: %s", e)
+            return None
+        return Zone(
+            id=str(uuid.uuid4()),
+            name="",
+            shape=shape,
+            vertices=vertices,
+            color=self._current_color,
+        )
 
     def _update_display(self) -> None:
         """Update the display with frame and zones."""
@@ -148,6 +265,7 @@ class ZonePreviewWidget(QLabel):
             display_frame = draw_zones(
                 display_frame, self._zone_config, alpha=0.3, show_labels=True
             )
+        self._draw_overlays(display_frame)
 
         # Convert to QImage
         rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
@@ -213,17 +331,24 @@ class ZonePreviewWidget(QLabel):
         return dist <= self._close_threshold
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Handle mouse press for zone drawing."""
-        if not self._drawing_mode:
-            super().mousePressEvent(event)
-            return
-
+        """Draw in drawing mode; otherwise select the zone under the cursor."""
         if event.button() != Qt.MouseButton.LeftButton:
             super().mousePressEvent(event)
             return
 
         coords = self._widget_to_image_coords(event.pos())
         if coords is None:
+            return
+
+        if not self._drawing_mode:
+            self._begin_drag(event.pos(), coords)
+            return
+
+        if self._stamping():
+            zone = self._stamp_zone(coords)
+            if zone is not None:
+                self._current_point = None
+                self.zone_defined.emit(zone)
             return
 
         if self._current_shape == ZoneShape.RECTANGLE:
@@ -300,12 +425,98 @@ class ZonePreviewWidget(QLabel):
         # Emit signal
         self.zone_defined.emit(zone)
 
+    def _begin_drag(self, pos: QPoint, coords: tuple[int, int]) -> None:
+        """Select the zone under *coords* and remember where a drag would start."""
+        zone = None
+        if self._zone_config is not None and self._frame is not None:
+            w, h = self._frame_size()
+            zone = self._zone_config.zone_at(coords[0] / w, coords[1] / h, w / h)
+        new_id = zone.id if zone is not None else None
+        if new_id != self._selected_id:
+            self._selected_id = new_id
+            self.zone_selected.emit(new_id)
+        if zone is not None:
+            self._drag_press = pos
+            self._drag_vertices = list(zone.vertices)
+            self._dragged = False
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        self._update_display()
+
+    def _drag_to(self, pos: QPoint) -> None:
+        """Move the dragged zone so it sits where the cursor has carried it.
+
+        Measured from the press, not the last move event, so rounding never
+        accumulates and the zone stays under the same spot of the cursor.
+        """
+        zone = self.selected_zone()
+        if zone is None or self._image_rect is None or self._drag_vertices is None:
+            return
+        _x, _y, img_w, img_h = self._image_rect
+        if img_w <= 0 or img_h <= 0:
+            return
+        dx = (pos.x() - self._drag_press.x()) / img_w
+        dy = (pos.y() - self._drag_press.y()) / img_h
+        zone.vertices = list(self._drag_vertices)
+        translate_zone(zone, dx, dy)
+        self._dragged = zone.vertices != self._drag_vertices
+        self._update_display()
+
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         """Handle mouse move for preview."""
-        if self._drawing_mode and self._points:
+        if self._drag_press is not None:
+            self._drag_to(event.pos())
+        elif self._drawing_mode and self._points:
             self._current_point = event.pos()
             self._draw_preview()
+        elif self._stamping():
+            self._current_point = event.pos()
+            self._update_display()
+        elif not self._drawing_mode:
+            self._update_hover_cursor(event.pos())
         super().mouseMoveEvent(event)
+
+    def _update_hover_cursor(self, pos: QPoint) -> None:
+        """An open hand over a zone says it can be grabbed."""
+        coords = self._widget_to_image_coords(pos)
+        over = False
+        if coords is not None and self._zone_config is not None and self._frame is not None:
+            w, h = self._frame_size()
+            over = self._zone_config.zone_at(coords[0] / w, coords[1] / h, w / h) is not None
+        self.setCursor(Qt.CursorShape.OpenHandCursor if over else Qt.CursorShape.ArrowCursor)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """Finish a drag, reporting the move if the zone actually went anywhere."""
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_press is not None:
+            moved = self._dragged and self._selected_id is not None
+            self._drag_press = None
+            self._drag_vertices = None
+            self._dragged = False
+            self._update_hover_cursor(event.pos())
+            if moved:
+                self.zone_moved.emit(self._selected_id)
+            return
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Arrow keys nudge the selected zone by a frame pixel (Shift: ten)."""
+        steps = {
+            Qt.Key.Key_Left: (-1, 0),
+            Qt.Key.Key_Right: (1, 0),
+            Qt.Key.Key_Up: (0, -1),
+            Qt.Key.Key_Down: (0, 1),
+        }
+        zone = self.selected_zone()
+        step = steps.get(event.key())
+        if step is None or zone is None or self._frame is None or self._drawing_mode:
+            super().keyPressEvent(event)
+            return
+        px = NUDGE_FAST_PX if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else NUDGE_PX
+        w, h = self._frame_size()
+        before = list(zone.vertices)
+        translate_zone(zone, step[0] * px / w, step[1] * px / h)
+        if zone.vertices != before:
+            self._update_display()
+            self.zone_moved.emit(zone.id)
 
     def _draw_preview(self) -> None:
         """Draw preview of current shape being drawn."""
@@ -320,6 +531,7 @@ class ZonePreviewWidget(QLabel):
             display_frame = draw_zones(
                 display_frame, self._zone_config, alpha=0.3, show_labels=True
             )
+        self._draw_overlays(display_frame)
 
         # Get pixel coordinates for current points
         pixel_points = []
@@ -415,16 +627,31 @@ class ZoneDialog(QDialog):
         zone_config: ZoneConfiguration,
         parent=None,
         frame: "np.ndarray | None" = None,
+        calibration=None,
+        settings: QSettings | None = None,
     ):
+        """
+        Args:
+            calibration: The rig's spatial calibration, if any. An arena
+                (anything with ``to_arena_cm``/``to_image``) or a scalar
+                calibration (``pixels_per_mm``) lets fixed-size zones be
+                given in centimetres; without one they are in frame pixels.
+            settings: Where the fixed-size controls are remembered; the
+                application's ``QSettings`` by default. Tests pass a throwaway.
+        """
         super().__init__(parent)
         self._camera = camera_manager
         self._zone_config = zone_config
+        self._calibration = calibration
+        self._settings = settings if settings is not None else QSettings()
         self._color_index = len(zone_config.zones) % len(DEFAULT_COLORS)
         self._custom_color: tuple[int, int, int] | None = None
         self._pending_zone: Zone | None = None
         self._compact = False  # set by embed(compact=True)
 
         self._setup_ui()
+        self._load_size_settings()
+        self._update_size_controls()
         self._update_table()
 
         # Seed the canvas. An explicit frame (e.g. a scrubbed video frame) takes
@@ -454,7 +681,16 @@ class ZoneDialog(QDialog):
         # Preview widget
         self._preview = ZonePreviewWidget()
         self._preview.zone_defined.connect(self._on_zone_defined)
+        self._preview.zone_selected.connect(self._on_preview_selection)
+        self._preview.zone_moved.connect(self._on_zone_moved)
         left_layout.addWidget(self._preview, 1)
+
+        self._move_hint = QLabel(
+            "Click a zone to select it, then drag it or use the arrow keys "
+            "(Shift for bigger steps) to move it."
+        )
+        self._move_hint.setWordWrap(True)
+        left_layout.addWidget(self._move_hint)
 
         # Shape selector
         shape_group = QGroupBox("Zone Shape")
@@ -476,7 +712,38 @@ class ZoneDialog(QDialog):
         shape_layout.addWidget(self._polygon_radio)
 
         shape_layout.addStretch()
+        self._shape_group.idToggled.connect(self._on_shape_toggled)
         left_layout.addWidget(shape_group)
+
+        # Fixed size: one click places a rectangle or circle of this size.
+        size_layout = self._size_layout = QHBoxLayout()
+        self._fixed_size_check = QCheckBox("Fixed size")
+        self._fixed_size_check.setToolTip(
+            "Place rectangles and circles of a set size with one click, centred where "
+            "you click.\nWith an arena calibration the size is in cm on the floor and "
+            "the zone follows the camera's perspective (it is stored as a polygon)."
+        )
+        self._fixed_size_check.toggled.connect(self._on_size_changed)
+        size_layout.addWidget(self._fixed_size_check)
+
+        self._width_label = QLabel("Width:")
+        size_layout.addWidget(self._width_label)
+        self._width_spin = QDoubleSpinBox()
+        size_layout.addWidget(self._width_spin)
+
+        self._height_label = QLabel("Height:")
+        size_layout.addWidget(self._height_label)
+        self._height_spin = QDoubleSpinBox()
+        size_layout.addWidget(self._height_spin)
+
+        for spin in (self._width_spin, self._height_spin):
+            spin.setKeyboardTracking(False)
+            spin.valueChanged.connect(self._on_size_changed)
+
+        self._unit_label = QLabel("px")
+        size_layout.addWidget(self._unit_label)
+        size_layout.addStretch()
+        left_layout.addLayout(size_layout)
 
         # Drawing controls
         draw_layout = self._draw_layout = QHBoxLayout()
@@ -553,6 +820,8 @@ class ZoneDialog(QDialog):
         self._table.setColumnWidth(2, 60)
         self._table.setColumnWidth(3, 60)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self._table.itemSelectionChanged.connect(self._on_table_selection)
         table_layout.addWidget(self._table)
 
         right_layout.addWidget(table_group, 1)
@@ -619,6 +888,156 @@ class ZoneDialog(QDialog):
             f"background-color: rgb({color[2]}, {color[1]}, {color[0]}); "
             f"border: 1px solid {colors.BORDER};"
         )
+
+    # ------------------------------------------------------------------
+    # fixed size
+    # ------------------------------------------------------------------
+
+    def set_calibration(self, calibration) -> None:
+        """Adopt a new rig calibration, which may switch fixed sizes between cm and px."""
+        self._calibration = calibration
+        self._load_size_settings()
+        self._update_size_controls()
+
+    def _arena(self):
+        """The calibration, if it can map image points to the floor and back."""
+        cal = self._calibration
+        if cal is not None and hasattr(cal, "to_arena_cm") and hasattr(cal, "to_image"):
+            return cal
+        return None
+
+    def _scalar_px_per_cm(self, frame_width: int) -> float | None:
+        """Pixels per cm from a scalar calibration on a *frame_width* frame, or None."""
+        cal = self._calibration
+        if cal is None or not getattr(cal, "is_calibrated", False):
+            return None
+        ppm = float(getattr(cal, "pixels_per_mm", 0.0) or 0.0)
+        if ppm <= 0:
+            return None
+        cal_width = getattr(cal, "calibration_width", 0) or 0
+        if cal_width and frame_width:
+            ppm *= frame_width / cal_width
+        return ppm * 10.0
+
+    def _size_unit(self) -> str:
+        """``"cm"`` when a calibration can turn centimetres into pixels, else ``"px"``."""
+        if self._arena() is not None or self._scalar_px_per_cm(0) is not None:
+            return "cm"
+        return "px"
+
+    def _size_key(self, name: str) -> str:
+        return f"{SETTINGS_GROUP}/{name}"
+
+    def _load_size_settings(self) -> None:
+        """Restore the fixed-size state; sizes are kept per unit, cm and px apart."""
+        unit = self._size_unit()
+        default_w, default_h = DEFAULT_SIZE[unit]
+        s = self._settings
+        try:
+            fixed = bool(s.value(self._size_key("fixed_size"), False, type=bool))
+            width = float(s.value(self._size_key(f"width_{unit}"), default_w, type=float))
+            height = float(s.value(self._size_key(f"height_{unit}"), default_h, type=float))
+        except (TypeError, ValueError):
+            fixed, width, height = False, default_w, default_h
+        widgets = (self._fixed_size_check, self._width_spin, self._height_spin)
+        for w in widgets:
+            w.blockSignals(True)
+        try:
+            for spin in (self._width_spin, self._height_spin):
+                if unit == "cm":
+                    spin.setDecimals(1)
+                    spin.setRange(0.1, 1000.0)
+                    spin.setSingleStep(0.5)
+                else:
+                    spin.setDecimals(0)
+                    spin.setRange(1.0, 10000.0)
+                    spin.setSingleStep(5.0)
+            self._fixed_size_check.setChecked(fixed)
+            self._width_spin.setValue(width)
+            self._height_spin.setValue(height)
+        finally:
+            for w in widgets:
+                w.blockSignals(False)
+
+    def _save_size_settings(self) -> None:
+        unit = self._size_unit()
+        s = self._settings
+        s.setValue(self._size_key("fixed_size"), self._fixed_size_check.isChecked())
+        s.setValue(self._size_key(f"width_{unit}"), self._width_spin.value())
+        s.setValue(self._size_key(f"height_{unit}"), self._height_spin.value())
+
+    def _on_size_changed(self, *_args) -> None:
+        self._save_size_settings()
+        self._update_size_controls()
+
+    def _on_shape_toggled(self, _id: int, checked: bool) -> None:
+        if not checked:
+            return
+        self._update_size_controls()
+        if self._draw_btn.isChecked():
+            # Switch the shape being drawn without leaving drawing mode.
+            self._on_draw_toggled(True)
+
+    def _update_size_controls(self) -> None:
+        """Label, show and enable the size inputs for the current shape and unit."""
+        shape = self._get_current_shape()
+        sizable = shape in (ZoneShape.RECTANGLE, ZoneShape.CIRCLE)
+        circle = shape == ZoneShape.CIRCLE
+        self._fixed_size_check.setEnabled(sizable)
+        enabled = sizable and self._fixed_size_check.isChecked()
+        for w in (self._width_label, self._width_spin, self._height_spin, self._unit_label):
+            w.setEnabled(enabled)
+        self._height_label.setEnabled(enabled)
+        self._width_label.setText("Diameter:" if circle else "Width:")
+        self._height_label.setVisible(not circle)
+        self._height_spin.setVisible(not circle)
+        self._unit_label.setText(self._size_unit())
+        self._preview.set_stamp(self._stamp if enabled else None)
+
+    def _stamp(
+        self, centre: tuple[float, float], frame_size: tuple[int, int]
+    ) -> tuple[ZoneShape, list[tuple[float, float]]]:
+        """The fixed-size zone centred on *centre*: its shape and normalized vertices.
+
+        Through an arena the size is laid out on the floor and the result is a
+        polygon (see :func:`arena_sized_zone_vertices`); with a scalar
+        calibration or none it stays a rectangle or circle.
+        """
+        shape = self._get_current_shape()
+        width = self._width_spin.value()
+        height = width if shape == ZoneShape.CIRCLE else self._height_spin.value()
+        arena = self._arena()
+        if arena is not None:
+            return ZoneShape.POLYGON, arena_sized_zone_vertices(arena, shape, centre, width, height)
+        scale = self._scalar_px_per_cm(frame_size[0]) or 1.0
+        return shape, sized_zone_vertices(shape, centre, width * scale, height * scale, frame_size)
+
+    # ------------------------------------------------------------------
+    # selection and moving
+    # ------------------------------------------------------------------
+
+    def _on_preview_selection(self, zone_id) -> None:
+        """Mirror a click on the canvas in the zones table."""
+        self._table.blockSignals(True)
+        try:
+            self._table.clearSelection()
+            for i, zone in enumerate(self._zone_config.zones):
+                if zone.id == zone_id:
+                    self._table.selectRow(i)
+                    break
+        finally:
+            self._table.blockSignals(False)
+
+    def _on_table_selection(self) -> None:
+        """Mirror a table row selection on the canvas, so it can be nudged."""
+        rows = self._table.selectionModel().selectedRows()
+        zone_id = None
+        if rows and 0 <= rows[0].row() < len(self._zone_config.zones):
+            zone_id = self._zone_config.zones[rows[0].row()].id
+        self._preview.select_zone(zone_id)
+
+    def _on_zone_moved(self, _zone_id: str) -> None:
+        self.zones_changed.emit()
 
     def _on_draw_toggled(self, checked: bool) -> None:
         """Handle draw button toggle."""
@@ -747,6 +1166,17 @@ class ZoneDialog(QDialog):
 
     def _update_table(self) -> None:
         """Update the zones table."""
+        # Rebuilding the rows must not clear the canvas selection behind its back.
+        self._table.blockSignals(True)
+        try:
+            self._fill_table()
+        finally:
+            self._table.blockSignals(False)
+        selected = self._preview.selected_zone()
+        self._on_preview_selection(selected.id if selected is not None else None)
+        self._update_info()
+
+    def _fill_table(self) -> None:
         self._table.setRowCount(len(self._zone_config.zones))
 
         for i, zone in enumerate(self._zone_config.zones):
@@ -774,8 +1204,6 @@ class ZoneDialog(QDialog):
                 delete_btn.setFixedWidth(40)
             delete_btn.clicked.connect(lambda checked, idx=i: self._remove_zone(idx))
             self._table.setCellWidget(i, 3, delete_btn)
-
-        self._update_info()
 
     def _remove_zone(self, index: int) -> None:
         """Remove a zone by index."""
@@ -877,7 +1305,12 @@ class ZoneDialog(QDialog):
             self._preview.refit_on_resize = True
             # Three buttons (or shapes) abreast are wider than 480px in a wide
             # platform font at touch padding; stacked they never clip.
-            for row in (self._shape_layout, self._draw_layout, self._file_layout):
+            for row in (
+                self._shape_layout,
+                self._size_layout,
+                self._draw_layout,
+                self._file_layout,
+            ):
                 row.setDirection(QBoxLayout.Direction.TopToBottom)
             self._update_table()  # rows built in __init__ have the desktop delete button
         return self
