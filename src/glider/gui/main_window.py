@@ -4074,9 +4074,14 @@ class MainWindow(QMainWindow):
         return presets.slugify(md.experiment_type or md.name)
 
     def _prepare_run_folder(self) -> Path | None:
-        """Create this run's numbered folder; None when the session has no run fields."""
+        """Create this run's numbered folder; None only when there is no session.
+
+        Every run gets one, run fields or not (#226). A flat recording folder
+        piles every run's CSVs, videos and keypoints into one place, and the
+        analysis side already expects one folder per recording.
+        """
         session = self._core.session
-        if session is None or not session.metadata.run_fields:
+        if session is None:
             return None
         md = session.metadata
         values = [md.run_values.get(f.key, "") for f in md.run_fields if f.required]
@@ -4111,17 +4116,14 @@ class MainWindow(QMainWindow):
         self._run_header.set_run_info(presets.next_run_number(base, slug, today), str(folder))
 
     def _apply_recording_directory(self) -> Path | None:
-        """Point every recorder at this run's folder; returns it for preset runs.
+        """Point every recorder at this run's folder and return it.
 
-        ``set_recording_directory`` is sticky, so the flat path must always set
-        it too (recorders default to the current directory).
+        ``set_recording_directory`` is sticky, so this always sets it: a run
+        must never write into the folder the previous run left behind.
         """
         folder = self._live_run_folder = self._prepare_run_folder()
         if folder is not None:
             self._core.set_recording_directory(folder)
-        else:
-            rec_dir = self._core.session.metadata.recording_directory
-            self._core.set_recording_directory(Path(rec_dir) if rec_dir else Path.cwd())
         return folder
 
     async def _start_async(self) -> None:

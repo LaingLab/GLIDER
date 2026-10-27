@@ -1,5 +1,4 @@
 from datetime import date
-from pathlib import Path
 
 import pytest
 
@@ -15,8 +14,16 @@ def window(main_window_factory, tmp_path):
     return w
 
 
-def test_no_run_fields_keeps_flat_folder(window):
-    assert window._prepare_run_folder() is None
+def test_no_run_fields_still_gets_its_own_folder(window, tmp_path):
+    """#226: a run without preset fields no longer dumps into the flat folder."""
+    md = window._core.session.metadata
+    md.experiment_type = ""
+    md.name = "Open Field"
+    folder = window._prepare_run_folder()
+    stamp = f"{date.today():%Y%m%d}"
+    assert folder == tmp_path / "open-field" / f"{stamp}_run01"
+    assert folder.is_dir()
+    assert window._prepare_run_folder().name == f"{stamp}_run02"
 
 
 def test_run_fields_make_a_numbered_folder(window, tmp_path):
@@ -41,18 +48,19 @@ def test_run_info_shows_next_number(window, tmp_path):
     assert "m031_" in window._run_header._tags._trailing.text()
 
 
-def test_flat_run_after_preset_run_does_not_reuse_run_folder(window, tmp_path, monkeypatch):
+def test_run_without_fields_after_preset_run_gets_a_new_folder(window, tmp_path):
     md = window._core.session.metadata
+    md.experiment_type = "OFT"
     md.run_fields = [RunField("animal_id", "Animal ID", True)]
     md.run_values = {"animal_id": "M031"}
-    folder = window._apply_recording_directory()
-    assert window._core.data_recorder._output_dir == folder
+    first = window._apply_recording_directory()
+    assert window._core.data_recorder._output_dir == first
 
     md.run_fields = []
-    md.recording_directory = ""
-    monkeypatch.chdir(tmp_path)
-    assert window._apply_recording_directory() is None
-    assert window._core.data_recorder._output_dir == Path.cwd()
+    second = window._apply_recording_directory()
+    assert second != first
+    assert second.parent == tmp_path / "oft"
+    assert window._core.data_recorder._output_dir == second
 
 
 def test_failed_start_removes_empty_run_folder(window, tmp_path):

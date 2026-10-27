@@ -159,7 +159,7 @@ class ExperimentDialog(QDialog):
         save_dir_layout = QHBoxLayout()
         self._save_dir_edit = QLineEdit()
         self._save_dir_edit.setReadOnly(True)
-        self._save_dir_edit.setPlaceholderText("Default (current directory)")
+        self._save_dir_edit.setPlaceholderText("Default (GLIDER folder in Documents)")
         save_dir_layout.addWidget(self._save_dir_edit)
         self._browse_dir_btn = QPushButton("Browse")
         self._browse_dir_btn.setFixedWidth(80)
