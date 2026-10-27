@@ -7,6 +7,7 @@
 #
 # It goes in ~/glider unless GLIDER_DIR says otherwise. Run it again to update;
 # pass every --extra you want each time, since extras not named are removed.
+# GLIDER starts once it is installed; set GLIDER_NO_LAUNCH=1 to skip that.
 set -eu
 
 REPO=https://github.com/LaingLab/glider.git
@@ -100,10 +101,26 @@ if ! $PI; then
 fi
 
 say "Checking the install"
+HEALTHY=true
 if $GLIDER doctor; then
     say "Done. Start GLIDER with:"
 else
+    HEALTHY=false
     say "Installed, but doctor found problems (above). Once they are fixed, start GLIDER with:"
 fi
 echo "    cd $DIR && $GLIDER"
 $PI || echo "or search for GLIDER in Spotlight / your app menu."
+
+# Open it, so the install ends in the app rather than in a terminal (#219). Not
+# when doctor failed, since it would only fail again, and not without a display
+# to open on (an install over ssh).
+if $HEALTHY && [ "${GLIDER_NO_LAUNCH:-}" != 1 ]; then
+    if [ "$(uname -s)" = Darwin ] && [ -d "$HOME/Applications/GLIDER.app" ]; then
+        say "Starting GLIDER"
+        open "$HOME/Applications/GLIDER.app"
+    elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        say "Starting GLIDER"
+        # nohup, so closing this terminal does not close GLIDER with it.
+        nohup $GLIDER >/dev/null 2>&1 &
+    fi
+fi

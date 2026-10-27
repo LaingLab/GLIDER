@@ -6,6 +6,7 @@
 #
 # It goes in ~\glider unless $env:GLIDER_DIR says otherwise. Run it again to
 # update; pass every -Extra you want each time, since extras not named are removed.
+# GLIDER starts once it is installed; set $env:GLIDER_NO_LAUNCH=1 to skip that.
 param([string[]]$Extra = @())
 
 # Everything happens inside a function: `irm | iex` runs a script in the
@@ -68,13 +69,25 @@ function Install-Glider([string[]]$Extra) {
 
     Say "Checking the install"
     & uv run --directory $dir glider doctor
-    if ($LASTEXITCODE -eq 0) {
+    $healthy = $LASTEXITCODE -eq 0
+    if ($healthy) {
         Say "Done. Start GLIDER with:"
     } else {
         Say "Installed, but doctor found problems (above). Once they are fixed, start GLIDER with:"
     }
     Write-Host "    cd $dir; uv run glider"
     Write-Host "or search for GLIDER in the Start Menu."
+
+    # Open it, so the install ends in the app rather than in a terminal (#219).
+    # pythonw, as the Start Menu shortcut uses: no console window behind it.
+    # Not when doctor failed, since it would only fail again, out of sight.
+    if ($healthy -and $env:GLIDER_NO_LAUNCH -ne "1") {
+        $pythonw = Join-Path $dir ".venv\Scripts\pythonw.exe"
+        if (Test-Path $pythonw) {
+            Say "Starting GLIDER"
+            Start-Process -FilePath $pythonw -ArgumentList "-m", "glider" -WorkingDirectory $dir
+        }
+    }
 }
 
 Install-Glider $Extra
