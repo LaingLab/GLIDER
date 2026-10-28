@@ -153,7 +153,7 @@ def test_the_menu_bar_is_the_menus_with_something_only_they_can_show(qtbot, main
     """Experiment is on it because nothing else shows its actions.
 
     Tools was, and no longer is: every one of its entries now has a card on the
-    Analyze tab, which is the documented condition for a menu to leave the bar.
+    Tools tab, which is the documented condition for a menu to leave the bar.
     """
     window = _builder(qtbot, main_window_factory)
     assert _bar_titles(window) == ["File", "Edit", "Experiment", "View", "Help"]

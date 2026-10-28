@@ -238,7 +238,7 @@ uv run glider doctor
 Then launch GLIDER (`uv run glider`, or open the app). You should see the graph
 editor with a **File / Edit / Experiment / View / Hardware / Run / Tools / Help**
 menu bar. To confirm your machine's compute capabilities (useful before
-[tracking](../camera-behavior/tracking.md)), open the **Analyze** tab and
+[tracking](../camera-behavior/tracking.md)), open the **Tools** tab and
 choose **GPU / Device Check**.
 
 Next: [build your first experiment](first-experiment.md).

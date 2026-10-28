@@ -247,11 +247,11 @@ def test_removing_a_video_drops_its_frames(qtbot, window, tmp_path, monkeypatch)
     assert len(window._project.videos) == 1
 
 
-def test_analyze_card_and_menu_open_the_studio(main_window_factory, qtbot):
+def test_tools_card_and_menu_open_the_studio(main_window_factory, qtbot):
     main = main_window_factory()
-    titles = [card.title for card in main._analyze_page.cards()]
+    titles = [card.title for card in main._tools_page.cards()]
     assert "Animal Annotator" in titles
-    main._analyze_page.tool_chosen.emit("annotator")
+    main._tools_page.tool_chosen.emit("annotator")
     studio = main._animal_annotator_window
     assert studio is not None
     qtbot.addWidget(studio)

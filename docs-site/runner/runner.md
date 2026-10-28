@@ -33,7 +33,7 @@ and on the right:
 - The **⚙ menu** (below).
 
 **Row two** is the tabs: **Experiment**, **Dashboard**, **Run**. There is no
-**Analyze** tab on the Pi — the analysis tools are a desktop feature (see
+**Tools** tab on the Pi — the analysis tools are a desktop feature (see
 [Switch to Desktop](#switch-to-desktop)).
 
 ### The ⚙ menu
@@ -267,7 +267,7 @@ Run tab — and tap **Stop**.
 ## Switch to Desktop
 
 **⚙ › Switch to Desktop** opens the desktop editor in place: the normal header
-with the **Analyze** tab, and the node graph with its side panels. Nothing is
+with the **Tools** tab, and the node graph with its side panels. Nothing is
 reloaded — your experiment, hardware, and camera carry over. The **Run** tab
 stays the Pi's run page.
 

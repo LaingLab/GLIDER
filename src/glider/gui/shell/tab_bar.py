@@ -23,7 +23,7 @@ Status belongs on :class:`~glider.gui.shell.status_strip.StatusStrip`, one row
 below, which is built to carry it.
 
 **Touch mode** (:meth:`ShellTabBar.set_touch_mode`, off by default) is the Pi's
-version of the row: no Analyze tab, and the other three share the full width
+version of the row: no Tools tab, and the other three share the full width
 instead of huddling in the middle. It is reversible, and ``False`` restores the
 centred desktop row.
 
@@ -62,14 +62,14 @@ TAB_BAR_HEIGHT = 36
 #: on the Dashboard, and you cannot Run either of them until both are done. It
 #: is also the tab the window opens on once an experiment exists, and a first
 #: tab that is not the landing tab reads as a bug.
-TAB_KEYS: tuple[str, ...] = ("experiment", "dashboard", "run", "analyze")
+TAB_KEYS: tuple[str, ...] = ("experiment", "dashboard", "run", "tools")
 
 #: What each key is called on screen.
 TAB_LABELS: dict[str, str] = {
     "dashboard": "Dashboard",
     "experiment": "Experiment",
     "run": "Run",
-    "analyze": "Analyze",
+    "tools": "Tools",
 }
 
 
@@ -130,7 +130,7 @@ class ShellTabBar(QFrame):
     # ------------------------------------------------------------ touch mode
 
     def set_touch_mode(self, enabled: bool) -> None:
-        """Drop Analyze and stretch the other tabs across the row, or undo it.
+        """Drop Tools and stretch the other tabs across the row, or undo it.
 
         The two end stretches go to zero and the tabs take stretch one, so the
         tabs are the only thing that can take the width (a zero-stretch spacer
@@ -138,7 +138,7 @@ class ShellTabBar(QFrame):
         width and equal stretch make the shares equal.
         """
         for key, button in self._buttons.items():
-            if key == "analyze":
+            if key == "tools":
                 button.setVisible(not enabled)
             else:
                 button.setSizePolicy(self._touch_policy if enabled else self._desktop_policy)

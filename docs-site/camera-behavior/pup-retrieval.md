@@ -67,7 +67,7 @@ Save asks where to save.
 
 ## Step 1 — track the dam and the pups
 
-Open **Analyze → Batch Pose Tracking**. With the protocol set to Pup Retrieval, a
+Open **Tools → Batch Pose Tracking**. With the protocol set to Pup Retrieval, a
 **Pup segmentation** card appears.
 
 1. Choose your **adult pose model**, and set its bodyparts in this order:
@@ -93,7 +93,7 @@ is reported on the video but never costs you its pose.
 
 ## Step 2 — set up each video in Session Review
 
-Open **Analyze → Session Review**, make sure its **Protocol** selector reads
+Open **Tools → Session Review**, make sure its **Protocol** selector reads
 Pup Retrieval, and open your footage:
 
 - **Open → Open video…** for one video, or

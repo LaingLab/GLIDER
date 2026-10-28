@@ -27,7 +27,7 @@ def test_header_is_two_rows_with_no_overlap(qtbot, main_window_factory):
     strip, bar = w._status_strip, w._tab_bar
     strip_bottom = strip.mapTo(w, QPoint(0, 0)).y() + strip.height()
     assert strip_bottom <= bar.mapTo(w, QPoint(0, 0)).y()
-    assert not w._tab_bar.buttons()["analyze"].isVisibleTo(w)
+    assert not w._tab_bar.buttons()["tools"].isVisibleTo(w)
 
 
 def test_desktop_controls_stay_hidden_on_every_page(qtbot, main_window_factory):

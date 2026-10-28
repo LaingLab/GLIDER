@@ -380,7 +380,7 @@ def extra_requirements(extra: str, distribution: str = "GLIDER") -> list[str]:
         if req.marker is None or not req.marker.evaluate({"extra": extra}):
             continue
         # ponytail: a nested self-extra (`GLIDER[audio]`) is skipped, not
-        # expanded; none of the extras the Analyze cards install uses one.
+        # expanded; none of the extras the Tools cards install uses one.
         if canonicalize_name(req.name) == canonicalize_name(distribution):
             continue
         requirements.append(f"{req.name}{req.specifier}")

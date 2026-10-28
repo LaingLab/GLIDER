@@ -1,4 +1,4 @@
-"""The Analyze tab: the tool windows, with a visible front door.
+"""The Tools tab: the tool windows, with a visible front door.
 
 Behavior Analysis, Batch Pose Tracking, Session Review, Multi-Camera Recording
 and the device check all lived on the Tools menu, which is the worst place for
