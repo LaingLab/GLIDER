@@ -120,7 +120,7 @@ def test_switch_to_desktop_rehosts_without_duplicates(qtbot, main_window_factory
     assert w._builder_view.left.widget_for("hardware") is hw
     assert cam.parent() is w._camera_tab_slot
     assert _is_descendant(cam, w._builder_view.right)
-    assert w._tab_bar.buttons()["analyze"].isVisibleTo(w)
+    assert w._tab_bar.buttons()["tools"].isVisibleTo(w)
     assert not w._gear_button.isVisibleTo(w)
     assert graph.dragMode().name == "RubberBandDrag" and not graph.is_locked()
     # The Pi lowered the graph's floor for landscape; the desktop gets its own back.

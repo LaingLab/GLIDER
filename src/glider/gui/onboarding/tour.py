@@ -416,7 +416,7 @@ class Tour(QObject):
         owned by a ``QTabWidget`` is switched through the tab widget, so the tab
         header follows. A bare one is switched directly -- and that is the case
         that matters now: the window's pages (Landing, Dashboard, Experiment,
-        Run, Analyze) are a bare stack, and so are the Experiment tab's
+        Run, Tools) are a bare stack, and so are the Experiment tab's
         sections. Without this the walkthrough opened on the landing page and
         every single one of its targets was on a page that was not showing --
         measured, all seven -- so each step rendered as a centred caption with

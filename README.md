@@ -102,7 +102,7 @@ group.
 
 ## Also in GLIDER
 
-- **Four tabs** (Experiment, Dashboard, Run, Analyze) and a landing page with
+- **Four tabs** (Experiment, Dashboard, Run, Tools) and a landing page with
   your recent experiments. Animals, zones and lab vocabulary live on the
   Experiment tab. [Tour →](https://lainglab.github.io/GLIDER/building/builder-window/)
 - **Multi-animal pose tracking** with YOLO: one track and one CSV per animal,
@@ -158,7 +158,7 @@ extras with `| sh -s -- --extra behavior`, or on Windows
 `& ([scriptblock]::Create((irm https://raw.githubusercontent.com/LaingLab/glider/main/install.ps1))) -Extra behavior`.
 GLIDER opens when the install finishes; set `GLIDER_NO_LAUNCH=1` to stop that.
 On a computer with an NVIDIA GPU, the first launch offers to install the CUDA
-build of PyTorch (or later from Install GPU Support on the Analyze tab).
+build of PyTorch (or later from Install GPU Support on the Tools tab).
 
 `glider doctor` checks an install at any time: Python, Qt, each extra, FFmpeg
 and the inference device, each with the fix for whatever is wrong.

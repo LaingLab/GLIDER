@@ -1771,7 +1771,7 @@ QPushButton#pluginsSectionRetry:hover {
     color: #e2e8f0;                                 /* TEXT_PRIMARY */
 }
 
-/* -- Analyze tab: tool cards -- */
+/* -- Tools tab: tool cards -- */
 
 QWidget#toolsPage,
 QScrollArea#toolsScroll,

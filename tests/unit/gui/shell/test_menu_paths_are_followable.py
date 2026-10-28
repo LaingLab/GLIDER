@@ -111,7 +111,7 @@ def test_the_menus_with_no_other_home_are_on_the_bar(menu):
 
     **Tools was on this list and has come off it**, which is the rule working
     rather than the rule being bent: every one of its actions now has a card on
-    the Analyze tab, and :func:`test_the_analyze_tab_offers_every_tool` is what
+    the Tools tab, and :func:`test_the_tools_tab_offers_every_tool` is what
     holds that open. Delete this parametrize down to nothing and the file has
     stopped checking anything -- add the menu back to the bar instead.
     """
@@ -119,7 +119,7 @@ def test_the_menus_with_no_other_home_are_on_the_bar(menu):
     assert menu not in RELOCATED_MENU_TITLES
 
 
-def test_the_analyze_tab_offers_every_tool(qtbot, mock_core):
+def test_the_tools_tab_offers_every_tool(qtbot, mock_core):
     """The condition Tools had to satisfy to leave the bar.
 
     The documented rule is that a menu may only be relocated once its actions
@@ -138,7 +138,7 @@ def test_the_analyze_tab_offers_every_tool(qtbot, mock_core):
         for action in tools_menu.actions()
         if not action.isSeparator()
     }
-    on_page = {card.title for card in window._analyze_page.cards()}
+    on_page = {card.title for card in window._tools_page.cards()}
 
     # Titles differ in punctuation between the two surfaces, so compare on a
     # normalised form rather than demanding they be written identically.
@@ -146,7 +146,7 @@ def test_the_analyze_tab_offers_every_tool(qtbot, mock_core):
         return {v.replace(" ", "").replace("/", "").lower() for v in values}
 
     missing = _norm(in_menu) - _norm(on_page) - _norm({"Plugins"})
-    assert not missing, f"Tools actions with no card on Analyze: {sorted(missing)}"
+    assert not missing, f"Tools actions with no card on Tools: {sorted(missing)}"
 
 
 def test_the_plugin_manager_is_reachable_without_the_palette(qtbot, mock_core):

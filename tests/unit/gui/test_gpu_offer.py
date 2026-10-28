@@ -91,15 +91,13 @@ def test_waits_for_the_welcome_instead_of_stacking_on_it(window, tmp_path, answe
     assert len(retries) == 1, "gave up instead of trying again later"
 
 
-def test_the_pose_model_card_opens_ultralytics_platform(window, monkeypatch):
-    from PyQt6.QtGui import QDesktopServices
+def test_no_tool_card_links_out_to_ultralytics_platform(window):
+    """Pose models are labelled in the Animal Annotator now, not on a website."""
+    window._create_tools_page()
+    keys = {card.key for card in window._tools_page.cards()}
 
-    opened = []
-    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toString()))
-
-    window._on_tool_chosen("pose_model")
-
-    assert opened and opened[0].startswith("https://platform.ultralytics.com")
+    assert "pose_model" not in keys
+    assert "annotator" in keys
 
 
 # --- Install GPU Support, any time after the launch offer --------------------

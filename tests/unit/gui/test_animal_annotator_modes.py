@@ -60,7 +60,7 @@ def _extract(qtbot, window, videos, per_video=4):
 
 def test_animal_annotator_is_the_first_tool(main_window_factory):
     main = main_window_factory()
-    assert main._analyze_page.cards()[0].title == "Animal Annotator"
+    assert main._tools_page.cards()[0].title == "Animal Annotator"
     tools = next(m for m in main.findChildren(QMenu) if m.title().replace("&", "") == "Tools")
     assert tools.actions()[0].text().replace("&", "").startswith("Animal Annotator")
 

@@ -1,6 +1,6 @@
 """The section-rail and tool-card icons: Lucide line art, in pastel.
 
-Used by the Experiment tab's section rail and the Analyze tab's tool cards.
+Used by the Experiment tab's section rail and the Tools tab's tool cards.
 Lives here rather than in either of them because both need the same set.
 
 **The shapes are Lucide** (``gui/styles/icons/lucide/``, ISC -- the licence
@@ -62,7 +62,7 @@ ICON_DIR = Path(__file__).resolve().parent.parent / "styles" / "icons" / "lucide
 
 #: Stroke colour per glyph key.
 #:
-#: The Analyze tab's six reuse the Experiment rail's hues rather than
+#: The Tools tab's six reuse the Experiment rail's hues rather than
 #: multiplying them: the two pages are never on screen together, so a shared hue
 #: costs nothing, and ten distinct pastels would be a colour wheel rather than a
 #: palette.
@@ -73,7 +73,7 @@ GLYPH_COLOURS: dict[str, str] = {
     "zones": colors.PASTEL_MINT,
     "vocabulary": colors.PASTEL_PEACH,
     "plugins": colors.PASTEL_SKY,
-    # Analyze tab
+    # Tools tab
     "behavior": colors.PASTEL_LILAC,
     "pose": colors.PASTEL_ROSE,
     "review": colors.PASTEL_PEACH,

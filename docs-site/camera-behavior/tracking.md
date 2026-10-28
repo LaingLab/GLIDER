@@ -167,7 +167,7 @@ format — the pose inference itself is done by YOLO.)
 ## Multiple animals
 
 YOLO pose models can track more than one animal through a video. In the
-**Batch Pose Tracking** window (Analyze tab), set **Animals** to how many are
+**Batch Pose Tracking** window (Tools tab), set **Animals** to how many are
 actually in the recording — it is not detected, it is the constraint you
 supply, and it is what lets tracking stitch a tracker id that gets lost and
 reassigned all night back into one lifelong animal. Too high and one real
@@ -406,7 +406,7 @@ yourself from a script:
 ## Checking your GPU
 
 Tracking and pose models run much faster on a GPU. To see what GLIDER will use,
-open the **Analyze** tab and choose **GPU / Device Check**, or run it headless:
+open the **Tools** tab and choose **GPU / Device Check**, or run it headless:
 
 ```bash
 glider --gpu-check

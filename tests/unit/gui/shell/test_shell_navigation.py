@@ -203,7 +203,7 @@ def test_new_from_landing_enters_the_experiment_tab(qtbot, main_window_factory):
 
 def test_experiment_is_the_first_tab(qtbot):
     """Order is part of the design, not an accident of the dict."""
-    assert TAB_KEYS == ("experiment", "dashboard", "run", "analyze")
+    assert TAB_KEYS == ("experiment", "dashboard", "run", "tools")
 
 
 def test_tabs_switch_pages(qtbot, main_window_factory):
@@ -349,17 +349,17 @@ def test_startup_with_a_file_draws_its_graph(qtbot, tmp_path):
         loop.close()
 
 
-def test_analyze_is_the_fourth_tab(qtbot, main_window_factory):
-    from glider.gui.main_window import PAGE_ANALYZE
+def test_tools_is_the_fourth_tab(qtbot, main_window_factory):
+    from glider.gui.main_window import PAGE_TOOLS
 
     window = main_window_factory(desktop_mode=True)
     window.show()
     window.switch_to_builder()
 
-    window._tab_bar.buttons()["analyze"].click()
+    window._tab_bar.buttons()["tools"].click()
 
-    assert window._stack.currentIndex() == PAGE_ANALYZE
-    assert TAB_KEYS == ("experiment", "dashboard", "run", "analyze")
+    assert window._stack.currentIndex() == PAGE_TOOLS
+    assert TAB_KEYS == ("experiment", "dashboard", "run", "tools")
 
 
 def test_an_unavailable_tool_card_opens_nothing(qtbot):

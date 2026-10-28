@@ -104,10 +104,6 @@ LAB_SETUP_COMPLETE_KEY = "first_run/setup_complete"
 #: check offers the same install for anyone who said no.
 GPU_SETUP_OFFERED_KEY = "first_run/gpu_offered"
 
-#: Where "Create Your Own Pose Model" goes: labelling and training happen there,
-#: and the YOLO pose model it exports loads in GLIDER as it is.
-POSE_MODEL_PLATFORM_URL = "https://platform.ultralytics.com"
-
 # --- Stack pages -------------------------------------------------------------
 #
 # The window's QStackedWidget, by index. The Builder and operator indices are 0
@@ -121,7 +117,7 @@ PAGE_BUILDER = 0
 PAGE_OPERATOR = 1
 PAGE_EXPERIMENT = 2
 PAGE_LANDING = 3
-PAGE_ANALYZE = 4
+PAGE_TOOLS = 4
 
 # Which page each tab shows. Keys are from
 # :data:`glider.gui.shell.tab_bar.TAB_KEYS`; "dashboard" is the Builder (nodes,
@@ -132,7 +128,7 @@ PAGE_BY_TAB = {
     "dashboard": PAGE_BUILDER,
     "experiment": PAGE_EXPERIMENT,
     "run": PAGE_OPERATOR,
-    "analyze": PAGE_ANALYZE,
+    "tools": PAGE_TOOLS,
 }
 
 # The reverse, for moving the tab highlight when a page switch started
@@ -478,7 +474,7 @@ class MainWindow(QMainWindow):
         self._tab_bar: ShellTabBar | None = None
         self._landing_page: LandingPage | None = None
         self._experiment_page: ExperimentPage | None = None
-        self._analyze_page: ToolsPage | None = None
+        self._tools_page: ToolsPage | None = None
         # The one status strip. Owned by the window rather than by the Builder
         # frame, so the experiment name and run state stay on screen whichever
         # tab is showing -- and so they still report in runner mode, where
@@ -724,8 +720,8 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._experiment_page)  # Index 2 -- PAGE_EXPERIMENT
         self._create_landing_page()
         self._stack.addWidget(self._landing_page)  # Index 3 -- PAGE_LANDING
-        self._create_analyze_page()
-        self._stack.addWidget(self._analyze_page)  # Index 4 -- PAGE_ANALYZE
+        self._create_tools_page()
+        self._stack.addWidget(self._tools_page)  # Index 4 -- PAGE_TOOLS
 
         self._wire_tab_bar()
 
@@ -796,7 +792,7 @@ class MainWindow(QMainWindow):
         The desktop chrome row overlays the tabs on the strip, which at 480 px
         covers the experiment name, so here the two are rows. Row one is the
         strip (stretching, its name eliding) beside a gear button that carries
-        what the desktop's menus do; row two is the tabs, less Analyze. Both
+        what the desktop's menus do; row two is the tabs, less Tools. Both
         widgets keep their attribute names, since a lot of code refreshes them.
 
         The gear's "Connect boards" resolves ``self._hardware_panel`` at click
@@ -1015,8 +1011,8 @@ class MainWindow(QMainWindow):
         if self._node_editor:
             self._node_editor.set_zone_configuration(self._zone_config)
 
-    def _create_analyze_page(self) -> None:
-        """Build the Analyze tab: a front door for each tool window.
+    def _create_tools_page(self) -> None:
+        """Build the Tools tab: a front door for each tool window.
 
         The availability probes are the same ones the Tools menu used, and are
         still lazy imports for the same reason -- they pull the optional
@@ -1072,15 +1068,6 @@ class MainWindow(QMainWindow):
                 install_extra="vision" if installable else "",
             ),
             ToolCard(
-                key="pose_model",
-                title="Create Your Own Pose Model",
-                description=(
-                    "Label frames and train a pose model on the Ultralytics "
-                    "Platform, then load it here. Opens in your browser."
-                ),
-                glyph="pose",
-            ),
-            ToolCard(
                 key="behavior",
                 title="Behavior Analysis",
                 description=(
@@ -1130,9 +1117,9 @@ class MainWindow(QMainWindow):
             ),
         ]
 
-        self._analyze_page = ToolsPage(cards, parent=self)
-        self._analyze_page.tool_chosen.connect(self._on_tool_chosen)
-        self._analyze_page.install_requested.connect(self._on_install_extra)
+        self._tools_page = ToolsPage(cards, parent=self)
+        self._tools_page.tool_chosen.connect(self._on_tool_chosen)
+        self._tools_page.install_requested.connect(self._on_install_extra)
 
     def _on_install_extra(self, extra: str) -> None:
         """Install an extra from its card, then offer the restart that loads it.
@@ -1142,7 +1129,7 @@ class MainWindow(QMainWindow):
         """
         from glider.plugins.installer import install_extra
 
-        page = self._analyze_page
+        page = self._tools_page
         page.set_install_status(extra, f"Installing the {extra} extra…", busy=True)
 
         async def _install() -> None:
@@ -1159,7 +1146,7 @@ class MainWindow(QMainWindow):
 
     def _after_install_extra(self, extra: str, result) -> None:
         """Report an extra's install, and offer the restart if it worked."""
-        page = self._analyze_page
+        page = self._tools_page
         if not result.ok:
             page.set_install_status(extra, f"Install failed: {result.message}", busy=False)
             box = QMessageBox(
@@ -1202,7 +1189,6 @@ class MainWindow(QMainWindow):
         opener = {
             "behavior": self._open_behavior_analysis,
             "pose": self._open_pose_batch,
-            "pose_model": self._open_pose_model_platform,
             "review": self._open_session_review,
             "annotator": self._open_animal_annotator,
             "multicam": self._open_multi_camera,
@@ -1252,8 +1238,8 @@ class MainWindow(QMainWindow):
             self._enter_dashboard()
         elif key == "experiment":
             self._show_experiment_tab()
-        elif key == "analyze":
-            self._stack.setCurrentIndex(PAGE_ANALYZE)
+        elif key == "tools":
+            self._stack.setCurrentIndex(PAGE_TOOLS)
 
     def _show_experiment_tab(self) -> None:
         """Show the Experiment page and build whatever section is selected."""
@@ -1342,12 +1328,6 @@ class MainWindow(QMainWindow):
             return
         if self._load_experiment_path(path):
             self._leave_landing()
-
-    def _open_pose_model_platform(self) -> None:
-        """Send the user to Ultralytics Platform to train a pose model (#222)."""
-        from PyQt6.QtGui import QDesktopServices
-
-        QDesktopServices.openUrl(QUrl(POSE_MODEL_PLATFORM_URL))
 
     def _on_landing_guide(self) -> None:
         from PyQt6.QtGui import QDesktopServices
@@ -4496,7 +4476,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _on_gpu_check(self) -> None:
-        """Show accelerator diagnostics (the Analyze tab's GPU / Device Check).
+        """Show accelerator diagnostics (the Tools tab's GPU / Device Check).
 
         Reuses the pose subsystem's device utilities so the report matches what
         inference resolves at runtime (CUDA > MPS > CPU). Works — and is worth
@@ -4566,12 +4546,12 @@ class MainWindow(QMainWindow):
 
         s.setValue(GPU_SETUP_OFFERED_KEY, True)
         self._ask_install_gpu(
-            driver, later="You can do this later from Install GPU Support on the Analyze tab."
+            driver, later="You can do this later from Install GPU Support on the Tools tab."
         )
         return True
 
     def _on_install_gpu_support(self) -> None:
-        """Install GPU support on request: the Analyze card and the Tools menu.
+        """Install GPU support on request: the Tools card and the Tools menu.
 
         The launch offer is asked once; this is the way back for anyone who said
         no, or whose torch went back to the CPU build when the installer re-ran.

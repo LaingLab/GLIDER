@@ -2,16 +2,16 @@
 
 The window is useless if it cannot be reached; before this it existed only as
 a checkbox buried in the camera panel. It then lived on the Tools menu, and
-now on the Analyze tab -- the Tools menu still holds it, but off the bar, so
+now on the Tools tab -- the Tools menu still holds it, but off the bar, so
 the card is the reachable route and the one worth testing.
 """
 
 from __future__ import annotations
 
 
-def test_the_analyze_tab_offers_multi_camera(main_window_factory):
+def test_the_tools_tab_offers_multi_camera(main_window_factory):
     window = main_window_factory()
-    titles = [card.title for card in window._analyze_page.cards()]
+    titles = [card.title for card in window._tools_page.cards()]
     assert "Multi-Camera Recording" in titles, titles
 
 
@@ -19,7 +19,7 @@ def test_the_card_opens_the_window(main_window_factory, qtbot):
     """The card is wired to the same handler the menu item used, rather than to
     a second copy of the open-once bookkeeping."""
     window = main_window_factory()
-    window._analyze_page.tool_chosen.emit("multicam")
+    window._tools_page.tool_chosen.emit("multicam")
     assert window._multi_camera_window is not None
     qtbot.addWidget(window._multi_camera_window)
 

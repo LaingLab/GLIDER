@@ -151,19 +151,19 @@ def test_only_a_left_click_on_the_pill_emits(qtbot):
         qtbot.mouseClick(strip.pill(), Qt.MouseButton.RightButton)
 
 
-def test_touch_tab_bar_drops_analyze_and_fills(qtbot):
+def test_touch_tab_bar_drops_tools_and_fills(qtbot):
     bar = ShellTabBar()
     qtbot.addWidget(bar)
     bar.resize(480, 46)
     bar.set_touch_mode(True)
     bar.show()
     buttons = bar.buttons()
-    assert not buttons["analyze"].isVisibleTo(bar)
+    assert not buttons["tools"].isVisibleTo(bar)
     widths = {buttons[k].width() for k in ("experiment", "dashboard", "run")}
     assert max(widths) - min(widths) <= 2
     assert sum(buttons[k].width() for k in ("experiment", "dashboard", "run")) >= 480 - 2 * 8 - 8
     bar.set_touch_mode(False)
-    assert buttons["analyze"].isVisibleTo(bar)
+    assert buttons["tools"].isVisibleTo(bar)
 
 
 def test_tab_bar_touch_mode_is_reversible(qtbot):
