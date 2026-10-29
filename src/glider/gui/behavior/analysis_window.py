@@ -254,7 +254,7 @@ def _select_all_text() -> str:
 
 
 def _zero_fill_across_epochs(rows_by_epoch: dict[str, list[dict]]) -> dict[str, list[dict]]:
-    """Zero-fill ``<state>_s`` using the states seen in *any* epoch, not just one.
+    """Zero-fill ``<state>_s`` and ``_bouts`` using the states seen in *any* epoch.
 
     ``range_rows`` already zero-fills a behaviour some session showed within
     that one call's own rows (a measurement, not a gap -- see its comment),
@@ -272,6 +272,7 @@ def _zero_fill_across_epochs(rows_by_epoch: dict[str, list[dict]]) -> dict[str, 
             if not row.get("outside"):
                 for state in states:
                     row.setdefault(f"{state}_s", 0.0)
+                    row.setdefault(f"{state}_bouts", 0)
     return rows_by_epoch
 
 
@@ -2774,6 +2775,7 @@ class AnalysisWindow(QMainWindow):
             if not row.get("outside"):
                 for state in states:
                     row.setdefault(f"{state}_s", 0.0)
+                    row.setdefault(f"{state}_bouts", 0)
         # ponytail: cleared wholesale past 64 ranges; an LRU if dragging
         # with the epoch table open ever shows up in a profile.
         if len(self._cohort_cache) >= 64:
@@ -2847,6 +2849,7 @@ class AnalysisWindow(QMainWindow):
                 f"{state}_s": float(seconds)
                 for state, seconds in zip(stats.bouts["state"], stats.bouts["total_s"], strict=True)
             },
+            **{f"{state}_bouts": n for state, n in view.bout_onsets(start, end).items()},
             **self._zone_columns(start, end, view),
             **self._hardware_columns(timeline, view.fps, start, end),
             **self._retrieval_columns(index, start, end),

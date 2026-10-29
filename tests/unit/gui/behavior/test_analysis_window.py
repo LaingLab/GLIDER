@@ -2314,6 +2314,21 @@ class TestTimeBinExport:
         # Excel reads it as UTF-8 only with the byte-order mark.
         assert out.read_bytes().startswith(b"\xef\xbb\xbf")
 
+    def test_bouts_count_in_the_bin_they_start_in(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        # 4 s bins: the groom bout (0-5 s) crosses the 4 s edge; rear starts at 5 s.
+        frame = win.bin_frame(0.0, 10.0, 4.0, "tidy")
+        first = frame[frame["session"] == frame["session"].iloc[0]]
+        assert first["groom_bouts"].tolist() == [1, 0, 0]
+        assert first["rear_bouts"].tolist() == [0, 1, 0]
+
+    def test_the_workbook_has_a_bouts_sheet(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        book = win.bin_frame(0.0, 10.0, 5.0, "sheets")
+        assert book["Groom bouts"]["0-5 s"].tolist() == [1, 1]
+        assert book["Rear bouts"]["5-10 s"].tolist() == [1, 1]
+        assert book["Rear bouts"]["0-5 s"].tolist() == [0, 0]
+
     def test_sheets_are_a_sheet_per_measure(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         book = win.bin_frame(0.0, 10.0, 5.0, "sheets")

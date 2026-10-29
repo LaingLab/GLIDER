@@ -831,6 +831,28 @@ class SessionView:
             threshold_unit=unit,
         )
 
+    def bout_onsets(self, start_frame: int, end_frame: int) -> dict[str, int]:
+        """Bouts of each behaviour that *start* in ``[start_frame, end_frame]``.
+
+        Not :meth:`segment_stats`' ``n_bouts``, which counts every bout the
+        window touches: one crossing a bin edge would count in both bins, and
+        the bins would add up to more bouts than the session had. Counted by
+        onset, a bout already under way at ``start_frame`` belongs to the bin
+        before, and the bins sum to the whole.
+        """
+        start_frame, end_frame = sorted((int(start_frame), int(end_frame)))
+        rows = np.where((self.frames >= start_frame) & (self.frames <= end_frame))[0]
+        counts: dict[str, int] = {}
+        if not len(rows):
+            return counts
+        previous = self.labels[rows[0] - 1] if rows[0] > 0 else None
+        for i in rows:
+            label = self.labels[i]
+            if label != previous and label and label != UNSCORED:
+                counts[label] = counts.get(label, 0) + 1
+            previous = label
+        return counts
+
     def _bout_table(self, labels, compute_intervals, compute_bouts, *, frames) -> pd.DataFrame:
         """Per-state bout tally for a label run, reusing the ethogram primitives.
 

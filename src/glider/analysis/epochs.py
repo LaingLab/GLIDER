@@ -82,7 +82,8 @@ def _title(name: str) -> str:
 def metric_catalog(rows: Iterable[dict]) -> list[Metric]:
     """Every metric the rows can answer, in reading order.
 
-    Movement; each behaviour as seconds and as a share of the range; each
+    Movement; each behaviour as seconds, as a share of the range and as bouts
+    begun in it; each
     zone; each device; pup retrieval where a session was scored for it;
     then the thresholds each session was scored with. Freezing and darting
     are always offered -- every row carries them.
@@ -96,6 +97,8 @@ def metric_catalog(rows: Iterable[dict]) -> list[Metric]:
         out += [
             Metric(f"{state}_s", f"{_title(state)} (s)", 2),
             Metric(f"{state}_pct", f"{_title(state)} %", 1),
+            # Counted where each bout starts, so bins sum to the session.
+            Metric(f"{state}_bouts", f"{_title(state)} bouts", 0),
         ]
     for zone in zones:
         out += [
