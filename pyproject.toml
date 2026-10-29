@@ -38,6 +38,7 @@ dependencies = [
     "packaging>=21.0",  # version comparison in the in-app updater
     "ryvencore>=0.4.0",
     "pandas>=2.0.0",
+    "openpyxl>=3.1.0",  # Session Review time-bin export: a sheet per measure
     "bleak>=0.21.0",  # Bluetooth LE (async, cross-platform: WinRT/CoreBluetooth/BlueZ)
     # PyQt6 is intentionally absent from core: Raspberry Pi uses system-installed PyQt6
     # (sudo apt install python3-pyqt6). PC installs use the [pc] optional group.

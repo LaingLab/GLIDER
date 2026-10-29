@@ -832,3 +832,31 @@ class TestFromVideo:
 
         assert all(is_video(f"a{s}") for s in (".mp4", ".AVI", ".mov", ".mkv"))
         assert not is_video("a.csv") and not is_video("a")
+
+
+class TestBoutOnsets:
+    # groom 0-3, rear 4-5, groom 6-8, unscored 9, groom 10-11
+    LABELS = ["groom"] * 4 + ["rear"] * 2 + ["groom"] * 3 + ["unscored"] + ["groom"] * 2
+
+    def _view(self):
+        from glider.analysis.ethogram import UNSCORED
+
+        labels = [UNSCORED if lab == "unscored" else lab for lab in self.LABELS]
+        return SessionView(labels=labels, frames=np.arange(len(labels)), fps=1.0)
+
+    def test_every_bout_that_starts_in_the_range(self):
+        assert self._view().bout_onsets(0, 11) == {"groom": 3, "rear": 1}
+
+    def test_a_bout_under_way_at_the_start_is_not_counted(self):
+        # Frame 2 is the middle of the first groom bout.
+        assert self._view().bout_onsets(2, 5) == {"rear": 1}
+
+    def test_adjacent_ranges_sum_to_the_whole(self):
+        view = self._view()
+        whole = view.bout_onsets(0, 11)
+        parts = [view.bout_onsets(a, b) for a, b in ((0, 2), (3, 6), (7, 11))]
+        for state, n in whole.items():
+            assert sum(p.get(state, 0) for p in parts) == n
+
+    def test_unscored_frames_are_not_a_behaviour(self):
+        assert "unscored" not in self._view().bout_onsets(0, 11)

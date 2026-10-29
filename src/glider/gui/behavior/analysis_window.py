@@ -70,6 +70,7 @@ from glider.analysis.epochs import (
     CURRENT,
     Epoch,
     metric_catalog,
+    metric_sheets,
     threshold_text,
     tidy_frame,
     time_bins,
@@ -137,6 +138,16 @@ def _short_path(path: Path, keep: int = 3) -> str:
 #: Exported tables carry a byte-order mark: without one Excel reads UTF-8 as
 #: Windows-1252, and a range named "Stim–Post" opens as "Stimâ€“Post".
 _EXCEL_CSV = "utf-8-sig"
+
+
+def _write_workbook(path: Path, sheets: dict) -> None:
+    """One sheet per table, in order, with the header row frozen."""
+    import openpyxl  # noqa: F401  # ImportError here, not deep inside pandas
+    import pandas as pd
+
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        for name, table in sheets.items():
+            table.to_excel(writer, sheet_name=name, index=False, freeze_panes=(1, 0))
 
 
 def _unique(ids: list[str]) -> list[str]:
@@ -243,7 +254,7 @@ def _select_all_text() -> str:
 
 
 def _zero_fill_across_epochs(rows_by_epoch: dict[str, list[dict]]) -> dict[str, list[dict]]:
-    """Zero-fill ``<state>_s`` using the states seen in *any* epoch, not just one.
+    """Zero-fill ``<state>_s`` and ``_bouts`` using the states seen in *any* epoch.
 
     ``range_rows`` already zero-fills a behaviour some session showed within
     that one call's own rows (a measurement, not a gap -- see its comment),
@@ -261,6 +272,7 @@ def _zero_fill_across_epochs(rows_by_epoch: dict[str, list[dict]]) -> dict[str, 
             if not row.get("outside"):
                 for state in states:
                     row.setdefault(f"{state}_s", 0.0)
+                    row.setdefault(f"{state}_bouts", 0)
     return rows_by_epoch
 
 
@@ -2763,6 +2775,7 @@ class AnalysisWindow(QMainWindow):
             if not row.get("outside"):
                 for state in states:
                     row.setdefault(f"{state}_s", 0.0)
+                    row.setdefault(f"{state}_bouts", 0)
         # ponytail: cleared wholesale past 64 ranges; an LRU if dragging
         # with the epoch table open ever shows up in a profile.
         if len(self._cohort_cache) >= 64:
@@ -2836,6 +2849,7 @@ class AnalysisWindow(QMainWindow):
                 f"{state}_s": float(seconds)
                 for state, seconds in zip(stats.bouts["state"], stats.bouts["total_s"], strict=True)
             },
+            **{f"{state}_bouts": n for state, n in view.bout_onsets(start, end).items()},
             **self._zone_columns(start, end, view),
             **self._hardware_columns(timeline, view.fps, start, end),
             **self._retrieval_columns(index, start, end),
@@ -3118,14 +3132,24 @@ class AnalysisWindow(QMainWindow):
         return min(s for s, _ in spans), max(e for _, e in spans)
 
     def _run_bins_dialog(self, minutes: float, *, has_selection: bool):
-        """``(bin_s, whole_session, shape)`` as chosen, or None if cancelled."""
-        from glider.gui.review.time_bins_dialog import TimeBinsDialog
+        """``(bin_s, whole_session, shape)`` as chosen, or None if cancelled.
 
-        dialog = TimeBinsDialog(minutes, has_selection=has_selection, parent=self)
+        ``shape`` is ``"tidy"``, ``"wide"``, or ``"sheets"`` for a workbook
+        with a sheet per measure; the tick is remembered.
+        """
+        from glider.gui.review.time_bins_dialog import SHEETS, TimeBinsDialog
+
+        settings = _settings()
+        per_sheet = str(settings.value("review/bin_sheets", "false")).lower() == "true"
+        dialog = TimeBinsDialog(
+            minutes, has_selection=has_selection, per_sheet=per_sheet, parent=self
+        )
         try:
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return None
-            return dialog.bin_seconds(), dialog.whole_session(), dialog.layout_shape()
+            shape = dialog.layout_shape()
+            settings.setValue("review/bin_sheets", "true" if shape == SHEETS else "false")
+            return dialog.bin_seconds(), dialog.whole_session(), shape
         finally:
             dialog.deleteLater()
 
@@ -3141,8 +3165,11 @@ class AnalysisWindow(QMainWindow):
         if not bins:
             return None
         rows = _zero_fill_across_epochs({b.key: self.range_rows(b.start_s, b.end_s) for b in bins})
-        metrics = [m.key for m in metric_catalog(r for block in rows.values() for r in block)]
+        catalog = metric_catalog(r for block in rows.values() for r in block)
+        metrics = [m.key for m in catalog]
         tidy = tidy_frame(bins, rows, metrics)
+        if shape == "sheets":
+            return self._bin_workbook(bins, tidy, catalog)
         if shape == "wide":
             return wide_frame(tidy, metrics)
         edges = {b.name: (b.start_s, b.end_s) for b in bins}
@@ -3150,6 +3177,28 @@ class AnalysisWindow(QMainWindow):
         tidy.insert(3, "bin_start_s", [edges[name][0] for name in tidy["bin"]])
         tidy.insert(4, "bin_end_s", [edges[name][1] for name in tidy["bin"]])
         return tidy
+
+    @staticmethod
+    def _bin_workbook(bins, tidy, catalog) -> dict:
+        """Sheet name -> table: a sheet per measure, then what the bins and sheets are."""
+        import pandas as pd
+
+        sheets = metric_sheets(tidy, catalog, reserved=("Bins", "Measures"))
+        measures = pd.DataFrame(
+            {
+                "sheet": [name for name, _, _ in sheets],
+                "measure": [metric.label for _, metric, _ in sheets],
+                "column": [metric.key for _, metric, _ in sheets],
+            }
+        )
+        about = pd.DataFrame(
+            {
+                "bin": [b.name for b in bins],
+                "start_s": [b.start_s for b in bins],
+                "end_s": [b.end_s for b in bins],
+            }
+        )
+        return {name: table for name, _, table in sheets} | {"Bins": about, "Measures": measures}
 
     def _export_bins(self) -> None:
         """The cohort cut into fixed-width time bins: every metric, per bin."""
@@ -3177,11 +3226,15 @@ class AnalysisWindow(QMainWindow):
             # bin edge so every bin is whole but the last.
             start_s = math.floor(min(0.0, start_s) / bin_s) * bin_s
         root = self._cohort_root or self._session_folder(max(0, self._shown))
+        workbook = shape == "sheets"
+        suffix, kind = (
+            (".xlsx", "Excel Workbook (*.xlsx)") if workbook else (".csv", "CSV Files (*.csv)")
+        )
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Export time bins",
-            str(root / f"time_bins_{bin_s / 60.0:g}min_{shape}.csv"),
-            "CSV Files (*.csv)",
+            str(root / f"time_bins_{bin_s / 60.0:g}min_{shape}{suffix}"),
+            kind,
         )
         if not path:
             return
@@ -3194,7 +3247,18 @@ class AnalysisWindow(QMainWindow):
             QMessageBox.information(self, "Export time bins", "The span holds no whole frame.")
             return
         try:
-            frame.to_csv(path, index=False, encoding=_EXCEL_CSV)
+            if workbook:
+                _write_workbook(Path(path), frame)
+            else:
+                frame.to_csv(path, index=False, encoding=_EXCEL_CSV)
+        except ImportError:
+            QMessageBox.critical(
+                self,
+                "Export time bins",
+                "Writing Excel workbooks needs openpyxl, which is not installed.\n\n"
+                "Install it (pip install openpyxl), or untick one sheet per measure.",
+            )
+            return
         except OSError as e:
             QMessageBox.critical(self, "Export time bins", f"Could not write {path}: {e}")
             return
