@@ -332,6 +332,8 @@ class AnalysisWindow(QMainWindow):
         self._heatmap_grid: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
         self._cohort: list[tuple[Path, SessionView]] = []
         self._ids: list[str] = []
+        # The ids before _unique: what glider_project.json knows them by.
+        self._manifest_ids: list[str] = []
         self._groups: list[str] = []
         self._timelines: list = []
         self._recordings_of: list = []
@@ -375,6 +377,7 @@ class AnalysisWindow(QMainWindow):
         # focus after a click -- those keys are the whole point of the window.
         self._pool.tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._pool.session_picked.connect(self._on_session_picked)
+        self._pool.group_assigned.connect(self.set_groups)
         self._canvas = KeypointCanvas()
         self._transport = Transport()
         viewer = QFrame()
@@ -986,7 +989,7 @@ class AnalysisWindow(QMainWindow):
         loaded = list(loaded)
         ids = list(ids) if ids is not None else [session_id_for(p) for p, _ in loaded]
         groups = list(groups) if groups is not None else [""] * len(loaded)
-        ids = _unique(ids)
+        manifest_ids, ids = ids, _unique(ids)
         built = [self._timeline_for(path, view) for path, view in loaded]
         # Before any assignment too: an unreadable file pops a modal dialog,
         # whose event loop must still see the old cohort whole.
@@ -996,6 +999,7 @@ class AnalysisWindow(QMainWindow):
             else self._open_store(self._cohort_root / mk.COHORT_FILE, t0=None)
         )
         self._cohort, self._ids, self._groups = loaded, ids, groups
+        self._manifest_ids = manifest_ids
         self._invalidate_cohort_cache()
         self._marker_stores = {}
         self._retrieval_state, self._retrievals = {}, {}
@@ -1004,6 +1008,58 @@ class AnalysisWindow(QMainWindow):
         self._recordings_of = [recording for _, recording in built]
         self._fill_pool(0)
         self._show_session(0)
+
+    def set_groups(self, indices: list[int], group: str) -> None:
+        """Put the sessions at ``indices`` in ``group`` ("" for none).
+
+        A cohort opened as a folder keeps it in ``glider_project.json``, so the
+        next open, the MCP tools and anything else reading the manifest agree.
+        Sessions opened as files have no folder to hold one: the grouping
+        lasts until they are closed, and the status bar says so.
+        """
+        group = group.strip()
+        chosen = {i for i in indices if 0 <= i < len(self._cohort)}
+        if not chosen:
+            return
+        # Two recordings sharing a name share one manifest record: grouping
+        # one groups both, on disk and so on screen.
+        names = {self._manifest_ids[i] for i in chosen}
+        chosen |= {i for i, sid in enumerate(self._manifest_ids) if sid in names}
+        if self._cohort_root is not None:
+            if not self._save_groups(sorted(names), group):
+                return
+        else:
+            self.statusBar().showMessage(
+                "Groups set for this review only: open the sessions as a folder to save them.",
+                8000,
+            )
+        for i in chosen:
+            self._groups[i] = group
+        # Every range's rows carry the group.
+        self._invalidate_cohort_cache()
+        self._fill_pool(self._shown)
+        self._fill_epochs()
+
+    def _save_groups(self, session_ids: list[str], group: str) -> bool:
+        """Write the groups into the cohort's manifest; False if it could not be."""
+        from glider.core.project import Project, ProjectError
+
+        try:
+            project = Project.load(self._cohort_root)
+            for sid in session_ids:
+                project.set_session(sid, group=group)
+            path = project.save()
+        except ProjectError as e:
+            # Never saved over: the manifest holds the subject mapping too.
+            QMessageBox.warning(
+                self, "Set group", f"{e}\n\nFix or remove it, then set the groups again."
+            )
+            return False
+        except OSError as e:
+            QMessageBox.warning(self, "Set group", f"Could not save the groups: {e}")
+            return False
+        self.statusBar().showMessage(f"Groups saved to {path.name}", 5000)
+        return True
 
     def _fill_pool(self, selected: int) -> None:
         order = behavior_order(label for _, view in self._cohort for label in view.labels)

@@ -1419,6 +1419,98 @@ class TestOpeningACohortFolder:
         assert warned and "ungrouped" in warned[0]
 
 
+class TestSettingGroups:
+    def _cohort(self, tmp_path, manifest=None):
+        for sid in ("s1", "s2", "s3"):
+            _ethogram(tmp_path / "sessions" / sid / "analysis", ["groom"] * 300)
+        if manifest is not None:
+            (tmp_path / "glider_project.json").write_text(manifest, encoding="utf-8")
+
+    def _open(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        return win
+
+    def test_a_folder_without_a_manifest_gets_one(self, qtbot, tmp_path):
+        from glider.core.project import Project
+
+        self._cohort(tmp_path)
+        win = self._open(qtbot, tmp_path)
+        win.set_groups([0, 2], "ChR2")
+        assert win._groups == ["ChR2", "", "ChR2"]
+        assert Project.load(tmp_path).groups() == {"ChR2": ["s1", "s3"]}
+        assert win._pool.tree.topLevelItemCount() == 2  # ChR2, Ungrouped
+
+    def test_the_rest_of_the_manifest_is_kept(self, qtbot, tmp_path):
+        from glider.core.project import Project
+
+        self._cohort(
+            tmp_path,
+            '{"subjects": {"m1": {"sex": "F"}}, '
+            '"sessions": {"s1": {"subject": "m1", "group": "eYFP", "day": "1"}}}',
+        )
+        win = self._open(qtbot, tmp_path)
+        win.set_groups([0], "ChR2")
+        project = Project.load(tmp_path)
+        record = project.record("s1")
+        assert (record.group, record.subject, record.day) == ("ChR2", "m1", "1")
+        assert project.subjects["m1"].sex == "F"
+
+    def test_reopening_shows_the_groups_set(self, qtbot, tmp_path):
+        self._cohort(tmp_path)
+        self._open(qtbot, tmp_path).set_groups([1], "Saline")
+        assert self._open(qtbot, tmp_path)._groups == ["", "Saline", ""]
+
+    def test_removing_from_a_group(self, qtbot, tmp_path):
+        from glider.core.project import Project
+
+        self._cohort(tmp_path, '{"sessions": {"s1": {"group": "eYFP"}}}')
+        win = self._open(qtbot, tmp_path)
+        win.set_groups([0], "")
+        assert win._groups == ["", "", ""]
+        assert Project.load(tmp_path).groups() == {}
+
+    def test_the_epoch_rows_carry_the_new_group(self, qtbot, tmp_path):
+        self._cohort(tmp_path)
+        win = self._open(qtbot, tmp_path)
+        before = win.range_rows(0.0, 5.0)
+        win.set_groups([0], "ChR2")
+        after = win.range_rows(0.0, 5.0)
+        assert [r["group"] for r in before] == ["", "", ""]
+        assert [r["group"] for r in after] == ["ChR2", "", ""]
+
+    def test_a_broken_manifest_is_never_saved_over(self, qtbot, tmp_path, monkeypatch):
+        self._cohort(tmp_path)
+        win = self._open(qtbot, tmp_path)
+        (tmp_path / "glider_project.json").write_text("{not json", encoding="utf-8")
+        warned = []
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QMessageBox.warning",
+            lambda *a, **k: warned.append(a[-1]),
+        )
+        win.set_groups([0], "ChR2")
+        assert warned and "not valid JSON" in warned[0]
+        assert win._groups == ["", "", ""]
+        assert (tmp_path / "glider_project.json").read_text(encoding="utf-8") == "{not json"
+
+    def test_sessions_opened_as_files_are_grouped_for_now(self, qtbot, tmp_path):
+        self._cohort(tmp_path)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(sorted(tmp_path.rglob("ethogram_raw.csv")))
+        win.set_groups([1], "ChR2")
+        assert win._groups[1] == "ChR2"
+        assert not (tmp_path / "glider_project.json").exists()
+        assert "this review only" in win.statusBar().currentMessage()
+
+    def test_the_pool_menu_reaches_the_window(self, qtbot, tmp_path):
+        self._cohort(tmp_path)
+        win = self._open(qtbot, tmp_path)
+        win._pool.group_assigned.emit([0, 1], "ChR2")
+        assert win._groups == ["ChR2", "ChR2", ""]
+
+
 class TestEditingKeys:
     def _win(self, qtbot, tmp_path):
         win = AnalysisWindow()

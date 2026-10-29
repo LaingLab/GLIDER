@@ -3,7 +3,8 @@
 A cohort is the unit of analysis, so every loaded session stays visible,
 grouped by the treatment recorded in ``glider_project.json``. Each row says
 which evidence the session has -- video, poses, hardware -- before you click
-it, and carries its ethogram in miniature.
+it, and carries its ethogram in miniature. Right-clicking a selection puts it
+in a group; the window decides where that is written.
 """
 
 from __future__ import annotations
@@ -11,14 +12,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QPixmap
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -113,6 +117,8 @@ class SessionPool(QFrame):
     """Every loaded session, grouped by treatment; clicking one shows it."""
 
     session_picked = pyqtSignal(int)
+    #: Session indices and the group to put them in; "" takes them out of one.
+    group_assigned = pyqtSignal(list, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -143,9 +149,15 @@ class SessionPool(QFrame):
         self.tree.setHeaderHidden(True)
         self.tree.setRootIsDecorated(False)
         self.tree.setIndentation(0)
+        # Ctrl- and Shift-click gather animals to group; the current row is
+        # still the one shown.
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._context_menu)
         column.addWidget(self.tree, 1)
         self._items: list[QTreeWidgetItem] = []
         self._names: list[str] = []
+        self._entry_groups: list[str] = []
         self._groups: list[QTreeWidgetItem] = []
         self.filter.textChanged.connect(self._apply_filter)
         self.tree.currentItemChanged.connect(self._on_current)
@@ -154,6 +166,7 @@ class SessionPool(QFrame):
         self.tree.blockSignals(True)
         self.tree.clear()
         self._items, self._names, self._groups = [], [], []
+        self._entry_groups = [e.group for e in entries]
         # PoolEntry holds a QImage, which is unhashable, so group names are
         # collected, not entries.
         grouped = bool(entries) and list(dict.fromkeys(e.group for e in entries)) != [""]
@@ -193,6 +206,55 @@ class SessionPool(QFrame):
         item = self.tree.currentItem()
         index = None if item is None else item.data(0, _INDEX)
         return -1 if index is None else int(index)
+
+    def selected_indices(self) -> list[int]:
+        """The selected sessions, in pool order; group headers are not sessions."""
+        picked = {item.data(0, _INDEX) for item in self.tree.selectedItems()}
+        return sorted(int(i) for i in picked if i is not None)
+
+    def group_names(self) -> list[str]:
+        """Every group a loaded session is in, in the order the pool shows them."""
+        return [g for g in dict.fromkeys(self._entry_groups) if g]
+
+    def group_menu(self, indices: list[int]) -> QMenu:
+        """Put ``indices`` in an existing group, a new one, or none."""
+        menu = QMenu(self)
+        count = len(indices)
+        title = menu.addAction(f"{count} session{'s' if count != 1 else ''}")
+        title.setEnabled(False)
+        current = {self._entry_groups[i] for i in indices}
+        for name in self.group_names():
+            action = menu.addAction(f"Move to {name}")
+            # Already there: nothing to do.
+            action.setEnabled(current != {name})
+            action.triggered.connect(lambda _=False, g=name: self.group_assigned.emit(indices, g))
+        menu.addSeparator()
+        new = menu.addAction("New group…")
+        new.triggered.connect(lambda: self._new_group(indices))
+        clear = menu.addAction("Remove from group")
+        clear.setEnabled(current != {""})
+        clear.triggered.connect(lambda: self.group_assigned.emit(indices, ""))
+        return menu
+
+    def _ask_group_name(self) -> str:
+        name, ok = QInputDialog.getText(self, "New group", "Group name:")
+        return name.strip() if ok else ""
+
+    def _new_group(self, indices: list[int]) -> None:
+        name = self._ask_group_name()
+        if name:
+            self.group_assigned.emit(indices, name)
+
+    def _context_menu(self, pos: QPoint) -> None:
+        item = self.tree.itemAt(pos)
+        index = None if item is None else item.data(0, _INDEX)
+        if index is None:
+            return
+        indices = self.selected_indices()
+        # A right-click outside the selection means that row alone.
+        if int(index) not in indices:
+            indices = [int(index)]
+        self.group_menu(indices).exec(self.tree.viewport().mapToGlobal(pos))
 
     def _on_current(self, item, _previous) -> None:
         index = None if item is None else item.data(0, _INDEX)
