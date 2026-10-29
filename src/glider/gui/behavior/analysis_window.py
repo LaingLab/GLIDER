@@ -134,6 +134,11 @@ def _short_path(path: Path, keep: int = 3) -> str:
     return str(path) if len(parts) <= keep else "…/" + "/".join(parts[-keep:])
 
 
+#: Exported tables carry a byte-order mark: without one Excel reads UTF-8 as
+#: Windows-1252, and a range named "Stim–Post" opens as "Stimâ€“Post".
+_EXCEL_CSV = "utf-8-sig"
+
+
 def _unique(ids: list[str]) -> list[str]:
     """Session ids made unique, later repeats suffixed `` (2)``, `` (3)``.
 
@@ -2908,7 +2913,7 @@ class AnalysisWindow(QMainWindow):
         # session's empty cells already say it), are not measurements.
         frame = frame[[c for c in frame.columns if not str(c).startswith("_") and c != "outside"]]
         try:
-            frame.to_csv(path, index=False)
+            frame.to_csv(path, index=False, encoding=_EXCEL_CSV)
         except OSError as e:
             QMessageBox.critical(self, "Export window", f"Could not write {path}: {e}")
             return
@@ -3084,7 +3089,7 @@ class AnalysisWindow(QMainWindow):
         if not path:
             return
         try:
-            frame.to_csv(path, index=False)
+            frame.to_csv(path, index=False, encoding=_EXCEL_CSV)
         except OSError as e:
             QMessageBox.critical(self, "Export epoch table", f"Could not write {path}: {e}")
             return
@@ -3189,7 +3194,7 @@ class AnalysisWindow(QMainWindow):
             QMessageBox.information(self, "Export time bins", "The span holds no whole frame.")
             return
         try:
-            frame.to_csv(path, index=False)
+            frame.to_csv(path, index=False, encoding=_EXCEL_CSV)
         except OSError as e:
             QMessageBox.critical(self, "Export time bins", f"Could not write {path}: {e}")
             return

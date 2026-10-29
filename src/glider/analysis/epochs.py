@@ -255,7 +255,8 @@ def time_bins(start_s: float, end_s: float, bin_s: float) -> list[Epoch]:
     k = first
     while k * bin_s < end_s - 1e-9:
         lo, hi = max(k * bin_s, start_s), min((k + 1) * bin_s, end_s)
-        name = f"{_bin_edge(lo, unit)}–{_bin_edge(hi, unit)} {suffix}"
+        # A plain hyphen: an en dash reads as "â€“" in a CSV opened by Excel.
+        name = f"{_bin_edge(lo, unit)}-{_bin_edge(hi, unit)} {suffix}"
         bins.append(Epoch(f"bin_{k - first + 1}", name, lo, hi))
         k += 1
     return bins

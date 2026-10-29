@@ -2278,8 +2278,8 @@ class TestTimeBinExport:
         frame = win.bin_frame(0.0, 10.0, 5.0, "tidy")
         assert len(frame) == 4
         assert list(frame.columns[:5]) == ["session", "group", "bin", "bin_start_s", "bin_end_s"]
-        first = frame[frame["bin"] == "0–5 s"]
-        second = frame[frame["bin"] == "5–10 s"]
+        first = frame[frame["bin"] == "0-5 s"]
+        second = frame[frame["bin"] == "5-10 s"]
         assert first["groom_s"].tolist() == pytest.approx([5.0, 5.0])
         assert first["rear_s"].tolist() == pytest.approx([0.0, 0.0])
         assert second["rear_s"].tolist() == pytest.approx([5.0, 5.0])
@@ -2288,7 +2288,7 @@ class TestTimeBinExport:
         win = self._win(qtbot, tmp_path)
         frame = win.bin_frame(0.0, 10.0, 5.0, "wide")
         assert len(frame) == 2
-        assert "5–10 s__rear_s" in frame.columns
+        assert "5-10 s__rear_s" in frame.columns
 
     def test_the_whole_session_span_reaches_the_last_frame(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
@@ -2309,8 +2309,10 @@ class TestTimeBinExport:
         win._export_bins()
         written = pd.read_csv(out)
         # 10 s in 4 s bins: two whole and one clipped, for each of two sessions.
-        assert sorted(set(written["bin"])) == ["0–4 s", "4–8 s", "8–10 s"]
+        assert sorted(set(written["bin"])) == ["0-4 s", "4-8 s", "8-10 s"]
         assert len(written) == 6
+        # Excel reads it as UTF-8 only with the byte-order mark.
+        assert out.read_bytes().startswith(b"\xef\xbb\xbf")
 
     def test_cancelling_the_dialog_writes_nothing(self, qtbot, tmp_path, monkeypatch):
         win = self._win(qtbot, tmp_path)
