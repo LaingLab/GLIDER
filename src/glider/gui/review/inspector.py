@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -113,6 +114,30 @@ class _Kpi(QFrame):
         column.addWidget(label)
 
 
+#: The grid sizes on offer; 1 means no grid.
+GRID_MAX = 20
+
+
+class GridSpin(QSpinBox):
+    """Cells a side of the exploration grid, shown as "3 × 3", or "Off"."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setRange(1, GRID_MAX)
+        self.setSpecialValueText("Off")
+        # Stepped with the arrows or the wheel: "3 × 3" is not text a plain
+        # spin box can parse back as it is typed.
+        self.lineEdit().setReadOnly(True)
+        self.setToolTip("Lay an N × N grid over the drawn arena and count the cells entered")
+
+    def textFromValue(self, value: int) -> str:  # noqa: N802 - Qt override
+        return f"{value} × {value}"
+
+    def valueFromText(self, text: str) -> int:  # noqa: N802 - Qt override
+        digits = text.split("×")[0].strip()
+        return int(digits) if digits.isdigit() else self.minimum()
+
+
 class Inspector(QTabWidget):
     """Range, Session, Markers and Retrieval tabs. The window fills them."""
 
@@ -176,6 +201,19 @@ class Inspector(QTabWidget):
         self.distance, self.mean_speed, self.peak_speed = (t.value for t in tiles)
         self.range_text = hint("")
         column.addWidget(self.range_text)
+
+        column.addWidget(_section("Exploration"))
+        self.grid_n = GridSpin()
+        column.addLayout(labelled_row("Grid", self.grid_n))
+        explore = QHBoxLayout()
+        explore.setSpacing(6)
+        tiles = [_Kpi("cells entered"), _Kpi("% explored"), _Kpi("s to cover all")]
+        for tile in tiles:
+            explore.addWidget(tile)
+        column.addLayout(explore)
+        self.cells_visited, self.explored_pct, self.coverage_s = (t.value for t in tiles)
+        self.exploration_text = hint("")
+        column.addWidget(self.exploration_text)
 
         column.addWidget(_section("Behavior"))
         self.bouts = _grow_with_rows(QTableWidget(0, 6))
@@ -274,6 +312,7 @@ class Inspector(QTabWidget):
     def clear_range(self) -> None:
         self.set_range(_NO_RANGE, _NO_RANGE_HINT)
         self.set_kpis("—", "—", "—")
+        self.set_exploration("—", "—", "—")
         self.range_text.setText("")
         self.set_hardware([])
         for table in (self.bouts, self.zones):
@@ -288,6 +327,12 @@ class Inspector(QTabWidget):
         self.distance.setText(distance)
         self.mean_speed.setText(mean)
         self.peak_speed.setText(peak)
+
+    def set_exploration(self, cells: str, pct: str, coverage: str, note: str = "") -> None:
+        self.cells_visited.setText(cells)
+        self.explored_pct.setText(pct)
+        self.coverage_s.setText(coverage)
+        self.exploration_text.setText(note)
 
     def set_hardware(self, rows: list[tuple[str, str, QColor]]) -> None:
         self.hardware.setRowCount(len(rows))

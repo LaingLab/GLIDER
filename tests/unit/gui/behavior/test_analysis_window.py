@@ -3644,3 +3644,99 @@ class TestRetrievalExports:
         assert "pups_retrieved" not in win.range_rows(0.0, 3.0)[0]
         win.set_experiment_type("Pup Retrieval")
         assert "pups_retrieved" in win.range_rows(0.0, 3.0)[0]
+
+
+class TestArenaGrid:
+    """The drawn arena, its N x N grid and the share of cells entered."""
+
+    def _win(self, qtbot, tmp_path, *, with_arena=True):
+        import json
+
+        from glider.vision.arena import ArenaCalibration
+
+        csv = _session(tmp_path / "v")
+        if with_arena:
+            arena = ArenaCalibration(corners=[(0, 0), (1, 0), (1, 1), (0, 1)])
+            (tmp_path / "v" / "v_arena.json").write_text(json.dumps(arena.to_dict()))
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(csv)
+        return win
+
+    def test_a_saved_arena_is_shown(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        assert win._canvas._arena is not None
+        assert win._canvas._grid_n == 3  # the default grid
+
+    def test_the_range_reports_the_cells_entered(self, qtbot, tmp_path):
+        # The fixture walks x = 0..299 at y = 100 on a 640x480 frame: on a 3x3
+        # grid that is the top row's first two cells.
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        assert win._inspector.cells_visited.text() == "2 / 9"
+        assert win._inspector.explored_pct.text() == "22"
+        assert win._canvas._visited.sum() == 2
+
+    def test_changing_the_grid_recounts(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        win._inspector.grid_n.setValue(2)
+        assert win._inspector.cells_visited.text() == "1 / 4"
+        assert win._canvas._grid_n == 2
+
+    def test_grid_off_draws_no_grid(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        win._bar.set_selection(0, 299)
+        win._inspector.grid_n.setValue(1)
+        assert win._inspector.grid_n.text() == "Off"
+        assert win._canvas._grid_n == 0
+        assert win._inspector.cells_visited.text() == "—"
+
+    def test_without_an_arena_it_says_how_to_get_one(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path, with_arena=False)
+        win._bar.set_selection(0, 299)
+        assert win._inspector.cells_visited.text() == "—"
+        assert "Draw arena" in win._inspector.exploration_text.text()
+
+    def test_exploration_reaches_the_cohort_rows_and_epoch_metrics(self, qtbot, tmp_path):
+        from glider.analysis.epochs import metric_catalog
+
+        win = self._win(qtbot, tmp_path)
+        rows = win.cohort_rows(0, 299)
+        assert rows[0]["cells_entered"] == 2
+        assert rows[0]["explored_percent"] == pytest.approx(200 / 9)
+        assert "explored_percent" in [m.key for m in metric_catalog(rows)]
+
+    def test_an_arena_set_here_is_saved_beside_the_session(self, qtbot, tmp_path):
+        from glider.analysis.behavior.exploration import read_arena
+        from glider.vision.arena import ArenaCalibration
+
+        win = self._win(qtbot, tmp_path, with_arena=False)
+        arena = ArenaCalibration(corners=[(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)])
+        win._adopt_arena(arena, title="Draw arena")
+        assert read_arena(tmp_path / "v" / "v_arena.json") == arena
+        assert win._canvas._arena == arena
+
+    def test_the_canvas_draws_the_grid_on_the_floor(self, qtbot, tmp_path):
+        from glider.vision.arena import ArenaCalibration
+
+        canvas = KeypointCanvas()
+        qtbot.addWidget(canvas)
+        canvas.resize(400, 300)
+        canvas.set_view(SessionView.load(_session(tmp_path / "v")))
+        canvas.set_arena(ArenaCalibration(corners=[(0, 0), (1, 0), (1, 1), (0, 1)]))
+        canvas.set_show_video(False)
+
+        def green_on_first_line():
+            # 640x480 fills 400x300 exactly, so a 3x3 grid's first vertical
+            # line sits at x = 133; the poses walk y ~ 62, well above.
+            image = canvas.grab().toImage()
+            column = [image.pixelColor(x, y) for x in (132, 133, 134) for y in range(150, 290)]
+            return any(c.green() > c.red() + 60 for c in column)
+
+        canvas.set_grid(0)
+        assert not green_on_first_line()
+        canvas.set_grid(3)
+        assert green_on_first_line()
+        canvas.set_show_arena(False)
+        assert not green_on_first_line()

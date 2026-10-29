@@ -367,6 +367,9 @@ class AnalysisWindow(QMainWindow):
         # there). A recording's CSVs are megabytes parsed on the GUI thread.
         self._recordings: dict[Path, object] = {}
         self._zones = None
+        # Each session's drawn arena, by cohort index: ``(arena, source)``, or
+        # None when the session has none. Looked up once, on first need.
+        self._arenas: dict[int, tuple | None] = {}
         self._tour = None
         self._cohort_root: Path | None = None
         # Marker files by the folder they sit in, kept for the cohort's
@@ -452,6 +455,8 @@ class AnalysisWindow(QMainWindow):
         self._build_bout_stepper()
         self._build_fixes()
         self._export_btn.clicked.connect(self._export_window)
+        self._inspector.grid_n.setValue(int(_settings().value(self._GRID_KEY, 3, type=int) or 3))
+        self._inspector.grid_n.valueChanged.connect(self._on_grid_changed)
         self._trail_s.valueChanged.connect(self._apply_trail)
         self._bar.marker_clicked.connect(self._go_to_marker)
         self._bar.marker_activated.connect(self._edit_marker)
@@ -480,14 +485,14 @@ class AnalysisWindow(QMainWindow):
     # construction
 
     def _even_out_menus(self) -> None:
-        """Open, Zones and Export at one width: the widest's, in this platform's font.
+        """Open, Arena, Zones and Export at one width: the widest's, in this platform's font.
 
         A fixed min-width in the stylesheet held only while every label fit
-        inside it -- true of the macOS font, not of Windows', where the same
-        three came out 110, 118 and 130 px. Measured after the theme is
+        inside it -- true of the macOS font, not of Windows', where three of
+        them came out 110, 118 and 130 px. Measured after the theme is
         applied, so the padding that makes room for the arrow is counted.
         """
-        buttons = (self._open_btn, self._zones_btn, self._export_menu_btn)
+        buttons = (self._open_btn, self._arena_btn, self._zones_btn, self._export_menu_btn)
         for button in buttons:
             button.ensurePolished()
         width = max(button.sizeHint().width() for button in buttons)
@@ -594,6 +599,13 @@ class AnalysisWindow(QMainWindow):
             ],
             role="primary",
         )
+        self._arena_btn, _ = self._menu_button(
+            "Arena",
+            [
+                ("Draw arena…", self._draw_arena),
+                ("Load arena…", self._load_arena),
+            ],
+        )
         self._zones_btn, _ = self._menu_button(
             "Zones",
             [
@@ -628,7 +640,13 @@ class AnalysisWindow(QMainWindow):
         )
         set_button_role(self._tour_btn, "ghost")
         self._tour_btn.setObjectName("ReviewHelp")
-        for button in (self._open_btn, self._zones_btn, self._export_menu_btn, self._tour_btn):
+        for button in (
+            self._open_btn,
+            self._arena_btn,
+            self._zones_btn,
+            self._export_menu_btn,
+            self._tour_btn,
+        ):
             row.addWidget(button)
         return bar
 
@@ -658,6 +676,7 @@ class AnalysisWindow(QMainWindow):
             "video for this session can be found."
         )
         t.video_on.toggled.connect(self._canvas.set_show_video)
+        t.arena_on.toggled.connect(self._canvas.set_show_arena)
         t.poses_on.toggled.connect(self._canvas.set_show_poses)
         t.distances_on.toggled.connect(self._canvas.set_show_distances)
         t.distances_on.customContextMenuRequested.connect(
@@ -1027,6 +1046,7 @@ class AnalysisWindow(QMainWindow):
         self._invalidate_cohort_cache()
         self._marker_stores = {}
         self._retrieval_state, self._retrievals = {}, {}
+        self._arenas = {}
         self._cohort_store = cohort_store
         self._timelines = [timeline for timeline, _ in built]
         self._recordings_of = [recording for _, recording in built]
@@ -1125,6 +1145,7 @@ class AnalysisWindow(QMainWindow):
         # New poses may move the nose; the scale is re-read with the view.
         self._retrieval_state.pop(index, None)
         self._retrievals.pop(index, None)
+        self._arenas.pop(index, None)
         self._invalidate_cohort_cache()
         self._fill_pool(index)
         self._show_session(index)
@@ -1213,6 +1234,9 @@ class AnalysisWindow(QMainWindow):
         self._canvas.set_hud_names(self._bar.behavior_order())
         self._bar.set_hidden(_settings().value(self._hidden_key(), [], type=list) or [])
         self._canvas.set_view(view)
+        found = self._arena_for(self._shown)
+        self._canvas.set_arena(found[0] if found else None)
+        self._canvas.set_grid(self._grid_n())
         self._restore_pairs()
         # The overlay belongs to the session that just left.
         self._canvas.set_heatmap(None)
@@ -2568,6 +2592,7 @@ class AnalysisWindow(QMainWindow):
         self._summary.setText(self._describe(stats))
         self._fill_epochs()
         self._fill_zones(start, end)
+        self._fill_exploration(start, end)
         self._fill_hardware(start, end)
         self._apply_heatmap()
         self._export_btn.setEnabled(True)
@@ -2588,6 +2613,7 @@ class AnalysisWindow(QMainWindow):
         self._fill_epochs()  # the cohort's ranges stay, less the current one
         self._export_btn.setEnabled(False)
         self._export_window_action.setEnabled(False)
+        self._canvas.set_visited(None)
         self._apply_heatmap()
 
     def _fill_movement(self, stats) -> None:
@@ -2662,6 +2688,156 @@ class AnalysisWindow(QMainWindow):
         if selection is not None:
             self._on_selection(*selection)
         self._fill_epochs()
+
+    # ------------------------------------------------------------------
+    # the arena and its exploration grid
+
+    #: QSettings key for the grid size: a lab scores every cohort on one grid.
+    _GRID_KEY = "review/grid_n"
+
+    def _grid_n(self) -> int:
+        """Cells a side of the exploration grid; below 2 there is none."""
+        n = self._inspector.grid_n.value()
+        return n if n >= 2 else 0
+
+    def _on_grid_changed(self, n: int) -> None:
+        _settings().setValue(self._GRID_KEY, int(n))
+        self._canvas.set_grid(self._grid_n())
+        self._invalidate_cohort_cache()
+        selection = self._bar.selection()
+        if selection is not None:
+            self._fill_exploration(*selection)
+        self._fill_epochs()
+
+    def _arena_for(self, index: int):
+        """``(arena, source)`` for a cohort session, or None; looked up once."""
+        if not 0 <= index < len(self._cohort):
+            return None
+        if index not in self._arenas:
+            from glider.analysis.behavior.exploration import find_session_arena
+
+            path, view = self._cohort[index]
+            try:
+                self._arenas[index] = find_session_arena(path, view)
+            except (OSError, ValueError):
+                logger.debug("no arena for %s", path, exc_info=True)
+                self._arenas[index] = None
+        return self._arenas[index]
+
+    def _exploration(self, index: int, start: int, end: int):
+        """``(Exploration, None)`` over frames ``[start, end]``, or ``(None, why not)``."""
+        from glider.analysis.behavior import exploration, spatial
+
+        n = self._grid_n()
+        if not n:
+            return None, "Pick a grid size to count the cells entered."
+        found = self._arena_for(index)
+        if found is None:
+            return None, "No arena drawn for this session: Arena ▸ Draw arena…"
+        view = self._cohort[index][1]
+        try:
+            result = exploration.explore(view, found[0], n, start_frame=start, end_frame=end)
+        except (spatial.SpatialError, ValueError) as e:
+            return None, f"No exploration: {e}."
+        return result, None
+
+    def _fill_exploration(self, start: int, end: int) -> None:
+        result, why = self._exploration(self._shown, start, end)
+        if result is None:
+            self._inspector.set_exploration("—", "—", "—", why)
+            self._canvas.set_visited(None)
+            return
+        source = self._arena_for(self._shown)[1]
+        self._inspector.set_exploration(
+            f"{result.cells_visited} / {result.cells}",
+            f"{100.0 * result.fraction:.0f}",
+            "—" if result.full_coverage_s is None else f"{result.full_coverage_s:.1f}",
+            f"Arena from {source.name}. A cell counts once the body centre enters it.",
+        )
+        self._canvas.set_visited(result.visited)
+
+    def _exploration_columns(self, index: int, start: int, end: int) -> dict:
+        """Cells entered and the share explored, for a session with an arena and a grid."""
+        result, _why = self._exploration(index, start, end)
+        if result is None:
+            return {}
+        return {
+            "grid_n": result.n,
+            "cells_entered": result.cells_visited,
+            "explored_percent": 100.0 * result.fraction,
+            "full_coverage_s": (
+                math.nan if result.full_coverage_s is None else result.full_coverage_s
+            ),
+        }
+
+    def _adopt_arena(self, arena, *, title: str) -> None:
+        """Save *arena* beside the shown session and show it."""
+        import json
+
+        from glider.analysis.behavior.exploration import arena_file_for
+
+        path = arena_file_for(self._cohort[self._shown][0])
+        try:
+            path.write_text(json.dumps(arena.to_dict(), indent=2), encoding="utf-8")
+        except OSError as e:
+            QMessageBox.critical(self, title, f"Could not save the arena to {path}: {e}")
+            return
+        self._arenas[self._shown] = (arena, path)
+        self._canvas.set_arena(arena)
+        self._canvas.set_grid(self._grid_n())
+        self._invalidate_cohort_cache()
+        self.statusBar().showMessage(f"Arena saved to {path}", 8000)
+        selection = self._bar.selection()
+        if selection is not None:
+            self._fill_exploration(*selection)
+        self._fill_epochs()
+
+    def _draw_arena(self) -> None:
+        """Outline the shown session's floor on the frame on screen, and save it."""
+        if self._view is None:
+            return
+        frame = self._canvas.current_frame()
+        if frame is None:
+            QMessageBox.warning(
+                self,
+                "Draw arena",
+                "The arena is drawn on a video frame, and no video was found for "
+                "this session.\n\nUse “Load arena…” to bring in one drawn elsewhere.",
+            )
+            return
+        from glider.gui.dialogs.arena_dialog import ArenaDialog
+
+        dialog = ArenaDialog(frame, title=self._ids[self._shown], parent=self)
+        try:
+            found = self._arena_for(self._shown)
+            if found is not None:
+                dialog.set_arena(found[0])
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            arena = dialog.calibration()
+        finally:
+            dialog.deleteLater()
+        if arena is not None:
+            self._adopt_arena(arena, title="Draw arena")
+
+    def _load_arena(self) -> None:
+        """Use an arena file drawn elsewhere for the shown session."""
+        if self._view is None:
+            return
+        from glider.analysis.behavior.exploration import read_arena
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load arena", str(self._session_folder(self._shown)), "Arena files (*.json)"
+        )
+        if not path:
+            return
+        arena = read_arena(path)
+        if arena is None:
+            QMessageBox.critical(
+                self, "Load arena", f"{Path(path).name} is not a readable arena file."
+            )
+            return
+        self._adopt_arena(arena, title="Load arena")
 
     def _clear_zones(self) -> None:
         self._zones = None
@@ -2851,6 +3027,7 @@ class AnalysisWindow(QMainWindow):
             },
             **{f"{state}_bouts": n for state, n in view.bout_onsets(start, end).items()},
             **self._zone_columns(start, end, view),
+            **self._exploration_columns(index, start, end),
             **self._hardware_columns(timeline, view.fps, start, end),
             **self._retrieval_columns(index, start, end),
         }
