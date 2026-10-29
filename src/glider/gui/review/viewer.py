@@ -39,11 +39,63 @@ from glider.gui.styles import colors
 from glider.gui.widgets.pastel_glyphs import lucide_icon
 from glider.gui.widgets.tool_ui import ElidedLabel, data_font, set_button_role, set_text_role
 
-__all__ = ["TRAIL_DEFAULT_S", "KeypointCanvas", "Transport"]
+__all__ = [
+    "TRAIL_DEFAULT_S",
+    "KeypointCanvas",
+    "Transport",
+    "all_pairs",
+    "default_pairs",
+    "pair_distances",
+]
 
 logger = logging.getLogger(__name__)
 
 TRAIL_DEFAULT_S = 5.0
+
+# The mouse skeleton the lab's pose models share: head and flanks to the body
+# centre, ears to the nose. Any spelling of the centre the pipeline accepts.
+_CENTRES = ("center", "center_body", "body_center", "centroid")
+_MOUSE_EDGES = (
+    ("nose", "{c}"),
+    ("l_ear", "nose"),
+    ("r_ear", "nose"),
+    ("l_body", "{c}"),
+    ("r_body", "{c}"),
+    ("tail_base", "{c}"),
+)
+
+
+def all_pairs(names: list[str]) -> list[tuple[int, int]]:
+    """Every unordered pair of keypoints, in list order."""
+    return [(i, j) for i in range(len(names)) for j in range(i + 1, len(names))]
+
+
+def default_pairs(names: list[str]) -> list[tuple[int, int]]:
+    """The pairs measured until the reviewer picks others.
+
+    The mouse skeleton's edges where the keypoints are the lab's mouse set;
+    otherwise each keypoint to the next, which for a model's own order is
+    usually a chain along the body.
+    """
+    index = {name.lower(): i for i, name in enumerate(names)}
+    centre = next((c for c in _CENTRES if c in index), None)
+    if centre is not None:
+        edges = [(a, b.format(c=centre)) for a, b in _MOUSE_EDGES]
+        found = [(index[a], index[b]) for a, b in edges if a in index and b in index]
+        if len(found) >= 2:
+            return found
+    return [(i, i + 1) for i in range(len(names) - 1)]
+
+
+def pair_distances(points: np.ndarray, pairs) -> list[float]:
+    """Euclidean distance in pixels for each ``(i, j)``; NaN where either is missing."""
+    out = []
+    for i, j in pairs:
+        if max(i, j) >= len(points):
+            out.append(float("nan"))
+            continue
+        out.append(float(np.hypot(*(points[i] - points[j]))))
+    return out
 
 
 class KeypointCanvas(QWidget):
@@ -70,6 +122,10 @@ class KeypointCanvas(QWidget):
         self._video_failed = False  # this view's video would not open; retried on set_view
         self._cached: tuple[int, QImage] | None = None
         self._show_poses = True
+        self._show_distances = False
+        # Keypoint index pairs to measure, per keypoint set: a cohort can mix
+        # pose models, and indices only mean something within one.
+        self._pairs: dict[tuple[str, ...], list[tuple[int, int]]] = {}
         self._show_zones = True
         self._show_hud = True
         self._hud: tuple[tuple[str, QColor] | None, list[tuple[str, QColor]]] | None = None
@@ -282,6 +338,10 @@ class KeypointCanvas(QWidget):
                     )
                     painter.setPen(QPen(QColor(colors.CANVAS), 1))
                     painter.drawEllipse(to_widget(point), 5, 5)
+                if self._show_distances:
+                    painter.save()
+                    self._paint_distances(painter, to_widget, points)
+                    painter.restore()
 
         if self._show_pups and self._pups is not None:
             painter.save()
@@ -436,6 +496,77 @@ class KeypointCanvas(QWidget):
     def set_show_poses(self, enabled: bool) -> None:
         self._show_poses = bool(enabled)
         self.update()
+
+    def set_show_distances(self, enabled: bool) -> None:
+        """Label each measured pair with its length in source-video pixels."""
+        self._show_distances = bool(enabled)
+        self.update()
+
+    def _names(self) -> tuple[str, ...]:
+        return tuple(self._view.keypoint_names) if self._view is not None else ()
+
+    def set_pairs(self, pairs) -> None:
+        """The keypoint pairs to measure for this session's keypoint set, as
+        index pairs; None goes back to :func:`default_pairs`."""
+        names = self._names()
+        if pairs is None:
+            self._pairs.pop(names, None)
+        else:
+            self._pairs[names] = [
+                (int(i), int(j)) for i, j in pairs if max(i, j) < len(names) and i != j
+            ]
+        self.update()
+
+    def pairs(self) -> list[tuple[int, int]]:
+        names = self._names()
+        if names in self._pairs:
+            return list(self._pairs[names])
+        return default_pairs(list(names))
+
+    def _paint_distances(self, painter, to_widget, points: np.ndarray) -> None:
+        """A dashed line per pair, its length in px beside the line's middle.
+
+        Measured in the video's own pixels, not the widget's: the number must
+        not change with the window size. Each label sits off its line, on the
+        side away from the body unless an earlier label is already there:
+        mirrored pairs (both ears to the nose) would otherwise stack.
+        """
+        font = QFont(self.font())
+        size = font.pointSizeF() if font.pointSizeF() > 0 else 10.0
+        font.setPointSizeF(size * 0.9)
+        painter.setFont(font)
+        metrics = QFontMetricsF(font)
+        line = QPen(colors.qcolor_with_alpha(QColor(colors.TEXT_PRIMARY), 0.7), 1)
+        line.setStyle(Qt.PenStyle.DashLine)
+        finite = points[np.isfinite(points).all(axis=1)]
+        body = to_widget(finite.mean(axis=0)) if len(finite) else QPointF()
+        placed: list[QRectF] = []
+        pairs = self.pairs()
+        for (i, j), px in zip(pairs, pair_distances(points, pairs), strict=True):
+            if not np.isfinite(px):
+                continue
+            a, b = to_widget(points[i]), to_widget(points[j])
+            painter.setPen(line)
+            painter.drawLine(a, b)
+            text = f"{px:.0f} px"
+            mid = (a + b) / 2
+            dx, dy = b.x() - a.x(), b.y() - a.y()
+            length = max((dx * dx + dy * dy) ** 0.5, 1e-9)
+            normal = QPointF(-dy / length, dx / length)
+            away = mid - body
+            if normal.x() * away.x() + normal.y() * away.y() < 0:
+                normal = -normal
+            half_w, half_h = metrics.horizontalAdvance(text) / 2, metrics.height() / 2
+            # Far enough along the normal that the text box clears the line.
+            reach = abs(normal.x()) * half_w + abs(normal.y()) * half_h + 3
+            boxes = [
+                QRectF(c.x() - half_w, c.y() - half_h, 2 * half_w, 2 * half_h)
+                for c in (mid + normal * reach, mid - normal * reach)
+            ]
+            box = next((r for r in boxes if not any(r.intersects(q) for q in placed)), boxes[0])
+            placed.append(box)
+            at = QPointF(box.left(), box.top() + metrics.ascent())
+            self._paint_label(painter, at, text, QColor(colors.TEXT_PRIMARY))
 
     def set_retrieval(self, pups, result, nest_at) -> None:
         """Draw a pup session: its ``PupTracks``, its ``SessionRetrieval`` (or None,
@@ -607,6 +738,13 @@ class Transport(QFrame):
         row.addWidget(self.bout, 1)
         self.video_on = _toggle("Video", "Draw the session's video", checked=True)
         self.poses_on = _toggle("Poses", "Draw the tracked keypoints", checked=True)
+        self.distances_on = _toggle(
+            "Distances",
+            "Label keypoint pairs with their distance in video pixels. "
+            "Right-click to choose the pairs.",
+            checked=False,
+        )
+        self.distances_on.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.pups_on = _toggle(
             "Pups", "Draw the nest, each pup and the dam's nose line", checked=True
         )
@@ -621,6 +759,7 @@ class Transport(QFrame):
         for toggle in (
             self.video_on,
             self.poses_on,
+            self.distances_on,
             self.pups_on,
             self.trail_on,
             self.heatmap_on,

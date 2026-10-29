@@ -29,6 +29,7 @@ __all__ = [
     "summarize",
     "threshold_text",
     "tidy_frame",
+    "time_bins",
     "wide_frame",
 ]
 
@@ -230,6 +231,34 @@ def tidy_frame(
             )
     columns = ["session", "group", "range", "t0", "start_s", "end_s", *metrics]
     return pd.DataFrame.from_records(records, columns=columns)
+
+
+def _bin_edge(seconds: float, unit: float) -> str:
+    """``90`` s as ``1.5`` in minutes: whole numbers without a trailing ``.0``."""
+    return f"{seconds / unit:g}"
+
+
+def time_bins(start_s: float, end_s: float, bin_s: float) -> list[Epoch]:
+    """``[start_s, end_s)`` cut into consecutive bins of ``bin_s``, as epochs.
+
+    Bin edges sit on whole multiples of ``bin_s`` from zero (flow start, or the
+    first video frame), so minute 3 is the same stretch in every export
+    whatever span was asked for. The last bin is clipped to ``end_s`` and named
+    for what it covers. Labelled in minutes when the bin is a whole number of
+    them, in seconds otherwise.
+    """
+    if not bin_s > 0 or not end_s > start_s:
+        return []
+    unit, suffix = (60.0, "min") if float(bin_s) % 60 == 0 else (1.0, "s")
+    first = math.floor(start_s / bin_s + 1e-9)
+    bins = []
+    k = first
+    while k * bin_s < end_s - 1e-9:
+        lo, hi = max(k * bin_s, start_s), min((k + 1) * bin_s, end_s)
+        name = f"{_bin_edge(lo, unit)}–{_bin_edge(hi, unit)} {suffix}"
+        bins.append(Epoch(f"bin_{k - first + 1}", name, lo, hi))
+        k += 1
+    return bins
 
 
 def wide_frame(tidy: pd.DataFrame, metrics: list[str]) -> pd.DataFrame:
