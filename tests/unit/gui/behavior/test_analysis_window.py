@@ -11,7 +11,7 @@ import pytest
 
 pytest.importorskip("PyQt6")
 
-from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6.QtCore import QSettings, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QKeyEvent  # noqa: E402
 
 from glider.analysis.behavior.session_view import SessionView  # noqa: E402
@@ -1419,6 +1419,98 @@ class TestOpeningACohortFolder:
         assert warned and "ungrouped" in warned[0]
 
 
+class TestSettingGroups:
+    def _cohort(self, tmp_path, manifest=None):
+        for sid in ("s1", "s2", "s3"):
+            _ethogram(tmp_path / "sessions" / sid / "analysis", ["groom"] * 300)
+        if manifest is not None:
+            (tmp_path / "glider_project.json").write_text(manifest, encoding="utf-8")
+
+    def _open(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_folder(tmp_path)
+        return win
+
+    def test_a_folder_without_a_manifest_gets_one(self, qtbot, tmp_path):
+        from glider.core.project import Project
+
+        self._cohort(tmp_path)
+        win = self._open(qtbot, tmp_path)
+        win.set_groups([0, 2], "ChR2")
+        assert win._groups == ["ChR2", "", "ChR2"]
+        assert Project.load(tmp_path).groups() == {"ChR2": ["s1", "s3"]}
+        assert win._pool.tree.topLevelItemCount() == 2  # ChR2, Ungrouped
+
+    def test_the_rest_of_the_manifest_is_kept(self, qtbot, tmp_path):
+        from glider.core.project import Project
+
+        self._cohort(
+            tmp_path,
+            '{"subjects": {"m1": {"sex": "F"}}, '
+            '"sessions": {"s1": {"subject": "m1", "group": "eYFP", "day": "1"}}}',
+        )
+        win = self._open(qtbot, tmp_path)
+        win.set_groups([0], "ChR2")
+        project = Project.load(tmp_path)
+        record = project.record("s1")
+        assert (record.group, record.subject, record.day) == ("ChR2", "m1", "1")
+        assert project.subjects["m1"].sex == "F"
+
+    def test_reopening_shows_the_groups_set(self, qtbot, tmp_path):
+        self._cohort(tmp_path)
+        self._open(qtbot, tmp_path).set_groups([1], "Saline")
+        assert self._open(qtbot, tmp_path)._groups == ["", "Saline", ""]
+
+    def test_removing_from_a_group(self, qtbot, tmp_path):
+        from glider.core.project import Project
+
+        self._cohort(tmp_path, '{"sessions": {"s1": {"group": "eYFP"}}}')
+        win = self._open(qtbot, tmp_path)
+        win.set_groups([0], "")
+        assert win._groups == ["", "", ""]
+        assert Project.load(tmp_path).groups() == {}
+
+    def test_the_epoch_rows_carry_the_new_group(self, qtbot, tmp_path):
+        self._cohort(tmp_path)
+        win = self._open(qtbot, tmp_path)
+        before = win.range_rows(0.0, 5.0)
+        win.set_groups([0], "ChR2")
+        after = win.range_rows(0.0, 5.0)
+        assert [r["group"] for r in before] == ["", "", ""]
+        assert [r["group"] for r in after] == ["ChR2", "", ""]
+
+    def test_a_broken_manifest_is_never_saved_over(self, qtbot, tmp_path, monkeypatch):
+        self._cohort(tmp_path)
+        win = self._open(qtbot, tmp_path)
+        (tmp_path / "glider_project.json").write_text("{not json", encoding="utf-8")
+        warned = []
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QMessageBox.warning",
+            lambda *a, **k: warned.append(a[-1]),
+        )
+        win.set_groups([0], "ChR2")
+        assert warned and "not valid JSON" in warned[0]
+        assert win._groups == ["", "", ""]
+        assert (tmp_path / "glider_project.json").read_text(encoding="utf-8") == "{not json"
+
+    def test_sessions_opened_as_files_are_grouped_for_now(self, qtbot, tmp_path):
+        self._cohort(tmp_path)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(sorted(tmp_path.rglob("ethogram_raw.csv")))
+        win.set_groups([1], "ChR2")
+        assert win._groups[1] == "ChR2"
+        assert not (tmp_path / "glider_project.json").exists()
+        assert "this review only" in win.statusBar().currentMessage()
+
+    def test_the_pool_menu_reaches_the_window(self, qtbot, tmp_path):
+        self._cohort(tmp_path)
+        win = self._open(qtbot, tmp_path)
+        win._pool.group_assigned.emit([0, 1], "ChR2")
+        assert win._groups == ["ChR2", "ChR2", ""]
+
+
 class TestEditingKeys:
     def _win(self, qtbot, tmp_path):
         win = AnalysisWindow()
@@ -2167,6 +2259,111 @@ class TestMarkersInTheWindow:
         assert "1 marker" in win._status.text()
 
 
+class TestTimeBinExport:
+    """Fixed-width bins of every session: the epoch table's maths, bins as epochs."""
+
+    def _win(self, qtbot, tmp_path):
+        # 300 frames at 30 fps: 5 s of groom, then 5 s of rear.
+        paths = [
+            _ethogram(tmp_path / sid / "analysis", ["groom"] * 150 + ["rear"] * 150)
+            for sid in ("s1", "s2")
+        ]
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(paths)
+        return win
+
+    def test_tidy_is_a_row_per_session_per_bin(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        frame = win.bin_frame(0.0, 10.0, 5.0, "tidy")
+        assert len(frame) == 4
+        assert list(frame.columns[:5]) == ["session", "group", "bin", "bin_start_s", "bin_end_s"]
+        first = frame[frame["bin"] == "0-5 s"]
+        second = frame[frame["bin"] == "5-10 s"]
+        assert first["groom_s"].tolist() == pytest.approx([5.0, 5.0])
+        assert first["rear_s"].tolist() == pytest.approx([0.0, 0.0])
+        assert second["rear_s"].tolist() == pytest.approx([5.0, 5.0])
+
+    def test_wide_is_a_row_per_session(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        frame = win.bin_frame(0.0, 10.0, 5.0, "wide")
+        assert len(frame) == 2
+        assert "5-10 s__rear_s" in frame.columns
+
+    def test_the_whole_session_span_reaches_the_last_frame(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        assert win._cohort_span() == pytest.approx((0.0, 10.0))
+
+    def test_export_writes_the_bins(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path)
+        out = tmp_path / "bins.csv"
+        monkeypatch.setattr(win, "_run_bins_dialog", lambda *a, **k: (4.0, True, "tidy"))
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window._settings",
+            lambda: QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat),
+        )
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: (str(out), ""),
+        )
+        win._export_bins()
+        written = pd.read_csv(out)
+        # 10 s in 4 s bins: two whole and one clipped, for each of two sessions.
+        assert sorted(set(written["bin"])) == ["0-4 s", "4-8 s", "8-10 s"]
+        assert len(written) == 6
+        # Excel reads it as UTF-8 only with the byte-order mark.
+        assert out.read_bytes().startswith(b"\xef\xbb\xbf")
+
+    def test_cancelling_the_dialog_writes_nothing(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path)
+        monkeypatch.setattr(win, "_run_bins_dialog", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window._settings",
+            lambda: QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat),
+        )
+        asked = []
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: asked.append(a) or ("", ""),
+        )
+        win._export_bins()
+        assert asked == []
+
+
+class TestKeypointDistances:
+    def _win(self, qtbot, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window._settings",
+            lambda: QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat),
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        return win
+
+    def test_the_toggle_drives_the_canvas(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        assert win._canvas._show_distances is False
+        win._transport.distances_on.setChecked(True)
+        assert win._canvas._show_distances is True
+
+    def test_chosen_pairs_survive_reopening(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        assert len(win._view.keypoint_names) >= 2
+        win._set_pairs([(0, 1)])
+        assert win._transport.distances_on.isChecked()
+        again = AnalysisWindow()
+        qtbot.addWidget(again)
+        again.load(_session(tmp_path / "w"))
+        assert again._canvas.pairs() == [(0, 1)]
+
+    def test_the_menu_lists_every_pair(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        n = len(win._view.keypoint_names)
+        checkable = [a for a in win._pairs_menu().actions() if a.isCheckable()]
+        assert len(checkable) == n * (n - 1) // 2
+
+
 class TestTheEpochTableInTheWindow:
     """Cohort range markers become columns; a row is an animal; exports match."""
 
@@ -2262,6 +2459,7 @@ class TestTheEpochTableInTheWindow:
             "Range stats (CSV)…",
             "Epoch table, tidy (CSV)…",
             "Epoch table, wide (CSV)…",
+            "Time bins (CSV)…",
             "Markers (CSV)…",
             "Retrieval tables (CSV)…",
             "Nest distance per frame (CSV)…",

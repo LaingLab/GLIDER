@@ -93,3 +93,51 @@ def test_a_narrow_pool_shows_every_badge_whole(qtbot):
     for badge in badges:
         assert badge.isVisible()
         assert badge.sizeHint().width() <= badge.width(), badge.text()
+
+
+class TestGrouping:
+    def _actions(self, menu):
+        return {a.text(): a for a in menu.actions() if a.text()}
+
+    def test_several_rows_can_be_selected(self, pool):
+        pool._items[0].setSelected(True)
+        pool._items[2].setSelected(True)
+        assert pool.selected_indices() == [0, 2]
+
+    def test_group_headers_are_not_sessions(self, pool):
+        pool.tree.topLevelItem(0).setSelected(True)
+        assert pool.selected_indices() == []
+
+    def test_the_menu_offers_every_group_and_says_how_many(self, pool):
+        actions = self._actions(pool.group_menu([0, 2]))
+        assert "2 sessions" in actions
+        assert {"Move to ChR2", "Move to eYFP", "New group…", "Remove from group"} <= set(actions)
+
+    def test_moving_to_the_group_they_are_in_is_disabled(self, pool):
+        actions = self._actions(pool.group_menu([0, 1]))
+        assert not actions["Move to ChR2"].isEnabled()
+        assert actions["Move to eYFP"].isEnabled()
+
+    def test_choosing_a_group_reports_the_sessions_and_the_group(self, pool):
+        seen = []
+        pool.group_assigned.connect(lambda i, g: seen.append((i, g)))
+        self._actions(pool.group_menu([0, 2]))["Move to eYFP"].trigger()
+        self._actions(pool.group_menu([2]))["Remove from group"].trigger()
+        assert seen == [([0, 2], "eYFP"), ([2], "")]
+
+    def test_a_new_group_asks_for_its_name(self, pool, monkeypatch):
+        seen = []
+        pool.group_assigned.connect(lambda i, g: seen.append((i, g)))
+        monkeypatch.setattr(pool, "_ask_group_name", lambda: "Saline")
+        self._actions(pool.group_menu([1]))["New group…"].trigger()
+        monkeypatch.setattr(pool, "_ask_group_name", lambda: "")  # cancelled
+        self._actions(pool.group_menu([1]))["New group…"].trigger()
+        assert seen == [([1], "Saline")]
+
+    def test_an_ungrouped_cohort_can_remove_nothing(self, qtbot):
+        pool = SessionPool()
+        qtbot.addWidget(pool)
+        pool.set_entries([PoolEntry("a", "", 1.0, False, False, False)])
+        actions = self._actions(pool.group_menu([0]))
+        assert not actions["Remove from group"].isEnabled()
+        assert not any(t.startswith("Move to") for t in actions)

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -71,6 +72,7 @@ from glider.analysis.epochs import (
     metric_catalog,
     threshold_text,
     tidy_frame,
+    time_bins,
     wide_frame,
 )
 from glider.analysis.timeline import (
@@ -130,6 +132,11 @@ def _short_path(path: Path, keep: int = 3) -> str:
     """
     parts = Path(path).parts
     return str(path) if len(parts) <= keep else "…/" + "/".join(parts[-keep:])
+
+
+#: Exported tables carry a byte-order mark: without one Excel reads UTF-8 as
+#: Windows-1252, and a range named "Stim–Post" opens as "Stimâ€“Post".
+_EXCEL_CSV = "utf-8-sig"
 
 
 def _unique(ids: list[str]) -> list[str]:
@@ -332,6 +339,8 @@ class AnalysisWindow(QMainWindow):
         self._heatmap_grid: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
         self._cohort: list[tuple[Path, SessionView]] = []
         self._ids: list[str] = []
+        # The ids before _unique: what glider_project.json knows them by.
+        self._manifest_ids: list[str] = []
         self._groups: list[str] = []
         self._timelines: list = []
         self._recordings_of: list = []
@@ -375,6 +384,7 @@ class AnalysisWindow(QMainWindow):
         # focus after a click -- those keys are the whole point of the window.
         self._pool.tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._pool.session_picked.connect(self._on_session_picked)
+        self._pool.group_assigned.connect(self.set_groups)
         self._canvas = KeypointCanvas()
         self._transport = Transport()
         viewer = QFrame()
@@ -586,6 +596,7 @@ class AnalysisWindow(QMainWindow):
                 ("Range stats (CSV)…", self._export_window),
                 ("Epoch table, tidy (CSV)…", lambda: self._export_epochs("tidy")),
                 ("Epoch table, wide (CSV)…", lambda: self._export_epochs("wide")),
+                ("Time bins (CSV)…", self._export_bins),
                 ("Markers (CSV)…", self._export_markers),
                 ("Retrieval tables (CSV)…", self._export_retrieval),
                 ("Nest distance per frame (CSV)…", self._export_nest_distance),
@@ -636,6 +647,10 @@ class AnalysisWindow(QMainWindow):
         )
         t.video_on.toggled.connect(self._canvas.set_show_video)
         t.poses_on.toggled.connect(self._canvas.set_show_poses)
+        t.distances_on.toggled.connect(self._canvas.set_show_distances)
+        t.distances_on.customContextMenuRequested.connect(
+            lambda pos: self._pairs_menu().exec(t.distances_on.mapToGlobal(pos))
+        )
         t.pups_on.setVisible(False)  # shown for a pup session (_publish_retrieval)
         t.pups_on.toggled.connect(self._canvas.set_show_pups)
         t.trail_on.toggled.connect(self._apply_trail)
@@ -986,7 +1001,7 @@ class AnalysisWindow(QMainWindow):
         loaded = list(loaded)
         ids = list(ids) if ids is not None else [session_id_for(p) for p, _ in loaded]
         groups = list(groups) if groups is not None else [""] * len(loaded)
-        ids = _unique(ids)
+        manifest_ids, ids = ids, _unique(ids)
         built = [self._timeline_for(path, view) for path, view in loaded]
         # Before any assignment too: an unreadable file pops a modal dialog,
         # whose event loop must still see the old cohort whole.
@@ -996,6 +1011,7 @@ class AnalysisWindow(QMainWindow):
             else self._open_store(self._cohort_root / mk.COHORT_FILE, t0=None)
         )
         self._cohort, self._ids, self._groups = loaded, ids, groups
+        self._manifest_ids = manifest_ids
         self._invalidate_cohort_cache()
         self._marker_stores = {}
         self._retrieval_state, self._retrievals = {}, {}
@@ -1004,6 +1020,58 @@ class AnalysisWindow(QMainWindow):
         self._recordings_of = [recording for _, recording in built]
         self._fill_pool(0)
         self._show_session(0)
+
+    def set_groups(self, indices: list[int], group: str) -> None:
+        """Put the sessions at ``indices`` in ``group`` ("" for none).
+
+        A cohort opened as a folder keeps it in ``glider_project.json``, so the
+        next open, the MCP tools and anything else reading the manifest agree.
+        Sessions opened as files have no folder to hold one: the grouping
+        lasts until they are closed, and the status bar says so.
+        """
+        group = group.strip()
+        chosen = {i for i in indices if 0 <= i < len(self._cohort)}
+        if not chosen:
+            return
+        # Two recordings sharing a name share one manifest record: grouping
+        # one groups both, on disk and so on screen.
+        names = {self._manifest_ids[i] for i in chosen}
+        chosen |= {i for i, sid in enumerate(self._manifest_ids) if sid in names}
+        if self._cohort_root is not None:
+            if not self._save_groups(sorted(names), group):
+                return
+        else:
+            self.statusBar().showMessage(
+                "Groups set for this review only: open the sessions as a folder to save them.",
+                8000,
+            )
+        for i in chosen:
+            self._groups[i] = group
+        # Every range's rows carry the group.
+        self._invalidate_cohort_cache()
+        self._fill_pool(self._shown)
+        self._fill_epochs()
+
+    def _save_groups(self, session_ids: list[str], group: str) -> bool:
+        """Write the groups into the cohort's manifest; False if it could not be."""
+        from glider.core.project import Project, ProjectError
+
+        try:
+            project = Project.load(self._cohort_root)
+            for sid in session_ids:
+                project.set_session(sid, group=group)
+            path = project.save()
+        except ProjectError as e:
+            # Never saved over: the manifest holds the subject mapping too.
+            QMessageBox.warning(
+                self, "Set group", f"{e}\n\nFix or remove it, then set the groups again."
+            )
+            return False
+        except OSError as e:
+            QMessageBox.warning(self, "Set group", f"Could not save the groups: {e}")
+            return False
+        self.statusBar().showMessage(f"Groups saved to {path.name}", 5000)
+        return True
 
     def _fill_pool(self, selected: int) -> None:
         order = behavior_order(label for _, view in self._cohort for label in view.labels)
@@ -1133,6 +1201,7 @@ class AnalysisWindow(QMainWindow):
         self._canvas.set_hud_names(self._bar.behavior_order())
         self._bar.set_hidden(_settings().value(self._hidden_key(), [], type=list) or [])
         self._canvas.set_view(view)
+        self._restore_pairs()
         # The overlay belongs to the session that just left.
         self._canvas.set_heatmap(None)
         self._refresh_heatmap_export_state()
@@ -1660,6 +1729,59 @@ class AnalysisWindow(QMainWindow):
             return "review/hidden/none"
         path = str(Path(self._cohort[self._shown][0]).resolve())
         return f"review/hidden/{hashlib.sha1(path.encode('utf-8')).hexdigest()[:16]}"
+
+    def _pairs_key(self) -> str:
+        """Per keypoint set: the same model's sessions share their chosen pairs."""
+        names = "|".join(self._view.keypoint_names) if self._view is not None else ""
+        return f"review/kp_pairs/{hashlib.sha1(names.encode('utf-8')).hexdigest()[:16]}"
+
+    def _restore_pairs(self) -> None:
+        saved = _settings().value(self._pairs_key(), None, type=list)
+        if not saved:
+            self._canvas.set_pairs(None)
+            return
+        try:
+            pairs = [tuple(int(v) for v in str(item).split("-")) for item in saved]
+        except ValueError:
+            pairs = None
+        self._canvas.set_pairs(pairs)
+
+    def _set_pairs(self, pairs) -> None:
+        self._canvas.set_pairs(pairs)
+        if pairs is None:
+            _settings().remove(self._pairs_key())
+        else:
+            _settings().setValue(self._pairs_key(), [f"{i}-{j}" for i, j in pairs])
+        # Choosing pairs is asking to see them.
+        self._transport.distances_on.setChecked(True)
+
+    def _pairs_menu(self) -> QMenu:
+        """Which keypoint pairs the Distances overlay measures."""
+        from glider.gui.review.viewer import all_pairs
+
+        menu = QMenu(self)
+        names = list(self._view.keypoint_names) if self._view is not None else []
+        if len(names) < 2:
+            menu.addAction("Needs two or more keypoints").setEnabled(False)
+            return menu
+        current = set(self._canvas.pairs())
+        menu.addAction("Default pairs", lambda: self._set_pairs(None))
+        menu.addAction("All pairs", lambda: self._set_pairs(all_pairs(names)))
+        menu.addAction("None", lambda: self._set_pairs([]))
+        menu.addSeparator()
+        for pair in all_pairs(names):
+            i, j = pair
+            action = menu.addAction(f"{names[i]} – {names[j]}")
+            action.setCheckable(True)
+            action.setChecked(pair in current)
+            action.toggled.connect(
+                lambda on, p=pair: self._set_pairs(
+                    sorted(set(self._canvas.pairs()) | {p})
+                    if on
+                    else [q for q in self._canvas.pairs() if q != p]
+                )
+            )
+        return menu
 
     def _remember_hidden(self, keys: list) -> None:
         # Only on a change: _adopt's own set_hidden echoes the saved list back.
@@ -2791,7 +2913,7 @@ class AnalysisWindow(QMainWindow):
         # session's empty cells already say it), are not measurements.
         frame = frame[[c for c in frame.columns if not str(c).startswith("_") and c != "outside"]]
         try:
-            frame.to_csv(path, index=False)
+            frame.to_csv(path, index=False, encoding=_EXCEL_CSV)
         except OSError as e:
             QMessageBox.critical(self, "Export window", f"Could not write {path}: {e}")
             return
@@ -2967,9 +3089,114 @@ class AnalysisWindow(QMainWindow):
         if not path:
             return
         try:
-            frame.to_csv(path, index=False)
+            frame.to_csv(path, index=False, encoding=_EXCEL_CSV)
         except OSError as e:
             QMessageBox.critical(self, "Export epoch table", f"Could not write {path}: {e}")
+            return
+        self.statusBar().showMessage(f"Wrote {path}", 10000)
+
+    def _cohort_span(self) -> tuple[float, float] | None:
+        """Seconds from the earliest scored frame to the end of the latest, cohort-wide.
+
+        Each session on its own zero (see :meth:`range_rows`), so the span is
+        what a range would have to cover to reach every frame of every animal.
+        """
+        spans = []
+        for index, (_path, view) in enumerate(self._cohort):
+            bounds = self._scored_bounds(view)
+            if bounds is None:
+                continue
+            timeline = self._timeline_at(index)
+            spans.append(
+                (
+                    mk.seconds_at(timeline, view.fps, bounds[0]),
+                    mk.seconds_at(timeline, view.fps, bounds[1] + 1),
+                )
+            )
+        if not spans:
+            return None
+        return min(s for s, _ in spans), max(e for _, e in spans)
+
+    def _run_bins_dialog(self, minutes: float, *, has_selection: bool):
+        """``(bin_s, whole_session, shape)`` as chosen, or None if cancelled."""
+        from glider.gui.review.time_bins_dialog import TimeBinsDialog
+
+        dialog = TimeBinsDialog(minutes, has_selection=has_selection, parent=self)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return None
+            return dialog.bin_seconds(), dialog.whole_session(), dialog.layout_shape()
+        finally:
+            dialog.deleteLater()
+
+    def bin_frame(self, start_s: float, end_s: float, bin_s: float, shape: str):
+        """Every metric over consecutive ``bin_s`` bins of ``[start_s, end_s)``.
+
+        The epoch table's arithmetic with bins as the epochs: tidy is a row per
+        session per bin, wide a row per session with ``<bin>__<metric>``
+        columns. Every metric the cohort can answer goes in, as the range
+        stats export writes every column rather than the table's picks.
+        """
+        bins = time_bins(start_s, end_s, bin_s)
+        if not bins:
+            return None
+        rows = _zero_fill_across_epochs({b.key: self.range_rows(b.start_s, b.end_s) for b in bins})
+        metrics = [m.key for m in metric_catalog(r for block in rows.values() for r in block)]
+        tidy = tidy_frame(bins, rows, metrics)
+        if shape == "wide":
+            return wide_frame(tidy, metrics)
+        edges = {b.name: (b.start_s, b.end_s) for b in bins}
+        tidy = tidy.rename(columns={"range": "bin"})
+        tidy.insert(3, "bin_start_s", [edges[name][0] for name in tidy["bin"]])
+        tidy.insert(4, "bin_end_s", [edges[name][1] for name in tidy["bin"]])
+        return tidy
+
+    def _export_bins(self) -> None:
+        """The cohort cut into fixed-width time bins: every metric, per bin."""
+        if not self._cohort:
+            return
+        settings = _settings()
+        try:
+            minutes = float(settings.value("review/bin_minutes", 1.0))
+        except (TypeError, ValueError):
+            minutes = 1.0
+        picked = self._run_bins_dialog(minutes, has_selection=self._current_span is not None)
+        if picked is None:
+            return
+        bin_s, whole, shape = picked
+        settings.setValue("review/bin_minutes", bin_s / 60.0)
+        span = self._cohort_span() if whole else self._current_span
+        if span is None:
+            QMessageBox.information(
+                self, "Export time bins", "Nothing to export: no session has scored frames."
+            )
+            return
+        start_s, end_s = span
+        if whole:
+            # From zero (flow start), or earlier for frames before it, on a
+            # bin edge so every bin is whole but the last.
+            start_s = math.floor(min(0.0, start_s) / bin_s) * bin_s
+        root = self._cohort_root or self._session_folder(max(0, self._shown))
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export time bins",
+            str(root / f"time_bins_{bin_s / 60.0:g}min_{shape}.csv"),
+            "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            frame = self.bin_frame(start_s, end_s, bin_s, shape)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if frame is None:
+            QMessageBox.information(self, "Export time bins", "The span holds no whole frame.")
+            return
+        try:
+            frame.to_csv(path, index=False, encoding=_EXCEL_CSV)
+        except OSError as e:
+            QMessageBox.critical(self, "Export time bins", f"Could not write {path}: {e}")
             return
         self.statusBar().showMessage(f"Wrote {path}", 10000)
 

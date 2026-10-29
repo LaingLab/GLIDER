@@ -17,6 +17,9 @@ from glider.gui.review.viewer import (  # noqa: E402
     CHIP_H,
     KeypointCanvas,
     Transport,
+    all_pairs,
+    default_pairs,
+    pair_distances,
 )
 from glider.gui.styles import colors  # noqa: E402
 
@@ -252,3 +255,64 @@ def test_a_video_that_will_not_open_is_not_forgotten_by_the_session(canvas, monk
     assert not canvas.has_video()
     canvas.set_view(view)  # shown again: tried again
     assert canvas.has_video()
+
+
+MOUSE = ["nose", "l_ear", "r_ear", "l_body", "center", "r_body", "tail_base"]
+
+
+class TestKeypointPairs:
+    def test_the_mouse_set_gets_its_skeleton(self):
+        pairs = default_pairs(MOUSE)
+        assert (0, 4) in pairs and (1, 0) in pairs and (6, 4) in pairs
+        assert len(pairs) == 6
+
+    def test_any_spelling_of_the_centre(self):
+        assert default_pairs(["nose", "body_center", "tail_base"]) == [(0, 1), (2, 1)]
+
+    def test_an_unknown_set_is_chained_in_order(self):
+        assert default_pairs(["a", "b", "c"]) == [(0, 1), (1, 2)]
+        assert default_pairs(["a"]) == []
+
+    def test_all_pairs(self):
+        assert all_pairs(["a", "b", "c"]) == [(0, 1), (0, 2), (1, 2)]
+
+    def test_distances_are_in_pixels_and_nan_when_missing(self):
+        points = np.array([[0.0, 0.0], [3.0, 4.0], [np.nan, np.nan]])
+        got = pair_distances(points, [(0, 1), (0, 2), (0, 9)])
+        assert got[0] == pytest.approx(5.0)
+        assert np.isnan(got[1]) and np.isnan(got[2])
+
+
+class TestDistanceOverlay:
+    def _mouse_view(self):
+        xy = np.zeros((10, 7, 2))
+        xy[:, :, 0] = np.arange(7) * 20 + 100
+        xy[:, :, 1] = 200.0
+        return _view(labels=["groom"] * 10, frames=np.arange(10), xy=xy, keypoint_names=MOUSE)
+
+    def test_pairs_default_until_chosen(self, canvas):
+        canvas.set_view(self._mouse_view())
+        assert canvas.pairs() == default_pairs(MOUSE)
+        canvas.set_pairs([(0, 6), (0, 99)])  # an index past the set is dropped
+        assert canvas.pairs() == [(0, 6)]
+        canvas.set_pairs(None)
+        assert canvas.pairs() == default_pairs(MOUSE)
+
+    def test_pairs_belong_to_their_keypoint_set(self, canvas):
+        canvas.set_view(self._mouse_view())
+        canvas.set_pairs([(0, 6)])
+        canvas.set_view(_view())  # one keypoint: nothing to measure
+        assert canvas.pairs() == []
+        canvas.set_view(self._mouse_view())
+        assert canvas.pairs() == [(0, 6)]
+
+    def test_drawing_distances_paints_without_error(self, canvas):
+        canvas.set_view(self._mouse_view())
+        canvas.set_show_distances(True)
+        canvas.grab()  # runs paintEvent
+
+    def test_the_transport_has_the_toggle_off(self, qtbot):
+        transport = Transport()
+        qtbot.addWidget(transport)
+        assert transport.distances_on.text() == "Distances"
+        assert not transport.distances_on.isChecked()
