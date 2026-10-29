@@ -10,6 +10,7 @@ answer and how each answer reads.
 from __future__ import annotations
 
 import math
+import re
 import statistics
 from collections import Counter
 from collections.abc import Iterable
@@ -23,6 +24,7 @@ __all__ = [
     "Metric",
     "default_metrics",
     "metric_catalog",
+    "metric_sheets",
     "metric_text",
     "metric_value",
     "missing_reason",
@@ -274,3 +276,46 @@ def wide_frame(tidy: pd.DataFrame, metrics: list[str]) -> pd.DataFrame:
         for key in metrics:
             out[f"{name}__{key}"] = block[key]
     return out.reset_index()
+
+
+#: Characters Excel refuses in a sheet name, and its length limit.
+_SHEET_FORBIDDEN = re.compile(r"[\[\]:*?/\\]")
+_SHEET_MAX = 31
+
+
+def _sheet_name(label: str, taken: set[str]) -> str:
+    """``label`` as a legal, unique Excel sheet name."""
+    base = _SHEET_FORBIDDEN.sub("-", label).strip("' ") or "Measure"
+    name, n = base[:_SHEET_MAX], 1
+    while name.lower() in taken:  # Excel compares sheet names case-blind
+        n += 1
+        suffix = f" ({n})"
+        name = base[: _SHEET_MAX - len(suffix)] + suffix
+    taken.add(name.lower())
+    return name
+
+
+def metric_sheets(
+    tidy: pd.DataFrame, metrics: list[Metric], *, reserved: Iterable[str] = ()
+) -> list[tuple[str, Metric, pd.DataFrame]]:
+    """``(sheet name, metric, table)`` per metric: a row per session, a column per range.
+
+    For a workbook with a sheet per measure, the layout a stats package or a
+    plot wants. Sessions and ranges keep the order ``tidy`` has them in. A
+    metric no session has a value for gets no sheet: an empty one is clutter.
+    Sheet names are legal in Excel and unique, avoiding ``reserved``.
+    """
+    ranges = list(dict.fromkeys(tidy["range"]))
+    sessions = tidy.drop_duplicates("session")[["session", "group"]]
+    taken = {name.lower() for name in reserved}
+    sheets: list[tuple[str, Metric, pd.DataFrame]] = []
+    for metric in metrics:
+        if metric.key not in tidy or tidy[metric.key].isna().all():
+            continue
+        table = tidy.pivot(index="session", columns="range", values=metric.key)
+        table = table.reindex(index=sessions["session"], columns=ranges)
+        table.columns.name = None
+        table = table.reset_index()
+        table.insert(1, "group", sessions["group"].to_numpy())
+        sheets.append((_sheet_name(metric.label, taken), metric, table))
+    return sheets

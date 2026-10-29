@@ -2314,6 +2314,42 @@ class TestTimeBinExport:
         # Excel reads it as UTF-8 only with the byte-order mark.
         assert out.read_bytes().startswith(b"\xef\xbb\xbf")
 
+    def test_sheets_are_a_sheet_per_measure(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        book = win.bin_frame(0.0, 10.0, 5.0, "sheets")
+        assert list(book)[-2:] == ["Bins", "Measures"]
+        groom = book["Groom (s)"]
+        assert list(groom.columns) == ["session", "group", "0-5 s", "5-10 s"]
+        assert groom["0-5 s"].tolist() == pytest.approx([5.0, 5.0])
+        measures = book["Measures"].set_index("sheet")
+        assert measures.loc["Groom (s)", "column"] == "groom_s"
+        assert set(measures.index) == set(book) - {"Bins", "Measures"}
+        assert book["Bins"]["end_s"].tolist() == [5.0, 10.0]
+
+    def test_the_tick_writes_a_workbook(self, qtbot, tmp_path, monkeypatch):
+        pytest.importorskip("openpyxl")
+        win = self._win(qtbot, tmp_path)
+        out = tmp_path / "bins.xlsx"
+        monkeypatch.setattr(win, "_run_bins_dialog", lambda *a, **k: (5.0, True, "sheets"))
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window._settings",
+            lambda: QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat),
+        )
+        offered = []
+
+        def save_as(_parent, _title, default, kind):
+            offered.append((Path(default).suffix, kind))
+            return str(out), ""
+
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName", save_as
+        )
+        win._export_bins()
+        assert offered == [(".xlsx", "Excel Workbook (*.xlsx)")]
+        book = pd.read_excel(out, sheet_name=None)
+        assert "Groom (s)" in book and "Rear (s)" in book
+        assert book["Rear (s)"]["5-10 s"].tolist() == pytest.approx([5.0, 5.0])
+
     def test_cancelling_the_dialog_writes_nothing(self, qtbot, tmp_path, monkeypatch):
         win = self._win(qtbot, tmp_path)
         monkeypatch.setattr(win, "_run_bins_dialog", lambda *a, **k: None)

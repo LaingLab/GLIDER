@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -10,18 +11,22 @@ from PyQt6.QtWidgets import (
     QFormLayout,
 )
 
-__all__ = ["BIN_PRESETS_MIN", "TimeBinsDialog"]
+__all__ = ["BIN_PRESETS_MIN", "SHEETS", "TimeBinsDialog"]
 
 #: Offered in the bin box's drop-down; any other width can be typed.
 BIN_PRESETS_MIN = (1.0, 3.0, 5.0, 10.0)
 
 WHOLE, SELECTION = "whole", "selection"
+#: The layout of a workbook with a sheet per measure, in place of tidy or wide.
+SHEETS = "sheets"
 
 
 class TimeBinsDialog(QDialog):
-    """Bin width, the span to bin, and the CSV's shape."""
+    """Bin width, the span to bin, and the file's shape."""
 
-    def __init__(self, minutes: float, *, has_selection: bool, parent=None):
+    def __init__(
+        self, minutes: float, *, has_selection: bool, per_sheet: bool = False, parent=None
+    ):
         super().__init__(parent)
         self.setWindowTitle("Export time bins")
         form = QFormLayout(self)
@@ -47,6 +52,13 @@ class TimeBinsDialog(QDialog):
         self.shape = QComboBox()
         self.shape.addItem("Tidy: a row per session per bin", "tidy")
         self.shape.addItem("Wide: a row per session", "wide")
+        self.per_sheet = QCheckBox("One sheet per measure (Excel workbook)")
+        self.per_sheet.setToolTip(
+            "Each behaviour, zone and distance measure on its own sheet: "
+            "a row per session, a column per bin."
+        )
+        self.per_sheet.toggled.connect(lambda on: self.shape.setEnabled(not on))
+        self.per_sheet.setChecked(per_sheet)
         self._sync_preset(minutes)
         self.preset.activated.connect(self._preset_picked)
         self.bin_width.valueChanged.connect(self._sync_preset)
@@ -54,6 +66,7 @@ class TimeBinsDialog(QDialog):
         form.addRow("", self.bin_width)
         form.addRow("Span", self.span)
         form.addRow("Layout", self.shape)
+        form.addRow("", self.per_sheet)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -77,4 +90,4 @@ class TimeBinsDialog(QDialog):
         return self.span.currentData() == WHOLE
 
     def layout_shape(self) -> str:
-        return self.shape.currentData()
+        return SHEETS if self.per_sheet.isChecked() else self.shape.currentData()

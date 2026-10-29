@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import pandas as pd
 import pytest
 
 from glider.analysis.epochs import (
@@ -12,6 +13,7 @@ from glider.analysis.epochs import (
     Metric,
     default_metrics,
     metric_catalog,
+    metric_sheets,
     metric_text,
     metric_value,
     missing_reason,
@@ -201,3 +203,40 @@ class TestTimeBins:
     @pytest.mark.parametrize("start, end, width", [(0, 10, 0), (10, 10, 5), (10, 0, 5)])
     def test_an_empty_span_or_width_gives_no_bins(self, start, end, width):
         assert time_bins(start, end, width) == []
+
+
+class TestMetricSheets:
+    TIDY = pd.DataFrame(
+        {
+            "session": ["b", "a", "b", "a"],
+            "group": ["ChR2", "eYFP", "ChR2", "eYFP"],
+            "range": ["0-1 min", "0-1 min", "1-2 min", "1-2 min"],
+            "groom_s": [1.0, 2.0, 3.0, 4.0],
+            "freezing_s": [float("nan")] * 4,
+        }
+    )
+    METRICS = [Metric("groom_s", "Groom (s)"), Metric("freezing_s", "Freezing (s)")]
+
+    def test_a_row_per_session_and_a_column_per_bin(self):
+        [(name, metric, table)] = metric_sheets(self.TIDY, self.METRICS)
+        assert (name, metric.key) == ("Groom (s)", "groom_s")
+        assert list(table.columns) == ["session", "group", "0-1 min", "1-2 min"]
+        # Sessions stay in the order they came, each with its group.
+        assert table.values.tolist() == [["b", "ChR2", 1.0, 3.0], ["a", "eYFP", 2.0, 4.0]]
+
+    def test_a_metric_nobody_has_gets_no_sheet(self):
+        assert [m.key for _, m, _ in metric_sheets(self.TIDY, self.METRICS)] == ["groom_s"]
+
+    def test_names_are_legal_unique_and_avoid_reserved_ones(self):
+        tidy = self.TIDY.assign(a=1.0, b=2.0, c=3.0, d=4.0)
+        metrics = [
+            Metric("a", "Zone [left]: time / visits?"),
+            Metric("b", "x" * 40),
+            Metric("c", "x" * 40),
+            Metric("d", "bins"),
+        ]
+        names = [n for n, _, _ in metric_sheets(tidy, metrics, reserved=["Bins"])]
+        assert names[0] == "Zone -left-- time - visits-"
+        assert all(len(n) <= 31 for n in names)
+        assert names[1] != names[2]
+        assert names[3] == "bins (2)"
