@@ -18,6 +18,7 @@ from glider.analysis.epochs import (
     summarize,
     threshold_text,
     tidy_frame,
+    time_bins,
     wide_frame,
 )
 
@@ -176,3 +177,27 @@ def test_retrieval_metrics_join_the_catalog_only_when_present():
     keys = [m.key for m in metric_catalog([row])]
     assert {"pups_retrieved", "dam_in_nest_frac", "nose_nest_mean_cm"} <= set(keys)
     assert "pups_retrieved" not in [m.key for m in metric_catalog([{}])]
+
+
+class TestTimeBins:
+    def test_whole_minutes_are_named_in_minutes(self):
+        bins = time_bins(0.0, 180.0, 60.0)
+        assert [b.name for b in bins] == ["0–1 min", "1–2 min", "2–3 min"]
+        assert [(b.start_s, b.end_s) for b in bins] == [(0, 60), (60, 120), (120, 180)]
+        assert len({b.key for b in bins}) == 3
+
+    def test_the_last_bin_is_clipped_to_the_end(self):
+        bins = time_bins(0.0, 150.0, 60.0)
+        assert bins[-1].name == "2–2.5 min"
+        assert bins[-1].end_s == 150.0
+
+    def test_other_widths_are_named_in_seconds(self):
+        assert [b.name for b in time_bins(0.0, 60.0, 30.0)] == ["0–30 s", "30–60 s"]
+
+    def test_edges_stay_on_multiples_of_the_width(self):
+        bins = time_bins(90.0, 200.0, 60.0)
+        assert [(b.start_s, b.end_s) for b in bins] == [(90, 120), (120, 180), (180, 200)]
+
+    @pytest.mark.parametrize("start, end, width", [(0, 10, 0), (10, 10, 5), (10, 0, 5)])
+    def test_an_empty_span_or_width_gives_no_bins(self, start, end, width):
+        assert time_bins(start, end, width) == []

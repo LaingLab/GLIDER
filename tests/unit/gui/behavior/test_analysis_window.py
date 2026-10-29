@@ -11,7 +11,7 @@ import pytest
 
 pytest.importorskip("PyQt6")
 
-from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6.QtCore import QSettings, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QKeyEvent  # noqa: E402
 
 from glider.analysis.behavior.session_view import SessionView  # noqa: E402
@@ -2259,6 +2259,109 @@ class TestMarkersInTheWindow:
         assert "1 marker" in win._status.text()
 
 
+class TestTimeBinExport:
+    """Fixed-width bins of every session: the epoch table's maths, bins as epochs."""
+
+    def _win(self, qtbot, tmp_path):
+        # 300 frames at 30 fps: 5 s of groom, then 5 s of rear.
+        paths = [
+            _ethogram(tmp_path / sid / "analysis", ["groom"] * 150 + ["rear"] * 150)
+            for sid in ("s1", "s2")
+        ]
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many(paths)
+        return win
+
+    def test_tidy_is_a_row_per_session_per_bin(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        frame = win.bin_frame(0.0, 10.0, 5.0, "tidy")
+        assert len(frame) == 4
+        assert list(frame.columns[:5]) == ["session", "group", "bin", "bin_start_s", "bin_end_s"]
+        first = frame[frame["bin"] == "0–5 s"]
+        second = frame[frame["bin"] == "5–10 s"]
+        assert first["groom_s"].tolist() == pytest.approx([5.0, 5.0])
+        assert first["rear_s"].tolist() == pytest.approx([0.0, 0.0])
+        assert second["rear_s"].tolist() == pytest.approx([5.0, 5.0])
+
+    def test_wide_is_a_row_per_session(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        frame = win.bin_frame(0.0, 10.0, 5.0, "wide")
+        assert len(frame) == 2
+        assert "5–10 s__rear_s" in frame.columns
+
+    def test_the_whole_session_span_reaches_the_last_frame(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        assert win._cohort_span() == pytest.approx((0.0, 10.0))
+
+    def test_export_writes_the_bins(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path)
+        out = tmp_path / "bins.csv"
+        monkeypatch.setattr(win, "_run_bins_dialog", lambda *a, **k: (4.0, True, "tidy"))
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window._settings",
+            lambda: QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat),
+        )
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: (str(out), ""),
+        )
+        win._export_bins()
+        written = pd.read_csv(out)
+        # 10 s in 4 s bins: two whole and one clipped, for each of two sessions.
+        assert sorted(set(written["bin"])) == ["0–4 s", "4–8 s", "8–10 s"]
+        assert len(written) == 6
+
+    def test_cancelling_the_dialog_writes_nothing(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path)
+        monkeypatch.setattr(win, "_run_bins_dialog", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window._settings",
+            lambda: QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat),
+        )
+        asked = []
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QFileDialog.getSaveFileName",
+            lambda *a, **k: asked.append(a) or ("", ""),
+        )
+        win._export_bins()
+        assert asked == []
+
+
+class TestKeypointDistances:
+    def _win(self, qtbot, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window._settings",
+            lambda: QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat),
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        return win
+
+    def test_the_toggle_drives_the_canvas(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        assert win._canvas._show_distances is False
+        win._transport.distances_on.setChecked(True)
+        assert win._canvas._show_distances is True
+
+    def test_chosen_pairs_survive_reopening(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        assert len(win._view.keypoint_names) >= 2
+        win._set_pairs([(0, 1)])
+        assert win._transport.distances_on.isChecked()
+        again = AnalysisWindow()
+        qtbot.addWidget(again)
+        again.load(_session(tmp_path / "w"))
+        assert again._canvas.pairs() == [(0, 1)]
+
+    def test_the_menu_lists_every_pair(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        n = len(win._view.keypoint_names)
+        checkable = [a for a in win._pairs_menu().actions() if a.isCheckable()]
+        assert len(checkable) == n * (n - 1) // 2
+
+
 class TestTheEpochTableInTheWindow:
     """Cohort range markers become columns; a row is an animal; exports match."""
 
@@ -2354,6 +2457,7 @@ class TestTheEpochTableInTheWindow:
             "Range stats (CSV)…",
             "Epoch table, tidy (CSV)…",
             "Epoch table, wide (CSV)…",
+            "Time bins (CSV)…",
             "Markers (CSV)…",
             "Retrieval tables (CSV)…",
             "Nest distance per frame (CSV)…",
