@@ -321,3 +321,103 @@ def test_a_persistent_false_positive_outsits_an_intermittent_animal():
     # The loss is recorded, not silent: every burst is accounted for.
     assert len(res.dropped) == len(occluded)
     assert {t for t, _s, _e in res.dropped} == {20 + i for i in range(10)}
+
+
+# ---------------------------------------------------------------------------
+# Id changes must not lose the animal
+#
+# Each of these used to drop a whole stretch of an animal: every fragment after
+# the change was refused by every slot, leaving NaN for the rest of the video.
+# ---------------------------------------------------------------------------
+
+
+def covered(res, slot):
+    return int(np.isfinite(res.tracks[slot].xy[:, 0, 0]).sum())
+
+
+def test_a_new_id_starting_before_the_old_one_ends_continues_the_animal():
+    # A duplicate box: id 2 appears on the mouse a few frames before id 1 dies.
+    # Id 1 is the longer, so id 2 is the one that used to be refused.
+    before = frag(1, 0, 603, x=100, y=100)
+    after = frag(2, 600, 400, x=102, y=100)
+    other = frag(3, 0, 1000, x=600, y=600)
+    res = run([before, after, other], n_animals=2, n_frames=1000)
+    assert res.dropped == []
+    assert covered(res, 0) == 1000 and covered(res, 1) == 1000
+    assert np.allclose(res.tracks[0].xy[900, :, 0], 102.0)
+
+
+def test_shared_handoff_frames_keep_the_longer_fragment():
+    before = frag(1, 0, 603, x=100, y=100)
+    after = frag(2, 600, 400, x=102, y=100)
+    res = run([before, after], n_animals=1, n_frames=1000)
+    assert np.allclose(res.tracks[0].xy[601, :, 0], 100.0)
+
+
+def test_a_handoff_overlap_far_from_the_slot_is_refused():
+    # Briefly coexisting in two places is two things, not one changing id.
+    slot = [frag(1, 0, 100, x=0, y=0)]
+    elsewhere = frag(2, 98, 100, x=500, y=0)
+    assert assignment_cost(slot, elsewhere, max_travel_px_per_frame=40.0) == math.inf
+
+
+def test_a_handoff_prices_above_a_clean_join():
+    overlapping = assignment_cost(
+        [frag(1, 0, 100, x=0, y=0)], frag(2, 98, 100, x=1, y=0), max_travel_px_per_frame=40.0
+    )
+    clean = assignment_cost(
+        [frag(1, 0, 100, x=0, y=0)], frag(2, 100, 100, x=30, y=0), max_travel_px_per_frame=40.0
+    )
+    assert clean < overlapping < math.inf
+
+
+def test_an_id_given_back_by_the_tracker_leaves_its_hole_fillable():
+    # ByteTrack re-finds id 1 after id 2 covered the animal: id 1's span covers
+    # id 2 but it has no frames there, so nothing conflicts.
+    head, tail = frag(1, 0, 300, x=100, y=100), frag(1, 600, 400, x=100, y=100)
+    given_back = Fragment(
+        track_id=1,
+        frames=np.concatenate([head.frames, tail.frames]),
+        xy=np.concatenate([head.xy, tail.xy]),
+        confidence=np.concatenate([head.confidence, tail.confidence]),
+    )
+    filler = frag(2, 300, 300, x=101, y=100)
+    other = frag(3, 0, 1000, x=600, y=600)
+    res = run([given_back, filler, other], n_animals=2, n_frames=1000)
+    assert res.dropped == []
+    assert covered(res, 0) == 1000
+    assert np.allclose(res.tracks[0].xy[450, :, 0], 101.0)
+
+
+def test_seeds_are_not_one_animal_before_and_after_an_id_change():
+    # Id 1 and id 2 are the longest, but they are the same mouse. Seeding both
+    # used to leave the other mouse no slot, and splice it into both of them.
+    first = frag(1, 0, 500, x=100, y=100)
+    second = frag(2, 500, 500, x=100, y=100)
+    bursts = [frag(10 + i, i * 100, 100, x=600, y=600) for i in range(10)]
+    res = run([first, second, *bursts], n_animals=2, n_frames=1000)
+    assert res.dropped == []
+    assert covered(res, 0) == 1000 and covered(res, 1) == 1000
+    for slot in res.tracks:
+        assert len(set(res.tracks[slot].xy[:, 0, 0].tolist())) == 1, "a slot mixed two animals"
+
+
+def test_a_jump_at_an_id_change_is_kept_when_only_one_slot_is_possible():
+    # Far past the travel limit, but the other mouse is busy on every one of
+    # these frames, so the count says who this is.
+    before = frag(1, 0, 400, x=100, y=100)
+    after = frag(2, 401, 599, x=300, y=100)
+    other = frag(3, 0, 1000, x=600, y=600)
+    res = run([before, after, other], n_animals=2, n_frames=1000)
+    assert res.dropped == []
+    assert covered(res, 0) == 1000 - 1 or covered(res, 1) == 1000 - 1
+    assert res.stitched[0] or res.stitched[1]
+
+
+def test_a_short_jumping_fragment_is_not_kept_by_elimination():
+    # Under a second is as likely a flicker as an animal.
+    before = frag(1, 0, 400, x=100, y=100)
+    flicker = frag(2, 401, 20, x=300, y=100)
+    other = frag(3, 0, 1000, x=600, y=600)
+    res = run([before, flicker, other], n_animals=2, n_frames=1000)
+    assert res.dropped == [(2, 401, 420)]
