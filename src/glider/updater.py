@@ -1,13 +1,16 @@
 """In-app update checker.
 
-On application startup we run a single, cheap, best-effort check against the
-GitHub Releases API. If a newer tagged release exists, a modeless dialog tells
-the user about it and offers three actions:
+On application startup we run a single, cheap, best-effort check against
+GitHub. A git checkout (what the installers make) is compared with ``main``:
+if ``main`` has commits the checkout lacks, the dialog offers to ``git pull``
+them. A prebuilt app has no checkout, so it falls back to GitHub Releases and
+offers to open the newer release's page. Either way the dialog has three
+actions:
 
-* **Download** — open the release page in the system browser.
+* **Update now** / **Download** — pull ``main``, or open the release page.
 * **Later** — dismiss; check again next launch.
-* **Don't ask again** — suppress future prompts *for this specific version*.
-  Next release resets the prompt.
+* **Don't ask again** — suppress future prompts *for this specific version*
+  (a release tag, or the commit ``main`` is at). The next one resets it.
 
 The check is strictly non-blocking: it runs on a :class:`QThread`, has a 5-second
 timeout, and silently swallows all network errors. The user must never see a
@@ -29,6 +32,8 @@ Design invariants
 from __future__ import annotations
 
 import logging
+import subprocess
+from pathlib import Path
 from typing import NamedTuple
 
 import httpx
@@ -47,6 +52,12 @@ OWNER = "LaingLab"
 REPO = "glider"
 RELEASES_API = f"https://api.github.com/repos/{OWNER}/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{OWNER}/{REPO}/releases/latest"
+BRANCH = "main"
+COMPARE_API = f"https://api.github.com/repos/{OWNER}/{REPO}/compare/{{base}}...{BRANCH}"
+
+# src/glider/updater.py -> the checkout. Only a checkout if it holds ``.git``
+# (a directory, or a file in a worktree); a prebuilt app has neither.
+REPO_DIR = Path(__file__).resolve().parents[2]
 
 # How long we're willing to block a worker thread on the GitHub API before
 # giving up. Five seconds is long enough for a slow home/lab connection and
@@ -64,6 +75,8 @@ class UpdateInfo(NamedTuple):
     latest_version: str
     release_url: str
     release_notes: str
+    # Commits ``main`` is ahead of the checkout; None for a release check.
+    commits_behind: int | None = None
 
 
 # --- Pure helpers (testable without Qt) --------------------------------------
@@ -133,6 +146,107 @@ def fetch_latest_release(
     )
 
 
+def local_commit(repo_dir: Path = REPO_DIR) -> str | None:
+    """The checkout's HEAD commit, or None when this isn't a git checkout."""
+    if not (repo_dir / ".git").exists():
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            check=True,
+        )
+    except Exception:
+        logger.debug("Could not read the checkout's commit", exc_info=True)
+        return None
+    return out.stdout.strip() or None
+
+
+def fetch_main_update(
+    base: str,
+    timeout: float = REQUEST_TIMEOUT_SECONDS,
+    *,
+    api_url: str = COMPARE_API,
+) -> UpdateInfo | None:
+    """How far GitHub's ``main`` is ahead of commit ``base``.
+
+    Returns None on any failure, including a ``base`` GitHub has never seen
+    (an unpushed local commit), which GitHub answers with a 404.
+    """
+    try:
+        response = httpx.get(
+            api_url.format(base=base),
+            timeout=timeout,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        response.raise_for_status()
+        data = response.json()
+        behind = int(data["ahead_by"])  # main is ahead of base by this many
+        commits = data.get("commits") or []
+        head = commits[-1]["sha"] if commits else base
+    except Exception:
+        logger.debug("Update check failed", exc_info=True)
+        return None
+
+    # Newest first, subject lines only — the dialog shows a handful.
+    subjects = [(c.get("commit", {}).get("message") or "").splitlines()[0:1] for c in commits]
+    notes = "\n".join(f"• {s[0]}" for s in reversed(subjects) if s)
+    return UpdateInfo(
+        latest_version=head,
+        release_url=data.get("html_url") or f"https://github.com/{OWNER}/{REPO}",
+        release_notes=notes,
+        commits_behind=behind,
+    )
+
+
+def fetch_update() -> UpdateInfo | None:
+    """Compare a checkout with ``main``; anything else with the latest release."""
+    base = local_commit()
+    return fetch_main_update(base) if base else fetch_latest_release()
+
+
+def pull_main(repo_dir: Path = REPO_DIR) -> tuple[bool, str]:
+    """``git pull --ff-only`` the checkout. Returns (ok, message for the user).
+
+    Fast-forward only, so local changes or a diverged branch make it refuse
+    rather than merge — the user's checkout is never left mid-merge.
+    """
+    try:
+        before = local_commit(repo_dir)
+        out = subprocess.run(
+            ["git", "-C", str(repo_dir), "pull", "--ff-only", "origin", BRANCH],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    if out.returncode != 0:
+        return False, (out.stderr or out.stdout).strip()
+    changed = subprocess.run(
+        ["git", "-C", str(repo_dir), "diff", "--name-only", f"{before}..HEAD"],
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    # ponytail: dependencies are only flagged, not installed — reinstalling
+    # needs the extras the installer was run with, which we don't record.
+    if "pyproject.toml" in changed or "uv.lock" in changed:
+        return True, (
+            "GLIDER was updated, and its dependencies changed.\n"
+            "Run the installer again (with the same options) before restarting."
+        )
+    return True, "GLIDER was updated. Restart it to use the new version."
+
+
+def update_available(info: UpdateInfo, current_version: str) -> bool:
+    """Whether ``info`` describes something newer than what is running."""
+    if info.commits_behind is not None:
+        return info.commits_behind > 0
+    return is_newer(info.latest_version, current_version)
+
+
 # --- Qt plumbing -------------------------------------------------------------
 
 
@@ -147,7 +261,7 @@ class _UpdateFetcher(QThread):
     result = pyqtSignal(object)  # emits UpdateInfo | None
 
     def run(self) -> None:  # pragma: no cover — thin wrapper; logic in fetch_latest_release
-        self.result.emit(fetch_latest_release())
+        self.result.emit(fetch_update())
 
 
 class UpdateChecker(QObject):
@@ -215,12 +329,17 @@ class UpdateChecker(QObject):
                 )
             return
 
-        if not is_newer(info.latest_version, self._current_version):
+        if not update_available(info, self._current_version):
             if not self._silent:
+                latest = (
+                    f"has everything on {BRANCH}"
+                    if info.commits_behind is not None
+                    else "is the latest release"
+                )
                 QMessageBox.information(
                     self._parent_widget,
                     "Check for Updates",
-                    f"You're up to date — GLIDER {self._current_version} " "is the latest release.",
+                    f"You're up to date — GLIDER {self._current_version} {latest}.",
                 )
             return
 
@@ -240,17 +359,24 @@ class UpdateChecker(QObject):
         box = QMessageBox(self._parent_widget)
         box.setWindowTitle("GLIDER Update Available")
         box.setIcon(QMessageBox.Icon.Information)
-        box.setText(
-            f"GLIDER {info.latest_version} is available.\n"
-            f"You have version {self._current_version}."
-        )
+        from_main = info.commits_behind is not None
+        if from_main:
+            n = info.commits_behind
+            box.setText(f"{n} new change{'s' if n != 1 else ''} on {BRANCH} since your copy.")
+        else:
+            box.setText(
+                f"GLIDER {info.latest_version} is available.\n"
+                f"You have version {self._current_version}."
+            )
         if info.release_notes:
             # Trim to a handful of lines — full release notes can be very
             # long and we don't want the dialog to grow without bound.
             snippet_lines = info.release_notes.splitlines()[:8]
             box.setInformativeText("\n".join(snippet_lines))
 
-        download_btn = box.addButton("Download", QMessageBox.ButtonRole.AcceptRole)
+        download_btn = box.addButton(
+            "Update now" if from_main else "Download", QMessageBox.ButtonRole.AcceptRole
+        )
         later_btn = box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
         skip_btn = box.addButton("Don't ask again", QMessageBox.ButtonRole.DestructiveRole)
         box.setDefaultButton(download_btn)
@@ -258,7 +384,17 @@ class UpdateChecker(QObject):
         box.exec()
         clicked = box.clickedButton()
 
-        if clicked is download_btn:
+        if clicked is download_btn and from_main:
+            ok, message = pull_main()
+            if ok:
+                QMessageBox.information(self._parent_widget, "GLIDER Updated", message)
+            else:
+                QMessageBox.warning(
+                    self._parent_widget,
+                    "Update Failed",
+                    f"Could not pull {BRANCH}:\n\n{message}",
+                )
+        elif clicked is download_btn:
             QDesktopServices.openUrl(QUrl(info.release_url))
         elif clicked is skip_btn:
             self._settings.setValue(SKIPPED_VERSION_KEY, info.latest_version)
