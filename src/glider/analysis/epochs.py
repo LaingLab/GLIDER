@@ -69,6 +69,13 @@ _RETRIEVAL = (
     Metric("dam_in_nest_frac", "Dam in nest (fraction)", 2),
     Metric("nose_nest_mean_cm", "Nose to nest (cm)", 1),
 )
+# Grid coverage over the drawn arena (AnalysisWindow._exploration_columns).
+# "_percent", not "_pct": metric_value would read a `_pct` key as seconds.
+_EXPLORATION = (
+    Metric("cells_entered", "Grid cells entered", 0),
+    Metric("explored_percent", "Explored %", 1),
+    Metric("full_coverage_s", "Time to enter every cell (s)", 1),
+)
 _THRESHOLDS = (
     Metric("freeze_threshold", "Freeze < (cm/s)", 2),
     Metric("dart_threshold", "Dart > (cm/s)", 2),
@@ -84,7 +91,8 @@ def metric_catalog(rows: Iterable[dict]) -> list[Metric]:
 
     Movement; each behaviour as seconds, as a share of the range and as bouts
     begun in it; each
-    zone; each device; pup retrieval where a session was scored for it;
+    zone; grid exploration where an arena was drawn; each device; pup
+    retrieval where a session was scored for it;
     then the thresholds each session was scored with. Freezing and darting
     are always offered -- every row carries them.
     """
@@ -106,6 +114,8 @@ def metric_catalog(rows: Iterable[dict]) -> list[Metric]:
             Metric(f"zone_{zone}_entries", f"{zone} entries", 0),
             Metric(f"zone_{zone}_latency_s", f"{zone} latency (s)", 2),
         ]
+    if any("explored_percent" in row for row in rows):
+        out += list(_EXPLORATION)
     out += [Metric(f"hw_{device}_on_s", f"{device} on (s)", 2) for device in devices]
     if any("pups_retrieved" in row for row in rows):
         out += list(_RETRIEVAL)
@@ -181,6 +191,12 @@ def missing_reason(row: dict, key: str) -> str:
         return "No zone data for this session"
     if key.startswith("hw_"):
         return "This session has no such device"
+    if key in ("cells_entered", "explored_percent"):
+        return "No arena drawn for this session"
+    if key == "full_coverage_s":
+        if key in row:
+            return "Some cell was never entered in this range"
+        return "No arena drawn for this session"
     if key in ("freeze_threshold", "dart_threshold"):
         if row.get(f"{key}_px_frame") is not None:
             return "Uncalibrated: shown in px/frame"

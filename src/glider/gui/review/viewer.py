@@ -118,6 +118,12 @@ class KeypointCanvas(QWidget):
         self._show_video = True
         self._zones = None
         self._heatmap = None
+        # The drawn floor, the grid laid over it (cells a side, 0 = none) and
+        # which of its cells the selected range visited (row = y, col = x).
+        self._arena = None
+        self._grid_n = 0
+        self._visited = None
+        self._show_arena = True
         self._reader = None  # VideoFileSource, opened lazily
         self._video_failed = False  # this view's video would not open; retried on set_view
         self._cached: tuple[int, QImage] | None = None
@@ -155,6 +161,27 @@ class KeypointCanvas(QWidget):
     def set_zones(self, zones) -> None:
         """Outline a zone configuration over the arena."""
         self._zones = zones
+        self.update()
+
+    def set_arena(self, arena) -> None:
+        """Outline a drawn floor (an ``ArenaCalibration``), or clear it with None."""
+        self._arena = arena
+        self._visited = None
+        self.update()
+
+    def set_grid(self, n: int) -> None:
+        """Lay an ``n`` x ``n`` grid over the arena; 0 or 1 draws none."""
+        self._grid_n = max(0, int(n))
+        self._visited = None
+        self.update()
+
+    def set_visited(self, visited) -> None:
+        """Shade the grid cells the range entered: ``(n, n)`` bool, or None."""
+        self._visited = visited
+        self.update()
+
+    def set_show_arena(self, enabled: bool) -> None:
+        self._show_arena = bool(enabled)
         self.update()
 
     def current_frame(self):
@@ -308,6 +335,8 @@ class KeypointCanvas(QWidget):
             painter.drawImage(arena, self._heatmap)
         painter.setPen(QPen(QColor(colors.BORDER), 1))
         painter.drawRect(arena)
+        if self._show_arena and self._arena is not None:
+            self._paint_arena(painter, arena)
         if self._show_zones:
             self._paint_zones(painter, arena)
 
@@ -370,6 +399,43 @@ class KeypointCanvas(QWidget):
         for zone in getattr(self._zones, "zones", []):
             b, g, r = zone.color
             self._paint_zone_shape(painter, arena, zone, QPen(QColor(r, g, b), 2))
+
+    def _paint_arena(self, painter, arena: QRectF) -> None:
+        """The drawn floor, its grid, and the grid cells the range visited.
+
+        The arena is stored normalised, like the zones, so it maps onto the
+        on-screen rectangle directly. The grid lives on the floor, in
+        centimetres, so under a tilted camera its far cells are drawn smaller.
+        """
+        from glider.analysis.behavior import exploration
+
+        def to_widget(points):
+            return [
+                QPointF(arena.x() + x * arena.width(), arena.y() + y * arena.height())
+                for x, y in points
+            ]
+
+        colour = QColor(colors.SUCCESS)
+        try:
+            n = self._grid_n
+            if n >= 1 and self._visited is not None and self._visited.shape == (n, n):
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(colors.qcolor_with_alpha(colour, 0.18))
+                for row, col in zip(*np.nonzero(self._visited), strict=True):
+                    painter.drawPolygon(
+                        *to_widget(exploration.cell_polygon(self._arena, n, int(col), int(row)))
+                    )
+            if n >= 2:
+                painter.setPen(QPen(colors.qcolor_with_alpha(colour, 0.9), 1.5))
+                for line in exploration.grid_segments(self._arena, n):
+                    painter.drawPolyline(*to_widget(line))
+            width, height = self._view.resolution
+            outline = [(x / width, y / height) for x, y in self._arena.outline(width, height)]
+        except ValueError:  # a degenerate arena: nothing sensible to draw
+            return
+        painter.setPen(QPen(colour, 2))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPolygon(*to_widget(outline))
 
     @staticmethod
     def _paint_zone_shape(painter, arena: QRectF, zone, pen: QPen) -> None:
@@ -753,6 +819,9 @@ class Transport(QFrame):
             "Heatmap", "Where the animal spent the selected range", checked=False
         )
         self.zones_on = _toggle("Zones", "Outline the loaded zones", checked=True)
+        self.arena_on = _toggle(
+            "Arena", "Outline the drawn arena floor and its exploration grid", checked=True
+        )
         self.hud_on = _toggle(
             "HUD", "Name the behaviour and active outputs on each frame", checked=True
         )
@@ -764,6 +833,7 @@ class Transport(QFrame):
             self.trail_on,
             self.heatmap_on,
             self.zones_on,
+            self.arena_on,
             self.hud_on,
         ):
             row.addWidget(toggle)
