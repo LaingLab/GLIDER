@@ -26,13 +26,25 @@ from glider.vision.pose.tracks import PoseTracks
 
 __all__ = ["Fragment", "assignment_cost", "seed_slots", "ConsolidationResult", "consolidate"]
 
+#: Frames two ids may share and still be one animal changing id. A duplicate box
+#: lets the new id start while the old one is still alive, and ByteTrack keeps a
+#: lost id for ``track_buffer`` (30) frames, so a real handoff can overlap by a
+#: few frames. Two ids together for longer than this are two things.
+MAX_HANDOFF_OVERLAP_FRAMES = 30
+
+#: A fragment this long is an animal rather than a flicker, so when the animal
+#: count leaves it only one possible slot, it goes there despite a jump.
+MIN_ELIMINATION_SECONDS = 1.0
+
 
 @dataclass
 class Fragment:
     """One tracker id's continuous run of detections.
 
     ``frames`` is strictly increasing but need not be contiguous -- a tracker
-    may hold an id across a frame it did not detect.
+    may hold an id across a frame it did not detect, and ByteTrack can give a
+    lost id back after another id has covered the animal in between. So
+    ``start``/``end`` bound a fragment without saying it was there throughout.
     """
 
     track_id: int
@@ -88,6 +100,11 @@ def seed_slots(
     ``remaining`` is longest-first, which is the order Task 3 assigns in -- a
     long fragment carries more evidence about where it belongs, so it should
     claim its slot before a short one can mis-claim it.
+
+    Seeds have to be seen together. Two long fragments that never coexist may
+    be one animal before and after an id change, and seeding both would leave
+    the other animal no slot to go to. A seed that coexists with none of the
+    others is only taken when nothing better is left to fill the slot.
     """
     usable = [f for f in fragments if len(f) >= min_fragment_frames]
     # Sort key is total: length descending, then first frame, then track id.
@@ -95,26 +112,72 @@ def seed_slots(
     # between runs, which is the same reproducibility problem as above.
     usable.sort(key=lambda f: (-len(f), f.start, f.track_id))
 
-    seeds = usable[:n_animals]
-    remaining = usable[n_animals:]
+    seeds: list[Fragment] = []
+    for fragment in usable:
+        if len(seeds) == n_animals:
+            break
+        if all(len(_shared_rows(fragment, s)[0]) > MAX_HANDOFF_OVERLAP_FRAMES for s in seeds):
+            seeds.append(fragment)
+    remaining = [f for f in usable if not any(f is s for s in seeds)]
+    while len(seeds) < n_animals and remaining:
+        seeds.append(remaining.pop(0))
     seeds.sort(key=lambda f: (f.start, f.track_id))
     return seeds, remaining
 
 
-def _gap_and_distance(a: Fragment, b: Fragment) -> tuple[int, float]:
-    """Temporal gap and spatial jump between two non-overlapping fragments.
+def _shared_rows(a: Fragment, b: Fragment) -> tuple[np.ndarray, np.ndarray]:
+    """Rows of *a* and of *b* holding the frames both were detected on."""
+    _, in_a, in_b = np.intersect1d(a.frames, b.frames, assume_unique=True, return_indices=True)
+    return in_a, in_b
 
-    Measured in whichever direction they actually sit: *b* may precede *a*, and
-    measuring only backwards would strand a fragment that starts before the
-    seed does -- it would be dropped despite being the same animal.
+
+def _gap_and_distance(a: Fragment, b: Fragment) -> tuple[int, float]:
+    """Temporal gap and spatial jump between two fragments sharing no frames.
+
+    Measured between the closest frames they actually hold, in whichever
+    direction those sit: *b* may precede *a*, and measuring only backwards would
+    strand a fragment that starts before the seed does -- it would be dropped
+    despite being the same animal. *b* may equally sit in a hole inside *a*.
     """
-    if a.end < b.start:
-        gap = b.start - a.end
-        here, there = a.last_centroid(), b.first_centroid()
+    after = np.searchsorted(a.frames, b.frames)
+    gaps_after = np.where(
+        after < len(a), a.frames[np.minimum(after, len(a) - 1)] - b.frames, np.inf
+    )
+    gaps_before = np.where(after > 0, b.frames - a.frames[np.maximum(after - 1, 0)], np.inf)
+
+    row_after, row_before = int(np.argmin(gaps_after)), int(np.argmin(gaps_before))
+    if gaps_before[row_before] <= gaps_after[row_after]:
+        row_b, row_a = row_before, int(after[row_before]) - 1
     else:
-        gap = a.start - b.end
-        here, there = a.first_centroid(), b.last_centroid()
-    return gap, float(np.linalg.norm(there - here))
+        row_b, row_a = row_after, int(after[row_after])
+    gap = abs(int(a.frames[row_a]) - int(b.frames[row_b]))
+    return gap, float(np.linalg.norm(b.centroid_at(row_b) - a.centroid_at(row_a)))
+
+
+def _handoff_cost(
+    slot: list[Fragment], fragment: Fragment, *, max_travel_px_per_frame: float
+) -> float:
+    """Cost of a *fragment* that shares frames with *slot*, or ``math.inf``.
+
+    Accepted only if it looks like one animal changing id: briefly together, in
+    the same place, with the fragment mostly adding frames the slot lacks.
+    Priced above any clean join, so a slot it fits without overlapping wins.
+    """
+    pairs = [(other, *_shared_rows(other, fragment)) for other in slot]
+    n_shared = sum(len(in_other) for _, in_other, _ in pairs)
+    if n_shared > MAX_HANDOFF_OVERLAP_FRAMES or n_shared * 2 >= len(fragment):
+        return math.inf
+
+    distances = [
+        np.linalg.norm(fragment.centroid_at(j) - other.centroid_at(i))
+        for other, in_other, in_fragment in pairs
+        for i, j in zip(in_other, in_fragment, strict=True)
+    ]
+    finite = [d for d in distances if math.isfinite(d)]
+    distance = float(np.median(finite)) if finite else math.inf
+    if distance > max_travel_px_per_frame:
+        return math.inf
+    return max_travel_px_per_frame + distance
 
 
 def assignment_cost(
@@ -127,9 +190,11 @@ def assignment_cost(
 
     ``math.inf`` means refused, and there are three ways to earn it:
 
-    * the fragment's frames overlap frames the slot already holds -- one animal
-      cannot be in two places, and this constraint is the entire value of
-      knowing the animal count up front;
+    * the fragment holds frames the slot already holds -- one animal cannot be
+      in two places, and this constraint is the entire value of knowing the
+      animal count up front. The exception is the brief overlap of an id
+      handoff, see :func:`_handoff_cost`. Actual frames are compared, not
+      spans: another id can cover a hole in a fragment the tracker gave back;
     * the jump needed to get there exceeds ``max_travel_px_per_frame``;
     * either endpoint is NaN, so there is no evidence either way. Scoring that
       as NaN instead would sort unpredictably against real costs.
@@ -141,9 +206,8 @@ def assignment_cost(
     if not slot:
         return math.inf
 
-    for other in slot:
-        if fragment.start <= other.end and other.start <= fragment.end:
-            return math.inf
+    if any(len(_shared_rows(other, fragment)[0]) for other in slot):
+        return _handoff_cost(slot, fragment, max_travel_px_per_frame=max_travel_px_per_frame)
 
     nearest = min(slot, key=lambda o: _gap_and_distance(o, fragment)[0])
     gap, distance = _gap_and_distance(nearest, fragment)
@@ -223,6 +287,17 @@ def consolidate(
         # argmin of an all-inf list is 0, which would silently donate every
         # rejected fragment to slot 0.
         if not math.isfinite(costs[best]):
+            # Every other slot was busy on this fragment's frames, so with N
+            # known this is the only animal it can be. A jump this size is a
+            # reason to flag it (it is marked stitched), not to throw it away.
+            free = [
+                i
+                for i, slot in enumerate(slots)
+                if not any(len(_shared_rows(o, fragment)[0]) for o in slot)
+            ]
+            if len(free) == 1 and len(fragment) >= fps * MIN_ELIMINATION_SECONDS:
+                slots[free[0]].append(fragment)
+                continue
             dropped.append((fragment.track_id, fragment.start, fragment.end))
             continue
         slots[best].append(fragment)
@@ -235,7 +310,9 @@ def consolidate(
         xy = np.full((n_frames, n_kpts, 2), np.nan)
         confidence = np.zeros((n_frames, n_kpts))
         joined: set[int] = set()
-        for fragment in slot:
+        # Seed last and longest later, so that on a handoff's shared frames the
+        # better-evidenced fragment is the one that stands.
+        for fragment in reversed(slot):
             rows = fragment.frames
             xy[rows] = fragment.xy
             confidence[rows] = fragment.confidence

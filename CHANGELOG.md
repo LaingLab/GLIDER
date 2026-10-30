@@ -373,6 +373,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Multi-animal batch tracking keeps an animal across a tracker id change.**
+  A new id that overlapped the old one for a few frames, filled a hole in an id
+  the tracker later gave back, or jumped at the change was refused by every
+  slot, and the animal's keypoints were blank from there on. Slots are also no
+  longer seeded with one animal before and after a change, which left the other
+  animal without a slot. Videos already tracked need re-running with overwrite
+  on to pick this up.
 - **A dropped Bluetooth peripheral comes back in seconds, and never stops
   trying.** The first retry is immediate, then half a second, a second, and
   every two seconds after that, for as long as the device is in use; before,
