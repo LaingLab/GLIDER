@@ -213,7 +213,11 @@ Video recording relies on **FFmpeg**. Install it once:
 
 === "From source"
 
-    Re-run the [one-command installer](#one-command) with the same extras, or
+    GLIDER compares your copy with the `main` branch on GitHub at launch and
+    offers to pull any new changes (**Help → Check for Updates…**). If an
+    update changes GLIDER's dependencies, it says so: re-run the installer.
+
+    Or re-run the [one-command installer](#one-command) with the same extras, or
     by hand:
 
     ```bash

@@ -20,8 +20,12 @@ from glider.updater import (
     UpdateChecker,
     UpdateInfo,
     fetch_latest_release,
+    fetch_main_update,
+    fetch_update,
     is_newer,
+    local_commit,
     parse_version,
+    pull_main,
 )
 
 # --- Pure logic --------------------------------------------------------------
@@ -134,6 +138,114 @@ class TestFetchLatestRelease:
             assert fetch_latest_release() is None
 
 
+class TestFetchMainUpdate:
+    def test_counts_commits_main_is_ahead(self) -> None:
+        payload = {
+            "ahead_by": 2,
+            "html_url": "https://github.com/LaingLab/glider/compare/abc...main",
+            "commits": [
+                {"sha": "c1", "commit": {"message": "feat: one\n\nbody"}},
+                {"sha": "c2", "commit": {"message": "fix: two"}},
+            ],
+        }
+        with patch("glider.updater.httpx.get", return_value=_make_response(200, payload)) as get:
+            info = fetch_main_update("abc")
+        assert "compare/abc...main" in get.call_args.args[0]
+        assert info is not None
+        assert info.commits_behind == 2
+        assert info.latest_version == "c2"  # the commit main is at
+        assert info.release_notes == "• fix: two\n• feat: one"  # newest first, subjects
+
+    def test_up_to_date(self) -> None:
+        payload = {"ahead_by": 0, "commits": []}
+        with patch("glider.updater.httpx.get", return_value=_make_response(200, payload)):
+            info = fetch_main_update("abc")
+        assert info is not None and info.commits_behind == 0
+
+    def test_unknown_commit_returns_none(self) -> None:
+        # An unpushed local commit: GitHub 404s the compare.
+        with patch("glider.updater.httpx.get", return_value=_make_response(404)):
+            assert fetch_main_update("abc") is None
+
+
+class TestCheckoutDetection:
+    def test_not_a_checkout(self, tmp_path) -> None:
+        assert local_commit(tmp_path) is None
+
+    def test_this_checkout_has_a_commit(self) -> None:
+        # The suite runs from a checkout, so the real one resolves.
+        assert local_commit() is not None
+
+    def test_prebuilt_app_falls_back_to_releases(self) -> None:
+        with (
+            patch("glider.updater.local_commit", return_value=None),
+            patch("glider.updater.fetch_latest_release", return_value="release") as rel,
+        ):
+            assert fetch_update() == "release"
+        rel.assert_called_once()
+
+    def test_checkout_compares_with_main(self) -> None:
+        with (
+            patch("glider.updater.local_commit", return_value="abc"),
+            patch("glider.updater.fetch_main_update", return_value="main") as main,
+        ):
+            assert fetch_update() == "main"
+        main.assert_called_once_with("abc")
+
+
+def _git(repo, *args) -> str:
+    import subprocess
+
+    return subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+class TestPullMain:
+    """Real git against a local "origin" — no network."""
+
+    @pytest.fixture
+    def clone(self, tmp_path):
+        origin = tmp_path / "origin"
+        origin.mkdir()
+        _git(origin, "init", "-q", "-b", "main")
+        _git(origin, "config", "user.email", "t@t")
+        _git(origin, "config", "user.name", "t")
+        (origin / "a.txt").write_text("1")
+        _git(origin, "add", ".")
+        _git(origin, "commit", "-qm", "one")
+        _git(tmp_path, "clone", "-q", str(origin), "clone")
+        return origin, tmp_path / "clone"
+
+    def _commit(self, origin, name, text) -> None:
+        (origin / name).write_text(text)
+        _git(origin, "add", ".")
+        _git(origin, "commit", "-qm", name)
+
+    def test_fast_forwards(self, clone) -> None:
+        origin, local = clone
+        self._commit(origin, "a.txt", "2")
+        ok, message = pull_main(local)
+        assert ok and "Restart" in message
+        assert (local / "a.txt").read_text() == "2"
+
+    def test_flags_dependency_changes(self, clone) -> None:
+        origin, local = clone
+        self._commit(origin, "pyproject.toml", "[project]")
+        ok, message = pull_main(local)
+        assert ok and "installer" in message
+
+    def test_refuses_to_merge_a_diverged_checkout(self, clone) -> None:
+        origin, local = clone
+        self._commit(origin, "a.txt", "2")
+        _git(local, "config", "user.email", "t@t")
+        _git(local, "config", "user.name", "t")
+        self._commit(local, "b.txt", "local work")
+        ok, _ = pull_main(local)
+        assert not ok
+        assert (local / "a.txt").read_text() == "1"  # untouched
+
+
 # --- Qt controller -----------------------------------------------------------
 
 
@@ -244,6 +356,23 @@ class TestUpdateCheckerResultHandling:
         checker._on_result(UpdateInfo("1.2.0", "https://x", ""))
 
         assert len(shown) == 1
+
+    def test_checkout_behind_main_prompts(self, qapp, isolated_settings, monkeypatch) -> None:
+        checker = UpdateChecker(parent=None, current_version="1.0.0", settings=isolated_settings)
+        shown = []
+        monkeypatch.setattr(UpdateChecker, "_show_prompt", lambda self, info: shown.append(info))
+        checker._silent = True
+        # Same version string: only the commit count matters for a checkout.
+        checker._on_result(UpdateInfo("c2", "https://x", "", commits_behind=3))
+        assert len(shown) == 1
+
+    def test_checkout_level_with_main_is_quiet(self, qapp, isolated_settings, monkeypatch) -> None:
+        checker = UpdateChecker(parent=None, current_version="1.0.0", settings=isolated_settings)
+        shown = []
+        monkeypatch.setattr(UpdateChecker, "_show_prompt", lambda self, info: shown.append(info))
+        checker._silent = True
+        checker._on_result(UpdateInfo("c2", "https://x", "", commits_behind=0))
+        assert shown == []
 
     def test_network_failure_silent_mode_stays_quiet(
         self, qapp, isolated_settings, monkeypatch
