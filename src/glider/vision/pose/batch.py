@@ -29,6 +29,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from glider.vision.pose.tracks import PoseTracks
     from glider.vision.zones import ZoneConfiguration
 
+from glider.vision.pose.core import DEFAULT_MIN_BODY_FRACTION
+
 logger = logging.getLogger(__name__)
 
 #: Video containers both halves of the pipeline accept. Single-sourced on
@@ -630,6 +632,7 @@ def run_batch(
     zone_keypoint: str = "body_center",
     arenas: Mapping[Path, ArenaCalibration] | None = None,
     gate: ArenaGateSettings | None = None,
+    min_body_fraction: float | None = DEFAULT_MIN_BODY_FRACTION,
     n_animals: int = 1,
     max_travel_px_per_frame: float = 40.0,
     min_fragment_frames: int = 5,
@@ -661,6 +664,13 @@ def run_batch(
         Detections that left that arena are blanked before the primary CSV is
         written and before zones are scored, and the ``_raw`` companion holds
         the ungated inference. A video with no arena is untouched.
+    min_body_fraction
+        Single animal only. Inference prefers, on each frame, a candidate at
+        least this fraction of the animal's typical span over a more confident
+        smaller one (an object in the arena), and frames left with only an
+        undersized skeleton -- the objects before the animal is placed -- are
+        blanked before the primary CSV is written, with the ``_raw`` companion
+        keeping them. ``None`` turns both off.
     infer
         Injection point for tests; defaults to
         :func:`glider.vision.pose.core.infer_video`.
@@ -891,15 +901,28 @@ def run_batch(
                     cancel_cb=cancel_cb,
                     arena=arena,
                     gate_settings=gate,
+                    min_body_fraction=min_body_fraction,
                 )
                 gating = gate is not None and arena is not None
+                sized, size_report = pose, None
+                if min_body_fraction is not None:
+                    from glider.vision.pose.body_size import gate_body_size
+
+                    sized, size_report = gate_body_size(pose, min_body_fraction)
+                    sized.metadata["body_size"] = {
+                        **pose.metadata.get("body_size", {}),
+                        **asdict(size_report),
+                    }
+                sizing = size_report is not None and size_report.frames_blanked > 0
 
                 # _raw is the "what did the model actually say" file, so it
                 # must be pre-gate as well as pre-filter — and it must exist
-                # whenever either is active, or gating discards data with no
-                # companion.
-                if gating or filtering is not None:
+                # whenever anything blanks or smooths, or data is discarded
+                # with no companion. A size gate that blanked nothing changed
+                # nothing, and leaves no _raw.
+                if gating or sizing or filtering is not None:
                     to_dlc_csv(pose, raw_output_path(video, model_path))
+                pose = sized
 
                 if gating:
                     from glider.vision.arena_gate import gate_to_arena

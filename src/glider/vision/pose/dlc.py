@@ -122,6 +122,10 @@ def write_pose_meta(pose: PoseData, csv_path: str | Path) -> Path:
     gate = pose.metadata.get("arena_gate") if pose.metadata else None
     if gate:
         payload["arena_gate"] = gate
+    # Same footing: which frames were blanked as too small to be the animal.
+    size = pose.metadata.get("body_size") if pose.metadata else None
+    if size:
+        payload["body_size"] = size
     return _write_meta_payload(payload, csv_path)
 
 

@@ -42,6 +42,12 @@ class PoseCancelledError(RuntimeError):
     """
 
 
+#: Default for ``infer_video(min_body_fraction=...)``; the reasoning is in
+#: :mod:`glider.vision.pose.body_size`. Defined here because that module
+#: imports this one.
+DEFAULT_MIN_BODY_FRACTION = 0.4
+
+
 @dataclass
 class PoseData:
     """Frame-aligned pose container (single animal)."""
@@ -534,6 +540,7 @@ def infer_video(
     cancel_cb: Callable[[], bool] | None = None,
     arena: ArenaCalibration | None = None,
     gate_settings: ArenaGateSettings | None = None,
+    min_body_fraction: float | None = DEFAULT_MIN_BODY_FRACTION,
 ) -> PoseData:
     """Run an Ultralytics YOLO-pose model over a video and return PoseData.
 
@@ -587,6 +594,13 @@ def infer_video(
         An arena whose corners do not describe a usable quad is reported once
         and ignored, leaving plain ``argmax``: a calibration problem must not
         cost a run of inference.
+    min_body_fraction
+        After the pass, a frame's candidates shorter than this fraction of the
+        animal's typical span (measured from the run) give way to the next
+        candidate that is not -- so a confident object in the arena cannot
+        take the track from the animal. See
+        :func:`glider.vision.pose.body_size.pick_by_size`. Also a re-ranking,
+        not a filter. ``None`` keeps the confidence/arena ranking alone.
 
     Returns
     -------
@@ -601,7 +615,7 @@ def infer_video(
     -----
     Frames where no animal is detected are written as NaN xy with confidence 0.
     For multi-detection frames, the highest box-confidence detection is kept
-    (single-animal v1).
+    unless it is too small to be the animal (``min_body_fraction``).
     """
     from glider.vision.pose.spec import PoseModelError, identify_pose_model
 
@@ -711,6 +725,9 @@ def infer_video(
 
     xy_rows: list[np.ndarray] = []
     conf_rows: list[np.ndarray] = []
+    # Every frame's ranked candidates, for the size pass after the loop.
+    candidates_xy: list[list[np.ndarray]] = []
+    candidates_cf: list[list[np.ndarray]] = []
 
     for r in results_iter:
         # Checked before decoding so a cancel doesn't pay for one more frame.
@@ -724,34 +741,68 @@ def infer_video(
         ):
             xy_rows.append(np.full((n_kpts, 2), np.nan))
             conf_rows.append(np.zeros(n_kpts))
+            candidates_xy.append([])
+            candidates_cf.append([])
         else:
-            # Highest-confidence detection on this frame — preferring one
-            # inside the arena, when there is an arena to prefer.
+            # Every detection, best first by confidence -- preferring one
+            # inside the arena, when there is an arena to prefer. Which one is
+            # the animal is decided after the loop, once its size is known.
             if r.boxes is not None and r.boxes.conf is not None:
                 confidences = r.boxes.conf.cpu().numpy()
-                best = _pick_candidate(r, confidences, arena, gate_settings, resolution)
+                order = _rank_candidates(r, confidences, arena, gate_settings, resolution)
             else:
-                best = 0
+                order = [0]
+            if min_body_fraction is None:
+                order = order[:1]
 
-            xy = r.keypoints.xy[best].cpu().numpy()
-            if r.keypoints.conf is not None:
-                cf = r.keypoints.conf[best].cpu().numpy()
-            else:
-                cf = np.ones(n_kpts)
-
-            if xy.shape[0] != n_kpts:
-                raise ValueError(
-                    f"model emitted {xy.shape[0]} keypoints but {n_kpts} names "
-                    f"were supplied — check `keypoint_names` ordering against "
-                    f"the training data.yaml"
-                )
-
-            xy_rows.append(np.asarray(xy, dtype=float))
-            conf_rows.append(np.asarray(cf, dtype=float))
+            frame_xy, frame_cf = [], []
+            for index in order:
+                xy = r.keypoints.xy[index].cpu().numpy()
+                if r.keypoints.conf is not None:
+                    cf = r.keypoints.conf[index].cpu().numpy()
+                else:
+                    cf = np.ones(n_kpts)
+                if xy.shape[0] != n_kpts:
+                    raise ValueError(
+                        f"model emitted {xy.shape[0]} keypoints but {n_kpts} names "
+                        f"were supplied — check `keypoint_names` ordering against "
+                        f"the training data.yaml"
+                    )
+                frame_xy.append(np.asarray(xy, dtype=float))
+                frame_cf.append(np.asarray(cf, dtype=float))
+            candidates_xy.append(frame_xy)
+            candidates_cf.append(frame_cf)
+            xy_rows.append(frame_xy[0])
+            conf_rows.append(frame_cf[0])
 
         # Single loop tail: undetected frames count toward progress too.
         if progress_cb is not None:
             progress_cb(len(xy_rows), total_frames)
+
+    metadata = {
+        "model_path": str(model_path),
+        "video_path": str(video_path),
+        "conf_threshold": conf,
+        "device": resolved_device,
+        # Pose coordinates are pixels; a viewer without the video needs
+        # the canvas they were measured on to place them.
+        "resolution": resolution,
+    }
+    if min_body_fraction is not None:
+        from glider.vision.pose.body_size import pick_by_size
+
+        chosen, reference = pick_by_size(candidates_xy, min_body_fraction)
+        reranked = 0
+        for f, index in enumerate(chosen):
+            if index:
+                xy_rows[f] = candidates_xy[f][index]
+                conf_rows[f] = candidates_cf[f][index]
+                reranked += 1
+        metadata["body_size"] = {
+            "reference_span_px": None if reference is None else round(reference, 1),
+            "min_fraction": min_body_fraction,
+            "frames_reranked": reranked,
+        }
 
     xy_arr = np.stack(xy_rows, axis=0) if xy_rows else np.zeros((0, n_kpts, 2))
     conf_arr = np.stack(conf_rows, axis=0) if conf_rows else np.zeros((0, n_kpts))
@@ -762,13 +813,5 @@ def infer_video(
         keypoint_names=keypoint_names,
         fps=fps,
         source=source,
-        metadata={
-            "model_path": str(model_path),
-            "video_path": str(video_path),
-            "conf_threshold": conf,
-            "device": resolved_device,
-            # Pose coordinates are pixels; a viewer without the video needs
-            # the canvas they were measured on to place them.
-            "resolution": resolution,
-        },
+        metadata=metadata,
     )
