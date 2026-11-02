@@ -65,7 +65,12 @@ from glider.analysis.behavior.retrieval_setup import (
     setup_path,
 )
 from glider.analysis.behavior.session_view import SessionView, SessionViewError, is_video
-from glider.analysis.cohort import discover_sessions, recording_candidates, session_id_for
+from glider.analysis.cohort import (
+    discover_sessions,
+    recording_candidates,
+    recording_filmed,
+    session_id_for,
+)
 from glider.analysis.epochs import (
     CURRENT,
     Epoch,
@@ -1179,7 +1184,8 @@ class AnalysisWindow(QMainWindow):
             return build_timeline(None, view), None
         for folder in recording_candidates(path, view.video_path):
             session = self._recording(folder)
-            if session is None:
+            # Another video's recording would lend this session its timeline.
+            if session is None or not recording_filmed(folder, view.video_path):
                 continue
             try:
                 return build_timeline(session, view), session
