@@ -254,3 +254,139 @@ class TestPlusMaze:
         canvas.set_corners(ARM_ENDS)
         canvas.repaint()  # must not raise
         assert canvas.calibration().shape == "plus"
+
+
+def _mouse(kind, pos: QPoint, modifiers=None):
+    from PyQt6.QtCore import QPointF
+    from PyQt6.QtCore import Qt as _Qt
+    from PyQt6.QtGui import QMouseEvent
+
+    types = {
+        "press": QMouseEvent.Type.MouseButtonPress,
+        "move": QMouseEvent.Type.MouseMove,
+        "release": QMouseEvent.Type.MouseButtonRelease,
+    }
+    button = _Qt.MouseButton.NoButton if kind == "move" else _Qt.MouseButton.LeftButton
+    return QMouseEvent(
+        types[kind],
+        QPointF(pos),
+        button,
+        _Qt.MouseButton.LeftButton,
+        modifiers or _Qt.KeyboardModifier.NoModifier,
+    )
+
+
+def _drag(canvas, start, end, modifiers=None):
+    a, b = canvas._to_canvas(start), canvas._to_canvas(end)
+    canvas.mousePressEvent(_mouse("press", a))
+    canvas.mouseMoveEvent(_mouse("move", b, modifiers))
+    canvas.mouseReleaseEvent(_mouse("release", b))
+
+
+def _axes(canvas):
+    c, u, v = canvas._ellipse_axes()
+    return c, np.linalg.norm(u), np.linalg.norm(v)
+
+
+#: A 100 px circle at the centre of the 640x480 frame, dragged out.
+_CENTRE, _EDGE = (0.5, 0.5), (0.5 + 100 / 640, 0.5)
+
+
+class TestCircleTool:
+    """A round arena is dragged out, then moved and stretched as one shape."""
+
+    @pytest.fixture
+    def round_canvas(self, canvas):
+        canvas.set_shape("ellipse")
+        return canvas
+
+    def test_press_and_drag_draws_a_circle_out_from_the_centre(self, round_canvas):
+        _drag(round_canvas, _CENTRE, _EDGE)
+        assert round_canvas.is_complete
+        c, ru, rv = _axes(round_canvas)
+        np.testing.assert_allclose(c, [320, 240], atol=2)
+        assert ru == pytest.approx(100, abs=2) and rv == pytest.approx(100, abs=2)
+
+    def test_a_click_places_a_default_circle(self, round_canvas):
+        _drag(round_canvas, _CENTRE, _CENTRE)
+        _, ru, rv = _axes(round_canvas)
+        assert ru == pytest.approx(0.4 * 480) and rv == pytest.approx(0.4 * 480)
+
+    def test_dragging_inside_moves_it(self, round_canvas):
+        _drag(round_canvas, _CENTRE, _EDGE)
+        _drag(round_canvas, (0.45, 0.45), (0.45 + 32 / 640, 0.45 + 24 / 480))
+        c, ru, _ = _axes(round_canvas)
+        np.testing.assert_allclose(c, [352, 264], atol=2)
+        assert ru == pytest.approx(100, abs=2)
+
+    def test_a_rim_handle_stretches_one_axis_with_the_far_rim_fixed(self, round_canvas):
+        _drag(round_canvas, _CENTRE, _EDGE)
+        _drag(round_canvas, (420 / 640, 0.5), (460 / 640, 0.5))
+        c, ru, rv = _axes(round_canvas)
+        assert ru == pytest.approx(120, abs=2) and rv == pytest.approx(100, abs=2)
+        assert c[0] - ru == pytest.approx(220, abs=2)  # the left rim did not move
+
+    def test_shift_keeps_it_round(self, round_canvas):
+        from PyQt6.QtCore import Qt as _Qt
+
+        _drag(round_canvas, _CENTRE, _EDGE)
+        _drag(round_canvas, (420 / 640, 0.5), (460 / 640, 0.5), _Qt.KeyboardModifier.ShiftModifier)
+        _, ru, rv = _axes(round_canvas)
+        assert ru == pytest.approx(120, abs=2) and rv == pytest.approx(ru, abs=1)
+
+    def test_a_press_outside_a_fitted_circle_does_nothing(self, round_canvas):
+        _drag(round_canvas, _CENTRE, (0.5 + 50 / 640, 0.5))
+        before = round_canvas.corners
+        _drag(round_canvas, (0.05, 0.05), (0.1, 0.1))
+        assert round_canvas.corners == before
+
+    def test_the_wheel_scales_it(self, round_canvas):
+        from PyQt6.QtCore import QPointF
+        from PyQt6.QtCore import Qt as _Qt
+        from PyQt6.QtGui import QWheelEvent
+
+        _drag(round_canvas, _CENTRE, _EDGE)
+        at = QPointF(round_canvas._to_canvas(_CENTRE))
+        round_canvas.wheelEvent(
+            QWheelEvent(
+                at,
+                at,
+                QPoint(0, 0),
+                QPoint(0, 120),
+                _Qt.MouseButton.NoButton,
+                _Qt.KeyboardModifier.NoModifier,
+                _Qt.ScrollPhase.NoScrollPhase,
+                False,
+            )
+        )
+        _, ru, _ = _axes(round_canvas)
+        assert ru == pytest.approx(103, abs=1)
+
+    def test_an_old_three_click_arena_reopens_as_the_same_ellipse(self, round_canvas):
+        from glider.vision.arena import ArenaCalibration
+
+        # Conjugate, not principal: the second edge is not a quarter-turn round.
+        old_handles = [(0.5, 0.5), (0.7, 0.5), (0.6, 0.8)]
+        old = ArenaCalibration.from_ellipse(*old_handles, width_cm=30.0, frame_size=(640, 480))
+        round_canvas.set_corners(old_handles)
+        c, u, v = round_canvas._ellipse_axes()
+        assert abs(u @ v) < 1e-6  # principal axes
+        # Every rim point of the re-expressed ellipse lies on the old one.
+        t = np.linspace(0, 2 * np.pi, 24, endpoint=False)
+        rim = [round_canvas._from_px(c + u * np.cos(a) + v * np.sin(a)) for a in t]
+        radii = np.hypot(*(np.array(old.to_arena_cm(rim)) - 15.0).T)
+        np.testing.assert_allclose(radii, 15.0, atol=1e-6)
+
+    def test_the_grid_is_not_mirrored(self, round_canvas):
+        _drag(round_canvas, _CENTRE, _EDGE)
+        tl, tr, br, bl = round_canvas.calibration().corners
+        assert tl[0] < tr[0] and tl[1] < bl[1]
+
+    def test_undo_clears_the_circle(self, round_canvas):
+        _drag(round_canvas, _CENTRE, _EDGE)
+        round_canvas.undo()
+        assert round_canvas.corners == []
+
+    def test_the_canvas_paints_a_fitted_circle(self, round_canvas):
+        _drag(round_canvas, _CENTRE, _EDGE)
+        round_canvas.repaint()  # must not raise

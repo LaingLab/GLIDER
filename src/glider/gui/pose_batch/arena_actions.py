@@ -132,7 +132,10 @@ def regate_videos(
             else:
                 gated += 1
                 if on_log:
-                    on_log(f"{video.name}: blanked {report.blanked_fraction:.1%}")
+                    on_log(
+                        f"{video.name}: blanked {report.blanked_fraction:.1%}, "
+                        f"{report.keypoints_jumped} jumped keypoints"
+                    )
         if on_progress:
             on_progress(index + 1, len(videos))
     return gated, skipped
