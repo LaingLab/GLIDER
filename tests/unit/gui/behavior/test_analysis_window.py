@@ -2619,6 +2619,7 @@ class TestTheEpochTableInTheWindow:
             "Retrieval tables (CSV)…",
             "Nest distance per frame (CSV)…",
             "Heatmap (PNG + CSV)…",
+            "Current frame (PNG)…",
         ]
 
     def test_the_markers_tab_opens_the_epoch_table(self, qtbot, tmp_path):

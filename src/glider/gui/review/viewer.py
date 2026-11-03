@@ -22,6 +22,7 @@ from PyQt6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QPolygonF,
 )
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -124,6 +125,8 @@ class KeypointCanvas(QWidget):
         self._grid_n = 0
         self._visited = None
         self._show_arena = True
+        # Set only while render_frame paints an export image.
+        self._paint_size: tuple[int, int] | None = None
         self._reader = None  # VideoFileSource, opened lazily
         self._video_failed = False  # this view's video would not open; retried on set_view
         self._cached: tuple[int, QImage] | None = None
@@ -293,22 +296,54 @@ class KeypointCanvas(QWidget):
         self._frame = int(frame)
         self.update()
 
+    @property
+    def frame(self) -> int:
+        return self._frame
+
     def set_trail(self, seconds: float, enabled: bool) -> None:
         self._trail_s, self._show_trail = float(seconds), bool(enabled)
         self.update()
+
+    def _size(self) -> tuple[int, int]:
+        """What is being painted on: the widget, or an export image."""
+        return self._paint_size or (self.width(), self.height())
 
     def _transform(self):
         """Scale and offset mapping video pixels onto the widget, or None."""
         if self._view is None or not self._view.resolution:
             return None
         width, height = self._view.resolution
-        scale = min(self.width() / width, self.height() / height)
-        return scale, (self.width() - width * scale) / 2, (self.height() - height * scale) / 2
+        w, h = self._size()
+        scale = min(w / width, h / height)
+        return scale, (w - width * scale) / 2, (h - height * scale) / 2
+
+    def render_frame(self) -> QImage | None:
+        """The current frame with every overlay that is switched on, at video resolution.
+
+        Painted by the same code as the screen, so what is exported is what the
+        reviewer was looking at -- less the frame-number caption, which is
+        viewer chrome, not part of the picture.
+        """
+        if self._view is None or not self._view.resolution:
+            return None
+        width, height = (int(v) for v in self._view.resolution)
+        image = QImage(width, height, QImage.Format.Format_RGB32)
+        self._paint_size = (width, height)
+        painter = QPainter(image)
+        try:
+            self._paint(painter, chrome=False)
+        finally:
+            painter.end()
+            self._paint_size = None
+        return image
 
     def paintEvent(self, _event):
         painter = QPainter(self)
+        self._paint(painter)
+
+    def _paint(self, painter: QPainter, *, chrome: bool = True) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor(colors.CANVAS))
+        painter.fillRect(QRectF(0, 0, *self._size()), QColor(colors.CANVAS))
 
         transform = self._transform()
         if (
@@ -318,7 +353,7 @@ class KeypointCanvas(QWidget):
         ):
             painter.setPen(QPen(QColor(colors.TEXT_MUTED)))
             painter.drawText(
-                self.rect(),
+                QRectF(0, 0, *self._size()),
                 Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
                 self._why_blank(),
             )
@@ -333,8 +368,9 @@ class KeypointCanvas(QWidget):
             painter.drawImage(arena, image)
         if self._heatmap is not None:
             painter.drawImage(arena, self._heatmap)
-        painter.setPen(QPen(QColor(colors.BORDER), 1))
-        painter.drawRect(arena)
+        if chrome:
+            painter.setPen(QPen(QColor(colors.BORDER), 1))
+            painter.drawRect(arena)
         if self._show_arena and self._arena is not None:
             self._paint_arena(painter, arena)
         if self._show_zones:
@@ -378,10 +414,12 @@ class KeypointCanvas(QWidget):
             painter.restore()
 
         if self._hud is None:
+            if not chrome:
+                return
             label = self._view.label_at(self._frame)
             painter.setPen(QPen(QColor(colors.TEXT_PRIMARY)))
             painter.drawText(
-                QRectF(8, 6, self.width() - 16, 20),
+                QRectF(8, 6, self._size()[0] - 16, 20),
                 Qt.AlignmentFlag.AlignLeft,
                 f"frame {self._frame}   {label or '(unscored)'}",
             )
@@ -417,20 +455,27 @@ class KeypointCanvas(QWidget):
 
         colour = QColor(colors.SUCCESS)
         try:
+            width, height = self._view.resolution
+            outline = [(x / width, y / height) for x, y in self._arena.outline(width, height)]
             n = self._grid_n
             if n >= 1 and self._visited is not None and self._visited.shape == (n, n):
+                # Cells are squares of the arena's bounding box; clipped to the
+                # floor so a round arena or a plus maze is not filled square.
+                floor = QPainterPath()
+                floor.addPolygon(QPolygonF(to_widget(outline)))
+                painter.save()
+                painter.setClipPath(floor)
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(colors.qcolor_with_alpha(colour, 0.18))
                 for row, col in zip(*np.nonzero(self._visited), strict=True):
                     painter.drawPolygon(
                         *to_widget(exploration.cell_polygon(self._arena, n, int(col), int(row)))
                     )
+                painter.restore()
             if n >= 2:
                 painter.setPen(QPen(colors.qcolor_with_alpha(colour, 0.9), 1.5))
                 for line in exploration.grid_segments(self._arena, n):
                     painter.drawPolyline(*to_widget(line))
-            width, height = self._view.resolution
-            outline = [(x / width, y / height) for x, y in self._arena.outline(width, height)]
         except ValueError:  # a degenerate arena: nothing sensible to draw
             return
         painter.setPen(QPen(colour, 2))
@@ -685,12 +730,12 @@ class KeypointCanvas(QWidget):
             self._chip(painter, 12.0, 10.0, *behavior, right=False, large=True)
         y = 10.0
         for text, colour in chips[: self._MAX_CHIPS]:
-            self._chip(painter, self.width() - 12.0, y, text, colour, right=True)
+            self._chip(painter, self._size()[0] - 12.0, y, text, colour, right=True)
             y += 24
         if len(chips) > self._MAX_CHIPS:
             extra = f"+{len(chips) - self._MAX_CHIPS}"
             self._chip(
-                painter, self.width() - 12.0, y, extra, QColor(colors.TEXT_MUTED), right=True
+                painter, self._size()[0] - 12.0, y, extra, QColor(colors.TEXT_MUTED), right=True
             )
 
     def _chip_font(self, large: bool) -> QFont:

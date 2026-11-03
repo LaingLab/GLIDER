@@ -1,8 +1,9 @@
 """Arena Dialog - outline the floor to calibrate scale and perspective.
 
 The operator clicks the four floor corners of an arena of known size, or, for
-a round arena, its centre and the ends of two radii, or, for an elevated plus
-maze, the far ends of its four arms. That
+a round arena, drags a circle out from its centre and then moves and stretches
+it onto the rim, or, for an elevated plus maze, clicks the far ends of its four
+arms. That
 fixes a homography (see :mod:`glider.vision.arena`), which in turn gives a
 centre zone meaning the same patch of floor in every video, and a scale that
 varies correctly across the floor instead of being one number for all of it.
@@ -31,7 +32,16 @@ import logging
 import cv2
 import numpy as np
 from PyQt6.QtCore import QPoint, QRect, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QImage, QMouseEvent, QPainter, QPen, QPixmap
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QImage,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QPixmap,
+    QWheelEvent,
+)
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -81,6 +91,20 @@ _POINT_NAMES = {
     "plus": tuple(f"end of the {name}" for name in ARM_END_NAMES),
 }
 
+#: Radius a round arena starts at when placed with a click rather than dragged
+#: out, as a fraction of the frame's shorter side: most rigs frame the arena
+#: closely, so this lands near the rim and the handles finish the fit.
+_CIRCLE_DEFAULT_RADIUS = 0.4
+
+#: Canvas pixels a press must travel before it is a drag rather than a click.
+_DRAG_THRESHOLD = 5
+
+#: How much one wheel notch scales a round arena.
+_WHEEL_STEP = 1.03
+
+#: Rim handles of a round arena: which axis each moves, and which end of it.
+_RIM_HANDLES = (("u", 1), ("v", 1), ("u", -1), ("v", -1))
+
 #: Size a plus maze starts at when the operator has not typed one: a standard
 #: mouse EPM is two 35 cm arms either side of a 5 cm centre.
 _PLUS_DEFAULT_CM = 75.0
@@ -107,6 +131,12 @@ class ArenaCanvas(QWidget):
         self._pixmap: QPixmap | None = None
         self._corners: list[tuple[float, float]] = []
         self._dragging: int | None = None
+        # A round arena is dragged as a whole: "create", "move", or a rim
+        # handle from _RIM_HANDLES. Kept apart from _dragging, which indexes a
+        # clicked point.
+        self._ellipse_drag: str | tuple[str, int] | None = None
+        self._press_norm: tuple[float, float] | None = None
+        self._press_corners: list[tuple[float, float]] = []
         self._zone_cm = 10.0
         self._arena_cm = (30.0, 30.0)
         self._shape = "rectangle"
@@ -162,11 +192,15 @@ class ArenaCanvas(QWidget):
     def clear(self) -> None:
         self._corners = []
         self._dragging = None
+        self._ellipse_drag = None
         self.update()
         self.corners_changed.emit()
 
     def undo(self) -> None:
-        if self._corners:
+        if self._shape == "ellipse":
+            # A circle is placed in one gesture, so it is undone in one too.
+            self.clear()
+        elif self._corners:
             self._corners.pop()
             self.update()
             self.corners_changed.emit()
@@ -243,9 +277,155 @@ class ArenaCanvas(QWidget):
 
     # -- interaction ---------------------------------------------------
 
+    # -- round arena ---------------------------------------------------
+    #
+    # Geometry is done in frame pixels, not normalised coordinates: those are
+    # stretched by the frame's aspect ratio, so a circle there is an ellipse on
+    # screen, and "perpendicular" means nothing.
+
+    def _px(self, norm) -> np.ndarray:
+        fh, fw = self._frame.shape[:2]
+        return np.array([norm[0] * fw, norm[1] * fh], dtype=np.float64)
+
+    def _from_px(self, px) -> tuple[float, float]:
+        fh, fw = self._frame.shape[:2]
+        return (float(px[0] / fw), float(px[1] / fh))
+
+    def _ellipse_axes(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Centre and the two *principal* semi-axes, in frame pixels.
+
+        The stored handles may be any conjugate pair -- an arena drawn by the
+        old three-click tool, or one passed to :meth:`set_corners` -- which
+        describe the same ellipse but put handles in odd places. An SVD of the
+        pair gives the principal axes of that same ellipse. ``u`` is the more
+        horizontal one, pointing right, and ``v`` turns clockwise from it on
+        screen, so the corners from_ellipse derives keep their TL-TR-BR-BL
+        order and the exploration grid is not mirrored.
+        """
+        c, a, b = (self._px(p) for p in self._corners)
+        left, scale, _ = np.linalg.svd(np.column_stack([a - c, b - c]))
+        u, v = left[:, 0] * scale[0], left[:, 1] * scale[1]
+        if abs(v[0]) > abs(u[0]):
+            u, v = v, u
+        if u[0] < 0:
+            u = -u
+        if u[0] * v[1] - u[1] * v[0] < 0:
+            v = -v
+        return c, u, v
+
+    def _set_ellipse(self, c, u, v) -> None:
+        self._corners = [self._from_px(c), self._from_px(c + u), self._from_px(c + v)]
+        self.update()
+        self.corners_changed.emit()
+
+    def _ellipse_hit(self, pos: QPoint):
+        """What a press at *pos* grabs: a rim handle, "move", or None."""
+        c, u, v = self._ellipse_axes()
+        for axis, sign in _RIM_HANDLES:
+            end = c + sign * (u if axis == "u" else v)
+            if (self._to_canvas(self._from_px(end)) - pos).manhattanLength() <= _GRAB_RADIUS:
+                return (axis, sign)
+        # Inside the ellipse, or on the centre of one too small to get inside.
+        p = self._px(self._to_norm(pos)) - c
+        inside = (p @ u / (u @ u)) ** 2 + (p @ v / (v @ v)) ** 2 <= 1
+        near_centre = (self._to_canvas(self._corners[0]) - pos).manhattanLength() <= _GRAB_RADIUS
+        return "move" if inside or near_centre else None
+
+    def _ellipse_press(self, pos: QPoint) -> None:
+        norm = self._to_norm(pos)
+        if norm is None:
+            return
+        if self.is_complete:
+            # A miss grabs nothing: Clear starts over, and a stray click beside
+            # a fitted circle should not throw the fit away.
+            self._ellipse_drag = self._ellipse_hit(pos)
+        else:
+            fh, fw = self._frame.shape[:2]
+            r = _CIRCLE_DEFAULT_RADIUS * min(fw, fh)
+            self._set_ellipse(self._px(norm), np.array([r, 0.0]), np.array([0.0, r]))
+            self._ellipse_drag = "create"
+        self._press_norm = norm
+        self._press_corners = list(self._corners)
+        if self._ellipse_drag == "move":
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def _ellipse_move(self, event: QMouseEvent) -> None:
+        norm = self._to_norm(event.pos())
+        if norm is None:
+            return
+        drag = self._ellipse_drag
+        mods = event.modifiers()
+        if drag == "create":
+            if (
+                event.pos() - self._to_canvas(self._press_norm)
+            ).manhattanLength() < _DRAG_THRESHOLD:
+                return  # still a click: keep the default circle
+            c = self._px(self._corners[0])
+            r = max(float(np.linalg.norm(self._px(norm) - c)), 2.0)
+            self._set_ellipse(c, np.array([r, 0.0]), np.array([0.0, r]))
+        elif drag == "move":
+            delta = self._px(norm) - self._px(self._press_norm)
+            self._corners = [self._from_px(self._px(p) + delta) for p in self._press_corners]
+            self.update()
+            self.corners_changed.emit()
+        else:
+            self._stretch(*drag, self._px(norm), mods)
+
+    def _stretch(self, axis: str, sign: int, p: np.ndarray, mods) -> None:
+        """Drag one rim handle to *p*, keeping the opposite rim point fixed.
+
+        The handle moves along its own axis; Ctrl lets it turn the ellipse too,
+        and Shift makes the other axis follow, keeping the arena round.
+        """
+        c, u, v = self._ellipse_axes()
+        a, b = (u, v) if axis == "u" else (v, u)
+        fixed = c - sign * a
+        direction = sign * a / np.linalg.norm(a)  # from the fixed point outwards
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            span = p - fixed
+            if np.linalg.norm(span) > 1e-9:
+                direction = span / np.linalg.norm(span)
+        reach = max(float((p - fixed) @ direction), 4.0)  # never through the far rim
+        a_new = sign * direction * reach / 2
+        b_len = reach / 2 if mods & Qt.KeyboardModifier.ShiftModifier else np.linalg.norm(b)
+        # b turns with a, staying on the side it was on.
+        perp = np.array([-direction[1], direction[0]])
+        if perp @ b < 0:
+            perp = -perp
+        b_new = perp * b_len
+        c_new = fixed + sign * a_new
+        if axis == "u":
+            self._set_ellipse(c_new, a_new, b_new)
+        else:
+            self._set_ellipse(c_new, b_new, a_new)
+
+    def _ellipse_hover(self, pos: QPoint) -> None:
+        hit = self._ellipse_hit(pos) if self.is_complete else None
+        if hit == "move":
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        elif hit is not None:
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+        else:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802 - Qt override
+        """Over a round arena, the wheel scales it about its centre."""
+        if self._shape != "ellipse" or not self.is_complete or self._frame is None:
+            return super().wheelEvent(event)
+        notches = event.angleDelta().y() / 120
+        if not notches:
+            return super().wheelEvent(event)
+        c, u, v = self._ellipse_axes()
+        factor = _WHEEL_STEP**notches
+        self._set_ellipse(c, u * factor, v * factor)
+        event.accept()
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if self._frame is None or event.button() != Qt.MouseButton.LeftButton:
             return super().mousePressEvent(event)
+        if self._shape == "ellipse":
+            self._ellipse_press(event.pos())
+            return
         pos = event.pos()
         for i, corner in enumerate(self._corners):
             if (self._to_canvas(corner) - pos).manhattanLength() <= _GRAB_RADIUS:
@@ -259,21 +439,25 @@ class ArenaCanvas(QWidget):
                 self.corners_changed.emit()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._shape == "ellipse" and self._frame is not None:
+            if self._ellipse_drag is not None:
+                self._ellipse_move(event)
+            else:
+                self._ellipse_hover(event.pos())
+            return
         if self._dragging is None:
             return super().mouseMoveEvent(event)
         norm = self._to_norm(event.pos())
         if norm is not None:
-            if self._shape == "ellipse" and self._dragging == 0:
-                # Moving the centre carries the whole ellipse with it.
-                dx = norm[0] - self._corners[0][0]
-                dy = norm[1] - self._corners[0][1]
-                self._corners = [(x + dx, y + dy) for x, y in self._corners]
             self._corners[self._dragging] = norm
             self.update()
             self.corners_changed.emit()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         self._dragging = None
+        if self._ellipse_drag is not None:
+            self._ellipse_drag = None
+            self._ellipse_hover(event.pos())
         super().mouseReleaseEvent(event)
 
     # -- painting ------------------------------------------------------
@@ -347,6 +531,9 @@ class ArenaCanvas(QWidget):
             painter.drawLine(zone[i], zone[(i + 1) % len(zone)])
 
     def _paint_corners(self, painter: QPainter) -> None:
+        if self._shape == "ellipse" and self.is_complete:
+            self._paint_ellipse_handles(painter)
+            return
         font = QFont()
         font.setPointSize(9)
         font.setBold(True)
@@ -358,13 +545,24 @@ class ArenaCanvas(QWidget):
             painter.drawLine(point.x() - 9, point.y(), point.x() + 9, point.y())
             painter.drawLine(point.x(), point.y() - 9, point.x(), point.y() + 9)
             painter.setPen(QColor(colors.TEXT_PRIMARY))
-            if self._shape == "ellipse":
-                label = ("C", "1", "2")[i]
-            elif self._shape == "plus":
+            if self._shape == "plus":
                 label = ("T", "R", "B", "L")[i]
             else:
                 label = str(i + 1)
             painter.drawText(point.x() + 10, point.y() - 8, label)
+
+    def _paint_ellipse_handles(self, painter: QPainter) -> None:
+        """A crosshair at the centre and a square grip at each axis end."""
+        c, u, v = self._ellipse_axes()
+        centre = self._to_canvas(self._corners[0])
+        painter.setPen(QPen(_CORNER_COLOUR, 2))
+        painter.drawLine(centre.x() - 9, centre.y(), centre.x() + 9, centre.y())
+        painter.drawLine(centre.x(), centre.y() - 9, centre.x(), centre.y() + 9)
+        painter.setBrush(_CORNER_COLOUR)
+        for axis, sign in _RIM_HANDLES:
+            end = self._to_canvas(self._from_px(c + sign * (u if axis == "u" else v)))
+            painter.drawRect(end.x() - 5, end.y() - 5, 10, 10)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
 
 
 class ArenaDialog(QDialog):
@@ -480,9 +678,10 @@ class ArenaDialog(QDialog):
             )
         elif round_arena:
             self.instructions.setText(
-                "Click the centre of the floor, then a point on its edge, then a second "
-                "edge point about a quarter-turn round. Click where the bedding meets "
-                "the wall. Drag the centre to move the circle, an edge point to fit it."
+                "Press at the centre of the floor and drag out to its edge, where the "
+                "bedding meets the wall. Then drag inside the circle to move it, drag a "
+                "square handle to stretch it (Shift keeps it round, Ctrl turns it), or "
+                "use the mouse wheel to resize it."
             )
         else:
             self.instructions.setText(
@@ -528,6 +727,11 @@ class ArenaDialog(QDialog):
         except ValueError as exc:  # DegenerateArenaError included
             self.status.setText(str(exc))
             self.status.setStyleSheet(f"color: {colors.ERROR};")
+            ok_button.setEnabled(False)
+            return
+        if cal is None and self.canvas.shape == "ellipse":
+            self.status.setText("Press at the centre of the floor and drag out to its edge.")
+            self.status.setStyleSheet(f"color: {colors.TEXT_SECONDARY};")
             ok_button.setEnabled(False)
             return
         if cal is None:

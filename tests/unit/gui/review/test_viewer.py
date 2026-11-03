@@ -86,6 +86,57 @@ def test_the_hud_draws_the_behaviour_chip(canvas):
     assert canvas.grab().toImage().pixelColor(*centre) != colour
 
 
+def _round_arena():
+    from glider.vision.arena import ArenaCalibration
+
+    # A 400 px circle filling the middle of the 640x480 frame.
+    return ArenaCalibration.from_ellipse(
+        (0.5, 0.5),
+        (0.5 + 200 / 640, 0.5),
+        (0.5, 0.5 + 200 / 480),
+        width_cm=30.0,
+        frame_size=(640, 480),
+    )
+
+
+class TestRenderFrame:
+    def test_it_is_the_video_resolution(self, canvas):
+        canvas.set_view(_view())
+        image = canvas.render_frame()
+        assert (image.width(), image.height()) == (640, 480)
+
+    def test_it_has_the_overlays_and_not_the_frame_caption(self, canvas):
+        canvas.set_view(_view())
+        canvas.set_frame(10)
+        image = canvas.render_frame()
+        # The pose dot at (10, 100) is in the export...
+        assert image.pixelColor(10, 100) != QColor(colors.CANVAS)
+        # ...and the "frame N" caption, which the widget draws at top-left, is not.
+        caption = [image.pixelColor(x, 12) for x in range(8, 120)]
+        assert all(c == QColor(colors.CANVAS) for c in caption)
+
+    def test_it_does_not_disturb_the_widget(self, canvas):
+        canvas.set_view(_view())
+        before = canvas.grab().toImage()
+        canvas.render_frame()
+        assert canvas.grab().toImage() == before
+
+    def test_without_a_session_there_is_nothing(self, canvas):
+        assert canvas.render_frame() is None
+
+
+def test_visited_cells_are_filled_only_inside_a_round_arena(canvas):
+    canvas.set_view(_view())
+    canvas.set_show_poses(False)
+    canvas.set_arena(_round_arena())
+    canvas.set_grid(3)
+    canvas.set_visited(np.ones((3, 3), dtype=bool))
+    image = canvas.render_frame()
+    # The corner of the bounding box is in a visited cell but off the floor.
+    assert image.pixelColor(130, 50) == QColor(colors.CANVAS)
+    assert image.pixelColor(320, 240) != QColor(colors.CANVAS)
+
+
 def test_the_behaviour_chip_is_larger_than_an_output_chip(canvas):
     """It is what a reviewer reads while scrubbing; the output chips are secondary."""
     assert BEHAVIOUR_CHIP_H >= 1.5 * CHIP_H

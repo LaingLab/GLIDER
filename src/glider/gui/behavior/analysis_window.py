@@ -630,14 +630,15 @@ class AnalysisWindow(QMainWindow):
                 ("Retrieval tables (CSV)…", self._export_retrieval),
                 ("Nest distance per frame (CSV)…", self._export_nest_distance),
                 ("Heatmap (PNG + CSV)…", self._export_heatmap),
+                ("Current frame (PNG)…", self._export_frame),
             ],
         )
         self._export_window_action = export_actions[0]
-        self._export_retrieval_action, self._export_nest_action = export_actions[-3:-1]
+        self._export_retrieval_action, self._export_nest_action = export_actions[-4:-2]
         # Shown under a pup-retrieval preset only (_apply_experiment_type).
         for action in (self._export_retrieval_action, self._export_nest_action):
             action.setVisible(False)
-        self._export_heatmap_btn = export_actions[-1]
+        self._export_heatmap_btn = export_actions[-2]
         self._export_window_action.setEnabled(False)
         self._export_heatmap_btn.setEnabled(False)
         self._tour_btn, _ = self._menu_button(
@@ -3612,6 +3613,30 @@ class AnalysisWindow(QMainWindow):
         wrote = str(csv_path) if png_path is None else f"{png_path} and {csv_path.name}"
         note = "" if png_path is not None else " (no figure: matplotlib is not installed)"
         self.statusBar().showMessage(f"Wrote {wrote}{note}", 10000)
+
+    def _export_frame(self) -> None:
+        """Save the frame on screen, with the overlays that are switched on, as a PNG."""
+        image = self._canvas.render_frame()
+        if image is None:
+            QMessageBox.information(
+                self, "Export frame", "Open a session with a video or poses first."
+            )
+            return
+        frame = self._canvas.frame
+        if self._ethogram_csv is not None:
+            session_dir = (
+                self._ethogram_csv if self._ethogram_csv.is_dir() else self._ethogram_csv.parent
+            )
+            default = str(session_dir / f"{session_dir.name}_frame{frame}.png")
+        else:
+            default = f"frame{frame}.png"
+        path, _ = QFileDialog.getSaveFileName(self, "Export frame", default, "PNG Files (*.png)")
+        if not path:
+            return
+        if not image.save(path, "PNG"):
+            QMessageBox.critical(self, "Export frame", f"Could not write {path}")
+            return
+        self.statusBar().showMessage(f"Wrote {path}", 10000)
 
     def _describe(self, stats) -> str:
         span = (

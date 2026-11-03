@@ -429,3 +429,63 @@ class TestPostHoc:
         meta_path(csv).unlink()
         gate_pose_csv(csv, _arena(), settings=ArenaGateSettings(margin_cm=7.5))
         assert (tmp_path / f"{csv.stem}_ungated.csv").exists()
+
+
+def _walk(n=60, jump_at=(), to=(500.0, 60.0)):
+    """Keypoint ``a`` strolling across SQUARE's centre, teleporting on *jump_at*."""
+    xy = np.full((n, 4, 2), 320.0)
+    xy[:, :, 1] = 240.0
+    xy[:, 0, 0] = 300.0 + np.arange(n) * 0.5  # ~1 cm/s: well under any limit
+    for t in jump_at:
+        xy[t, 0] = to
+    return xy
+
+
+class TestJumps:
+    """Containment cannot see a keypoint that jumps somewhere still inside the arena."""
+
+    def test_a_short_teleport_inside_the_arena_is_blanked(self):
+        # (500, 60) is inside the square, so containment alone keeps it.
+        gated, report = gate_to_arena(_pose(_walk(jump_at=(20, 21, 22))), _arena())
+        assert np.isnan(gated.xy[20:23, 0]).all()
+        assert np.isfinite(gated.xy[:20, 0]).all() and np.isfinite(gated.xy[23:, 0]).all()
+        assert report.keypoints_jumped == 3
+        assert report.jumped_by_keypoint == {"a": 3, "b": 0, "c": 0, "d": 0}
+        assert report.frames_blanked == 0  # the other keypoints were fine
+
+    def test_a_teleport_on_the_first_frames_loses_too(self):
+        gated, _ = gate_to_arena(_pose(_walk(jump_at=(0, 1))), _arena())
+        assert np.isnan(gated.xy[:2, 0]).all()
+        assert np.isfinite(gated.xy[2:, 0]).all()
+
+    def test_a_relocation_longer_than_the_excursion_is_kept(self):
+        settings = ArenaGateSettings(max_excursion_s=0.5)  # 15 frames
+        gated, report = gate_to_arena(
+            _pose(_walk(jump_at=range(20, 40))), _arena(), settings=settings
+        )
+        assert report.keypoints_jumped == 0
+        assert np.isfinite(gated.xy[:, 0]).all()
+
+    def test_none_turns_the_jump_gate_off(self):
+        settings = ArenaGateSettings(max_speed_cm_s=None)
+        gated, report = gate_to_arena(_pose(_walk(jump_at=(20,))), _arena(), settings=settings)
+        assert report.keypoints_jumped == 0
+        assert np.isfinite(gated.xy[20, 0]).all()
+
+    def test_fast_but_real_running_is_kept(self):
+        xy = _walk()
+        # 100 cm/s at 30 fps on a 13.3 px/cm floor is 44 px a frame.
+        xy[:, 0, 0] = 150.0 + np.minimum(np.arange(60), 8) * 44.0
+        _, report = gate_to_arena(_pose(xy), _arena())
+        assert report.keypoints_jumped == 0
+
+    def test_a_block_from_before_the_jump_gate_reads_as_no_jump_gate(self):
+        from dataclasses import asdict
+
+        from glider.vision.arena_gate import settings_from_block
+
+        old = asdict(ArenaGateSettings())
+        del old["max_speed_cm_s"], old["max_excursion_s"]
+        assert settings_from_block({"gated": True, "settings": old})["max_speed_cm_s"] is None
+        new = {"gated": True, "settings": asdict(ArenaGateSettings())}
+        assert settings_from_block(new)["max_speed_cm_s"] == ArenaGateSettings().max_speed_cm_s

@@ -671,7 +671,7 @@ def test_one_bad_video_does_not_end_the_pass(tmp_path, monkeypatch):
         calls.append(csv)
         if len(calls) == 1:
             raise ValueError("refused")
-        return SimpleNamespace(blanked_fraction=0.0)
+        return SimpleNamespace(blanked_fraction=0.0, keypoints_jumped=0)
 
     monkeypatch.setattr("glider.vision.arena_gate.gate_pose_csv", flaky)
     gated, skipped = regate_videos(videos, calibrations, on_log=lambda m: None)

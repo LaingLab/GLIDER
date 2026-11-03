@@ -18,6 +18,13 @@ rearing against a wall projects above that plane and lands genuinely outside
 the quad, so a bare containment test would delete real rearing -- invisibly,
 which is worse than leaving a visible glitch.
 
+The margin also means containment alone cannot catch a keypoint that jumps
+*within* the arena -- to a reflection, an object, the far corner -- and back.
+The jump gate does that, on the same floor coordinates: a keypoint's track is
+cut wherever it would have to move faster than ``max_speed_cm_s``, and short
+islands between cuts are blanked, shortest first, so the track the animal
+spends most of its time on is the one that survives.
+
 Qt-free on purpose: ``run_batch`` and a GUI button both drive this, and a
 notebook can too.
 """
@@ -50,12 +57,26 @@ __all__ = [
 #: catching the bench-floor detections this exists for.
 _DEFAULT_MARGIN_FRACTION = 0.25
 
+#: Above any real rodent locomotion -- a mouse sprints at roughly 1 m/s, a rat
+#: not much faster in an open field -- and far below a detector relocating
+#: across a 30-60 cm arena in one frame, which is 900+ cm/s at 30 fps.
+_DEFAULT_MAX_SPEED_CM_S = 200.0
+
+#: Islands up to this long are blanked. Longer than any single-frame glitch
+#: and short enough that a sustained relocation is left visible rather than
+#: decided by a majority vote over several seconds.
+_DEFAULT_MAX_EXCURSION_S = 1.0
+
 
 @dataclass(frozen=True)
 class ArenaGateSettings:
     margin_cm: float | None = None
     min_inside_fraction: float = 0.5
     min_detected_fraction: float = 0.0
+    # None turns the jump gate off. It is also what a block written before the
+    # jump gate existed reads back as -- see settings_from_block.
+    max_speed_cm_s: float | None = _DEFAULT_MAX_SPEED_CM_S
+    max_excursion_s: float = _DEFAULT_MAX_EXCURSION_S
 
     def margin_for(self, arena: ArenaCalibration) -> float:
         if self.margin_cm is not None:
@@ -72,6 +93,9 @@ class GateReport:
     masked_by_keypoint: dict[str, int] = field(default_factory=dict)
     settings: ArenaGateSettings = field(default_factory=ArenaGateSettings)
     arena_corners: list = field(default_factory=list)
+    #: Keypoints the jump gate blanked, in frames the arena test kept.
+    keypoints_jumped: int = 0
+    jumped_by_keypoint: dict[str, int] = field(default_factory=dict)
 
     @property
     def blanked_fraction(self) -> float:
@@ -155,6 +179,14 @@ def _outside(arena, xy_px, resolution, margin_cm) -> np.ndarray:
     keypoint is not "outside" -- it is simply not present, which the caller
     accounts for separately.
     """
+    x, y = _floor_cm(arena, xy_px, resolution)
+    with np.errstate(invalid="ignore"):
+        # An ellipse lies inside its bounding box, so the argument above holds.
+        return np.asarray(arena.outside_cm(x, y, margin_cm), dtype=bool)
+
+
+def _floor_cm(arena, xy_px, resolution) -> tuple[np.ndarray, np.ndarray]:
+    """``(T, K)`` floor coordinates in centimetres; see :func:`_outside` on ``w``."""
     flat = np.asarray(xy_px, dtype=np.float64).reshape(-1, 2)
     width, height = resolution
     homogeneous = np.stack(
@@ -164,9 +196,44 @@ def _outside(arena, xy_px, resolution, margin_cm) -> np.ndarray:
     w = projected[2]
     with np.errstate(invalid="ignore", divide="ignore"):
         x, y = projected[0] / w, projected[1] / w
-        # An ellipse lies inside its bounding box, so the argument above holds.
-        beyond = arena.outside_cm(x, y, margin_cm)
-    return beyond.reshape(np.asarray(xy_px).shape[:2])
+    shape = np.asarray(xy_px).shape[:2]
+    return x.reshape(shape), y.reshape(shape)
+
+
+def _jumps(x, y, valid, fps: float, max_speed_cm_s: float, max_excursion_s: float) -> np.ndarray:
+    """Boolean ``(T, K)``: valid keypoints on a short island between jumps.
+
+    Per keypoint, the valid samples are cut wherever the step to the next one
+    would need more than ``max_speed_cm_s``. The allowance grows with the gap
+    in frames, so a keypoint that was missing for a while may reappear further
+    away. The shortest island is then blanked, provided it spans no more than
+    ``max_excursion_s``, and the cuts are recomputed: once a glitch is gone,
+    the frames either side of it are usually reachable from each other, and
+    the track rejoins. Shortest first is what makes the result independent of
+    which end of the video the glitch is at -- a teleport on frame 0 loses the
+    same way a teleport mid-session does.
+    """
+    out = np.zeros(valid.shape, dtype=bool)
+    max_frames = max_excursion_s * fps
+    for k in range(valid.shape[1]):
+        frames = np.flatnonzero(valid[:, k])
+        keep = np.ones(len(frames), dtype=bool)
+        while True:
+            live = frames[keep]
+            if len(live) < 2:
+                break
+            step = np.hypot(np.diff(x[live, k]), np.diff(y[live, k]))
+            cuts = np.flatnonzero(step > max_speed_cm_s * np.diff(live) / fps)
+            if not len(cuts):
+                break
+            bounds = np.concatenate(([0], cuts + 1, [len(live)]))
+            spans = live[bounds[1:] - 1] - live[bounds[:-1]] + 1
+            shortest = int(np.argmin(spans))
+            if spans[shortest] > max_frames:
+                break
+            keep[np.flatnonzero(keep)[bounds[shortest] : bounds[shortest + 1]]] = False
+        out[frames[~keep], k] = True
+    return out
 
 
 def gate_to_arena(pose, arena, *, settings=None, resolution=None):
@@ -219,6 +286,23 @@ def gate_to_arena(pose, arena, *, settings=None, resolution=None):
     # the frame verdict, not by their own position. blank is (T,), so the
     # trailing axis is added to broadcast against stray's (T, K).
     counted = stray & ~blank[:, None]
+
+    # Jumps last, over what containment kept: a stray is already gone and
+    # would otherwise cut the track around itself for no reason.
+    jumped = np.zeros_like(stray)
+    if settings.max_speed_cm_s is not None:
+        x, y = _floor_cm(arena, pose.xy, resolution)
+        jumped = _jumps(
+            x,
+            y,
+            detected & ~stray & ~blank[:, None],
+            float(pose.fps),
+            float(settings.max_speed_cm_s),
+            float(settings.max_excursion_s),
+        )
+        out.xy[jumped] = np.nan
+        out.confidence[jumped] = 0.0
+
     names = list(pose.keypoint_names)
     return out, GateReport(
         frames_total=int(pose.n_frames),
@@ -228,6 +312,8 @@ def gate_to_arena(pose, arena, *, settings=None, resolution=None):
         masked_by_keypoint={n: int(counted[:, i].sum()) for i, n in enumerate(names)},
         settings=settings,
         arena_corners=corners,
+        keypoints_jumped=int(jumped.sum()),
+        jumped_by_keypoint={n: int(jumped[:, i].sum()) for i, n in enumerate(names)},
     )
 
 
@@ -241,7 +327,17 @@ _REPORT_KEYS = (
     "keypoints_masked",
     "masked_by_keypoint",
     "arena_corners",
+    "keypoints_jumped",
+    "jumped_by_keypoint",
 )
+
+#: Every field a gate block recorded before the jump gate existed. Writers have
+#: always stored ``asdict(settings)``, so a block spelling out exactly these is
+#: from a build that had no jump gate -- its silence on ``max_speed_cm_s`` means
+#: "none", not today's default. Without this an old file would claim a jump gate
+#: it never had and pool with jump-gated sessions. A terse block that records
+#: only what was changed is still read as defaults, as before.
+_PRE_JUMP_FIELDS = frozenset({"margin_cm", "min_inside_fraction", "min_detected_fraction"})
 
 
 def settings_from_block(block) -> dict:
@@ -258,7 +354,9 @@ def settings_from_block(block) -> dict:
     understand is still a difference between two blocks, and silently ignoring
     it is how a real mismatch would pass.
     """
-    return {**asdict(ArenaGateSettings()), **((block or {}).get("settings") or {})}
+    stored = (block or {}).get("settings") or {}
+    legacy = {"max_speed_cm_s": None} if set(stored) == _PRE_JUMP_FIELDS else {}
+    return {**asdict(ArenaGateSettings()), **legacy, **stored}
 
 
 def _report_from_block(block) -> GateReport:
