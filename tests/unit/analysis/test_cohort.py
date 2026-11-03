@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from glider.analysis.cohort import discover_sessions, session_id_for
+from glider.analysis.cohort import discover_sessions, recording_filmed, session_id_for
 
 
 def _tracking(folder: Path, video_stem: str | None = None) -> Path:
@@ -168,3 +168,26 @@ def test_a_recording_without_pups_is_still_its_own_session(tmp_path):
         ("m2.avi", None),
         ("rec", recording.resolve()),
     ]
+
+
+def test_a_video_does_not_claim_another_videos_recording(tmp_path):
+    """A stray recording in a folder of tracked videos is not theirs: it stays its own."""
+    folder = _tracking(tmp_path / "downloads", video_stem="other_mouse")
+    (folder / "rat01.avi").write_bytes(b"")
+    (folder / "rat01_pups.npz").write_bytes(b"")
+    sources, _ = discover_sessions(tmp_path)
+    assert sorted((s.path.name, s.recording) for s in sources) == [
+        ("downloads", folder.resolve()),
+        ("rat01.avi", None),
+    ]
+
+
+def test_recording_filmed(tmp_path):
+    own = _tracking(tmp_path / "own", video_stem="mouse01")
+    bare = _tracking(tmp_path / "bare")
+    assert recording_filmed(own, own / "mouse01.mp4")
+    assert recording_filmed(own, own / "mouse01_annotated.mp4")
+    assert not recording_filmed(own, tmp_path / "rat01.avi")
+    # Nothing to compare: kept, as before.
+    assert recording_filmed(bare, tmp_path / "rat01.avi")
+    assert recording_filmed(own, None)

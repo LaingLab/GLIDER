@@ -373,6 +373,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Batch Pose follows the animal, not an object the model also detects.** A
+  rat model over a novel-object arena also scored each dish as a small rat, and
+  the single-animal path kept whichever detection was most confident. The track
+  sat on a dish before the rat was placed and jumped to one whenever it
+  outscored the rat. Each frame now prefers a detection at least 40% of the
+  animal's typical size, measured from the video itself, and frames with only an
+  undersized detection are blanked, with the `_raw` companion keeping them. On
+  one session this recovered about 1,700 frames of the rat and removed 254 jumps.
+  `min_body_fraction=None` turns it off.
+- **Session Review no longer lends a video another recording's timeline.** A
+  folder holding a stray live recording beside tracked videos attached that
+  recording to every one of them, so an 11-minute video could be scrubbed for
+  only the recording's 54 seconds. A recording is now used only when its own
+  video is the session's.
+
 - **Multi-animal batch tracking keeps an animal across a tracker id change.**
   A new id that overlapped the old one for a few frames, filled a hole in an id
   the tracker later gave back, or jumped at the change was refused by every

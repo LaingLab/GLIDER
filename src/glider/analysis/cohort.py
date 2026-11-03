@@ -31,6 +31,7 @@ __all__ = [
     "is_recording",
     "project_groups",
     "recording_candidates",
+    "recording_filmed",
     "session_id_for",
 ]
 
@@ -71,6 +72,26 @@ def recording_candidates(ethogram_csv: Path, video_path: Path | None = None) -> 
             break
         folder = folder.parent
     return list(dict.fromkeys(f.resolve() for f in folders))
+
+
+def recording_filmed(folder: Path, video: Path | None) -> bool:
+    """Whether the recording in ``folder`` could be the one ``video`` belongs to.
+
+    A folder search finds *a* recording, not *this* session's: a Downloads
+    folder holding one stray live recording beside a batch of tracked videos
+    lent every one of them that recording's timeline, clamping an 11-minute
+    video to the stray's 54 seconds. A recording that kept a video of its own
+    names its session, so a different video rules it out. One with no video,
+    or a session with none, cannot be told apart and is kept, as before.
+    """
+    if video is None:
+        return True
+    try:
+        artifacts = discover(Path(folder))
+    except OSError:
+        return False
+    own = {raw_video_stem(v) for v in (artifacts.video, artifacts.annotated_video) if v}
+    return not own or raw_video_stem(video) in own
 
 
 def session_id_for(path: Path) -> str:
@@ -129,8 +150,11 @@ def discover_sessions(root: Path) -> tuple[list[SessionSource], str | None]:
     sources: list[SessionSource] = []
     claimed: set[Path] = set()
     for ethogram in sorted(root.rglob("ethogram_raw.csv")):
-        candidates = recording_candidates(ethogram, find_session_video(ethogram))
-        recording = next((f for f in candidates if is_recording(f)), None)
+        video = find_session_video(ethogram)
+        candidates = recording_candidates(ethogram, video)
+        recording = next(
+            (f for f in candidates if is_recording(f) and recording_filmed(f, video)), None
+        )
         if recording is not None:
             claimed.add(recording)
         sources.append(SessionSource(ethogram, recording, session_id_for(ethogram)))
@@ -147,7 +171,9 @@ def discover_sessions(root: Path) -> tuple[list[SessionSource], str | None]:
         if video is None:
             continue
         candidates = recording_candidates(video, video)
-        recording = next((f for f in candidates if is_recording(f)), None)
+        recording = next(
+            (f for f in candidates if is_recording(f) and recording_filmed(f, video)), None
+        )
         if recording is not None:
             claimed.add(recording)
         pup_videos.append(SessionSource(video, recording, session_id_for(recording or video)))
