@@ -1565,13 +1565,31 @@ class AnalysisWindow(QMainWindow):
         """The zone editor on *frame*: the edited *config*, or None if cancelled."""
         from glider.gui.dialogs.zone_dialog import ZoneDialog
 
-        dialog = ZoneDialog(None, config, parent=self, frame=frame)
+        dialog = ZoneDialog(
+            None, config, parent=self, frame=frame, calibration=self._zone_calibration()
+        )
         try:
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return None
             return dialog.get_zone_configuration()
         finally:
             dialog.deleteLater()
+
+    def _zone_calibration(self):
+        """What lets the zone editor size zones in cm on the shown session's video.
+
+        The session's arena when one is drawn, so sizes follow the camera's
+        perspective; else its px/mm as a plain scale; else None, and sizes stay
+        in pixels.
+        """
+        found = self._arena_for(self._shown)
+        if found is not None:
+            return found[0]
+        if self._view is not None and self._view.px_per_mm:
+            from glider.gui.dialogs.zone_dialog import FrameScale
+
+            return FrameScale(float(self._view.px_per_mm))
+        return None
 
     def _redraw_nest(self) -> None:
         """The nest outlined on the frame on screen, in force from the playhead on.
@@ -2775,7 +2793,9 @@ class AnalysisWindow(QMainWindow):
         from glider.vision.zones import ZoneConfiguration
 
         config = self._zones if self._zones is not None else ZoneConfiguration()
-        dialog = ZoneDialog(None, config, parent=self, frame=frame)
+        dialog = ZoneDialog(
+            None, config, parent=self, frame=frame, calibration=self._zone_calibration()
+        )
         try:
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return

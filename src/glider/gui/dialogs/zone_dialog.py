@@ -9,6 +9,7 @@ import logging
 import math
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import cv2
@@ -20,6 +21,7 @@ from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QColorDialog,
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
@@ -81,6 +83,25 @@ SETTINGS_GROUP = "zone_editor"
 #: Default fixed sizes per unit, chosen to be a plausible zone on a mouse arena
 #: (cm) and on a 640x480 frame (px).
 DEFAULT_SIZE = {"cm": (10.0, 10.0), "px": (100.0, 100.0)}
+
+#: The units a fixed size can be given in, as the unit picker lists them.
+UNITS = ("px", "cm")
+
+
+@dataclass(frozen=True)
+class FrameScale:
+    """A scale known only as a number, on the frame the zones are drawn on.
+
+    What a recorded session carries (its px/mm) when there is no arena
+    drawn for it: enough to turn centimetres into pixels, with no perspective.
+    """
+
+    pixels_per_mm: float
+
+    @property
+    def is_calibrated(self) -> bool:
+        return self.pixels_per_mm > 0
+
 
 #: A stamp turns a normalized click position and the frame size into the shape
 #: and vertices of a fixed-size zone; ValueError means "nothing to place".
@@ -665,6 +686,7 @@ class ZoneDialog(QDialog):
             self._preview.set_frame(initial)
             self._zone_config.config_width = initial.shape[1]
             self._zone_config.config_height = initial.shape[0]
+            self._update_info()
 
         self._preview.set_zone_configuration(self._zone_config)
 
@@ -720,8 +742,9 @@ class ZoneDialog(QDialog):
         self._fixed_size_check = QCheckBox("Fixed size")
         self._fixed_size_check.setToolTip(
             "Place rectangles and circles of a set size with one click, centred where "
-            "you click.\nWith an arena calibration the size is in cm on the floor and "
-            "the zone follows the camera's perspective (it is stored as a polygon)."
+            "you click.\nThe size is in frame pixels, or in cm once a calibration is "
+            "known; through an arena, cm are on the floor and the zone follows the "
+            "camera's perspective (it is stored as a polygon)."
         )
         self._fixed_size_check.toggled.connect(self._on_size_changed)
         size_layout.addWidget(self._fixed_size_check)
@@ -740,8 +763,12 @@ class ZoneDialog(QDialog):
             spin.setKeyboardTracking(False)
             spin.valueChanged.connect(self._on_size_changed)
 
-        self._unit_label = QLabel("px")
-        size_layout.addWidget(self._unit_label)
+        # Pixels always work; centimetres only once a calibration can convert
+        # them, so the cm entry is disabled until then (see _update_size_controls).
+        self._unit_combo = QComboBox()
+        self._unit_combo.addItems(UNITS)
+        self._unit_combo.currentTextChanged.connect(self._on_unit_changed)
+        size_layout.addWidget(self._unit_combo)
         size_layout.addStretch()
         left_layout.addLayout(size_layout)
 
@@ -836,6 +863,9 @@ class ZoneDialog(QDialog):
         self._res_label = QLabel("--")
         info_layout.addRow("Resolution:", self._res_label)
 
+        self._scale_label = QLabel("--")
+        info_layout.addRow("Scale:", self._scale_label)
+
         right_layout.addWidget(info_group)
 
         # File operations
@@ -898,6 +928,7 @@ class ZoneDialog(QDialog):
         self._calibration = calibration
         self._load_size_settings()
         self._update_size_controls()
+        self._update_info()
 
     def _arena(self):
         """The calibration, if it can map image points to the floor and back."""
@@ -919,11 +950,30 @@ class ZoneDialog(QDialog):
             ppm *= frame_width / cal_width
         return ppm * 10.0
 
+    def _cm_available(self) -> bool:
+        """Whether a calibration can turn centimetres into pixels."""
+        return self._arena() is not None or self._scalar_px_per_cm(0) is not None
+
     def _size_unit(self) -> str:
-        """``"cm"`` when a calibration can turn centimetres into pixels, else ``"px"``."""
-        if self._arena() is not None or self._scalar_px_per_cm(0) is not None:
+        """The unit fixed sizes are given in: the one picked, but never cm uncalibrated.
+
+        Centimetres are the default whenever they are possible; a choice of
+        pixels is remembered and survives a calibration arriving.
+        """
+        try:
+            picked = str(self._settings.value(self._size_key("unit"), "cm"))
+        except (TypeError, ValueError):
+            picked = "cm"
+        if picked == "cm" and self._cm_available():
             return "cm"
         return "px"
+
+    def _on_unit_changed(self, unit: str) -> None:
+        if unit not in UNITS or unit == self._size_unit():
+            return
+        self._settings.setValue(self._size_key("unit"), unit)
+        self._load_size_settings()
+        self._update_size_controls()
 
     def _size_key(self, name: str) -> str:
         return f"{SETTINGS_GROUP}/{name}"
@@ -985,13 +1035,23 @@ class ZoneDialog(QDialog):
         circle = shape == ZoneShape.CIRCLE
         self._fixed_size_check.setEnabled(sizable)
         enabled = sizable and self._fixed_size_check.isChecked()
-        for w in (self._width_label, self._width_spin, self._height_spin, self._unit_label):
+        for w in (self._width_label, self._width_spin, self._height_spin, self._unit_combo):
             w.setEnabled(enabled)
         self._height_label.setEnabled(enabled)
         self._width_label.setText("Diameter:" if circle else "Width:")
         self._height_label.setVisible(not circle)
         self._height_spin.setVisible(not circle)
-        self._unit_label.setText(self._size_unit())
+
+        cm_item = self._unit_combo.model().item(UNITS.index("cm"))
+        cm_item.setEnabled(self._cm_available())
+        cm_item.setToolTip(
+            "Centimetres on the arena floor"
+            if self._cm_available()
+            else "Needs a calibration: draw an arena or set the scale first"
+        )
+        self._unit_combo.blockSignals(True)
+        self._unit_combo.setCurrentText(self._size_unit())
+        self._unit_combo.blockSignals(False)
         self._preview.set_stamp(self._stamp if enabled else None)
 
     def _stamp(
@@ -999,13 +1059,16 @@ class ZoneDialog(QDialog):
     ) -> tuple[ZoneShape, list[tuple[float, float]]]:
         """The fixed-size zone centred on *centre*: its shape and normalized vertices.
 
-        Through an arena the size is laid out on the floor and the result is a
-        polygon (see :func:`arena_sized_zone_vertices`); with a scalar
-        calibration or none it stays a rectangle or circle.
+        In pixels the size is taken as-is. In centimetres through an arena the
+        size is laid out on the floor and the result is a polygon (see
+        :func:`arena_sized_zone_vertices`); with a scalar calibration it stays a
+        rectangle or circle.
         """
         shape = self._get_current_shape()
         width = self._width_spin.value()
         height = width if shape == ZoneShape.CIRCLE else self._height_spin.value()
+        if self._size_unit() == "px":
+            return shape, sized_zone_vertices(shape, centre, width, height, frame_size)
         arena = self._arena()
         if arena is not None:
             return ZoneShape.POLYGON, arena_sized_zone_vertices(arena, shape, centre, width, height)
@@ -1225,6 +1288,16 @@ class ZoneDialog(QDialog):
             )
         else:
             self._res_label.setText("--")
+        self._scale_label.setText(self._scale_text())
+
+    def _scale_text(self) -> str:
+        """The calibration's px/cm on this frame, for the information box."""
+        arena = self._arena()
+        if arena is not None:
+            centre = getattr(arena, "px_per_cm_centre", None)
+            return f"{centre:.2f} px/cm (arena centre)" if centre else "arena"
+        scale = self._scalar_px_per_cm(self._zone_config.config_width)
+        return f"{scale:.2f} px/cm" if scale else "none (sizes in px)"
 
     def _save_config(self) -> None:
         """Save zone configuration to file."""

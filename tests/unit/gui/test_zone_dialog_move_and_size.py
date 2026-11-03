@@ -7,7 +7,7 @@ import pytest
 from PyQt6.QtCore import QPointF, QSettings, Qt
 from PyQt6.QtGui import QKeyEvent, QMouseEvent
 
-from glider.gui.dialogs.zone_dialog import ZoneDialog
+from glider.gui.dialogs.zone_dialog import FrameScale, ZoneDialog
 from glider.vision.arena import ArenaCalibration
 from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape
 
@@ -146,7 +146,7 @@ class TestMoving:
 class TestFixedSize:
     def test_one_click_places_a_rectangle_of_the_set_pixel_size(self, qtbot, settings):
         dialog, preview = _editor(qtbot, settings)
-        assert dialog._unit_label.text() == "px"
+        assert dialog._unit_combo.currentText() == "px"
         dialog._fixed_size_check.setChecked(True)
         dialog._width_spin.setValue(64)
         dialog._height_spin.setValue(96)
@@ -201,7 +201,7 @@ class TestFixedSize:
             frame_size=(640, 480),
         )
         dialog, preview = _editor(qtbot, settings, calibration=arena)
-        assert dialog._unit_label.text() == "cm"
+        assert dialog._unit_combo.currentText() == "cm"
         dialog._fixed_size_check.setChecked(True)
         dialog._width_spin.setValue(10)
         dialog._height_spin.setValue(5)
@@ -223,7 +223,7 @@ class TestFixedSize:
             calibration_width = 320
 
         dialog, preview = _editor(qtbot, settings, calibration=Scalar())
-        assert dialog._unit_label.text() == "cm"
+        assert dialog._unit_combo.currentText() == "cm"
         dialog._fixed_size_check.setChecked(True)
         dialog._width_spin.setValue(2)
         dialog._height_spin.setValue(1)
@@ -245,5 +245,66 @@ class TestFixedSize:
         # Centimetres are a different quantity: they keep their own default.
         arena = ArenaCalibration(corners=[(0, 0), (1, 0), (1, 1), (0, 1)])
         again.set_calibration(arena)
-        assert again._unit_label.text() == "cm"
+        assert again._unit_combo.currentText() == "cm"
         assert again._width_spin.value() == 10.0
+
+
+class TestSizeUnit:
+    def test_without_a_calibration_cm_cannot_be_picked(self, qtbot, settings):
+        dialog, _preview = _editor(qtbot, settings)
+        cm = dialog._unit_combo.model().item(dialog._unit_combo.findText("cm"))
+        assert not cm.isEnabled()
+        assert dialog._unit_combo.currentText() == "px"
+
+    def test_pixels_can_be_picked_over_an_arena(self, qtbot, settings):
+        arena = ArenaCalibration(
+            corners=[(0, 0), (1, 0), (1, 1), (0, 1)],
+            width_cm=40.0,
+            height_cm=30.0,
+            frame_size=(640, 480),
+        )
+        dialog, preview = _editor(qtbot, settings, calibration=arena)
+        dialog._fixed_size_check.setChecked(True)
+        dialog._unit_combo.setCurrentText("px")
+        dialog._width_spin.setValue(64)
+        dialog._height_spin.setValue(48)
+        dialog._draw_btn.setChecked(True)
+
+        _mouse(preview, "press", 320, 240)
+
+        zone = dialog._pending_zone
+        assert zone.shape == ZoneShape.RECTANGLE
+        (x1, y1), (x2, y2) = zone.vertices
+        assert ((x2 - x1) * 640, (y2 - y1) * 480) == pytest.approx((64, 48))
+
+    def test_the_picked_unit_is_remembered_and_keeps_its_own_size(self, qtbot, settings):
+        scale = FrameScale(pixels_per_mm=4.0)
+        dialog, _preview = _editor(qtbot, settings, calibration=scale)
+        dialog._fixed_size_check.setChecked(True)
+        assert dialog._unit_combo.currentText() == "cm"
+        dialog._width_spin.setValue(3)
+
+        dialog._unit_combo.setCurrentText("px")
+        assert dialog._width_spin.value() == 100.0  # the px default, not 3 px
+        dialog._width_spin.setValue(250)
+
+        again, _ = _editor(qtbot, settings, calibration=scale)
+        assert again._unit_combo.currentText() == "px"
+        assert again._width_spin.value() == 250
+        again._unit_combo.setCurrentText("cm")
+        assert again._width_spin.value() == 3
+
+    def test_a_frame_scale_sizes_cm_on_the_frame_as_given(self, qtbot, settings):
+        dialog, preview = _editor(qtbot, settings, calibration=FrameScale(pixels_per_mm=4.0))
+        assert dialog._scale_label.text() == "40.00 px/cm"
+        dialog._fixed_size_check.setChecked(True)
+        dialog._width_spin.setValue(2)
+        dialog._height_spin.setValue(1)
+        dialog._draw_btn.setChecked(True)
+        _mouse(preview, "press", 320, 240)
+        (x1, y1), (x2, y2) = dialog._pending_zone.vertices
+        assert ((x2 - x1) * 640, (y2 - y1) * 480) == pytest.approx((80, 40))
+
+    def test_an_uncalibrated_frame_scale_leaves_sizes_in_pixels(self, qtbot, settings):
+        dialog, _preview = _editor(qtbot, settings, calibration=FrameScale(pixels_per_mm=0.0))
+        assert dialog._unit_combo.currentText() == "px"

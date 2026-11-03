@@ -158,6 +158,26 @@ class TestAnalysisWindow:
         win._bar.set_selection(0, 200)
         assert "no calibration" in win._summary.text().lower()
 
+    def test_zones_are_sized_in_pixels_without_a_calibration(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        assert win._zone_calibration() is None
+
+    def test_the_session_scale_lets_zones_be_sized_in_cm(self, qtbot, tmp_path):
+        from glider.gui.dialogs.zone_dialog import FrameScale
+
+        win = self._win(qtbot, tmp_path)
+        win._view.px_per_mm = 2.5
+        assert win._zone_calibration() == FrameScale(pixels_per_mm=2.5)
+
+    def test_a_drawn_arena_beats_the_plain_scale_for_zone_sizes(self, qtbot, tmp_path):
+        from glider.vision.arena import ArenaCalibration
+
+        win = self._win(qtbot, tmp_path)
+        win._view.px_per_mm = 2.5
+        arena = ArenaCalibration(corners=[(0, 0), (1, 0), (1, 1), (0, 1)])
+        win._arenas[win._shown] = (arena, "test")
+        assert win._zone_calibration() is arena
+
     def test_select_whole_session(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._select_all()
