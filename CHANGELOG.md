@@ -373,6 +373,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A folder of Batch Pose videos opens in Session Review.** Videos tracked by
+  Batch Pose (a video beside its `DLC_` CSV) are now sessions of a cohort, as
+  pup-tracked videos already were, and Open recording folder on a folder that
+  is no single recording opens every session in it instead of reporting "no
+  GLIDER recording". A video that already has a session (its ethogram, its pup
+  tracking, or the recording that filmed it) is not listed twice.
 - **Batch Pose follows the animal, not an object the model also detects.** A
   rat model over a novel-object arena also scored each dish as a small rat, and
   the single-animal path kept whichever detection was most confident. The track

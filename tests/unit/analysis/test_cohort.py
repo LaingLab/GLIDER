@@ -133,6 +133,37 @@ def test_a_video_with_pups_is_a_session_named_by_its_stem(tmp_path):
     ]
 
 
+def test_a_video_tracked_by_batch_pose_is_a_session(tmp_path):
+    """A folder of videos run through Batch Pose holds nothing else to find."""
+    folder = tmp_path / "rats"
+    folder.mkdir()
+    for stem in ("JP01_OF1", "JP02_OF2"):
+        (folder / f"{stem}.avi").write_bytes(b"")
+        for name in (f"{stem}DLC_rat-1.csv", f"{stem}DLC_rat-1_raw.csv"):
+            (folder / name).write_text("scorer\n", encoding="utf-8")
+    (folder / "untracked.avi").write_bytes(b"")
+    (folder / "JP01_OF1_zones").mkdir()
+    (folder / "JP01_OF1_zones" / "zone_occupancy.csv").write_text("zone\n", encoding="utf-8")
+    sources, _ = discover_sessions(tmp_path)
+    assert [(s.path.name, s.recording, s.session_id) for s in sources] == [
+        ("JP01_OF1.avi", None, "JP01_OF1"),
+        ("JP02_OF2.avi", None, "JP02_OF2"),
+    ]
+
+
+def test_a_pose_tracked_video_with_another_session_is_not_listed_twice(tmp_path):
+    """Its ethogram, its pups, or the recording that filmed it already show it."""
+    recording = _tracking(tmp_path / "rec", video_stem="mouse01")
+    (recording / "mouse01DLC_m.csv").write_text("scorer\n", encoding="utf-8")
+    pups = tmp_path / "pups"
+    pups.mkdir()
+    (pups / "litter.avi").write_bytes(b"")
+    (pups / "litter_pups.npz").write_bytes(b"")
+    (pups / "litterDLC_m.csv").write_text("scorer\n", encoding="utf-8")
+    sources, _ = discover_sessions(tmp_path)
+    assert sorted(s.path.name for s in sources) == ["litter.avi", "rec"]
+
+
 def test_session_id_of_a_video_is_its_stem(tmp_path):
     video = tmp_path / "litter1_pre.avi"
     video.write_bytes(b"")

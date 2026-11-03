@@ -3,7 +3,8 @@
 Session Review opens a folder as a cohort. A cohort mixes three kinds of session:
 apply-run ethograms (``<output>/<video stem>/ethogram_raw.csv``), live
 recordings (a folder of GLIDER tracking/events/data CSVs) and videos, found
-by the ``_pups.npz`` the pup pass leaves beside them. An ethogram usually
+by the ``_pups.npz`` the pup pass or the ``DLC_`` pose CSV the batch pose
+pass leaves beside them. An ethogram usually
 sits beneath the recording it was scored from, and a pup video inside one,
 so each *claims* that recording, and only unclaimed recordings become
 sessions of their own -- otherwise one animal would appear twice in every
@@ -179,9 +180,44 @@ def discover_sessions(root: Path) -> tuple[list[SessionSource], str | None]:
         pup_videos.append(SessionSource(video, recording, session_id_for(recording or video)))
     # Only folders that hold a CSV are classified, so a tree of raw videos is
     # not header-sniffed file by file.
+    recordings: set[Path] = set()
     for folder in sorted({p.parent.resolve() for p in root.rglob("*.csv")}):
-        if folder not in claimed and is_recording(folder):
-            sources.append(SessionSource(folder, folder, session_id_for(folder)))
+        if is_recording(folder):
+            recordings.add(folder)
+            if folder not in claimed:
+                sources.append(SessionSource(folder, folder, session_id_for(folder)))
     sources += pup_videos
+    sources += _pose_videos(root, sources, recordings)
     groups, warning = project_groups(root)
     return [replace(s, group=groups.get(s.session_id, "")) for s in sources], warning
+
+
+def _pose_videos(
+    root: Path, found: list[SessionSource], recordings: set[Path]
+) -> list[SessionSource]:
+    """Videos the batch pose pass tracked that no other session already shows.
+
+    A folder of videos run through Batch Pose holds nothing else -- no
+    ethogram, no recording -- so without these it opened as an empty cohort.
+    A video that already has a session is left to it: an ethogram scored from
+    it, a pup session, or the GLIDER recording that filmed it, whose tracking
+    the recording session reads.
+    """
+    from glider.vision.pose.batch import find_pose_csv
+
+    shown = {s.path.resolve() for s in found if s.path.is_file()}
+    for s in found:
+        if s.path.name == "ethogram_raw.csv" and (video := find_session_video(s.path)):
+            shown.add(Path(video).resolve())
+    sources = []
+    for folder in sorted({p.parent for p in root.rglob("*DLC_*.csv")}):
+        filmed_here = folder.resolve() in recordings
+        for video in sorted(folder.iterdir()):
+            if not is_video(video) or video.resolve() in shown:
+                continue
+            if filmed_here and recording_filmed(folder, video):
+                continue
+            if find_pose_csv(video) is not None:
+                shown.add(video.resolve())
+                sources.append(SessionSource(video.resolve(), None, session_id_for(video)))
+    return sources
