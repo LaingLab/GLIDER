@@ -22,12 +22,18 @@ implementations of "time in zone" is how a cohort ends up with two answers.
 Which body point counts as the animal's position is a real choice, not a
 detail — commercial trackers charge for the distinction between a centre-point
 and a nose-point, because a nose crossing into a zone is a different event
-from a body crossing into it. ``point`` takes either.
+from a body crossing into it. ``point`` takes either, or a list of keypoints:
+a novel-object test scores investigation from the head (nose and ears), not
+from the body sitting beside the object. With a list, the position is the
+mean of those keypoints and a zone holds the animal on any frame where any
+one of them is inside it -- the nose reaching into an object's zone counts,
+even when the head's mean point has not yet crossed the line.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +44,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "CENTROID",
     "SpatialError",
+    "describe_point",
     "load_zones",
     "occupancy_grid",
     "position_track",
@@ -49,6 +56,9 @@ __all__ = [
 #: The default body point: the mean of the tracked keypoints. A dropped nose
 #: nudges it rather than teleporting it, which a single keypoint cannot claim.
 CENTROID = "centroid"
+
+#: A body point: :data:`CENTROID`, one keypoint name, or several.
+Point = str | Sequence[str]
 
 
 class SpatialError(ValueError):
@@ -65,27 +75,59 @@ def load_zones(path: Path | str):
     return config
 
 
-def position_track(view, point: str = CENTROID) -> np.ndarray:
-    """``(n_frames, 2)`` pixel positions of *point*, or raise.
+def describe_point(point: Point) -> str:
+    """*point* as a reader would name it: ``centroid``, ``nose``, ``nose + left_ear``."""
+    if isinstance(point, str):
+        return point
+    return " + ".join(point) if point else CENTROID
 
-    ``point`` is either :data:`CENTROID` or the name of a keypoint.
-    """
+
+def _keypoint_indices(view, point: Point) -> list[int] | None:
+    """The keypoint columns *point* names, or None for the centroid."""
+    names = [point] if isinstance(point, str) else list(point)
+    if not names or names == [CENTROID]:
+        return None
+    missing = [n for n in names if n not in view.keypoint_names]
+    if missing:
+        raise SpatialError(
+            f"{', '.join(map(repr, missing))} "
+            f"{'is not a keypoint' if len(missing) == 1 else 'are not keypoints'} "
+            f"of this session; known: {', '.join(view.keypoint_names)}"
+        )
+    return [view.keypoint_names.index(n) for n in dict.fromkeys(names)]
+
+
+def _keypoint_stack(view, point: Point) -> np.ndarray | None:
+    """``(n_frames, k, 2)`` for a keypoint list, or None for the centroid."""
     if view.xy is None:
         raise SpatialError("this session has no poses, so it has no position track")
-    if point == CENTROID:
+    indices = _keypoint_indices(view, point)
+    return None if indices is None else view.xy[:, indices, :]
+
+
+def position_track(view, point: Point = CENTROID) -> np.ndarray:
+    """``(n_frames, 2)`` pixel positions of *point*, or raise.
+
+    ``point`` is :data:`CENTROID`, the name of a keypoint, or a list of them,
+    whose mean is the position -- the head from the nose and both ears.
+    """
+    stack = _keypoint_stack(view, point)
+    if stack is None:
         track = view.centroid()
         if track is None:
             raise SpatialError("no centroid could be computed")
         return track
-    if point not in view.keypoint_names:
-        raise SpatialError(
-            f"{point!r} is not a keypoint of this session; known: "
-            f"{', '.join(view.keypoint_names)}"
-        )
-    return view.xy[:, view.keypoint_names.index(point), :]
+    if stack.shape[1] == 1:
+        return stack[:, 0, :]
+    import warnings
+
+    with warnings.catch_warnings():
+        # A frame with every chosen keypoint dropped is NaN, as it should be.
+        warnings.filterwarnings("ignore", r"Mean of empty slice", RuntimeWarning)
+        return np.nanmean(stack, axis=1)
 
 
-def tracking_frame(view, zones=None, *, point: str = CENTROID) -> pd.DataFrame:
+def tracking_frame(view, zones=None, *, point: Point = CENTROID) -> pd.DataFrame:
     """A ``Session.tracking``-shaped frame for a video-derived session.
 
     Columns match what the live tracker logs, because that is what every
@@ -99,8 +141,12 @@ def tracking_frame(view, zones=None, *, point: str = CENTROID) -> pd.DataFrame:
     the arena size to normalise against, so a session whose resolution was
     never recorded gets empty ``zone_ids`` rather than a guess — the sidecar
     repair in the session review window exists for exactly that.
+
+    With several keypoints, ``center_x``/``center_y`` is their mean and
+    ``zone_ids`` names every zone any one of them is inside.
     """
     track = position_track(view, point)
+    stack = _keypoint_stack(view, point)
     frames = np.asarray(view.frames, dtype=int)
     labels = view.labels
 
@@ -115,6 +161,7 @@ def tracking_frame(view, zones=None, *, point: str = CENTROID) -> pd.DataFrame:
     keep = (frames >= 0) & (frames < len(track))
     frames, row = frames[keep], row[keep]
     track = track[frames]
+    members = track if stack is None else stack[frames]
     n = len(frames)
 
     data = {
@@ -125,7 +172,7 @@ def tracking_frame(view, zones=None, *, point: str = CENTROID) -> pd.DataFrame:
         "center_y": track[:, 1],
         "behavioral_state": [labels[i] if i < len(labels) else "" for i in row],
     }
-    data["zone_ids"] = _zone_ids(track, zones, view.resolution)
+    data["zone_ids"] = _zone_ids(members, zones, view.resolution)
     return pd.DataFrame(data)
 
 
@@ -137,6 +184,10 @@ def _zone_ids(track: np.ndarray, zones, resolution) -> list[str]:
     overlapping zones reads as one combined row rather than being
     double-counted, and a video-derived session must not disagree with a
     live-recorded one about that.
+
+    ``track`` is ``(n, 2)``, or ``(n, k, 2)`` for several keypoints, where a
+    frame is in a zone when any of its k points is; a frame is dropped only
+    when all k are.
     """
     if zones is None or not getattr(zones, "zones", None):
         return [""] * len(track)
@@ -145,9 +196,12 @@ def _zone_ids(track: np.ndarray, zones, resolution) -> list[str]:
         return [""] * len(track)
 
     width, height = resolution
-    xs = track[:, 0] / width
-    ys = track[:, 1] / height
-    finite = np.isfinite(xs) & np.isfinite(ys)
+    points = track if track.ndim == 3 else track[:, None, :]
+    n, k = points.shape[:2]
+    xs = points[..., 0].reshape(-1) / width
+    ys = points[..., 1].reshape(-1) / height
+    finite_point = np.isfinite(xs) & np.isfinite(ys)
+    finite = finite_point.reshape(n, k).any(axis=1)
 
     # One vectorised membership test per zone rather than one scalar call per
     # frame. A cohort is thirty sessions of ~45,000 frames, so the scalar form
@@ -156,10 +210,13 @@ def _zone_ids(track: np.ndarray, zones, resolution) -> list[str]:
     # ``_zone_mask`` is checked against Zone.contains_point in the tests, so
     # the two cannot drift apart.
     aspect = width / height
-    per_zone = [(zone.name, _zone_mask(zone, xs, ys, aspect) & finite) for zone in zones.zones]
+    per_zone = [
+        (zone.name, (_zone_mask(zone, xs, ys, aspect) & finite_point).reshape(n, k).any(axis=1))
+        for zone in zones.zones
+    ]
 
     out: list[str] = []
-    for i in range(len(track)):
+    for i in range(n):
         if not finite[i]:
             out.append("")  # a dropped frame is not "outside every zone"
             continue
@@ -215,7 +272,7 @@ def zone_occupancy(
     view,
     zones,
     *,
-    point: str = CENTROID,
+    point: Point = CENTROID,
     start_frame: int | None = None,
     end_frame: int | None = None,
 ) -> pd.DataFrame:
@@ -267,7 +324,7 @@ def zone_occupancy(
 def occupancy_grid(
     view,
     *,
-    point: str = CENTROID,
+    point: Point = CENTROID,
     bins: int | tuple[int, int] = 50,
     start_frame: int | None = None,
     end_frame: int | None = None,

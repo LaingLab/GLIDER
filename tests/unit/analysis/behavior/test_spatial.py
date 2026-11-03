@@ -17,6 +17,7 @@ import pytest
 from glider.analysis.behavior.session_view import SessionView
 from glider.analysis.behavior.spatial import (
     SpatialError,
+    describe_point,
     occupancy_grid,
     position_track,
     tracking_frame,
@@ -114,6 +115,89 @@ class TestTheTrackingShape:
         view = SessionView.load(folder / "ethogram_raw.csv")
         with pytest.raises(SpatialError, match="no poses"):
             tracking_frame(view)
+
+
+class TestSeveralKeypoints:
+    """Novel-object investigation is the head, not the body beside the object."""
+
+    HEAD = ["nose", "l_ear", "r_ear"]
+
+    def _corner(self, tmp_path, n=5):
+        """Every keypoint in the corner; each test moves the ones it needs."""
+        return _view(tmp_path, [10] * n, [10] * n)
+
+    def test_the_position_is_the_mean_of_the_chosen_keypoints(self, tmp_path):
+        view = self._corner(tmp_path)
+        view.xy[:, 0, :] = (300.0, 200.0)
+        view.xy[:, 1, :] = (330.0, 230.0)
+        view.xy[:, 2, :] = (360.0, 260.0)
+        assert position_track(view, self.HEAD)[0] == pytest.approx([330.0, 230.0])
+
+    def test_a_dropped_keypoint_leaves_the_others_to_place_the_head(self, tmp_path):
+        view = self._corner(tmp_path)
+        view.xy[:, 0, :] = (300.0, 200.0)
+        view.xy[:, 1, :] = np.nan
+        view.xy[:, 2, :] = (360.0, 260.0)
+        assert position_track(view, self.HEAD)[0] == pytest.approx([330.0, 230.0])
+
+    def test_a_list_of_one_is_that_keypoint(self, tmp_path):
+        view = self._corner(tmp_path)
+        view.xy[:, 0, :] = 500.0
+        assert position_track(view, ["nose"])[0][0] == pytest.approx(500.0)
+
+    def test_an_empty_list_is_the_centroid(self, tmp_path):
+        view = self._corner(tmp_path)
+        view.xy[:, 0, :] = 500.0
+        assert position_track(view, [])[0] == pytest.approx(position_track(view)[0])
+
+    def test_unknown_keypoints_are_refused_by_name(self, tmp_path):
+        view = self._corner(tmp_path)
+        with pytest.raises(SpatialError, match="snout"):
+            position_track(view, ["nose", "snout"])
+
+    def test_the_zone_holds_the_animal_when_any_chosen_keypoint_is_inside(self, tmp_path):
+        """Only the nose reaches the object; the ears and the body do not."""
+        view = self._corner(tmp_path)
+        view.xy[:, 0, :] = (320.0, 240.0)  # nose inside the centre zone
+        view.xy[:, 1, :] = (100.0, 100.0)
+        view.xy[:, 2, :] = (100.0, 100.0)
+        frame = tracking_frame(view, _centre_zone(), point=self.HEAD)
+        assert set(frame["zone_ids"]) == {"centre"}
+        # The centroid, dragged out by the body, never gets there.
+        assert set(tracking_frame(view, _centre_zone())["zone_ids"]) == {""}
+
+    def test_the_body_inside_the_zone_does_not_count_when_the_head_is_out(self, tmp_path):
+        view = _view(tmp_path, [320] * 5, [240] * 5)  # every point at the centre
+        view.xy[:, :3, :] = (10.0, 10.0)  # but the head is in the corner
+        frame = tracking_frame(view, _centre_zone(), point=self.HEAD)
+        assert set(frame["zone_ids"]) == {""}
+
+    def test_a_frame_is_dropped_only_when_every_chosen_keypoint_is(self, tmp_path):
+        view = self._corner(tmp_path)
+        view.xy[:, :3, :] = (320.0, 240.0)
+        view.xy[1, 0, :] = np.nan  # nose dropped, ears still inside
+        view.xy[2, :3, :] = np.nan  # the whole head dropped
+        ids = list(tracking_frame(view, _centre_zone(), point=self.HEAD)["zone_ids"])
+        assert ids[:3] == ["centre", "centre", ""]
+
+    def test_occupancy_counts_head_time_in_the_zone(self, tmp_path):
+        view = self._corner(tmp_path, n=60)
+        view.xy[:30, 0, :] = (320.0, 240.0)  # the nose in for the first second
+        rows = zone_occupancy(view, _centre_zone(), point=self.HEAD).set_index("zone")
+        assert rows.loc["centre", "total_s"] == pytest.approx(1.0)
+
+    def test_the_heatmap_bins_the_head(self, tmp_path):
+        view = self._corner(tmp_path, n=20)
+        view.xy[:, :3, :] = (600.0, 400.0)
+        grid, x_edges, y_edges = occupancy_grid(view, point=self.HEAD, bins=10)
+        i = np.searchsorted(x_edges, 600.0) - 1
+        j = np.searchsorted(y_edges, 400.0) - 1
+        assert grid[i, j] == grid.sum() == 20
+
+    def test_points_are_named_for_a_reader(self):
+        assert describe_point("centroid") == "centroid"
+        assert describe_point([]) == "centroid"
+        assert describe_point(["nose", "l_ear"]) == "nose + l_ear"
 
 
 class TestZoneMembership:

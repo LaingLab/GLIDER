@@ -152,6 +152,8 @@ class Inspector(QTabWidget):
         # "Sess...") and hide the arrows. Keep whole titles; scroll if needed.
         self.tabBar().setElideMode(Qt.TextElideMode.ElideNone)
         self.tabBar().setUsesScrollButtons(True)
+        self._zone_count = 0
+        self._zone_point = "centroid"
         self.addTab(self._build_range(), "Range")
         self.addTab(self._build_session(), "Session")
         self.addTab(self._build_markers(), "Markers")
@@ -348,7 +350,18 @@ class Inspector(QTabWidget):
         self.hardware.setMaximumHeight(self.hardware.sizeHint().height())
 
     def set_zone_count(self, n: int) -> None:
-        self.zones_title.setText("ZONES" if n == 0 else f"ZONES ({n})")
+        self._zone_count = n
+        self._title_zones()
+
+    def set_zone_point(self, point: str) -> None:
+        """The body point time in zone is scored from, beside the title."""
+        self._zone_point = point
+        self._title_zones()
+
+    def _title_zones(self) -> None:
+        n, point = self._zone_count, self._zone_point
+        title = "ZONES" if n == 0 else f"ZONES ({n})"
+        self.zones_title.setText(title if point == "centroid" else f"{title} · {point}")
 
     def set_markers(self, rows: list[MarkerRow]) -> None:
         """Ranges then points, as the window orders them; the filter survives."""
