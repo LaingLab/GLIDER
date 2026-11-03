@@ -819,6 +819,9 @@ class Transport(QFrame):
             "Heatmap", "Where the animal spent the selected range", checked=False
         )
         self.zones_on = _toggle("Zones", "Outline the loaded zones", checked=True)
+        # Right-click either to choose the keypoints they are measured from.
+        for toggle in (self.heatmap_on, self.zones_on):
+            toggle.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.arena_on = _toggle(
             "Arena", "Outline the drawn arena floor and its exploration grid", checked=True
         )

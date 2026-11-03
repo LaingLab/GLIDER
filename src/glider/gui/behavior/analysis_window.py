@@ -692,6 +692,10 @@ class AnalysisWindow(QMainWindow):
         t.trail_on.toggled.connect(self._apply_trail)
         t.heatmap_on.toggled.connect(self._apply_heatmap)
         t.zones_on.toggled.connect(self._canvas.set_show_zones)
+        for toggle in (t.heatmap_on, t.zones_on):
+            toggle.customContextMenuRequested.connect(
+                lambda pos, w=toggle: self._body_point_menu().exec(w.mapToGlobal(pos))
+            )
         t.hud_on.toggled.connect(self._canvas.set_show_hud)
 
     def _build_epoch_table(self) -> None:
@@ -1254,6 +1258,7 @@ class AnalysisWindow(QMainWindow):
         self._canvas.set_arena(found[0] if found else None)
         self._canvas.set_grid(self._grid_n())
         self._restore_pairs()
+        self._show_body_point()
         # The overlay belongs to the session that just left.
         self._canvas.set_heatmap(None)
         self._refresh_heatmap_export_state()
@@ -1835,6 +1840,87 @@ class AnalysisWindow(QMainWindow):
             )
         return menu
 
+    @staticmethod
+    def _body_point_key(names) -> str:
+        """Per keypoint set, like the distance pairs: a model's sessions share it."""
+        joined = "|".join(names)
+        return f"review/body_point/{hashlib.sha1(joined.encode('utf-8')).hexdigest()[:16]}"
+
+    def _body_point(self, view=None) -> list[str]:
+        """The keypoints the heatmap and zones use for *view*; [] is the centroid.
+
+        Looked up per session rather than held once for the window: the
+        cohort's zone columns are computed for every animal, and a cohort can
+        mix keypoint sets. Names that set does not have are dropped, so a
+        stale choice falls back to the centroid instead of blanking the zones.
+        """
+        target = view if view is not None else self._view
+        if target is None:
+            return []
+        names = list(target.keypoint_names)
+        saved = _settings().value(self._body_point_key(names), [], type=list) or []
+        return [n for n in names if n in {str(v) for v in saved}]
+
+    def _set_body_point(self, points: list[str]) -> None:
+        if self._view is None:
+            return
+        key = self._body_point_key(self._view.keypoint_names)
+        if points:
+            _settings().setValue(key, list(points))
+        else:
+            _settings().remove(key)
+        self._show_body_point()
+        self._invalidate_cohort_cache()
+        from glider.analysis.behavior.spatial import describe_point
+
+        self.statusBar().showMessage(f"Heatmap and zones now use: {describe_point(points)}", 8000)
+        selection = self._bar.selection()
+        if selection is not None:
+            self._on_selection(*selection)
+        self._fill_epochs()
+
+    def _toggle_body_point(self, name: str, on: bool) -> None:
+        chosen = set(self._body_point()) | {name} if on else set(self._body_point()) - {name}
+        self._set_body_point([k for k in self._view.keypoint_names if k in chosen])
+
+    def _show_body_point(self) -> None:
+        """Name the body point on the toggles and the zone table."""
+        from glider.analysis.behavior.spatial import describe_point
+
+        chosen = self._body_point()
+        point = describe_point(chosen)
+        rule = "inside when any of them is" if len(chosen) > 1 else "inside when it is"
+        t = self._transport
+        t.heatmap_on.setToolTip(
+            f"Where the animal spent the selected range, by {point}. "
+            "Right-click to choose the keypoints."
+        )
+        t.zones_on.setToolTip(
+            f"Outline the loaded zones. Time in zone is scored from {point} "
+            f"({rule}). Right-click to choose the keypoints."
+        )
+        self._inspector.set_zone_point(point)
+
+    def _body_point_menu(self) -> QMenu:
+        """Which keypoints the heatmap and zone occupancy are measured from."""
+        menu = QMenu(self)
+        names = list(self._view.keypoint_names) if self._view is not None else []
+        current = self._body_point()
+        centroid = menu.addAction("Centroid (all keypoints)", lambda: self._set_body_point([]))
+        centroid.setCheckable(True)
+        centroid.setChecked(not current)
+        if len(names) < 2:
+            return menu
+        menu.addSeparator()
+        note = menu.addAction("Several: heatmap at their mean, in a zone if any is")
+        note.setEnabled(False)
+        for name in names:
+            action = menu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(name in current)
+            action.toggled.connect(lambda on, n=name: self._toggle_body_point(n, on))
+        return menu
+
     def _remember_hidden(self, keys: list) -> None:
         # Only on a change: _adopt's own set_hidden echoes the saved list back.
         key = self._hidden_key()
@@ -2249,7 +2335,11 @@ class AnalysisWindow(QMainWindow):
 
         try:
             grid, x_edges, y_edges = spatial.occupancy_grid(
-                self._view, bins=60, start_frame=selection[0], end_frame=selection[1]
+                self._view,
+                point=self._body_point(),
+                bins=60,
+                start_frame=selection[0],
+                end_frame=selection[1],
             )
         except spatial.SpatialError as e:
             logger.info("no heatmap for this session: %s", e)
@@ -2885,7 +2975,13 @@ class AnalysisWindow(QMainWindow):
         if self._zones is None or target is None:
             return pd.DataFrame()
         try:
-            return zone_occupancy(target, self._zones, start_frame=start, end_frame=end)
+            return zone_occupancy(
+                target,
+                self._zones,
+                point=self._body_point(target),
+                start_frame=start,
+                end_frame=end,
+            )
         except SpatialError as e:
             logger.info("no zone occupancy for this session: %s", e)
             return pd.DataFrame()
@@ -3476,7 +3572,7 @@ class AnalysisWindow(QMainWindow):
         if not path:
             return
 
-        from glider.analysis.behavior.spatial import write_occupancy_export
+        from glider.analysis.behavior.spatial import describe_point, write_occupancy_export
 
         grid, x_edges, y_edges = self._heatmap_grid
         try:
@@ -3485,7 +3581,10 @@ class AnalysisWindow(QMainWindow):
                 x_edges,
                 y_edges,
                 Path(path),
-                title=f"{session_dir.name}  frames {start}-{end}",
+                title=(
+                    f"{session_dir.name}  frames {start}-{end}  "
+                    f"({describe_point(self._body_point())})"
+                ),
             )
         except (OSError, ValueError) as e:
             QMessageBox.critical(self, "Export heatmap", f"Could not write {path}: {e}")

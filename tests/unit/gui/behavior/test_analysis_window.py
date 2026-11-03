@@ -2415,6 +2415,90 @@ class TestKeypointDistances:
         assert len(checkable) == n * (n - 1) // 2
 
 
+class TestBodyPoint:
+    """Heatmap and zones measured from chosen keypoints, e.g. nose and ears."""
+
+    def _win(self, qtbot, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window._settings",
+            lambda: QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat),
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        return win
+
+    def test_the_default_is_the_centroid(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        assert win._body_point() == []
+        checked = [a.text() for a in win._body_point_menu().actions() if a.isChecked()]
+        assert checked == ["Centroid (all keypoints)"]
+
+    def test_the_menu_offers_every_keypoint(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        texts = [a.text() for a in win._body_point_menu().actions() if a.isCheckable()]
+        assert texts[1:] == list(win._view.keypoint_names)
+
+    def test_ticking_keypoints_builds_the_set_in_keypoint_order(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        names = list(win._view.keypoint_names)
+        win._toggle_body_point(names[1], True)
+        win._toggle_body_point(names[0], True)
+        assert win._body_point() == names[:2]
+        win._toggle_body_point(names[0], False)
+        assert win._body_point() == [names[1]]
+
+    def test_the_choice_survives_reopening(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        names = list(win._view.keypoint_names)
+        win._set_body_point(names[:2])
+        again = AnalysisWindow()
+        qtbot.addWidget(again)
+        again.load(_session(tmp_path / "w"))
+        assert again._body_point() == names[:2]
+        assert names[0] in again._inspector.zones_title.text()
+
+    def test_zones_and_heatmap_are_measured_from_it(self, qtbot, tmp_path, monkeypatch):
+        from glider.analysis.behavior import spatial
+
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        names = list(win._view.keypoint_names)
+        win._zones = _centre_zone_config()
+        win._set_body_point(names[:2])
+        seen = []
+        real_occupancy, real_grid = spatial.zone_occupancy, spatial.occupancy_grid
+
+        def occupancy(*a, **k):
+            seen.append(("zones", k["point"]))
+            return real_occupancy(*a, **k)
+
+        def grid(*a, **k):
+            seen.append(("heatmap", k["point"]))
+            return real_grid(*a, **k)
+
+        monkeypatch.setattr(spatial, "zone_occupancy", occupancy)
+        monkeypatch.setattr(spatial, "occupancy_grid", grid)
+        win._transport.heatmap_on.setChecked(True)
+        win._bar.set_selection(0, 299)
+        assert ("zones", names[:2]) in seen
+        assert ("heatmap", names[:2]) in seen
+
+
+def _centre_zone_config():
+    from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape
+
+    config = ZoneConfiguration()
+    config.add_zone(
+        Zone(
+            id="centre",
+            name="centre",
+            shape=ZoneShape.RECTANGLE,
+            vertices=[(0.25, 0.25), (0.75, 0.75)],
+        )
+    )
+    return config
+
+
 class TestTheEpochTableInTheWindow:
     """Cohort range markers become columns; a row is an animal; exports match."""
 
