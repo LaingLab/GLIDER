@@ -897,6 +897,16 @@ class AnalysisWindow(QMainWindow):
         if len(ethograms) == 1:
             self.load(ethograms[0])
             return
+        # A folder of sessions -- a batch of tracked videos, several ethograms
+        # -- is what "open this folder" means: all of them, as a cohort.
+        if problem is None:
+            try:
+                sessions = discover_sessions(path)[0]
+            except (OSError, ValueError):
+                sessions = []
+            if sessions:
+                self.load_folder(path)
+                return
         found = "no ethogram_raw.csv" if not ethograms else f"{len(ethograms)} ethograms"
         more = "  Use Open folder as cohort to load them all." if ethograms else ""
         recording = (
@@ -972,8 +982,8 @@ class AnalysisWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Open cohort",
-                f"No sessions found under {root}.\n\nLooked for ethogram_raw.csv files "
-                "and folders of GLIDER recording CSVs.",
+                f"No sessions found under {root}.\n\nLooked for ethogram_raw.csv files, "
+                "folders of GLIDER recording CSVs, and videos with pose or pup tracking.",
             )
             return
         loaded, ids, groups, failed = [], [], [], []

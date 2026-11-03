@@ -2851,6 +2851,17 @@ class TestOpenVideo:
         assert len(win._cohort) == 1
         assert win._cohort[0][1].pups is not None
 
+    def test_a_folder_of_pose_tracked_videos_opens_them_all(self, qtbot, tmp_path):
+        """Batch Pose output: videos and their DLC CSVs, no recording, no ethogram."""
+        for stem in ("rat01", "rat02"):
+            _scorable(tmp_path / "batch", stem)
+            (tmp_path / "batch" / f"{stem}_pups.npz").unlink()
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(tmp_path / "batch")
+        assert win._ids == ["rat01", "rat02"]
+        assert all(view.pose_path is not None for _, view in win._cohort)
+
     def test_open_path_takes_a_video_file(self, qtbot, tmp_path):
         win = AnalysisWindow()
         qtbot.addWidget(win)
