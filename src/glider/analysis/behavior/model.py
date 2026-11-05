@@ -85,6 +85,7 @@ class BehaviorModel:
         library_versions: dict[str, str] | None = None,
         glider_version: str | None = None,
         embedding: Any | None = None,
+        image_lane: Any | None = None,
     ):
         self.classifier = classifier
         self.feature_names = list(feature_names)
@@ -100,6 +101,9 @@ class BehaviorModel:
         # for the live "galaxy" view. None for models trained without it
         # (and for all format_version-1 bundles).
         self.embedding = embedding
+        # Optional fitted ImageLaneArtifact: the PCA + windows that rebuild the
+        # img_* columns from the video. None for keypoint-only models.
+        self.image_lane = image_lane
 
     # ------------------------------------------------------------------
     # Inference
@@ -139,7 +143,7 @@ class BehaviorModel:
         # same column names it was fit on (avoids a UserWarning about
         # missing feature names).
         df = windowed[self.feature_names]
-        valid_mask = ~df.isna().any(axis=1).to_numpy()
+        valid_mask = ~df[self.required_feature_names].isna().any(axis=1).to_numpy()
         labels = np.full(len(df), "", dtype=object)
         if valid_mask.any():
             valid_df = df.loc[valid_mask]
@@ -174,7 +178,7 @@ class BehaviorModel:
                 f"first few: {missing[:5]}"
             )
         df = windowed[self.feature_names]
-        valid = ~df.isna().any(axis=1).to_numpy()
+        valid = ~df[self.required_feature_names].isna().any(axis=1).to_numpy()
         probs = (
             self.classifier.predict_proba(df.loc[valid])
             if valid.any()
@@ -205,7 +209,7 @@ class BehaviorModel:
                 raise ValueError(
                     f"feature_row shape {row.shape} != " f"({len(self.feature_names)},)"
                 )
-        if np.isnan(row).any():
+        if np.isnan(row[self._required_index]).any():
             return ""
         # Wrap in a 1-row DataFrame so sklearn sees the feature names it
         # was fit on (avoids a UserWarning that fires on bare arrays).
@@ -243,6 +247,7 @@ class BehaviorModel:
             "library_versions": dict(self.library_versions),
             "glider_version": self.glider_version,
             "embedding": self.embedding,
+            "image_lane": self.image_lane,
             "format_version": 2,
         }
         joblib.dump(payload, path)
@@ -276,11 +281,29 @@ class BehaviorModel:
             # A half-reconstructed embedding is worse than none: drop it so
             # nothing downstream tries to project through a stubbed reducer.
             embedding=payload.get("embedding") if embedding_usable else None,
+            image_lane=payload.get("image_lane"),
         )
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    @property
+    def required_feature_names(self) -> list[str]:
+        """Columns whose NaN blanks a prediction: all but the NaN-tolerant image lane."""
+        from glider.analysis.behavior.image_lane import required_columns
+
+        return required_columns(self.feature_names)
+
+    @property
+    def _required_index(self) -> np.ndarray:
+        cached = getattr(self, "_required_index_cache", None)
+        if cached is None or len(cached[0]) != len(self.feature_names):
+            req = set(self.required_feature_names)
+            idx = np.array([i for i, c in enumerate(self.feature_names) if c in req], dtype=int)
+            cached = (list(self.feature_names), idx)
+            self._required_index_cache = cached
+        return cached[1]
+
     def _is_fitted(self) -> bool:
         return self.classifier is not None and hasattr(self.classifier, "classes_")
 
