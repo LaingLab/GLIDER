@@ -44,11 +44,13 @@ import pandas as pd
 
 if TYPE_CHECKING:
     from glider.analysis.behavior.hybrid import HybridModel
+    from glider.analysis.behavior.image_lane import ImageLaneArtifact, ImageLaneConfig
     from glider.vision.pose.core import PoseData
 
 from glider.analysis.behavior.annotations import AnnotationStore
 from glider.analysis.behavior.benchmarks.metrics import macro_frame_f1
 from glider.analysis.behavior.features import FeatureSpec, compute_features
+from glider.analysis.behavior.image_lane import required_columns, resolve_config
 from glider.analysis.behavior.labels import (
     AMBIGUOUS,
     build_label_and_group_series,
@@ -230,6 +232,7 @@ def train_model(
     motion_features: bool = False,
     individuals: list[int | None] | None = None,
     holdout_individuals: list[int | None] | None = None,
+    image_lane=None,
 ) -> TrainResult:
     """Fit a behavior classifier from one or more (pose, annotations) pairs.
 
@@ -335,6 +338,13 @@ def train_model(
         with ``holdout_sessions`` and independent of ``individuals`` and its
         length. ``None`` (default) is today's behaviour — every holdout
         session sees every zone.
+    image_lane
+        Add the image embedding of the animal crop beside the keypoint
+        features (:mod:`~glider.analysis.behavior.image_lane`). ``True`` uses
+        :func:`~glider.analysis.behavior.image_lane.default_config`; an
+        :class:`~glider.analysis.behavior.image_lane.ImageLaneConfig` sets it
+        explicitly. Needs each session's source video. The lane's PCA is
+        fitted on ``sessions`` only, never on ``holdout_sessions``.
 
     Returns
     -------
@@ -348,6 +358,15 @@ def train_model(
 
     spec = spec or FeatureSpec()
     fps = resolve_sessions_fps(sessions, fps, holdout_sessions=holdout_sessions)
+    lane_config = resolve_config(image_lane)
+    if lane_config is not None and mirror_augment:
+        raise ValueError(_LANE_MIRROR_REFUSAL)
+    # Fitted on the training sessions alone, before any holdout is assembled.
+    lane = (
+        _fit_image_lane(sessions, spec=spec, fps=fps, config=lane_config)
+        if lane_config is not None
+        else None
+    )
 
     # ---- 1-2. Assemble features/labels, drop unusable rows, subsample bg ----
     assembled = _assemble_and_filter(
@@ -367,6 +386,7 @@ def train_model(
         background_subsample_ratio=background_subsample_ratio,
         random_state=random_state,
         individuals=individuals,
+        image_lane=lane,
     )
     x_kept, y_kept, g_kept = assembled.x_kept, assembled.y_kept, assembled.g_kept
     n_total = assembled.n_total
@@ -413,6 +433,7 @@ def train_model(
                 individuals=(
                     [holdout_individuals[hi]] if holdout_individuals is not None else None
                 ),
+                image_lane=lane,
             )
             n_h = len(y_h)
             clean_h = _clean_window_rows(
@@ -426,10 +447,7 @@ def train_model(
         # cross-validation and evaluate_model score under, so this holdout
         # accuracy is comparable to theirs.
         test_keep = (
-            (y_test_all != "")
-            & (y_test_all != AMBIGUOUS)
-            & ~x_test_all.isna().any(axis=1)
-            & test_clean
+            (y_test_all != "") & (y_test_all != AMBIGUOUS) & ~_nan_rows(x_test_all) & test_clean
         )
         # Note: if include_background is on, we don't add background to
         # the test set — the test set's labels should only be the
@@ -552,6 +570,7 @@ def train_model(
         "lgbm_reg": (
             dataclasses.asdict(lgbm_reg or LgbmReg()) if classifier_label == "lightgbm" else None
         ),
+        "image_lane": lane_config.to_dict() if lane_config is not None else None,
     }
 
     # Optional 3D embedding of the training feature space for the live
@@ -586,6 +605,7 @@ def train_model(
         training_summary=summary,
         library_versions=capture_library_versions(),
         embedding=embedding_artifact,
+        image_lane=lane,
     )
     return TrainResult(model=model, summary=summary)
 
@@ -767,6 +787,7 @@ def _assemble_sessions(
     traj_features: bool = False,
     motion_features: bool = False,
     individuals: list[int | None] | None = None,
+    image_lane: ImageLaneArtifact | None = None,
 ) -> tuple[pd.DataFrame, pd.Series, pd.Series, list[dict[str, int]]]:
     """Load each (pose, annotations) pair, extract features + label series.
 
@@ -782,7 +803,12 @@ def _assemble_sessions(
     zone in the file. A two-animal video appears as TWO sessions sharing one
     annotations CSV and differing only in this list — which is why the loop
     body needs no notion of multiple animals at all.
+
+    ``image_lane`` is an already-fitted lane; its columns are appended after
+    the keypoint windows, since the lane has windows of its own.
     """
+    if image_lane is not None and mirror_augment:
+        raise ValueError(_LANE_MIRROR_REFUSAL)
     if motion_features and mirror_augment:
         raise ValueError(
             "motion features are not supported with mirror augmentation yet "
@@ -874,6 +900,11 @@ def _assemble_sessions(
                 traj = apply_trajectory_rolling(variant.xy, body_axis=ba, window=window)
                 traj.index = windowed.index
                 windowed = pd.concat([windowed, traj], axis=1)
+            if image_lane is not None:
+                raw = _image_lane_raw(pose_csv, variant, spec, image_lane.config)
+                img = image_lane.frame_features(raw)
+                img.index = windowed.index
+                windowed = pd.concat([windowed, img], axis=1)
             if len(windowed) != len(labels):
                 raise RuntimeError(
                     f"windowed length {len(windowed)} != labels length {len(labels)} for {pose_csv}"
@@ -925,6 +956,7 @@ def _assemble_and_filter(
     background_subsample_ratio: float,
     random_state: int,
     individuals: list[int | None] | None = None,
+    image_lane: ImageLaneArtifact | None = None,
 ) -> _AssembledData:
     """Assemble sessions, drop unusable rows, and subsample background.
 
@@ -952,6 +984,7 @@ def _assemble_and_filter(
         traj_features=traj_features,
         motion_features=motion_features,
         individuals=individuals,
+        image_lane=image_lane,
     )
 
     # ---- 2. Optionally promote unannotated frames to a background class ----
@@ -963,7 +996,7 @@ def _assemble_and_filter(
             raise ValueError("background_class_name must be non-empty")
         y_all = y_all.where(y_all != "", background_class_name)
     n_total = len(x_all)
-    keep_mask = (y_all != "") & (y_all != AMBIGUOUS) & ~x_all.isna().any(axis=1)
+    keep_mask = (y_all != "") & (y_all != AMBIGUOUS) & ~_nan_rows(x_all)
     n_kept = int(keep_mask.sum())
     if n_kept < 2:
         raise ValueError(
@@ -1066,6 +1099,76 @@ def _append_motion(feats: pd.DataFrame, pose_csv: Path, pose, spec: FeatureSpec)
     return pd.concat([feats, motion], axis=1)
 
 
+_LANE_MIRROR_REFUSAL = (
+    "the image lane is not supported with mirror augmentation (the pose is "
+    "mirrored but the video the lane is read from is not)"
+)
+
+
+def _nan_rows(x: pd.DataFrame) -> pd.Series:
+    """Rows with a NaN keypoint feature. Image-lane NaN (a missed mask) does not count."""
+    return x[required_columns(x.columns)].isna().any(axis=1)
+
+
+def _image_lane_raw(pose_csv: Path, pose, spec: FeatureSpec, config: ImageLaneConfig):
+    """The session's raw lane rows (memory-mapped cache), read from its source video."""
+    from glider.analysis.behavior.image_lane import load_or_compute_raw
+    from glider.analysis.behavior.motion import video_path_for
+
+    ba = spec.with_resolved_body_axis(pose.n_keypoints).body_axis
+    return load_or_compute_raw(Path(pose_csv), video_path_for(Path(pose_csv)), pose.xy, ba, config)
+
+
+#: Every this-many frames of each session goes into the lane's PCA fit.
+LANE_FIT_STRIDE = 5
+
+
+def _fit_image_lane(
+    sessions: list[SessionPair], *, spec: FeatureSpec, fps: float, config: ImageLaneConfig
+) -> ImageLaneArtifact:
+    """Fit the lane's standardisation + PCA on these (training) sessions."""
+    from glider.analysis.behavior.image_lane import ImageLaneArtifact
+
+    samples = []
+    for pose_csv, _ann in sessions:
+        pose = from_dlc_csv(Path(pose_csv), fps=fps)
+        raw = _image_lane_raw(pose_csv, pose, spec, config)
+        samples.append(np.asarray(raw[::LANE_FIT_STRIDE], dtype=np.float32))
+    return ImageLaneArtifact.fit(samples, config, stride=1)
+
+
+@dataclass
+class _CvLane:
+    """Raw lane rows per CV session, so each fold can fit its own PCA.
+
+    ``raws[i]`` is session ``i``'s memory-mapped cache. A fold fits on its
+    training sessions and projects every row, which keeps the held-out
+    session out of the PCA that scores it, as in the research protocol.
+    """
+
+    config: ImageLaneConfig
+    raws: list[np.ndarray]
+
+    def fit(self, train_sessions) -> ImageLaneArtifact:
+        from glider.analysis.behavior.image_lane import ImageLaneArtifact
+
+        samples = [
+            np.asarray(self.raws[int(i)][::LANE_FIT_STRIDE], dtype=np.float32)
+            for i in train_sessions
+        ]
+        return ImageLaneArtifact.fit(samples, self.config, stride=1)
+
+    def join(self, x: pd.DataFrame, artifact, sess: np.ndarray, frame: np.ndarray) -> pd.DataFrame:
+        """``x`` with the lane columns for each row's (session, frame) appended."""
+        lane = np.full((len(x), len(artifact.columns)), np.nan)
+        for i in np.unique(sess):
+            rows = np.flatnonzero(sess == i)
+            values = artifact.transform(self.raws[int(i)])
+            lane[rows] = artifact.window(values, np.arange(len(values)), frame[rows])
+        img = pd.DataFrame(lane, columns=artifact.columns, index=x.index)
+        return pd.concat([x, img], axis=1)
+
+
 def _mirror_pose(pose):
     """Return a copy of ``pose`` with x-coords mirrored + L/R keypoints swapped.
 
@@ -1134,6 +1237,7 @@ def cross_validate_sessions(
     freq_features: bool = False,
     traj_features: bool = False,
     motion_features: bool = False,
+    image_lane=None,
 ) -> dict[str, Any]:
     """Session-grouped K-fold cross-validation — a robust cross-session
     generalization estimate.
@@ -1165,6 +1269,9 @@ def cross_validate_sessions(
     ``classifier_type`` defaults to ``"lightgbm"`` (matching
     :func:`train_model`) so CV measures the same backend that gets
     deployed; pass ``"rf"`` to evaluate the RandomForest backend instead.
+
+    ``image_lane`` is as for :func:`train_model`; each fold fits the lane's
+    PCA on its own training sessions.
     """
     spec = spec or FeatureSpec()
     fps = resolve_sessions_fps(sessions, fps)
@@ -1184,6 +1291,7 @@ def cross_validate_sessions(
         background_class_name=background_class_name,
         background_ratio=background_ratio,
         random_state=random_state,
+        image_lane=resolve_config(image_lane),
     )
     return _run_cv_folds(
         data,
@@ -1223,6 +1331,7 @@ def cross_validate_and_train(
     traj_features: bool = False,
     motion_features: bool = False,
     embedding: str = "none",
+    image_lane=None,
 ) -> tuple[dict[str, Any], TrainResult]:
     """Cross-validate, then refit on everything — one feature pass for both.
 
@@ -1261,6 +1370,7 @@ def cross_validate_and_train(
         background_class_name=background_class_name,
         background_ratio=background_ratio,
         random_state=random_state,
+        image_lane=resolve_config(image_lane),
     )
     cv_result = _run_cv_folds(
         data,
@@ -1285,7 +1395,10 @@ def cross_validate_and_train(
         class_weight=class_weight,
         lgbm_reg=lgbm_reg,
     )
-    clf.fit(data.x, data.y)
+    # The deployed lane is fitted on every session, like the classifier.
+    lane = data.lane.fit(np.unique(data.sess)) if data.lane is not None else None
+    x_all = data.lane.join(data.x, lane, data.sess, data.frame) if lane is not None else data.x
+    clf.fit(x_all, data.y)
 
     summary = {
         "split_strategy": "cross_validated",
@@ -1298,7 +1411,7 @@ def cross_validate_and_train(
         # only say how many rows were assembled, leaving the reader to infer
         # the real denominator from the per-class supports.
         "n_rows_scored": cv_result.get("n_rows_scored"),
-        "train_accuracy": float(clf.score(data.x, data.y)),
+        "train_accuracy": float(clf.score(x_all, data.y)),
         # The honest headline: measured across folds, not on the fit itself.
         "test_accuracy": cv_result.get("mean_accuracy"),
         # The names every reader looks for -- run_report.TrainingRun,
@@ -1317,7 +1430,7 @@ def cross_validate_and_train(
         "bout_metrics": cv_result.get("bout_metrics") or {},
         "false_alarm_rate": cv_result.get("false_alarm_rate"),
         "classes": [str(c) for c in clf.classes_],
-        "n_features": int(data.x.shape[1]),
+        "n_features": int(x_all.shape[1]),
         "kept_label_counts": split_label_counts(data.y),
         "window": int(window),
         "stats": list(stats),
@@ -1330,12 +1443,13 @@ def cross_validate_and_train(
             if _classifier_label_for(clf) == "lightgbm"
             else None
         ),
+        "image_lane": lane.config.to_dict() if lane is not None else None,
     }
     if hasattr(clf, "feature_importances_"):
         importances = np.asarray(clf.feature_importances_, dtype=float)
         order = np.argsort(-importances)
         summary["top_features"] = [
-            {"feature": data.x.columns[int(i)], "importance": float(importances[int(i)])}
+            {"feature": x_all.columns[int(i)], "importance": float(importances[int(i)])}
             for i in order[:20]
         ]
 
@@ -1349,7 +1463,7 @@ def cross_validate_and_train(
 
         try:
             embedding_artifact = _embedding_mod.fit_embedding(
-                data.x, data.y, method=embedding, random_state=random_state
+                x_all, data.y, method=embedding, random_state=random_state
             )
         except Exception as e:  # noqa: BLE001 - never lose a fit over a chart
             warnings.warn(
@@ -1359,7 +1473,7 @@ def cross_validate_and_train(
 
     model = BehaviorModel(
         classifier=clf,
-        feature_names=list(data.x.columns),
+        feature_names=list(x_all.columns),
         spec=spec,
         window=window,
         stats=tuple(stats),
@@ -1368,6 +1482,7 @@ def cross_validate_and_train(
         training_summary=summary,
         library_versions=capture_library_versions(),
         embedding=embedding_artifact,
+        image_lane=lane,
     )
     return cv_result, TrainResult(model=model, summary=summary)
 
@@ -1396,6 +1511,9 @@ class _CvData:
     #: same run counting evaluation uses). ``None`` recomputes it over the
     #: kept rows.
     clean: np.ndarray | None = None
+    #: Raw image-lane rows per session; ``None`` when the lane is off. The lane
+    #: columns are not in ``x``: each fold appends its own (see _CvLane).
+    lane: _CvLane | None = None
 
 
 def _assemble_for_cv(
@@ -1415,6 +1533,7 @@ def _assemble_for_cv(
     background_class_name: str,
     background_ratio: float,
     random_state: int,
+    image_lane: ImageLaneConfig | None = None,
 ) -> _CvData:
     """Feature matrix + per-row session / mirror / frame metadata.
 
@@ -1426,6 +1545,8 @@ def _assemble_for_cv(
     """
     if not sessions:
         raise ValueError("cross-validation requires at least one session")
+    if image_lane is not None and mirror_augment:
+        raise ValueError(_LANE_MIRROR_REFUSAL)
     if motion_features and mirror_augment:
         raise ValueError(
             "motion features are not supported with mirror augmentation yet "
@@ -1464,9 +1585,12 @@ def _assemble_for_cv(
     sess_ids: list[np.ndarray] = []
     is_mirror: list[np.ndarray] = []
     frame_ids: list[np.ndarray] = []
+    lane_raws: list[np.ndarray] = []
     for sidx, (pose_csv, ann_csv) in enumerate(sessions):
         pose = from_dlc_csv(Path(pose_csv), fps=fps)
         store = AnnotationStore.load_csv(Path(ann_csv))
+        if image_lane is not None:
+            lane_raws.append(_image_lane_raw(pose_csv, pose, spec, image_lane))
         variants = [(pose, False)]
         if mirror_augment:
             variants.append((_mirror_pose(pose), True))
@@ -1517,7 +1641,7 @@ def _assemble_for_cv(
         y_all.to_numpy(), sess_all, frame_all_rows, window, mirror=mirror_all
     )
 
-    keep = ((y_all != AMBIGUOUS) & ~x_all.isna().any(axis=1)).to_numpy()
+    keep = ((y_all != AMBIGUOUS) & ~_nan_rows(x_all)).to_numpy()
     if not include_background:
         keep = keep & (y_all != "").to_numpy()
     x = x_all.loc[keep].reset_index(drop=True)
@@ -1548,7 +1672,10 @@ def _assemble_for_cv(
                 frame = frame[sel]
                 clean = clean[sel]
 
-    return _CvData(x=x, y=y, sess=sess, mirror=mirror, frame=frame, window=window, clean=clean)
+    lane = _CvLane(image_lane, lane_raws) if image_lane is not None else None
+    return _CvData(
+        x=x, y=y, sess=sess, mirror=mirror, frame=frame, window=window, clean=clean, lane=lane
+    )
 
 
 def _run_cv_folds(
@@ -1614,8 +1741,13 @@ def _run_cv_folds(
             class_weight=class_weight,
             lgbm_reg=lgbm_reg,
         )
-        clf.fit(x.iloc[train_idx], y.iloc[train_idx])
-        real_pred = clf.predict(x.iloc[real_idx])
+        xf = x
+        if data.lane is not None:
+            # This fold's PCA, fitted without the held-out session(s).
+            fold_lane = data.lane.fit(np.unique(sess[train_idx]))
+            xf = data.lane.join(x, fold_lane, sess, frame)
+        clf.fit(xf.iloc[train_idx], y.iloc[train_idx])
+        real_pred = clf.predict(xf.iloc[real_idx])
         y_true = y.iloc[eval_idx].to_numpy()
         y_pred = real_pred[clean_sel]
         fold_acc.append(float((y_pred == y_true).mean()))
@@ -1626,7 +1758,7 @@ def _run_cv_folds(
         bout_true.append(y.iloc[real_idx].to_numpy())
         bout_pred.append(real_pred)
         if threshold_curve:
-            all_proba.append((clf.predict_proba(x.iloc[eval_idx]), [str(c) for c in clf.classes_]))
+            all_proba.append((clf.predict_proba(xf.iloc[eval_idx]), [str(c) for c in clf.classes_]))
 
     # Aggregate per-class metrics + confusion over ALL folds. GroupKFold
     # test sets are disjoint and cover every kept row exactly once, so

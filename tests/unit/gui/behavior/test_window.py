@@ -1740,6 +1740,33 @@ def test_the_two_can_never_both_reach_train_model(qtbot, tmp_path, monkeypatch):
     assert not (options.get("motion_features") and options.get("mirror_augment"))
 
 
+def test_image_lane_defaults_off_and_is_sent_when_ticked(qtbot, tmp_path, monkeypatch):
+    _tab, options = _fit_options(qtbot, tmp_path, monkeypatch)
+    assert options["image_lane"] is False
+    _tab, options = _fit_options(
+        qtbot, tmp_path, monkeypatch, configure=lambda t: t._image_lane_check.setChecked(True)
+    )
+    assert options["image_lane"] is True
+
+
+def test_image_lane_and_mirror_are_mutually_exclusive(qtbot, tmp_path, monkeypatch):
+    """The lane reads the unmirrored video, so train_model refuses it with mirror."""
+    tab, _ = _fit_options(qtbot, tmp_path, monkeypatch)
+    tab._image_lane_check.setChecked(True)
+    assert tab._mirror_check.isEnabled() is False
+    tab._image_lane_check.setChecked(False)
+    tab._mirror_check.setChecked(True)
+    assert tab._image_lane_check.isEnabled() is False
+    assert tab._image_lane_check.isChecked() is False
+
+    def click_both(t):
+        t._mirror_check.setChecked(True)
+        t._image_lane_check.setChecked(True)
+
+    _tab, options = _fit_options(qtbot, tmp_path, monkeypatch, configure=click_both)
+    assert not (options.get("image_lane") and options.get("mirror_augment"))
+
+
 # --------------------------------------------------------------------------
 # Train tab: cross-validation
 #
