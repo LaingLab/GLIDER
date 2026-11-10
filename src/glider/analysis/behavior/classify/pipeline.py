@@ -111,6 +111,8 @@ RAW_QUEUE_MAX = 4
 TRACKED_QUEUE_MAX = 4
 DISPLAY_QUEUE_MAX = 4
 CLASSIFIER_QUEUE_MAX = 8
+# Small: the lift is the slowest stage, and a stale frame is worth less than a fresh one.
+LIFT3D_QUEUE_MAX = 2
 
 
 @dataclass
@@ -202,9 +204,14 @@ class LiveInferenceConfig:
     # mismatch before this config is built, and the field exists so the block
     # can travel with the resolved thresholds instead of being dropped.
     gate_provenance: dict | None = None
+    # Optional 3-D lift (glider.vision.lift3d.Lift3DConfig). When set, a further
+    # consumer lifts each tracked frame to a body-height surface, writes
+    # `lift3d_csv` if given, and the display shows its rear weight. Experimental.
+    lift3d: object = None
+    lift3d_csv: Path | None = None
 
 
-def _make_tracker(config, raw_queue, tracked_queue, display_queue, stop_event):
+def _make_tracker(config, raw_queue, tracked_queue, display_queue, stop_event, extra_queues=None):
     """PoseReplay when a pose CSV was supplied, else the YOLO PoseTracker.
 
     Both present the same queues and payload shape, so nothing downstream --
@@ -218,6 +225,7 @@ def _make_tracker(config, raw_queue, tracked_queue, display_queue, stop_event):
             stop_event=stop_event,
             pose_csv=config.pose_csv_in,
             keypoint_names=config.keypoint_names,
+            extra_queues=extra_queues,
         )
     return PoseTracker(
         raw_queue=raw_queue,
@@ -232,6 +240,7 @@ def _make_tracker(config, raw_queue, tracked_queue, display_queue, stop_event):
         # Never re-write a CSV we just read from.
         pose_csv_out=None if config.pose_csv_in else config.pose_csv_out,
         fps=config.fps_override or 30.0,
+        extra_queues=extra_queues,
     )
 
 
@@ -256,6 +265,7 @@ class LiveInferencePipeline:
         self.tracked_queue: queue.Queue = queue.Queue(maxsize=TRACKED_QUEUE_MAX)
         self.display_queue: queue.Queue = queue.Queue(maxsize=DISPLAY_QUEUE_MAX)
         self.classifier_queue: queue.Queue = queue.Queue(maxsize=CLASSIFIER_QUEUE_MAX)
+        self._build_lift3d(config)
 
         # Load the behavior model up front so we fail loudly if it's
         # missing — before we spin up any threads. Streaming a video without
@@ -349,7 +359,12 @@ class LiveInferencePipeline:
             fps_override=config.fps_override,
         )
         self.tracker = _make_tracker(
-            config, self.raw_queue, self.tracked_queue, self.display_queue, self.stop_event
+            config,
+            self.raw_queue,
+            self.tracked_queue,
+            self.display_queue,
+            self.stop_event,
+            extra_queues=self._lift_queues,
         )
         self.feature_engine = FeatureEngine(
             tracked_queue=self.tracked_queue,
@@ -390,6 +405,33 @@ class LiveInferencePipeline:
             video_writer_path=(Path(config.output_video) if config.output_video else None),
             fps=config.fps_override or 30.0,
             vocab_order=self.model.classes,
+            latest_lift=self.latest_lift,
+        )
+
+    def _build_lift3d(self, config) -> None:
+        """The optional 3-D lift consumer, its queue and the shared readout."""
+        self.lift3d = None
+        self.latest_lift = None
+        self._lift_queues: list[queue.Queue] = []
+        if config.lift3d is None:
+            return
+        from glider.analysis.behavior.classify.lift3d_consumer import (
+            LatestLift,
+            Lift3DConsumer,
+        )
+
+        if config.fps_override:
+            config.lift3d.fps = config.fps_override
+        lift_queue: queue.Queue = queue.Queue(maxsize=LIFT3D_QUEUE_MAX)
+        self._lift_queues = [lift_queue]
+        self.latest_lift = LatestLift()
+        self.lift3d = Lift3DConsumer(
+            lift_queue=lift_queue,
+            stop_event=self.stop_event,
+            keypoint_names=config.keypoint_names,
+            config=config.lift3d,
+            csv_path=Path(config.lift3d_csv) if config.lift3d_csv else None,
+            latest=self.latest_lift,
         )
 
     def _build_sequence_threads(self, config) -> None:
@@ -403,7 +445,12 @@ class LiveInferencePipeline:
             fps_override=config.fps_override,
         )
         self.tracker = _make_tracker(
-            config, self.raw_queue, self.tracked_queue, self.display_queue, self.stop_event
+            config,
+            self.raw_queue,
+            self.tracked_queue,
+            self.display_queue,
+            self.stop_event,
+            extra_queues=self._lift_queues,
         )
         self.seq_classifier = SequenceClassifier(
             tracked_queue=self.tracked_queue,
@@ -425,6 +472,7 @@ class LiveInferencePipeline:
             video_writer_path=(Path(config.output_video) if config.output_video else None),
             fps=config.fps_override or 30.0,
             vocab_order=list(self.model.classes),
+            latest_lift=self.latest_lift,
         )
 
     def run(self) -> None:
@@ -470,6 +518,8 @@ class LiveInferencePipeline:
                 self.classifier,
                 self.display,
             ]
+        if self.lift3d is not None:
+            threads.append(self.lift3d)
         for t in threads:
             t.start()
 
@@ -490,7 +540,7 @@ class LiveInferencePipeline:
                 t.join(timeout=2.0)
             # Surface any per-thread errors so the user knows what
             # broke instead of staring at a silent exit.
-            for t in (self.producer, self.tracker):
+            for t in (self.producer, self.tracker, self.lift3d):
                 err = getattr(t, "error", None)
                 if err:
                     print(f"[{t.name}] error: {err}")

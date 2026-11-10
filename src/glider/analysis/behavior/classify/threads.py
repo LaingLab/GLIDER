@@ -31,6 +31,7 @@ from glider.analysis.behavior.classify.overlay import (
     color_for_behavior,
     draw_fps,
     draw_label_badge,
+    draw_lift_readout,
     draw_skeleton,
 )
 from glider.analysis.behavior.features import FeatureSpec
@@ -184,8 +185,12 @@ class PoseTracker(threading.Thread):
         undetected_dir: Path | None = None,
         pose_csv_out: Path | None = None,
         fps: float = 30.0,
+        extra_queues: list[queue.Queue] | None = None,
     ):
         super().__init__(name="PoseTracker", daemon=True)
+        # Further consumers (the 3-D lift). Each gets its own copy of the frame,
+        # because the display draws its overlay on the shared one in place.
+        self.extra_queues = list(extra_queues or [])
         # Poses are computed anyway; writing them costs one CSV and saves the
         # whole inference pass next time they are wanted -- for percentile or
         # cohort thresholds, or any downstream analysis.
@@ -273,6 +278,7 @@ class PoseTracker(threading.Thread):
                 # Push to both downstream queues; ignore Full timeouts
                 # because we'd rather drop a frame than block the YOLO
                 # forward pass.
+                _fan_out_extra(self.extra_queues, payload, self.stop_event)
                 _put_or_drop(self.tracked_queue, payload, self.stop_event)
                 _put_or_drop(self.display_queue, payload, self.stop_event)
         finally:
@@ -335,6 +341,11 @@ class PoseTracker(threading.Thread):
             self.display_queue.put(END_OF_STREAM, timeout=1.0)
         except queue.Full:
             pass
+        for q in self.extra_queues:
+            try:
+                q.put(END_OF_STREAM, timeout=1.0)
+            except queue.Full:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -366,8 +377,10 @@ class PoseReplay(threading.Thread):
         stop_event: threading.Event,
         pose_csv: str | Path,
         keypoint_names: list[str],
+        extra_queues: list[queue.Queue] | None = None,
     ):
         super().__init__(name="PoseReplay", daemon=True)
+        self.extra_queues = list(extra_queues or [])
         self.raw_queue = raw_queue
         self.tracked_queue = tracked_queue
         self.display_queue = display_queue
@@ -405,6 +418,7 @@ class PoseReplay(threading.Thread):
                     self.n_frames_without_pose += 1
                     keypoints, confidences = blank, blank_conf
                 payload = (frame_idx, frame_bgr, keypoints, confidences)
+                _fan_out_extra(self.extra_queues, payload, self.stop_event)
                 _put_or_drop(self.tracked_queue, payload, self.stop_event)
                 _put_or_drop(self.display_queue, payload, self.stop_event)
         finally:
@@ -423,7 +437,7 @@ class PoseReplay(threading.Thread):
         return pose.xy, pose.confidence
 
     def _propagate_eos(self) -> None:
-        for q in (self.tracked_queue, self.display_queue):
+        for q in (self.tracked_queue, self.display_queue, *self.extra_queues):
             try:
                 q.put(END_OF_STREAM, timeout=1.0)
             except queue.Full:
@@ -820,8 +834,11 @@ class DisplayConsumer(threading.Thread):
         fps: float = 30.0,
         frame_size: tuple[int, int] | None = None,
         vocab_order: list[str] | None = None,
+        latest_lift=None,
     ):
         super().__init__(name="DisplayConsumer", daemon=True)
+        # Newest 3-D lift result (classify.lift3d_consumer.LatestLift), or None.
+        self.latest_lift = latest_lift
         self.display_queue = display_queue
         self.latest_label = latest_label
         self.stop_event = stop_event
@@ -873,6 +890,10 @@ class DisplayConsumer(threading.Thread):
                     color = (60, 60, 60)
                 draw_label_badge(frame_bgr, label or "(waiting...)", color)
                 draw_fps(frame_bgr, self._render_fps)
+                if self.latest_lift is not None:
+                    lift_idx, rear, nose = self.latest_lift.get()
+                    if lift_idx >= 0:
+                        draw_lift_readout(frame_bgr, rear, nose)
 
                 if self.video_writer_path is not None:
                     self._ensure_writer(frame_bgr)
@@ -929,6 +950,23 @@ def _fmt(value: float) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return ""
     return f"{float(value):.4f}"
+
+
+def _fan_out_extra(queues, payload, stop_event: threading.Event) -> None:
+    """Send ``payload`` to each extra consumer with its own copy of the frame."""
+    if not queues:
+        return
+    frame_idx, frame_bgr, keypoints, confidences = payload
+    if stop_event.is_set():
+        return
+    for q in queues:
+        if q.full():  # never hold the pose model up for a slower extra stage
+            continue
+        frame = frame_bgr.copy() if frame_bgr is not None else None
+        try:
+            q.put_nowait((frame_idx, frame, keypoints, confidences))
+        except queue.Full:
+            pass
 
 
 def _put_or_drop(
