@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import queue
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from glider.analysis.behavior.classify.threads import (
@@ -111,8 +111,9 @@ RAW_QUEUE_MAX = 4
 TRACKED_QUEUE_MAX = 4
 DISPLAY_QUEUE_MAX = 4
 CLASSIFIER_QUEUE_MAX = 8
-# Small: the lift is the slowest stage, and a stale frame is worth less than a fresh one.
-LIFT3D_QUEUE_MAX = 2
+# Small: an extra frame consumer is usually the slowest stage, and a stale frame
+# is worth less than a fresh one.
+FRAME_CONSUMER_QUEUE_MAX = 2
 
 
 @dataclass
@@ -204,11 +205,12 @@ class LiveInferenceConfig:
     # mismatch before this config is built, and the field exists so the block
     # can travel with the resolved thresholds instead of being dropped.
     gate_provenance: dict | None = None
-    # Optional 3-D lift (glider.vision.lift3d.Lift3DConfig). When set, a further
-    # consumer lifts each tracked frame to a body-height surface, writes
-    # `lift3d_csv` if given, and the display shows its rear weight. Experimental.
-    lift3d: object = None
-    lift3d_csv: Path | None = None
+    # Extra stages fed every tracked frame (e.g. a plugin's 3-D lift). Each is a
+    # factory ``f(frame_queue, stop_event, keypoint_names, fps) -> Thread``; the
+    # thread reads ``(frame_idx, frame_bgr, keypoints, confidences)`` items (its
+    # own copy of the frame) until a None. It may expose ``draw_overlay(frame)``,
+    # which the display calls on each shown frame, and ``error``.
+    frame_consumers: list = field(default_factory=list)
 
 
 def _make_tracker(config, raw_queue, tracked_queue, display_queue, stop_event, extra_queues=None):
@@ -265,7 +267,7 @@ class LiveInferencePipeline:
         self.tracked_queue: queue.Queue = queue.Queue(maxsize=TRACKED_QUEUE_MAX)
         self.display_queue: queue.Queue = queue.Queue(maxsize=DISPLAY_QUEUE_MAX)
         self.classifier_queue: queue.Queue = queue.Queue(maxsize=CLASSIFIER_QUEUE_MAX)
-        self._build_lift3d(config)
+        self._build_frame_consumers(config)
 
         # Load the behavior model up front so we fail loudly if it's
         # missing — before we spin up any threads. Streaming a video without
@@ -364,7 +366,7 @@ class LiveInferencePipeline:
             self.tracked_queue,
             self.display_queue,
             self.stop_event,
-            extra_queues=self._lift_queues,
+            extra_queues=self._consumer_queues,
         )
         self.feature_engine = FeatureEngine(
             tracked_queue=self.tracked_queue,
@@ -405,34 +407,25 @@ class LiveInferencePipeline:
             video_writer_path=(Path(config.output_video) if config.output_video else None),
             fps=config.fps_override or 30.0,
             vocab_order=self.model.classes,
-            latest_lift=self.latest_lift,
+            overlays=self._overlays,
         )
 
-    def _build_lift3d(self, config) -> None:
-        """The optional 3-D lift consumer, its queue and the shared readout."""
-        self.lift3d = None
-        self.latest_lift = None
-        self._lift_queues: list[queue.Queue] = []
-        if config.lift3d is None:
-            return
-        from glider.analysis.behavior.classify.lift3d_consumer import (
-            LatestLift,
-            Lift3DConsumer,
-        )
-
-        if config.fps_override:
-            config.lift3d.fps = config.fps_override
-        lift_queue: queue.Queue = queue.Queue(maxsize=LIFT3D_QUEUE_MAX)
-        self._lift_queues = [lift_queue]
-        self.latest_lift = LatestLift()
-        self.lift3d = Lift3DConsumer(
-            lift_queue=lift_queue,
-            stop_event=self.stop_event,
-            keypoint_names=config.keypoint_names,
-            config=config.lift3d,
-            csv_path=Path(config.lift3d_csv) if config.lift3d_csv else None,
-            latest=self.latest_lift,
-        )
+    def _build_frame_consumers(self, config) -> None:
+        """The extra per-frame stages (``config.frame_consumers``) and their queues."""
+        fps = config.fps_override or 30.0
+        self.frame_consumers: list = []
+        self._consumer_queues: list[queue.Queue] = []
+        for factory in config.frame_consumers or []:
+            q: queue.Queue = queue.Queue(maxsize=FRAME_CONSUMER_QUEUE_MAX)
+            self._consumer_queues.append(q)
+            self.frame_consumers.append(
+                factory(q, self.stop_event, list(config.keypoint_names), fps)
+            )
+        self._overlays = [
+            c.draw_overlay
+            for c in self.frame_consumers
+            if callable(getattr(c, "draw_overlay", None))
+        ]
 
     def _build_sequence_threads(self, config) -> None:
         """Thread set for a CNN SequenceModel: producer → tracker →
@@ -450,7 +443,7 @@ class LiveInferencePipeline:
             self.tracked_queue,
             self.display_queue,
             self.stop_event,
-            extra_queues=self._lift_queues,
+            extra_queues=self._consumer_queues,
         )
         self.seq_classifier = SequenceClassifier(
             tracked_queue=self.tracked_queue,
@@ -472,7 +465,7 @@ class LiveInferencePipeline:
             video_writer_path=(Path(config.output_video) if config.output_video else None),
             fps=config.fps_override or 30.0,
             vocab_order=list(self.model.classes),
-            latest_lift=self.latest_lift,
+            overlays=self._overlays,
         )
 
     def run(self) -> None:
@@ -518,8 +511,7 @@ class LiveInferencePipeline:
                 self.classifier,
                 self.display,
             ]
-        if self.lift3d is not None:
-            threads.append(self.lift3d)
+        threads.extend(self.frame_consumers)
         for t in threads:
             t.start()
 
@@ -540,7 +532,7 @@ class LiveInferencePipeline:
                 t.join(timeout=2.0)
             # Surface any per-thread errors so the user knows what
             # broke instead of staring at a silent exit.
-            for t in (self.producer, self.tracker, self.lift3d):
+            for t in (self.producer, self.tracker, *self.frame_consumers):
                 err = getattr(t, "error", None)
                 if err:
                     print(f"[{t.name}] error: {err}")

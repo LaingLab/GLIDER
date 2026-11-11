@@ -193,18 +193,3 @@ def draw_fps(frame: np.ndarray, fps: float) -> np.ndarray:
 
 def _finite_point(p: tuple[int, int]) -> bool:
     return all(np.isfinite(v) and -1e6 < v < 1e6 for v in p)
-
-
-def draw_lift_readout(frame: np.ndarray, rear_weight: float, nose_cm: float) -> np.ndarray:
-    """3-D lift readout in the bottom-left: rear weight and estimated nose height."""
-    import cv2
-
-    text = f"rear {rear_weight:4.2f}  nose {nose_cm:4.1f}"
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    scale, thickness = 0.5, 1
-    h = frame.shape[0]
-    x, y = 12, h - 12
-    colour = (80, 200, 255) if rear_weight >= 0.5 else (220, 220, 220)
-    cv2.putText(frame, text, (x + 1, y + 1), font, scale, (0, 0, 0), thickness + 1, cv2.LINE_AA)
-    cv2.putText(frame, text, (x, y), font, scale, colour, thickness, cv2.LINE_AA)
-    return frame

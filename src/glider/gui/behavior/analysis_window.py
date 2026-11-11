@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -416,12 +417,28 @@ class AnalysisWindow(QMainWindow):
         viewer_column.addWidget(self._transport)
         self._inspector = Inspector()
 
+        # Panels from plugins (glider.review_panel entry points): side ones sit
+        # between the video and the inspector, timeline ones become tabs.
+        from glider.gui.review.extensions import PanelHost, load_review_panels
+
+        self._panels = PanelHost(load_review_panels())
+        side = [p for p in self._panels.panels if p.placement == "side"]
+        top_widgets = [self._pool, viewer]
+        if side:
+            if len(side) == 1:
+                top_widgets.append(side[0].widget())
+            else:
+                side_tabs = QTabWidget()
+                for panel in side:
+                    side_tabs.addTab(panel.widget(), panel.title)
+                top_widgets.append(side_tabs)
+        top_widgets.append(self._inspector)
         self._top_split = QSplitter(Qt.Orientation.Horizontal)
-        for widget in (self._pool, viewer, self._inspector):
+        for widget in top_widgets:
             self._top_split.addWidget(widget)
         self._top_split.setCollapsible(1, False)
         self._top_split.setStretchFactor(1, 1)
-        self._top_split.setSizes([250, 860, 330])
+        self._top_split.setSizes([250, 860, 420, 330] if side else [250, 860, 330])
 
         self._timeline_panel = TimelinePanel()
         self._split = QSplitter(Qt.Orientation.Vertical)
@@ -457,6 +474,10 @@ class AnalysisWindow(QMainWindow):
         self._bar.hidden_changed.connect(self._remember_hidden)
         self._wire_transport()
         self._build_epoch_table()
+        # Plugin tabs go after the window's own, so theirs keep their places.
+        for panel in self._panels.panels:
+            if panel.placement == "timeline":
+                self._timeline_panel.addTab(panel.widget(), panel.title)
         self._build_bout_stepper()
         self._build_fixes()
         self._export_btn.clicked.connect(self._export_window)
@@ -754,7 +775,7 @@ class AnalysisWindow(QMainWindow):
 
     def _restore_layout(self) -> None:
         settings = _settings()
-        for key, splitter in (("review/split", self._split), ("review/top", self._top_split)):
+        for key, splitter in (("review/split", self._split), (self._top_key(), self._top_split)):
             state = settings.value(key)
             if state is not None:
                 splitter.restoreState(state)
@@ -762,7 +783,12 @@ class AnalysisWindow(QMainWindow):
     def _save_layout(self) -> None:
         settings = _settings()
         settings.setValue("review/split", self._split.saveState())
-        settings.setValue("review/top", self._top_split.saveState())
+        settings.setValue(self._top_key(), self._top_split.saveState())
+
+    def _top_key(self) -> str:
+        """Splitter key per column count, so a plugin panel never inherits a 3-column state."""
+        n = self._top_split.count()
+        return "review/top" if n == 3 else f"review/top{n}"
 
     # ------------------------------------------------------------------
     # walkthrough
@@ -1298,6 +1324,25 @@ class AnalysisWindow(QMainWindow):
         self._show_session_text(path, view)
         self._update_status()
         self._publish_markers()
+        self._publish_panels(path, view)
+
+    def _publish_panels(self, path: Path, view: SessionView) -> None:
+        """Tell plugin panels which session is on screen."""
+        if not self._panels.panels:
+            return
+        from glider.gui.review.extensions import ReviewContext
+
+        found = self._arena_for(self._shown)
+        self._panels.set_session(
+            ReviewContext(
+                view=view,
+                source=Path(path),
+                arena=found[0] if found else None,
+                frame_bounds=tuple(self._bar.frame_bounds()),
+                seek=self._set_frame,
+            )
+        )
+        self._panels.set_frame(self._frame)
 
     def _show_session_text(self, path: Path, view: SessionView) -> None:
         """The Session tab: what was found for the session, and what is missing."""
@@ -2198,6 +2243,7 @@ class AnalysisWindow(QMainWindow):
         self._frame = int(frame)
         self._bar.set_frame(self._frame, follow=self._timer.isActive())
         self._canvas.set_frame(self._frame)
+        self._panels.set_frame(self._frame)
         self._canvas.set_hud(self._hud_behavior(), self._hud_chips())
         self._bout_label.setText(self._describe_bout())
         if self._view and self._view.fps:

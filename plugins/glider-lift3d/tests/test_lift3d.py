@@ -11,14 +11,14 @@ import pytest
 
 cv2 = pytest.importorskip("cv2")
 
-from glider.vision.lift3d import EXP16_KEYPOINTS, KeypointRoles, Lift3D, Lift3DConfig  # noqa: E402
-from glider.vision.lift3d.posture import (  # noqa: E402
+from glider_lift3d import EXP16_KEYPOINTS, KeypointRoles, Lift3D, Lift3DConfig  # noqa: E402
+from glider_lift3d.posture import (  # noqa: E402
     REAR_NONE,
     KeypointHeight,
     body_surface,
     rear_weight,
 )
-from glider.vision.lift3d.surface import CROP_PX, floor_relative  # noqa: E402
+from glider_lift3d.surface import CROP_PX, floor_relative  # noqa: E402
 
 EXP6 = ["nose", "l_ear", "r_ear", "l_body", "center", "r_body", "tail_base"]
 PPC = 10.0
@@ -199,7 +199,8 @@ def test_pipeline_needs_a_scale():
 
 
 def test_run_video_writes_a_frame_aligned_csv(tmp_path):
-    from glider.vision.lift3d.batch import CSV_COLUMNS, run_video
+    from glider_lift3d.batch import CSV_COLUMNS, run_video
+
     from glider.vision.pose.core import PoseData
     from glider.vision.pose.dlc import to_dlc_csv
 
@@ -230,7 +231,7 @@ def test_run_video_writes_a_frame_aligned_csv(tmp_path):
 
 
 def test_live_consumer_lifts_queued_frames_and_writes_csv(tmp_path):
-    from glider.analysis.behavior.classify.lift3d_consumer import LatestLift, Lift3DConsumer
+    from glider_lift3d.live import Lift3DConsumer
 
     xy16 = mouse_exp16()
     frame = frame_with_mouse(xy16)
@@ -239,22 +240,48 @@ def test_live_consumer_lifts_queued_frames_and_writes_csv(tmp_path):
         q.put((i, frame.copy(), xy16, np.ones(7)))
     q.put(None)
     lift = make_lift()
-    latest = LatestLift()
     t = Lift3DConsumer(
         q,
         threading.Event(),
         EXP16_KEYPOINTS,
         lift.config,
         csv_path=tmp_path / "lift.csv",
-        latest=latest,
         lift=lift,
     )
     t.start()
     t.join(timeout=10)
     assert not t.is_alive() and t.error is None
     assert t.n_lifted == 5
-    assert latest.get()[0] == 4
+    assert t.latest.get()[0] == 4
     assert len(list(csv.reader(open(tmp_path / "lift.csv")))) == 6
+    shown = np.zeros((480, 640, 3), np.uint8)
+    t.draw_overlay(shown)
+    assert shown.any()
+
+
+def test_live_pipeline_runs_plugin_frame_consumers():
+    """Core builds one queue + thread per factory and passes their overlays to the display."""
+    from glider_lift3d.live import frame_consumer
+
+    from glider.analysis.behavior.classify.pipeline import LiveInferencePipeline
+
+    seen = {}
+
+    def factory(q, stop_event, names, fps):
+        seen.update(q=q, names=names, fps=fps)
+        return frame_consumer(make_lift().config)(q, stop_event, names, fps)
+
+    pipe = LiveInferencePipeline.__new__(LiveInferencePipeline)
+    pipe.stop_event = threading.Event()
+
+    class Cfg:
+        frame_consumers = [factory]
+        fps_override = 25.0
+        keypoint_names = EXP16_KEYPOINTS
+
+    pipe._build_frame_consumers(Cfg)
+    assert len(pipe.frame_consumers) == 1 and seen["q"] is pipe._consumer_queues[0]
+    assert seen["fps"] == 25.0 and pipe._overlays == [pipe.frame_consumers[0].draw_overlay]
 
 
 def test_fan_out_copies_the_frame_and_never_blocks():

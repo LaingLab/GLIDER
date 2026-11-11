@@ -91,6 +91,11 @@ class Lift3DFrame:
     used_mask_model: bool
     used_depth: bool
     timings: dict = field(default_factory=dict)
+    # Height above the floor from the depth model alone (fraction of camera distance;
+    # times depth_scale for cm-like units), or None without depth.
+    rel: np.ndarray | None = None
+    # Neck .. tail base in crop px (10-keypoint models only), or None without a neck.
+    spine_c: np.ndarray | None = None
 
 
 def _ultralytics_segment(model, device, half) -> SegmentFn:
@@ -240,6 +245,9 @@ class Lift3D:
         xy = self.roles.canonical(keypoints)
         if not np.isfinite(xy).all():
             return None
+        spine = self.roles.spine(keypoints)
+        if spine is not None and not np.isfinite(spine).all():
+            spine = None
         cfg = self.config
         t: dict[str, float] = {}
 
@@ -317,4 +325,6 @@ class Lift3D:
             used_mask_model=used_mask,
             used_depth=rel is not None,
             timings=t,
+            rel=rel,
+            spine_c=None if spine is None else apply_affine(affine, spine),
         )

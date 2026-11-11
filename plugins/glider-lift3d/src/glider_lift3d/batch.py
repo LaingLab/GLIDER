@@ -1,6 +1,6 @@
 """Offline 3-D lift of a recorded video from its pose CSV, written as a per-frame CSV.
 
-python -m glider.vision.lift3d VIDEO --pose-csv POSES.csv --ppc 12.7 [--arena ...]
+python -m glider_lift3d VIDEO --pose-csv POSES.csv --ppc 12.7 [--arena ...]
 """
 
 from __future__ import annotations
@@ -122,7 +122,7 @@ def parse_arena(text: str | None) -> np.ndarray | None:
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    ap = argparse.ArgumentParser(prog="python -m glider.vision.lift3d", description=__doc__)
+    ap = argparse.ArgumentParser(prog="python -m glider_lift3d", description=__doc__)
     ap.add_argument("video")
     ap.add_argument("--pose-csv", required=True, help="DLC-format pose CSV for the video")
     ap.add_argument("--ppc", type=float, required=True, help="pixels per cm at the floor")

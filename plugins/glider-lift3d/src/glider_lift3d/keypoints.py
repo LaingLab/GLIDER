@@ -35,6 +35,14 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "tail_base": ("tail_base", "tailbase", "base_tail", "tail_root", "tail"),
 }
 
+# Spine points only the 10-keypoint model has (slots 7-9 after exp-16's seven).
+# Optional for the lift; the neck is required for the back-arch measure.
+_SPINE_ALIASES: dict[str, tuple[str, ...]] = {
+    "neck": ("neck", "nape"),
+    "withers": ("withers", "shoulders", "spine_front", "spine1"),
+    "lumbar": ("lumbar", "spine_back", "spine2", "lower_back"),
+}
+
 
 def _norm(name: str) -> str:
     return name.strip().lower().replace("-", "_").replace(" ", "_")
@@ -51,6 +59,9 @@ class KeypointRoles:
     left_hip: int
     right_hip: int
     tail_base: int
+    neck: int | None = None
+    withers: int | None = None
+    lumbar: int | None = None
 
     @classmethod
     def from_names(cls, names: list[str]) -> KeypointRoles:
@@ -70,7 +81,22 @@ class KeypointRoles:
                 + "; ".join(f"{r}: {'/'.join(_ALIASES[r])}" for r in missing)
                 + ")."
             )
+        for role, aliases in _SPINE_ALIASES.items():
+            for alias in aliases:
+                if alias in normed:
+                    found[role] = normed.index(alias)
+                    break
         return cls(**found)
+
+    def spine(self, xy: np.ndarray) -> np.ndarray | None:
+        """Neck -> withers -> body centre -> lumbar -> tail base, ``(n, 2)``.
+
+        Withers and lumbar are used when the model has them. None without a neck.
+        """
+        if self.neck is None:
+            return None
+        order = [self.neck, self.withers, self.center, self.lumbar, self.tail_base]
+        return np.asarray(xy, float)[[i for i in order if i is not None], :2]
 
     def canonical(self, xy: np.ndarray) -> np.ndarray:
         """``(K, 2+)`` keypoints -> ``(7, 2)`` in exp-16 order, the order the maths uses."""

@@ -31,7 +31,6 @@ from glider.analysis.behavior.classify.overlay import (
     color_for_behavior,
     draw_fps,
     draw_label_badge,
-    draw_lift_readout,
     draw_skeleton,
 )
 from glider.analysis.behavior.features import FeatureSpec
@@ -834,11 +833,11 @@ class DisplayConsumer(threading.Thread):
         fps: float = 30.0,
         frame_size: tuple[int, int] | None = None,
         vocab_order: list[str] | None = None,
-        latest_lift=None,
+        overlays=None,
     ):
         super().__init__(name="DisplayConsumer", daemon=True)
-        # Newest 3-D lift result (classify.lift3d_consumer.LatestLift), or None.
-        self.latest_lift = latest_lift
+        # Extra drawing on each shown frame, from frame consumers (plugins).
+        self.overlays = list(overlays or [])
         self.display_queue = display_queue
         self.latest_label = latest_label
         self.stop_event = stop_event
@@ -890,10 +889,13 @@ class DisplayConsumer(threading.Thread):
                     color = (60, 60, 60)
                 draw_label_badge(frame_bgr, label or "(waiting...)", color)
                 draw_fps(frame_bgr, self._render_fps)
-                if self.latest_lift is not None:
-                    lift_idx, rear, nose = self.latest_lift.get()
-                    if lift_idx >= 0:
-                        draw_lift_readout(frame_bgr, rear, nose)
+                for draw in self.overlays:
+                    try:
+                        draw(frame_bgr)
+                    except Exception:  # noqa: BLE001 - a plugin overlay must not stop the display
+                        logger.exception("frame overlay failed; removed")
+                        self.overlays.remove(draw)
+                        break
 
                 if self.video_writer_path is not None:
                     self._ensure_writer(frame_bgr)
