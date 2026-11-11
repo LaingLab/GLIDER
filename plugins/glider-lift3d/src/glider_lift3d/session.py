@@ -1,15 +1,21 @@
 """Per-session 3-D lift, computed once and saved beside the pose CSV for review.
 
 Scrubbing a session cannot re-run three models per frame, so the lift is run over the
-whole session once (GPU, roughly real time) and saved as sidecars of the pose CSV:
+whole session once (GPU, roughly real time) and saved in a folder beside the pose CSV,
+``<pose stem>.lift3d/``:
 
-* ``<pose stem>.lift3d.csv``         per frame: rear weight, body length, back-arch
-  eccentricity (surface and depth-only), spine length, arch peak
-* ``<pose stem>.lift3d_surface.npy`` ``(n_frames, GRID, GRID)`` float16 height map of
-  the 20 cm crop around the mouse (NaN off the mouse), for the 3-D view
-* ``<pose stem>.lift3d_spine.npy``   ``(n_frames, 5, 2)`` float32 neck .. tail base in
-  grid coordinates (NaN without a neck keypoint), for the arch overlay
-* ``<pose stem>.lift3d.json``        what produced them (scale, models, keypoints)
+* ``frames.csv``   per frame: rear weight, body length, back-arch eccentricity (surface
+  and depth-only), spine length, arch peak
+* ``surface.npy``  ``(n_frames, GRID, GRID)`` float16 height map of the 20 cm crop
+  around the mouse (NaN off the mouse), for the 3-D view
+* ``spine.npy``    ``(n_frames, 5, 2)`` float32 neck .. tail base in grid coordinates
+  (NaN without a neck keypoint), for the arch overlay
+* ``meta.json``    what produced them (scale, models, keypoints)
+
+A folder, not files named after the pose CSV: GLIDER finds a video's poses by the
+pattern ``<video>DLC_*.csv``, which a ``<pose stem>.lift3d.csv`` matches -- and, being
+newest, wins, so the session then opened with no poses. Version-1 sidecars written that
+way are moved into the folder when found.
 
 Files are written under temporary names and renamed at the end, so an interrupted run
 never looks finished.
@@ -55,8 +61,18 @@ class SidecarPaths:
 
     @classmethod
     def for_pose(cls, pose_csv: str | Path) -> SidecarPaths:
-        p = Path(pose_csv)
-        base = p.with_suffix("")
+        folder = Path(f"{Path(pose_csv).with_suffix('')}.lift3d")
+        return cls(
+            table=folder / "frames.csv",
+            surface=folder / "surface.npy",
+            spine=folder / "spine.npy",
+            meta=folder / "meta.json",
+        )
+
+    @classmethod
+    def legacy(cls, pose_csv: str | Path) -> SidecarPaths:
+        """Version 1: flat files beside the pose CSV (they hid the poses; see above)."""
+        base = Path(pose_csv).with_suffix("")
         return cls(
             table=Path(f"{base}.lift3d.csv"),
             surface=Path(f"{base}.lift3d_surface.npy"),
@@ -64,11 +80,27 @@ class SidecarPaths:
             meta=Path(f"{base}.lift3d.json"),
         )
 
+    @property
+    def folder(self) -> Path:
+        return self.table.parent
+
     def all(self) -> tuple[Path, ...]:
         return self.table, self.surface, self.spine, self.meta
 
     def exist(self) -> bool:
         return all(p.exists() for p in self.all())
+
+
+def migrate_legacy(pose_csv: str | Path) -> bool:
+    """Move version-1 flat sidecars into the folder. True if anything moved."""
+    old, new = SidecarPaths.legacy(pose_csv), SidecarPaths.for_pose(pose_csv)
+    present = [(o, n) for o, n in zip(old.all(), new.all(), strict=True) if o.exists()]
+    if not present:
+        return False
+    new.folder.mkdir(exist_ok=True)
+    for o, n in present:
+        os.replace(o, n)
+    return True
 
 
 def downsample(height: np.ndarray, grid: int = GRID) -> np.ndarray:
@@ -104,7 +136,9 @@ def compute_session(
     from glider.vision.pose.dlc import from_dlc_csv
 
     pose = from_dlc_csv(pose_csv, individual=individual)
+    migrate_legacy(pose_csv)
     paths = SidecarPaths.for_pose(pose_csv)
+    paths.folder.mkdir(exist_ok=True)
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
         raise OSError(f"could not open video {video}")
@@ -187,6 +221,8 @@ def compute_session(
                 os.replace(partial, final)
             else:
                 partial.unlink(missing_ok=True)
+        if not finished and not any(paths.folder.iterdir()):
+            paths.folder.rmdir()
     return paths
 
 
@@ -212,6 +248,7 @@ def load_session(pose_csv: str | Path) -> LiftSession | None:
     """The saved lift for this pose CSV, or None if it has not been computed."""
     import pandas as pd
 
+    migrate_legacy(pose_csv)
     paths = SidecarPaths.for_pose(pose_csv)
     if not paths.exist():
         return None

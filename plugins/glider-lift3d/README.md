@@ -34,15 +34,15 @@ and *Posture (3-D)* for the timeline tab); the choice is remembered.
 
 Open a session whose pose CSV and video are found, with a scale (px/mm) or a drawn
 arena. The *3-D mouse* panel offers **Compute 3-D for this session**: it lifts every
-frame once (roughly 60 fps on an RTX 4090 without depth) and saves sidecars beside the
-pose CSV:
+frame once (roughly 60 fps on an RTX 4090 without depth) and saves the results
+into a folder `<pose>.lift3d/` beside the pose CSV:
 
 | file | contents |
 |---|---|
-| `<pose>.lift3d.csv` | per frame: rear weight, body ratio/length, spine length, `ecc_surface`, `ecc_depth`, arch peak |
-| `<pose>.lift3d_surface.npy` | `(frames, 48, 48)` float16 height map of the 20 cm crop (~160 MB per 20 min at 30 fps) |
-| `<pose>.lift3d_spine.npy` | `(frames, 5, 2)` neck … tail base in grid coordinates |
-| `<pose>.lift3d.json` | scale, models and keypoints used |
+| `frames.csv` | per frame: rear weight, body ratio/length, spine length, `ecc_surface`, `ecc_depth`, arch peak |
+| `surface.npy` | `(frames, 48, 48)` float16 height map of the 20 cm crop (~160 MB per 20 min at 30 fps) |
+| `spine.npy` | `(frames, 5, 2)` neck … tail base in grid coordinates |
+| `meta.json` | scale, models and keypoints used |
 
 Offline, without the GUI: `glider-lift3d VIDEO --pose-csv POSES.csv --ppc 11.7`.
 

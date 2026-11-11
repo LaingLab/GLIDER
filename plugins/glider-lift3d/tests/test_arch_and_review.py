@@ -136,7 +136,7 @@ def test_compute_session_writes_frame_aligned_sidecars(tmp_path):
     lift = Lift3D(TEN, cfg, segment=dark_segment, depth=bump_depth)
     paths = compute_session(video, pose_csv, cfg, lift=lift)
     assert paths == SidecarPaths.for_pose(pose_csv) and paths.exist()
-    assert not list(tmp_path.glob("*.partial"))
+    assert not list(tmp_path.rglob("*.partial"))
     s = load_session(pose_csv)
     assert s.n_frames == 5 and s.surface.shape == (5, GRID, GRID)
     assert s.meta["has_neck"] and s.meta["used_depth"]
@@ -147,6 +147,37 @@ def test_compute_session_writes_frame_aligned_sidecars(tmp_path):
     assert np.isfinite(s.spine[1]).all()
 
 
+def test_sidecars_never_shadow_the_pose_csv(tmp_path):
+    """GLIDER finds poses by <video>DLC_*.csv; a sidecar must not be the newest match."""
+    from glider.vision.pose.batch import find_pose_csv
+
+    video, pose_csv = _session(tmp_path)
+    cfg = Lift3DConfig(ppc=PPC)
+    compute_session(
+        video, pose_csv, cfg, lift=Lift3D(TEN, cfg, segment=dark_segment, depth=bump_depth)
+    )
+    assert find_pose_csv(video) == pose_csv
+    assert [p.name for p in tmp_path.glob("*.csv")] == [pose_csv.name]
+
+
+def test_version_one_flat_sidecars_are_moved_into_the_folder(tmp_path):
+    from glider.vision.pose.batch import find_pose_csv
+
+    video, pose_csv = _session(tmp_path)
+    cfg = Lift3DConfig(ppc=PPC)
+    compute_session(
+        video, pose_csv, cfg, lift=Lift3D(TEN, cfg, segment=dark_segment, depth=bump_depth)
+    )
+    new, old = SidecarPaths.for_pose(pose_csv), SidecarPaths.legacy(pose_csv)
+    for n, o in zip(new.all(), old.all(), strict=True):
+        n.replace(o)
+    assert find_pose_csv(video) == old.table  # the bug: the sidecar won
+    s = load_session(pose_csv)
+    assert s is not None and s.n_frames == 5
+    assert not any(o.exists() for o in old.all())
+    assert find_pose_csv(video) == pose_csv
+
+
 def test_a_stopped_run_leaves_nothing_behind(tmp_path):
     video, pose_csv = _session(tmp_path)
     cfg = Lift3DConfig(ppc=PPC)
@@ -154,7 +185,7 @@ def test_a_stopped_run_leaves_nothing_behind(tmp_path):
     calls = iter([False, False, True])
     assert compute_session(video, pose_csv, cfg, lift=lift, should_stop=lambda: next(calls)) is None
     assert not any(p.exists() for p in SidecarPaths.for_pose(pose_csv).all())
-    assert not list(tmp_path.glob("*.partial"))
+    assert not list(tmp_path.rglob("*.partial"))
     assert load_session(pose_csv) is None
 
 
