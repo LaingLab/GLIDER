@@ -39,7 +39,6 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -417,28 +416,19 @@ class AnalysisWindow(QMainWindow):
         viewer_column.addWidget(self._transport)
         self._inspector = Inspector()
 
-        # Panels from plugins (glider.review_panel entry points): side ones sit
-        # between the video and the inspector, timeline ones become tabs.
+        # Panels from plugins (glider.review_panel entry points): each side one
+        # is a column between the video and the inspector, each timeline one a
+        # tab. All start hidden; the View menu shows them.
         from glider.gui.review.extensions import PanelHost, load_review_panels
 
         self._panels = PanelHost(load_review_panels())
         side = [p for p in self._panels.panels if p.placement == "side"]
-        top_widgets = [self._pool, viewer]
-        if side:
-            if len(side) == 1:
-                top_widgets.append(side[0].widget())
-            else:
-                side_tabs = QTabWidget()
-                for panel in side:
-                    side_tabs.addTab(panel.widget(), panel.title)
-                top_widgets.append(side_tabs)
-        top_widgets.append(self._inspector)
         self._top_split = QSplitter(Qt.Orientation.Horizontal)
-        for widget in top_widgets:
+        for widget in [self._pool, viewer, *(p.widget() for p in side), self._inspector]:
             self._top_split.addWidget(widget)
         self._top_split.setCollapsible(1, False)
         self._top_split.setStretchFactor(1, 1)
-        self._top_split.setSizes([250, 860, 420, 330] if side else [250, 860, 330])
+        self._top_split.setSizes([250, 860, *([420] * len(side)), 330])
 
         self._timeline_panel = TimelinePanel()
         self._split = QSplitter(Qt.Orientation.Vertical)
@@ -501,6 +491,7 @@ class AnalysisWindow(QMainWindow):
         retrieval.jump_to.connect(lambda s: self._set_frame(round(s * self._view.fps)))
 
         self._restore_layout()
+        self._build_view_menu()
         # Opened with parent=None, so nothing hands it the app theme.
         apply_tool_theme(self)
         self._even_out_menus()
@@ -518,7 +509,13 @@ class AnalysisWindow(QMainWindow):
         them came out 110, 118 and 130 px. Measured after the theme is
         applied, so the padding that makes room for the arrow is counted.
         """
-        buttons = (self._open_btn, self._arena_btn, self._zones_btn, self._export_menu_btn)
+        buttons = (
+            self._open_btn,
+            self._arena_btn,
+            self._zones_btn,
+            self._view_btn,
+            self._export_menu_btn,
+        )
         for button in buttons:
             button.ensurePolished()
         width = max(button.sizeHint().width() for button in buttons)
@@ -667,10 +664,14 @@ class AnalysisWindow(QMainWindow):
         )
         set_button_role(self._tour_btn, "ghost")
         self._tour_btn.setObjectName("ReviewHelp")
+        # Filled by _build_view_menu once the panels exist.
+        self._view_btn, _ = self._menu_button("View", [])
+        self._view_btn.setToolTip("Show or hide the window's panels")
         for button in (
             self._open_btn,
             self._arena_btn,
             self._zones_btn,
+            self._view_btn,
             self._export_menu_btn,
             self._tour_btn,
         ):
@@ -789,6 +790,74 @@ class AnalysisWindow(QMainWindow):
         """Splitter key per column count, so a plugin panel never inherits a 3-column state."""
         n = self._top_split.count()
         return "review/top" if n == 3 else f"review/top{n}"
+
+    #: QSettings prefix for each panel's shown/hidden choice.
+    _SHOW_KEY = "review/show/"
+
+    def _build_view_menu(self) -> None:
+        """View: a checkable entry per panel. The window's own start shown, plugins' hidden."""
+        menu = self._view_btn.menu()
+        self._view_actions: dict = {}
+        builtins = [
+            ("sessions", "Sessions list", self._pool),
+            ("inspector", "Inspector", self._inspector),
+            ("timeline", "Timeline and tables", self._timeline_panel),
+        ]
+        for key, label, widget in builtins:
+            self._add_view_action(menu, key, label, True, lambda on, w=widget: w.setVisible(on))
+        if self._panels.panels:
+            menu.addSeparator()
+        for panel in self._panels.panels:
+            label = panel.title + ("" if panel.placement == "side" else "  (timeline tab)")
+            self._add_view_action(
+                menu,
+                f"plugin/{panel.title}",
+                label,
+                False,
+                lambda on, p=panel: self._show_plugin_panel(p, on),
+            )
+
+    def _add_view_action(self, menu, key: str, label: str, default: bool, apply) -> None:
+        action = menu.addAction(label)
+        action.setCheckable(True)
+        shown = bool(_settings().value(self._SHOW_KEY + key, default, type=bool))
+        action.setChecked(shown)
+        apply(shown)
+
+        def toggled(on: bool) -> None:
+            apply(on)
+            _settings().setValue(self._SHOW_KEY + key, on)
+
+        action.toggled.connect(toggled)
+        self._view_actions[key] = action
+
+    def _show_plugin_panel(self, panel, shown: bool) -> None:
+        widget = panel.widget()
+        if panel.placement == "side":
+            widget.setVisible(shown)
+            if shown:
+                self._give_room(widget)
+        else:
+            tabs = self._timeline_panel
+            index = tabs.indexOf(widget)
+            if not shown and tabs.currentIndex() == index:
+                tabs.setCurrentIndex(0)
+            tabs.setTabVisible(index, shown)
+            if shown:
+                tabs.setCurrentIndex(index)
+        # A hidden panel does no work: no sidecar loads, no per-frame redraws.
+        self._panels.set_active(panel, shown)
+
+    def _give_room(self, widget: QWidget, width: int = 420) -> None:
+        """A column shown again after being saved hidden comes back at zero width."""
+        split = self._top_split
+        index = split.indexOf(widget)
+        sizes = split.sizes()
+        if index < 0 or sizes[index] > 0:
+            return
+        sizes[1] = max(sizes[1] - width, 200)
+        sizes[index] = width
+        split.setSizes(sizes)
 
     # ------------------------------------------------------------------
     # walkthrough

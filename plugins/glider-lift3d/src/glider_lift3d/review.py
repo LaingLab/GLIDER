@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .curvature import MAX_REAR_WEIGHT, ellipse_points, fit_ellipse_params, spine_profile
+from .curvature import MAX_REAR_WEIGHT, spine_profile
 from .session import GRID, LiftSession, load_session
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 # Height colour ramp (cm-like): floor-dark to rear-bright.
 _RAMP = [(0.0, (40, 52, 90)), (1.5, (40, 120, 160)), (3.0, (90, 190, 140)), (6.0, (250, 220, 90))]
 MAX_Z = 8.0
+#: Spine-profile axes (cm): a long mouse's neck-to-tail run, and a high back.
+PROFILE_X_CM, PROFILE_Z_CM = 10.0, 5.0
 
 
 def _colour(z: float) -> QColor:
@@ -344,10 +346,15 @@ class SurfacePanel:
         self.profile = pg.PlotWidget()
         self.profile.setMinimumHeight(140)
         self.profile.setLabel("bottom", "along spine, neck → tail base (cm)")
-        self.profile.setLabel("left", "height")
+        self.profile.setLabel("left", "height (cm)")
+        # Fixed axes at true proportions, so frames compare by eye: a hunch
+        # shows as the line bowing up, not as the axes rescaling.
         self.profile.setAspectLocked(True)
-        self._pts = self.profile.plot([], [], pen=None, symbol="o", symbolSize=5)
-        self._fit = self.profile.plot([], [], pen=pg.mkPen((255, 90, 90), width=1.5))
+        self.profile.setXRange(0, PROFILE_X_CM, padding=0.02)
+        self.profile.setYRange(0, PROFILE_Z_CM, padding=0.02)
+        self.profile.disableAutoRange()
+        self.profile.setMouseEnabled(x=False, y=False)
+        self._line = self.profile.plot([], [], pen=pg.mkPen((255, 90, 90), width=2))
         col.addWidget(self.profile, 2)
 
         self.compute_btn.clicked.connect(ctl.compute)
@@ -387,8 +394,7 @@ class SurfacePanel:
         if lift is None or not 0 <= frame < lift.n_frames:
             self.view.set_data(None, None, 20.0 / GRID, "" if lift else "Not computed")
             self.readout.setText("")
-            self._pts.setData([], [])
-            self._fit.setData([], [])
+            self._line.setData([], [])
             return
         grid = np.asarray(lift.surface[frame], float)
         spine = np.asarray(lift.spine[frame], float)
@@ -397,17 +403,9 @@ class SurfacePanel:
         self.readout.setText(_readout(row))
         if np.isfinite(spine).all():
             s, z = spine_profile(grid, spine, 1.0 / lift.cell_cm)
-            self._pts.setData(s, z)
-            rearing = row is not None and row.get("rear_weight", 0) >= MAX_REAR_WEIGHT
-            params = fit_ellipse_params(s, z) if len(s) >= 6 and not rearing else None
-            if params is not None:
-                e = ellipse_points(params)
-                self._fit.setData(e[:, 0], e[:, 1])
-            else:
-                self._fit.setData([], [])
+            self._line.setData(s, z, connect="finite")
         else:
-            self._pts.setData([], [])
-            self._fit.setData([], [])
+            self._line.setData([], [])
 
 
 def _readout(row) -> str:

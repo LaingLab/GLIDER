@@ -10,8 +10,8 @@ measurements.**
   side-view profile along neck → withers → centre → lumbar → tail base, fitted with an
   ellipse; eccentricity `e = √(a² − b²)/a`. Lower `e` = more hunched. Needs a model with
   a `neck` keypoint (the 10-keypoint model).
-* **Session Review panels**: the 3-D mouse beside the video (drag to turn) with the arch
-  profile and its fitted ellipse, and a *Posture (3-D)* timeline tab with arch
+* **Session Review panels**: the 3-D mouse beside the video (drag to turn) with the
+  back's height profile along the spine, and a *Posture (3-D)* timeline tab with arch
   eccentricity, body length and rear weight (click to seek).
 * **Live**: a frame consumer for the live pipeline (`glider_lift3d.live.frame_consumer`).
 
@@ -28,6 +28,9 @@ model needs `ultralytics>=8.4.192`; without it the lift runs on the mask and key
 and the depth-only arch trace stays empty.
 
 ## Use in Session Review
+
+The panels start hidden. Turn them on in Session Review's **View** menu (*3-D mouse*,
+and *Posture (3-D)* for the timeline tab); the choice is remembered.
 
 Open a session whose pose CSV and video are found, with a scale (px/mm) or a drawn
 arena. The *3-D mouse* panel offers **Compute 3-D for this session**: it lifts every

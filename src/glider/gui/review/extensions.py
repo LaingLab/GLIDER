@@ -10,8 +10,11 @@ group whose target is a factory: called with no arguments, it returns one
 
 Session Review then
 
-* places each ``"side"`` panel beside the video (several share a tab strip) and
-  each ``"timeline"`` panel as a tab next to the ethogram;
+* places each ``"side"`` panel as a column beside the video and each
+  ``"timeline"`` panel as a tab next to the ethogram, all hidden until the user
+  ticks them in the window's View menu (the choice is remembered);
+* while a panel is hidden, calls nothing on it; shown, it gets the current
+  session and frame;
 * calls :meth:`ReviewPanel.set_session` whenever the shown session changes
   (``None`` when nothing is shown), and :meth:`ReviewPanel.set_frame` on every
   frame change, including during playback, so ``set_frame`` must be cheap.
@@ -94,9 +97,28 @@ class PanelHost:
     def __init__(self, panels: list[ReviewPanel]):
         self.panels = list(panels)
         self._dead: set[int] = set()
+        # Panels the user has hidden get nothing; shown again, they are brought
+        # up to date with the last session and frame.
+        self._inactive: set[int] = set()
+        self._context: ReviewContext | None = None
+        self._frame: int | None = None
+
+    def set_active(self, panel: ReviewPanel, active: bool) -> None:
+        if not active:
+            self._inactive.add(id(panel))
+            return
+        if id(panel) not in self._inactive:
+            return
+        self._inactive.discard(id(panel))
+        self._call(panel, "set_session", self._context)
+        if self._frame is not None:
+            self._call(panel, "set_frame", self._frame)
+
+    def is_active(self, panel: ReviewPanel) -> bool:
+        return id(panel) not in self._inactive and id(panel) not in self._dead
 
     def _call(self, panel: ReviewPanel, method: str, arg) -> None:
-        if id(panel) in self._dead:
+        if id(panel) in self._dead or id(panel) in self._inactive:
             return
         try:
             getattr(panel, method)(arg)
@@ -109,9 +131,11 @@ class PanelHost:
                 pass
 
     def set_session(self, context: ReviewContext | None) -> None:
+        self._context, self._frame = context, None
         for panel in self.panels:
             self._call(panel, "set_session", context)
 
     def set_frame(self, frame: int) -> None:
+        self._frame = frame
         for panel in self.panels:
             self._call(panel, "set_frame", frame)

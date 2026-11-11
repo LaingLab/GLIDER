@@ -65,24 +65,79 @@ def test_host_switches_off_a_failing_panel_and_keeps_the_rest(qtbot):
     assert not bad.widget().isEnabled()
 
 
+def test_hidden_panels_get_nothing_and_catch_up_when_shown(qtbot):
+    panel = _Panel("p")
+    host = PanelHost([panel])
+    host.set_active(panel, False)
+    host.set_session("ctx")
+    host.set_frame(3)
+    host.set_frame(4)
+    assert panel.calls == []
+    host.set_active(panel, True)
+    assert panel.calls == [("session", "ctx"), ("frame", 4)]
+    host.set_active(panel, True)  # already shown: no replay
+    assert len(panel.calls) == 2
+
+
 @pytest.fixture
-def window_with_panels(qtbot, monkeypatch):
+def window_with_panels(qtbot, monkeypatch, tmp_path):
+    from PyQt6.QtCore import QSettings
+
+    ini = str(tmp_path / "review.ini")
+    monkeypatch.setattr(
+        "glider.gui.behavior.analysis_window._settings",
+        lambda: QSettings(ini, QSettings.Format.IniFormat),
+    )
     side, timeline = _Panel("Side", "side"), _Panel("Trace", "timeline")
     monkeypatch.setattr("glider.gui.review.extensions.load_review_panels", lambda: [side, timeline])
     from glider.gui.behavior.analysis_window import AnalysisWindow
 
-    window = AnalysisWindow()
-    qtbot.addWidget(window)
-    return window, side, timeline
+    def make():
+        window = AnalysisWindow()
+        qtbot.addWidget(window)
+        return window
+
+    return make, side, timeline
 
 
-def test_review_window_places_plugin_panels(window_with_panels):
-    window, side, timeline = window_with_panels
+def test_review_window_places_plugin_panels_hidden(window_with_panels):
+    make, side, timeline = window_with_panels
+    window = make()
+    window.show()
     assert window._top_split.count() == 4
     assert window._top_split.widget(2) is side.widget()
     tabs = window._timeline_panel
-    assert tabs.widget(tabs.count() - 1) is timeline.widget()  # after the built-in tabs
-    assert tabs.indexOf(window._epoch) < tabs.count() - 1
+    index = tabs.indexOf(timeline.widget())
+    assert index == tabs.count() - 1  # after the built-in tabs
+    assert tabs.indexOf(window._epoch) < index
     assert window._top_key() == "review/top4"
+    # Plugin panels start hidden and idle.
+    assert not side.widget().isVisible() and not tabs.isTabVisible(index)
     window._set_frame(7)
-    assert ("frame", 7) in side.calls and ("frame", 7) in timeline.calls
+    assert side.calls == [] and timeline.calls == []
+
+
+def test_view_menu_shows_panels_and_remembers(window_with_panels):
+    make, side, timeline = window_with_panels
+    window = make()
+    window.show()
+    actions = window._view_actions
+    assert {"sessions", "inspector", "timeline", "plugin/Side", "plugin/Trace"} <= set(actions)
+    window._set_frame(5)
+    actions["plugin/Side"].setChecked(True)
+    actions["plugin/Trace"].setChecked(True)
+    assert side.widget().isVisible() and side.calls[-1] == ("frame", 5)
+    tabs = window._timeline_panel
+    assert tabs.isTabVisible(tabs.indexOf(timeline.widget()))
+    assert window._top_split.sizes()[2] > 0
+    actions["inspector"].setChecked(False)
+    assert not window._inspector.isVisible()
+
+    window.close()
+    again = make()
+    again.show()
+    assert again._view_actions["plugin/Side"].isChecked()
+    assert side.widget().isVisible() and not again._inspector.isVisible()
+    assert again._top_split.sizes()[2] > 0
+    again._view_actions["plugin/Trace"].setChecked(False)
+    assert not again._timeline_panel.isTabVisible(again._timeline_panel.count() - 1)
