@@ -52,7 +52,7 @@ In the Arduino IDE:
    XIAO's reset button so it starts its bootloader, then upload again.
 
 **Check it before wiring the loads.** Open the serial monitor at 115200 baud.
-It should print `# VapePod 0.3.0, max puff 10000 ms`. Type `pump,100` and
+It should print `# VapePod 0.3.1, max puff 10000 ms`. Type `pump,100` and
 press Enter: it answers `atom=0 pump=100`. (Close the monitor, or send `off`:
 three seconds without a command turns it all off again.) Then use a phone BLE app
 (e.g. nRF Connect) to connect to `VapePod` and write `puff,1000` to the command
@@ -73,13 +73,13 @@ so GLIDER can't tell the two apart.
 |---|---|
 | USB-C | Power (and, wired, the commands): the Pi, or any USB supply for Bluetooth-only use |
 | GND | Both MOSFET modules' signal GND |
-| D0 | Atomizer MOSFET module, signal input (IN / PWM / TRIG) |
-| D1 | Pump MOSFET module, signal input |
+| D6 | Atomizer MOSFET module, signal input (IN / PWM / TRIG) |
+| D5 | Pump MOSFET module, signal input |
 
 On an ESP32 DevKitC the same go to its USB port, GND, GPIO25 (atomizer) and
 GPIO26 (pump).
 
-- **Signal current:** the firmware puts D0 and D1 in high-drive mode. That is
+- **Signal current:** the firmware puts D5 and D6 in high-drive mode. That is
   plenty for a module whose input goes straight to a MOSFET gate. If a module
   has an optocoupler input and its LED stays dim or the output won't switch
   fully, it needs more current than the pin gives: drive it through a small

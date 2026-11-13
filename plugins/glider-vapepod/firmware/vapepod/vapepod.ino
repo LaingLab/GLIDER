@@ -29,7 +29,7 @@
 #include <Arduino.h>
 #include <bluefruit.h>
 
-#define FW_VERSION "0.3.0"
+#define FW_VERSION "0.3.1"
 
 // The advertised name. GLIDER finds the pod by it, so give each pod its own
 // name if you build more than one ("VapePod-2", ...).
@@ -41,8 +41,8 @@ static const char *COMMAND_UUID = "70c4957d-11e9-41a8-83fc-8783938e1e91";  // wr
 static const char *STATUS_UUID = "70c4957d-11e9-41a8-83fc-8783938e1e92";   // read, notify
 
 // To the MOSFET modules' signal inputs.
-static const uint8_t ATOM_PIN = D0;
-static const uint8_t PUMP_PIN = D1;
+static const uint8_t ATOM_PIN = D6;
+static const uint8_t PUMP_PIN = D5;
 
 // The longest puff the pod will run. GLIDER checks against the same figure
 // (MAX_PUFF_MS in device.py); change both together.
