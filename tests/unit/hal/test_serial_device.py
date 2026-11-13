@@ -460,3 +460,88 @@ def test_exported_from_devices_package():
     from glider.hal import devices
 
     assert devices.GenericSerialDevice is GenericSerialDevice
+
+
+# --- a port that goes away ----------------------------------------------------
+
+
+class _FakeSerialError(OSError):
+    """pyserial's SerialException is an IOError (OSError) subclass."""
+
+
+async def _wait_for_reader_exit(device, timeout=3.0):
+    deadline = time.perf_counter() + timeout
+    while device._thread is not None and device._thread.is_alive():
+        assert time.perf_counter() < deadline, "reader thread never stopped"
+        await asyncio.sleep(0.01)
+
+
+async def test_reader_stops_once_when_the_usb_device_disconnects(fake_serial, caplog):
+    # What pyserial raises on Linux, forever, after a USB serial device goes.
+    _module, ser = fake_serial
+    ser.read_until.side_effect = _FakeSerialError(
+        "device reports readiness to read but returned no data "
+        "(device disconnected or multiple access on port?)"
+    )
+    with caplog.at_level("DEBUG", logger="glider.hal.devices.serial_device"):
+        device = await _initialized(settings={"stream": True})
+        await _wait_for_reader_exit(device)
+    assert ser.read_until.call_count == 1
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1 and "is gone" in errors[0].getMessage()
+    await device.shutdown()
+
+
+async def test_reader_stops_on_eio(fake_serial):
+    import errno as _errno
+
+    _module, ser = fake_serial
+    ser.read_until.side_effect = OSError(_errno.EIO, "Input/output error")
+    device = await _initialized(settings={"stream": True})
+    await _wait_for_reader_exit(device)
+    assert ser.read_until.call_count == 1
+    await device.shutdown()
+
+
+async def test_reader_gives_up_after_repeated_unknown_errors(fake_serial, caplog, monkeypatch):
+    import glider.hal.devices.serial_device as serial_device
+
+    monkeypatch.setattr(serial_device, "READER_GIVE_UP", 3)
+    _module, ser = fake_serial
+    ser.read_until.side_effect = RuntimeError("glitch")
+    with caplog.at_level("DEBUG", logger="glider.hal.devices.serial_device"):
+        device = await _initialized(settings={"stream": True})
+        await _wait_for_reader_exit(device)
+    assert ser.read_until.call_count == 3
+    # One traceback, then quiet repeats, then one "gone".
+    tracebacks = [r for r in caplog.records if r.exc_info]
+    assert len(tracebacks) == 1
+    assert sum("is gone" in r.getMessage() for r in caplog.records) == 1
+    await device.shutdown()
+
+
+async def test_a_glitch_between_good_lines_does_not_stop_the_reader(fake_serial, monkeypatch):
+    import glider.hal.devices.serial_device as serial_device
+
+    monkeypatch.setattr(serial_device, "READER_GIVE_UP", 2)
+    _module, ser = fake_serial
+    # error, line, error, line, ...: never two errors in a row.
+    script = [RuntimeError("glitch"), b"a\n"] * 3
+
+    def _read_until(*_a, **_k):
+        if script:
+            item = script.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+        time.sleep(0.005)
+        return b""
+
+    ser.read_until.side_effect = _read_until
+    device = await _initialized(settings={"stream": True})
+    deadline = time.perf_counter() + 3.0
+    while script:
+        assert time.perf_counter() < deadline
+        await asyncio.sleep(0.01)
+    assert device._thread is not None and device._thread.is_alive()
+    await device.shutdown()

@@ -21,6 +21,7 @@ Cross-platform via pyserial (Windows COMx, macOS /dev/cu.*, Linux /dev/tty*).
 """
 
 import asyncio
+import errno
 import logging
 import threading
 import time
@@ -54,6 +55,25 @@ MAX_READER_TIMEOUT_S = 1.0
 # A write that cannot drain (flow control stalled, device gone) raises after
 # this long instead of blocking the port lock (and thus shutdown) forever.
 WRITE_TIMEOUT_S = 1.0
+
+# The streaming reader stops after this many read errors in a row (0.5 s
+# apart), on the grounds that the port has gone; see _reader_loop.
+READER_GIVE_UP = 5
+
+# errno values a read fails with once the device behind the port has gone.
+_GONE_ERRNOS = {errno.EIO, errno.ENXIO, errno.ENODEV, errno.EBADF}
+
+
+def _port_gone(error: BaseException) -> bool:
+    """Whether a read error means the device left, rather than a glitch.
+
+    pyserial on Linux/macOS raises ``SerialException("device reports readiness
+    to read but returned no data (device disconnected ...)")`` with no errno
+    once a USB serial device goes; a read can also fail with EIO.
+    """
+    if isinstance(error, OSError) and error.errno in _GONE_ERRNOS:
+        return True
+    return "disconnected" in str(error).lower()
 
 
 class GenericSerialDevice(BaseDevice):
@@ -387,19 +407,42 @@ class GenericSerialDevice(BaseDevice):
         port timeout, so it re-checks the stop event at least every ``timeout``
         seconds). Once the stop event is set, serial errors are expected
         (shutdown may have closed the handle) and the loop exits quietly.
+
+        A port that has gone (USB cable pulled, board reset or reflashed) never
+        comes back on the same handle: Linux reports it readable forever and
+        every read fails. So the first error is logged with its traceback, the
+        repeats quietly, and once the port is plainly gone -- a known
+        "disconnected" error, or READER_GIVE_UP errors in a row -- the reader
+        stops with one error saying to reconnect. The cache then goes stale, so
+        ``read`` raises rather than returning the last value forever.
         """
         term = self._terminator.encode(self._encoding)
         resync = False  # True after a partial frame: its tail is still buffered
+        failures = 0
         while not stop_event.is_set():
             try:
                 raw = ser.read_until(term)
-            except Exception:
+            except Exception as e:
                 if stop_event.is_set():
                     break  # expected: shutdown closed the handle
-                logger.exception("GenericSerial %s: reader error", self._name)
+                failures += 1
+                if _port_gone(e) or failures >= READER_GIVE_UP:
+                    logger.error(
+                        "GenericSerial %s: port %s is gone (%s); reader stopped. "
+                        "Reconnect the device once it is back.",
+                        self._name,
+                        self._port,
+                        e,
+                    )
+                    break
+                if failures == 1:
+                    logger.exception("GenericSerial %s: reader error", self._name)
+                else:
+                    logger.debug("GenericSerial %s: reader error again: %s", self._name, e)
                 if stop_event.wait(0.5):
                     break
                 continue
+            failures = 0
             if not raw:
                 continue  # timed out with no data; loop re-checks the stop event
             if not raw.endswith(term):
