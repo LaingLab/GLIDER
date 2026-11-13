@@ -192,7 +192,7 @@ async def test_puff_rejects_a_bad_duration(fake_bleak, bad):
     assert fake_bleak["client"].written == []
 
 
-@pytest.mark.parametrize("bad", [0, MAX_ATOM_PERCENT + 1, 50, 100, 10.5, "max"])
+@pytest.mark.parametrize("bad", [0, MAX_ATOM_PERCENT + 1, 75, 100, 10.5, "max"])
 async def test_puff_rejects_a_bad_power(fake_bleak, bad):
     device = await _initialized()
     with pytest.raises(ValueError, match="power"):

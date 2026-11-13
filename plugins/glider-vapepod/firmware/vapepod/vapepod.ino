@@ -29,7 +29,7 @@
 #include <Arduino.h>
 #include <bluefruit.h>
 
-#define FW_VERSION "0.3.3"
+#define FW_VERSION "0.3.4"
 
 // The advertised name. GLIDER finds the pod by it, so give each pod its own
 // name if you build more than one ("VapePod-2", ...).
@@ -54,7 +54,7 @@ static const uint32_t MAX_PUFF_MS = 10000;
 // not turned down, and a puff with no power given runs at it. GLIDER checks
 // against the same figure (MAX_ATOM_PERCENT in device.py); change both
 // together.
-static const long MAX_ATOM_PERCENT = 20;
+static const long MAX_ATOM_PERCENT = 50;
 
 // 100 % is a solid output with no switching at all. Anything less switches at
 // PWM_HZ: slow enough for an optocoupled MOSFET module, but an audible whine

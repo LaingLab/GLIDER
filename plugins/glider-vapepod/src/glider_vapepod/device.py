@@ -63,7 +63,7 @@ MAX_PUFF_MS = 10_000
 
 # The most the atomizer is ever driven, as a duty cycle in % (MAX_ATOM_PERCENT
 # in the firmware, which refuses more). Full power burns the coils out.
-MAX_ATOM_PERCENT = 20
+MAX_ATOM_PERCENT = 50
 
 # How long the courtesy "off" on shutdown may take. HardwareManager bounds each
 # device.shutdown() at DEVICE_IO_TIMEOUT_S (2.0s), so this has to leave room for

@@ -41,7 +41,7 @@ def test_has_only_exec_ports():
 
 def test_defaults_are_a_usable_puff():
     node = VapePodNode()
-    assert (node.mode, node.duration_ms, node.power) == ("puff", 3000, 20)
+    assert (node.mode, node.duration_ms, node.power) == ("puff", 3000, 50)
 
 
 @pytest.mark.parametrize(
