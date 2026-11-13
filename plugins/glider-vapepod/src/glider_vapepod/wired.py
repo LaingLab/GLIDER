@@ -174,6 +174,19 @@ class VapePodUSBDevice(GenericSerialDevice):
 
     # --- wire ---
 
+    async def write(self, *args: Any) -> None:
+        """Send one command line, logged so a session log shows what the pod was told.
+
+        The heartbeat bypasses this (it writes from its own thread), so the log
+        carries commands only.
+        """
+        logger.info(
+            "VapePod USB %s: sending %s",
+            self._name,
+            ",".join(str(a) for a in args if a is not None),
+        )
+        await super().write(*args)
+
     def _blocking_write(self, ser: Any, buf: bytes) -> None:
         # An instance method here (static in the base, called through self), so
         # it can take the lock the heartbeat thread shares.

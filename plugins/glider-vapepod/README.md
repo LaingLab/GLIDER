@@ -52,7 +52,7 @@ In the Arduino IDE:
    XIAO's reset button so it starts its bootloader, then upload again.
 
 **Check it before wiring the loads.** Open the serial monitor at 115200 baud.
-It should print `# VapePod 0.3.1, max puff 10000 ms`. Type `pump,100` and
+It should print `# VapePod 0.3.2, max puff 10000 ms`. Type `pump,100` and
 press Enter: it answers `atom=0 pump=100`. (Close the monitor, or send `off`:
 three seconds without a command turns it all off again.) Then use a phone BLE app
 (e.g. nRF Connect) to connect to `VapePod` and write `puff,1000` to the command
