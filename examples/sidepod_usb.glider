@@ -1,0 +1,227 @@
+{
+  "metadata": {
+    "id": "3487f45c-9dea-4ca8-a841-e986267315d1",
+    "name": "Side pod (USB)",
+    "description": "Vape box side pod driven over USB (VapePodUSB, glider-vapepod plugin): pump on, a 3 s puff, then all off. Port left blank so GLIDER finds the XIAO.",
+    "author": "",
+    "version": "1.0.0",
+    "created_at": "2026-11-13T12:02:44.986462",
+    "modified_at": "2026-11-13T12:02:44.986462",
+    "glider_version": "1.0.0",
+    "protocol": "",
+    "experiment_type": "",
+    "experimenter": "",
+    "lab": "",
+    "project": "",
+    "notes": "",
+    "recording_directory": "",
+    "subjects": [],
+    "active_subject_id": null,
+    "run_fields": []
+  },
+  "hardware": {
+    "boards": [
+      {
+        "id": "xiao",
+        "driver_type": "serial",
+        "port": null,
+        "board_type": "uno",
+        "auto_reconnect": false,
+        "settings": {}
+      }
+    ],
+    "devices": [
+      {
+        "id": "side_pod",
+        "device_type": "VapePodUSB",
+        "name": "side_pod",
+        "board_id": "xiao",
+        "pins": {},
+        "settings": {
+          "port": ""
+        }
+      }
+    ]
+  },
+  "flow": {
+    "nodes": [
+      {
+        "id": "start",
+        "node_type": "StartExperiment",
+        "position": [
+          0,
+          0
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "pump_on",
+        "node_type": "VapePod",
+        "position": [
+          250,
+          0
+        ],
+        "state": {
+          "mode": "pump_on",
+          "duration_ms": 3000,
+          "power": 100,
+          "pump_percent": 100
+        },
+        "device_id": "side_pod",
+        "visible_in_runner": false
+      },
+      {
+        "id": "prime",
+        "node_type": "Delay",
+        "position": [
+          500,
+          0
+        ],
+        "state": {
+          "duration": 2.0,
+          "unit": "seconds"
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "puff",
+        "node_type": "VapePod",
+        "position": [
+          750,
+          0
+        ],
+        "state": {
+          "mode": "puff",
+          "duration_ms": 3000,
+          "power": 100,
+          "pump_percent": 100
+        },
+        "device_id": "side_pod",
+        "visible_in_runner": false
+      },
+      {
+        "id": "hold_puff",
+        "node_type": "Delay",
+        "position": [
+          1000,
+          0
+        ],
+        "state": {
+          "duration": 3.0,
+          "unit": "seconds"
+        },
+        "device_id": null,
+        "visible_in_runner": false
+      },
+      {
+        "id": "all_off",
+        "node_type": "VapePod",
+        "position": [
+          1250,
+          0
+        ],
+        "state": {
+          "mode": "off",
+          "duration_ms": 3000,
+          "power": 100,
+          "pump_percent": 100
+        },
+        "device_id": "side_pod",
+        "visible_in_runner": false
+      },
+      {
+        "id": "end",
+        "node_type": "EndExperiment",
+        "position": [
+          1500,
+          0
+        ],
+        "state": {},
+        "device_id": null,
+        "visible_in_runner": false
+      }
+    ],
+    "connections": [
+      {
+        "id": "start_to_pump_on",
+        "from_node": "start",
+        "from_output": 0,
+        "to_node": "pump_on",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "pump_on_to_prime",
+        "from_node": "pump_on",
+        "from_output": 0,
+        "to_node": "prime",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "prime_to_puff",
+        "from_node": "prime",
+        "from_output": 0,
+        "to_node": "puff",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "puff_to_hold_puff",
+        "from_node": "puff",
+        "from_output": 0,
+        "to_node": "hold_puff",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "hold_puff_to_all_off",
+        "from_node": "hold_puff",
+        "from_output": 0,
+        "to_node": "all_off",
+        "to_input": 0,
+        "connection_type": "exec"
+      },
+      {
+        "id": "all_off_to_end",
+        "from_node": "all_off",
+        "from_output": 0,
+        "to_node": "end",
+        "to_input": 0,
+        "connection_type": "exec"
+      }
+    ]
+  },
+  "dashboard": {
+    "widgets": [],
+    "layout": "vertical",
+    "columns": 1
+  },
+  "camera": {
+    "camera_index": 0,
+    "resolution": [
+      640,
+      480
+    ],
+    "fps": 30,
+    "exposure": -1,
+    "brightness": 128,
+    "contrast": 128,
+    "cv_enabled": true,
+    "cv_backend": "background_subtraction",
+    "confidence_threshold": 0.5,
+    "tracking_enabled": true,
+    "max_disappeared": 50,
+    "video_recording_enabled": true,
+    "audio_device_name": null,
+    "audio_device_index": null
+  },
+  "zones": {
+    "zones": [],
+    "config_width": 0,
+    "config_height": 0
+  }
+}
