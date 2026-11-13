@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glider-vapepod"
+version = "0.1.0"
+description = "Vape box side pod (XIAO nRF52840 or ESP32, over BLE or USB) support for GLIDER"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11,<3.14"
+authors = [
+    {name = "LaingLab"}
+]
+keywords = ["vape", "glider", "bluetooth", "ble", "nrf52840", "esp32", "vapor"]
+classifiers = [
+    # Alpha: the driver is exercised against a fake bleak client and the
+    # firmware has only been compiled. Promote once a pod has run a session.
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    # bleak only; GLIDER itself is the host application, not a dependency
+    # (see glider-maimu's pyproject for why).
+    "bleak>=0.21",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+# One module-style entry point, so PluginManager reads DEVICE_TYPES/NODE_TYPES
+# and registers both as `VapePod`. A class-style entry point would register
+# under the entry point's own (lowercase) name instead; glider-maimu's
+# pyproject has the story.
+[project.entry-points."glider.device"]
+glider_vapepod = "glider_vapepod"
+
+[project.urls]
+Homepage = "https://github.com/LaingLab/glider"
+Repository = "https://github.com/LaingLab/glider"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "real_registration: exercises the installed entry points; skips the suite's hand-registration fixture",
+]

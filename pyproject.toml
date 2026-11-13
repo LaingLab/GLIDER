@@ -201,6 +201,7 @@ testpaths = [
     "tests/integration",
     "plugins/glider-harp/tests",
     "plugins/glider-maimu/tests",
+    "plugins/glider-vapepod/tests",
     "plugins/glider-sleap/tests",
     "plugins/glider-dlc/tests",
 ]
@@ -252,6 +253,7 @@ src = [
     "src",
     "plugins/glider-harp/src",
     "plugins/glider-maimu/src",
+    "plugins/glider-vapepod/src",
     "plugins/glider-sleap/src",
     "plugins/glider-dlc/src",
 ]

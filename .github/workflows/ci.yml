@@ -128,6 +128,7 @@ jobs:
         run: |
           uv pip install -e ./plugins/glider-harp
           uv pip install -e ./plugins/glider-maimu
+          uv pip install -e ./plugins/glider-vapepod
           # --no-deps for glider-sleap: its dependency is TensorFlow, a
           # several-hundred-megabyte wheel downloaded on every job of a
           # nine-cell matrix to be imported by exactly one test, which
@@ -165,12 +166,14 @@ jobs:
         # they match what `testpaths` in pyproject.toml lists.
         run: |
           uv run --no-sync pytest tests/ plugins/glider-harp/tests/ \
-            plugins/glider-maimu/tests/ plugins/glider-sleap/tests/ \
+            plugins/glider-maimu/tests/ plugins/glider-vapepod/tests/ \
+            plugins/glider-sleap/tests/ \
             plugins/glider-dlc/tests/ plugins/glider-sleap-nn/tests/ \
             -v -m "not slow" \
             --cov=glider \
             --cov=glider_harp \
             --cov=glider_maimu \
+            --cov=glider_vapepod \
             --cov=glider_sleap \
             --cov=glider_dlc \
             --cov=glider_sleap_nn \
