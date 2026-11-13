@@ -115,6 +115,7 @@ class VapePodUSBDevice(GenericSerialDevice):
         self._write_lock = threading.Lock()
         self._heartbeat: threading.Thread | None = None
         self._heartbeat_stop = threading.Event()
+        self._last_status: str | None = None  # touched by the reader thread only
         # A blank port means "find it", every time: a replugged XIAO can come
         # back as a different /dev/ttyACM*.
         self._find_port = not self._port
@@ -202,6 +203,11 @@ class VapePodUSBDevice(GenericSerialDevice):
         """
         text = super()._decode(raw)
         if text.startswith(STATUS_PREFIX):
+            # Log each change, not the once-a-second repeats, so a session log
+            # shows what the pod actually did next to what it was told.
+            if text != self._last_status:
+                logger.info("VapePod USB %s: pod status: %s", self._name, text)
+                self._last_status = text
             return text
         if text.startswith(NOTE_PREFIX):
             message = text.lstrip("#").strip()

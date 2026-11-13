@@ -367,3 +367,15 @@ async def test_shutdown_survives_a_dead_port(pod):
     pod["write_error"] = OSError("gone")
     await dev.shutdown()  # must not raise
     assert not pod["port"].is_open
+
+
+async def test_status_changes_are_logged_once_each(device, pod, caplog):
+    with caplog.at_level(logging.INFO, logger="glider_vapepod.wired"):
+        await device.pump(40)
+        await device.pump(40)  # same status again: not logged twice
+        deadline = time.perf_counter() + 1.0
+        while "pump=40" not in caplog.text:
+            assert time.perf_counter() < deadline
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
+    assert caplog.text.count("pod status: atom=0 pump=40") == 1
