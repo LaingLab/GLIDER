@@ -14,6 +14,7 @@ from glider_vapepod.device import (
     DEFAULT_NAME,
     DEFAULT_SERVICE_UUID,
     DEFAULT_STATUS_CHAR_UUID,
+    MAX_ATOM_PERCENT,
     MAX_PUFF_MS,
     VapePodDevice,
 )
@@ -129,27 +130,33 @@ async def test_a_blank_address_finds_the_pod_by_its_default_name(fake_bleak):
 
 async def test_puff_writes_duration_and_power(fake_bleak):
     device = await _initialized()
-    await device.puff(3000, 80)
-    assert fake_bleak["client"].written == [b"puff,3000,80"]
+    await device.puff(3000, 15)
+    assert fake_bleak["client"].written == [b"puff,3000,15"]
 
 
-async def test_puff_defaults_to_full_power(fake_bleak):
+async def test_puff_defaults_to_the_power_cap(fake_bleak):
     device = await _initialized()
     await device.puff(2000)
-    assert fake_bleak["client"].written == [b"puff,2000,100"]
+    assert fake_bleak["client"].written == [f"puff,2000,{MAX_ATOM_PERCENT}".encode()]
+
+
+async def test_the_strongest_puff_is_the_cap(fake_bleak):
+    device = await _initialized()
+    await device.puff(1000, MAX_ATOM_PERCENT)
+    assert fake_bleak["client"].written == [f"puff,1000,{MAX_ATOM_PERCENT}".encode()]
 
 
 async def test_puff_writes_whole_numbers_from_floats(fake_bleak):
     """Spin boxes and math nodes deliver floats; the firmware refuses "3000.0"."""
     device = await _initialized()
-    await device.puff(3000.0, 50.0)
-    assert fake_bleak["client"].written == [b"puff,3000,50"]
+    await device.puff(3000.0, 10.0)
+    assert fake_bleak["client"].written == [b"puff,3000,10"]
 
 
 async def test_the_longest_puff_is_allowed(fake_bleak):
     device = await _initialized()
     await device.puff(MAX_PUFF_MS)
-    assert fake_bleak["client"].written == [f"puff,{MAX_PUFF_MS},100".encode()]
+    assert fake_bleak["client"].written == [f"puff,{MAX_PUFF_MS},{MAX_ATOM_PERCENT}".encode()]
 
 
 @pytest.mark.parametrize(
@@ -185,7 +192,7 @@ async def test_puff_rejects_a_bad_duration(fake_bleak, bad):
     assert fake_bleak["client"].written == []
 
 
-@pytest.mark.parametrize("bad", [0, 101, 50.5, "max"])
+@pytest.mark.parametrize("bad", [0, MAX_ATOM_PERCENT + 1, 50, 100, 10.5, "max"])
 async def test_puff_rejects_a_bad_power(fake_bleak, bad):
     device = await _initialized()
     with pytest.raises(ValueError, match="power"):
@@ -204,8 +211,8 @@ async def test_pump_rejects_a_bad_speed(fake_bleak, bad):
 async def test_execute_action_routes_to_puff(fake_bleak):
     """The nodes and the control panel call through execute_action."""
     device = await _initialized()
-    await device.execute_action("puff", 2000, 50)
-    assert fake_bleak["client"].written == [b"puff,2000,50"]
+    await device.execute_action("puff", 2000, 12)
+    assert fake_bleak["client"].written == [b"puff,2000,12"]
 
 
 async def test_read_returns_the_pods_own_status(fake_bleak):
@@ -258,3 +265,23 @@ async def test_shutdown_before_initialize_is_safe_and_quiet(caplog):
         await device.shutdown()
     assert not device.is_initialized
     assert caplog.records == []
+
+
+@pytest.mark.parametrize("sketch", SKETCHES, ids=lambda p: p.parent.name)
+def test_the_firmware_caps_the_atomizer_at_the_same_percent(sketch):
+    """Both sketches refuse, and clamp, above the figure device.py checks."""
+    source = sketch.read_text(encoding="utf-8")
+    cap = re.search(r"MAX_ATOM_PERCENT = (\d+);", source)
+    assert cap is not None and int(cap.group(1)) == MAX_ATOM_PERCENT
+    assert "parseNumber(fields[2], 1, MAX_ATOM_PERCENT, b)" in source
+    assert "long a = 0, b = MAX_ATOM_PERCENT;" in source  # the default puff power
+    assert "&out == &atom && percent > MAX_ATOM_PERCENT" in source  # setOutput clamp
+
+
+def test_the_panel_offers_no_power_above_the_cap():
+    power = VapePodDevice.ACTION_ARGS_SCHEMA["puff"][1]
+    assert (power["key"], power["max"], power["default"]) == (
+        "power",
+        MAX_ATOM_PERCENT,
+        MAX_ATOM_PERCENT,
+    )

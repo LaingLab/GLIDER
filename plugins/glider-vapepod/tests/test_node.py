@@ -41,13 +41,13 @@ def test_has_only_exec_ports():
 
 def test_defaults_are_a_usable_puff():
     node = VapePodNode()
-    assert (node.mode, node.duration_ms, node.power) == ("puff", 3000, 100)
+    assert (node.mode, node.duration_ms, node.power) == ("puff", 3000, 20)
 
 
 @pytest.mark.parametrize(
     "mode, props, expected",
     [
-        ("puff", {"duration_ms": 2500, "power": 70}, ("puff", (2500, 70))),
+        ("puff", {"duration_ms": 2500, "power": 15}, ("puff", (2500, 15))),
         ("pump_on", {"pump_percent": 80}, ("pump", (80,))),
         ("pump_off", {}, ("pump_off", ())),
         ("off", {}, ("off", ())),

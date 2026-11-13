@@ -14,7 +14,7 @@ from glider.nodes.base_node import (
     PortDefinition,
     PortType,
 )
-from glider_vapepod.device import MAX_PUFF_MS
+from glider_vapepod.device import MAX_ATOM_PERCENT, MAX_PUFF_MS
 
 # Mode -> the device action it calls.
 MODE_PUFF = "puff"
@@ -24,7 +24,7 @@ MODE_OFF = "off"
 MODES = (MODE_PUFF, MODE_PUMP_ON, MODE_PUMP_OFF, MODE_OFF)
 
 DEFAULT_DURATION_MS = 3000
-DEFAULT_POWER = 100
+DEFAULT_POWER = MAX_ATOM_PERCENT
 DEFAULT_PUMP_PERCENT = 100
 
 
@@ -72,8 +72,11 @@ class VapePodNode(HardwareNode):
             "type": "int",
             "default": DEFAULT_POWER,
             "min": 1,
-            "max": 100,
-            "help": "Puff mode only. Atomizer duty cycle; 100 is the full 12 V.",
+            "max": MAX_ATOM_PERCENT,
+            "help": (
+                f"Puff mode only. Atomizer duty cycle, at most {MAX_ATOM_PERCENT} %: "
+                "more burns the coils out."
+            ),
         },
         {
             "key": "pump_percent",

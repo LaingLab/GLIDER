@@ -9,7 +9,8 @@ peripheral with two characteristics:
 
       off                     atomizer and pump off
       pump,<percent>          pump at 0-100 %; stays until changed
-      puff,<ms>,<percent>     atomizer for ms milliseconds at percent, then off
+      puff,<ms>,<percent>     atomizer for ms milliseconds at percent (at most
+                              MAX_ATOM_PERCENT), then off
       puff,0                  stop a puff early
 
 - **status** (read, notify): ``atom=<percent> pump=<percent>``, pushed on every
@@ -60,6 +61,10 @@ DEFAULT_STATUS_CHAR_UUID = "70c4957d-11e9-41a8-83fc-8783938e1e92"
 # a legible node error beats a flow that thinks it dosed the animal.
 MAX_PUFF_MS = 10_000
 
+# The most the atomizer is ever driven, as a duty cycle in % (MAX_ATOM_PERCENT
+# in the firmware, which refuses more). Full power burns the coils out.
+MAX_ATOM_PERCENT = 20
+
 # How long the courtesy "off" on shutdown may take. HardwareManager bounds each
 # device.shutdown() at DEVICE_IO_TIMEOUT_S (2.0s), so this has to leave room for
 # the disconnect that follows it.
@@ -87,10 +92,13 @@ ACTION_ARGS_SCHEMA = {
             "key": "power",
             "label": "Power (%)",
             "type": "int",
-            "default": 100,
+            "default": MAX_ATOM_PERCENT,
             "min": 1,
-            "max": 100,
-            "help": "Atomizer duty cycle. 100 is the full 12 V.",
+            "max": MAX_ATOM_PERCENT,
+            "help": (
+                f"Atomizer duty cycle, at most {MAX_ATOM_PERCENT} %: more burns the "
+                "coils out, and the pod refuses it."
+            ),
         },
     ],
     "pump": [
@@ -220,7 +228,7 @@ class VapePodDevice(BLEDevice):
 
     # --- actions ---
 
-    async def puff(self, duration_ms: Any, power: Any = 100) -> None:
+    async def puff(self, duration_ms: Any, power: Any = MAX_ATOM_PERCENT) -> None:
         """Run the atomizer for ``duration_ms`` at ``power`` %, then stop.
 
         The pod times the puff itself, so this returns as soon as the command
@@ -230,7 +238,7 @@ class VapePodDevice(BLEDevice):
         arrives seconds late, or not at all, must show up as an error.
         """
         ms = self._whole_number(duration_ms, "duration_ms", 1, MAX_PUFF_MS)
-        percent = self._whole_number(power, "power", 1, 100)
+        percent = self._whole_number(power, "power", 1, MAX_ATOM_PERCENT)
         async with self._state_lock:
             if self._link_is_down():
                 # Normally already running; this covers a drop no callback reported.

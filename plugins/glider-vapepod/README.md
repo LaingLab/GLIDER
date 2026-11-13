@@ -20,6 +20,8 @@ the coil heating:
   moment a wired host **closes the port or goes quiet for 3 s**
   (`HOST_TIMEOUT_MS`). Losing either link turns everything off, so drive a pod
   over one link at a time.
+- The atomizer never runs above **20 % duty** (`MAX_ATOM_PERCENT`): full power
+  burns the coils out. A puff asking for more is refused, not turned down.
 - The atomizer only runs for a stated time, **at most 10 s** (`MAX_PUFF_MS`),
   then turns itself off. There is no "atomizer on" command. A longer puff is
   refused, not shortened.
@@ -52,7 +54,7 @@ In the Arduino IDE:
    XIAO's reset button so it starts its bootloader, then upload again.
 
 **Check it before wiring the loads.** Open the serial monitor at 115200 baud.
-It should print `# VapePod 0.3.2, max puff 10000 ms`. Type `pump,100` and
+It should print `# VapePod 0.3.3, max puff 10000 ms`. Type `pump,100` and
 press Enter: it answers `atom=0 pump=100`. (Close the monitor, or send `off`:
 three seconds without a command turns it all off again.) Then use a phone BLE app
 (e.g. nRF Connect) to connect to `VapePod` and write `puff,1000` to the command
@@ -146,7 +148,7 @@ Commands are case-insensitive and their fields are comma-separated.
 |---|---|
 | `off` | Atomizer and pump off |
 | `pump,<percent>` | Pump at 0-100 %. It stays at that speed until changed. 100 is a solid output. Below 100 it switches at 1 kHz, which makes the pump whine. |
-| `puff,<ms>[,<percent>]` | Atomizer at `percent` (default 100) for `ms` (1-10000), then off. A new puff replaces one already running. |
+| `puff,<ms>[,<percent>]` | Atomizer at `percent` (1-20, default 20) for `ms` (1-10000), then off. A new puff replaces one already running. |
 | `puff,0` | Stop a puff early |
 | `status` | Send the status now |
 
@@ -182,7 +184,7 @@ of its outputs (`atom=100 pump=100`) alongside each sample.
 
 | Action | Arguments | Notes |
 |---|---|---|
-| `puff` | duration_ms, power (%) | Returns once the command lands; the pod times the puff |
+| `puff` | duration_ms, power (%, at most 20) | Returns once the command lands; the pod times the puff |
 | `pump_on` | | Full speed |
 | `pump` | percent | 0 is off |
 | `pump_off` | | |

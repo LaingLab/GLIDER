@@ -34,7 +34,7 @@
 #error "VapePod needs the ESP32 Arduino core 2.x or 3.x (core 4 changed the BLE API). Install esp32 3.3.x in the Boards Manager."
 #endif
 
-#define FW_VERSION "0.2.0"
+#define FW_VERSION "0.2.1"
 
 // The advertised name. GLIDER finds the pod by it, so give each pod its own
 // name if you build more than one ("VapePod-2", ...).
@@ -53,6 +53,13 @@ static const uint8_t PUMP_PIN = 26;
 // The longest puff the pod will run. GLIDER checks against the same figure
 // (MAX_PUFF_MS in device.py); change both together.
 static const uint32_t MAX_PUFF_MS = 10000;
+
+// The most the atomizer is ever driven, as a duty cycle in %. Full power
+// (100 %, the whole 12 V) burns the coils out. A puff above it is refused,
+// not turned down, and a puff with no power given runs at it. GLIDER checks
+// against the same figure (MAX_ATOM_PERCENT in device.py); change both
+// together.
+static const long MAX_ATOM_PERCENT = 20;
 
 // 100 % is a solid output with no switching at all. Anything less switches at
 // PWM_HZ: slow enough for an optocoupled MOSFET module, but an audible whine
@@ -151,6 +158,10 @@ static void note(const char *format, ...) {
 }
 
 static void setOutput(Output &out, uint8_t percent) {
+  // Second line of defence: the coil never sees more, whatever asked.
+  if (&out == &atom && percent > MAX_ATOM_PERCENT) {
+    percent = MAX_ATOM_PERCENT;
+  }
   out.percent = percent;
   pwmWrite(out.pin, out.channel, (uint32_t)percent * PWM_MAX / 100);
 }
@@ -196,7 +207,8 @@ static bool parseNumber(const char *field, long lo, long hi, long &out) {
 //   off                      atomizer and pump off
 //   pump,<percent>           pump at 0-100 %; stays until changed
 //   puff,<ms>[,<percent>]    atomizer for ms (1..MAX_PUFF_MS) at percent
-//                            (default 100), then off; puff,0 stops a puff
+//                            (1..MAX_ATOM_PERCENT, default MAX_ATOM_PERCENT),
+//                            then off; puff,0 stops a puff
 //   status                   send the status now
 static bool runCommand(char *text) {
   for (char *c = text; *c; ++c) {
@@ -212,7 +224,7 @@ static bool runCommand(char *text) {
     return false;
   }
   const char *name = fields[0];
-  long a = 0, b = 100;
+  long a = 0, b = MAX_ATOM_PERCENT;
 
   if (strcmp(name, "off") == 0 && count == 1) {
     allOff();
@@ -220,7 +232,7 @@ static bool runCommand(char *text) {
     setOutput(pump, a);
   } else if (strcmp(name, "puff") == 0 && (count == 2 || count == 3) &&
              parseNumber(fields[1], 0, MAX_PUFF_MS, a) &&
-             (count == 2 || parseNumber(fields[2], 1, 100, b))) {
+             (count == 2 || parseNumber(fields[2], 1, MAX_ATOM_PERCENT, b))) {
     if (a == 0) {
       stopPuff();
     } else {

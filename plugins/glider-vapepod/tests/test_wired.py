@@ -18,7 +18,12 @@ import pytest
 
 import glider_vapepod.wired as wired
 from glider.hal.base_device import DeviceConfig
-from glider_vapepod.device import ACTION_ARGS_SCHEMA, MAX_PUFF_MS, VapePodDevice
+from glider_vapepod.device import (
+    ACTION_ARGS_SCHEMA,
+    MAX_ATOM_PERCENT,
+    MAX_PUFF_MS,
+    VapePodDevice,
+)
 from glider_vapepod.wired import VapePodUSBDevice
 
 FIRMWARE_DIR = Path(__file__).parents[1] / "firmware"
@@ -244,13 +249,21 @@ async def test_the_lookup_needs_exactly_one_xiao(pod, comports, message):
 
 
 async def test_puff_sends_duration_and_power(device, pod):
-    await device.puff(3000, 40)
-    assert _commands(pod["port"])[-1] == "puff,3000,40\n"
+    await device.puff(3000, 15)
+    assert _commands(pod["port"])[-1] == "puff,3000,15\n"
 
 
-async def test_puff_defaults_to_full_power_and_takes_whole_floats(device, pod):
+async def test_puff_defaults_to_the_power_cap_and_takes_whole_floats(device, pod):
     await device.puff(2500.0)
-    assert _commands(pod["port"])[-1] == "puff,2500,100\n"
+    assert _commands(pod["port"])[-1] == f"puff,2500,{MAX_ATOM_PERCENT}\n"
+
+
+@pytest.mark.parametrize("bad", [MAX_ATOM_PERCENT + 1, 100])
+async def test_a_puff_above_the_power_cap_sends_nothing(device, pod, bad):
+    before = list(_commands(pod["port"]))
+    with pytest.raises(ValueError, match="power"):
+        await device.puff(1000, bad)
+    assert _commands(pod["port"]) == before
 
 
 @pytest.mark.parametrize("bad", [0, -1, MAX_PUFF_MS + 1, 1.5, "long", None])

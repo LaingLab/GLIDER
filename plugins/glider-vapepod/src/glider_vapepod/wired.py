@@ -31,7 +31,12 @@ from typing import TYPE_CHECKING, Any
 
 from glider.hal.base_device import DeviceConfig
 from glider.hal.devices.serial_device import GenericSerialDevice
-from glider_vapepod.device import ACTION_ARGS_SCHEMA, MAX_PUFF_MS, whole_number
+from glider_vapepod.device import (
+    ACTION_ARGS_SCHEMA,
+    MAX_ATOM_PERCENT,
+    MAX_PUFF_MS,
+    whole_number,
+)
 
 if TYPE_CHECKING:
     from glider.hal.base_board import BaseBoard
@@ -148,13 +153,13 @@ class VapePodUSBDevice(GenericSerialDevice):
 
     # --- actions ---
 
-    async def puff(self, duration_ms: Any, power: Any = 100) -> None:
+    async def puff(self, duration_ms: Any, power: Any = MAX_ATOM_PERCENT) -> None:
         """Run the atomizer for ``duration_ms`` at ``power`` %, then stop.
 
         The pod times the puff itself, so this returns once the line is sent.
         """
         ms = whole_number(duration_ms, "duration_ms", 1, MAX_PUFF_MS)
-        percent = whole_number(power, "power", 1, 100)
+        percent = whole_number(power, "power", 1, MAX_ATOM_PERCENT)
         await self.write("puff", ms, percent)
 
     async def pump(self, percent: Any) -> None:
