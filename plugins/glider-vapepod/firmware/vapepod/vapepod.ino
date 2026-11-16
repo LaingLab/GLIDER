@@ -29,7 +29,7 @@
 #include <Arduino.h>
 #include <bluefruit.h>
 
-#define FW_VERSION "0.3.4"
+#define FW_VERSION "0.3.5"
 
 // The advertised name. GLIDER finds the pod by it, so give each pod its own
 // name if you build more than one ("VapePod-2", ...).
@@ -44,6 +44,16 @@ static const char *STATUS_UUID = "70c4957d-11e9-41a8-83fc-8783938e1e92";   // re
 // D5 and D6 are plain pin numbers (5, 6), reported to a wired host on connect.
 static const uint8_t ATOM_PIN = D6;
 static const uint8_t PUMP_PIN = D5;
+
+// Analog sensors, read for every status. Only A0-A5 (D0-D5) can read analog
+// on the XIAO; D6-D10 are on the nRF52840's port 1, which has no ADC. Inputs
+// must stay between 0 V and 3.3 V.
+static const uint8_t HCHO_PIN = A0;  // formaldehyde sensor output
+static const uint8_t BEAM_PIN = A1;  // beam break output
+// The core's default ADC range: internal 0.6 V reference, gain 1/6.
+static const uint32_t ADC_FULL_SCALE_MV = 3600;
+static const uint8_t ADC_BITS = 12;
+static const uint8_t ADC_SAMPLES = 8;  // averaged per reading
 
 // The longest puff the pod will run. GLIDER checks against the same figure
 // (MAX_PUFF_MS in device.py); change both together.
@@ -174,6 +184,17 @@ static void setOutput(Output &out, uint8_t percent) {
   pwm.writePin(out.pin, (uint32_t)percent * PWM_MAX / 100);
 }
 
+// One analog input in millivolts, averaged over ADC_SAMPLES reads.
+static uint32_t readMillivolts(uint8_t pin) {
+  uint32_t sum = 0;
+  for (uint8_t i = 0; i < ADC_SAMPLES; ++i) {
+    sum += analogRead(pin);
+  }
+  return (sum / ADC_SAMPLES) * ADC_FULL_SCALE_MV / (1u << ADC_BITS);
+}
+
+// Bluetooth gets the outputs only: the status characteristic is sized for a
+// default 20-byte notification. USB also carries the sensors, in mV.
 static void sendStatus() {
   char text[STATUS_LEN];
   snprintf(text, sizeof(text), "atom=%u pump=%u", atom.percent, pump.percent);
@@ -181,7 +202,10 @@ static void sendStatus() {
   if (connected && statusChar.notifyEnabled()) {
     statusChar.notify(text);
   }
-  usbSend(text);
+  char wired[STATUS_LEN + 32];
+  snprintf(wired, sizeof(wired), "%s hcho=%lu beam=%lu", text,
+           (unsigned long)readMillivolts(HCHO_PIN), (unsigned long)readMillivolts(BEAM_PIN));
+  usbSend(wired);
   statusSentAt = millis();
 }
 
@@ -344,6 +368,7 @@ void setup() {
 
   Serial.begin(115200);  // USB CDC: the baud rate is ignored
   pwmBegin();
+  analogReadResolution(ADC_BITS);
   allOff();
   note("VapePod %s, max puff %lu ms", FW_VERSION, (unsigned long)MAX_PUFF_MS);
   inbox = xQueueCreate(8, sizeof(Command));

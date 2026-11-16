@@ -54,7 +54,7 @@ In the Arduino IDE:
    XIAO's reset button so it starts its bootloader, then upload again.
 
 **Check it before wiring the loads.** Open the serial monitor at 115200 baud.
-It should print `# VapePod 0.3.4, max puff 10000 ms`. Type `pump,100` and
+It should print `# VapePod 0.3.5, max puff 10000 ms`. Type `pump,100` and
 press Enter: it answers `atom=0 pump=100`. (Close the monitor, or send `off`:
 three seconds without a command turns it all off again.) Then use a phone BLE app
 (e.g. nRF Connect) to connect to `VapePod` and write `puff,1000` to the command
@@ -77,6 +77,8 @@ so GLIDER can't tell the two apart.
 | GND | Both MOSFET modules' signal GND |
 | D6 | Atomizer MOSFET module, signal input (IN / PWM / TRIG) |
 | D5 | Pump MOSFET module, signal input |
+| A0 (D0) | Formaldehyde (HCHO) sensor output, 0-3.3 V |
+| A1 (D1) | Beam sensor output, 0-3.3 V |
 
 On an ESP32 DevKitC the same go to its USB port, GND, GPIO25 (atomizer) and
 GPIO26 (pump).
@@ -136,6 +138,13 @@ with everything unplugged, measure from the XIAO's GND pin to the pod supply's
   speed, 12 Mbps, which is all the XIAO uses) with an isolated 5 V output; the
   XIAO draws tens of mA, well within it.
 
+**Analog inputs.** Only A0-A5 (D0-D5) can read analog on the XIAO; pins
+D6-D10 sit on the nRF52840's second port, which has no ADC. A sensor whose
+output can go above 3.3 V needs a divider (e.g. 10 kOhm in series, 20 kOhm to
+GND for a 5 V signal). Over USB every status carries both readings in mV
+(`atom=0 pump=0 hcho=812 beam=3301`), so the recorder logs them too;
+Bluetooth does not carry them.
+
 ## Protocol
 
 There is one GATT service, `70c4957d-11e9-41a8-83fc-8783938e1e90`, with two
@@ -189,6 +198,8 @@ of its outputs (`atom=100 pump=100`) alongside each sample.
 | `pump` | percent | 0 is off |
 | `pump_off` | | |
 | `off` | | Atomizer and pump |
+| `read_hcho` | | HCHO sensor now, in mV (USB only) |
+| `read_beam` | | Beam sensor now, in mV (USB only) |
 | `read` | | The status text |
 | `write` | text | Raw command, for anything not modelled |
 

@@ -504,8 +504,13 @@ class DeviceControlPanel(QWidget):
 
         async def _run():
             try:
-                await device.execute_action(action, *args)
-                self._device_status_label.setText(f"Status: ran {action!r}")
+                result = await device.execute_action(action, *args)
+                # A read-type action (a plugin's read_hcho, say) returns its value;
+                # show it, since the panel is the only place a manual read lands.
+                if result is None:
+                    self._device_status_label.setText(f"Status: ran {action!r}")
+                else:
+                    self._device_status_label.setText(f"Status: {action} = {result}")
             except Exception as exc:  # noqa: BLE001 - surfaced to the user
                 logger.exception("Device action %s failed", action)
                 self._device_status_label.setText(f"Status: {action!r} failed - {exc}")

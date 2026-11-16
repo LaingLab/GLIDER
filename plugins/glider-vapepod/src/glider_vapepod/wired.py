@@ -8,8 +8,10 @@ sent as lines over the XIAO's USB serial port. Built on GLIDER's
 The wire, both ways one line each, ended by ``\\n``:
 
 - to the pod: ``off``, ``pump,<percent>``, ``puff,<ms>,<percent>``, ``status``
-- from the pod: ``atom=<percent> pump=<percent>`` on every change and once a
-  second, or a note starting with ``# `` (a refusal, the boot banner, ...)
+- from the pod: ``atom=<percent> pump=<percent> hcho=<mV> beam=<mV>`` on every
+  change, every ``status`` and once a second, or a note starting with ``# `` (a
+  refusal, the boot banner, ...). The sensor fields are on XIAO firmware 0.3.5
+  and later only; Bluetooth never carries them.
 
 **The heartbeat.** The firmware turns everything off when a wired host goes
 quiet for 3 s (or closes the port). This device sends ``status`` every
@@ -61,6 +63,25 @@ OFF_ON_SHUTDOWN_S = 0.75
 
 STATUS_PREFIX = "atom="
 NOTE_PREFIX = "#"
+
+# The pod's analog inputs, as named in its status line (values in mV).
+SENSORS = ("hcho", "beam")
+
+# How long a sensor read waits for the status the pod sends back.
+SENSOR_READ_S = 1.0
+
+
+def parse_status(text: str) -> dict[str, int]:
+    """``"atom=0 pump=100 hcho=812 beam=3301"`` -> ``{"atom": 0, ...}``.
+
+    Fields that are not ``name=<whole number>`` are left out.
+    """
+    fields: dict[str, int] = {}
+    for part in text.split():
+        name, sep, value = part.partition("=")
+        if sep and value.isdigit():
+            fields[name] = int(value)
+    return fields
 
 
 def find_pod_port() -> str:
@@ -140,13 +161,19 @@ class VapePodUSBDevice(GenericSerialDevice):
 
     @property
     def actions(self) -> dict[str, Callable]:
-        """The pod's command set, as on Bluetooth. ``read`` returns its status."""
+        """The pod's command set, as on Bluetooth, plus its two analog inputs.
+
+        ``read`` returns the whole status line; ``read_hcho`` / ``read_beam``
+        one fresh sensor reading in mV.
+        """
         return {
             "puff": self.puff,
             "pump_on": self.pump_on,
             "pump_off": self.pump_off,
             "pump": self.pump,
             "off": self.off,
+            "read_hcho": self.read_hcho,
+            "read_beam": self.read_beam,
             "read": self.read,
             "write": self.write,
         }
@@ -178,6 +205,45 @@ class VapePodUSBDevice(GenericSerialDevice):
         """Turn the atomizer and the pump off."""
         await self.write("off")
 
+    async def read_hcho(self) -> int:
+        """The formaldehyde sensor's output now, in mV (A0)."""
+        return (await self.read_sensors())["hcho"]
+
+    async def read_beam(self) -> int:
+        """The beam sensor's output now, in mV (A1)."""
+        return (await self.read_sensors())["beam"]
+
+    async def read_sensors(self) -> dict[str, int]:
+        """Ask for a status and return the pod's fields from the reply.
+
+        Waits for a status line that arrived after the request, so the reading
+        is fresh rather than up to a second old. Raises if none comes, or if the
+        pod's firmware predates the sensor fields.
+        """
+        sent_at = time.perf_counter()
+        # Straight to the port, not through write(): a read is not a command
+        # worth a line in the session log.
+        await GenericSerialDevice.write(self, "status")
+        deadline = sent_at + SENSOR_READ_S
+        while True:
+            sample = self._fresh_sample()
+            if sample is not None and sample[1] >= sent_at:
+                fields = parse_status(sample[0])
+                missing = [name for name in SENSORS if name not in fields]
+                if missing:
+                    raise RuntimeError(
+                        f"VapePod USB {self._name}: the pod reports no {', '.join(missing)}; "
+                        "flash firmware 0.3.5 or later"
+                    )
+                return fields
+            if not self._initialized:
+                raise RuntimeError(f"VapePod USB {self._name} is not connected")
+            if time.perf_counter() >= deadline:
+                raise TimeoutError(
+                    f"VapePod USB {self._name}: no status within {SENSOR_READ_S:.0f} s"
+                )
+            await asyncio.sleep(0.01)
+
     # --- wire ---
 
     async def write(self, *args: Any) -> None:
@@ -208,11 +274,14 @@ class VapePodUSBDevice(GenericSerialDevice):
         """
         text = super()._decode(raw)
         if text.startswith(STATUS_PREFIX):
-            # Log each change, not the once-a-second repeats, so a session log
-            # shows what the pod actually did next to what it was told.
-            if text != self._last_status:
-                logger.info("VapePod USB %s: pod status: %s", self._name, text)
-                self._last_status = text
+            # Log each change of the outputs, not the once-a-second repeats or
+            # the sensors (which move every reading), so a session log shows
+            # what the pod actually did next to what it was told.
+            fields = parse_status(text)
+            outputs = f"atom={fields.get('atom')} pump={fields.get('pump')}"
+            if outputs != self._last_status:
+                logger.info("VapePod USB %s: pod status: %s", self._name, outputs)
+                self._last_status = outputs
             return text
         if text.startswith(NOTE_PREFIX):
             message = text.lstrip("#").strip()

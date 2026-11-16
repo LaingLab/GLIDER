@@ -215,3 +215,38 @@ def test_digital_outputs_keep_their_own_controls(qtbot):
 
     assert panel._digital_widget.isVisibleTo(panel)
     assert not panel._actions_widget.isVisibleTo(panel)
+
+
+class _ReadingDevice(_Device):
+    """A device whose read action returns a value, like a plugin's sensor read."""
+
+    async def read_level(self):
+        self.calls.append("read_level")
+        return 812
+
+    @property
+    def actions(self):
+        return {**super().actions, "read_level": self.read_level}
+
+
+async def test_a_value_an_action_returns_is_shown(qtbot):
+    """A manual read has nowhere else to land: the panel shows it."""
+    device = _ReadingDevice()
+    coros: list = []
+    panel, _ran = _panel(qtbot, device, run_async=coros.append)
+
+    _action_buttons(panel)["read_level"].click()
+    await coros[0]
+
+    assert panel._device_status_label.text() == "Status: read_level = 812"
+
+
+async def test_an_action_with_no_result_still_says_it_ran(qtbot):
+    device = _Device()
+    coros: list = []
+    panel, _ran = _panel(qtbot, device, run_async=coros.append)
+
+    _action_buttons(panel)["off"].click()
+    await coros[0]
+
+    assert panel._device_status_label.text() == "Status: ran 'off'"

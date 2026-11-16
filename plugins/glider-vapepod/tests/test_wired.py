@@ -59,7 +59,9 @@ class FakePort:
             self.pump = 0
         for note in self.pod.pop("notes", []):
             self._replies.put(f"# {note}\n".encode())
-        self._replies.put(f"atom=0 pump={self.pump}\n".encode())
+        sensors = self.pod.get("sensors")  # (hcho, beam) mV; None = old firmware
+        extra = f" hcho={sensors[0]} beam={sensors[1]}" if sensors else ""
+        self._replies.put(f"atom=0 pump={self.pump}{extra}\n".encode())
         return len(buf)
 
     def flush(self):
@@ -149,7 +151,9 @@ def test_device_type():
 
 def test_same_actions_and_panel_arguments_as_bluetooth():
     usb = _make()
-    assert set(usb.actions) == {"puff", "pump_on", "pump_off", "pump", "off", "read", "write"}
+    bluetooth = {"puff", "pump_on", "pump_off", "pump", "off", "read", "write"}
+    # The same set, plus the analog reads only the wired link carries.
+    assert set(usb.actions) == bluetooth | {"read_hcho", "read_beam"}
     assert VapePodUSBDevice.ACTION_ARGS_SCHEMA is ACTION_ARGS_SCHEMA
     assert VapePodDevice.ACTION_ARGS_SCHEMA is ACTION_ARGS_SCHEMA
 
@@ -392,3 +396,68 @@ async def test_status_changes_are_logged_once_each(device, pod, caplog):
             await asyncio.sleep(0.01)
         await asyncio.sleep(0.1)
     assert caplog.text.count("pod status: atom=0 pump=40") == 1
+
+
+# --- analog sensors -----------------------------------------------------------
+
+
+async def test_read_hcho_and_beam_return_millivolts(device, pod):
+    pod["sensors"] = (812, 3301)
+    assert await device.read_hcho() == 812
+    assert await device.read_beam() == 3301
+
+
+async def test_a_sensor_read_is_fresh_not_the_cached_status(device, pod):
+    pod["sensors"] = (100, 200)
+    assert await device.read_hcho() == 100
+    pod["sensors"] = (900, 200)  # the next status the pod sends
+    assert await device.read_hcho() == 900
+
+
+async def test_a_sensor_read_asks_with_status_and_is_not_logged(device, pod, caplog):
+    pod["sensors"] = (1, 2)
+    with caplog.at_level(logging.INFO, logger="glider_vapepod.wired"):
+        await device.read_beam()
+    assert pod["port"].lines[-1] == "status\n"
+    assert "sending status" not in caplog.text
+
+
+async def test_old_firmware_without_sensors_says_so(device, pod):
+    pod.pop("sensors", None)
+    with pytest.raises(RuntimeError, match="0.3.5"):
+        await device.read_hcho()
+
+
+def test_sensor_reads_are_panel_buttons():
+    actions = _make().actions
+    assert {"read_hcho", "read_beam"} <= set(actions)
+    # No arguments, so the control panel can press them as they are.
+    assert not _make().action_needs_args("read_hcho")
+
+
+async def test_sensor_changes_alone_are_not_logged_as_status(device, pod, caplog):
+    with caplog.at_level(logging.INFO, logger="glider_vapepod.wired"):
+        pod["sensors"] = (10, 20)
+        await device.read_hcho()
+        pod["sensors"] = (11, 21)
+        await device.read_hcho()
+    assert caplog.text.count("pod status:") <= 1
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("atom=0 pump=100 hcho=812 beam=3301", {"atom": 0, "pump": 100, "hcho": 812, "beam": 3301}),
+        ("atom=50 pump=0", {"atom": 50, "pump": 0}),
+        ("atom=x pump=", {}),
+    ],
+)
+def test_parse_status(text, expected):
+    assert wired.parse_status(text) == expected
+
+
+def test_the_xiao_firmware_sends_the_sensor_fields():
+    source = SKETCHES[0].read_text(encoding="utf-8")
+    assert '"%s hcho=%lu beam=%lu"' in source
+    for name in wired.SENSORS:
+        assert f"{name.upper()}_PIN = A" in source
