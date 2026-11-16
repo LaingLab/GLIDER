@@ -23,6 +23,7 @@ engine's shared runner.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, NamedTuple
@@ -59,6 +60,8 @@ if TYPE_CHECKING:
 _CONTROL_MIN_HEIGHT = 72  # touch-target floor (matches the runner tab height)
 _COMPACT_MIN_HEIGHT = 32  # desktop: a mouse target
 _SPACING = 10
+
+logger = logging.getLogger(__name__)
 
 # A range with more discrete steps than this is not usefully draggable on a
 # ~400px touch track, so it renders as precise entry alone (no slider).
@@ -182,14 +185,21 @@ class RunnerDeviceControls(QWidget):
         has_primary_value = any(device.value_spec(a) is not None for a in actions)
         controls: list[tuple[str, str, object]] = []
         read_seen = False
+        # A device with several sensors (a plugin pod reading two analog
+        # inputs, say) lists the reads it wants as rows of their own, as
+        # {action: label}. Everything else keeps one read display per device.
+        own_rows = _declared_reads(device)
         for action in actions:
             spec = device.value_spec(action)
             # A read action is a measurement, not a command — classify it first,
             # even though its value_spec carries the reading's range (which nodes
             # use). Otherwise a whole-number read spec (e.g. AnalogInput "read")
             # would render as a write slider that calls read() with an argument.
-            if action in _READ_ACTIONS or action.startswith("read"):
-                if not read_seen:  # one read display per device
+            if action in own_rows:
+                # For a read row, the third slot carries the button's label.
+                controls.append(("read", action, own_rows[action]))
+            elif action in _READ_ACTIONS or action.startswith("read"):
+                if not read_seen and not own_rows:  # one read display per device
                     controls.append(("read", action, None))
                     read_seen = True
             elif spec is not None and spec.kind == KIND_SWITCH:
@@ -514,12 +524,12 @@ class RunnerDeviceControls(QWidget):
         self._widgets[(dev_id, action)] = {"args": fields, "button": btn}
         return block
 
-    def _make_read(self, dev_id: str, action: str, spec) -> QWidget:
+    def _make_read(self, dev_id: str, action: str, label) -> QWidget:
         block = QWidget()
         row = QHBoxLayout(block)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(_SPACING)
-        read_btn = QPushButton("Read")
+        read_btn = QPushButton(label or "Read")
         read_btn.setMinimumHeight(self._min_h)
         read_btn.clicked.connect(lambda _=False: self.read_requested.emit(dev_id, action))
         value_label = QLabel("—")
@@ -631,6 +641,30 @@ def _args_schema(device, action: str) -> list[dict]:
         return list(asker(action) or [])
     except Exception:
         return []
+
+
+def _declared_reads(device) -> dict[str, str]:
+    """The reads a device asks to show as separate rows, as ``{action: label}``.
+
+    Read from the device's optional ``RUNNER_READS``: a mapping of action to
+    button label, or a sequence of actions (labelled from their names). Only
+    actions the device really has, and that need no arguments, are kept, so a
+    stale or awkward declaration can neither add a dead button nor take the
+    runner down.
+    """
+    try:
+        declared = getattr(device, "RUNNER_READS", None) or {}
+        if not isinstance(declared, dict):
+            declared = {name: _title(name) for name in declared}
+        actions = device.actions
+        return {
+            str(name): str(label)
+            for name, label in declared.items()
+            if name in actions and not _needs_args(device, name)
+        }
+    except Exception:
+        logger.debug("Could not read RUNNER_READS from %s", device, exc_info=True)
+        return {}
 
 
 def _title(action: str) -> str:

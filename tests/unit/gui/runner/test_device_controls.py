@@ -198,3 +198,75 @@ def test_failed_slider_write_reverts_to_last_confirmed_value(qtbot):
     slider.setValue(50)
     w.on_action_failed("pwm", "set", "set failed: again")
     assert spin.value() == 150 and slider.value() == 150
+
+
+# --- devices with several sensors (RUNNER_READS) -----------------------------
+
+
+def _sensor_dev(runner_reads, *, extra=None):
+    """A pod-like device: two sensor reads and a status read, all no-argument."""
+
+    async def read_hcho():
+        return 812
+
+    async def read_beam():
+        return 3301
+
+    async def read():
+        return "atom=0 pump=0"
+
+    actions = {"read_hcho": read_hcho, "read_beam": read_beam, "read": read, **(extra or {})}
+    return SimpleNamespace(
+        device_type="VapePodUSB",
+        actions=actions,
+        value_spec=lambda name: None,
+        RUNNER_READS=runner_reads,
+    )
+
+
+def test_without_runner_reads_a_device_still_gets_one_read_row(qtbot):
+    dev = _sensor_dev(None)
+    w = _controls({"pod": dev})
+    qtbot.addWidget(w)
+    w.refresh()
+    reads = [k for k, v in w._widgets.items() if "read" in v]
+    assert reads == [("pod", "read_hcho")]
+
+
+def test_each_declared_read_gets_its_own_labelled_row(qtbot):
+    dev = _sensor_dev({"read_hcho": "Read HCHO (mV)", "read_beam": "Read beam (mV)"})
+    w = _controls({"pod": dev})
+    qtbot.addWidget(w)
+    hcho = _widget(w, "pod", "read_hcho")["read"]
+    beam = w._widgets[("pod", "read_beam")]["read"]
+    assert (hcho.text(), beam.text()) == ("Read HCHO (mV)", "Read beam (mV)")
+    # Undeclared reads are not added on top of a declaration.
+    assert ("pod", "read") not in w._widgets
+    with qtbot.waitSignal(w.read_requested) as sig:
+        beam.click()
+    assert sig.args == ["pod", "read_beam"]
+    w.set_read_value("pod", "read_beam", "3301")
+    assert w._value_labels[("pod", "read_beam")].text() == "3301"
+    assert w._value_labels[("pod", "read_hcho")].text() == "—"
+
+
+def test_a_list_of_reads_is_labelled_from_the_action_names(qtbot):
+    dev = _sensor_dev(["read_hcho", "read_beam"])
+    w = _controls({"pod": dev})
+    qtbot.addWidget(w)
+    assert _widget(w, "pod", "read_hcho")["read"].text() == "Read Hcho"
+
+
+def test_a_declared_read_the_device_lacks_or_that_needs_arguments_is_dropped(qtbot):
+    async def read_channel(channel):
+        return 0
+
+    dev = _sensor_dev(
+        {"read_hcho": "HCHO", "read_gone": "Gone", "read_channel": "Ch"},
+        extra={"read_channel": read_channel},
+    )
+    w = _controls({"pod": dev})
+    qtbot.addWidget(w)
+    w.refresh()
+    reads = sorted(k[1] for k, v in w._widgets.items() if "read" in v)
+    assert reads == ["read_hcho"]

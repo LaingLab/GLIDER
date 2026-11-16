@@ -127,6 +127,14 @@ class VapePodUSBDevice(GenericSerialDevice):
 
     ACTION_ARGS_SCHEMA = ACTION_ARGS_SCHEMA
 
+    # The Pi runner shows one read per device unless told otherwise; each of
+    # these gets its own Read button and value.
+    RUNNER_READS = {
+        "read_hcho": "Read HCHO (mV)",
+        "read_beam": "Read beam (mV)",
+        "read": "Read status",
+    }
+
     def __init__(self, board: "BaseBoard", config: DeviceConfig, name: str | None = None):
         # The pod's framing, not the user's: lines, streamed, so the status the
         # pod pushes is always cached for read() and the recorder. USB CDC
