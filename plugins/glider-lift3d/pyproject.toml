@@ -44,6 +44,9 @@ dev = [
 [project.entry-points."glider.review_panel"]
 lift3d = "glider_lift3d.review:panels"
 
+[project.entry-points."glider.range_metrics"]
+lift3d = "glider_lift3d.metrics:provider"
+
 [project.scripts]
 glider-lift3d = "glider_lift3d.batch:main"
 

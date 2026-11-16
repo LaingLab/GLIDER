@@ -44,6 +44,13 @@ into a folder `<pose>.lift3d/` beside the pose CSV:
 | `spine.npy` | `(frames, 5, 2)` neck … tail base in grid coordinates |
 | `meta.json` | scale, models and keypoints used |
 
+Once a session is computed, its range numbers join GLIDER's own in the Epoch table,
+**Export → Range stats** and **Export → Time bins** (e.g. 1-minute bins): arch `e`
+(surface and depth-only), body and spine length, and rearing fraction, as means over
+the frames that have a value. `Arch frames (3-D)` is how many frames each arch mean
+stands on; a bin spent mostly rearing has few. A session without a computed lift
+leaves the columns blank.
+
 Offline, without the GUI: `glider-lift3d VIDEO --pose-csv POSES.csv --ppc 11.7`.
 
 ## Reading the arch numbers

@@ -2304,6 +2304,30 @@ class TestTimeBinExport:
         assert first["rear_s"].tolist() == pytest.approx([0.0, 0.0])
         assert second["rear_s"].tolist() == pytest.approx([5.0, 5.0])
 
+    def test_plugin_measures_become_bin_columns(self, qtbot, tmp_path, monkeypatch):
+        """glider.range_metrics: a plugin's per-range values land in every bin row."""
+        from glider.analysis.epochs import Metric
+
+        class Frames:
+            name = "fake"
+
+            def metrics(self):
+                return [Metric("fake_first", "First frame", 0), Metric("fake_last", "Last", 0)]
+
+            def values(self, view, start, end):
+                return {"fake_first": float(start), "fake_last": float(end)}
+
+        monkeypatch.setattr(
+            "glider.analysis.range_extensions.load_range_metric_providers", lambda: [Frames()]
+        )
+        win = self._win(qtbot, tmp_path)
+        frame = win.bin_frame(0.0, 10.0, 5.0, "tidy")
+        second = frame[frame["bin"] == "5-10 s"]
+        assert second["fake_first"].tolist() == [150.0, 150.0]
+        assert second["fake_last"].tolist() == [299.0, 299.0]
+        book = win.bin_frame(0.0, 10.0, 5.0, "sheets")
+        assert any("First frame" in name for name in book)
+
     def test_wide_is_a_row_per_session(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         frame = win.bin_frame(0.0, 10.0, 5.0, "wide")

@@ -201,6 +201,10 @@ class _Controller(QObject):
             return
         self.set_session(self.context)
         self.set_frame(self.frame)
+        # The epoch table and exports read the new frames.csv (glider_lift3d.metrics).
+        changed = getattr(self.context, "data_changed", None)
+        if changed is not None:
+            changed()
 
 
 # ----------------------------------------------------------------------------------------

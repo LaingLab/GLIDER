@@ -422,6 +422,13 @@ class AnalysisWindow(QMainWindow):
         from glider.gui.review.extensions import PanelHost, load_review_panels
 
         self._panels = PanelHost(load_review_panels())
+        # Measures from plugins (glider.range_metrics): extra epoch/bin columns.
+        from glider.analysis.range_extensions import (
+            RangeMetricHost,
+            load_range_metric_providers,
+        )
+
+        self._range_metrics = RangeMetricHost(load_range_metric_providers())
         side = [p for p in self._panels.panels if p.placement == "side"]
         self._top_split = QSplitter(Qt.Orientation.Horizontal)
         for widget in [self._pool, viewer, *(p.widget() for p in side), self._inspector]:
@@ -1409,9 +1416,15 @@ class AnalysisWindow(QMainWindow):
                 arena=found[0] if found else None,
                 frame_bounds=tuple(self._bar.frame_bounds()),
                 seek=self._set_frame,
+                data_changed=self._plugin_data_changed,
             )
         )
         self._panels.set_frame(self._frame)
+
+    def _plugin_data_changed(self) -> None:
+        """A panel wrote new data (e.g. computed a session): range numbers are stale."""
+        self._invalidate_cohort_cache()
+        self._fill_epochs()
 
     def _show_session_text(self, path: Path, view: SessionView) -> None:
         """The Session tab: what was found for the session, and what is missing."""
@@ -3278,6 +3291,7 @@ class AnalysisWindow(QMainWindow):
             **self._exploration_columns(index, start, end),
             **self._hardware_columns(timeline, view.fps, start, end),
             **self._retrieval_columns(index, start, end),
+            **self._range_metrics.columns(view, start, end),
         }
 
     def _retrieval_columns(self, index: int, start: int, end: int) -> dict:

@@ -52,6 +52,9 @@ class ReviewContext:
     frame_bounds: tuple[int, int]
     #: Move the whole window (video, timeline, panels) to a frame.
     seek: Callable[[int], None]
+    #: Call after writing data a range measure reads (glider.range_metrics), so the
+    #: epoch table and exports recompute instead of serving cached numbers.
+    data_changed: Callable[[], None] = lambda: None
 
 
 @runtime_checkable

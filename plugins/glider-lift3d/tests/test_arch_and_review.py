@@ -250,3 +250,31 @@ def test_panel_offers_to_compute_when_missing(qtbot, tmp_path):
     view.px_per_mm = None
     side.set_session(ReviewContext(view, pose_csv, None, (0, 4), lambda f: None))
     assert not side.compute_btn.isEnabled() and "scale" in side.status.text()
+
+
+# -- range measures (glider.range_metrics) -----------------------------------------------
+
+
+def test_range_measures_average_the_saved_lift(tmp_path):
+    import math
+
+    from glider_lift3d.metrics import provider
+
+    from glider.analysis.range_extensions import RangeMetricHost
+
+    video, pose_csv = _session(tmp_path)
+    m = provider()
+    view = _View(pose_csv, video)
+    assert m.values(view, 0, 4) == {}  # not computed: no columns
+    cfg = Lift3DConfig(ppc=PPC)
+    compute_session(
+        video, pose_csv, cfg, lift=Lift3D(TEN, cfg, segment=dark_segment, depth=bump_depth)
+    )
+    table = load_session(pose_csv).table
+    v = m.values(view, 0, 4)
+    assert v["lift3d_arch_e_surface"] == pytest.approx(table["ecc_surface"].mean())
+    assert v["lift3d_arch_frames"] == 4  # frame 2 has no pose
+    assert v["lift3d_rear_fraction"] == 0.0
+    assert math.isnan(m.values(view, 2, 2)["lift3d_arch_e_surface"])
+    row = RangeMetricHost([m]).columns(view, 0, 4)
+    assert {x.key for x in row["_extra_metrics"]} == set(v)
