@@ -29,7 +29,7 @@
 #include <Arduino.h>
 #include <bluefruit.h>
 
-#define FW_VERSION "0.3.5"
+#define FW_VERSION "0.3.6"
 
 // The advertised name. GLIDER finds the pod by it, so give each pod its own
 // name if you build more than one ("VapePod-2", ...).
@@ -42,8 +42,8 @@ static const char *STATUS_UUID = "70c4957d-11e9-41a8-83fc-8783938e1e92";   // re
 
 // To the MOSFET modules' signal inputs.
 // D5 and D6 are plain pin numbers (5, 6), reported to a wired host on connect.
-static const uint8_t ATOM_PIN = D6;
-static const uint8_t PUMP_PIN = D5;
+static const uint8_t ATOM_PIN = D5;
+static const uint8_t PUMP_PIN = D6;
 
 // Analog sensors, read for every status. Only A0-A5 (D0-D5) can read analog
 // on the XIAO; D6-D10 are on the nRF52840's port 1, which has no ADC. Inputs

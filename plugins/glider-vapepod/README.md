@@ -54,7 +54,7 @@ In the Arduino IDE:
    XIAO's reset button so it starts its bootloader, then upload again.
 
 **Check it before wiring the loads.** Open the serial monitor at 115200 baud.
-It should print `# VapePod 0.3.5, max puff 10000 ms`. Type `pump,100` and
+It should print `# VapePod 0.3.6, max puff 10000 ms`. Type `pump,100` and
 press Enter: it answers `atom=0 pump=100`. (Close the monitor, or send `off`:
 three seconds without a command turns it all off again.) Then use a phone BLE app
 (e.g. nRF Connect) to connect to `VapePod` and write `puff,1000` to the command
@@ -75,8 +75,8 @@ so GLIDER can't tell the two apart.
 |---|---|
 | USB-C | Power (and, wired, the commands): the Pi, or any USB supply for Bluetooth-only use |
 | GND | Both MOSFET modules' signal GND |
-| D6 | Atomizer MOSFET module, signal input (IN / PWM / TRIG) |
-| D5 | Pump MOSFET module, signal input |
+| D5 | Atomizer MOSFET module, signal input (IN / PWM / TRIG) |
+| D6 | Pump MOSFET module, signal input |
 | A0 (D0) | Formaldehyde (HCHO) sensor output, 0-3.3 V |
 | A1 (D1) | Beam sensor output, 0-3.3 V |
 
