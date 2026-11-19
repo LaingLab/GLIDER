@@ -52,7 +52,7 @@ rpi = [
 vision = [
     # 8.4.136 is the first release known to load the semantic-segmentation
     # task (SemanticSegment head) the pup-retrieval models are trained on.
-    "ultralytics>=8.4.136",
+    "ultralytics>=8.4.192",
     # ByteTrack (model.track(tracker="bytetrack.yaml")) needs `lap` for linear
     # assignment. Ultralytics doesn't declare it because they treat it as
     # opt-in, and they shell out to `pip install` at runtime when it's missing
@@ -203,6 +203,7 @@ testpaths = [
     "plugins/glider-maimu/tests",
     "plugins/glider-sleap/tests",
     "plugins/glider-dlc/tests",
+    "plugins/glider-lift3d/tests",
 ]
 # Import test modules by their full path rather than by inserting a rootdir on
 # sys.path. Under the default ("prepend") mode a module's identity is its
@@ -254,6 +255,7 @@ src = [
     "plugins/glider-maimu/src",
     "plugins/glider-sleap/src",
     "plugins/glider-dlc/src",
+    "plugins/glider-lift3d/src",
 ]
 
 [tool.ruff.lint]

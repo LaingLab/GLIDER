@@ -258,6 +258,20 @@ def _select_all_text() -> str:
     )
 
 
+#: Time-bin export: exploration accumulates from the first bin (see
+#: ``AnalysisWindow._cumulative_exploration``), so its columns say so.
+_CUMULATIVE_KEYS = {
+    "cells_entered": "cells_entered_cumulative",
+    "explored_percent": "explored_percent_cumulative",
+}
+
+
+def _cumulative_metric(metric):
+    if metric.key not in _CUMULATIVE_KEYS:
+        return metric
+    return replace(metric, key=_CUMULATIVE_KEYS[metric.key], label=f"{metric.label}, cumulative")
+
+
 def _zero_fill_across_epochs(rows_by_epoch: dict[str, list[dict]]) -> dict[str, list[dict]]:
     """Zero-fill ``<state>_s`` and ``_bouts`` using the states seen in *any* epoch.
 
@@ -416,12 +430,26 @@ class AnalysisWindow(QMainWindow):
         viewer_column.addWidget(self._transport)
         self._inspector = Inspector()
 
+        # Panels from plugins (glider.review_panel entry points): each side one
+        # is a column between the video and the inspector, each timeline one a
+        # tab. All start hidden; the View menu shows them.
+        from glider.gui.review.extensions import PanelHost, load_review_panels
+
+        self._panels = PanelHost(load_review_panels())
+        # Measures from plugins (glider.range_metrics): extra epoch/bin columns.
+        from glider.analysis.range_extensions import (
+            RangeMetricHost,
+            load_range_metric_providers,
+        )
+
+        self._range_metrics = RangeMetricHost(load_range_metric_providers())
+        side = [p for p in self._panels.panels if p.placement == "side"]
         self._top_split = QSplitter(Qt.Orientation.Horizontal)
-        for widget in (self._pool, viewer, self._inspector):
+        for widget in [self._pool, viewer, *(p.widget() for p in side), self._inspector]:
             self._top_split.addWidget(widget)
         self._top_split.setCollapsible(1, False)
         self._top_split.setStretchFactor(1, 1)
-        self._top_split.setSizes([250, 860, 330])
+        self._top_split.setSizes([250, 860, *([420] * len(side)), 330])
 
         self._timeline_panel = TimelinePanel()
         self._split = QSplitter(Qt.Orientation.Vertical)
@@ -457,6 +485,10 @@ class AnalysisWindow(QMainWindow):
         self._bar.hidden_changed.connect(self._remember_hidden)
         self._wire_transport()
         self._build_epoch_table()
+        # Plugin tabs go after the window's own, so theirs keep their places.
+        for panel in self._panels.panels:
+            if panel.placement == "timeline":
+                self._timeline_panel.addTab(panel.widget(), panel.title)
         self._build_bout_stepper()
         self._build_fixes()
         self._export_btn.clicked.connect(self._export_window)
@@ -480,6 +512,7 @@ class AnalysisWindow(QMainWindow):
         retrieval.jump_to.connect(lambda s: self._set_frame(round(s * self._view.fps)))
 
         self._restore_layout()
+        self._build_view_menu()
         # Opened with parent=None, so nothing hands it the app theme.
         apply_tool_theme(self)
         self._even_out_menus()
@@ -497,7 +530,13 @@ class AnalysisWindow(QMainWindow):
         them came out 110, 118 and 130 px. Measured after the theme is
         applied, so the padding that makes room for the arrow is counted.
         """
-        buttons = (self._open_btn, self._arena_btn, self._zones_btn, self._export_menu_btn)
+        buttons = (
+            self._open_btn,
+            self._arena_btn,
+            self._zones_btn,
+            self._view_btn,
+            self._export_menu_btn,
+        )
         for button in buttons:
             button.ensurePolished()
         width = max(button.sizeHint().width() for button in buttons)
@@ -646,10 +685,14 @@ class AnalysisWindow(QMainWindow):
         )
         set_button_role(self._tour_btn, "ghost")
         self._tour_btn.setObjectName("ReviewHelp")
+        # Filled by _build_view_menu once the panels exist.
+        self._view_btn, _ = self._menu_button("View", [])
+        self._view_btn.setToolTip("Show or hide the window's panels")
         for button in (
             self._open_btn,
             self._arena_btn,
             self._zones_btn,
+            self._view_btn,
             self._export_menu_btn,
             self._tour_btn,
         ):
@@ -754,7 +797,7 @@ class AnalysisWindow(QMainWindow):
 
     def _restore_layout(self) -> None:
         settings = _settings()
-        for key, splitter in (("review/split", self._split), ("review/top", self._top_split)):
+        for key, splitter in (("review/split", self._split), (self._top_key(), self._top_split)):
             state = settings.value(key)
             if state is not None:
                 splitter.restoreState(state)
@@ -762,7 +805,80 @@ class AnalysisWindow(QMainWindow):
     def _save_layout(self) -> None:
         settings = _settings()
         settings.setValue("review/split", self._split.saveState())
-        settings.setValue("review/top", self._top_split.saveState())
+        settings.setValue(self._top_key(), self._top_split.saveState())
+
+    def _top_key(self) -> str:
+        """Splitter key per column count, so a plugin panel never inherits a 3-column state."""
+        n = self._top_split.count()
+        return "review/top" if n == 3 else f"review/top{n}"
+
+    #: QSettings prefix for each panel's shown/hidden choice.
+    _SHOW_KEY = "review/show/"
+
+    def _build_view_menu(self) -> None:
+        """View: a checkable entry per panel. The window's own start shown, plugins' hidden."""
+        menu = self._view_btn.menu()
+        self._view_actions: dict = {}
+        builtins = [
+            ("sessions", "Sessions list", self._pool),
+            ("inspector", "Inspector", self._inspector),
+            ("timeline", "Timeline and tables", self._timeline_panel),
+        ]
+        for key, label, widget in builtins:
+            self._add_view_action(menu, key, label, True, lambda on, w=widget: w.setVisible(on))
+        if self._panels.panels:
+            menu.addSeparator()
+        for panel in self._panels.panels:
+            label = panel.title + ("" if panel.placement == "side" else "  (timeline tab)")
+            self._add_view_action(
+                menu,
+                f"plugin/{panel.title}",
+                label,
+                False,
+                lambda on, p=panel: self._show_plugin_panel(p, on),
+            )
+
+    def _add_view_action(self, menu, key: str, label: str, default: bool, apply) -> None:
+        action = menu.addAction(label)
+        action.setCheckable(True)
+        shown = bool(_settings().value(self._SHOW_KEY + key, default, type=bool))
+        action.setChecked(shown)
+        apply(shown)
+
+        def toggled(on: bool) -> None:
+            apply(on)
+            _settings().setValue(self._SHOW_KEY + key, on)
+
+        action.toggled.connect(toggled)
+        self._view_actions[key] = action
+
+    def _show_plugin_panel(self, panel, shown: bool) -> None:
+        widget = panel.widget()
+        if panel.placement == "side":
+            widget.setVisible(shown)
+            if shown:
+                self._give_room(widget)
+        else:
+            tabs = self._timeline_panel
+            index = tabs.indexOf(widget)
+            if not shown and tabs.currentIndex() == index:
+                tabs.setCurrentIndex(0)
+            tabs.setTabVisible(index, shown)
+            if shown:
+                tabs.setCurrentIndex(index)
+        # A hidden panel does no work: no sidecar loads, no per-frame redraws.
+        self._panels.set_active(panel, shown)
+
+    def _give_room(self, widget: QWidget, width: int = 420) -> None:
+        """A column shown again after being saved hidden comes back at zero width."""
+        split = self._top_split
+        index = split.indexOf(widget)
+        sizes = split.sizes()
+        if index < 0 or sizes[index] > 0:
+            return
+        sizes[1] = max(sizes[1] - width, 200)
+        sizes[index] = width
+        split.setSizes(sizes)
 
     # ------------------------------------------------------------------
     # walkthrough
@@ -1298,6 +1414,31 @@ class AnalysisWindow(QMainWindow):
         self._show_session_text(path, view)
         self._update_status()
         self._publish_markers()
+        self._publish_panels(path, view)
+
+    def _publish_panels(self, path: Path, view: SessionView) -> None:
+        """Tell plugin panels which session is on screen."""
+        if not self._panels.panels:
+            return
+        from glider.gui.review.extensions import ReviewContext
+
+        found = self._arena_for(self._shown)
+        self._panels.set_session(
+            ReviewContext(
+                view=view,
+                source=Path(path),
+                arena=found[0] if found else None,
+                frame_bounds=tuple(self._bar.frame_bounds()),
+                seek=self._set_frame,
+                data_changed=self._plugin_data_changed,
+            )
+        )
+        self._panels.set_frame(self._frame)
+
+    def _plugin_data_changed(self) -> None:
+        """A panel wrote new data (e.g. computed a session): range numbers are stale."""
+        self._invalidate_cohort_cache()
+        self._fill_epochs()
 
     def _show_session_text(self, path: Path, view: SessionView) -> None:
         """The Session tab: what was found for the session, and what is missing."""
@@ -2198,6 +2339,7 @@ class AnalysisWindow(QMainWindow):
         self._frame = int(frame)
         self._bar.set_frame(self._frame, follow=self._timer.isActive())
         self._canvas.set_frame(self._frame)
+        self._panels.set_frame(self._frame)
         self._canvas.set_hud(self._hud_behavior(), self._hud_chips())
         self._bout_label.setText(self._describe_bout())
         if self._view and self._view.fps:
@@ -3163,6 +3305,7 @@ class AnalysisWindow(QMainWindow):
             **self._exploration_columns(index, start, end),
             **self._hardware_columns(timeline, view.fps, start, end),
             **self._retrieval_columns(index, start, end),
+            **self._range_metrics.columns(view, start, end),
         }
 
     def _retrieval_columns(self, index: int, start: int, end: int) -> dict:
@@ -3475,9 +3618,12 @@ class AnalysisWindow(QMainWindow):
         if not bins:
             return None
         rows = _zero_fill_across_epochs({b.key: self.range_rows(b.start_s, b.end_s) for b in bins})
+        rows = self._cumulative_exploration(rows)
         catalog = metric_catalog(r for block in rows.values() for r in block)
         metrics = [m.key for m in catalog]
-        tidy = tidy_frame(bins, rows, metrics)
+        tidy = tidy_frame(bins, rows, metrics).rename(columns=_CUMULATIVE_KEYS)
+        catalog = [_cumulative_metric(m) for m in catalog]
+        metrics = [m.key for m in catalog]
         if shape == "sheets":
             return self._bin_workbook(bins, tidy, catalog)
         if shape == "wide":
@@ -3487,6 +3633,33 @@ class AnalysisWindow(QMainWindow):
         tidy.insert(3, "bin_start_s", [edges[name][0] for name in tidy["bin"]])
         tidy.insert(4, "bin_end_s", [edges[name][1] for name in tidy["bin"]])
         return tidy
+
+    def _cumulative_exploration(self, rows_by_bin: dict[str, list[dict]]) -> dict[str, list[dict]]:
+        """Cells entered and explored % from the first bin's start to each bin's end.
+
+        Coverage only grows, so per bin it reads as "how much of the arena has
+        the animal seen so far". Bins arrive in time order; the cached range
+        rows are copied, not changed, so the epoch table keeps per-range values.
+        """
+        first: dict[int, int] = {}
+        out = {}
+        for key, block in rows_by_bin.items():
+            new = []
+            for index, row in enumerate(block):
+                if row.get("outside") or "explored_percent" not in row:
+                    new.append(row)
+                    continue
+                start = first.setdefault(index, row["start_frame"])
+                result, _why = self._exploration(index, start, row["end_frame"])
+                if result is not None:
+                    row = {
+                        **row,
+                        "cells_entered": result.cells_visited,
+                        "explored_percent": 100.0 * result.fraction,
+                    }
+                new.append(row)
+            out[key] = new
+        return out
 
     @staticmethod
     def _bin_workbook(bins, tidy, catalog) -> dict:

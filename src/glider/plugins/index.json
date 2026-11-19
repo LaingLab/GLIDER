@@ -73,6 +73,21 @@
         "pose"
       ],
       "requirements": []
+    },
+    {
+      "name": "glider-lift3d",
+      "display_name": "3-D Posture (Experimental)",
+      "version": "0.1.0",
+      "pypi": "glider-lift3d",
+      "description": "Mouse 3-D posture from one top-down camera: a height map of the mouse, back-arch eccentricity (after Mittal et al. 2016), body and spine length and rearing, in Session Review and its exports. Estimates, not measurements; the arch needs a 10-keypoint model with a neck.",
+      "author": "Laing Lab",
+      "homepage": "https://github.com/LaingLab/glider/tree/main/plugins/glider-lift3d",
+      "glider_requires": ">=1.0,<2.0",
+      "provides": [
+        "review panel",
+        "range metrics"
+      ],
+      "requirements": []
     }
   ]
 }

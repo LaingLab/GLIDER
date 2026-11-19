@@ -143,6 +143,10 @@ jobs:
           # glider-sleap above, which needs --no-deps to keep TensorFlow out
           # of the matrix: there is nothing here to keep out.
           uv pip install -e ./plugins/glider-sleap-nn
+          # glider-lift3d has no dependencies of its own: torch, OpenCV and
+          # Ultralytics come with GLIDER's vision extra. Its tests use no model
+          # weights (the mask and depth models are optional at run time).
+          uv pip install -e ./plugins/glider-lift3d
 
       - name: Run tests with coverage
         # Force bash on all platforms: the default Windows shell is PowerShell,
@@ -167,6 +171,7 @@ jobs:
           uv run --no-sync pytest tests/ plugins/glider-harp/tests/ \
             plugins/glider-maimu/tests/ plugins/glider-sleap/tests/ \
             plugins/glider-dlc/tests/ plugins/glider-sleap-nn/tests/ \
+            plugins/glider-lift3d/tests/ \
             -v -m "not slow" \
             --cov=glider \
             --cov=glider_harp \
@@ -174,6 +179,7 @@ jobs:
             --cov=glider_sleap \
             --cov=glider_dlc \
             --cov=glider_sleap_nn \
+            --cov=glider_lift3d \
             --cov-report=xml \
             --cov-report=term
 

@@ -864,6 +864,8 @@ class ZoneDialog(QDialog):
         info_layout.addRow("Resolution:", self._res_label)
 
         self._scale_label = QLabel("--")
+        # "none (sizes in px)" beside the label column is wider than the Pi's 480 px.
+        self._scale_label.setWordWrap(True)
         info_layout.addRow("Scale:", self._scale_label)
 
         right_layout.addWidget(info_group)
