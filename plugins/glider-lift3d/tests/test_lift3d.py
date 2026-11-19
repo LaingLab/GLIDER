@@ -295,3 +295,30 @@ def test_fan_out_copies_the_frame_and_never_blocks():
     assert idx == 0 and got is not frame
     frame[:] = 255  # the display drawing on the shared frame
     assert got.max() == 0
+
+
+def test_depth_model_is_fetched_once_and_offline_means_no_depth(tmp_path, monkeypatch):
+    import ultralytics.utils.downloads as dl
+    from glider_lift3d import models
+
+    monkeypatch.setenv("GLIDER_LIFT3D_MODELS", str(tmp_path))
+    monkeypatch.setattr(models, "check_depth_support", lambda: None)
+    calls = []
+
+    def fake_download(target):
+        calls.append(target)
+        target.write_bytes(b"x")
+        return str(target)
+
+    monkeypatch.setattr(dl, "attempt_download_asset", fake_download)
+    assert models.fetch_depth_model() == tmp_path / models.DEPTH_MODEL
+    assert models.fetch_depth_model() == tmp_path / models.DEPTH_MODEL
+    assert len(calls) == 1  # present now: no second download
+
+    (tmp_path / models.DEPTH_MODEL).unlink()
+
+    def offline(target):
+        raise ConnectionError("offline")
+
+    monkeypatch.setattr(dl, "attempt_download_asset", offline)
+    assert models.fetch_depth_model() is None

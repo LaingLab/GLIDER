@@ -69,6 +69,10 @@ class _Worker(QObject):
             from glider.vision.pose.dlc import from_dlc_csv
 
             names = from_dlc_csv(self.pose_csv).keypoint_names
+            if self.config.use_depth and self.config.depth_model is None:
+                from .models import fetch_depth_model
+
+                fetch_depth_model()  # first compute downloads it; None = run without
             try:
                 lift = Lift3D(names, self.config)
             except RuntimeError as e:  # depth model present but Ultralytics too old

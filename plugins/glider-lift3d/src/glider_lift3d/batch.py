@@ -146,6 +146,10 @@ def main(argv: list[str] | None = None) -> int:
         use_depth=not a.no_depth,
         device=a.device,
     )
+    if cfg.use_depth and cfg.depth_model is None:
+        from .models import fetch_depth_model
+
+        fetch_depth_model()
 
     def progress(done, total):
         if done % 300 == 0 or done == total:

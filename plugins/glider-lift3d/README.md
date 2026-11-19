@@ -23,9 +23,13 @@ From the GLIDER checkout, into GLIDER's own environment:
 uv pip install -e plugins/glider-lift3d
 ```
 
-Put the models in `~/.glider/models/lift3d` (or set `GLIDER_LIFT3D_MODELS`). The depth
-model needs `ultralytics>=8.4.192`; without it the lift runs on the mask and keypoints,
-and the depth-only arch trace stays empty.
+Models live in `~/.glider/models/lift3d` (or the folder in `GLIDER_LIFT3D_MODELS`):
+
+* `yolo26x-depth.pt`, Ultralytics' depth model (110 MB), downloads there on the first
+  compute. It needs `ultralytics>=8.4.192`, which GLIDER now requires. Offline, the lift
+  runs without depth and the depth-only arch stays blank.
+* `mouse_seg.pt`, the mouse mask, is copied there by hand from the lab share. Without
+  it the lift uses the keypoints alone.
 
 ## Use in Session Review
 
