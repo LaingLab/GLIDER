@@ -1687,7 +1687,7 @@ QToolButton#landingRecent:hover {
 QToolButton#menuHelpButton {
     background-color: transparent;
     border: 1px solid #475569;                      /* TEXT_DISABLED */
-    border-radius: 10px;
+    border-radius: 10px;  /* geometric: half the 20px box, so a circle */
     color: #94a3b8;                                 /* TEXT_TERTIARY */
     font-size: 12px;
     font-weight: 600;
