@@ -44,10 +44,10 @@ class SamModel:
 
 #: Smallest and fastest first. Ultralytics downloads each on first use.
 SAM_MODELS = (
-    SamModel("mobile_sam.pt", "MobileSAM (fastest)", 40),
-    SamModel("sam2.1_t.pt", "SAM 2.1 tiny", 39),
-    SamModel("sam2.1_s.pt", "SAM 2.1 small", 46),
-    SamModel("sam2.1_b.pt", "SAM 2.1 base (most accurate)", 162),
+    SamModel("mobile_sam.pt", "MobileSAM (fastest)", 39),
+    SamModel("sam2.1_t.pt", "SAM 2.1 tiny", 75),
+    SamModel("sam2.1_s.pt", "SAM 2.1 small", 88),
+    SamModel("sam2.1_b.pt", "SAM 2.1 base (most accurate)", 154),
 )
 DEFAULT_SAM_MODEL = "sam2.1_t.pt"
 
