@@ -430,6 +430,111 @@ class PoseReplay(threading.Thread):
                 pass
 
 
+class ImageLaneWorker(threading.Thread):
+    """Crops, encodes and reduces each tracked frame for the image lane.
+
+    Sits between the tracker and the :class:`FeatureEngine`, so the networks
+    run alongside the pose model rather than after it: per-frame throughput is
+    set by the slower of the two stages, not their sum. Payloads pass through
+    with the frame's reduced lane values appended (``None`` before the first
+    keypoint fix). The crop uses only this frame's and earlier keypoints
+    (:class:`~glider.analysis.behavior.image_lane.CropTracker`), the same
+    policy the offline extraction applies.
+
+    ``encode_ms`` keeps recent per-frame timings so a run can report whether
+    the lane kept up with the camera.
+    """
+
+    def __init__(
+        self,
+        in_queue: queue.Queue,
+        out_queue: queue.Queue,
+        stop_event: threading.Event,
+        artifact,
+        body_axis: tuple[int, int],
+        device: str | None = None,
+        max_batch: int = 8,
+    ):
+        super().__init__(name="ImageLaneWorker", daemon=True)
+        self.in_queue = in_queue
+        self.out_queue = out_queue
+        self.stop_event = stop_event
+        self.artifact = artifact
+        self.body_axis = body_axis
+        self.device = device
+        self.encode_ms: deque[float] = deque(maxlen=300)
+        self.max_batch = int(max_batch)
+        self.error: str | None = None
+
+    def run(self) -> None:
+        from glider.analysis.behavior.image_lane import CropTracker, crop_at, get_encoder
+
+        config = self.artifact.config
+        try:
+            encoder = get_encoder(config, device=self.device)
+        except Exception as e:  # noqa: BLE001 - surfaced through self.error
+            self.error = f"could not load the image-lane models: {e}"
+            self._end()
+            return
+        if not str(encoder.device).startswith("cuda"):
+            # Measured on a 32-core desktop: 76 ms/frame unbatched, 47 ms at
+            # batch 8 -- short of a 33 ms frame at any batch size.
+            logger.warning(
+                "the image lane is running on %s; it needs a CUDA GPU to keep up "
+                "with 30 fps, so frames will be dropped and windows broken",
+                encoder.device,
+            )
+        tracker = CropTracker(config, self.body_axis)
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    batch = [self.in_queue.get(timeout=0.1)]
+                except queue.Empty:
+                    continue
+                # Micro-batch: whatever queued up while the last batch ran is
+                # encoded in one call. Per-frame cost falls steeply with batch
+                # size, so a stall (a GC pause, the pose model's turn on the
+                # GPU) is absorbed instead of overflowing the queue and
+                # dropping frames, which would break every window spanning them.
+                while len(batch) < self.max_batch and batch[-1] is not END_OF_STREAM:
+                    try:
+                        batch.append(self.in_queue.get_nowait())
+                    except queue.Empty:
+                        break
+                ended = batch[-1] is END_OF_STREAM
+                items = batch[:-1] if ended else batch
+                crops, slots = [], []
+                for i, (_idx, frame_bgr, keypoints, _conf) in enumerate(items):
+                    fix = tracker.push(keypoints)
+                    if fix is not None and frame_bgr is not None:
+                        crops.append(crop_at(frame_bgr, fix[0], fix[1], config.crop_px))
+                        slots.append(i)
+                values: list = [None] * len(items)
+                if crops:
+                    t0 = time.perf_counter()
+                    try:
+                        reduced = self.artifact.transform(encoder.encode(crops))
+                    except Exception as e:  # noqa: BLE001
+                        self.error = f"image lane failed on frame {items[slots[0]][0]}: {e}"
+                        return
+                    per_frame = (time.perf_counter() - t0) * 1000.0 / len(crops)
+                    self.encode_ms.extend([per_frame] * len(crops))
+                    for i, row in zip(slots, reduced, strict=True):
+                        values[i] = row
+                for item, v in zip(items, values, strict=True):
+                    _put_or_drop(self.out_queue, (*item, v), self.stop_event)
+                if ended:
+                    return
+        finally:
+            self._end()
+
+    def _end(self) -> None:
+        try:
+            self.out_queue.put(END_OF_STREAM, timeout=1.0)
+        except queue.Full:
+            pass
+
+
 class FeatureEngine(threading.Thread):
     """Per-frame features → sliding buffer → emit rolling row to classifier.
 
@@ -462,6 +567,7 @@ class FeatureEngine(threading.Thread):
         dart_threshold: float | None = None,
         freeze_min_frames: int = 30,
         dart_min_frames: int = 3,
+        image_lane=None,
     ):
         super().__init__(name="FeatureEngine", daemon=True)
         self.tracked_queue = tracked_queue
@@ -490,6 +596,15 @@ class FeatureEngine(threading.Thread):
             spectral_features=spectral_features,
         )
         self._tick: int = 0
+        # Image lane: per-frame values arrive on the payload from the
+        # ImageLaneWorker; each emitted row gets the lane window at the same
+        # (lagged) frame it describes.
+        self._lane = None
+        if image_lane is not None:
+            from glider.analysis.behavior.image_lane import StreamingImageLane
+
+            self._lane = StreamingImageLane(image_lane)
+            self._lane_columns = list(image_lane.columns)
         # Centered-feature lag: the emitted windowed row describes the MIDDLE
         # frame, which trails the current frame by this many frames.
         self._lag = self._extractor.lag
@@ -527,7 +642,9 @@ class FeatureEngine(threading.Thread):
                 if item is END_OF_STREAM:
                     self._end()
                     return
-                frame_idx, _frame_bgr, keypoints, _confidences = item
+                frame_idx, _frame_bgr, keypoints, _confidences = item[:4]
+                if self._lane is not None:
+                    self._lane.push(frame_idx, item[4] if len(item) > 4 else None)
                 if self._speed_axis:
                     spd = self._causal_speed.push(keypoints)
                     self._speed_labels.append(self._freeze_dart.push(spd))
@@ -550,6 +667,9 @@ class FeatureEngine(threading.Thread):
                 # current one by self._lag. Tag it with that index so the
                 # ethogram timeline stays aligned.
                 mid_idx = max(0, frame_idx - self._lag)
+                if self._lane is not None:
+                    column_names = list(column_names) + self._lane_columns
+                    row = np.concatenate([np.asarray(row, float), self._lane.row(mid_idx)])
                 if self._speed_axis:
                     # Speed label for that same middle frame = the oldest entry
                     # in the lag-sized buffer (once it has filled).
@@ -848,6 +968,10 @@ class DisplayConsumer(threading.Thread):
                 if item is END_OF_STREAM:
                     return
                 _frame_idx, frame_bgr, keypoints, confidences = item
+                # Draw on a copy: the tracker hands this same array to the
+                # feature path, and the image lane crops its pixels. Drawing
+                # in place put the skeleton and badge into the lane's input.
+                frame_bgr = frame_bgr.copy()
 
                 # Update render FPS estimate with EMA so the overlay
                 # doesn't flicker. Quick coefficient = 0.1.

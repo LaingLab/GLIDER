@@ -1339,6 +1339,16 @@ class TrainTab(QWidget):
             "mirrors the pose but not the video, so the two would disagree.\n"
             "train_model refuses the combination outright."
         )
+        self._image_lane_check = QCheckBox("Image lane")
+        self._image_lane_check.setToolTip(
+            "Adds an embedding of the animal crop from the source video: mask\n"
+            "shape, DINOv2 and the pose model's neck features (the classifier\n"
+            "the GLIDER paper reports). Needs mouse_seg.pt and mmv2.pt in\n"
+            "~/.glider/models/image_lane (or $GLIDER_IMAGE_LANE_MODELS), and a\n"
+            "GPU to keep up in real time.\n\n"
+            "Cannot be combined with mirror augmentation, for the same reason\n"
+            "as motion features: the video is not mirrored."
+        )
         self._freq_check = QCheckBox("Frequency features")
         self._freq_check.setToolTip(
             "Dominant frequency and spectral flatness per kinematic column —\n"
@@ -1362,18 +1372,20 @@ class TrainTab(QWidget):
 
         options.add(self._traj_check)
         options.add(self._motion_check)
+        options.add(self._image_lane_check)
         options.add(self._freq_check)
         # train_model raises on motion + mirror together, and the raise lands
         # minutes into a fit with the model lost. Enforce it here, where the
         # click happens, rather than letting the run start and fail.
         self._mirror_check.toggled.connect(self._on_motion_mirror_toggled)
         self._motion_check.toggled.connect(self._on_motion_mirror_toggled)
+        self._image_lane_check.toggled.connect(self._on_motion_mirror_toggled)
         self._motion_mirror_hint = hint("")
         options.add(self._motion_mirror_hint)
         self._on_motion_mirror_toggled()
         options.add(
             hint(
-                "These three are computed but off by default, so no existing "
+                "These four are computed but off by default, so no existing "
                 "model used them. Turning one on changes the feature set, and "
                 "the resulting model is not comparable to one trained without it."
             )
@@ -1411,31 +1423,35 @@ class TrainTab(QWidget):
         self._refresh_counts()
 
     def _on_motion_mirror_toggled(self, *_args) -> None:
-        """Keep motion features and mirror augmentation mutually exclusive.
+        """Keep the video-read features and mirror augmentation mutually exclusive.
 
         The pipeline mirrors the pose but not the source video, so motion
-        features read from the video would disagree with the mirrored pose;
-        ``train_model`` refuses the pair. Whichever the operator picked most
-        recently wins, and the other is cleared and greyed out with the reason
-        on screen — a disabled box with no explanation reads as a bug.
+        features and the image lane, both read from the video, would disagree
+        with the mirrored pose; ``train_model`` refuses either pair. Whichever
+        the operator picked most recently wins, and the other is cleared and
+        greyed out with the reason on screen — a disabled box with no
+        explanation reads as a bug.
         """
-        mirror, motion = self._mirror_check, self._motion_check
-        # Signals are blocked while clearing so the two handlers do not
-        # bounce the state between them.
-        if mirror.isChecked() and motion.isChecked():
-            loser = motion if self.sender() is mirror else mirror
-            loser.blockSignals(True)
-            loser.setChecked(False)
-            loser.blockSignals(False)
+        mirror = self._mirror_check
+        video = [self._motion_check, self._image_lane_check]
+        # Signals are blocked while clearing so the handlers do not bounce the
+        # state between them.
+        if mirror.isChecked() and any(box.isChecked() for box in video):
+            losers = [b for b in video if b.isChecked()] if self.sender() is mirror else [mirror]
+            for loser in losers:
+                loser.blockSignals(True)
+                loser.setChecked(False)
+                loser.blockSignals(False)
 
-        motion.setEnabled(not mirror.isChecked())
-        mirror.setEnabled(not motion.isChecked())
+        for box in video:
+            box.setEnabled(not mirror.isChecked())
+        mirror.setEnabled(not any(box.isChecked() for box in video))
         if mirror.isChecked():
-            note = "Motion features are unavailable while mirror augment is on."
-        elif motion.isChecked():
-            note = "Mirror augment is unavailable while motion features are on."
+            note = "Motion features and the image lane are unavailable while mirror augment is on."
+        elif any(box.isChecked() for box in video):
+            note = "Mirror augment is unavailable while a video feature is on."
         else:
-            note = "Motion features and mirror augment cannot be used together."
+            note = "Motion features and the image lane cannot be used with mirror augment."
         self._motion_mirror_hint.setText(note)
 
     def _refresh_window_hint(self) -> None:
@@ -1561,6 +1577,7 @@ class TrainTab(QWidget):
             "random_state": int(self._seed_spin.value()),
             "traj_features": self._traj_check.isChecked(),
             "motion_features": self._motion_check.isChecked(),
+            "image_lane": self._image_lane_check.isChecked(),
             "freq_features": self._freq_check.isChecked(),
             "embedding": self._embedding_combo.currentData(),
             # 0 is the spin box's "auto": leave fps unset and let the pipeline
