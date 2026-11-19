@@ -55,7 +55,7 @@ from glider.gui.panels.experiment_page import ExperimentPage
 from glider.gui.panels.hardware_panel import HardwarePanel
 from glider.gui.panels.node_editor_controller import NodeEditorController, node_category_for_type
 from glider.gui.panels.node_library_panel import NodeLibraryPanel
-from glider.gui.panels.tools_page import ToolsPage
+from glider.gui.panels.tools_page import ToolCard, ToolsPage
 from glider.gui.runner.finger_scroll import FingerScroll
 from glider.gui.runner.notice_bar import NoticeBar
 from glider.gui.runner.pi_dashboard import PiDashboard
@@ -160,7 +160,7 @@ MENU_BAR_TITLES = ("File", "Edit", "Experiment", "View", "Help")
 # Experiment and Tools did not satisfy it at all, which is the bug this list now
 # exists to prevent. Experiment Settings, Add Subject and Lab Setup have exactly
 # one call site each and it is the menu action; so do Behavior Analysis, Batch
-# Pose Tracking, Session Review, GPU / Device Check and Plugins. Eight actions
+# Pose Tracking, Session Review, Device Check and Plugins. Eight actions
 # whose only route was a palette you have to know about first -- in an
 # application whose own comment three lines up says every user is a first-time
 # user. Five strings elsewhere in the app were still telling people to use those
@@ -1012,7 +1012,13 @@ class MainWindow(QMainWindow):
             self._node_editor.set_zone_configuration(self._zone_config)
 
     def _create_tools_page(self) -> None:
-        """Build the Tools tab: a front door for each tool window.
+        """Build the Tools tab from :meth:`_tool_cards`."""
+        self._tools_page = ToolsPage(self._tool_cards(), parent=self, subheading="", plain=True)
+        self._tools_page.tool_chosen.connect(self._on_tool_chosen)
+        self._tools_page.install_requested.connect(self._on_install_extra)
+
+    def _tool_cards(self) -> list[ToolCard]:
+        """The tool cards shared by the Tools tab and the landing page.
 
         The availability probes are the same ones the Tools menu used, and are
         still lazy imports for the same reason -- they pull the optional
@@ -1028,7 +1034,6 @@ class MainWindow(QMainWindow):
             behavior_available,
             missing_behavior_deps,
         )
-        from glider.gui.panels.tools_page import ToolCard
         from glider.gui.pose_batch.availability import (
             missing_pose_batch_deps,
             pose_batch_available,
@@ -1099,7 +1104,7 @@ class MainWindow(QMainWindow):
             ),
             ToolCard(
                 key="devices",
-                title="GPU / Device Check",
+                title="Device Check",
                 description=(
                     "What inference will actually run on, and why. Worth opening "
                     "precisely when something is missing."
@@ -1113,13 +1118,37 @@ class MainWindow(QMainWindow):
                     "Swap a CPU-only PyTorch for the CUDA build your NVIDIA card can "
                     "run, so tracking and pose models use the GPU."
                 ),
-                glyph="devices",
+                glyph="gpu",
             ),
         ]
 
-        self._tools_page = ToolsPage(cards, parent=self)
-        self._tools_page.tool_chosen.connect(self._on_tool_chosen)
-        self._tools_page.install_requested.connect(self._on_install_extra)
+        return cards
+
+    def _landing_tool_cards(self) -> list[ToolCard]:
+        """The Tools tab's cards plus Plugins, for the landing page.
+
+        Plugins has its own section on the Experiment tab, which is the one
+        place it can be found once an experiment is open -- and the one place
+        it cannot before. The plugin browser needs no experiment, so the
+        landing page offers it alongside the tools.
+        """
+        return [
+            *self._tool_cards(),
+            ToolCard(
+                key="plugins",
+                title="Plugins",
+                description="Browse the plugin catalogue and install hardware and analysis add-ons.",
+                glyph="plugins",
+            ),
+        ]
+
+    def _tool_pages(self) -> list[ToolsPage]:
+        """Every set of tool cards on screen, so an install reports on all."""
+        pages = [getattr(self, "_tools_page", None)]
+        landing = getattr(self, "_landing_page", None)
+        if landing is not None:
+            pages.append(landing.tools())
+        return [page for page in pages if page is not None]
 
     def _on_install_extra(self, extra: str) -> None:
         """Install an extra from its card, then offer the restart that loads it.
@@ -1129,13 +1158,16 @@ class MainWindow(QMainWindow):
         """
         from glider.plugins.installer import install_extra
 
-        page = self._tools_page
-        page.set_install_status(extra, f"Installing the {extra} extra…", busy=True)
+        def _status(message: str, busy: bool) -> None:
+            for page in self._tool_pages():
+                page.set_install_status(extra, message, busy=busy)
+
+        _status(f"Installing the {extra} extra…", True)
 
         async def _install() -> None:
             result = await install_extra(
                 extra,
-                on_output=lambda line: page.set_install_status(extra, line[-120:], busy=True),
+                on_output=lambda line: _status(line[-120:], True),
             )
             # The dialogs run a nested event loop, and the restart closes the
             # window; inside this task both deadlock qasync ("Cannot enter into
@@ -1146,16 +1178,18 @@ class MainWindow(QMainWindow):
 
     def _after_install_extra(self, extra: str, result) -> None:
         """Report an extra's install, and offer the restart if it worked."""
-        page = self._tools_page
+        pages = self._tool_pages()
         if not result.ok:
-            page.set_install_status(extra, f"Install failed: {result.message}", busy=False)
+            for page in pages:
+                page.set_install_status(extra, f"Install failed: {result.message}", busy=False)
             box = QMessageBox(
                 QMessageBox.Icon.Warning, "Install failed", result.message, parent=self
             )
             box.setDetailedText(result.output[-8000:])
             box.exec()
             return
-        page.set_install_status(extra, "Installed. Restart GLIDER to use it.", busy=True)
+        for page in pages:
+            page.set_install_status(extra, "Installed. Restart GLIDER to use it.", busy=True)
         answer = QMessageBox.question(
             self,
             "Restart GLIDER?",
@@ -1194,6 +1228,7 @@ class MainWindow(QMainWindow):
             "multicam": self._open_multi_camera,
             "devices": self._on_gpu_check,
             "gpu_install": self._on_install_gpu_support,
+            "plugins": self._on_open_plugins,
         }.get(key)
         if opener is None:  # pragma: no cover - a card with no handler
             logger.warning("No handler for tool card %r", key)
@@ -1201,13 +1236,19 @@ class MainWindow(QMainWindow):
         opener()
 
     def _create_landing_page(self) -> None:
-        """Build the landing page and wire its five actions to the window."""
-        self._landing_page = LandingPage(settings=self._settings, parent=self)
+        """Build the landing page and wire its actions to the window.
+
+        The tool cards ride on the same handlers as the Tools tab's, so a tool
+        opened from here is the same window, opened the same way.
+        """
+        self._landing_page = LandingPage(
+            settings=self._settings, parent=self, tool_cards=self._landing_tool_cards()
+        )
+        self._landing_page.tool_chosen.connect(self._on_tool_chosen)
+        self._landing_page.install_requested.connect(self._on_install_extra)
         self._landing_page.new_requested.connect(self._on_landing_new)
         self._landing_page.open_requested.connect(self._on_landing_open)
         self._landing_page.recent_requested.connect(self._on_landing_recent)
-        self._landing_page.lab_setup_requested.connect(self._on_lab_setup)
-        self._landing_page.guide_requested.connect(self._on_landing_guide)
 
     def _wire_tab_bar(self) -> None:
         """Connect the tabs to the stack, in both directions.
@@ -1328,6 +1369,26 @@ class MainWindow(QMainWindow):
             return
         if self._load_experiment_path(path):
             self._leave_landing()
+
+    def _build_help_button(self) -> QToolButton:
+        """The round "?" in the menu bar's right corner.
+
+        Holds what used to be the landing page's footer links -- the User Guide
+        and lab setup -- so they are one click away on every page instead of
+        hanging under the start card.
+        """
+        button = QToolButton(self)
+        button.setObjectName("menuHelpButton")
+        button.setText("?")
+        button.setToolTip("Help")
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(button)
+        menu.addAction("User Guide", self._on_landing_guide)
+        menu.addAction("Set up your lab…", self._on_lab_setup)
+        button.setMenu(menu)
+        self._help_button = button
+        return button
 
     def _on_landing_guide(self) -> None:
         from PyQt6.QtGui import QDesktopServices
@@ -2068,12 +2129,7 @@ class MainWindow(QMainWindow):
 
         menubar = self.menuBar()
 
-        branding = QLabel("GLIDER")
-        branding.setStyleSheet(
-            f"font-weight: 600; color: {colors.ACCENT}; font-size: 13px; "
-            f"letter-spacing: 0.5px; padding: 0 12px 0 4px;"
-        )
-        menubar.setCornerWidget(branding, Qt.Corner.TopLeftCorner)
+        menubar.setCornerWidget(self._build_help_button(), Qt.Corner.TopRightCorner)
 
         # File menu
         file_menu = self._menu("&File")
@@ -2326,7 +2382,7 @@ class MainWindow(QMainWindow):
 
         # GPU / device diagnostics. Always enabled — it's most useful precisely
         # when torch or a GPU is missing, and it reports that cleanly.
-        gpu_check_action = QAction("&GPU / Device Check…", self)
+        gpu_check_action = QAction("&Device Check…", self)
         gpu_check_action.triggered.connect(self._on_gpu_check)
         tools_menu.addAction(gpu_check_action)
 
@@ -4476,7 +4532,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _on_gpu_check(self) -> None:
-        """Show accelerator diagnostics (the Tools tab's GPU / Device Check).
+        """Show accelerator diagnostics (the Tools tab's Device Check).
 
         Reuses the pose subsystem's device utilities so the report matches what
         inference resolves at runtime (CUDA > MPS > CPU). Works — and is worth
@@ -4485,7 +4541,7 @@ class MainWindow(QMainWindow):
         try:
             from glider.vision.pose.device import diagnose, format_gpu_info, resolve_device
         except Exception as e:  # pragma: no cover - only on a broken vision install
-            QMessageBox.warning(self, "GPU / Device Check", f"Diagnostics unavailable: {e}")
+            QMessageBox.warning(self, "Device Check", f"Diagnostics unavailable: {e}")
             return
 
         marks = {"ok": "✓", "warn": "⚠", "fail": "✗", "info": "·"}
@@ -4500,7 +4556,7 @@ class MainWindow(QMainWindow):
         lines += ["", f"Inference will use: {selected}"]
 
         box = QMessageBox(self)
-        box.setWindowTitle("GPU / Device Check")
+        box.setWindowTitle("Device Check")
         box.setIcon(QMessageBox.Icon.Information)
         box.setText("GLIDER GPU / device check")
         box.setInformativeText("\n".join(lines))

@@ -44,12 +44,18 @@ from glider.gui.widgets.pastel_glyphs import glyph_icon
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CARD_ICON_PX", "ToolCard", "ToolsPage"]
+__all__ = ["CARD_ICON_PX", "DEFAULT_SUBHEADING", "ToolCard", "ToolsPage"]
 
 #: Card glyph edge length in pixels. Much larger than the rail's 20px: a card
 #: is a target you pick out of a page, and the illustration is what you pick it
 #: out by.
 CARD_ICON_PX = 40
+
+#: The Tools tab's line under its heading.
+DEFAULT_SUBHEADING = (
+    "Analysis and recording tools. Each opens in its own window, so you "
+    "can keep working here while it runs."
+)
 
 
 @dataclass(frozen=True)
@@ -84,6 +90,15 @@ class ToolsPage(QWidget):
 
     Args:
         cards: The tools, in the order they should be offered.
+        heading: The title above the cards.
+        subheading: The line under the title.
+        plain: Name and icon only. The description becomes the card's
+            tooltip, and the line under each card is shown only while an
+            install is reporting progress.
+        embedded: Build for a host that already scrolls -- the landing page's
+            right-hand column -- rather than as a page of its own: no scroll
+            area of its own (a scroll area inside a scroll area traps the
+            wheel) and no page margins.
         parent: Standard Qt parent.
 
     Signals:
@@ -96,9 +111,19 @@ class ToolsPage(QWidget):
     tool_chosen = pyqtSignal(str)
     install_requested = pyqtSignal(str)
 
-    def __init__(self, cards: list[ToolCard], parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        cards: list[ToolCard],
+        parent: QWidget | None = None,
+        *,
+        heading: str = "Tools",
+        subheading: str = DEFAULT_SUBHEADING,
+        embedded: bool = False,
+        plain: bool = False,
+    ) -> None:
         super().__init__(parent)
-        self.setObjectName("toolsPage")
+        self.setObjectName("toolsEmbedded" if embedded else "toolsPage")
+        self._plain = plain
         self._cards = list(cards)
         self._frames: dict[str, QFrame] = {}
         self._install_rows: dict[str, tuple[QLabel, QPushButton]] = {}
@@ -107,38 +132,45 @@ class ToolsPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        scroll = QScrollArea(self)
-        scroll.setObjectName("toolsScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        outer.addWidget(scroll)
-
         host = QWidget()
         host.setObjectName("toolsHost")
         column = QVBoxLayout(host)
-        column.setContentsMargins(28, 24, 28, 24)
+        if embedded:
+            column.setContentsMargins(0, 0, 0, 0)
+        else:
+            column.setContentsMargins(28, 24, 28, 24)
         column.setSpacing(10)
 
-        heading = QLabel("Tools")
-        heading.setObjectName("toolsHeading")
-        column.addWidget(heading)
+        if heading:
+            heading_label = QLabel(heading)
+            heading_label.setObjectName("toolsHeading")
+            column.addWidget(heading_label)
 
-        subheading = QLabel(
-            "Analysis and recording tools. Each opens in its own window, so you "
-            "can keep working here while it runs."
-        )
-        subheading.setObjectName("toolsSubheading")
-        subheading.setWordWrap(True)
-        column.addWidget(subheading)
-        column.addSpacing(8)
+        if subheading:
+            subheading_label = QLabel(subheading)
+            subheading_label.setObjectName("toolsSubheading")
+            subheading_label.setWordWrap(True)
+            column.addWidget(subheading_label)
+        if heading or subheading:
+            column.addSpacing(8)
 
         for card in self._cards:
             frame = self._build_card(card)
             self._frames[card.key] = frame
             column.addWidget(frame)
 
+        if embedded:
+            column.addStretch(1)
+            outer.addWidget(host)
+            return
+
         column.addStretch(1)
+        scroll = QScrollArea(self)
+        scroll.setObjectName("toolsScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(host)
+        outer.addWidget(scroll)
 
     # ------------------------------------------------------------------ build
 
@@ -176,6 +208,9 @@ class ToolsPage(QWidget):
         body.setObjectName("toolCardBody" if card.available else "toolCardUnavailable")
         body.setWordWrap(True)
         text.addWidget(body)
+        if self._plain:
+            frame.setToolTip(body.text())
+            body.setVisible(False)
 
         row.addLayout(text, 1)
         if not card.available and card.install_extra:
@@ -194,6 +229,7 @@ class ToolsPage(QWidget):
             if card.install_extra == extra and card.key in self._install_rows:
                 body, button = self._install_rows[card.key]
                 body.setText(message)
+                body.setVisible(True)
                 button.setEnabled(not busy)
 
     def install_button(self, key: str) -> QPushButton | None:

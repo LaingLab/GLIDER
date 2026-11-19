@@ -155,10 +155,10 @@ def test_tools_menu_has_gpu_check_action(qtbot):
         tools = _find_menu(win, "Tools")
         assert tools is not None, "Tools menu missing"
         gpu = next(
-            (a for a in tools.actions() if "GPU / Device Check" in a.text().replace("&", "")),
+            (a for a in tools.actions() if "Device Check" in a.text().replace("&", "")),
             None,
         )
-        assert gpu is not None, "GPU / Device Check action missing"
+        assert gpu is not None, "Device Check action missing"
         # Always enabled — it reports missing torch/GPU rather than being gated.
         assert gpu.isEnabled() is True
     finally:
