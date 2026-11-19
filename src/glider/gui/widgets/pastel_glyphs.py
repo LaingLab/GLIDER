@@ -79,6 +79,7 @@ GLYPH_COLOURS: dict[str, str] = {
     "review": colors.PASTEL_PEACH,
     "multicam": colors.PASTEL_SKY,
     "devices": colors.PASTEL_MINT,
+    "gpu": colors.PASTEL_SKY,
     "annotator": colors.PASTEL_PEACH,
 }
 

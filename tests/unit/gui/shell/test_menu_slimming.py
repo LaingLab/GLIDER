@@ -76,7 +76,7 @@ ACTIONS_THE_REMOVED_MENUS_CARRIED = {
         "Behavior Analysis…",
         "Batch Pose Tracking…",
         "Session Review…",
-        "GPU / Device Check…",
+        "Device Check…",
         "Plugins…",
     ],
 }

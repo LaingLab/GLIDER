@@ -1,4 +1,4 @@
-"""The project's images as a grid: four across, every frame, keypoints drawn on.
+"""The project's images as a grid: four across, every frame, its labels drawn on.
 
 
 Thumbnails are made on demand, the first time a tile is painted, and cached;
@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from PyQt6.QtCore import QAbstractListModel, QModelIndex, QRect, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
+from PyQt6.QtCore import QAbstractListModel, QModelIndex, QPointF, QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import QListView, QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from glider.gui.styles import colors
@@ -65,7 +65,20 @@ def render_thumbnail(project: StudioProject, frame: FrameRecord, width: int = _T
         instances = project.read_instances(frame)
     except ValueError:
         instances = []
-    if instances:
+    if instances and project.is_segment:
+        from glider.gui.animal_annotator.seg_canvas import class_colour
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        for inst in instances:
+            colour = class_colour(inst.class_id)
+            fill = QColor(colour)
+            fill.setAlpha(90)
+            painter.setPen(QPen(colour, 1.2))
+            painter.setBrush(fill)
+            painter.drawPolygon(QPolygonF([QPointF(x * sw, y * sh) for x, y in inst.polygon]))
+        painter.end()
+    elif instances:
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         for inst in instances:
