@@ -258,6 +258,20 @@ def _select_all_text() -> str:
     )
 
 
+#: Time-bin export: exploration accumulates from the first bin (see
+#: ``AnalysisWindow._cumulative_exploration``), so its columns say so.
+_CUMULATIVE_KEYS = {
+    "cells_entered": "cells_entered_cumulative",
+    "explored_percent": "explored_percent_cumulative",
+}
+
+
+def _cumulative_metric(metric):
+    if metric.key not in _CUMULATIVE_KEYS:
+        return metric
+    return replace(metric, key=_CUMULATIVE_KEYS[metric.key], label=f"{metric.label}, cumulative")
+
+
 def _zero_fill_across_epochs(rows_by_epoch: dict[str, list[dict]]) -> dict[str, list[dict]]:
     """Zero-fill ``<state>_s`` and ``_bouts`` using the states seen in *any* epoch.
 
@@ -3604,9 +3618,12 @@ class AnalysisWindow(QMainWindow):
         if not bins:
             return None
         rows = _zero_fill_across_epochs({b.key: self.range_rows(b.start_s, b.end_s) for b in bins})
+        rows = self._cumulative_exploration(rows)
         catalog = metric_catalog(r for block in rows.values() for r in block)
         metrics = [m.key for m in catalog]
-        tidy = tidy_frame(bins, rows, metrics)
+        tidy = tidy_frame(bins, rows, metrics).rename(columns=_CUMULATIVE_KEYS)
+        catalog = [_cumulative_metric(m) for m in catalog]
+        metrics = [m.key for m in catalog]
         if shape == "sheets":
             return self._bin_workbook(bins, tidy, catalog)
         if shape == "wide":
@@ -3616,6 +3633,33 @@ class AnalysisWindow(QMainWindow):
         tidy.insert(3, "bin_start_s", [edges[name][0] for name in tidy["bin"]])
         tidy.insert(4, "bin_end_s", [edges[name][1] for name in tidy["bin"]])
         return tidy
+
+    def _cumulative_exploration(self, rows_by_bin: dict[str, list[dict]]) -> dict[str, list[dict]]:
+        """Cells entered and explored % from the first bin's start to each bin's end.
+
+        Coverage only grows, so per bin it reads as "how much of the arena has
+        the animal seen so far". Bins arrive in time order; the cached range
+        rows are copied, not changed, so the epoch table keeps per-range values.
+        """
+        first: dict[int, int] = {}
+        out = {}
+        for key, block in rows_by_bin.items():
+            new = []
+            for index, row in enumerate(block):
+                if row.get("outside") or "explored_percent" not in row:
+                    new.append(row)
+                    continue
+                start = first.setdefault(index, row["start_frame"])
+                result, _why = self._exploration(index, start, row["end_frame"])
+                if result is not None:
+                    row = {
+                        **row,
+                        "cells_entered": result.cells_visited,
+                        "explored_percent": 100.0 * result.fraction,
+                    }
+                new.append(row)
+            out[key] = new
+        return out
 
     @staticmethod
     def _bin_workbook(bins, tidy, catalog) -> dict:

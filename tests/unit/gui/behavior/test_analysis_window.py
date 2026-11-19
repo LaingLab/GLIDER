@@ -3847,6 +3847,20 @@ class TestArenaGrid:
         assert rows[0]["explored_percent"] == pytest.approx(200 / 9)
         assert "explored_percent" in [m.key for m in metric_catalog(rows)]
 
+    def test_time_bins_accumulate_exploration_from_the_first_bin(self, qtbot, tmp_path):
+        # 10 s at 30 fps; the walk is in cell 0 to frame 212, then cell 1. On its
+        # own the last 2.5 s bin sees only cell 1; summed from the start it is 2.
+        win = self._win(qtbot, tmp_path)
+        frame = win.bin_frame(0.0, 10.0, 2.5, "tidy")
+        assert frame["cells_entered_cumulative"].tolist() == [1, 1, 2, 2]
+        assert frame["explored_percent_cumulative"].tolist() == pytest.approx(
+            [100 / 9, 100 / 9, 200 / 9, 200 / 9]
+        )
+        assert "explored_percent" not in frame
+        assert win.range_rows(7.5, 10.0)[0]["cells_entered"] == 1  # the epoch table is per range
+        sheets = win.bin_frame(0.0, 10.0, 2.5, "sheets")
+        assert "Explored %, cumulative" in sheets
+
     def test_an_arena_set_here_is_saved_beside_the_session(self, qtbot, tmp_path):
         from glider.analysis.behavior.exploration import read_arena
         from glider.vision.arena import ArenaCalibration
