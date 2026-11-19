@@ -1,9 +1,13 @@
-"""Animal Annotator: label frames from your videos and export a YOLO pose dataset.
+"""Animal Annotator: label frames from your videos and export a YOLO dataset.
 
-Phase 1 of #224. The window has two steps, one tab each:
+Phase 1 of #224. A project labels either keypoints (pose) or outlines
+(instance segmentation), chosen when it is made. The window has two steps,
+one tab each:
 
 1. **Frames** -- add videos and pull frames worth labelling out of them.
-2. **Label** -- place keypoints on each frame, for every animal in it.
+2. **Label** -- place keypoints, or draw outlines, on every animal in each
+   frame. Outlines can be drawn by hand or proposed by Segment Anything
+   from a click or a box (the Auto tool).
 
 **Export Dataset** writes ``data.yaml`` with the train/val lists, ready for
 Ultralytics. Training inside GLIDER comes next, on this same project folder.
@@ -18,7 +22,7 @@ import math
 import threading
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QSettings, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QSettings, Qt, QThread, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QButtonGroup,
@@ -28,6 +32,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -48,6 +53,7 @@ from glider.core.presets import slugify
 from glider.gui.animal_annotator.canvas import SEQUENTIAL, SKELETON, LabelCanvas, read_image
 from glider.gui.animal_annotator.gallery import GalleryView
 from glider.gui.animal_annotator.history import LABELS, SKIP, Edit, History
+from glider.gui.animal_annotator.seg_canvas import AUTO, POLYGON, SegmentCanvas, class_colour
 from glider.gui.animal_annotator.skeleton_editor import (
     SkeletonCanvas,
     SkeletonEditorDialog,
@@ -59,7 +65,14 @@ from glider.gui.styles import colors
 from glider.gui.widgets.pastel_glyphs import lucide_icon
 from glider.vision.training.dataset import DatasetError, export_dataset
 from glider.vision.training.frames import ExtractionCancelledError, extract_frames
-from glider.vision.training.project import PROJECT_FILE, StudioProject, StudioProjectError
+from glider.vision.training.project import (
+    PROJECT_FILE,
+    TASK_POSE,
+    TASK_SEGMENT,
+    StudioProject,
+    StudioProjectError,
+)
+from glider.vision.training.sam import DEFAULT_SAM_MODEL, SAM_MODELS
 from glider.vision.training.templates import SkeletonTemplate, TemplateKeypoint, palette_colour
 
 logger = logging.getLogger(__name__)
@@ -75,6 +88,8 @@ def _all_templates() -> list[SkeletonTemplate]:
 
 _SETTINGS_LAST = "animal_annotator/last_project"
 _SETTINGS_MODE = "animal_annotator/label_mode"
+_SETTINGS_SEG_TOOL = "animal_annotator/seg_tool"
+_SETTINGS_SAM_MODEL = "animal_annotator/sam_model"
 _VIDEO_FILTER = "Videos (*.mp4 *.avi *.mov *.mkv *.m4v);;All files (*)"
 
 #: Frame-list filters: label, and which statuses each shows.
@@ -175,6 +190,24 @@ class NewProjectDialog(QDialog):
         form.addRow("", self._folder_label)
         self._location.textChanged.connect(self._update_folder)
 
+        self._task = QComboBox()
+        self._task.addItem("Pose — keypoints", TASK_POSE)
+        self._task.addItem("Instance segmentation — outlines", TASK_SEGMENT)
+        self._task.setToolTip(
+            "Pose trains a model that finds body parts; segmentation trains one that "
+            "outlines each animal. A project does one or the other."
+        )
+        self._task.currentIndexChanged.connect(self._on_task_changed)
+        form.addRow("Labels", self._task)
+
+        self._classes = QLineEdit("animal")
+        self._classes.setToolTip(
+            "What you will outline, separated by commas, e.g. 'mouse, pup'. "
+            "More can be added later."
+        )
+        form.addRow("Classes", self._classes)
+        self._form = form
+
         skeleton = QHBoxLayout()
         skeleton.setSpacing(12)
         preview_frame, preview_layout = _panel()
@@ -205,6 +238,8 @@ class NewProjectDialog(QDialog):
         right.addStretch()
         skeleton.addLayout(right, 1)
         form.addRow("Skeleton", skeleton)
+        self._skeleton_row = form.rowCount() - 1
+        self._classes_row = form.rowCount() - 2
         outer.addLayout(form)
 
         buttons = QHBoxLayout()
@@ -221,11 +256,32 @@ class NewProjectDialog(QDialog):
 
         self._on_template(self._picker.current.copy(self._picker.current.name))
         self._update_folder()
+        self._on_task_changed()
         self.resize(600, self.sizeHint().height())
 
     @property
     def name(self) -> str:
         return self._name.text().strip()
+
+    @property
+    def task(self) -> str:
+        return self._task.currentData()
+
+    def set_task(self, task: str) -> None:
+        self._task.setCurrentIndex(max(0, self._task.findData(task)))
+
+    @property
+    def class_names(self) -> list[str]:
+        """The classes typed, for a segmentation project; ``["animal"]`` for pose."""
+        if self.task != TASK_SEGMENT:
+            return ["animal"]
+        return [n.strip() for n in self._classes.text().split(",") if n.strip()]
+
+    def _on_task_changed(self, _index: int = 0) -> None:
+        segment = self.task == TASK_SEGMENT
+        self._form.setRowVisible(self._skeleton_row, not segment)
+        self._form.setRowVisible(self._classes_row, segment)
+        self.adjustSize()
 
     @property
     def folder(self) -> Path:
@@ -256,7 +312,16 @@ class NewProjectDialog(QDialog):
             self._location.setText(path)
 
     def _accept(self) -> None:
-        problem = self._template.problem()
+        if self.task == TASK_SEGMENT:
+            names = self.class_names
+            if not names or len(set(names)) != len(names):
+                QMessageBox.warning(
+                    self, "Classes", "Give at least one class, each name only once."
+                )
+                return
+            problem = None
+        else:
+            problem = self._template.problem()
         if problem:
             QMessageBox.warning(self, "Keypoints", f"These keypoints can't be used: {problem}.")
             return
@@ -318,13 +383,67 @@ class ExtractWorker(QObject):
         self.finished.emit(added, errors)
 
 
+class SamWorker(QObject):
+    """Runs Segment Anything off the UI thread for the Auto tool.
+
+    Requests arrive through a queued signal, one per change of clicks. Only
+    the newest matters, so any request older than :attr:`latest` (set from the
+    UI thread) is dropped unrun: a burst of clicks costs one SAM call, not one
+    per click.
+    """
+
+    #: request id, polygon in image pixels (list) or None, error text ("" if none)
+    result = pyqtSignal(int, object, str)
+    status = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.latest = 0
+        self._segmenter = None
+
+    @pyqtSlot(int, str, str, object, object, object, object)
+    def run(self, request: int, model: str, key: str, image, points, labels, box) -> None:
+        if request < self.latest:
+            return
+        from glider.vision.training.sam import SAM_MODELS, SamSegmenter, mask_to_polygon
+
+        try:
+            if self._segmenter is None or self._segmenter.model != model:
+                info = next((m for m in SAM_MODELS if m.file == model), None)
+                self.status.emit(
+                    f"Loading {info.label if info else model}… "
+                    f"(first use downloads about {info.size_mb if info else '?'} MB)"
+                )
+                self._segmenter = SamSegmenter(model)
+                self._segmenter.load()
+            if self._segmenter.image_key != key:
+                self.status.emit("Reading the frame…")
+                self._segmenter.set_image(key, image)
+            if request < self.latest:
+                return
+            self.status.emit("Segmenting…")
+            mask = self._segmenter.segment(points, labels, box)
+            polygon = mask_to_polygon(mask) if mask is not None else None
+            self.result.emit(request, polygon, "")
+        except ImportError as e:
+            logger.exception("SAM unavailable")
+            self.result.emit(request, None, f"Segment Anything needs Ultralytics and PyTorch: {e}")
+        except Exception as e:  # report it in the window and keep the tool usable
+            logger.exception("SAM failed")
+            self._segmenter = None
+            self.result.emit(request, None, str(e) or type(e).__name__)
+
+
 # ----------------------------------------------------------------------
 # the window
 # ----------------------------------------------------------------------
 
 
 class AnimalAnnotatorWindow(QMainWindow):
-    """Label frames and build a pose dataset."""
+    """Label frames and build a pose or instance-segmentation dataset."""
+
+    #: request id, model file, frame key, BGR image, points, labels, box
+    _sam_request = pyqtSignal(int, str, str, object, object, object, object)
 
     def __init__(self, parent=None, settings: QSettings | None = None):
         super().__init__(parent)
@@ -339,6 +458,10 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._history = History()
         #: The shown frame's labels as last saved: what an edit is undone to.
         self._baseline: list = []
+        # Auto (SAM) tool: started on first use, kept for the window's life.
+        self._sam_thread: QThread | None = None
+        self._sam_worker: SamWorker | None = None
+        self._sam_request_id = 0
 
         self.setStyleSheet(studio_stylesheet())
         central = QWidget()
@@ -685,6 +808,26 @@ class AnimalAnnotatorWindow(QMainWindow):
             self._mode_group.addButton(button)
             self._mode_buttons[mode] = button
             top_row.addWidget(button)
+        # Segmentation projects: the same two-part switch, with their tools.
+        self._tool_group = QButtonGroup(self)
+        self._tool_buttons: dict[str, QPushButton] = {}
+        for tool, label, tip, side in (
+            (POLYGON, "Polygon", "Click round the animal to outline it", "left"),
+            (
+                AUTO,
+                "Auto",
+                "Segment Anything: click the animal, or drag a box round it",
+                "right",
+            ),
+        ):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setProperty("segment", side)
+            button.setToolTip(f"{tip} (M switches)")
+            button.clicked.connect(lambda _c=False, t=tool: self._set_tool(t))
+            self._tool_group.addButton(button)
+            self._tool_buttons[tool] = button
+            top_row.addWidget(button)
         top_row.addSpacing(10)
         undo_key = QKeySequence(QKeySequence.StandardKey.Undo).toString(
             QKeySequence.SequenceFormat.NativeText
@@ -710,9 +853,39 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._hint.setTextFormat(Qt.TextFormat.RichText)
         top_row.addWidget(self._hint, 1)
         middle_layout.addLayout(top_row)
+
+        # The Auto tool's bar: which SAM model, accept, and what SAM is doing.
+        self._auto_bar = QWidget()
+        auto_row = QHBoxLayout(self._auto_bar)
+        auto_row.setContentsMargins(0, 0, 0, 0)
+        auto_row.setSpacing(8)
+        auto_row.addWidget(muted(QLabel("Model")))
+        self._sam_model = QComboBox()
+        for model in SAM_MODELS:
+            self._sam_model.addItem(model.label, model.file)
+        saved = self._settings.value(_SETTINGS_SAM_MODEL, DEFAULT_SAM_MODEL, type=str)
+        self._sam_model.setCurrentIndex(max(0, self._sam_model.findData(saved)))
+        self._sam_model.setToolTip(
+            "The Segment Anything model that proposes outlines. Each downloads once, "
+            "on first use. Bigger is more accurate and slower on a CPU."
+        )
+        self._sam_model.currentIndexChanged.connect(self._on_sam_model_changed)
+        auto_row.addWidget(self._sam_model)
+        self._accept_btn = QPushButton("Accept")
+        self._accept_btn.setToolTip("Keep the proposed outline (Enter)")
+        self._accept_btn.clicked.connect(self._commit)
+        auto_row.addWidget(self._accept_btn)
+        self._clear_prompts_btn = secondary(QPushButton("Clear"))
+        self._clear_prompts_btn.setToolTip("Drop the clicks and the proposal (Esc)")
+        self._clear_prompts_btn.clicked.connect(self._cancel)
+        auto_row.addWidget(self._clear_prompts_btn)
+        self._sam_status = muted(QLabel(), small=True)
+        auto_row.addWidget(self._sam_status, 1)
+        middle_layout.addWidget(self._auto_bar)
+
         self._canvas_holder = QVBoxLayout()
         middle_layout.addLayout(self._canvas_holder, 1)
-        self._canvas: LabelCanvas | None = None
+        self._canvas: LabelCanvas | SegmentCanvas | None = None
         self._help_text = muted(QLabel(), small=True)
         self._help_text.setWordWrap(True)
         middle_layout.addWidget(self._help_text)
@@ -720,9 +893,22 @@ class AnimalAnnotatorWindow(QMainWindow):
         if self._mode not in (SEQUENTIAL, SKELETON):
             self._mode = SEQUENTIAL
         self._mode_buttons[self._mode].setChecked(True)
+        self._tool = self._settings.value(_SETTINGS_SEG_TOOL, AUTO, type=str)
+        if self._tool not in (POLYGON, AUTO):
+            self._tool = AUTO
+        self._tool_buttons[self._tool].setChecked(True)
         splitter.addWidget(middle)
 
         right, right_layout = _panel()
+        # Pose projects: keypoints and animals.
+        self._pose_panel = QWidget()
+        pose_layout = QVBoxLayout(self._pose_panel)
+        pose_layout.setContentsMargins(0, 0, 0, 0)
+        pose_layout.setSpacing(6)
+        right_layout.addWidget(self._pose_panel, 1)
+        self._seg_panel = self._build_seg_panel()
+        right_layout.addWidget(self._seg_panel, 1)
+        right_layout = pose_layout  # the pose controls below go in their own panel
         right_layout.addWidget(section("Keypoints"))
         self._keypoint_list = QListWidget()
         self._keypoint_list.setProperty("compact", True)
@@ -760,6 +946,7 @@ class AnimalAnnotatorWindow(QMainWindow):
         animal_actions.addWidget(self._delete_animal_btn)
         right_layout.addLayout(animal_actions)
 
+        right_layout = right.layout()  # back to the shared panel
         right_layout.addSpacing(4)
         right_layout.addWidget(section("Frame"))
         nav = QHBoxLayout()
@@ -795,10 +982,12 @@ class AnimalAnnotatorWindow(QMainWindow):
             (("S",), lambda: self._skip_btn.toggle()),
             (("Delete", "Backspace"), self._remove_point),
             (("M",), self._toggle_mode),
-            (("[",), lambda: self._canvas and self._canvas.rotate_current(-5)),
-            (("]",), lambda: self._canvas and self._canvas.rotate_current(5)),
-            (("-",), lambda: self._canvas and self._canvas.scale_current(1 / 1.05)),
-            (("=", "+"), lambda: self._canvas and self._canvas.scale_current(1.05)),
+            (("[",), lambda: self._pose_canvas() and self._pose_canvas().rotate_current(-5)),
+            (("]",), lambda: self._pose_canvas() and self._pose_canvas().rotate_current(5)),
+            (("-",), lambda: self._pose_canvas() and self._pose_canvas().scale_current(1 / 1.05)),
+            (("=", "+"), lambda: self._pose_canvas() and self._pose_canvas().scale_current(1.05)),
+            (("Return", "Enter"), self._commit),
+            (("Escape",), self._cancel),
         ):
             for key in keys:
                 shortcut = QShortcut(QKeySequence(key), page)
@@ -806,14 +995,90 @@ class AnimalAnnotatorWindow(QMainWindow):
                 shortcut.activated.connect(slot)
         return page
 
+    def _build_seg_panel(self) -> QWidget:
+        """Segmentation projects' side panel: classes and the outlines on this frame."""
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(section("Classes"))
+        self._class_list = QListWidget()
+        self._class_list.setProperty("compact", True)
+        self._class_list.setToolTip(
+            "The class new outlines get; picking one also changes the selected outline's "
+            "class. Double-click to rename."
+        )
+        self._class_list.itemClicked.connect(self._on_class_clicked)
+        self._class_list.itemDoubleClicked.connect(self._rename_class)
+        layout.addWidget(self._class_list, 1)
+        class_actions = QHBoxLayout()
+        add_class = secondary(QPushButton("Add Class…"))
+        add_class.clicked.connect(self._add_class)
+        class_actions.addWidget(add_class)
+        layout.addLayout(class_actions)
+
+        layout.addSpacing(4)
+        layout.addWidget(section("Outlines"))
+        self._shape_list = QListWidget()
+        self._shape_list.setProperty("compact", True)
+        self._shape_list.setToolTip("The animals outlined on this frame; pick one to edit it")
+        self._shape_list.currentRowChanged.connect(self._on_shape_chosen)
+        # Clicking the row already current still counts as picking that outline.
+        self._shape_list.itemClicked.connect(
+            lambda item: self._on_shape_chosen(self._shape_list.row(item))
+        )
+        layout.addWidget(self._shape_list, 1)
+        self._delete_shape_btn = secondary(QPushButton("Delete Outline"))
+        self._delete_shape_btn.setToolTip("Remove the selected outline")
+        self._delete_shape_btn.clicked.connect(self._delete_shape)
+        layout.addWidget(self._delete_shape_btn)
+        return panel
+
+    def _is_segment(self) -> bool:
+        return self._project is not None and self._project.is_segment
+
+    def _pose_canvas(self) -> LabelCanvas | None:
+        return self._canvas if isinstance(self._canvas, LabelCanvas) else None
+
+    def _seg_canvas(self) -> SegmentCanvas | None:
+        return self._canvas if isinstance(self._canvas, SegmentCanvas) else None
+
+    def _show_task_controls(self) -> None:
+        """Show the pose or the segmentation controls, whichever the project uses."""
+        segment = self._is_segment()
+        for button in self._mode_buttons.values():
+            button.setVisible(not segment)
+        for button in self._tool_buttons.values():
+            button.setVisible(segment)
+        self._pose_panel.setVisible(not segment)
+        self._seg_panel.setVisible(segment)
+        self._auto_bar.setVisible(segment and self._tool == AUTO)
+        self._skeleton_btn.setVisible(not segment)
+
     def _make_canvas(self) -> None:
-        """Build a canvas for the open project's keypoints, replacing any old one."""
+        """Build a canvas for the open project, replacing any old one."""
         if self._canvas is not None:
+            # Hidden now, not just when deleteLater gets round to it, so a
+            # stale canvas never draws over the toolbar in the meantime.
+            self._canvas.hide()
             self._canvas_holder.removeWidget(self._canvas)
             self._canvas.deleteLater()
             self._canvas = None
         self._keypoint_list.clear()
+        self._class_list.clear()
+        self._shape_list.clear()
+        self._show_task_controls()
         if self._project is None:
+            return
+        if self._project.is_segment:
+            canvas = SegmentCanvas(self._project.class_names)
+            canvas.set_tool(self._tool)
+            canvas.changed.connect(self._on_labels_changed)
+            canvas.state_changed.connect(self._refresh_label_state)
+            canvas.prompt_changed.connect(self._request_sam)
+            self._canvas = canvas
+            self._canvas_holder.addWidget(canvas)
+            self._refresh_class_list()
             return
         self._canvas = LabelCanvas(
             self._project.keypoint_names,
@@ -903,6 +1168,9 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._skip_btn.setChecked(frame.skipped)
         self._loading_frame = False
         self._baseline = instances
+        # Any SAM answer still on its way is for the previous frame's clicks.
+        self._sam_request_id += 1
+        self._sam_status.setText("")
         self._canvas.set_frame(image, instances)
         self._canvas.setFocus()
         if image is None:
@@ -940,15 +1208,244 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._mode = mode
         self._mode_buttons[mode].setChecked(True)
         self._settings.setValue(_SETTINGS_MODE, mode)
-        if self._canvas is not None:
-            self._canvas.set_mode(mode)
-            self._canvas.setFocus()
+        canvas = self._pose_canvas()
+        if canvas is not None:
+            canvas.set_mode(mode)
+            canvas.setFocus()
         self._refresh_label_state()
 
     def _toggle_mode(self) -> None:
+        if self._is_segment():
+            self._set_tool(AUTO if self._tool == POLYGON else POLYGON)
+            return
         self._set_mode(SKELETON if self._mode == SEQUENTIAL else SEQUENTIAL)
 
+    def _set_tool(self, tool: str) -> None:
+        """Segmentation: switch between the Polygon and Auto tools."""
+        self._tool = tool
+        self._tool_buttons[tool].setChecked(True)
+        self._settings.setValue(_SETTINGS_SEG_TOOL, tool)
+        self._auto_bar.setVisible(self._is_segment() and tool == AUTO)
+        self._sam_status.setText("")
+        canvas = self._seg_canvas()
+        if canvas is not None:
+            canvas.set_tool(tool)
+            canvas.setFocus()
+        self._refresh_label_state()
+
+    def _commit(self) -> None:
+        """Enter: close the polygon being drawn, or accept SAM's proposal."""
+        canvas = self._seg_canvas()
+        if canvas is not None:
+            canvas.commit()
+            canvas.setFocus()
+
+    def _cancel(self) -> None:
+        """Esc: drop the polygon being drawn, or the Auto tool's clicks."""
+        canvas = self._seg_canvas()
+        if canvas is not None:
+            canvas.cancel()
+            self._sam_status.setText("")
+            canvas.setFocus()
+
+    # ------------------------------------------------------------------
+    # segmentation: classes, outlines and SAM
+    # ------------------------------------------------------------------
+
+    def _refresh_class_list(self) -> None:
+        if self._project is None or not self._project.is_segment:
+            return
+        canvas = self._seg_canvas()
+        current = canvas.current_class if canvas is not None else 0
+        self._class_list.blockSignals(True)
+        self._class_list.clear()
+        for i, name in enumerate(self._project.class_names):
+            self._class_list.addItem(QListWidgetItem(_swatch(class_colour(i)), name))
+        self._class_list.setCurrentRow(current)
+        self._class_list.blockSignals(False)
+
+    def _on_class_clicked(self, item: QListWidgetItem) -> None:
+        canvas = self._seg_canvas()
+        if canvas is not None:
+            canvas.set_class(self._class_list.row(item))
+            canvas.setFocus()
+
+    def _add_class(self) -> None:
+        if self._project is None:
+            return
+        name, ok = QInputDialog.getText(self, "Add class", "Class name:")
+        if not ok or not name.strip():
+            return
+        self._set_class_names([*self._project.class_names, name.strip()])
+
+    def _rename_class(self, item: QListWidgetItem) -> None:
+        if self._project is None:
+            return
+        row = self._class_list.row(item)
+        name, ok = QInputDialog.getText(
+            self, "Rename class", "Class name:", text=self._project.class_names[row]
+        )
+        if not ok or not name.strip():
+            return
+        names = list(self._project.class_names)
+        names[row] = name.strip()
+        self._set_class_names(names)
+
+    def _set_class_names(self, names: list[str]) -> None:
+        try:
+            self._project.set_class_names(names)
+        except (StudioProjectError, OSError) as e:
+            QMessageBox.warning(self, "Classes", str(e))
+            return
+        canvas = self._seg_canvas()
+        if canvas is not None:
+            canvas.set_class_names(self._project.class_names)
+        self._refresh_class_list()
+        self._refresh_label_state()
+
+    def _on_shape_chosen(self, row: int) -> None:
+        canvas = self._seg_canvas()
+        if canvas is not None and row >= 0:
+            canvas.select_shape(row)
+
+    def _delete_shape(self) -> None:
+        canvas = self._seg_canvas()
+        if canvas is not None:
+            canvas.delete_shape()
+            canvas.setFocus()
+
+    def _on_sam_model_changed(self, _index: int) -> None:
+        self._settings.setValue(_SETTINGS_SAM_MODEL, self._sam_model.currentData())
+        self._request_sam()
+
+    def _ensure_sam_worker(self) -> SamWorker:
+        if self._sam_worker is None:
+            self._sam_worker = SamWorker()
+            self._sam_thread = QThread(self)
+            self._sam_worker.moveToThread(self._sam_thread)
+            self._sam_request.connect(self._sam_worker.run, Qt.ConnectionType.QueuedConnection)
+            self._sam_worker.result.connect(self._on_sam_result)
+            self._sam_worker.status.connect(self._sam_status.setText)
+            self._sam_thread.start()
+        return self._sam_worker
+
+    def _request_sam(self) -> None:
+        """The Auto tool's clicks changed: ask SAM for an outline (or clear it)."""
+        canvas = self._seg_canvas()
+        if canvas is None or canvas.tool != AUTO or self._frame_index < 0:
+            return
+        self._sam_request_id += 1
+        points, labels, box = canvas.prompts()
+        if not points and box is None:
+            if self._sam_worker is not None:
+                self._sam_worker.latest = self._sam_request_id
+            canvas.busy = False
+            canvas.set_proposal(None)
+            return
+        image = canvas.image
+        if image is None:
+            return
+        worker = self._ensure_sam_worker()
+        worker.latest = self._sam_request_id
+        canvas.busy = True
+        key = self._project.frames[self._frame_index].name
+        self._sam_request.emit(
+            self._sam_request_id,
+            self._sam_model.currentData(),
+            key,
+            image,
+            points,
+            labels,
+            box,
+        )
+
+    def _on_sam_result(self, request: int, polygon, error: str) -> None:
+        if request != self._sam_request_id:
+            return  # the clicks changed again since; a newer answer is coming
+        canvas = self._seg_canvas()
+        if canvas is None:
+            return
+        canvas.busy = False
+        if error:
+            self._sam_status.setText(f"Auto failed: {error}")
+            return
+        if not polygon:
+            self._sam_status.setText("No outline found here; try another click or a box.")
+            canvas.set_proposal(None)
+            return
+        self._sam_status.setText(
+            "Enter to accept · click to add · right-click to take away · Esc to clear"
+        )
+        canvas.set_proposal(polygon)
+
+    def _refresh_seg_state(self) -> None:
+        canvas = self._seg_canvas()
+        common = (
+            "Drag a vertex: move · Shift-click an edge: add vertex · Delete: remove · "
+            "Wheel: zoom · Middle-drag: pan · ←/→: frame · S: skip · M: switch tool · "
+            + QKeySequence(QKeySequence.StandardKey.Undo).toString(
+                QKeySequence.SequenceFormat.NativeText
+            )
+            + ": undo"
+        )
+        if self._tool == AUTO:
+            self._help_text.setText(
+                "Click: on the animal · Right-click: not the animal · Drag: box round it · "
+                "Enter: accept · Esc: clear · " + common
+            )
+        else:
+            self._help_text.setText(
+                "Click: add vertex · Click the first vertex or Enter: close · Esc: abandon · "
+                "Right-click a vertex: remove it · " + common
+            )
+        if canvas is None or not canvas.has_image:
+            self._hint.setText("Pick a frame on the left." if self._project else "")
+            self._shape_list.clear()
+            return
+        names = self._project.class_names
+        cls_name = names[canvas.current_class] if canvas.current_class < len(names) else "?"
+        if canvas.drafting:
+            self._hint.setText(
+                f"Outlining a <b>{cls_name}</b>: {canvas.draft_length} vertices. "
+                "Click the first vertex or press <b>Enter</b> to close it."
+            )
+        elif self._tool == AUTO:
+            if canvas.has_proposal:
+                self._hint.setText(
+                    f"<b>Enter</b> to keep this <b>{cls_name}</b>, or click to refine it."
+                )
+            elif canvas.has_prompts:
+                self._hint.setText("Finding the outline…")
+            else:
+                self._hint.setText(
+                    f"Click a <b>{cls_name}</b>, or drag a box round it, to outline it."
+                )
+        else:
+            self._hint.setText(f"Click round a <b>{cls_name}</b> to outline it.")
+        self._accept_btn.setEnabled(canvas.has_proposal)
+        self._clear_prompts_btn.setEnabled(canvas.has_prompts or canvas.has_proposal)
+        self._shape_list.blockSignals(True)
+        self._shape_list.clear()
+        for i in range(canvas.shape_count):
+            c = canvas.shape_class(i)
+            name = names[c] if c < len(names) else f"class {c}"
+            self._shape_list.addItem(
+                QListWidgetItem(
+                    _swatch(class_colour(c)),
+                    f"{i + 1}. {name}  ·  {canvas.shape_vertex_count(i)} pts",
+                )
+            )
+        self._shape_list.setCurrentRow(canvas.current_shape)
+        self._shape_list.blockSignals(False)
+        self._delete_shape_btn.setEnabled(canvas.current_shape >= 0)
+        self._class_list.blockSignals(True)
+        self._class_list.setCurrentRow(canvas.current_class)
+        self._class_list.blockSignals(False)
+
     def _refresh_label_state(self) -> None:
+        if self._is_segment():
+            self._refresh_seg_state()
+            return
         common = (
             "Drag a point: move · Right-click: hidden/visible · Delete: remove point · "
             "Wheel: zoom · Middle-drag: pan · ←/→: frame · S: skip · M: switch mode · "
@@ -1002,25 +1499,40 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._next_animal_btn.setEnabled(canvas.current_animal < canvas.animal_count - 1)
 
     def _on_keypoint_clicked(self, item: QListWidgetItem) -> None:
-        if self._canvas is not None:
-            self._canvas.set_current_keypoint(self._keypoint_list.row(item))
-            self._canvas.setFocus()
+        canvas = self._pose_canvas()
+        if canvas is not None:
+            canvas.set_current_keypoint(self._keypoint_list.row(item))
+            canvas.setFocus()
 
     def _new_animal(self) -> None:
-        if self._canvas is not None:
-            self._canvas.new_animal()
+        seg = self._seg_canvas()
+        if seg is not None:
+            # A fresh start: nothing selected, nothing half-drawn.
+            seg.cancel()
+            seg.select_shape(-1)
+            return
+        canvas = self._pose_canvas()
+        if canvas is not None:
+            canvas.new_animal()
 
     def _delete_animal(self) -> None:
-        if self._canvas is not None:
-            self._canvas.delete_animal()
+        canvas = self._pose_canvas()
+        if canvas is not None:
+            canvas.delete_animal()
 
     def _step_animal(self, delta: int) -> None:
-        if self._canvas is not None:
-            self._canvas.select_animal(self._canvas.current_animal + delta)
+        canvas = self._pose_canvas()
+        if canvas is not None:
+            canvas.select_animal(canvas.current_animal + delta)
 
     def _remove_point(self) -> None:
-        if self._canvas is not None:
-            self._canvas.remove_selected_point()
+        seg = self._seg_canvas()
+        if seg is not None:
+            seg.remove()
+            return
+        canvas = self._pose_canvas()
+        if canvas is not None:
+            canvas.remove_selected_point()
 
     def _on_skip_toggled(self, checked: bool) -> None:
         if self._loading_frame or self._project is None or self._frame_index < 0:
@@ -1076,15 +1588,24 @@ class AnimalAnnotatorWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
-            template = dialog.template
-            project = StudioProject.create(
-                dialog.folder,
-                dialog.name,
-                template.names,
-                colours=template.colours,
-                template_name=template.name,
-                layout=[(k.x, k.y) for k in template.keypoints],
-            )
+            if dialog.task == TASK_SEGMENT:
+                project = StudioProject.create(
+                    dialog.folder,
+                    dialog.name,
+                    [],
+                    task=TASK_SEGMENT,
+                    class_names=dialog.class_names,
+                )
+            else:
+                template = dialog.template
+                project = StudioProject.create(
+                    dialog.folder,
+                    dialog.name,
+                    template.names,
+                    colours=template.colours,
+                    template_name=template.name,
+                    layout=[(k.x, k.y) for k in template.keypoints],
+                )
         except (StudioProjectError, OSError) as e:
             QMessageBox.warning(self, "New project", str(e))
             return
@@ -1324,4 +1845,8 @@ class AnimalAnnotatorWindow(QMainWindow):
         if self._thread is not None:
             retire_thread(self._thread, self._worker)
             self._thread = self._worker = None
+        if self._sam_thread is not None:
+            self._sam_worker.latest = self._sam_request_id + 1  # drop anything queued
+            retire_thread(self._sam_thread, self._sam_worker)
+            self._sam_thread = self._sam_worker = None
         super().closeEvent(event)
