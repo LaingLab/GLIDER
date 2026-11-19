@@ -5,7 +5,7 @@ On disk it is a plain YOLO dataset plus one JSON file::
     <folder>/
       studio.json          keypoints, colours, layout, videos, frame provenance
       images/<name>.jpg    every extracted frame
-      labels/<name>.txt    YOLO pose labels, written as you label
+      labels/<name>.txt    YOLO pose or segmentation labels, written as you label
       data.yaml, train.txt, val.txt   written by :func:`~.dataset.export_dataset`
 
 Images and labels stay in one folder each rather than being moved between
@@ -22,13 +22,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from glider.core.fileio import atomic_write_bytes
-from glider.vision.training.labels import PoseInstance, read_labels, write_labels
+from glider.vision.training.labels import (
+    PoseInstance,
+    SegInstance,
+    read_labels,
+    read_seg_labels,
+    write_labels,
+    write_seg_labels,
+)
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "PROJECT_FILE",
     "STUDIO_VERSION",
+    "TASKS",
+    "TASK_POSE",
+    "TASK_SEGMENT",
     "FrameRecord",
     "StudioProject",
     "StudioProjectError",
@@ -38,12 +48,27 @@ __all__ = [
 PROJECT_FILE = "studio.json"
 STUDIO_VERSION = 1
 
+#: What a project labels: keypoints (YOLO pose) or outlines (YOLO instance
+#: segmentation). Fixed when the project is made; the label files differ.
+TASK_POSE = "pose"
+TASK_SEGMENT = "segment"
+TASKS = (TASK_POSE, TASK_SEGMENT)
+
 #: Left/right spellings recognised when pairing keypoints for flip augmentation.
 _SIDES = (("left", "right"), ("l", "r"))
 
 
 class StudioProjectError(ValueError):
     """A studio project could not be read or made."""
+
+
+def _check_class_names(names: list[str]) -> list[str]:
+    names = [str(n).strip() for n in names]
+    if not names or any(not n for n in names):
+        raise StudioProjectError("a project needs at least one class, and names can't be blank")
+    if len(set(names)) != len(names):
+        raise StudioProjectError("class names must be unique")
+    return names
 
 
 def flip_pairs_from_names(names: list[str]) -> list[tuple[int, int]]:
@@ -141,18 +166,29 @@ class StudioProject:
         colours: list[tuple[int, int, int]] | None = None,
         template_name: str = "",
         layout: list[tuple[float, float]] | None = None,
+        task: str = TASK_POSE,
+        class_names: list[str] | None = None,
     ) -> StudioProject:
-        """Start a new project in ``folder``, which must be empty or not exist."""
+        """Start a new project in ``folder``, which must be empty or not exist.
+
+        A :data:`TASK_SEGMENT` project labels outlines, so ``keypoint_names``
+        may be empty; ``class_names`` are the kinds of thing outlined.
+        """
         folder = Path(folder)
         if (folder / PROJECT_FILE).exists():
             raise StudioProjectError(f"{folder} already holds a studio project")
-        if not keypoint_names:
+        if task not in TASKS:
+            raise StudioProjectError(f"unknown task {task!r}")
+        if task == TASK_POSE and not keypoint_names:
             raise StudioProjectError("a pose project needs at least one keypoint")
         if len(set(keypoint_names)) != len(keypoint_names):
             raise StudioProjectError("keypoint names must be unique")
+        classes = _check_class_names(class_names if class_names is not None else ["animal"])
         project = cls(
             folder=folder,
             name=name.strip() or folder.name,
+            task=task,
+            class_names=classes,
             keypoint_names=list(keypoint_names),
             flip_pairs=flip_pairs_from_names(keypoint_names),
             keypoint_colours=[tuple(c) for c in colours or []],
@@ -178,12 +214,15 @@ class StudioProject:
             raise StudioProjectError(
                 f"studio_version {version!r}; this build understands {STUDIO_VERSION}"
             )
+        task = str(data.get("task", TASK_POSE))
+        if task not in TASKS:
+            raise StudioProjectError(f"{path} is a {task!r} project; this build knows {TASKS}")
         try:
             return cls(
                 folder=folder,
                 name=str(data["name"]),
-                task=str(data.get("task", "pose")),
-                keypoint_names=[str(n) for n in data["keypoint_names"]],
+                task=task,
+                keypoint_names=[str(n) for n in data.get("keypoint_names", [])],
                 class_names=[str(n) for n in data.get("class_names", ["animal"])],
                 flip_pairs=[(int(a), int(b)) for a, b in data.get("flip_pairs", [])],
                 keypoint_colours=[
@@ -256,6 +295,29 @@ class StudioProject:
             self.keypoint_layout = [(float(x), float(y)) for x, y in layout]
         self.save()
 
+    @property
+    def is_segment(self) -> bool:
+        return self.task == TASK_SEGMENT
+
+    def set_class_names(self, names: list[str]) -> None:
+        """Rename or add classes, then save.
+
+        Like keypoints, classes are stored by position in the label files, so
+        once a frame is labelled a class can be renamed or added at the end
+        but not removed.
+
+        Raises:
+            StudioProjectError: Names are blank or repeated, or a class would
+                be removed with labels on disk.
+        """
+        names = _check_class_names(names)
+        if len(names) < len(self.class_names) and any(self.is_labelled(f) for f in self.frames):
+            raise StudioProjectError(
+                "classes can't be removed once frames are labelled; rename them instead"
+            )
+        self.class_names = names
+        self.save()
+
     # ------------------------------------------------------------------
     # paths
     # ------------------------------------------------------------------
@@ -326,10 +388,17 @@ class StudioProject:
     def is_labelled(self, frame: FrameRecord) -> bool:
         return self.label_path(frame).exists()
 
-    def read_instances(self, frame: FrameRecord) -> list[PoseInstance]:
+    def read_instances(self, frame: FrameRecord) -> list[PoseInstance] | list[SegInstance]:
+        """The frame's labels: :class:`SegInstance` in a segmentation project."""
+        if self.is_segment:
+            return read_seg_labels(self.label_path(frame))
         return read_labels(self.label_path(frame), len(self.keypoint_names))
 
-    def write_instances(self, frame: FrameRecord, instances: list[PoseInstance]) -> bool:
+    def write_instances(
+        self, frame: FrameRecord, instances: list[PoseInstance] | list[SegInstance]
+    ) -> bool:
+        if self.is_segment:
+            return write_seg_labels(self.label_path(frame), instances)
         return write_labels(self.label_path(frame), instances, self.box_padding)
 
     def counts(self) -> dict[str, int]:

@@ -86,7 +86,8 @@ def export_dataset(project: StudioProject) -> ExportResult:
     if len(labelled) < 2:
         raise DatasetError(
             f"{len(labelled)} frame(s) labelled; label at least 2 to make a dataset "
-            "(a useful pose model needs a few hundred)"
+            f"(a useful {'segmentation' if project.is_segment else 'pose'} model needs "
+            "a few hundred)"
         )
     train, val, by_video = split_frames(labelled, project.val_fraction, project.seed)
     if not train or not val:
@@ -99,22 +100,30 @@ def export_dataset(project: StudioProject) -> ExportResult:
         lines = "".join(f"{project.image_path(f).resolve().as_posix()}\n" for f in frames)
         atomic_write_bytes(folder / name, lines.encode("utf-8"))
 
-    k = len(project.keypoint_names)
     yaml_lines = [
         f"# Written by GLIDER Animal Annotator for project {_yaml(project.name)}.",
         "# Regenerated on every export; edit studio.json instead.",
         f"path: {_yaml(folder.resolve().as_posix())}",
         "train: train.txt",
         "val: val.txt",
-        f"kpt_shape: {_yaml([k, 3])}",
-        f"flip_idx: {_yaml(flip_idx(k, project.flip_pairs))}",
+    ]
+    if not project.is_segment:
+        k = len(project.keypoint_names)
+        yaml_lines += [
+            f"kpt_shape: {_yaml([k, 3])}",
+            f"flip_idx: {_yaml(flip_idx(k, project.flip_pairs))}",
+        ]
+    yaml_lines += [
         "names:",
         *(f"  {i}: {_yaml(n)}" for i, n in enumerate(project.class_names)),
-        # Per class. Ultralytics stores these in the trained .pt, so the
-        # model carries its own keypoint names instead of needing them typed.
-        "kpt_names:",
-        *(f"  {i}: {_yaml(project.keypoint_names)}" for i in range(len(project.class_names))),
     ]
+    if not project.is_segment:
+        yaml_lines += [
+            # Per class. Ultralytics stores these in the trained .pt, so the
+            # model carries its own keypoint names instead of needing them typed.
+            "kpt_names:",
+            *(f"  {i}: {_yaml(project.keypoint_names)}" for i in range(len(project.class_names))),
+        ]
     data_yaml = folder / "data.yaml"
     atomic_write_bytes(data_yaml, ("\n".join(yaml_lines) + "\n").encode("utf-8"))
     return ExportResult(data_yaml, train, val, by_video)
