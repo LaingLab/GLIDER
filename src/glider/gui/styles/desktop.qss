@@ -1683,16 +1683,37 @@ QToolButton#landingRecent:hover {
     color: #38bdf8;                                 /* ACCENT */
 }
 
-QToolButton#landingLink {
+/* The round help button in the menu bar's right corner. */
+QToolButton#menuHelpButton {
     background-color: transparent;
-    border: none;
-    color: #718096;                                 /* TEXT_MUTED */
+    border: 1px solid #475569;                      /* TEXT_DISABLED */
+    border-radius: 10px;
+    color: #94a3b8;                                 /* TEXT_TERTIARY */
     font-size: 12px;
-    padding: 2px 0;
+    font-weight: 600;
+    min-width: 18px;
+    max-width: 18px;
+    min-height: 18px;
+    max-height: 18px;
+    margin: 0 10px 0 0;
+    padding: 0;
 }
 
-QToolButton#landingLink:hover {
+QToolButton#menuHelpButton:hover {
+    border-color: #38bdf8;                          /* ACCENT */
     color: #38bdf8;                                 /* ACCENT */
+}
+
+QToolButton#menuHelpButton::menu-indicator {
+    image: none;
+    width: 0;
+}
+
+/* The tools column beside the start card. Its cards reuse the Tools tab's
+ * rules (#toolCard and friends); only the hosts need clearing to the canvas. */
+QFrame#landingTools,
+QWidget#toolsEmbedded {
+    background-color: transparent;
 }
 
 /* -- Experiment tab -- */
