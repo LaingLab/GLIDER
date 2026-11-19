@@ -7,6 +7,14 @@ import pytest
 
 cv2 = pytest.importorskip("cv2")
 
+from test_lift3d import (  # noqa: E402
+    EXP16_KEYPOINTS,
+    PPC,
+    dark_segment,
+    frame_with_mouse,
+    mouse_exp16,
+)
+
 from glider_lift3d import Lift3D, Lift3DConfig  # noqa: E402
 from glider_lift3d.curvature import (  # noqa: E402
     back_arch,
@@ -18,13 +26,6 @@ from glider_lift3d.curvature import (  # noqa: E402
 from glider_lift3d.keypoints import KeypointRoles  # noqa: E402
 from glider_lift3d.session import GRID, SidecarPaths, compute_session, load_session  # noqa: E402
 from glider_lift3d.surface import CROP_CM, CROP_PX  # noqa: E402
-from test_lift3d import (  # noqa: E402
-    EXP16_KEYPOINTS,
-    PPC,
-    dark_segment,
-    frame_with_mouse,
-    mouse_exp16,
-)
 
 TEN = [*EXP16_KEYPOINTS, "neck", "withers", "lumbar"]
 
@@ -203,9 +204,8 @@ class _View:
 
 
 def test_panels_show_a_computed_session_and_seek_on_click(qtbot, tmp_path):
-    from glider_lift3d.review import panels
-
     from glider.gui.review.extensions import PanelHost, ReviewContext, ReviewPanel
+    from glider_lift3d.review import panels
 
     video, pose_csv = _session(tmp_path)
     cfg = Lift3DConfig(ppc=PPC)
@@ -235,9 +235,8 @@ def test_panels_show_a_computed_session_and_seek_on_click(qtbot, tmp_path):
 
 
 def test_panel_offers_to_compute_when_missing(qtbot, tmp_path):
-    from glider_lift3d.review import panels
-
     from glider.gui.review.extensions import ReviewContext
+    from glider_lift3d.review import panels
 
     video, pose_csv = _session(tmp_path)
     side, _trace = panels()
@@ -258,9 +257,8 @@ def test_panel_offers_to_compute_when_missing(qtbot, tmp_path):
 def test_range_measures_average_the_saved_lift(tmp_path):
     import math
 
-    from glider_lift3d.metrics import provider
-
     from glider.analysis.range_extensions import RangeMetricHost
+    from glider_lift3d.metrics import provider
 
     video, pose_csv = _session(tmp_path)
     m = provider()

@@ -199,10 +199,9 @@ def test_pipeline_needs_a_scale():
 
 
 def test_run_video_writes_a_frame_aligned_csv(tmp_path):
-    from glider_lift3d.batch import CSV_COLUMNS, run_video
-
     from glider.vision.pose.core import PoseData
     from glider.vision.pose.dlc import to_dlc_csv
+    from glider_lift3d.batch import CSV_COLUMNS, run_video
 
     n = 6
     xy16 = mouse_exp16()
@@ -261,9 +260,8 @@ def test_live_consumer_lifts_queued_frames_and_writes_csv(tmp_path):
 
 def test_live_pipeline_runs_plugin_frame_consumers():
     """Core builds one queue + thread per factory and passes their overlays to the display."""
-    from glider_lift3d.live import frame_consumer
-
     from glider.analysis.behavior.classify.pipeline import LiveInferencePipeline
+    from glider_lift3d.live import frame_consumer
 
     seen = {}
 
@@ -299,6 +297,7 @@ def test_fan_out_copies_the_frame_and_never_blocks():
 
 def test_depth_model_is_fetched_once_and_offline_means_no_depth(tmp_path, monkeypatch):
     import ultralytics.utils.downloads as dl
+
     from glider_lift3d import models
 
     monkeypatch.setenv("GLIDER_LIFT3D_MODELS", str(tmp_path))
