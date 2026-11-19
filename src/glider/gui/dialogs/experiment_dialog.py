@@ -132,6 +132,12 @@ class ExperimentDialog(QDialog):
         self._protocol_combo = QComboBox()
         self._protocol_combo.setEditable(True)
         self._protocol_combo.addItems([type_label(t) for t in EXPERIMENT_TYPES])
+        # Sized to its longest type name by default, which pushed the Pi's
+        # 480 px page sideways; the form row still stretches it to fit.
+        self._protocol_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self._protocol_combo.setMinimumContentsLength(12)
         info_layout.addRow("Protocol:", self._protocol_combo)
 
         # Experimenter
