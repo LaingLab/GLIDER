@@ -134,23 +134,26 @@ def behavior_steps() -> list[TourStep]:
         TourStep(
             "annotate_resume",
             "Picking up again",
-            "Labelling a few hundred clips takes more than one sitting. Resume "
-            "reopens the same queue with your finished clips marked done — and "
-            "'Render more' inside the annotator adds fresh ones on top.",
+            "Labelling a few hundred clips takes more than one sitting. Once a "
+            "folder has saved labels the button reads Resume Labelling and "
+            "reopens the same queue with your finished clips marked done; Label "
+            "Clips (in its menu) draws a new one, and 'Render more' inside the "
+            "annotator adds fresh clips on top.",
         ),
         TourStep(
             "tab_train",
             "2 · Train",
             "Add the same sessions here and fit a classifier. Window length, "
-            "class weight and the feature families all live on this tab — they "
-            "move the score far more than the model settings do.",
+            "class weight and the feature families live under Options — they "
+            "move the score far more than the LightGBM settings do.",
         ),
         TourStep(
             "train_cv",
             "Measure it honestly",
-            "Cross-validate splits whole animals across folds, so every score "
-            "comes from a recording the model never saw. Tick 'and fit a "
-            "model' to get the estimate and the bundle in one pass.",
+            "Cross-validate lives in the Fit Model \u25be menu. It splits whole "
+            "animals across folds, so every score comes from a recording the "
+            "model never saw. 'Cross-validate, then fit…' gets the estimate and "
+            "the bundle in one pass.",
         ),
         TourStep(
             "tab_review",
@@ -162,9 +165,11 @@ def behavior_steps() -> list[TourStep]:
         TourStep(
             "tab_apply",
             "4 · Apply",
-            "Point a trained model at recorded video to write the ethogram. "
-            "Review the run first: a model scored on one lucky split can look "
-            "far better than it is.",
+            "Add videos, pick the model and an output folder, then Score. "
+            "Cadence, smoothing and freeze/dart are under Options. When it "
+            "finishes, Open in Session Review reads the ethograms. Review the "
+            "run first: a model scored on one lucky split can look far better "
+            "than it is.",
         ),
         TourStep(
             None,
@@ -194,15 +199,16 @@ def pose_batch_steps() -> list[TourStep]:
             None,
             "Tracking a folder of video",
             "This runs a trained pose model over whole directories and writes a "
-            "DLC-format CSV beside each video. Fill the left column top to "
-            "bottom, then start the run on the right. Skip or Esc leaves anytime.",
+            "DLC-format CSV beside each video. The strip along the top follows "
+            "you through the four steps: model, videos, arenas, then Track. "
+            "Skip or Esc leaves anytime.",
         ),
         TourStep(
             "model",
             "1 · The model",
-            "Point this at your trained YOLO-pose .pt file. GLIDER reads the "
+            "Choose your trained YOLO-pose .pt file. GLIDER reads the "
             "keypoints straight out of the weights, so the bodypart list below "
-            "usually fills itself in.",
+            "usually fills itself in. Set Animals if more than one is in frame.",
         ),
         TourStep(
             "bodyparts",
@@ -214,28 +220,30 @@ def pose_batch_steps() -> list[TourStep]:
         TourStep(
             "videos",
             "2 · The videos",
-            "Drop folders or files here, or use the buttons. 'Include "
-            "subdirectories' is on, so pointing at one cohort folder usually "
-            "picks up everything under it.",
+            "Drop folders or files onto the table, or use Add Folder… and "
+            "Add Files…. Subfolders are included by default (see Settings), so "
+            "pointing at one cohort folder usually picks up everything under it.",
         ),
         TourStep(
             "calibration",
-            "3 · Scale, per video",
-            "Every video needs a pixels-to-centimetres scale before the batch "
-            "will run. Videos shot on the same rig at the same camera height can "
-            "share one — calibrate a video, then 'Copy to Selected'.",
+            "3 · Arena, per video",
+            "Every video needs its arena outlined before the batch will run; "
+            "that also gives the pixels-to-centimetres scale. Double-click a row "
+            "or use Draw Arena…. Videos shot on the same rig can share one: draw "
+            "it once, then 'Copy Arena to Selected' and check each copy.",
         ),
         TourStep(
             "filter",
-            "4 · Smoothing (optional)",
-            "Drops low-confidence points, bridges short gaps and median-filters "
-            "the rest. The smoothed result becomes the main CSV and the raw "
-            "inference is kept beside it as *_raw.csv, so this is reversible.",
+            "4 · Settings (optional)",
+            "Device, confidence, subfolders, overwrite and the arenas file live "
+            "here, along with smoothing: it drops low-confidence points, bridges "
+            "short gaps and median-filters the rest. The raw inference is kept "
+            "beside the result as *_raw.csv, so smoothing is reversible.",
         ),
         TourStep(
             "run",
             "5 · Run it",
-            "Progress and a log appear on this rail. Overwrite is off by "
+            "Progress and a log appear in the footer. Overwrite (in Settings) is off by "
             "default, so if a batch is interrupted you can start it again and it "
             "picks up where it stopped instead of redoing finished videos.",
         ),
@@ -305,16 +313,17 @@ def session_review_steps() -> list[TourStep]:
         ),
         TourStep(
             "zones",
-            "Zones (optional)",
-            "Load or draw regions of interest and the Range tab reports time in "
-            "zone, entries and latency for the selected range.",
+            "Setup (optional)",
+            "Setup holds what changes the analysis: the experiment type, the arena, "
+            "zones and the scale. Draw or load zones and the Range tab reports time "
+            "in zone, entries and latency for the selected range.",
         ),
         TourStep(
             "export",
             "5 · Export",
-            "Export writes the range stats, the epoch table (tidy or wide) or the "
-            "markers to CSV, so the table on screen and the table in your analysis "
-            "are the same table.",
+            "Every export is here: the range stats, the markers, the epoch table "
+            "(tidy or wide), time bins and the heatmap, so the table on screen and "
+            "the table in your analysis are the same table.",
         ),
         TourStep(
             None,

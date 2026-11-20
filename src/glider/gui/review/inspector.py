@@ -14,7 +14,6 @@ from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractScrollArea,
     QButtonGroup,
-    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -33,7 +32,6 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.gui.review.retrieval_panel import RetrievalPanel
-from glider.gui.review.viewer import TRAIL_DEFAULT_S
 from glider.gui.widgets.tool_ui import (
     data_font,
     hint,
@@ -139,9 +137,10 @@ class GridSpin(QSpinBox):
 
 
 class Inspector(QTabWidget):
-    """Range, Session, Markers and Retrieval tabs. The window fills them."""
+    """Range, Markers, Session and Retrieval tabs. The window fills them."""
 
     marker_picked = pyqtSignal(str)  # marker id
+    draw_arena_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -155,8 +154,9 @@ class Inspector(QTabWidget):
         self._zone_count = 0
         self._zone_point = "centroid"
         self.addTab(self._build_range(), "Range")
+        self._markers_page = self._build_markers()
+        self.addTab(self._markers_page, "Markers")
         self.addTab(self._build_session(), "Session")
-        self.addTab(self._build_markers(), "Markers")
         # Shown by the window only under a pup-retrieval experiment.
         self.retrieval = RetrievalPanel()
         self.addTab(self.retrieval, "Retrieval")
@@ -180,51 +180,76 @@ class Inspector(QTabWidget):
         self.save_marker_btn = QPushButton("Save as range marker")
         self.save_marker_btn.setEnabled(False)
         self.save_marker_btn.setToolTip("Keep this range as a named range marker  (⇧M)")
-        self.export_btn = QPushButton("Export…")
-        self.export_btn.setEnabled(False)
-        self.export_btn.setToolTip("Write the selected range's per-session numbers to a CSV")
         buttons = QHBoxLayout()
         buttons.addWidget(self.save_marker_btn)
         buttons.addStretch(1)
-        buttons.addWidget(self.export_btn)
         card.addWidget(self.range_title)
         card.addWidget(self.range_detail)
         card.addWidget(self.inside)
         card.addLayout(buttons)
         column.addWidget(self.range_card)
 
-        column.addWidget(_section("Movement"))
+        # The answer first: what the animal did, then how it moved.
+        self.behavior_title = _section("Behavior in range")
+        column.addWidget(self.behavior_title)
+        self.bouts = _grow_with_rows(QTableWidget(0, 6))
+        self.bouts.setHorizontalHeaderLabels(
+            ["Behavior", "Bouts", "Total (s)", "Fraction", "Mean (s)", "Median (s)"]
+        )
+        # Six columns do not fit the 300 px column: the answer (total and
+        # share) stays in view, mean and median ride in each row's tooltip.
+        for c in (4, 5):
+            self.bouts.setColumnHidden(c, True)
+        column.addWidget(self.bouts)
+
+        self.movement_title = _section("Movement")
+        column.addWidget(self.movement_title)
         kpis = QHBoxLayout()
         kpis.setSpacing(6)
-        tiles = [_Kpi("cm travelled"), _Kpi("mean cm/s"), _Kpi("peak cm/s")]
-        for tile in tiles:
+        self.movement_tiles = [_Kpi("cm travelled"), _Kpi("mean cm/s"), _Kpi("peak cm/s")]
+        for tile in self.movement_tiles:
             kpis.addWidget(tile)
         column.addLayout(kpis)
-        self.distance, self.mean_speed, self.peak_speed = (t.value for t in tiles)
-        self.range_text = hint("")
-        column.addWidget(self.range_text)
+        self.distance, self.mean_speed, self.peak_speed = (t.value for t in self.movement_tiles)
 
-        column.addWidget(_section("Exploration"))
+        # Exploration needs an arena; without one, a line under the same
+        # heading that says how to get it.
+        self.exploration_title = _section("Exploration")
+        column.addWidget(self.exploration_title)
+        self.exploration = QWidget()
+        box = QVBoxLayout(self.exploration)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(8)
         self.grid_n = GridSpin()
-        column.addLayout(labelled_row("Grid", self.grid_n))
+        box.addLayout(labelled_row("Grid", self.grid_n))
         explore = QHBoxLayout()
         explore.setSpacing(6)
         tiles = [_Kpi("cells entered"), _Kpi("% explored"), _Kpi("s to cover all")]
         for tile in tiles:
             explore.addWidget(tile)
-        column.addLayout(explore)
+        box.addLayout(explore)
         self.cells_visited, self.explored_pct, self.coverage_s = (t.value for t in tiles)
         self.exploration_text = hint("")
-        column.addWidget(self.exploration_text)
+        box.addWidget(self.exploration_text)
+        column.addWidget(self.exploration)
+        self.arena_prompt = QWidget()
+        prompt = QHBoxLayout(self.arena_prompt)
+        prompt.setContentsMargins(0, 0, 0, 0)
+        prompt.setSpacing(6)
+        self.arena_prompt_text = QLabel("Draw an arena to see exploration")
+        set_text_role(self.arena_prompt_text, "muted")
+        self.draw_arena_btn = QPushButton("Draw…")
+        set_button_role(self.draw_arena_btn, "ghost")
+        self.draw_arena_btn.setToolTip("Outline the arena floor on the frame on screen")
+        self.draw_arena_btn.clicked.connect(self.draw_arena_requested)
+        prompt.addWidget(self.arena_prompt_text)
+        prompt.addWidget(self.draw_arena_btn)
+        prompt.addStretch(1)
+        column.addWidget(self.arena_prompt)
+        self.set_has_arena(False)
 
-        column.addWidget(_section("Behavior"))
-        self.bouts = _grow_with_rows(QTableWidget(0, 6))
-        self.bouts.setHorizontalHeaderLabels(
-            ["Behavior", "Bouts", "Total (s)", "Fraction", "Mean (s)", "Median (s)"]
-        )
-        column.addWidget(self.bouts)
-
-        column.addWidget(_section("Hardware in range"))
+        self.hardware_title = _section("Hardware in range")
+        column.addWidget(self.hardware_title)
         self.hardware = _grow_with_rows(QTableWidget(0, 2))
         self.hardware.horizontalHeader().setVisible(False)
         header = self.hardware.horizontalHeader()
@@ -242,6 +267,18 @@ class Inspector(QTabWidget):
         )
         column.addWidget(self.zones)
         column.addStretch(1)
+
+        # A table with no rows says nothing, so it and its title hide. The
+        # window fills the tables directly; their row counts are the signal.
+        self._sections = [
+            (self.behavior_title, self.bouts),
+            (self.hardware_title, self.hardware),
+            (self.zones_title, self.zones),
+        ]
+        for _title, table in self._sections:
+            table.model().rowsInserted.connect(self._show_filled_sections)
+            table.model().rowsRemoved.connect(self._show_filled_sections)
+        self._show_filled_sections()
         return scroll
 
     def _build_session(self) -> QWidget:
@@ -251,14 +288,6 @@ class Inspector(QTabWidget):
         self.summary = hint("No session loaded.")
         self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         column.addWidget(self.summary)
-        self.fixes = QHBoxLayout()
-        self.fixes.setSpacing(6)
-        column.addLayout(self.fixes)
-        self.trail_s = QDoubleSpinBox()
-        self.trail_s.setRange(0.5, 60.0)
-        self.trail_s.setValue(TRAIL_DEFAULT_S)
-        self.trail_s.setSuffix(" s")
-        column.addLayout(labelled_row("Trail length", self.trail_s))
         column.addStretch(1)
         return scroll
 
@@ -292,20 +321,28 @@ class Inspector(QTabWidget):
             lambda item: self.marker_picked.emit(item.data(Qt.ItemDataRole.UserRole))
         )
         column.addWidget(self.marker_list, 1)
-        footer = QHBoxLayout()
-        self.epoch_btn = QPushButton("Epoch table ▸")
-        set_button_role(self.epoch_btn, "primary")
-        self.export_markers_btn = QPushButton("Export markers…")
-        footer.addWidget(self.epoch_btn)
-        footer.addWidget(self.export_markers_btn)
-        footer.addStretch(1)
-        column.addLayout(footer)
         return page
 
     # ------------------------------------------------------------------
 
     def set_retrieval_visible(self, on: bool) -> None:
         self.setTabVisible(self.indexOf(self.retrieval), on)
+
+    def _show_filled_sections(self, *_args) -> None:
+        for title, table in self._sections:
+            filled = table.rowCount() > 0
+            title.setVisible(filled)
+            table.setVisible(filled)
+
+    def set_has_arena(self, on: bool) -> None:
+        """Exploration with an arena; otherwise the line that offers to draw one."""
+        self.exploration.setVisible(on)
+        self.arena_prompt.setVisible(not on)
+
+    def set_movement_note(self, text: str) -> None:
+        """The prose behind the movement numbers, on hover over them."""
+        for tile in self.movement_tiles:
+            tile.setToolTip(text)
 
     def set_range(self, title: str, detail: str) -> None:
         self.range_title.setText(title)
@@ -315,7 +352,7 @@ class Inspector(QTabWidget):
         self.set_range(_NO_RANGE, _NO_RANGE_HINT)
         self.set_kpis("—", "—", "—")
         self.set_exploration("—", "—", "—")
-        self.range_text.setText("")
+        self.set_movement_note("")
         self.set_hardware([])
         for table in (self.bouts, self.zones):
             table.setRowCount(0)
@@ -374,7 +411,9 @@ class Inspector(QTabWidget):
             item.setData(Qt.ItemDataRole.UserRole, row.id)
             item.setData(Qt.ItemDataRole.UserRole + 1, row.kind)
             self.marker_list.addItem(item)
-        self.setTabText(2, f"Markers ({len(rows)})" if rows else "Markers")
+        self.setTabText(
+            self.indexOf(self._markers_page), f"Markers ({len(rows)})" if rows else "Markers"
+        )
         self._apply_marker_filter()
 
     def _apply_marker_filter(self, *_args) -> None:

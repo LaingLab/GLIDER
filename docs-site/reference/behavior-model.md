@@ -208,7 +208,7 @@ on your training sessions and 60% on a new mouse.
 | `reg_lambda` | **1.0** | 0.0 | Shrinks confident leaves toward the mean |
 | `num_leaves`, `learning_rate`, `max_depth`, `min_split_gain` | 31 / 0.1 / −1 / 0.0 | same | Left at stock so existing models reproduce |
 
-All nine are exposed in the GUI under **Train ▸ Advanced…** (`gui/behavior/window.py::LgbmAdvancedDialog`),
+All nine are exposed in the GUI under **Train ▸ Options ▸ LightGBM settings…** (`gui/behavior/window.py::LgbmAdvancedDialog`),
 which is enabled only for the `lightgbm` backend — the Random Forest path ignores
 every one of them.
 

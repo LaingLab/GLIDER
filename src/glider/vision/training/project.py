@@ -110,20 +110,26 @@ class FrameRecord:
     video: str
     frame: int
     skipped: bool = False
+    #: "train", "val" or "test"; "" until assigned.
+    split: str = ""
 
     def to_dict(self) -> dict:
         data = {"name": self.name, "video": self.video, "frame": self.frame}
         if self.skipped:
             data["skipped"] = True
+        if self.split:
+            data["split"] = self.split
         return data
 
     @classmethod
     def from_dict(cls, data: dict) -> FrameRecord:
+        split = str(data.get("split", ""))
         return cls(
             name=str(data["name"]),
             video=str(data["video"]),
             frame=int(data["frame"]),
             skipped=bool(data.get("skipped", False)),
+            split=split if split in ("train", "val", "test") else "",
         )
 
 

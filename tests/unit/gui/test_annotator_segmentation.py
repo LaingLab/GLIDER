@@ -262,17 +262,18 @@ def test_new_project_dialog_offers_segmentation(qtbot, tmp_path):
 def test_segment_project_shows_the_segmentation_controls(window, tmp_path):
     project = _seg_project(tmp_path)
     assert window.open_project(project.folder)
-    window._tabs.setCurrentIndex(1)
+    window.show_editor(0)
     assert isinstance(window._canvas, SegmentCanvas)
     assert not window._seg_panel.isHidden() and window._pose_panel.isHidden()
-    assert window._skeleton_btn.isHidden()
+    assert window._grid.skeleton_btn.isHidden()
+    assert "Segmentation · 2 classes" in window._grid.summary.text()
     assert window._class_list.count() == 2
 
 
 def test_polygon_outline_is_saved_and_undone(qtbot, window, tmp_path):
     project = _seg_project(tmp_path)
     window.open_project(project.folder)
-    window._tabs.setCurrentIndex(1)
+    window.show_editor(0)
     window._set_tool(POLYGON)
     canvas = window._canvas
     for x, y in ((20, 20), (80, 20), (80, 60)):
@@ -294,9 +295,10 @@ def test_auto_tool_runs_sam_and_accepts_its_outline(qtbot, window, tmp_path, mon
     monkeypatch.setattr(sam, "SamSegmenter", _FakeSegmenter)
     project = _seg_project(tmp_path)
     window.open_project(project.folder)
-    window._tabs.setCurrentIndex(1)
+    window.show_editor(0)
     window._set_tool(AUTO)
-    assert not window._auto_bar.isHidden()
+    assert window._tool_buttons[AUTO].isChecked()
+    assert "drag a box" in window._hint.text()
     canvas = window._canvas
     window._class_list.setCurrentRow(1)
     window._on_class_clicked(window._class_list.item(1))
@@ -305,7 +307,7 @@ def test_auto_tool_runs_sam_and_accepts_its_outline(qtbot, window, tmp_path, mon
     qtbot.waitUntil(lambda: canvas.has_proposal, timeout=10000)
     xs = [p[0] for p in canvas._proposal]
     assert min(xs) == pytest.approx(40, abs=2) and max(xs) == pytest.approx(120, abs=2)
-    assert window._accept_btn.isEnabled()
+    assert "Enter" in window._hint.text()  # accepting is Enter, no button
 
     window._commit()
     frame = window._project.frames[window._frame_index]
@@ -322,7 +324,7 @@ def test_auto_tool_runs_sam_and_accepts_its_outline(qtbot, window, tmp_path, mon
 def test_a_sam_answer_for_another_frame_is_ignored(qtbot, window, tmp_path):
     project = _seg_project(tmp_path)
     window.open_project(project.folder)
-    window._tabs.setCurrentIndex(1)
+    window.show_editor(0)
     window._set_tool(AUTO)
     stale = window._sam_request_id
     window._step_frame(1)  # moving on invalidates anything in flight
@@ -333,10 +335,10 @@ def test_a_sam_answer_for_another_frame_is_ignored(qtbot, window, tmp_path):
 def test_sam_errors_are_reported_not_raised(qtbot, window, tmp_path):
     project = _seg_project(tmp_path)
     window.open_project(project.folder)
-    window._tabs.setCurrentIndex(1)
+    window.show_editor(0)
     window._set_tool(AUTO)
     window._on_sam_result(window._sam_request_id, None, "no network")
-    assert "no network" in window._sam_status.text()
+    assert "no network" in window._hint.text()
 
 
 def test_pose_projects_are_unchanged(window, tmp_path):
@@ -347,4 +349,16 @@ def test_pose_projects_are_unchanged(window, tmp_path):
     window.open_project(project.folder)
     assert isinstance(window._canvas, LabelCanvas)
     assert window._seg_panel.isHidden() and not window._pose_panel.isHidden()
-    assert window._auto_bar.isHidden()
+    assert window._tool_buttons[AUTO].isHidden() and window._tool_buttons[POLYGON].isHidden()
+    assert not window._mode_buttons["sequential"].isHidden()
+
+
+def test_sam_model_menu_persists(window):
+    from glider.vision.training.sam import SAM_MODELS
+
+    menu = window._tool_buttons[AUTO].menu()
+    chosen = menu.actions()[2]  # not the default, so the setting must change
+    chosen.trigger()
+    assert chosen.isChecked()
+    assert window._settings.value("animal_annotator/sam_model") == SAM_MODELS[2].file
+    assert window._sam_model_file == SAM_MODELS[2].file

@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -42,6 +43,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QTabBar,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -49,11 +51,12 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.analysis.behavior.classify.smoothing import DEFAULT_OFFLINE_WINDOW
+from glider.gui.behavior.step_parts import OptionsPopup, StepFooter, summary_label
 from glider.gui.qthreads import retire_thread
+from glider.gui.styles import restyle
 from glider.gui.widgets.tool_ui import (
     GUTTER,
     Card,
-    RunRail,
     ToolHeader,
     apply_tool_theme,
     attach_empty_state,
@@ -303,14 +306,9 @@ class LgbmAdvancedDialog(QDialog):
 class BehaviorAnalysisWindow(QMainWindow):
     """Top-level window for the Behavior Analysis tool."""
 
-    # What each tab is for, shown in the header so the four stages read as one
-    # pipeline rather than four unrelated screens.
-    _TAB_BLURBS = (
-        "Label behavior on sampled clips to build a training set",
-        "Fit a classifier from labeled sessions",
-        "Read how the trained model actually performed",
-        "Score recorded video and write the ethogram",
-    )
+    #: An Apply output folder to open in Session Review. The main window owns
+    #: that window, so this one only says which folder.
+    open_in_session_review = pyqtSignal(str)
 
     def __init__(self, project_dir: Path | None = None, parent=None):
         super().__init__(parent)
@@ -327,23 +325,31 @@ class BehaviorAnalysisWindow(QMainWindow):
         from glider.gui.behavior.review_tab import ReviewTab
 
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("StepTabs")
         self.tabs.setDocumentMode(True)
-        self.tabs.addTab(AnnotateTab(self.project_dir), "Annotate")
+        self.annotate_tab = AnnotateTab(self.project_dir)
+        self.tabs.addTab(self.annotate_tab, "Annotate")
         self.train_tab = TrainTab()
         self.tabs.addTab(self.train_tab, "Train")
         # Between Train and Apply, in pipeline order: a run is reviewed before
         # it is trusted to score a cohort.
         self.review_tab = ReviewTab()
         self.tabs.addTab(self.review_tab, "Review")
-        self.tabs.addTab(ApplyTab(), "Apply")
+        self.apply_tab = ApplyTab()
+        self.tabs.addTab(self.apply_tab, "Apply")
+        self.apply_tab.scored.connect(lambda _n: self.set_step_done(3, True))
+        self.apply_tab.open_in_session_review.connect(self.open_in_session_review)
 
         # A finished run opens its own report. The Train tab does not know
         # about the Review tab -- it announces that a run produced one, and
         # the window decides what to do with that.
         self.train_tab.run_reported.connect(self._on_run_reported)
+        self.train_tab.model_saved.connect(lambda _path: self.set_step_done(1, True))
 
-        self._header = ToolHeader("Behavior Analysis", self._TAB_BLURBS[0])
+        self._header = ToolHeader("Behavior Analysis")
+        self._build_step_strip()
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.annotate_tab.labelling_found.connect(lambda found: self.set_step_done(0, found))
 
         central = QWidget()
         central.setObjectName("ToolPage")
@@ -376,14 +382,14 @@ class BehaviorAnalysisWindow(QMainWindow):
         widget holding it. Pointing at the tab bar instead would highlight the
         label while leaving the wrong page on screen.
         """
-        annotate = self.tabs.widget(0)
+        annotate = self.annotate_tab
         return {
             "tab_annotate": annotate,
-            "annotate_resume": getattr(annotate, "_resume_btn", None) or annotate,
+            "annotate_resume": annotate._footer.primary,
             "tab_train": self.train_tab,
-            "train_cv": getattr(self.train_tab, "_cv_btn", None) or self.train_tab,
+            "train_cv": self.train_tab._fit_btn,
             "tab_review": self.review_tab,
-            "tab_apply": self.tabs.widget(3),
+            "tab_apply": self.apply_tab,
         }
 
     def start_tour(self) -> None:
@@ -406,9 +412,48 @@ class BehaviorAnalysisWindow(QMainWindow):
 
         offer_tour_once(self, behavior_steps(), BEHAVIOR_TOUR_COMPLETE_KEY)
 
+    # ------------------------------------------------------------------
+    # Step strip
+    # ------------------------------------------------------------------
+    def _build_step_strip(self) -> None:
+        """Number the tabs as steps; a badge beside each title, not in it.
+
+        The titles stay exactly "Annotate", "Train", ... -- tests and the tour
+        read them -- so the number (or tick) is a separate label in the tab.
+        """
+        bar = self.tabs.tabBar()
+        self._step_done = [False] * self.tabs.count()
+        self._step_badges: list[QLabel] = []
+        for i in range(self.tabs.count()):
+            badge = QLabel(str(i + 1))
+            badge.setObjectName("StepNumber")
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setFixedSize(28, 18)  # 10 of it is the margin off the tab's edge
+            bar.setTabButton(i, QTabBar.ButtonPosition.LeftSide, badge)
+            self._step_badges.append(badge)
+        self._restyle_steps()
+
+    def step_badge(self, index: int) -> QLabel:
+        return self._step_badges[index]
+
+    def set_step_done(self, index: int, done: bool) -> None:
+        """Tick a step whose output exists (labels, a model, a report, an ethogram)."""
+        self._step_done[index] = bool(done)
+        self._restyle_steps()
+
+    def _restyle_steps(self) -> None:
+        current = self.tabs.currentIndex()
+        for i, badge in enumerate(self._step_badges):
+            done = self._step_done[i]
+            badge.setText("\u2713" if done else str(i + 1))
+            badge.setProperty("state", "done" if done else "current" if i == current else "")
+            restyle(badge)
+
     def _on_tab_changed(self, index: int) -> None:
-        if 0 <= index < len(self._TAB_BLURBS):
-            self._header.set_subtitle(self._TAB_BLURBS[index])
+        # A step's Options belong to that step; left open they float over the next.
+        for popup in self.findChildren(OptionsPopup):
+            popup.hide()
+        self._restyle_steps()
 
     def _on_run_reported(self, report_dir: object, summary: object) -> None:
         """Show a just-finished run and bring its tab forward.
@@ -426,26 +471,8 @@ class BehaviorAnalysisWindow(QMainWindow):
             self.review_tab.show_run(TrainingRun.from_summary(summary))
             shown = True
         if shown:
+            self.set_step_done(2, True)
             self.tabs.setCurrentWidget(self.review_tab)
-
-
-def _workspace(parent: QWidget, rail: RunRail, *, rail_width: int = 380) -> QVBoxLayout:
-    """Lay a tab out as ``[ scrolling config column | pinned run rail ]``.
-
-    Returns the layout to add cards to. The rail keeps the primary action and
-    its output on screen no matter how far the configuration scrolls, which is
-    the whole point of the two-column shape.
-    """
-    outer = QHBoxLayout(parent)
-    outer.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
-    outer.setSpacing(GUTTER)
-
-    area, column = scroll_column()
-    outer.addWidget(area, 1)
-
-    rail.setFixedWidth(rail_width)
-    outer.addWidget(rail)
-    return column
 
 
 class AnnotateTab(QWidget):
@@ -455,6 +482,9 @@ class AnnotateTab(QWidget):
     # default so an existing habit produces an unchanged session.
     DEFAULT_CLIP_COUNT = 50
 
+    #: Whether the chosen folders already hold labelling (the step is done).
+    labelling_found = pyqtSignal(bool)
+
     def __init__(self, project_dir: Path, parent=None):
         super().__init__(parent)
         self.project_dir = Path(project_dir)
@@ -463,21 +493,39 @@ class AnnotateTab(QWidget):
         # Keep a reference so the launched AnnotatorWindow survives GC.
         self._annotator_window = None
 
-        rail = RunRail("Launch annotator")
-        self._launch_btn = rail.button
-        self._launch_btn.clicked.connect(self._on_launch)
-        rail.status.setVisible(False)  # nothing runs here; the annotator opens
-        rail.card.add(
-            hint(
-                "Opens the clip annotator in its own window. Labels are saved "
-                "beside each pose CSV as <name>_annotations.csv — the same "
-                "files the Train tab reads."
-            )
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        body = QVBoxLayout()
+        body.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
+        area, column = scroll_column()
+        body.addWidget(area)
+        outer.addLayout(body, 1)
+
+        # One primary button: Resume when this folder already has labelling
+        # on disk, else Label Clips. The other action and Review hang off its
+        # menu, so there is never a question of which of three to press.
+        self._footer = StepFooter("Label Clips")
+        self._footer.primary.setToolTip(
+            "Opens the clip annotator in its own window. Labels are saved\n"
+            "beside each pose CSV as <name>_annotations.csv — the same\n"
+            "files the Train tab reads."
         )
-        column = _workspace(self, rail, rail_width=340)
+        self._resume_mode = False
+        self._footer.primary.clicked.connect(
+            lambda: self._on_resume() if self._resume_mode else self._on_launch()
+        )
+        self._other_action = self._footer.add_menu_action(
+            "Resume Labelling",
+            lambda: self._on_launch() if self._resume_mode else self._on_resume(),
+        )
+        self._footer.add_menu_action(
+            "Review saved annotations", lambda: self._on_launch(review=True)
+        )
+        outer.addWidget(self._footer)
 
         # --- sources ----------------------------------------------------
-        sources = Card("Sources", "where the clips come from")
+        sources = Card("Sources")
         self._videos_label = path_label("(none)")
         videos_btn = QPushButton("Choose…")
         videos_btn.clicked.connect(self._on_choose_videos)
@@ -496,19 +544,7 @@ class AnnotateTab(QWidget):
         column.addWidget(sources)
 
         # --- clips ------------------------------------------------------
-        clips = Card("Clips", "what the annotator will show you")
-        # Reviewing existing work and sampling new material are the two
-        # reasons to open the annotator, and the tab could only do the second.
-        self._review_check = QCheckBox("Review annotations already saved for these videos")
-        self._review_check.setToolTip(
-            "Replay every saved behavior zone instead of sampling new clips.\n"
-            "Zones are read from <pose CSV folder>/<name>_annotations.csv — the\n"
-            "same files training reads."
-        )
-        self._review_check.toggled.connect(self._on_review_toggled)
-        clips.add(self._review_check)
-        clips.add_separator()
-
+        clips = Card("Clips")
         self._clip_count = QSpinBox()
         # A 30-video cohort wants four figures of clips, so the ceiling has to
         # be well clear of anything a labeller would actually ask for.
@@ -516,50 +552,34 @@ class AnnotateTab(QWidget):
         self._clip_count.setValue(self.DEFAULT_CLIP_COUNT)
         self._clip_count.setToolTip(
             "Total clips sampled across ALL videos, not per video.\n"
-            "Raised to the number of videos if you ask for fewer."
+            "Raised to the number of videos if you ask for fewer.\n\n"
+            "Resume ignores this — it only affects drawing a new queue.\n"
+            "Add more from inside the annotator with 'Render more'."
         )
-        self._clip_count_label = QLabel("Clips to sample (across all videos):")
-        self._clip_count_label.setVisible(False)  # the row caption says it now
         clips.add_row("Clips to sample", self._clip_count)
-        clips.add(hint("Across all videos, not per video."))
-
-        self._skip_labelled_check = QCheckBox("Skip regions already labelled")
-        self._skip_labelled_check.setToolTip(
-            "Keep the sampler off frames you have already annotated, so a\n"
-            "second pass over a cohort proposes new material."
-        )
-        clips.add(self._skip_labelled_check)
 
         # Resuming used to be silent: a relaunch looked identical whether it
         # had reused the saved queue or discarded it and sampled a new one.
         self._queue_status = ""
         self._annotate_status = hint("")
+        self._annotate_status.setVisible(False)  # until something has been opened
         clips.add(self._annotate_status)
-
-        # Picking up where you left off is the common case, and it was only
-        # reachable by reproducing the exact settings that first drew the
-        # queue — including a sampling-only checkbox that has no bearing on
-        # an existing one. Its own button, with no settings involved.
-        self._resume_btn = QPushButton("Resume labelling")
-        self._resume_btn.setToolTip(
-            "Open the saved clip queue together with everything you have\n"
-            "already labelled, whatever the settings above say.\n\n"
-            "To add further clips on top, use 'Render more' in the\n"
-            "annotator's sidebar — it avoids the stretches already done."
-        )
-        self._resume_btn.clicked.connect(self._on_resume)
-        clips.add(self._resume_btn)
-        clips.add(
-            hint(
-                "Resume ignores the clip count and the skip setting — those "
-                "only affect drawing a new queue. Add more from inside the "
-                "annotator with 'Render more'."
-            )
-        )
+        self._summary = summary_label()
+        clips.add(self._summary)
         column.addWidget(clips)
+        column.addStretch(1)
 
-        # --- speed trace ------------------------------------------------
-        speed = Card("Speed trace", "optional reference while labelling")
+        # --- options ----------------------------------------------------
+        self._options = OptionsPopup(self._footer.options_button, "Annotate options")
+        sampling = self._options.add_section("Sampling")
+        self._skip_labelled_check = QCheckBox("Skip regions already labelled")
+        self._skip_labelled_check.setToolTip(
+            "Keep the sampler off frames you have already annotated, so a\n"
+            "second pass over a cohort proposes new material."
+        )
+        sampling.addRow(self._skip_labelled_check)
+
+        speed = self._options.add_section("Speed trace")
         # On by default: the labeller is judging speed either way, and doing it
         # against the numbers the scoring run uses is the whole point. Opting
         # out skips reading pose data altogether.
@@ -570,24 +590,24 @@ class AnnotateTab(QWidget):
             "which is why it can be turned off."
         )
         self._speed_check.toggled.connect(self._on_speed_toggled)
-        speed.add(self._speed_check)
+        speed.addRow(self._speed_check)
 
         self._cohort_path: Path | None = None
         self._cohort_label = path_label("(none — trace has no reference lines)")
         cohort_btn = QPushButton("Choose…")
         cohort_btn.clicked.connect(self._on_choose_cohort)
-        self._cohort_row = speed.add_row("Speed thresholds", self._cohort_label, cohort_btn)
+        speed.addRow("Speed thresholds", _row(self._cohort_label, cohort_btn))
 
         self._calibration_master: Path | None = None
         self._calibration_label = path_label("(none — trace in px/frame)")
         calib_btn = QPushButton("Choose…")
         calib_btn.clicked.connect(self._on_choose_calibration)
-        self._calibration_row = speed.add_row("Calibration", self._calibration_label, calib_btn)
+        speed.addRow("Calibration", _row(self._calibration_label, calib_btn))
         self._speed_children = (cohort_btn, calib_btn)
-        column.addWidget(speed)
 
-        column.addStretch(1)
+        self._skip_labelled_check.toggled.connect(self._update_summary)
         self._on_speed_toggled(self._speed_check.isChecked())
+        self._refresh_step()
 
     def _on_speed_toggled(self, enabled: bool) -> None:
         """The trace's inputs mean nothing when the trace itself is off."""
@@ -597,11 +617,73 @@ class AnnotateTab(QWidget):
             *self._speed_children,
         ):
             widget.setEnabled(enabled)
+        self._update_summary()
 
-    def _on_review_toggled(self, reviewing: bool) -> None:
-        """Review mode replays saved zones, so the sampling controls don't apply."""
-        for widget in (self._clip_count, self._clip_count_label, self._skip_labelled_check):
-            widget.setEnabled(not reviewing)
+    def _update_summary(self, *_args) -> None:
+        """Name the non-default options, so a closed popup hides nothing."""
+        parts = []
+        if self._skip_labelled_check.isChecked():
+            parts.append("skip labelled regions")
+        if not self._speed_check.isChecked():
+            parts.append("speed trace off")
+        else:
+            if self._cohort_path is not None:
+                parts.append(f"thresholds {self._cohort_path.name}")
+            if self._calibration_master is not None:
+                parts.append(f"calibration {self._calibration_master.name}")
+        text = " · ".join(parts)
+        self._summary.setText(text[:1].upper() + text[1:])
+        self._summary.setVisible(bool(text))
+
+    def _has_saved_labelling(self) -> bool:
+        """True when the chosen folders already hold a queue or annotations."""
+        if self._videos_dir is None:
+            return False
+        from glider.gui.behavior.annotator.resume_cache import ResumeCache
+
+        if ResumeCache(self._videos_dir).path.exists():
+            return True
+        poses_dir = self._poses_dir or self._videos_dir
+        return poses_dir.is_dir() and any(poses_dir.glob("*_annotations.csv"))
+
+    def _refresh_step(self) -> None:
+        """Pick the primary action and the readiness message for the folders."""
+        self._resume_mode = self._has_saved_labelling()
+        self.labelling_found.emit(self._resume_mode)
+        label, other = ("Label Clips", "Resume Labelling")
+        if self._resume_mode:
+            label, other = other, label
+        self._footer.set_primary_text(label)
+        self._other_action.setText(other)
+
+        if self._videos_dir is None:
+            self._footer.set_message("Choose a videos folder to start.")
+        else:
+            try:
+                n = sum(1 for p in self._videos_dir.iterdir() if p.suffix.lower() in _VIDEO_EXTS)
+            except OSError:
+                n = 0
+            if not n:
+                self._footer.set_message(f"No videos in {self._videos_dir.name}.", warning=True)
+            elif not self._any_pose_csv():
+                self._footer.set_message(
+                    "No pose CSVs found for these videos — run Batch Pose Tracking "
+                    "first, or choose the Pose CSV folder.",
+                    warning=True,
+                )
+            elif self._resume_mode:
+                self._footer.set_message(f"{n} video(s) · saved labelling found.")
+            else:
+                self._footer.set_message(f"Ready: {n} video(s).")
+
+    def _any_pose_csv(self) -> bool:
+        """Whether any chosen video has a pose CSV the annotator could read."""
+        poses_dir = self._poses_dir or self._videos_dir
+        try:
+            videos = [p for p in self._videos_dir.iterdir() if p.suffix.lower() in _VIDEO_EXTS]
+        except OSError:
+            return False
+        return any(find_pose_csv(v, poses_dir) or find_pose_csvs(v, poses_dir) for v in videos)
 
     def _set_queue_status(self, origin: str, clips, videos_meta: dict[Path, Path]) -> None:
         """Report which queue was opened and how much of it is already done.
@@ -618,6 +700,7 @@ class AnnotateTab(QWidget):
         if origin == "review":
             self._queue_status = f"review · {n} labelled clip(s) loaded"
             self._annotate_status.setText(self._queue_status)
+            self._annotate_status.setVisible(True)
             return
 
         # A clip counts as done when a saved zone overlaps it — the same rule
@@ -638,6 +721,7 @@ class AnnotateTab(QWidget):
         word = "resumed" if origin == "resumed" else "sampled"
         self._queue_status = f"{word} · {n} clip(s) · {labelled} already labelled"
         self._annotate_status.setText(self._queue_status)
+        self._annotate_status.setVisible(True)
 
     def _on_choose_cohort(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -648,6 +732,7 @@ class AnnotateTab(QWidget):
         self._cohort_path = Path(path)
         set_path_text(self._cohort_label, Path(path).name, filled=True)
         self._cohort_label.setToolTip(path)
+        self._update_summary()
 
     def _on_choose_calibration(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -658,22 +743,31 @@ class AnnotateTab(QWidget):
         self._calibration_master = Path(path)
         set_path_text(self._calibration_label, Path(path).name, filled=True)
         self._calibration_label.setToolTip(path)
+        self._update_summary()
 
     def _on_choose_videos(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose videos folder")
         if not path:
             return
-        self._videos_dir = Path(path)
-        set_path_text(self._videos_label, _short_path(self._videos_dir), filled=True)
-        self._videos_label.setToolTip(path)
+        self._set_videos_dir(Path(path))
+
+    def _set_videos_dir(self, path: Path) -> None:
+        self._videos_dir = path
+        set_path_text(self._videos_label, _short_path(path), filled=True)
+        self._videos_label.setToolTip(str(path))
+        self._refresh_step()
 
     def _on_choose_poses(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose pose CSV folder")
         if not path:
             return
-        self._poses_dir = Path(path)
-        set_path_text(self._poses_label, _short_path(self._poses_dir), filled=True)
-        self._poses_label.setToolTip(path)
+        self._set_poses_dir(Path(path))
+
+    def _set_poses_dir(self, path: Path) -> None:
+        self._poses_dir = path
+        set_path_text(self._poses_label, _short_path(path), filled=True)
+        self._poses_label.setToolTip(str(path))
+        self._refresh_step()
 
     def _open_annotator(
         self,
@@ -714,6 +808,7 @@ class AnnotateTab(QWidget):
             return
 
         self._set_queue_status(origin, clips, videos_meta)
+        self._refresh_step()  # a queue now exists, so Resume becomes the primary
 
         # The window's "render more" button only exists when it is given a
         # sampler; without one, a review session is a dead end and a sampled
@@ -866,7 +961,7 @@ class AnnotateTab(QWidget):
                 "Annotate",
                 "Nothing to resume: no saved clip queue and no annotations "
                 f"for the videos in {self._videos_dir}.\n\n"
-                "Use 'Launch annotator' to draw a queue first.",
+                "Use Label Clips to draw a queue first.",
             )
             return
 
@@ -874,7 +969,8 @@ class AnnotateTab(QWidget):
             sessions, videos_meta, fps, clips, origin="resumed", pose_tracks=pose_tracks
         )
 
-    def _on_launch(self) -> None:
+    def _on_launch(self, review: bool = False) -> None:
+        """Open the annotator on a sampled queue, or with ``review`` on saved zones."""
         if self._videos_dir is None:
             QMessageBox.warning(self, "Annotate", "Choose a videos folder first.")
             return
@@ -967,7 +1063,7 @@ class AnnotateTab(QWidget):
         # sampled separately below, through propose_clips_for_animal.
         single_pairs = [(p, v) for v, p in sessions if v not in pose_tracks]
         try:
-            if self._review_check.isChecked():
+            if review:
                 # Every saved zone becomes a replayable clip. Nothing is
                 # sampled: the point is to see the work already on disk.
                 clips = build_review_clips(videos_meta, fps)
@@ -980,9 +1076,8 @@ class AnnotateTab(QWidget):
                         f"Looked for <name>_annotations.csv in {poses_dir}.\n\n"
                         "Review replays clips you have already labelled — it is "
                         "not how you get back to a sampled queue.\n\n"
-                        "Untick 'Review annotations already saved' to start "
-                        "labelling. Your clip queue is resumed automatically "
-                        "when the settings match the last run.",
+                        "Use Label Clips to start labelling. Your clip queue is "
+                        "resumed automatically when the settings match the last run.",
                     )
                     return
             else:
@@ -1099,6 +1194,11 @@ class TrainTab(QWidget):
     #: Review tab itself: which tab shows it is the window's business, and a
     #: TrainTab built on its own in a test must not need one to exist.
     run_reported = pyqtSignal(object, object)
+    #: The path a finished run saved its model bundle to. Cross-validation
+    #: alone saves none, so it never fires this.
+    model_saved = pyqtSignal(object)
+
+    _DEFAULT_SEED = 42
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1115,73 +1215,61 @@ class TrainTab(QWidget):
         # truth instead of freezing today's values into every trained model.
         self._lgbm_advanced: dict | None = None
 
-        # --- run rail ---------------------------------------------------
-        rail = RunRail("Fit model")
-        self._fit_btn = rail.button
-        self._fit_btn.clicked.connect(self._on_fit)
-        self._rail = rail
+        # How many folds Cross-validate splits into, and whether it then fits
+        # a model on everything. Asked for each time from the Fit menu; kept
+        # so the next prompt opens on the last answer.
+        self._folds = 5
+        self._cv_then_fit = False
+        #: Where the run in flight saves a model bundle, or None (CV only).
+        #: The step is only ticked done when a run actually saved one.
+        self._saving_to: Path | None = None
 
-        # Cross-validation is its own action, not a mode of Fit: it
-        # deliberately produces NO model, only a measurement, and folding it
-        # into the same button would invite saving something that does not
-        # exist. It is the only way to get a number with a spread on it — a
-        # single cross-session holdout on this kind of data varies by ~0.09
-        # macro F1 depending purely on which animals land in it.
-        self._folds_spin = QSpinBox()
-        self._folds_spin.setRange(2, 100)
-        self._folds_spin.setValue(5)
-        self._folds_spin.setToolTip(
-            "Whole sessions are split across folds, never frames within a\n"
-            "session, so every fold is scored on animals the model never saw.\n"
-            "At or above the number of sessions this is leave-one-out."
-        )
-        self._cv_btn = QPushButton("Cross-validate")
-        set_button_role(self._cv_btn, "ghost")
-        self._cv_btn.setToolTip(
-            "Measure generalization across all training sessions.\n"
-            "Produces no model — use Fit for that."
-        )
-        self._cv_btn.clicked.connect(self._on_cross_validate)
-        rail.card.add(_button_row(QLabel("Folds"), self._folds_spin, self._cv_btn))
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        body = QVBoxLayout()
+        body.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
+        area, column = scroll_column()
+        body.addWidget(area)
+        outer.addLayout(body, 1)
 
+        # --- footer: one primary, Cross-validate in its menu -------------
+        # Cross-validation is a menu item rather than a mode of Fit: it
+        # deliberately produces NO model, only a measurement. It is the only
+        # way to get a number with a spread on it — a single cross-session
+        # holdout on this kind of data varies by ~0.09 macro F1 depending
+        # purely on which animals land in it.
+        self._footer = StepFooter("Fit Model")
+        self._fit_btn = self._footer.primary
+        # Late-bound, so a handler replaced on the instance is the one called.
+        self._fit_btn.clicked.connect(lambda: self._on_fit())
+        self._footer.add_menu_action("Fit model", lambda: self._on_fit())
+        cv_only = self._footer.add_menu_action(
+            "Cross-validate (k folds)…", lambda: self._ask_cross_validate(False)
+        )
+        cv_only.setToolTip(
+            "Splits whole TRAINING sessions across folds (the holdout list is\n"
+            "ignored), so every fold is scored on animals the model never saw.\n"
+            "Reports a mean and a spread, and saves nothing."
+        )
         # Refitting on everything after measuring is the standard way to turn a
         # CV estimate into a deployable model. Done as two separate actions it
         # assembles the features twice — and with motion features that means
-        # decoding every source video twice — so it is offered here instead.
-        self._cv_fit_check = QCheckBox("…and fit a model on all sessions")
-        self._cv_fit_check.setToolTip(
-            "Refit on every session after measuring, and save the bundle.\n"
-            "One feature pass for both, and the saved model carries the\n"
-            "cross-validated score instead of a meaningless 1.000 train\n"
-            "accuracy.\n\n"
-            "The CV number understates this model slightly: it saw every\n"
-            "session, while each fold model saw only a fraction."
+        # decoding every source video twice.
+        cv_fit = self._footer.add_menu_action(
+            "Cross-validate, then fit…", lambda: self._ask_cross_validate(True)
         )
-        rail.card.add(self._cv_fit_check)
-        rail.card.add(
-            hint(
-                "Cross-validation splits the TRAINING sessions itself and "
-                "ignores the holdout list. It reports a mean and a spread "
-                "instead of one split's number, and saves nothing."
-            )
+        cv_fit.setToolTip(
+            "Measure, then refit on every session and save the bundle. One\n"
+            "feature pass for both, and the saved model carries the\n"
+            "cross-validated score. The CV number understates this model\n"
+            "slightly: it saw every session, each fold model only a fraction."
         )
+        self._footer.menu.setToolTipsVisible(True)
+        outer.addWidget(self._footer)
 
-        self._progress = QProgressBar()
-        self._progress.setVisible(False)
-        rail.card.add(self._progress)
-
-        results_card = Card("Results")
-        self._results = QTextEdit()
-        self._results.setObjectName("LogPane")
-        self._results.setReadOnly(True)
-        self._results.setPlaceholderText("Training results will appear here.")
-        results_card.add(self._results, 1)
-        rail.add(results_card, 1)
-
-        column = _workspace(self, rail)
-
-        # --- training sessions ------------------------------------------
-        sessions_group = Card("Training sessions", "pose CSV + annotations CSV")
+        # --- labelled sessions ------------------------------------------
+        sessions_group = Card("Labelled sessions", "pose CSV + annotations CSV")
         self._sessions_card = sessions_group
         self._sessions_list = QListWidget()
         self._sessions_list.setMinimumHeight(96)
@@ -1192,20 +1280,27 @@ class TrainTab(QWidget):
             "No sessions yet.\nAdd pose CSVs; annotations are found beside them.",
         )
         sessions_group.add(self._sessions_list)
-        add_btn = QPushButton("Add sessions…")
+        add_btn = QPushButton("Add Sessions…")
         add_btn.setToolTip(
             "Pick any number of pose CSVs. Each session's annotations are\n"
             "taken from <name>_annotations.csv beside it — the same file\n"
             "training reads."
         )
         add_btn.clicked.connect(self._on_add_session)
-        remove_btn = QPushButton("Remove selected")
+        remove_btn = QPushButton("Remove")
         set_button_role(remove_btn, "ghost")
         remove_btn.clicked.connect(self._on_remove_session)
-        sessions_group.add(_button_row(add_btn, remove_btn))
+        self._holdout_toggle = QPushButton()
+        self._holdout_toggle.setCheckable(True)
+        set_button_role(self._holdout_toggle, "ghost")
+        self._holdout_toggle.setToolTip(
+            "Sessions held back from fitting, so the reported accuracy is\n"
+            "measured on animals the model has never seen."
+        )
+        sessions_group.add(_button_row(add_btn, remove_btn, self._holdout_toggle))
         column.addWidget(sessions_group)
 
-        # --- holdout ----------------------------------------------------
+        # --- holdout (behind "Hold some out ▸") -------------------------
         holdout_group = Card("Holdout sessions", "optional cross-session test set")
         self._holdout_card = holdout_group
         self._holdout_list = QListWidget()
@@ -1217,32 +1312,85 @@ class TrainTab(QWidget):
             "No holdout sessions.\nAccuracy will be reported on training data only.",
         )
         holdout_group.add(self._holdout_list)
-        add_holdout_btn = QPushButton("Add holdout sessions…")
+        add_holdout_btn = QPushButton("Add Holdout Sessions…")
         add_holdout_btn.clicked.connect(self._on_add_holdout)
-        remove_holdout_btn = QPushButton("Remove selected")
+        remove_holdout_btn = QPushButton("Remove")
         set_button_role(remove_holdout_btn, "ghost")
         remove_holdout_btn.clicked.connect(self._on_remove_holdout)
         holdout_group.add(_button_row(add_holdout_btn, remove_holdout_btn))
-        holdout_group.add(
-            hint(
-                "Sessions held back from fitting, so the reported accuracy is "
-                "measured on animals the model has never seen."
-            )
-        )
         column.addWidget(holdout_group)
+        self._holdout_toggle.toggled.connect(self._on_holdout_toggled)
+        self._on_holdout_toggled(False)
 
-        # --- classifier -------------------------------------------------
-        options = Card("Classifier")
+        # --- output -----------------------------------------------------
+        output = Card("Save model as")
+        self._output_label = path_label("(none)")
+        self._output_label.setToolTip("A .pkl the Apply tab loads to score new video.")
+        output_btn = QPushButton("Choose…")
+        output_btn.clicked.connect(self._on_choose_output)
+        output.add_row("Model bundle", self._output_label, output_btn)
+        self._summary = summary_label()
+        output.add(self._summary)
+        column.addWidget(output)
+
+        # --- results: shown once a run starts, and kept -----------------
+        results_card = Card("Results")
+        self._results_card = results_card
+        self._progress = QProgressBar()
+        self._progress.setVisible(False)
+        results_card.add(self._progress)
+        self._results = QTextEdit()
+        self._results.setObjectName("LogPane")
+        self._results.setReadOnly(True)
+        self._results.setMinimumHeight(200)
+        self._results.setPlaceholderText("Training results will appear here.")
+        results_card.add(self._results, 1)
+        results_card.setVisible(False)
+        column.addWidget(results_card, 1)
+        column.addStretch(1)
+
+        # --- options ----------------------------------------------------
+        self._options = OptionsPopup(self._footer.options_button, "Training options")
+        model = self._options.add_section("Model")
         self._classifier_combo = QComboBox()
         # train_model(classifier_type=...) accepts exactly "rf"
         # (RandomForestClassifier) or "lightgbm" (LGBMClassifier, and the
         # library-side default) — see
-        # glider.analysis.behavior.pipeline.train_model docstring.
-        self._classifier_combo.addItems(["rf", "lightgbm"])
-        self._classifier_combo.currentTextChanged.connect(self._on_classifier_changed)
-        self._advanced_btn = QPushButton("Advanced…")
-        self._advanced_btn.clicked.connect(self._on_advanced)
-        options.add_row("Backend", self._classifier_combo, self._advanced_btn)
+        # glider.analysis.behavior.pipeline.train_model docstring. Shown by
+        # name; the stored value is the item data.
+        self._classifier_combo.addItem("Random forest", "rf")
+        self._classifier_combo.addItem("LightGBM", "lightgbm")
+        self._classifier_combo.currentIndexChanged.connect(self._on_classifier_changed)
+        model.addRow("Kind", self._classifier_combo)
+
+        # Pipeline knobs, deliberately here rather than in the LightGBM
+        # dialog: that dialog is LightGBM-only, which would leave these
+        # unreachable for a Random forest. They also move the score far more
+        # than the LightGBM knobs do — measured over five cross-session folds
+        # on a real cohort, window + class weight + mirroring together were
+        # worth +0.063 macro F1, winning 5 folds of 5.
+        self._window_spin = QSpinBox()
+        self._window_spin.setRange(1, 600)
+        self._window_spin.setValue(30)
+        self._window_spin.setToolTip(
+            "How many frames of context each prediction sees.\n"
+            "Shorter reacts faster and captures brief bouts; longer is\n"
+            "steadier but smears the boundaries between behaviors."
+        )
+        self._window_spin.valueChanged.connect(self._refresh_window_hint)
+        self._window_hint = hint("")
+        model.addRow("Window (frames)", _button_row(self._window_spin, self._window_hint))
+        self._refresh_window_hint()
+
+        self._class_weight_combo = QComboBox()
+        self._class_weight_combo.addItem("none", None)
+        self._class_weight_combo.addItem("balanced", "balanced")
+        self._class_weight_combo.setToolTip(
+            "'balanced' weights each class by the inverse of how often it\n"
+            "occurs, so a rare behavior is not simply ignored in favour of\n"
+            "the common ones. Worth trying whenever one class is scarce."
+        )
+        model.addRow("Class weight", self._class_weight_combo)
 
         self._background_check = QCheckBox("Include background class")
         self._background_check.setToolTip(
@@ -1254,39 +1402,61 @@ class TrainTab(QWidget):
             "Double the training set by left-right mirroring every pose, so a "
             "behavior is learned independently of which way the animal faced."
         )
-        options.add(self._background_check)
-        options.add(self._mirror_check)
+        model.addRow(self._background_check)
+        model.addRow(self._mirror_check)
 
-        # Pipeline knobs, deliberately here rather than in the Advanced
-        # dialog: that dialog is LightGBM-only and is disabled for the
-        # RandomForest backend, which would leave these unreachable. They also
-        # move the score far more than the LightGBM knobs do — measured over
-        # five cross-session folds on a real cohort, window + class weight +
-        # mirroring together were worth +0.063 macro F1, winning 5 folds of 5.
-        self._window_spin = QSpinBox()
-        self._window_spin.setRange(1, 600)
-        self._window_spin.setValue(30)
-        self._window_spin.setToolTip(
-            "How many frames of context each prediction sees.\n"
-            "Shorter reacts faster and captures brief bouts; longer is\n"
-            "steadier but smears the boundaries between behaviors."
+        features = self._options.add_section("Extra features")
+        # Feature families the pipeline can compute but never did: all three
+        # default to False in train_model and had no way to be switched on.
+        # Off by default, so no existing model used them; turning one on
+        # changes the feature set, and the model is not comparable to one
+        # trained without it.
+        self._traj_check = QCheckBox("Trajectory shape")
+        self._traj_check.setToolTip(
+            "Straightness, path length, net displacement, radius of gyration\n"
+            "and total turning over each window — the shape of the path\n"
+            "rather than the pose. Aimed at telling travelling apart from\n"
+            "milling about in one spot."
         )
-        self._window_spin.valueChanged.connect(self._refresh_window_hint)
-        options.add_row("Window (frames)", self._window_spin)
-        self._window_hint = hint("")
-        options.add(self._window_hint)
-        self._refresh_window_hint()
-
-        self._class_weight_combo = QComboBox()
-        self._class_weight_combo.addItem("none", None)
-        self._class_weight_combo.addItem("balanced", "balanced")
-        self._class_weight_combo.setToolTip(
-            "'balanced' weights each class by the inverse of how often it\n"
-            "occurs, so a rare behavior is not simply ignored in favour of\n"
-            "the common ones. Worth trying whenever one class is scarce."
+        self._motion_check = QCheckBox("Motion")
+        self._motion_check.setToolTip(
+            "Frame-differencing features read from the source video.\n\n"
+            "Cannot be combined with mirror augmentation: the pipeline\n"
+            "mirrors the pose but not the video, so the two would disagree.\n"
+            "train_model refuses the combination outright."
         )
-        options.add_row("Class weight", self._class_weight_combo)
+        self._freq_check = QCheckBox("Frequency")
+        self._freq_check.setToolTip(
+            "Dominant frequency and spectral flatness per kinematic column —\n"
+            "for rhythmic behaviors such as grooming."
+        )
+        features.addRow(_button_row(self._traj_check, self._motion_check, self._freq_check))
+        # train_model raises on motion + mirror together, and the raise lands
+        # minutes into a fit with the model lost. Enforce it here, where the
+        # click happens, rather than letting the run start and fail.
+        self._mirror_check.toggled.connect(self._on_motion_mirror_toggled)
+        self._motion_check.toggled.connect(self._on_motion_mirror_toggled)
+        self._motion_mirror_hint = hint("")
+        features.addRow(self._motion_mirror_hint)
+        self._on_motion_mirror_toggled()
 
+        # A 3D view of the feature space the classifier learned, stored in the
+        # bundle and drawn by the Review tab. Off by default: fitting one costs
+        # real time on a large cohort, and it changes nothing about the model.
+        self._embedding_combo = QComboBox()
+        self._embedding_combo.addItem("none", "none")
+        self._embedding_combo.addItem("UMAP", "umap")
+        self._embedding_combo.addItem("PCA", "pca")
+        self._embedding_combo.setToolTip(
+            "Fit a 3D embedding of the training features and store it in the\n"
+            "model bundle, so the Review tab can show whether the behaviors\n"
+            "occupy distinct regions.\n\n"
+            "UMAP separates clusters better; PCA is faster and always\n"
+            "available. UMAP falls back to PCA when it is not installed."
+        )
+        features.addRow("3D embedding", self._embedding_combo)
+
+        repro = self._options.add_section("Reproducibility")
         self._test_split_spin = QDoubleSpinBox()
         self._test_split_spin.setRange(0.0, 0.5)
         self._test_split_spin.setSingleStep(0.05)
@@ -1299,13 +1469,13 @@ class TrainTab(QWidget):
             "run reports training accuracy only, which is not a\n"
             "generalization estimate."
         )
-        options.add_row("Within-session test split", self._test_split_spin)
+        repro.addRow("Within-session test split", self._test_split_spin)
 
         self._seed_spin = QSpinBox()
         self._seed_spin.setRange(0, 999_999)
-        self._seed_spin.setValue(42)
+        self._seed_spin.setValue(self._DEFAULT_SEED)
         self._seed_spin.setToolTip("Change to check how much of a score is fit noise.")
-        options.add_row("Random seed", self._seed_spin)
+        repro.addRow("Random seed", self._seed_spin)
 
         # The escape hatch the "different frame rates" error tells you to use.
         # Without it that message asks for something the window cannot do.
@@ -1321,77 +1491,31 @@ class TrainTab(QWidget):
             "windowed feature is specified in seconds, so this rescales them\n"
             "all. Only force a rate the recordings actually share."
         )
-        options.add_row("Frame rate", self._fps_spin)
+        repro.addRow("Frame rate", self._fps_spin)
 
-        # Feature families the pipeline can compute but never did: all three
-        # default to False in train_model and had no way to be switched on.
-        self._traj_check = QCheckBox("Trajectory shape features")
-        self._traj_check.setToolTip(
-            "Straightness, path length, net displacement, radius of gyration\n"
-            "and total turning over each window — the shape of the path\n"
-            "rather than the pose. Aimed at telling travelling apart from\n"
-            "milling about in one spot."
-        )
-        self._motion_check = QCheckBox("Motion features")
-        self._motion_check.setToolTip(
-            "Frame-differencing features read from the source video.\n\n"
-            "Cannot be combined with mirror augmentation: the pipeline\n"
-            "mirrors the pose but not the video, so the two would disagree.\n"
-            "train_model refuses the combination outright."
-        )
-        self._freq_check = QCheckBox("Frequency features")
-        self._freq_check.setToolTip(
-            "Dominant frequency and spectral flatness per kinematic column —\n"
-            "for rhythmic behaviors such as grooming."
-        )
-        # A 3D view of the feature space the classifier learned, stored in the
-        # bundle and drawn by the Review tab. Off by default: fitting one costs
-        # real time on a large cohort, and it changes nothing about the model.
-        self._embedding_combo = QComboBox()
-        self._embedding_combo.addItem("none", "none")
-        self._embedding_combo.addItem("UMAP", "umap")
-        self._embedding_combo.addItem("PCA", "pca")
-        self._embedding_combo.setToolTip(
-            "Fit a 3D embedding of the training features and store it in the\n"
-            "model bundle, so the Review tab can show whether the behaviors\n"
-            "occupy distinct regions.\n\n"
-            "UMAP separates clusters better; PCA is faster and always\n"
-            "available. UMAP falls back to PCA when it is not installed."
-        )
-        options.add_row("3D embedding", self._embedding_combo)
-
-        options.add(self._traj_check)
-        options.add(self._motion_check)
-        options.add(self._freq_check)
-        # train_model raises on motion + mirror together, and the raise lands
-        # minutes into a fit with the model lost. Enforce it here, where the
-        # click happens, rather than letting the run start and fail.
-        self._mirror_check.toggled.connect(self._on_motion_mirror_toggled)
-        self._motion_check.toggled.connect(self._on_motion_mirror_toggled)
-        self._motion_mirror_hint = hint("")
-        options.add(self._motion_mirror_hint)
-        self._on_motion_mirror_toggled()
-        options.add(
-            hint(
-                "These three are computed but off by default, so no existing "
-                "model used them. Turning one on changes the feature set, and "
-                "the resulting model is not comparable to one trained without it."
-            )
-        )
-
-        column.addWidget(options)
+        self._advanced_btn = QPushButton("LightGBM settings…")
+        set_button_role(self._advanced_btn, "ghost")
+        self._advanced_btn.setToolTip("Tune LightGBM's capacity and regularization per knob.")
+        self._advanced_btn.clicked.connect(self._on_advanced)
+        repro.addRow(_button_row(self._advanced_btn))
         self._on_classifier_changed()
 
-        # --- output -----------------------------------------------------
-        output = Card("Output")
-        self._output_label = path_label("(none)")
-        output_btn = QPushButton("Choose…")
-        output_btn.clicked.connect(self._on_choose_output)
-        output.add_row("Model bundle", self._output_label, output_btn)
-        output.add(hint("A .pkl the Apply tab loads to score new video."))
-        column.addWidget(output)
-
-        column.addStretch(1)
+        for signal in (
+            self._classifier_combo.currentIndexChanged,
+            self._window_spin.valueChanged,
+            self._class_weight_combo.currentIndexChanged,
+            self._background_check.toggled,
+            self._mirror_check.toggled,
+            self._traj_check.toggled,
+            self._motion_check.toggled,
+            self._freq_check.toggled,
+            self._embedding_combo.currentIndexChanged,
+            self._test_split_spin.valueChanged,
+            self._seed_spin.valueChanged,
+            self._fps_spin.valueChanged,
+        ):
+            signal.connect(self._update_summary)
+        self._update_summary()
         self._refresh_counts()
 
     def _refresh_counts(self) -> None:
@@ -1400,7 +1524,61 @@ class TrainTab(QWidget):
         self._sessions_card.set_badge(f"{n} session{'' if n == 1 else 's'}" if n else "none yet")
         n = len(self._holdout)
         self._holdout_card.set_badge(f"{n} session{'' if n == 1 else 's'}" if n else "none yet")
-        self._rail.set_blocker("" if self._sessions else "Add at least one training session.")
+        # Sessions held out are never tucked away out of sight.
+        if self._holdout and not self._holdout_toggle.isChecked():
+            self._holdout_toggle.setChecked(True)
+        self._refresh_message()
+
+    def _refresh_message(self) -> None:
+        """Name what blocks Fit, or say it is ready."""
+        if not self._sessions:
+            self._footer.set_message("Add at least one labelled session.")
+        elif self._output_path is None:
+            self._footer.set_message("Choose where to save the model.")
+        else:
+            n = len(self._sessions)
+            held = f", {len(self._holdout)} held out" if self._holdout else ""
+            self._footer.set_message(f"Ready: {n} session{'' if n == 1 else 's'}{held}.")
+
+    def _on_holdout_toggled(self, shown: bool) -> None:
+        self._holdout_card.setVisible(shown)
+        self._holdout_toggle.setText("Hold some out \u25be" if shown else "Hold some out \u25b8")
+
+    def _update_summary(self, *_args) -> None:
+        """Name the kind, window and every non-default option in force."""
+        frames = self._window_spin.value()
+        fps = self._fps_spin.value()
+        secs = f"{frames / (fps or 30):g} s window"
+        parts = [self._classifier_combo.currentText(), secs if fps else f"{secs} at 30 fps"]
+        if self._class_weight_combo.currentData() is not None:
+            parts.append(f"{self._class_weight_combo.currentText()} class weight")
+        if self._background_check.isChecked():
+            parts.append("background class on")
+        if self._mirror_check.isChecked():
+            parts.append("mirror augment on")
+        extras = [
+            name
+            for name, box in (
+                ("trajectory", self._traj_check),
+                ("motion", self._motion_check),
+                ("frequency", self._freq_check),
+            )
+            if box.isChecked()
+        ]
+        if extras:
+            parts.append(" + ".join(extras) + " features")
+        if self._embedding_combo.currentData() != "none":
+            parts.append(f"{self._embedding_combo.currentText()} embedding")
+        if self._test_split_spin.value():
+            parts.append(f"{self._test_split_spin.value():g} test split")
+        if self._seed_spin.value() != self._DEFAULT_SEED:
+            parts.append(f"seed {self._seed_spin.value()}")
+        if self._fps_spin.value():
+            parts.append(f"{self._fps_spin.value():g} fps")
+        # Mirrors _lgbm_options without its pipeline import.
+        if self._lgbm_advanced and self._classifier_combo.currentData() == "lightgbm":
+            parts.append("custom LightGBM settings")
+        self._summary.setText(" \u00b7 ".join(parts))
 
     def _on_remove_session(self) -> None:
         _remove_selected(self._sessions_list, self._sessions)
@@ -1445,18 +1623,14 @@ class TrainTab(QWidget):
 
     def _on_classifier_changed(self, *_args) -> None:
         """The advanced knobs are LightGBM-only; RandomForest silently ignores them."""
-        lgbm = self._classifier_combo.currentText() == "lightgbm"
-        self._advanced_btn.setEnabled(lgbm)
-        self._advanced_btn.setToolTip(
-            "Tune LightGBM's capacity and regularization per knob."
-            if lgbm
-            else "LightGBM only — the RandomForest backend ignores these knobs."
-        )
+        # Hidden rather than greyed: a disabled button asks to be decoded.
+        self._advanced_btn.setVisible(self._classifier_combo.currentData() == "lightgbm")
 
     def _on_advanced(self) -> None:
         dialog = LgbmAdvancedDialog(self._lgbm_advanced, self)
         if dialog.exec():
             self._lgbm_advanced = dialog.values()
+            self._update_summary()
 
     def _lgbm_options(self) -> dict:
         """``train_model`` kwargs for the advanced knobs, or ``{}`` when untouched.
@@ -1465,7 +1639,7 @@ class TrainTab(QWidget):
         been filled in: ``_make_classifier`` ignores ``lgbm_reg`` there, so
         passing it would imply an effect the run won't have.
         """
-        if not self._lgbm_advanced or self._classifier_combo.currentText() != "lightgbm":
+        if not self._lgbm_advanced or self._classifier_combo.currentData() != "lightgbm":
             return {}
         # Imported here, not at module scope: pipeline pulls in sklearn/pandas
         # and this window must import cleanly under a bare [pc] install.
@@ -1540,6 +1714,24 @@ class TrainTab(QWidget):
         self._output_path = Path(path)
         set_path_text(self._output_label, _short_path(self._output_path), filled=True)
         self._output_label.setToolTip(path)
+        self._refresh_message()
+
+    def _ask_cross_validate(self, then_fit: bool) -> None:
+        """The Fit menu's Cross-validate items: ask the folds, then run CV."""
+        folds, ok = QInputDialog.getInt(
+            self,
+            "Cross-validate",
+            "Folds (whole sessions per fold; at or above the\n"
+            "number of sessions this is leave-one-out):",
+            self._folds,
+            2,
+            100,
+        )
+        if not ok:
+            return
+        self._folds = folds
+        self._cv_then_fit = then_fit
+        self._on_cross_validate()
 
     def _shared_options(self) -> dict:
         """Settings both Fit and Cross-validate accept.
@@ -1550,7 +1742,7 @@ class TrainTab(QWidget):
         takes neither, and it makes its own splits.
         """
         options: dict = {
-            "classifier_type": self._classifier_combo.currentText(),
+            "classifier_type": self._classifier_combo.currentData(),
             "include_background": self._background_check.isChecked(),
             "mirror_augment": self._mirror_check.isChecked(),
             "window": int(self._window_spin.value()),
@@ -1575,13 +1767,13 @@ class TrainTab(QWidget):
         if not self._sessions:
             QMessageBox.warning(self, "Train", "Add at least one training session first.")
             return
-        also_fit = self._cv_fit_check.isChecked()
+        also_fit = self._cv_then_fit
         if also_fit and self._output_path is None:
             QMessageBox.warning(
                 self,
                 "Train",
-                "Choose a model output file first, or untick "
-                "'…and fit a model on all sessions' to measure only.",
+                "Choose a model output file first, or pick "
+                "'Cross-validate (k folds)…' to measure only.",
             )
             return
 
@@ -1591,7 +1783,8 @@ class TrainTab(QWidget):
         from glider.gui.behavior import workers as workers_mod
 
         options = self._shared_options()
-        options["n_folds"] = int(self._folds_spin.value())
+        options["n_folds"] = int(self._folds)
+        self._saving_to = self._output_path if also_fit else None
 
         self._train_thread = QThread()
         self._train_worker = workers_mod.CrossValidateWorker(
@@ -1603,22 +1796,13 @@ class TrainTab(QWidget):
         self._train_worker.finished.connect(self._on_cv_finished)
         self._train_worker.failed.connect(self._on_train_failed)
 
-        self._results.clear()
-        self._progress.setVisible(True)
-        self._progress.setRange(0, 0)
-        self._fit_btn.setEnabled(False)
-        self._cv_btn.setEnabled(False)
-        self._rail.status.set_state("running", f"Cross-validating ({options['n_folds']} folds)")
+        self._start_run(f"Cross-validating ({options['n_folds']} folds)…")
         self._train_thread.start()
 
     def _on_cv_finished(self, result: object) -> None:
         from glider.analysis.behavior.summary_text import format_cv_summary
 
-        self._teardown_train_thread()
-        self._progress.setVisible(False)
-        self._fit_btn.setEnabled(True)
-        self._cv_btn.setEnabled(True)
-        self._rail.status.set_state("ok", "Done")
+        self._end_run()
         self._results.setPlainText(format_cv_summary(result))
         self._announce_run(result)
 
@@ -1655,13 +1839,30 @@ class TrainTab(QWidget):
         self._train_worker.finished.connect(self._on_train_finished)
         self._train_worker.failed.connect(self._on_train_failed)
 
+        self._saving_to = self._output_path
+        self._start_run("Fitting…")
+        self._train_thread.start()
+
+    def _start_run(self, message: str) -> None:
+        # Disabling the Fit button disables its menu, Cross-validate with it:
+        # both share the one thread slot.
+        self._results_card.setVisible(True)
         self._results.clear()
         self._progress.setVisible(True)
-        self._progress.setRange(0, 0)  # indeterminate until fit finishes
+        self._progress.setRange(0, 0)  # indeterminate until the run finishes
         self._fit_btn.setEnabled(False)
-        self._cv_btn.setEnabled(False)
-        self._rail.status.set_state("running", "Fitting")
-        self._train_thread.start()
+        self._footer.set_message(message)
+
+    def _end_run(self) -> None:
+        self._teardown_train_thread()
+        self._progress.setVisible(False)
+        self._fit_btn.setEnabled(True)
+        saved, self._saving_to = self._saving_to, None
+        if saved is not None:
+            self._footer.set_message(f"Done. Model saved to {saved.name}.")
+            self.model_saved.emit(saved)
+        else:
+            self._footer.set_message("Done. Cross-validation saves no model.")
 
     def _on_report_ready(self, report_dir: object) -> None:
         """Remember where this run's report landed, if it landed anywhere."""
@@ -1673,11 +1874,7 @@ class TrainTab(QWidget):
             self._progress.setValue(done)
 
     def _on_train_finished(self, summary: object) -> None:
-        self._teardown_train_thread()
-        self._progress.setVisible(False)
-        self._fit_btn.setEnabled(True)
-        self._cv_btn.setEnabled(True)
-        self._rail.status.set_state("ok", "Done")
+        self._end_run()
         # Deferred like the rest of the analysis imports, though this one is
         # cheap by design — it exists so the results pane never needs pandas.
         from glider.analysis.behavior.summary_text import format_training_summary
@@ -1691,14 +1888,14 @@ class TrainTab(QWidget):
         self.run_reported.emit(report, summary)
 
     def _on_train_failed(self, message: str) -> None:
-        # Shared by Fit and Cross-validate, so both buttons come back —
-        # otherwise a failed cross-validation leaves its own button dead.
-        self._cv_btn.setEnabled(True)
+        # Shared by Fit and Cross-validate: the Fit button (and the
+        # Cross-validate items in its menu) must come back either way.
         self._pending_report = None
+        self._saving_to = None
         self._teardown_train_thread()
         self._progress.setVisible(False)
         self._fit_btn.setEnabled(True)
-        self._rail.status.set_state("error", "Failed")
+        self._footer.set_message("Training failed.", warning=True)
         QMessageBox.critical(self, "Training failed", message)
 
     def _teardown_train_thread(self) -> None:
@@ -1711,12 +1908,19 @@ class TrainTab(QWidget):
 class ApplyTab(QWidget):
     """Classify recorded video(s) with a trained model and write the ethogram."""
 
+    #: The output folder, when "Open in Session Review" is clicked.
+    open_in_session_review = pyqtSignal(str)
+    #: How many videos a finished run scored (only emitted when at least one).
+    scored = pyqtSignal(int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._model_path: Path | None = None
         self._yolo_path: Path | None = None
         self._videos: list[Path] = []
         self._output_dir: Path | None = None
+        self._scored_dir: Path | None = None  # output folder of the last run
+        self._scored_single = 0  # last run's single-animal results
         self._calibration_master: Path | None = None
         self._cohort_path: Path | None = None
         self._cohort_thread: QThread | None = None
@@ -1728,35 +1932,51 @@ class ApplyTab(QWidget):
         # its own <output_dir>/<video stem>/ subfolder.
         self._queue: list[Path] = []
 
-        # --- run rail ---------------------------------------------------
-        rail = RunRail("Score videos")
-        self._run_btn = rail.button
-        self._run_btn.clicked.connect(self._on_run)
-        self._rail = rail
+        #: Videos that finished in the run in flight. Apply is ticked done, and
+        #: the "Scored N videos" banner shown, only when at least one did.
+        self._scored = 0
+        self._run_total = 0
 
-        self._progress = QProgressBar()
-        self._progress.setVisible(False)
-        rail.card.add(self._progress)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        body = QVBoxLayout()
+        body.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
+        area, column = scroll_column()
+        body.addWidget(area)
+        outer.addLayout(body, 1)
 
-        results_card = Card("Output")
-        self._results = QTextEdit()
-        self._results.setObjectName("LogPane")
-        self._results.setReadOnly(True)
-        self._results.setPlaceholderText("Output paths will appear here.")
-        results_card.add(self._results, 1)
-        rail.add(results_card, 1)
+        # --- footer -----------------------------------------------------
+        self._footer = StepFooter("Score Videos")
+        self._run_btn = self._footer.primary
+        # Late-bound, so a handler replaced on the instance is the one called.
+        self._run_btn.clicked.connect(lambda: self._on_run())
+        outer.addWidget(self._footer)
 
-        column = _workspace(self, rail)
+        # --- videos -----------------------------------------------------
+        videos_group = Card("Videos to score")
+        self._videos_card = videos_group
+        self._videos_list = QListWidget()
+        self._videos_list.setMinimumHeight(96)
+        self._videos_list.setMaximumHeight(160)
+        attach_empty_state(self._videos_list, "No videos yet.\nAdd the recordings you want scored.")
+        videos_group.add(self._videos_list)
+        add_videos_btn = QPushButton("Add Videos…")
+        add_videos_btn.clicked.connect(self._on_add_videos)
+        remove_video_btn = QPushButton("Remove")
+        set_button_role(remove_video_btn, "ghost")
+        remove_video_btn.clicked.connect(self._on_remove_video)
+        videos_group.add(_button_row(add_videos_btn, remove_video_btn))
+        self._pose_match_label = hint("")
+        videos_group.add(self._pose_match_label)
+        column.addWidget(videos_group)
 
-        # --- models -----------------------------------------------------
-        # Both models are optional, and the labels say so where the operator
-        # is deciding: no bundle scores freezing/darting alone, and no weights
-        # is fine as long as the poses already exist. Clearing is offered
-        # because choosing one is otherwise irreversible, and switching to a
-        # speed-only run after picking a bundle is a normal thing to want.
-        # No "both optional" subtitle: each field's own placeholder already says
-        # what happens without it, and more precisely than the card could.
-        models = Card("Models")
+        # --- model and output -------------------------------------------
+        # The bundle is optional -- no bundle scores freezing/darting alone --
+        # and the placeholder says so where the operator is deciding. Clearing
+        # is offered because switching to a speed-only run after picking a
+        # bundle is a normal thing to want.
+        target = Card("Model and output")
         self._model_label = QLabel("Model bundle: (none — scores freezing/darting only)")
         self._model_label.setVisible(False)  # kept as the text of record
         self._model_path_label = path_label("(none — scores freezing/darting only)")
@@ -1769,8 +1989,57 @@ class ApplyTab(QWidget):
             "the speed trace, which needs no classifier."
         )
         model_clear.clicked.connect(self._on_clear_model)
-        models.add_row("Model bundle", self._model_path_label, model_btn, model_clear)
+        target.add_row("Model bundle", self._model_path_label, model_btn, model_clear)
 
+        self._output_label = QLabel("Output folder: (none)")
+        self._output_label.setVisible(False)  # kept as the text of record
+        self._output_value = path_label("(none)")
+        self._output_value.setToolTip("Each video gets its own subfolder here.")
+        output_btn = QPushButton("Choose…")
+        output_btn.clicked.connect(self._on_choose_output_dir)
+        target.add_row("Write results to", self._output_value, output_btn)
+        self._summary = summary_label()
+        target.add(self._summary)
+        column.addWidget(target)
+
+        # --- finished banner: shown once a run scored something ---------
+        self._banner = QFrame()
+        self._banner.setObjectName("ScoredBanner")
+        banner_row = QHBoxLayout(self._banner)
+        banner_row.setContentsMargins(GUTTER, 10, GUTTER, 10)
+        self._banner_text = set_text_role(QLabel(""), "success")
+        self._banner_text.setWordWrap(True)
+        banner_row.addWidget(self._banner_text, 1)
+        self._show_files_btn = QPushButton("Show Files")
+        self._show_files_btn.clicked.connect(self._on_show_files)
+        banner_row.addWidget(self._show_files_btn)
+        self._review_btn = QPushButton("Open in Session Review")
+        set_button_role(self._review_btn, "primary")
+        self._review_btn.clicked.connect(self._on_open_in_review)
+        banner_row.addWidget(self._review_btn)
+        self._banner.setVisible(False)
+        column.addWidget(self._banner)
+
+        # --- results: shown once a run starts, and kept -----------------
+        results_card = Card("Results")
+        self._results_card = results_card
+        self._progress = QProgressBar()
+        self._progress.setVisible(False)
+        results_card.add(self._progress)
+        self._results = QTextEdit()
+        self._results.setObjectName("LogPane")
+        self._results.setReadOnly(True)
+        self._results.setMinimumHeight(160)
+        self._results.setPlaceholderText("Output paths will appear here.")
+        results_card.add(self._results, 1)
+        results_card.setVisible(False)
+        column.addWidget(results_card, 1)
+        column.addStretch(1)
+
+        # --- options ----------------------------------------------------
+        self._options = OptionsPopup(self._footer.options_button, "Scoring options", scroll=True)
+
+        tracking = self._options.add_section("Pose tracking")
         self._yolo_label = QLabel("YOLO weights: (none — needed only to track poses)")
         self._yolo_label.setVisible(False)
         self._yolo_path_label = path_label("(none — needed only to track poses)")
@@ -1783,43 +2052,10 @@ class ApplyTab(QWidget):
             "a pose CSV never needs them."
         )
         yolo_clear.clicked.connect(self._on_clear_yolo)
-        models.add_row("YOLO weights", self._yolo_path_label, yolo_btn, yolo_clear)
-        column.addWidget(models)
+        tracking.addRow(labelled_row("YOLO weights", self._yolo_path_label, yolo_btn, yolo_clear))
 
-        # --- videos -----------------------------------------------------
-        videos_group = Card("Videos to classify")
-        self._videos_card = videos_group
-        self._videos_list = QListWidget()
-        self._videos_list.setMinimumHeight(96)
-        self._videos_list.setMaximumHeight(160)
-        attach_empty_state(self._videos_list, "No videos yet.\nAdd the recordings you want scored.")
-        videos_group.add(self._videos_list)
-        add_videos_btn = QPushButton("Add video(s)…")
-        add_videos_btn.clicked.connect(self._on_add_videos)
-        remove_video_btn = QPushButton("Remove selected")
-        set_button_role(remove_video_btn, "ghost")
-        remove_video_btn.clicked.connect(self._on_remove_video)
-        videos_group.add(_button_row(add_videos_btn, remove_video_btn))
-        column.addWidget(videos_group)
-
-        # --- keypoints --------------------------------------------------
-        keypoints = Card("Keypoints", "must match the model's own order")
-        self._keypoints_edit = QLineEdit()
-        self._keypoints_edit.setPlaceholderText("nose, left_ear, right_ear, ... (comma-separated)")
-        edit_kp = QPushButton("Edit…")
-        edit_kp.setToolTip(
-            "Arrange the keypoints on a figure instead of typing the order, "
-            "and save the layout for reuse."
-        )
-        edit_kp.clicked.connect(self._edit_keypoint_schema)
-        keypoints.add_row("Names", self._keypoints_edit, edit_kp)
-        keypoints.add(hint("Filled in automatically when a model bundle is chosen."))
-        column.addWidget(keypoints)
-
-        # --- pose reuse -------------------------------------------------
         # Checked by default: Batch Pose Tracking has usually already produced
         # these, and re-deriving them is the biggest avoidable cost in a run.
-        poses = Card("Pose data")
         self._reuse_poses = QCheckBox("Reuse already-tracked pose CSVs (skips tracking)")
         self._reuse_poses.setChecked(True)
         self._reuse_poses.setToolTip(
@@ -1828,7 +2064,7 @@ class ApplyTab(QWidget):
             "Falls back to tracking for any video without one."
         )
         self._reuse_poses.toggled.connect(self._on_reuse_toggled)
-        poses.add(self._reuse_poses)
+        tracking.addRow(self._reuse_poses)
 
         # Batch Pose Tracking writes its CSVs wherever it was pointed, which
         # is routinely a poses folder rather than beside the videos. Matching
@@ -1843,36 +2079,35 @@ class ApplyTab(QWidget):
         self._pose_dir_clear = QPushButton("Use video folder")
         set_button_role(self._pose_dir_clear, "ghost")
         self._pose_dir_clear.clicked.connect(self._on_clear_pose_dir)
-        poses.add_row("CSV folder", self._pose_dir_value, self._pose_dir_btn, self._pose_dir_clear)
+        tracking.addRow(
+            labelled_row(
+                "Pose CSV folder", self._pose_dir_value, self._pose_dir_btn, self._pose_dir_clear
+            )
+        )
 
-        self._pose_match_label = hint("")
-        poses.add(self._pose_match_label)
-        column.addWidget(poses)
+        self._keypoints_edit = QLineEdit()
+        self._keypoints_edit.setPlaceholderText("nose, left_ear, right_ear, ... (comma-separated)")
+        self._keypoints_edit.setToolTip(
+            "Must match the model's own order. Filled in automatically when a "
+            "model bundle is chosen."
+        )
+        edit_kp = QPushButton("Edit…")
+        edit_kp.setToolTip(
+            "Arrange the keypoints on a figure instead of typing the order, "
+            "and save the layout for reuse."
+        )
+        edit_kp.clicked.connect(self._edit_keypoint_schema)
+        tracking.addRow(labelled_row("Keypoint names", self._keypoints_edit, edit_kp))
 
-        # --- scoring ----------------------------------------------------
-        scoring = Card("Scoring")
-        scoring.add(self._build_cadence_row())
-        scoring.add(self._build_time_range_row())
-        scoring.add_separator()
-        scoring.add(self._build_stability_group())
-        column.addWidget(scoring)
+        scoring = self._options.add_section("Scoring")
+        scoring.addRow(self._build_cadence_row())
+        scoring.addRow(self._build_time_range_row())
+        scoring.addRow(self._build_stability_group())
 
-        # --- speed axis -------------------------------------------------
-        speed_card = Card("Freeze / dart speed axis", "optional")
-        self._speed_card = speed_card
-        speed_card.add(self._build_speed_group())
-        column.addWidget(speed_card)
+        speed = self._options.add_section("Freeze / dart from speed")
+        speed.addRow(self._build_speed_group())
 
-        # --- output -----------------------------------------------------
-        output = Card("Output")
-        self._output_label = QLabel("Output folder: (none)")
-        self._output_label.setVisible(False)  # kept as the text of record
-        self._output_value = path_label("(none)")
-        output_btn = QPushButton("Choose…")
-        output_btn.clicked.connect(self._on_choose_output_dir)
-        output.add_row("Folder", self._output_value, output_btn)
-        output.add(hint("Each video gets its own subfolder here."))
-
+        output = self._options.add_section("Output")
         # Encoding an annotated MP4 costs more wall-clock than the inference
         # itself on a long recording, and it is a spot-checking aid rather than
         # an analysis artifact -- so it is off unless asked for.
@@ -1882,29 +2117,116 @@ class ApplyTab(QWidget):
             "Writes annotated.mp4 beside the ethogram. Useful for checking a "
             "single video; a large cost per video across a batch."
         )
-        output.add(self._render_video)
-        column.addWidget(output)
+        output.addRow(self._render_video)
 
-        column.addStretch(1)
+        for signal in (
+            self._predict_every.valueChanged,
+            self._range_on.toggled,
+            self._range_start.valueChanged,
+            self._range_end.valueChanged,
+            self._smooth_window.valueChanged,
+            self._offline_smooth.valueChanged,
+            self._min_bout_s.valueChanged,
+            self._speed_group.toggled,
+            self._reuse_poses.toggled,
+            self._render_video.toggled,
+            self._score_freezing.toggled,
+            self._score_darting.toggled,
+            self._speed_mode.currentIndexChanged,
+        ):
+            signal.connect(self._update_summary)
+        # A blocker can live in Options (the speed axis, the annotated video),
+        # so the footer is re-read whenever one of them changes.
+        self._render_video.toggled.connect(self._refresh_blocker)
+        self._score_freezing.toggled.connect(self._refresh_blocker)
+        self._score_darting.toggled.connect(self._refresh_blocker)
+        self._speed_mode.currentIndexChanged.connect(self._refresh_blocker)
+        self._keypoints_edit.textChanged.connect(self._refresh_blocker)
+        self._update_summary()
         self._refresh_blocker()
 
-    def _refresh_blocker(self) -> None:
-        """Say why Run is unavailable, in the rail, before it is ever clicked.
+    def _update_summary(self, *_args) -> None:
+        """Name the cadence, smoothing, speed axis and every non-default option."""
+        n = self._predict_every.value()
+        parts = ["Every frame" if n == 1 else f"Every {n} frames"]
+        if self._range_on.isChecked():
+            start, end = self._range_start.value(), self._range_end.value()
+            parts.append(f"{start:g}–{end:g} min" if end else f"from {start:g} min")
+        majority, centred = self._smooth_window.value(), self._offline_smooth.value()
+        if majority <= 1 and not centred:
+            parts.append("smoothing off")
+        elif majority == _DEFAULT_SMOOTH_WINDOW and centred == DEFAULT_OFFLINE_WINDOW:
+            parts.append("smoothing on")
+        else:
+            # Either knob off its default is named, with its value.
+            parts.append(f"majority {majority if majority > 1 else 'off'}")
+            parts.append(f"centred {centred or 'off'}")
+        if self._min_bout_s.value():
+            parts.append(f"{self._min_bout_s.value():g} s minimum bout")
+        if self._speed_group.isChecked():
+            freezing, darting = self._score_freezing.isChecked(), self._score_darting.isChecked()
+            speed = "freeze/dart" if freezing and darting else "freeze" if freezing else "dart"
+            if not (freezing or darting):
+                speed = "freeze/dart (neither ticked)"
+            mode = self._speed_mode_value()
+            if mode == "cohort":
+                name = self._cohort_path.name if self._cohort_path else "no file"
+                speed += f" on (cohort: {name})"
+            elif mode == "percentile":
+                speed += " on (percentile)"
+            else:
+                speed += " on"
+            parts.append(speed)
+        else:
+            parts.append("freeze/dart off")
+        if not self._reuse_poses.isChecked():
+            parts.append("tracking every video")
+        elif self._pose_dir is not None:
+            parts.append(f"poses from {_short_path(self._pose_dir)}")
+        if self._render_video.isChecked():
+            parts.append("annotated video")
+        self._summary.setText(" · ".join(parts))
+
+    def _refresh_blocker(self, *_args) -> None:
+        """Say why Score is unavailable, in the footer, before it is ever clicked.
 
         ``_run_blocker`` already knew all of this; it was only ever consulted
         after the click, so the operator configured the whole screen and then
-        found out. Shown continuously it becomes a checklist instead.
+        found out. Shown continuously it becomes a checklist instead -- and it
+        names settings that live in Options, so none blocks silently.
         """
         n = len(self._videos)
         self._videos_card.set_badge(f"{n} video{'' if n == 1 else 's'}" if n else "none yet")
-        self._speed_card.set_badge("on" if self._speed_group.isChecked() else "off")
+        self._run_btn.setText(f"Score {n} Video{'' if n == 1 else 's'}" if n else "Score Videos")
+        if not self._run_btn.isEnabled():
+            return  # a run in flight owns the footer message
         if not self._videos:
             message = "Add at least one video."
         elif self._output_dir is None:
             message = "Choose an output folder."
         else:
-            message = self._run_blocker() or ""
-        self._rail.set_blocker(message)
+            message = self._run_blocker()
+            if not message and not self._keypoints_edit.text().strip():
+                message = "Enter the keypoint names (Options ▸ Keypoint names)."
+        if message:
+            self._footer.set_message(message, warning=bool(self._videos))
+            return
+        untracked = len(self._needs_tracking())
+        poses = (
+            "poses found for all" if not untracked else f"{untracked} will be tracked from scratch"
+        )
+        self._footer.set_message(f"Ready: {n} video{'' if n == 1 else 's'}, {poses}.")
+
+    def _on_show_files(self) -> None:
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+
+        if self._scored_dir is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._scored_dir)))
+
+    def _on_open_in_review(self) -> None:
+        if self._scored_dir is not None:
+            self.open_in_session_review.emit(str(self._scored_dir))
 
     def _on_choose_model(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -2114,6 +2436,7 @@ class ApplyTab(QWidget):
         set_path_text(self._pose_dir_value, _short_path(self._pose_dir), filled=True)
         self._pose_dir_value.setToolTip(path)
         self._refresh_pose_match()
+        self._update_summary()
 
     def _on_clear_pose_dir(self) -> None:
         self._pose_dir = None
@@ -2122,6 +2445,7 @@ class ApplyTab(QWidget):
         set_path_text(self._pose_dir_value, "beside each video", filled=False)
         self._pose_dir_value.setToolTip("")
         self._refresh_pose_match()
+        self._update_summary()
 
     def _on_reuse_toggled(self, checked: bool) -> None:
         for w in (
@@ -2151,6 +2475,10 @@ class ApplyTab(QWidget):
         silently costs a full tracking pass, which is the single most
         expensive thing an apply run can do.
         """
+        self._label_video_rows()
+        # Shown only when it adds something; the per-row marks already say
+        # "found". The text is still set so the full-coverage state is readable.
+        self._pose_match_label.setVisible(True)
         if not self._reuse_poses.isChecked():
             set_text_role(self._pose_match_label, "warning")
             self._pose_match_label.setText("Tracking will run for every video.")
@@ -2159,6 +2487,7 @@ class ApplyTab(QWidget):
         if not self._videos:
             set_text_role(self._pose_match_label, "hint")
             self._pose_match_label.setText("")
+            self._pose_match_label.setVisible(False)
             self._refresh_blocker()
             return
         matched, unmatched = self._match_poses()
@@ -2169,6 +2498,7 @@ class ApplyTab(QWidget):
             self._pose_match_label.setText(
                 f"✓ Matched a pose CSV for all {len(matched)} video(s) in {where}."
             )
+            self._pose_match_label.setVisible(False)
             self._refresh_blocker()
             return
         names = ", ".join(v.name for v in unmatched[:4])
@@ -2176,9 +2506,23 @@ class ApplyTab(QWidget):
         set_text_role(self._pose_match_label, "warning")
         self._pose_match_label.setText(
             f"⚠ Matched {len(matched)} of {len(self._videos)} in {where}. "
-            f"No pose CSV for: {names}{more} — those would be tracked from scratch."
+            f"No pose CSV for: {names}{more} — those would be tracked from scratch "
+            "(or point Options ▸ Pose CSV folder at the tracked CSVs)."
         )
         self._refresh_blocker()
+
+    def _label_video_rows(self) -> None:
+        """Each row says whether its poses were found, so a miss is seen per video."""
+        if self._reuse_poses.isChecked():
+            _matched, unmatched = self._match_poses()
+        else:
+            unmatched = self._videos
+        for i, video in enumerate(self._videos):
+            item = self._videos_list.item(i)
+            if item is None:
+                continue
+            tail = "no poses — will be tracked" if video in unmatched else "\u2713 poses found"
+            item.setText(f"{video.name}   {tail}")
 
     def _on_choose_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose output folder")
@@ -2210,13 +2554,13 @@ class ApplyTab(QWidget):
             if not self._speed_group.isChecked():
                 return (
                     "Choose a model bundle — or, to score freezing and darting "
-                    "with no model at all, turn on the freeze/dart speed axis "
-                    "and set its thresholds."
+                    "with no model at all, turn on the speed axis "
+                    "(Options ▸ Freeze / dart) and set its thresholds."
                 )
             if not (self._score_freezing.isChecked() or self._score_darting.isChecked()):
                 return (
                     "A run with no model bundle scores the speed axis, so tick "
-                    "freezing, darting, or both."
+                    "freezing, darting, or both (Options ▸ Freeze / dart)."
                 )
             if self._render_video.isChecked():
                 return (
@@ -2233,14 +2577,15 @@ class ApplyTab(QWidget):
             # never told where its cut-offs live.
             return (
                 "Cohort mode takes its cut-offs from a file — choose or compute "
-                "one, or switch the threshold mode."
+                "one, or switch the threshold mode (Options ▸ Freeze / dart)."
             )
         untracked = self._needs_tracking()
         if self._yolo_path is None and untracked:
             names = ", ".join(v.name for v in untracked[:4])
             more = f" (+{len(untracked) - 4} more)" if len(untracked) > 4 else ""
             return (
-                f"Choose YOLO weights: {len(untracked)} video(s) have no pose CSV "
+                f"Choose YOLO weights, or point Options ▸ Pose CSV folder at the "
+                f"tracked CSVs — {len(untracked)} video(s) have no pose CSV "
                 f"to score and would have to be tracked — {names}{more}."
             )
         return None
@@ -2276,10 +2621,16 @@ class ApplyTab(QWidget):
             return
 
         self._results.clear()
+        self._results_card.setVisible(True)
+        self._banner.setVisible(False)
+        self._scored = 0
+        self._scored_single = 0
+        self._scored_dir = self._output_dir
         self._queue = list(self._videos)
+        self._run_total = len(self._queue)
         self._run_btn.setEnabled(False)
         self._progress.setVisible(True)
-        self._rail.status.set_state("running", "Scoring")
+        self._footer.set_message("Scoring…")
         self._keypoint_names = keypoint_names
         self._run_next()
 
@@ -2745,7 +3096,7 @@ class ApplyTab(QWidget):
         return group
 
     def _on_speed_group_toggled(self, _checked: bool) -> None:
-        """Keep the card badge and the Run blocker in step with the axis."""
+        """Keep the footer's blocker in step with the axis."""
         self._refresh_blocker()
 
     def _on_choose_cohort(self) -> None:
@@ -2768,6 +3119,7 @@ class ApplyTab(QWidget):
         from glider.analysis.behavior.cohort_speed import CohortSpeedError, CohortSpeedThresholds
 
         self._cohort_label.setToolTip(str(self._cohort_path))
+        self._update_summary()
         try:
             thresholds = CohortSpeedThresholds.load(self._cohort_path)
         except CohortSpeedError as e:
@@ -2832,6 +3184,8 @@ class ApplyTab(QWidget):
         self._results.append(
             f"Pooling speed from {len(csvs)} session(s) over {window}… this takes a minute or two."
         )
+        self._results_card.setVisible(True)
+        self._footer.set_message("Computing cohort thresholds…")
         self._progress.setVisible(True)
         self._progress.setRange(0, len(csvs))
         self._progress.setValue(0)
@@ -2873,6 +3227,7 @@ class ApplyTab(QWidget):
     def _end_cohort_run(self) -> None:
         self._progress.setVisible(False)
         self._run_btn.setEnabled(True)
+        self._refresh_blocker()
 
     def _on_cohort_done(self, thresholds, path) -> None:
         self._end_cohort_run()
@@ -2979,17 +3334,14 @@ class ApplyTab(QWidget):
 
     def _run_next(self) -> None:
         if not self._queue:
-            self._progress.setVisible(False)
-            self._run_btn.setEnabled(True)
-            if self._rail.status.property("state") == "running":
-                self._rail.status.set_state("ok", "Done")
+            self._finish_run()
             return
 
         from glider.gui.behavior.workers import ApplyWorker
 
         video = self._queue.pop(0)
         remaining = len(self._videos) - len(self._queue)
-        self._rail.status.set_state("running", f"{remaining} / {len(self._videos)}")
+        self._footer.set_message(f"Scoring {remaining} of {len(self._videos)}…")
         video_output_dir = self._output_dir / video.stem
         start_s, end_s = self._time_range()
 
@@ -3040,8 +3392,10 @@ class ApplyTab(QWidget):
             for slot in sorted(result):
                 lines.append(f"  animal {slot} ethogram: {result[slot]}")
             self._results.append("\n".join(lines))
+            self._scored += 1
             self._run_next()
             return
+        self._scored_single += 1
         n_frames = getattr(getattr(result, "ethogram", None), "__len__", lambda: None)()
         if n_frames is not None:
             lines.append(f"  frames classified: {n_frames}")
@@ -3056,14 +3410,38 @@ class ApplyTab(QWidget):
             if out_path.exists():
                 lines.append(f"  {label}: {out_path}")
         self._results.append("\n".join(lines))
+        self._scored += 1
         self._run_next()
 
     def _on_apply_failed(self, message: str, video: Path) -> None:
         self._teardown_apply_thread()
-        self._rail.status.set_state("error", "Failed")
         self._results.append(f"{video.name}: FAILED - {message}")
         QMessageBox.critical(self, "Apply failed", f"{video.name}:\n{message}")
         self._run_next()
+
+    def _finish_run(self) -> None:
+        """Banner and tick when the run scored anything; the footer says what failed."""
+        self._progress.setVisible(False)
+        self._run_btn.setEnabled(True)
+        n, total = self._scored, self._run_total
+        if n and self._scored_dir is not None:
+            # Multi-animal ethograms go beside each video, not under the
+            # output folder, and Session Review cannot discover them.
+            where = (
+                f"written to {_short_path(self._scored_dir)}"
+                if self._scored_single
+                else "written beside each video in <video>_animals/"
+            )
+            self._banner_text.setText(
+                f"\u2713 Scored {n} video{'' if n == 1 else 's'}. Ethograms, bouts and "
+                f"stats {where}"
+            )
+            self._review_btn.setVisible(self._scored_single > 0)
+            self._banner.setVisible(True)
+            self.scored.emit(n)
+        self._refresh_blocker()
+        if n < total:
+            self._footer.set_message(f"{total - n} of {total} failed.", warning=True)
 
     def _teardown_apply_thread(self) -> None:
         if self._apply_thread is not None:

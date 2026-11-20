@@ -250,6 +250,31 @@ def test_the_transport_has_every_toggle(qtbot):
     assert "Play" in transport.play.text()
 
 
+def test_overlays_toggle_like_chips(qtbot):
+    """Video, Poses and Trail are chips; the rest are checkable Overlays ▾ entries."""
+    from PyQt6.QtWidgets import QCheckBox
+
+    transport = Transport()
+    qtbot.addWidget(transport)
+    chips = [w.text() for w in transport.findChildren(QCheckBox) if not w.isHidden()]
+    assert chips == ["Video", "Poses", "Trail"]
+    assert "Overlays" in transport.overlays_btn.text()
+    entries = [a for a in transport.overlays_menu.actions() if a.isCheckable()]
+    assert [a.text() for a in entries] == ["Zones", "Arena", "HUD", "Distances", "Pups", "Heatmap"]
+    assert entries == [
+        transport.zones_on,
+        transport.arena_on,
+        transport.hud_on,
+        transport.distances_on,
+        transport.pups_on,
+        transport.heatmap_on,
+    ]
+    seen = []
+    transport.heatmap_on.toggled.connect(seen.append)
+    transport.heatmap_on.trigger()
+    assert seen == [True] and transport.heatmap_on.isChecked()
+
+
 def test_transport_buttons_are_drawn_icons_not_text_glyphs(qtbot):
     transport = Transport()
     qtbot.addWidget(transport)

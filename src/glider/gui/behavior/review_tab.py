@@ -559,29 +559,56 @@ class ReviewTab(QWidget):
             grid.add_full_width(confusion)
             used = True
 
+        if used:
+            blocks.append(grid)
+
+        # Reference cards: built and populated, folded until asked for.
+        ref = CardGrid()
+        ref_used = False
         balance = self._balance_card(run)
         features = self._features_card(run)
         if balance is not None and features is not None:
-            grid.add_pair(balance, features)
-            used = True
-        elif balance is not None:
-            grid.add_full_width(balance)
-            used = True
-        elif features is not None:
-            grid.add_full_width(features)
-            used = True
-
+            ref.add_pair(balance, features)
+            ref_used = True
+        else:
+            for card in (balance, features):
+                if card is not None:
+                    ref.add_full_width(card)
+                    ref_used = True
         # Full width on purpose: it is the one panel here that is a picture
         # rather than a list, and it is read by rotating it.
         embedding = self._embedding_card(run)
         if embedding is not None:
-            grid.add_full_width(embedding)
-            used = True
-
-        if used:
-            blocks.append(grid)
-        blocks.append(self._settings_card(run))
+            ref.add_full_width(embedding)
+            ref_used = True
+        blocks.append(self._details_section(ref if ref_used else None, self._settings_card(run)))
         return blocks
+
+    def _details_section(self, grid: QWidget | None, settings: Card) -> QWidget:
+        holder = QWidget()
+        col = QVBoxLayout(holder)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(CARD_GAP)
+        self.details_toggle = QPushButton("Details ▸")
+        set_button_role(self.details_toggle, "ghost")
+        self.details_toggle.setCheckable(True)
+        self.details_body = QWidget()
+        body = QVBoxLayout(self.details_body)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(CARD_GAP)
+        if grid is not None:
+            body.addWidget(grid)
+        body.addWidget(settings)
+        self.details_body.setVisible(False)
+
+        def _toggle(on: bool) -> None:
+            self.details_body.setVisible(on)
+            self.details_toggle.setText("Details ▾" if on else "Details ▸")
+
+        self.details_toggle.toggled.connect(_toggle)
+        col.addWidget(self.details_toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        col.addWidget(self.details_body)
+        return holder
 
     def _per_class_card(self, run: TrainingRun) -> Card | None:
         rows = run.per_class
@@ -665,12 +692,10 @@ class ReviewTab(QWidget):
         view = EmbeddingView()
         view.set_artifact(points)
         card.add(view)
-        card.add(
-            hint(
-                "Each point is a labelled window, reduced to three dimensions. "
-                "Classes in their own regions are separable; classes sitting on "
-                "top of each other are the confusion matrix, seen directly."
-            )
+        view.setToolTip(
+            "Each point is a labelled window, reduced to three dimensions. "
+            "Classes in their own regions are separable; overlapping classes "
+            "are the confusion matrix, seen directly."
         )
         return card
 
@@ -684,12 +709,6 @@ class ReviewTab(QWidget):
         grid.set_matrix(labels, normalized, counts)
         grid.setToolTip(grid.cell_tooltip())
         card.add(grid)
-        card.add(
-            hint(
-                "The diagonal is correct. A bright cell off it is a specific "
-                "confusion worth labelling more of."
-            )
-        )
         return card
 
     def _balance_card(self, run: TrainingRun) -> Card | None:
