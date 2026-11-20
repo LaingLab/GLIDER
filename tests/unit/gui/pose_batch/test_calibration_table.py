@@ -42,10 +42,10 @@ def test_one_row_per_video(table, tmp_path):
 
 def test_uncalibrated_videos_are_flagged(table, tmp_path):
     table.set_videos([tmp_path / "a.mp4"])
-    assert "—" in table.item(0, 2).text()
-    # The status column reports Run-readiness, and the first thing a bare video
+    assert "—" in table.item(0, 3).text()
+    # The arena cell reports Run-readiness, and the first thing a bare video
     # needs is the perimeter — the scale follows from it.
-    assert "Needs arena" in table.item(0, 4).text()
+    assert table.item(0, 2).text() == "Needs arena — double-click"
 
 
 def test_a_drawn_line_still_shows_its_scale(table, tmp_path):
@@ -55,9 +55,9 @@ def test_a_drawn_line_still_shows_its_scale(table, tmp_path):
     cal_set.set(video, _cal(6.4))
     table.set_calibration_set(cal_set)
     table.set_videos([video])
-    assert "6.4" in table.item(0, 2).text()
-    assert "640x480" in table.item(0, 1).text()
-    assert "Needs arena" in table.item(0, 4).text()
+    assert "6.4" in table.item(0, 3).text()
+    assert "px/mm" in table.item(0, 3).text()
+    assert table.item(0, 2).text() == "Needs arena — double-click"
 
 
 def test_refresh_picks_up_a_new_calibration(table, tmp_path):
@@ -65,11 +65,11 @@ def test_refresh_picks_up_a_new_calibration(table, tmp_path):
     cal_set = CalibrationSet()
     table.set_calibration_set(cal_set)
     table.set_videos([video])
-    assert "Needs arena" in table.item(0, 4).text()
+    assert "Needs arena" in table.item(0, 2).text()
 
     cal_set.set_arena(video, _arena())
     table.refresh()
-    assert "Calibrated" in table.item(0, 4).text()
+    assert table.item(0, 2).text().startswith("✓")
 
 
 def test_selected_videos_reports_the_selection(table, tmp_path):

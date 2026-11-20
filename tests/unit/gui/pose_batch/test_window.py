@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from glider.gui.pose_batch.window import PoseBatchWindow, _DropList
+from glider.gui.pose_batch.window import PoseBatchWindow
 
 
 def _touch(path: Path) -> Path:
@@ -70,28 +70,97 @@ def window(qtbot):
 
 
 # --------------------------------------------------------------------------
-# drop list
+# the one table: drops, sources, remove
 # --------------------------------------------------------------------------
 
 
-def test_drop_list_dedupes_paths(qtbot, tmp_path):
-    widget = _DropList()
-    qtbot.addWidget(widget)
-    widget.add_paths([tmp_path, tmp_path])
-    assert widget.paths() == [tmp_path]
+def _drop_on(widget, *paths):
+    """Deliver a real file drop to *widget*."""
+    from PyQt6.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PyQt6.QtGui import QDropEvent
+
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(p)) for p in paths])
+    event = QDropEvent(
+        QPointF(5, 5),
+        Qt.DropAction.CopyAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    widget.dropEvent(event)
+    return event
 
 
-def test_drop_list_emits_changed_on_add(qtbot, tmp_path):
-    widget = _DropList()
-    qtbot.addWidget(widget)
-    with qtbot.waitSignal(widget.changed, timeout=1000):
-        widget.add_paths([tmp_path])
+def test_there_is_no_separate_videos_list(window):
+    from PyQt6.QtWidgets import QListWidget
+
+    assert not window.findChildren(QListWidget)
+    assert window._cal_table.acceptDrops() is True
 
 
-def test_drop_list_accepts_drops(qtbot):
-    widget = _DropList()
-    qtbot.addWidget(widget)
-    assert widget.acceptDrops() is True
+def test_table_columns_are_video_folder_arena_scale(window):
+    table = window._cal_table
+    headers = [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())]
+    assert headers == ["Video", "Folder", "Arena", "Scale"]
+
+
+def test_drop_folder_on_table_adds_videos(window, tmp_path):
+    _touch(tmp_path / "a.mp4")
+    _touch(tmp_path / "sub" / "b.mp4")
+    _drop_on(window._cal_table, tmp_path)
+    assert len(window._videos) == 2
+    assert window._cal_table.rowCount() == 2
+
+
+def test_drop_respects_the_recursive_setting(window, tmp_path):
+    _touch(tmp_path / "a.mp4")
+    _touch(tmp_path / "sub" / "b.mp4")
+    window._recursive.setChecked(False)
+    _drop_on(window._cal_table, tmp_path)
+    assert len(window._videos) == 1
+
+
+def test_sources_dedupe_and_emit(window, tmp_path):
+    _touch(tmp_path / "a.mp4")
+    window._sources.add_paths([tmp_path, tmp_path])
+    assert window._sources.paths() == [tmp_path]
+    assert len(window._videos) == 1
+
+
+def test_remove_drops_its_arena(window, tmp_path):
+    _touch(tmp_path / "a.mp4")
+    _touch(tmp_path / "b.mp4")
+    window._sources.add_paths([tmp_path])
+    _calibrate_all(window)
+    keep, gone = window._videos
+    window._cal_table.selectRow(1)
+    window._remove_selected()
+    assert window._videos == [keep]
+    assert window._cal_table.rowCount() == 1
+    assert window._calibrations.get_arena(gone) is None
+    assert window._calibrations.get(gone) is None
+    assert window._calibrations.get_arena(keep) is not None
+
+
+def test_removed_video_stays_out_until_its_folder_is_added_again(window, tmp_path):
+    _touch(tmp_path / "a.mp4")
+    _touch(tmp_path / "b.mp4")
+    window._sources.add_paths([tmp_path])
+    window._cal_table.selectRow(0)
+    window._remove_selected()
+    window._recursive.setChecked(False)
+    window._recursive.setChecked(True)
+    assert len(window._videos) == 1
+    window._add_paths([tmp_path / "a.mp4"])
+    assert len(window._videos) == 2
+
+
+def test_empty_table_says_what_to_do(window):
+    from PyQt6.QtWidgets import QLabel
+
+    texts = [w.text() for w in window._cal_table.viewport().findChildren(QLabel)]
+    assert "Drop video folders here, or Add Folder…" in texts
 
 
 # --------------------------------------------------------------------------

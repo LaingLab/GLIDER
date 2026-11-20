@@ -16,9 +16,8 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QObject, QSettings, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QSettings, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
-    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -28,14 +27,12 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QSpinBox,
-    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -71,62 +68,33 @@ _SETTINGS_PREFIX = "pose_batch/keypoints"
 _INVALID_STYLE = f"border: 1px solid {colors.ERROR};"
 
 
-class _DropList(QListWidget):
-    """A list of video directories/files that accepts drag-and-drop."""
+class _Sources:
+    """The video folders/files the user added, in order, without duplicates.
 
-    changed = pyqtSignal()
+    Plain data: the table shows the videos they expand to, so nothing here is a
+    widget. ``on_change`` fires whenever the set of sources changes.
+    """
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.setToolTip("Drag video folders or files here")
-
-    # Qt camelCase overrides (N802 is suppressed project-wide).
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
-
-    def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
-
-    def dropEvent(self, event):
-        if not event.mimeData().hasUrls():
-            super().dropEvent(event)
-            return
-        dropped = [Path(url.toLocalFile()) for url in event.mimeData().urls() if url.toLocalFile()]
-        self.add_paths(dropped)
-        event.acceptProposedAction()
+    def __init__(self, on_change) -> None:
+        self._paths: list[Path] = []
+        self._on_change = on_change
 
     def add_paths(self, paths) -> None:
         """Add paths, ignoring ones already listed."""
-        existing = {self.item(i).text() for i in range(self.count())}
         added = False
-        for path in paths:
-            text = str(Path(path))
-            if text not in existing:
-                self.addItem(text)
-                existing.add(text)
+        for path in map(Path, paths):
+            if path not in self._paths:
+                self._paths.append(path)
                 added = True
         if added:
-            self.changed.emit()
-
-    def remove_selected(self) -> None:
-        for item in self.selectedItems():
-            self.takeItem(self.row(item))
-        self.changed.emit()
+            self._on_change()
 
     def clear_all(self) -> None:
-        self.clear()
-        self.changed.emit()
+        self._paths.clear()
+        self._on_change()
 
     def paths(self) -> list[Path]:
-        return [Path(self.item(i).text()) for i in range(self.count())]
+        return list(self._paths)
 
 
 class _MetaWorker(QObject):
@@ -235,17 +203,7 @@ class PoseBatchWindow(QMainWindow):
         area, column = scroll_column()
         column.addWidget(self._build_model_group())
         column.addWidget(self._build_pup_group())
-        # Videos and calibration still share a splitter -- the calibration
-        # table is the one thing here whose useful height genuinely depends on
-        # the cohort size, and trading rows against it is worth a handle. The
-        # log moved to the run rail, where output belongs.
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.setHandleWidth(GUTTER)
-        splitter.setChildrenCollapsible(False)
-        splitter.addWidget(self._build_sources_group())
-        splitter.addWidget(self._build_calibration_group())
-        splitter.setSizes([220, 340])
-        column.addWidget(splitter, 1)
+        column.addWidget(self._build_videos_group(), 1)
         column.addWidget(self._build_filter_group())
         column.addWidget(self._build_options_group())
         column.addStretch(0)
@@ -405,34 +363,70 @@ class PoseBatchWindow(QMainWindow):
         self._set_pup_model(None)
         return card
 
-    def _build_sources_group(self) -> Card:
-        card = Card("Videos", "drop folders or files here")
-        self._sources_card = card
+    def _build_videos_group(self) -> Card:
+        """One table for the batch: a row per video, with its arena and scale."""
+        card = Card("Videos", "an arena is required for every video")
+        # The walkthrough's "videos" and "calibration" steps are the same card now.
+        self._sources_card = self._calibration_card = card
+        self._sources = _Sources(self._refresh_videos)
+        self._excluded: set[Path] = set()
 
-        self._sources = _DropList()
-        self._sources.changed.connect(self._refresh_videos)
-        attach_empty_state(
-            self._sources, "Drop video folders or files here,\nor use the buttons below."
-        )
-        card.add(self._sources, 1)
+        self._cal_table = CalibrationTable()
+        self._cal_table.set_calibration_set(self._calibrations)
+        self._cal_table.arena_requested.connect(self._open_arena)
+        self._cal_table.paths_dropped.connect(self._add_paths)
+        self._cal_table.itemSelectionChanged.connect(self._update_selection_label)
+        # ~4-5 rows: enough to see arena status at a glance.
+        self._cal_table.setMinimumHeight(140)
+        attach_empty_state(self._cal_table, "Drop video folders here, or Add Folder…")
 
-        add_dir = QPushButton("Add Directory…")
+        add_dir = QPushButton("Add Folder…")
         add_dir.clicked.connect(self._choose_directory)
         add_files = QPushButton("Add Files…")
         add_files.clicked.connect(self._choose_files)
+
+        # The arena is the calibration: it is what Run requires, and it supplies
+        # the scale as a by-product (#212 retired the separate line tool here).
+        arena = QPushButton("Draw Arena…")
+        set_button_role(arena, "primary")
+        arena.setToolTip(
+            "Required. Outline the arena floor of the selected video, square or "
+            "round (or double-click its row).\nGives a centre zone that means the "
+            "same patch of floor in every video, and a scale that accounts for "
+            "perspective."
+        )
+        arena.clicked.connect(self._arena_selected)
+        copy_arena_btn = QPushButton("Copy Arena to Selected")
+        copy_arena_btn.setToolTip(
+            "Stamp one video's floor perimeter onto the other selected videos.\n"
+            "The copies land unconfirmed: an arena that does not fit gives no "
+            "warning of its own, so open each one and check the outline before "
+            "the batch will run."
+        )
+        copy_arena_btn.clicked.connect(self._copy_arena_to_selected)
+        clear_arena = QPushButton("Clear Arena")
+        set_button_role(clear_arena, "ghost")
+        clear_arena.clicked.connect(self._clear_selected_calibrations)
         remove = QPushButton("Remove")
         set_button_role(remove, "ghost")
-        remove.clicked.connect(self._sources.remove_selected)
-        clear = QPushButton("Clear")
-        set_button_role(clear, "ghost")
-        clear.clicked.connect(self._sources.clear_all)
+        remove.clicked.connect(self._remove_selected)
+        remove_all = QPushButton("Remove All")
+        set_button_role(remove_all, "ghost")
+        remove_all.clicked.connect(self._remove_all)
 
-        buttons = QHBoxLayout()
-        buttons.setSpacing(8)
-        for button in (add_dir, add_files, remove, clear):
-            buttons.addWidget(button)
-        buttons.addStretch(1)
-        card.add(buttons)
+        self._selection_label = QLabel("")
+        set_text_role(self._selection_label, "hint")
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        toolbar.addWidget(add_dir)
+        toolbar.addWidget(add_files)
+        toolbar.addStretch(1)
+        toolbar.addWidget(self._selection_label)
+        for button in (arena, copy_arena_btn, clear_arena, remove, remove_all):
+            toolbar.addWidget(button)
+        card.add(toolbar)
+        card.add(self._cal_table, 1)
 
         self._recursive = QCheckBox("Include subdirectories")
         self._recursive.setChecked(True)
@@ -443,54 +437,6 @@ class PoseBatchWindow(QMainWindow):
         self._count_label = QLabel("No videos found")
         self._count_label.setVisible(False)
         card.add(self._count_label)
-        return card
-
-    def _build_calibration_group(self) -> Card:
-        card = Card("Arena", "required for every video")
-        self._calibration_card = card
-        card.setToolTip(
-            "Every video needs its arena floor outlined before the batch can "
-            "run; the arena carries the scale. The DLC CSVs stay in pixels; the "
-            "scale is written to the master calibration file."
-        )
-
-        self._cal_table = CalibrationTable()
-        self._cal_table.set_calibration_set(self._calibrations)
-        self._cal_table.arena_requested.connect(self._open_arena)
-        # ~4-5 rows: enough to see calibration status at a glance even if the
-        # splitter above gets dragged down to its floor.
-        self._cal_table.setMinimumHeight(140)
-        card.add(self._cal_table, 1)
-
-        # The arena is the calibration: it is what Run requires, and it supplies
-        # the scale as a by-product (#212 retired the separate line tool here).
-        arena = QPushButton("Arena…")
-        set_button_role(arena, "primary")
-        arena.setToolTip(
-            "Required. Outline the arena floor of the selected video, square or "
-            "round (or double-click its row).\nGives a centre zone that means the "
-            "same patch of floor in every video, and a scale that accounts for "
-            "perspective."
-        )
-        arena.clicked.connect(self._arena_selected)
-        copy_arena_btn = QPushButton("Copy Arena…")
-        copy_arena_btn.setToolTip(
-            "Stamp one video's floor perimeter onto the other selected videos.\n"
-            "The copies land unconfirmed: an arena that does not fit gives no "
-            "warning of its own, so open each one and check the outline before "
-            "the batch will run."
-        )
-        copy_arena_btn.clicked.connect(self._copy_arena_to_selected)
-        clear_btn = QPushButton("Clear")
-        set_button_role(clear_btn, "ghost")
-        clear_btn.clicked.connect(self._clear_selected_calibrations)
-
-        buttons = QHBoxLayout()
-        buttons.setSpacing(8)
-        for button in (arena, copy_arena_btn, clear_btn):
-            buttons.addWidget(button)
-        buttons.addStretch(1)
-        card.add(buttons)
         card.add_separator()
 
         self._master_field = QLineEdit()
@@ -644,34 +590,60 @@ class PoseBatchWindow(QMainWindow):
     def _choose_directory(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Add video directory")
         if path:
-            self._sources.add_paths([Path(path)])
+            self._add_paths([Path(path)])
 
     def _choose_files(self) -> None:
         exts = " ".join(f"*{e}" for e in sorted(batch_core.VIDEO_EXTS))
         paths, _ = QFileDialog.getOpenFileNames(self, "Add videos", "", f"Videos ({exts})")
         if paths:
-            self._sources.add_paths([Path(p) for p in paths])
+            self._add_paths([Path(p) for p in paths])
 
-    def _refresh_videos(self) -> None:
+    def _discover(self, sources) -> list[Path]:
         # Same call Run uses, so the count can never disagree with the work
         # actually done. On a very large tree this touches disk synchronously.
         try:
-            self._videos = batch_core.discover_videos(
-                self._sources.paths(), recursive=self._recursive.isChecked()
-            )
+            return batch_core.discover_videos(sources, recursive=self._recursive.isChecked())
         except OSError:
             logger.warning("could not scan for videos", exc_info=True)
-            self._videos = []
+            return []
+
+    def _add_paths(self, paths) -> None:
+        """Add folders/files; anything in them the user removed earlier comes back."""
+        paths = list(paths)
+        self._excluded -= set(self._discover(paths))
+        before = self._sources.paths()
+        self._sources.add_paths(paths)  # refreshes itself when something is new
+        if self._sources.paths() == before:
+            self._refresh_videos()  # only exclusions changed
+
+    def _refresh_videos(self) -> None:
+        self._videos = [v for v in self._discover(self._sources.paths()) if v not in self._excluded]
         count = len(self._videos)
         self._count_label.setText(
             "No videos found" if count == 0 else f"{count} video{'s' if count != 1 else ''} found"
         )
-        self._sources_card.set_badge(
-            "none yet" if count == 0 else f"{count} video{'s' if count != 1 else ''}"
-        )
         self._cal_table.set_videos(self._videos)
+        self._update_selection_label()
         self._sync_master_field()
         self._validate()
+
+    def _update_selection_label(self) -> None:
+        n = len(self._cal_table.selected_videos())
+        self._selection_label.setText(f"{n} selected" if n else "")
+
+    def _remove_selected(self) -> None:
+        """Drop the selected videos, and their arenas with them."""
+        selected = self._cal_table.selected_videos()
+        for video in selected:
+            self._excluded.add(video)
+            self._calibrations.discard(video)
+            self._calibrations.discard_arena(video)
+        if selected:
+            self._refresh_videos()
+
+    def _remove_all(self) -> None:
+        self._excluded.clear()
+        self._sources.clear_all()
 
     # ------------------------------------------------------------------
     # calibration
@@ -1164,9 +1136,12 @@ class PoseBatchWindow(QMainWindow):
         if self._videos:
             missing = len(self._calibrations.missing_arenas(self._videos))
             done = len(self._videos) - missing
-            self._calibration_card.set_badge(f"{done} / {len(self._videos)} arenas drawn")
+            n = len(self._videos)
+            self._sources_card.set_badge(
+                f"{n} video{'s' if n != 1 else ''} · {done} / {n} arenas drawn"
+            )
         else:
-            self._calibration_card.set_badge("")
+            self._sources_card.set_badge("none yet")
 
         self._validate_regate()
 
