@@ -121,8 +121,12 @@ def test_view_menu_shows_panels_and_remembers(window_with_panels):
     make, side, timeline = window_with_panels
     window = make()
     window.show()
+    window._body.setCurrentIndex(1)  # the editor, as once a session is open
     actions = window._view_actions
     assert {"sessions", "inspector", "timeline", "plugin/Side", "plugin/Trace"} <= set(actions)
+    # Plugin entries land in the top bar's View ▾, beside the window's own.
+    in_view = window._view_btn.menu().actions()
+    assert actions["plugin/Side"] in in_view and actions["plugin/Trace"] in in_view
     window._set_frame(5)
     actions["plugin/Side"].setChecked(True)
     actions["plugin/Trace"].setChecked(True)
@@ -136,6 +140,7 @@ def test_view_menu_shows_panels_and_remembers(window_with_panels):
     window.close()
     again = make()
     again.show()
+    again._body.setCurrentIndex(1)
     assert again._view_actions["plugin/Side"].isChecked()
     assert side.widget().isVisible() and not again._inspector.isVisible()
     assert again._top_split.sizes()[2] > 0

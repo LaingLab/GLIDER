@@ -23,8 +23,10 @@ the item is greyed out and its tooltip tells you what's missing and how to fix i
 
 > Install the behavior extra: pip install glider[behavior] (missing: …)
 
-The Behavior Analysis window opens with three tabs — **Annotate**, **Train**, and
-**Apply** — which correspond to the three stages of the workflow.
+The Behavior Analysis window opens with a step strip — **Annotate**, **Train**, **Review**, and
+**Apply** — which walks the workflow in order. Each step shows what it needs and
+ends in one footer: a readiness message, **Options** for the settings you rarely
+change, and one primary button.
 
 !!! note "This is the supervised, machine-learning tool"
     Don't confuse this with the live **Enable Behavior Analysis** option in the
@@ -51,7 +53,12 @@ On the **Annotate** tab:
 1. Click **Choose videos folder…** and select the folder of recordings.
 2. Optionally click **Choose pose CSV folder…** if the pose CSVs live elsewhere
    (by default GLIDER looks in the videos folder).
-3. Click **Launch annotator**.
+3. Click **Label Clips**. Once the folder has saved labels the button reads
+   **Resume Labelling** instead; the other action and **Review saved
+   annotations** are in the button's ▾ menu. The footer names anything that
+   blocks labelling, such as videos with no pose CSVs yet. Rarely-used
+   settings (skip regions already labelled, the speed trace) are under
+   **Options**.
 
 GLIDER samples a spread of short clips across your videos — chosen to be varied
 rather than all alike, so your labels cover a representative range of behavior —
@@ -82,7 +89,7 @@ Your labels are saved next to each pose CSV as an annotations file (for example
 
 If a video was tracked with more than one animal (see
 [Multiple animals](tracking.md#multiple-animals) in Tracking), the annotator
-labels **one animal per pass**. Clicking **Launch annotator** asks, once for
+labels **one animal per pass**. Clicking **Label Clips** asks, once for
 each such video, which animal (numbered from 0) you want to label this time:
 
 > Label one animal per pass: every zone you create is stamped with this
@@ -115,27 +122,36 @@ those zones read as animal 0.
 
 On the **Train** tab you fit a classifier from your labeled sessions:
 
-1. Under **Training sessions**, click **Add sessions…** and pick a matching pose
-   CSV and its annotations CSV. Add as many sessions as you have.
-2. Optionally add **Holdout sessions** — recordings kept aside to test how well
-   the model generalizes to data it never trained on.
-3. Choose a **Classifier**:
-    - `rf` — a scikit-learn **Random Forest**.
-    - `lightgbm` — a **LightGBM** gradient-boosted model. (If LightGBM isn't
-      available, GLIDER falls back to Random Forest automatically.)
-4. With `lightgbm` selected, **Advanced…** opens the per-knob hyperparameters —
-   see [Advanced LightGBM settings](#advanced-lightgbm-settings).
-5. Optionally enable **Include background class** (treat unlabeled frames as a
-   catch-all "background" behavior) and **Mirror augment** (add left/right-mirrored
-   copies of your data to make the model robust to direction).
-6. Click **Choose output file…** to pick where to save the trained model. It's
-   saved as a single **model bundle** (`.pkl`).
-7. Click **Fit**.
+1. Under **Labelled sessions**, click **Add Sessions…** and pick the pose
+   CSVs; each one's annotations CSV is found beside it.
+2. Optionally click **Hold some out ▸** and add **Holdout sessions** —
+   recordings kept aside to test how well the model generalizes to data it
+   never trained on. The list stays open whenever it holds sessions.
+3. Under **Save model as**, click **Choose…** to pick where to save the trained
+   model. It's saved as a single **model bundle** (`.pkl`).
+4. Optionally open **Options** to tune the fit:
+    - **Kind**: **Random forest** (scikit-learn) or **LightGBM** (a
+      gradient-boosted model; if LightGBM isn't available, GLIDER falls back
+      to Random Forest automatically).
+    - Window, class weight, **Include background class** (treat unlabeled
+      frames as a catch-all "background" behavior) and **Mirror augment** (add
+      left/right-mirrored copies of your data to make the model robust to
+      direction).
+    - Extra feature families, a 3D embedding, test split, seed and frame rate.
+    - With LightGBM selected, **LightGBM settings…** opens the per-knob
+      hyperparameters — see [Advanced LightGBM settings](#advanced-lightgbm-settings).
 
-When training finishes, a summary appears in the results box: how many rows were
-kept versus dropped, the classes learned, training accuracy, the most important
-features, and — if you provided a holdout set — test accuracy, per-class
-precision/recall/F1, and a confusion matrix.
+   A line under the model path names the kind, window and every option
+   you've changed, so nothing set in a closed Options panel goes unnoticed.
+5. Click **Fit Model**. Its ▾ menu also holds **Cross-validate (k folds)…**
+   (measure only; saves nothing) and **Cross-validate, then fit…**; both ask
+   how many folds to use.
+
+When training finishes, the window moves to the **Review** step. It leads with
+the verdict — the headline accuracy and how it was measured — then per-behavior
+precision/recall/F1 and a confusion matrix (the latter two need a holdout set).
+Click **Details ▸** for the reference cards: feature space, training rows per
+behavior, top features, and the settings that produced the run.
 
 !!! note "Add a holdout set to see honest test scores"
     Without a holdout set, only training accuracy is reported, which always looks
@@ -148,7 +164,7 @@ Most users never need this. The defaults are already tuned to be *more*
 regularized than stock LightGBM, which deliberately gives up some training
 accuracy to generalize better to sessions the model has never seen.
 
-Reach for **Advanced…** when the training summary and your holdout scores
+Reach for **LightGBM settings…** when the training summary and your holdout scores
 disagree — near-perfect training accuracy alongside mediocre holdout accuracy
 means the model has memorized your training sessions rather than learned the
 behaviors. Every field has a tooltip explaining what it trades off, and
@@ -167,7 +183,7 @@ behaviors. Every field has a tooltip explaining what it trades off, and
 | **L2 regularization** | Penalty on confident leaf weights | Raise it |
 
 These settings apply to LightGBM only — the Random Forest backend ignores them,
-which is why **Advanced…** is greyed out when `rf` is selected. Values you set
+which is why **LightGBM settings…** is hidden when Random forest is selected. Values you set
 are used for the runs you fit afterward; they aren't saved between sessions, and
 leaving the dialog untouched means the built-in defaults are used.
 
@@ -251,17 +267,34 @@ a mirrored arena.
 
 ## Stage 3 — Apply
 
-On the **Apply** tab you score new videos with a trained model:
+On the **Apply** step you score new videos with a trained model. The step
+shows only what scoring needs, in order:
 
-1. Click **Choose model bundle…** and select the `.pkl` you trained.
-2. Click **Choose YOLO weights…** and select the pose model (`.pt`) — the same
-   kind used to produce your training pose data.
-3. Under **Video(s) to classify**, click **Add video(s)…** to add one or more
-   recordings.
-4. In **Keypoint names**, enter the keypoint names in the model's training order,
-   comma-separated (for example `nose, left_ear, right_ear, ...`).
-5. Optionally set **Classify every** — see [Classifier cadence](#classifier-cadence).
-6. Click **Choose output folder…**, then **Run**.
+1. Under **Videos to score**, click **Add Videos…** to add one or more
+   recordings. Each row says whether its poses were found
+   (**✓ poses found**) or will be tracked from scratch.
+2. Next to **Model bundle**, click **Choose…** and select the `.pkl` you
+   trained. Leave it empty to score freezing and darting from speed alone.
+3. Next to **Write results to**, click **Choose…** to pick the output folder.
+4. Click **Score N Videos** in the footer.
+
+Everything else lives under **Options** in the footer: **YOLO weights**
+(needed only for videos with no pose CSV), **Reuse already-tracked pose CSVs**
+and the **Pose CSV folder**, **Keypoint names** (filled in from the bundle;
+**Edit…** arranges them on a figure), **Classify every** (see
+[Classifier cadence](#classifier-cadence)), the **Time window**, the three
+smoothing settings (**Majority vote**, **Centred vote**, **Minimum bout**),
+**Freeze / dart from speed**, and **Also render an annotated video**. The
+line under the output folder names the options in force (for example
+"Every 3 frames · smoothing on · freeze/dart off"), and the footer message
+names anything that blocks the run, including a setting inside Options.
+
+When the run finishes, a banner reports **✓ Scored N videos** with
+**Show Files** (opens the output folder) and **Open in Session Review**
+(opens the Session Review window on that folder, with every ethogram loaded).
+Multi-animal results are the exception: their ethograms are written beside each
+video in `<video>_animals/`, Session Review cannot load them, and a run with
+only multi-animal results has no **Open in Session Review** button.
 
 GLIDER runs pose inference over each video and classifies it at the chosen
 cadence. Videos are processed one at a time, each writing into its own subfolder
@@ -316,7 +349,7 @@ tools that read an ethogram (Session Review among them) read a flat list of
 rows keyed only by position, and a shared multi-animal file would silently
 double-count every frame rather than error.
 
-To reach this path, check **Reuse already-tracked pose CSVs** (on by default)
+To reach this path, check **Options ▸ Reuse already-tracked pose CSVs** (on by default)
 and add a video that was already run through Batch Pose Tracking with
 **Animals** above 1. This matters because it's the *only* way in: tracking a
 video fresh from inside the Apply tab is always single-animal, so a

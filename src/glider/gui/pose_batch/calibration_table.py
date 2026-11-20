@@ -20,17 +20,26 @@ from PyQt6.QtWidgets import (
 from glider.vision.arena import DegenerateArenaError
 from glider.vision.calibration_set import CalibrationSet
 
-_COLUMNS = ("Video", "Resolution", "px/mm", "Arena", "Status")
+_COLUMNS = ("Video", "Folder", "Arena", "Scale")
 
 #: Index of the arena column.
-ARENA_COLUMN = 3
-_STATUS_COLUMN = 4
+ARENA_COLUMN = 2
+_SCALE_COLUMN = 3
+
+#: The three arena states Run cares about, one phrase each.
+NEEDS_ARENA = "Needs arena — double-click"
+UNCONFIRMED_ARENA = "Copied — open to confirm"
 
 
 class CalibrationTable(QTableWidget):
-    """One row per video: resolution, scale, and whether it still needs work."""
+    """The batch's one video list: a row per video with its arena and scale.
+
+    It is also the drop target for adding videos: dropped files and folders are
+    reported through ``paths_dropped`` and the window decides what they expand to.
+    """
 
     arena_requested = pyqtSignal(object)  # Path
+    paths_dropped = pyqtSignal(list)  # list[Path]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -48,12 +57,30 @@ class CalibrationTable(QTableWidget):
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.verticalHeader().setVisible(False)
-        self.setToolTip(
-            "Double-click a video to draw its measurement line, "
-            "or its Arena cell to draw the floor perimeter"
-        )
+        self.setAcceptDrops(True)
 
         self.itemDoubleClicked.connect(self._on_double_click)
+
+    # Qt camelCase overrides (N802 is suppressed project-wide).
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasUrls():
+            super().dropEvent(event)
+            return
+        dropped = [Path(url.toLocalFile()) for url in event.mimeData().urls() if url.toLocalFile()]
+        self.paths_dropped.emit(dropped)
+        event.acceptProposedAction()
 
     # ------------------------------------------------------------------
     # state
@@ -82,43 +109,28 @@ class CalibrationTable(QTableWidget):
     def refresh(self) -> None:
         self.setRowCount(len(self._videos))
         for row, video in enumerate(self._videos):
-            calibration = self._calibrations.get(video)
             ppm = self._calibrations.px_per_mm(video)
-
-            if calibration is not None and calibration.calibration_width:
-                resolution = f"{calibration.calibration_width}x{calibration.calibration_height}"
-            else:
-                resolution = "—"
-
             arena_text, arena_tip = self._arena_cell(video)
 
             self._set_cell(row, 0, video.name, tooltip=str(video))
-            self._set_cell(row, 1, resolution)
-            self._set_cell(row, 2, f"{ppm:.3f}" if ppm else "—", tooltip=self._scale_tip(video))
+            self._set_cell(row, 1, video.parent.name, tooltip=str(video.parent))
             self._set_cell(row, ARENA_COLUMN, arena_text, tooltip=arena_tip)
-            self._set_cell(row, _STATUS_COLUMN, self._status_text(video))
-
-    def _status_text(self, video: Path) -> str:
-        """Run-readiness, not merely whether a scale exists.
-
-        The Run gate now asks for a confirmed arena, so a row that shows only
-        "Calibrated" while Run stays disabled sends the operator hunting.
-        """
-        if self._calibrations.get_arena(video) is None:
-            return "⚠ Needs arena"
-        if not self._calibrations.is_arena_confirmed(video):
-            return "⚠ Copied — confirm it"
-        return "✓ Calibrated" if self._calibrations.px_per_mm(video) else "⚠ Needs calibration"
+            self._set_cell(
+                row,
+                _SCALE_COLUMN,
+                f"{ppm:.2f} px/mm" if ppm else "—",
+                tooltip=self._scale_tip(video),
+            )
 
     def _arena_cell(self, video: Path) -> tuple[str, str]:
-        """Text and tooltip for the arena column.
+        """Text and tooltip for the arena column: one phrase per Run-relevant state.
 
         A perimeter that does not yet describe a quadrilateral is reported, not
         raised: the operator is mid-draw, and the table must keep painting.
         """
         arena = self._calibrations.get_arena(video)
         if arena is None:
-            return "—", "No floor perimeter drawn"
+            return NEEDS_ARENA, "No floor perimeter drawn"
         try:
             residuals = arena.residuals()
         except DegenerateArenaError as exc:
@@ -140,6 +152,9 @@ class CalibrationTable(QTableWidget):
         ]
         if residuals["clipped"]:
             lines.append("extends beyond the frame")
+        if not self._calibrations.is_arena_confirmed(video):
+            lines.append("Copied from another video; open it and check the outline.")
+            return UNCONFIRMED_ARENA, "\n".join(lines)
         if residuals["suspect"]:
             lines.append("This quad looks unlikely — check the corners.")
             return "⚠ check", "\n".join(lines)
@@ -157,7 +172,7 @@ class CalibrationTable(QTableWidget):
         item = QTableWidgetItem(text)
         if tooltip:
             item.setToolTip(tooltip)
-        if col:
+        if col == _SCALE_COLUMN:
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setItem(row, col, item)
 

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from glider.core.fileio import atomic_write_bytes
 from glider.vision.training.project import FrameRecord, StudioProject
+from glider.vision.training.splits import ensure_splits, leaky_videos
 
 __all__ = ["DatasetError", "ExportResult", "export_dataset", "flip_idx", "split_frames"]
 
@@ -27,8 +28,9 @@ class ExportResult:
     data_yaml: Path
     train: list[FrameRecord] = field(default_factory=list)
     val: list[FrameRecord] = field(default_factory=list)
-    #: False when there was only one video, so validation frames come from a
-    #: video the model also trains on. Worth telling the user.
+    test: list[FrameRecord] = field(default_factory=list)
+    #: False when a video has frames in train and in val/test, so validation
+    #: frames come from a video the model also trains on. Worth telling the user.
     split_by_video: bool = True
 
 
@@ -77,7 +79,9 @@ def _yaml(value) -> str:
 
 
 def export_dataset(project: StudioProject) -> ExportResult:
-    """Write ``train.txt``, ``val.txt`` and ``data.yaml`` for the labelled frames.
+    """Write ``train.txt``, ``val.txt``, ``test.txt`` (if any) and ``data.yaml``.
+
+    Each labelled frame goes where its stored split says.
 
     Raises:
         DatasetError: Too few labelled frames to train and validate on.
@@ -89,12 +93,24 @@ def export_dataset(project: StudioProject) -> ExportResult:
             f"(a useful {'segmentation' if project.is_segment else 'pose'} model needs "
             "a few hundred)"
         )
-    train, val, by_video = split_frames(labelled, project.val_fraction, project.seed)
-    if not train or not val:
-        raise DatasetError("could not set any frames aside for validation")
+    if ensure_splits(project):
+        project.save()
+    groups = {k: [f for f in labelled if f.split == k] for k in ("train", "val", "test")}
+    for key, label in (("train", "training"), ("val", "validation")):
+        if not groups[key]:
+            if len(project.videos) <= 1:
+                hint = f"label more frames, or move some frames to {key}"
+            else:
+                hint = f"label some frames from a {key} video, or move frames to {key}"
+            raise DatasetError(f"No annotated frames in {label}: {hint}.")
+    train, val, test = groups["train"], groups["val"], groups["test"]
+    by_video = not leaky_videos(project)
 
     folder = project.folder
-    for name, frames in (("train.txt", train), ("val.txt", val)):
+    for name, frames in (("train.txt", train), ("val.txt", val), ("test.txt", test)):
+        if not frames:
+            (folder / name).unlink(missing_ok=True)  # a stale list from an earlier export
+            continue
         # Absolute image paths: Ultralytics finds each label by swapping
         # /images/ for /labels/ in the path, which this layout satisfies.
         lines = "".join(f"{project.image_path(f).resolve().as_posix()}\n" for f in frames)
@@ -107,6 +123,8 @@ def export_dataset(project: StudioProject) -> ExportResult:
         "train: train.txt",
         "val: val.txt",
     ]
+    if test:
+        yaml_lines.append("test: test.txt")
     if not project.is_segment:
         k = len(project.keypoint_names)
         yaml_lines += [
@@ -126,4 +144,4 @@ def export_dataset(project: StudioProject) -> ExportResult:
         ]
     data_yaml = folder / "data.yaml"
     atomic_write_bytes(data_yaml, ("\n".join(yaml_lines) + "\n").encode("utf-8"))
-    return ExportResult(data_yaml, train, val, by_video)
+    return ExportResult(data_yaml, train, val, test, by_video)

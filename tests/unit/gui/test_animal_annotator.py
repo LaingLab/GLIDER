@@ -6,9 +6,11 @@ import cv2
 import numpy as np
 import pytest
 from PyQt6.QtCore import QPoint, QPointF, QSettings, Qt
+from PyQt6.QtWidgets import QApplication
 
 from glider.analysis.behavior.keypoint_schema import KeypointSchema
 from glider.gui.animal_annotator.canvas import LabelCanvas
+from glider.gui.animal_annotator.history import SKIP, Edit
 from glider.gui.animal_annotator.window import AnimalAnnotatorWindow
 from glider.vision.training.labels import HIDDEN, MISSING, VISIBLE, PoseInstance
 from glider.vision.training.project import StudioProject
@@ -160,18 +162,15 @@ def window(qtbot, tmp_path):
 
 
 def _extract(qtbot, window, videos, per_video=4):
-    window._pending_videos = list(videos)
-    window._refresh_videos()
-    window._per_video.setValue(per_video)
-    window._method.setCurrentIndex(window._method.findData("uniform"))
-    window._extract()
+    window.extract(list(videos), per_video, "uniform")
     qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
 
 
 def test_window_starts_without_a_project(window):
     assert window._project is None
-    assert not window._extract_btn.isEnabled()
-    assert not window._tabs.isTabEnabled(1)
+    assert window._stack.currentIndex() == 0
+    assert not window._grid.add_btn.isEnabled()
+    assert not window._grid.export_btn.isEnabled()
 
 
 def test_extract_label_and_export(qtbot, window, tmp_path):
@@ -179,9 +178,10 @@ def test_extract_label_and_export(qtbot, window, tmp_path):
     assert window.open_project(project.folder)
     _extract(qtbot, window, [_clip(tmp_path / "a.avi"), _clip(tmp_path / "b.avi")])
     assert len(window._project.frames) == 8
-    assert window._video_list.count() == 2
+    assert len(window._project.videos) == 2
+    assert f"Pose · {len(MOUSE)} keypoints" in window._grid.summary.text()
 
-    window._tabs.setCurrentIndex(1)
+    window.show_editor(0)
     assert window._frame_index == 0
     canvas = window._canvas
     for _ in range(len(window._project.frames)):
@@ -205,18 +205,21 @@ def test_extract_label_and_export(qtbot, window, tmp_path):
     finally:
         qtbot_patch.undo()
     assert (project.folder / "data.yaml").exists()
-    listed = (project.folder / "train.txt").read_text().splitlines()
-    listed += (project.folder / "val.txt").read_text().splitlines()
+    listed = []
+    for name in ("train.txt", "val.txt", "test.txt"):
+        if (project.folder / name).exists():
+            listed += (project.folder / name).read_text().splitlines()
     assert len(listed) == 7  # eight labelled, one skipped
     assert "validation frame(s)" in shown[0]
-    assert "one video" not in shown[0]  # two videos: split by video, no warning
+    assert "has frames in train and in val/test" not in shown[0]  # whole videos held out
+    assert "one video" not in shown[0]
 
 
 def test_labels_are_saved_as_you_go(qtbot, window, tmp_path):
     project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
     window.open_project(project.folder)
     _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=2)
-    window._tabs.setCurrentIndex(1)
+    window.show_editor(0)
     window._canvas.place(5, 5)
     frame = window._project.frames[window._frame_index]
     saved = StudioProject.load(project.folder).read_instances(frame)
@@ -241,10 +244,205 @@ def test_removing_a_video_drops_its_frames(qtbot, window, tmp_path, monkeypatch)
     window.open_project(project.folder)
     _extract(qtbot, window, [_clip(tmp_path / "a.avi"), _clip(tmp_path / "b.avi")], per_video=2)
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
-    window._video_list.item(0).setSelected(True)
-    window._remove_videos()
+    window._grid.remove_video_requested.emit(next(iter(window._project.videos)))
     assert len(window._project.frames) == 2
     assert len(window._project.videos) == 1
+
+
+def _select(window, rows):
+    from PyQt6.QtCore import QItemSelectionModel
+
+    gallery = window._grid.gallery
+    for row in rows:
+        gallery.selectionModel().select(
+            gallery.gallery_model.index(row), QItemSelectionModel.SelectionFlag.Select
+        )
+
+
+def test_move_selection_to_test(qtbot, window, tmp_path):
+    from glider.gui.animal_annotator.gallery import GalleryModel
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=4)
+    grid = window._grid
+    assert grid.selection_bar.isHidden()
+    _select(window, [0, 1])
+    assert not grid.selection_bar.isHidden()
+    rows = grid.gallery.selected_rows()
+    assert rows == [0, 1]
+    grid.move_requested.emit(rows, "test")
+    saved = StudioProject.load(project.folder).frames
+    assert saved[0].split == saved[1].split == "test"
+    model = grid.gallery.gallery_model
+    assert model.data(model.index(0), GalleryModel.SplitRole) == "test"
+    tests = sum(f.split == "test" for f in window._project.frames)
+    assert grid.split_chips["test"].text().endswith(str(tests))
+
+
+def test_bulk_skip(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=4)
+    window._grid.skip_requested.emit([1, 2], True)
+    saved = StudioProject.load(project.folder).frames
+    assert saved[1].skipped and saved[2].skipped and not saved[0].skipped
+    assert window._grid.status_chips["skipped"].text().endswith("2")
+    window._grid.skip_requested.emit([1], False)
+    assert not StudioProject.load(project.folder).frames[1].skipped
+
+
+def test_tiles_do_not_open_while_extracting(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=2)
+    window.extract([_clip(tmp_path / "b.avi")], 4, "uniform")
+    window._grid.frame_activated.emit(0)
+    assert window._stack.currentIndex() == 0
+    assert not window._grid.add_btn.isEnabled()
+    qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
+    assert window._grid.add_btn.isEnabled()
+    window._grid.frame_activated.emit(0)
+    assert window._stack.currentIndex() == 1
+
+
+def test_leak_notice(qtbot, window, tmp_path):
+    from glider.vision.training.splits import leak_notice
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=4)
+    grid = window._grid
+    grid.move_requested.emit([0, 1], "train")
+    grid.move_requested.emit([2, 3], "val")
+    assert not grid.notice.isHidden()
+    assert grid.notice.text() == leak_notice(window._project)
+    assert grid.notice.text().startswith("All frames come from one video")
+    grid.move_requested.emit([0, 1, 2, 3], "train")
+    assert grid.notice.isHidden()
+
+
+def test_open_old_project_migrates_splits(qtbot, window, tmp_path):
+    from glider.vision.training.project import FrameRecord
+
+    project = StudioProject.create(tmp_path / "proj", "Old", MOUSE)
+    project.videos["v0"] = str(tmp_path / "v0.avi")
+    for i in range(3):
+        project.frames.append(FrameRecord(f"v0_f{i:06d}", "v0", i))
+    project.save()
+    assert '"split"' not in (project.folder / "studio.json").read_text()
+    assert window.open_project(project.folder)
+    assert all(f.split for f in window._project.frames)
+    assert all(f.split for f in StudioProject.load(project.folder).frames)
+
+
+def test_returning_to_grid_reapplies_filter(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=3)
+    grid = window._grid
+    grid.status_chips["todo"].click()
+    assert grid.gallery.visible_rows() == [0, 1, 2]
+    window.show_editor(1)
+    window._canvas.place(5, 5)
+    window.show_grid()
+    assert window._stack.currentIndex() == 0
+    assert grid.gallery.visible_rows() == [0, 2]
+    grid.status_chips["todo"].click()  # clicking the active chip clears it
+    assert grid.gallery.visible_rows() == [0, 1, 2]
+
+
+def test_escape_returns_to_grid_when_nothing_to_cancel(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=2)
+    window.show_editor(0)
+    window._cancel()
+    assert window._stack.currentIndex() == 0
+
+
+def test_split_combo_moves_the_frame(qtbot, window, tmp_path):
+    from glider.gui.animal_annotator.gallery import GalleryModel
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=2)
+    window.show_editor(1)
+    combo = window._split_combo
+    combo.setCurrentIndex(combo.findData("test"))
+    assert StudioProject.load(project.folder).frames[1].split == "test"
+    assert window._split_badge.text() == "TEST"
+    model = window._grid.gallery.gallery_model
+    assert model.data(model.index(1), GalleryModel.SplitRole) == "test"
+    window.show_editor(0)  # showing another frame never rewrites a split
+    assert window._split_combo.currentData() == window._project.frames[0].split
+    assert StudioProject.load(project.folder).frames[1].split == "test"
+
+
+def test_stepping_follows_the_grid_filter(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=4)
+    window.show_editor(1)
+    window._canvas.place(5, 5)  # frame 1 annotated
+    window.show_grid()
+    window._grid.status_chips["todo"].click()
+    assert window._grid.gallery.visible_rows() == [0, 2, 3]
+    window.show_editor(0)
+    assert "1 of 3" in window._frame_title.text()
+    assert window._filmstrip.visible_rows() == [0, 2, 3]
+    window._step_frame(1)
+    assert window._frame_index == 2
+    assert "2 of 3" in window._frame_title.text()
+
+
+def test_stepping_from_a_frame_the_filter_now_hides(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=4)
+    window._grid.status_chips["todo"].click()
+    window.show_editor(1)
+    window._canvas.place(5, 5)  # frame 1 no longer matches the filter
+    window._grid.gallery.apply_filter()  # even once the grid re-filters
+    assert 1 not in window._grid.gallery.visible_rows()
+    window._step_frame(1)
+    assert window._frame_index == 2
+    window.show_editor(1)
+    window._grid.gallery.apply_filter()
+    window._step_frame(-1)
+    assert window._frame_index == 0
+
+
+def test_question_mark_lists_shortcuts(window):
+    from PyQt6.QtWidgets import QLabel
+
+    dialog = window._shortcuts_dialog()
+    text = " ".join(label.text() for label in dialog.findChildren(QLabel))
+    assert "Undo" in text and "skip" in text
+
+
+def test_filmstrip_click_opens_that_frame(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=3)
+    window.show_editor(0)
+    window._filmstrip.frame_activated.emit(2)
+    assert window._frame_index == 2
+    assert window._filmstrip.currentIndex().row() == 2
+
+
+def test_add_images_dialog_lists_project_videos_unticked(qtbot, tmp_path):
+    from glider.gui.animal_annotator.add_images import AddImagesDialog
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    project.videos["a"] = str(tmp_path / "a.avi")
+    dialog = AddImagesDialog(project)
+    qtbot.addWidget(dialog)
+    assert dialog.videos == [] and dialog.per_video == 20 and dialog.method == "diverse"
+    dialog.add_paths([str(tmp_path / "b.avi"), str(tmp_path / "a.avi")])
+    assert dialog.videos == [(tmp_path / "b.avi").resolve()]
+    dialog._list.item(0).setCheckState(Qt.CheckState.Checked)
+    assert dialog.videos == [tmp_path / "a.avi", (tmp_path / "b.avi").resolve()]
 
 
 def test_tools_card_and_menu_open_the_studio(main_window_factory, qtbot):
@@ -257,3 +455,87 @@ def test_tools_card_and_menu_open_the_studio(main_window_factory, qtbot):
     qtbot.addWidget(studio)
     main._open_animal_annotator()
     assert main._animal_annotator_window is studio
+
+
+def test_several_videos_in_one_extract_do_not_leak(qtbot, window, tmp_path):
+    from glider.vision.training.splits import leaky_videos
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / n) for n in ("a.avi", "b.avi", "c.avi")], 6)
+    assert leaky_videos(window._project) == []
+    assert window._grid.notice.isHidden()
+
+
+def test_videos_that_yield_no_frames_are_not_left_registered(qtbot, window, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    bad = tmp_path / "bad.avi"
+    bad.write_bytes(b"not a video")
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi"), bad], 3)
+    assert list(window._project.videos) == ["a"]
+    assert list(StudioProject.load(project.folder).videos) == ["a"]
+
+
+def test_file_actions_are_disabled_while_extracting(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    window.extract([_clip(tmp_path / "a.avi")], 4, "uniform")
+    assert not any(a.isEnabled() for a in window._file_actions)
+    assert window.open_project(project.folder) is False
+    qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
+    assert all(a.isEnabled() for a in window._file_actions)
+
+
+def test_split_combo_ignores_the_wheel(qtbot, window, tmp_path):
+    from PyQt6.QtCore import QPoint, QPointF
+    from PyQt6.QtGui import QWheelEvent
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], 3)
+    window.show_editor(0)
+    before = window._project.frames[0].split
+    combo = window._split_combo
+    pos = QPointF(5, 5)
+    event = QWheelEvent(
+        pos,
+        combo.mapToGlobal(pos),
+        QPoint(0, 0),
+        QPoint(0, -120),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    QApplication.sendEvent(combo, event)
+    assert window._project.frames[0].split == before
+    assert combo.currentData() == before
+
+
+def test_stale_sam_status_leaves_the_hint_alone(qtbot, window, tmp_path):
+    window._sam_request_id = 5
+    window._hint.setText("kept")
+    window._on_sam_status(4, "Loading…")
+    assert window._hint.text() == "kept"
+    window._on_sam_status(5, "Segmenting…")
+    assert window._hint.text() == "Segmenting…"
+
+
+def test_removing_a_video_clears_undo(qtbot, window, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi"), _clip(tmp_path / "b.avi")], 2)
+    window.show_editor(2)
+    window._history.push(Edit(2, SKIP, False, True))
+    window._refresh_undo_buttons()
+    assert window._undo_btn.isEnabled()
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    window._grid.remove_video_requested.emit("a")
+    assert not window._history.can_undo
+    assert not window._undo_btn.isEnabled()
