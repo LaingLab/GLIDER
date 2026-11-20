@@ -43,7 +43,7 @@ the pup disappears into her mouth and comes out buried in the nest.
 Everything on this page except setting the scale appears only when the open
 experiment's **Protocol** is **Pup Retrieval**; every other experiment sees none
 of it. (**Setup ▾ → Scale…** and the top bar's **Uncalibrated** pill are there
-for every protocol.) The protocol is one value shared across GLIDER, so set it
+for every protocol, though Scale… stays greyed out until a pup video is open.) The protocol is one value shared across GLIDER, so set it
 once, anywhere:
 
 - the **Protocol** dropdown on the **Experiment** tab (also in **Experiment →
@@ -95,8 +95,8 @@ is reported on the video but never costs you its pose.
 
 ## Step 2 — set up each video in Session Review
 
-Open **Tools → Session Review**, make sure **Setup ▾ → Experiment type** reads
-Pup Retrieval, and open your footage:
+Open **Tools → Session Review** and open your footage (**Open → …**), then check
+that **Setup ▾ → Experiment type** reads Pup Retrieval:
 
 - **Open → Open video…** for one video, or
 - **Open → Open folder as cohort…** for a folder of them, grouped by treatment

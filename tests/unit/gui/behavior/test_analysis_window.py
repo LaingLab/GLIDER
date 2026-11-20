@@ -4229,3 +4229,29 @@ class TestRareToolsInMenus:
         assert table.rowCount() > 0
         assert [table.isColumnHidden(c) for c in range(6)] == [False] * 4 + [True] * 2
         assert table.item(0, 0).toolTip().startswith("Mean bout ")
+
+
+class TestDeclutterTooltips:
+    def test_long_path_is_elided_with_full_path_in_tooltip(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.resize(500, 400)
+        win.show()
+        long = tmp_path / ("d" * 40) / ("e" * 40) / ("f" * 40) / "ethogram.csv"
+        win._path_label.setText(str(long))
+        win._path_label.setToolTip(str(long))
+        win._path_label.resize(120, 20)
+        assert "…" in win._path_label.text()
+        assert win._path_label.text() != str(long)
+        assert win._path_label.toolTip() == str(long)
+
+    def test_scale_and_sessions_list_explain_themselves(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        menu = win._setup_btn.menu()
+        [scale] = [a for a in menu.actions() if a.text() == "Scale…"]
+        assert scale.toolTip() == "Measures a pup video's scale"
+        assert menu.toolTipsVisible()
+        sessions = win._view_actions["sessions"]
+        assert "two or more" in sessions.toolTip()
+        assert win._view_btn.menu().toolTipsVisible()

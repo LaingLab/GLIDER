@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import QPoint, QSettings, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QIcon, QKeySequence, QPainter, QPixmap
+from PyQt6.QtGui import QBrush, QColor, QFontMetrics, QIcon, QKeySequence, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QTableWidget,
@@ -163,6 +164,30 @@ class _ClickablePill(StatusPill):
         super().mouseReleaseEvent(event)
         if getattr(self, "_clickable", False) and event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
+
+
+class _ElidedLabel(QLabel):
+    """A label that shortens its text with '…' to fit, instead of clipping mid-word."""
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__()
+        self._full = text
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._elide()
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        self._full = text
+        self._elide()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        shown = QFontMetrics(self.font()).elidedText(
+            self._full, Qt.TextElideMode.ElideLeft, max(self.width(), 1)
+        )
+        super().setText(shown)
 
 
 def _settings() -> QSettings:
@@ -672,9 +697,9 @@ class AnalysisWindow(QMainWindow):
         info = QHBoxLayout(self._session_info)
         info.setContentsMargins(0, 0, 0, 0)
         info.setSpacing(10)
-        self._path_label = QLabel("No session loaded")
+        self._path_label = _ElidedLabel("No session loaded")
         set_text_role(self._path_label, "muted")
-        info.addWidget(self._path_label)
+        info.addWidget(self._path_label, 1)
         self._session_state = StatusPill("None loaded")
         self._hw_pill = StatusPill("")
         self._hw_pill.setVisible(False)
@@ -747,6 +772,8 @@ class AnalysisWindow(QMainWindow):
         zones.addAction("Clear zones", self._clear_zones)
         self._scale_action = menu.addAction("Scale…", lambda: self._set_scale())
         self._scale_action.setEnabled(False)  # a pup video's (_show_scale)
+        self._scale_action.setToolTip("Measures a pup video's scale")
+        menu.setToolTipsVisible(True)
         menu.addSeparator()
         # Shown only when the session needs them (_adopt).
         self._pick_poses_action = menu.addAction("Choose pose CSV…", self._choose_pose_csv)
@@ -923,6 +950,8 @@ class AnalysisWindow(QMainWindow):
             ("timeline", "Timeline and tables", self._timeline_panel),
         ]
         self._add_view_action(menu, "sessions", "Sessions list", True, self._sync_pool)
+        self._view_actions["sessions"].setToolTip("Shown when two or more sessions are open")
+        menu.setToolTipsVisible(True)
         for key, label, widget in builtins:
             self._add_view_action(menu, key, label, True, lambda on, w=widget: w.setVisible(on))
         menu.addSeparator()

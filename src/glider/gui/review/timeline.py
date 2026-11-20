@@ -1777,7 +1777,7 @@ class TimelinePanel(QTabWidget):
         self.fit_btn = _tool("Fit", "Show the whole session  (⇧Z)")
         self.fit_btn.clicked.connect(self.view.fit)
         row.addWidget(self.fit_btn)
-        # The rarer tools, each with a key of its own, under ⋯.
+        # The rarer tools (some with keys, Snap and Loop without), under ⋯.
         self.more_btn = _tool("⋯", "Range marker, Snap, Loop, Zoom to range")
         self.more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.more_menu = QMenu(self.more_btn)
