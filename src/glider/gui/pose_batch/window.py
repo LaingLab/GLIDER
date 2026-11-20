@@ -293,7 +293,9 @@ class PoseBatchWindow(QMainWindow):
         self._settings_button.clicked.connect(self._show_settings)
         self._header.add_action(self._settings_button)
 
-        self._more_button = QPushButton("More")
+        self._more_button = QPushButton("More ▾")
+        # The literal arrow sits beside the label; hide Qt's detached indicator.
+        self._more_button.setStyleSheet("QPushButton::menu-indicator { image: none; width: 0; }")
         set_button_role(self._more_button, "ghost")
         more_menu = QMenu(self._more_button)
         more_menu.addAction(self._regate_action)

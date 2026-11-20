@@ -707,6 +707,11 @@ def test_new_run_starts_with_log_closed(window, tmp_path, monkeypatch):
         window._teardown_thread()
 
 
+def test_more_button_has_one_arrow(window):
+    assert window._more_button.text() == "More ▾"
+    assert "menu-indicator" in window._more_button.styleSheet()
+
+
 def test_strip_shows_tracking_k_of_n(window, tmp_path, monkeypatch):
     _running(window, tmp_path, monkeypatch)
     try:
