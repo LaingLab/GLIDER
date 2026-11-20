@@ -45,11 +45,7 @@ def window(qtbot, tmp_path):
 
 
 def _extract(qtbot, window, videos, per_video=4):
-    window._pending_videos = list(videos)
-    window._refresh_videos()
-    window._per_video.setValue(per_video)
-    window._method.setCurrentIndex(window._method.findData("uniform"))
-    window._extract()
+    window.extract(list(videos), per_video, "uniform")
     qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
 
 
@@ -73,7 +69,7 @@ def test_animal_annotator_is_the_first_tool(main_window_factory):
 def test_gallery_shows_every_frame_and_wraps(qtbot, window, tmp_path):
     project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
     window.open_project(project.folder)
-    gallery = window._gallery
+    gallery = window._grid.gallery
     assert gallery.gallery_model.rowCount() == 0
     assert "No images" in gallery.empty_text
     _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=6)
@@ -85,8 +81,8 @@ def test_gallery_shows_every_frame_and_wraps(qtbot, window, tmp_path):
 
 
 def test_no_project_shows_a_blank_gallery(window):
-    assert window._gallery.gallery_model.rowCount() == 0
-    assert "No project" in window._gallery.empty_text
+    assert window._grid.gallery.gallery_model.rowCount() == 0
+    assert "No project" in window._grid.gallery.empty_text
 
 
 def test_gallery_thumbnail_draws_labelled_keypoints(tmp_path):
@@ -109,8 +105,8 @@ def test_double_clicking_a_tile_opens_it_for_labelling(qtbot, window, tmp_path):
     project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
     window.open_project(project.folder)
     _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=4)
-    window._gallery.frame_activated.emit(2)
-    assert window._tabs.currentIndex() == 1
+    window._grid.gallery.frame_activated.emit(2)
+    assert window._stack.currentIndex() == 1
     assert window._frame_index == 2
 
 
@@ -118,10 +114,10 @@ def test_a_label_edit_refreshes_its_tile(qtbot, window, tmp_path):
     project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
     window.open_project(project.folder)
     _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=2)
-    model = window._gallery.gallery_model
+    model = window._grid.gallery.gallery_model
     model.data(model.index(0), Qt.ItemDataRole.DecorationRole)  # cache it
     window._set_mode("sequential")
-    window._label_frame(0)
+    window.show_editor(0)
     with qtbot.waitSignal(model.dataChanged):
         window._canvas.place(5, 5)
     assert model.data(model.index(0), model.StatusRole) == "labelled"

@@ -1,15 +1,16 @@
 """Animal Annotator: label frames from your videos and export a YOLO dataset.
 
 Phase 1 of #224. A project labels either keypoints (pose) or outlines
-(instance segmentation), chosen when it is made. The window has two steps,
-one tab each:
+(instance segmentation), chosen when it is made. The window has two pages:
 
-1. **Frames** -- add videos and pull frames worth labelling out of them.
-2. **Label** -- place keypoints, or draw outlines, on every animal in each
-   frame. Outlines can be drawn by hand or proposed by Segment Anything
-   from a click or a box (the Auto tool).
+1. **The grid** -- every image in the project, filterable by status, split and
+   video. Add Images pulls frames worth labelling out of videos; a selection
+   can be moved to another split or skipped.
+2. **The editor** -- opens on a tile click: place keypoints, or draw outlines,
+   on every animal in the frame. Outlines can be drawn by hand or proposed by
+   Segment Anything from a click or a box (the Auto tool). Esc goes back.
 
-**Export Dataset** writes ``data.yaml`` with the train/val lists, ready for
+**Export Dataset** writes ``data.yaml`` with the stored splits, ready for
 Ultralytics. Training inside GLIDER comes next, on this same project folder.
 
 Labels are saved as you go, on every edit; there is no Save button to forget.
@@ -39,19 +40,18 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
     QPushButton,
-    QSpinBox,
     QSplitter,
-    QTabWidget,
+    QStackedWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from glider.core.presets import slugify
+from glider.gui.animal_annotator.add_images import AddImagesDialog
 from glider.gui.animal_annotator.canvas import SEQUENTIAL, SKELETON, LabelCanvas, read_image
-from glider.gui.animal_annotator.gallery import GalleryView
+from glider.gui.animal_annotator.grid_page import GridPage, short_path
 from glider.gui.animal_annotator.history import LABELS, SKIP, Edit, History
 from glider.gui.animal_annotator.seg_canvas import AUTO, POLYGON, SegmentCanvas, class_colour
 from glider.gui.animal_annotator.skeleton_editor import (
@@ -73,7 +73,7 @@ from glider.vision.training.project import (
     StudioProjectError,
 )
 from glider.vision.training.sam import DEFAULT_SAM_MODEL, SAM_MODELS
-from glider.vision.training.splits import leak_notice
+from glider.vision.training.splits import ensure_splits, leak_notice
 from glider.vision.training.templates import SkeletonTemplate, TemplateKeypoint, palette_colour
 
 logger = logging.getLogger(__name__)
@@ -91,7 +91,6 @@ _SETTINGS_LAST = "animal_annotator/last_project"
 _SETTINGS_MODE = "animal_annotator/label_mode"
 _SETTINGS_SEG_TOOL = "animal_annotator/seg_tool"
 _SETTINGS_SAM_MODEL = "animal_annotator/sam_model"
-_VIDEO_FILTER = "Videos (*.mp4 *.avi *.mov *.mkv *.m4v);;All files (*)"
 
 #: Frame-list filters: label, and which statuses each shows.
 _FILTERS = (
@@ -126,11 +125,6 @@ def _swatch(colour: QColor) -> QIcon:
     painter.drawEllipse(1, 1, 10, 10)
     painter.end()
     return QIcon(pixmap)
-
-
-def _short_path(path: Path, limit: int = 70) -> str:
-    text = str(path)
-    return text if len(text) <= limit else "…" + text[-(limit - 1) :]
 
 
 def _panel() -> tuple[QFrame, QVBoxLayout]:
@@ -297,7 +291,7 @@ class NewProjectDialog(QDialog):
         return self._template.names
 
     def _update_folder(self) -> None:
-        self._folder_label.setText(f"Saved in {_short_path(self.folder, 80)}")
+        self._folder_label.setText(f"Saved in {short_path(self.folder, 80)}")
         self._folder_label.setToolTip(str(self.folder))
         self._ok.setEnabled(bool(self.name))
 
@@ -465,46 +459,26 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._sam_request_id = 0
 
         self.setStyleSheet(studio_stylesheet())
-        central = QWidget()
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(14, 12, 14, 10)
-        layout.setSpacing(10)
+        file_menu = self.menuBar().addMenu("&File")
+        file_menu.addAction("New Project…", self._new_project)
+        file_menu.addAction("Open Project…", self._open_project_dialog)
 
-        bar = QHBoxLayout()
-        bar.setSpacing(8)
-        titles = QVBoxLayout()
-        titles.setSpacing(0)
-        self._project_title = QLabel("Animal Annotator")
-        self._project_title.setProperty("studioTitle", True)
-        titles.addWidget(self._project_title)
-        self._project_label = muted(QLabel(), small=True)
-        self._project_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        titles.addWidget(self._project_label)
-        bar.addLayout(titles, 1)
-        new_btn = secondary(QPushButton("New Project…"))
-        new_btn.clicked.connect(self._new_project)
-        bar.addWidget(new_btn)
-        open_btn = secondary(QPushButton("Open…"))
-        open_btn.setToolTip("Open an existing Animal Annotator project folder")
-        open_btn.clicked.connect(self._open_project_dialog)
-        bar.addWidget(open_btn)
-        self._skeleton_btn = secondary(QPushButton("Edit Skeleton…"))
-        self._skeleton_btn.setToolTip("Rename, recolour and rearrange this project's keypoints")
-        self._skeleton_btn.clicked.connect(self._edit_skeleton)
-        bar.addWidget(self._skeleton_btn)
-        bar.addSpacing(6)
-        self._export_btn = QPushButton("Export Dataset")
-        self._export_btn.setToolTip("Write data.yaml and the train/val lists for Ultralytics")
-        self._export_btn.clicked.connect(self._export)
-        bar.addWidget(self._export_btn)
-        layout.addLayout(bar)
-
-        self._tabs = QTabWidget()
-        self._tabs.addTab(self._build_frames_page(), "1. Images")
-        self._tabs.addTab(self._build_label_page(), "2. Label")
-        self._tabs.currentChanged.connect(self._on_tab_changed)
-        layout.addWidget(self._tabs, 1)
-        self.setCentralWidget(central)
+        self._grid = GridPage()
+        self._gallery = self._grid.gallery
+        self._grid.frame_activated.connect(self.show_editor)
+        self._grid.add_images_requested.connect(self._add_images)
+        self._grid.export_requested.connect(self._export)
+        self._grid.skeleton_requested.connect(self._edit_skeleton)
+        self._grid.cancel_requested.connect(self._cancel_extract)
+        self._grid.move_requested.connect(self._move_frames)
+        self._grid.skip_requested.connect(self._skip_frames)
+        self._grid.remove_video_requested.connect(self._remove_video)
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._grid)
+        label_page = self._build_label_page()
+        label_page.setContentsMargins(14, 0, 14, 10)
+        self._stack.addWidget(label_page)
+        self.setCentralWidget(self._stack)
 
         self._install_undo_shortcuts()
         self._set_project(None)
@@ -513,173 +487,84 @@ class AnimalAnnotatorWindow(QMainWindow):
             self.open_project(Path(last), quiet=True)
 
     # ------------------------------------------------------------------
-    # frames page
+    # grid and editor pages
     # ------------------------------------------------------------------
 
-    def _build_frames_page(self) -> QWidget:
-        """The Images step: every frame in a grid, and the videos they come from."""
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 10, 0, 0)
-        layout.setSpacing(8)
-
-        controls = QHBoxLayout()
-        controls.setSpacing(8)
-        self._add_videos_btn = secondary(QPushButton("Add Videos…"))
-        self._add_videos_btn.setToolTip(
-            "Several sessions, lighting conditions and animals make a model that "
-            "works on the next recording, not just these"
-        )
-        self._add_videos_btn.clicked.connect(self._add_videos)
-        controls.addWidget(self._add_videos_btn)
-        controls.addStretch(1)
-        controls.addWidget(muted(QLabel("Frames per video")))
-        self._per_video = QSpinBox()
-        self._per_video.setRange(1, 2000)
-        self._per_video.setValue(20)
-        self._per_video.setFixedWidth(84)
-        self._per_video.setToolTip("Frames added from each selected video (or every video)")
-        controls.addWidget(self._per_video)
-        controls.addSpacing(6)
-        self._method = QComboBox()
-        self._method.addItem("Most varied", "diverse")
-        self._method.addItem("Evenly spaced", "uniform")
-        self._method.setToolTip(
-            "Most varied skips near-identical frames, such as a mouse sitting still"
-        )
-        controls.addWidget(self._method)
-        self._progress = QProgressBar()
-        self._progress.setFixedWidth(180)
-        self._progress.setTextVisible(False)
-        self._progress.setVisible(False)
-        controls.addWidget(self._progress)
-        self._cancel_btn = QPushButton("Cancel")
-        self._cancel_btn.setFlat(True)
-        self._cancel_btn.clicked.connect(self._cancel_extract)
-        self._cancel_btn.setVisible(False)
-        controls.addWidget(self._cancel_btn)
-        self._extract_btn = QPushButton("Extract Frames")
-        self._extract_btn.clicked.connect(self._extract)
-        controls.addWidget(self._extract_btn)
-        layout.addLayout(controls)
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(6)
-        videos, videos_layout = _panel()
-        videos_layout.addWidget(section("Videos"))
-        self._video_list = QListWidget()
-        self._video_list.setProperty("compact", True)
-        self._video_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self._video_list.setWordWrap(True)
-        self._video_list.setToolTip("Select videos to extract from only those; none selected: all")
-        videos_layout.addWidget(self._video_list, 1)
-        self._remove_video_btn = secondary(QPushButton("Remove"))
-        self._remove_video_btn.setToolTip("Remove the selected videos and their frames")
-        self._remove_video_btn.clicked.connect(self._remove_videos)
-        videos_layout.addWidget(self._remove_video_btn)
-        splitter.addWidget(videos)
-
-        self._gallery = GalleryView()
-        self._gallery.setToolTip("Click an image to label it")
-        self._gallery.frame_activated.connect(self._label_frame)
-        splitter.addWidget(self._gallery)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([230, 1000])
-        layout.addWidget(splitter, 1)
-
-        self._frames_status = muted(QLabel(""), small=True)
-        self._frames_status.setWordWrap(True)
-        layout.addWidget(self._frames_status)
-        # Videos added but not yet extracted from: not in the project until
-        # they have frames, so a mistaken add leaves nothing behind.
-        self._pending_videos: list[Path] = []
-        return page
-
-    def _label_frame(self, index: int) -> None:
-        """Open frame ``index`` on the Label step."""
-        if self._project is None or not self._tabs.isTabEnabled(1):
+    def show_editor(self, index: int) -> None:
+        """Open frame ``index`` in the editor; not while frames are being added."""
+        if self._project is None or self._thread is not None:
+            return
+        if not 0 <= index < len(self._project.frames):
             return
         self._frame_index = index
-        self._tabs.setCurrentIndex(1)
+        self._stack.setCurrentIndex(1)
         self._refresh_frame_list()
         self._show_frame(index)
 
-    def _refresh_videos(self) -> None:
-        self._video_list.clear()
-        if self._project is None:
-            return
-        counts: dict[str, list[int]] = {}
-        for frame in self._project.frames:
-            entry = counts.setdefault(frame.video, [0, 0])
-            entry[0] += 1
-            entry[1] += self._project.is_labelled(frame)
-        for key, path in self._project.videos.items():
-            total, labelled = counts.get(key, [0, 0])
-            item = QListWidgetItem(f"{Path(path).name}\n{total} frames · {labelled} labelled")
-            item.setToolTip(path)
-            item.setData(Qt.ItemDataRole.UserRole, ("project", key))
-            self._video_list.addItem(item)
-        for path in self._pending_videos:
-            item = QListWidgetItem(f"{path.name}\nnot extracted yet")
-            item.setToolTip(str(path))
-            item.setData(Qt.ItemDataRole.UserRole, ("pending", str(path)))
-            self._video_list.addItem(item)
+    def show_grid(self) -> None:
+        """Back to the grid where it was scrolled, with the filter re-applied."""
+        self._save_current_frame()
+        bar = self._gallery.verticalScrollBar()
+        scroll = bar.value()
+        self._stack.setCurrentIndex(0)
+        self._grid.refresh()
+        self._gallery.doItemsLayout()
+        bar.setValue(scroll)
 
-    def _add_videos(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "Add videos", "", _VIDEO_FILTER)
-        known = {Path(p) for p in self._project.videos.values()} | set(self._pending_videos)
-        for p in paths:
-            path = Path(p).resolve()
-            if path not in known:
-                self._pending_videos.append(path)
-        self._refresh_videos()
-
-    def _remove_videos(self) -> None:
-        items = self._video_list.selectedItems()
-        if not items or self._project is None:
+    def _move_frames(self, rows: list, split: str) -> None:
+        """Bulk move to a split: saved at once, not undoable."""
+        if self._project is None or self._thread is not None:
             return
-        keys = [
-            k for kind, k in (i.data(Qt.ItemDataRole.UserRole) for i in items) if kind == "project"
-        ]
+        for row in rows:
+            self._project.frames[row].split = split
+        self._save_bulk(rows)
+
+    def _skip_frames(self, rows: list, skipped: bool) -> None:
+        """Bulk skip or unskip: saved at once, not undoable."""
+        if self._project is None or self._thread is not None:
+            return
+        for row in rows:
+            self._project.frames[row].skipped = skipped
+        self._save_bulk(rows)
+
+    def _save_bulk(self, rows: list) -> None:
+        try:
+            self._project.save()
+        except OSError as e:
+            QMessageBox.warning(self, "Save project", f"Could not save the project: {e}")
+        for row in rows:
+            self._gallery.gallery_model.invalidate(row)
+        self._grid.refresh()
+
+    def _remove_video(self, key: str) -> None:
+        if self._project is None or self._thread is not None or key not in self._project.videos:
+            return
         labelled = sum(
-            1 for f in self._project.frames if f.video in keys and self._project.is_labelled(f)
+            1 for f in self._project.frames if f.video == key and self._project.is_labelled(f)
         )
-        if keys:
-            text = f"Remove {len(keys)} video(s) and their extracted frames from the project?"
-            if labelled:
-                text += f"\n\n{labelled} labelled frame(s) will be deleted with them."
-            answer = QMessageBox.question(self, "Remove videos", text)
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-        for item in items:
-            kind, value = item.data(Qt.ItemDataRole.UserRole)
-            if kind == "project":
-                self._project.remove_video(value)
-            else:
-                self._pending_videos = [p for p in self._pending_videos if str(p) != value]
+        text = f"Remove {Path(self._project.videos[key]).name} and its extracted frames?"
+        if labelled:
+            text += f"\n\n{labelled} labelled frame(s) will be deleted with it."
+        if QMessageBox.question(self, "Remove video", text) != QMessageBox.StandardButton.Yes:
+            return
+        self._save_current_frame()
+        self._project.remove_video(key)
         self._project.save()
         self._frame_index = -1
         self._refresh_all()
 
-    def _selected_or_all_videos(self) -> list[Path]:
-        items = self._video_list.selectedItems() or [
-            self._video_list.item(i) for i in range(self._video_list.count())
-        ]
-        videos = []
-        for item in items:
-            kind, value = item.data(Qt.ItemDataRole.UserRole)
-            videos.append(Path(self._project.videos[value]) if kind == "project" else Path(value))
-        return videos
-
-    def _extract(self) -> None:
+    def _add_images(self) -> None:
         if self._project is None or self._thread is not None:
             return
-        videos = self._selected_or_all_videos()
-        if not videos:
-            QMessageBox.information(self, "Extract frames", "Add a video first.")
+        dialog = AddImagesDialog(self._project, parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.videos:
+            self.extract(dialog.videos, dialog.per_video, dialog.method)
+
+    def extract(self, videos: list[Path], per_video: int, method: str) -> None:
+        """Pull ``per_video`` frames from each of ``videos`` in the background."""
+        if self._project is None or self._thread is not None or not videos:
             return
-        missing = [v for v in videos if not v.exists()]
+        missing = [v for v in videos if not Path(v).exists()]
         if missing:
             QMessageBox.warning(
                 self,
@@ -689,72 +574,43 @@ class AnimalAnnotatorWindow(QMainWindow):
             )
             return
         self._save_current_frame()
-        self._worker = ExtractWorker(
-            self._project, videos, self._per_video.value(), self._method.currentData()
-        )
+        self._worker = ExtractWorker(self._project, [Path(v) for v in videos], per_video, method)
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(self._on_extract_progress)
+        self._worker.progress.connect(self._grid.set_progress)
         self._worker.video_started.connect(self._on_video_started)
         self._worker.finished.connect(self._on_extract_finished)
         self._worker.cancelled.connect(self._on_extract_cancelled)
-        self._set_busy(True)
+        self._grid.set_busy(True, "Starting…")
+        self._stack.setCurrentIndex(0)
         self._thread.start()
 
     def _on_video_started(self, index: int, count: int, name: str) -> None:
-        self._frames_status.setText(f"Video {index + 1} of {count}: {name}")
-        self._progress.setRange(0, 0)
-
-    def _on_extract_progress(self, done: int, total: int) -> None:
-        self._progress.setRange(0, max(total, 1))
-        self._progress.setValue(done)
+        self._grid.set_busy(True, f"Video {index + 1} of {count}: {name}")
 
     def _on_extract_finished(self, added: int, errors: list) -> None:
-        self._end_extract()
         text = f"Added {added} frame(s)."
         if errors:
             text += " Some videos failed:\n" + "\n".join(errors)
-        self._frames_status.setText(text)
+        self._end_extract(text.splitlines()[0])
         if errors:
             QMessageBox.warning(self, "Extract frames", text)
 
     def _on_extract_cancelled(self, added: int) -> None:
-        self._end_extract()
-        self._frames_status.setText(f"Cancelled. {added} frame(s) were added before stopping.")
+        self._end_extract(f"Cancelled. {added} frame(s) were added before stopping.")
 
     def _cancel_extract(self) -> None:
         if self._worker is not None:
             self._worker.cancel()
-            self._cancel_btn.setEnabled(False)
-            self._frames_status.setText("Stopping…")
 
-    def _end_extract(self) -> None:
+    def _end_extract(self, text: str) -> None:
         thread, worker = self._thread, self._worker
         self._thread = self._worker = None
         if thread is not None:
             retire_thread(thread, worker)
-        # The worker added frames for the pending videos: they are in the project now.
-        self._pending_videos = [
-            p for p in self._pending_videos if str(p) not in self._project.videos.values()
-        ]
-        self._set_busy(False)
+        self._grid.set_busy(False, text)
         self._refresh_all()
-
-    def _set_busy(self, busy: bool) -> None:
-        self._progress.setVisible(busy)
-        self._cancel_btn.setVisible(busy)
-        self._cancel_btn.setEnabled(busy)
-        for widget in (
-            self._extract_btn,
-            self._add_videos_btn,
-            self._remove_video_btn,
-            self._export_btn,
-            self._skeleton_btn,
-        ):
-            widget.setEnabled(not busy and self._project is not None)
-        # The worker is appending to the project; labelling meanwhile would race it.
-        self._tabs.setTabEnabled(1, not busy and self._project is not None)
 
     # ------------------------------------------------------------------
     # label page
@@ -790,6 +646,11 @@ class AnimalAnnotatorWindow(QMainWindow):
         middle_layout.setSpacing(8)
         top_row = QHBoxLayout()
         top_row.setSpacing(0)
+        back = secondary(QPushButton("← Grid"))
+        back.setToolTip("Back to every image (Esc)")
+        back.clicked.connect(self.show_grid)
+        top_row.addWidget(back)
+        top_row.addSpacing(10)
         self._mode_group = QButtonGroup(self)
         self._mode_buttons: dict[str, QPushButton] = {}
         for mode, label, tip, side in (
@@ -1054,7 +915,6 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._pose_panel.setVisible(not segment)
         self._seg_panel.setVisible(segment)
         self._auto_bar.setVisible(segment and self._tool == AUTO)
-        self._skeleton_btn.setVisible(not segment)
 
     def _make_canvas(self) -> None:
         """Build a canvas for the open project, replacing any old one."""
@@ -1133,6 +993,7 @@ class AnimalAnnotatorWindow(QMainWindow):
 
     def _update_frame_item(self, index: int) -> None:
         self._gallery.gallery_model.invalidate(index)
+        self._grid.update_stats()
         for row in range(self._frame_list.count()):
             item = self._frame_list.item(row)
             if item.data(Qt.ItemDataRole.UserRole) == index:
@@ -1242,12 +1103,14 @@ class AnimalAnnotatorWindow(QMainWindow):
             canvas.setFocus()
 
     def _cancel(self) -> None:
-        """Esc: drop the polygon being drawn, or the Auto tool's clicks."""
+        """Esc: drop the polygon being drawn or the Auto tool's clicks; else back to the grid."""
         canvas = self._seg_canvas()
-        if canvas is not None:
+        if canvas is not None and (canvas.drafting or canvas.has_prompts or canvas.has_proposal):
             canvas.cancel()
             self._sam_status.setText("")
             canvas.setFocus()
+            return
+        self.show_grid()
 
     # ------------------------------------------------------------------
     # segmentation: classes, outlines and SAM
@@ -1611,7 +1474,6 @@ class AnimalAnnotatorWindow(QMainWindow):
             QMessageBox.warning(self, "New project", str(e))
             return
         self._set_project(project)
-        self._tabs.setCurrentIndex(0)
 
     def _open_project_dialog(self) -> None:
         start = str(self._project.folder.parent) if self._project else str(self._default_location())
@@ -1627,6 +1489,11 @@ class AnimalAnnotatorWindow(QMainWindow):
             if not quiet:
                 QMessageBox.warning(self, "Open project", str(e))
             return False
+        if ensure_splits(project):  # a project from before splits were stored
+            try:
+                project.save()
+            except OSError as e:
+                logger.warning("could not save the split migration for %s: %s", folder, e)
         self._set_project(project)
         return True
 
@@ -1693,7 +1560,7 @@ class AnimalAnnotatorWindow(QMainWindow):
             if on_screen:
                 self._baseline = value
                 self._canvas.set_instances(value)
-        if not on_screen and self._tabs.currentIndex() == 1:
+        if not on_screen and self._stack.currentIndex() == 1:
             self._show_frame(edit.frame)
         self._update_frame_item(edit.frame)
         self._refresh_undo_buttons()
@@ -1703,49 +1570,25 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._history.clear()
         self._baseline = []
         self._project = project
-        self._pending_videos = []
         self._frame_index = -1
         if project is not None:
             self._settings.setValue(_SETTINGS_LAST, str(project.folder))
-            self._project_title.setText(project.name)
-            self._project_label.setText(_short_path(project.folder))
-            self._project_label.setToolTip(str(project.folder))
             self.setWindowTitle(f"Animal Annotator — {project.name}")
         else:
-            self._project_title.setText("Animal Annotator")
-            self._project_label.setText("No project open")
-            self._project_label.setToolTip("")
             self.setWindowTitle("Animal Annotator")
         self._make_canvas()
-        self._gallery.set_project(project)
-        self._gallery.empty_text = (
-            "No images yet.\n\nAdd videos and extract frames to start labelling."
-            if project is not None
-            else "No project open.\n\nStart a new project or open an existing one."
-        )
-        self._set_busy(False)
+        self._grid.set_project(project)
+        self._stack.setCurrentIndex(0)
         self._refresh_all()
         self._refresh_undo_buttons()
 
     def _refresh_all(self) -> None:
         self._gallery.gallery_model.reload()
-        self._refresh_videos()
+        self._grid.refresh()
         self._refresh_frame_list()
         if self._frame_index >= 0:
             self._show_frame(self._frame_index)
         self._refresh_label_state()
-
-    def _on_tab_changed(self, index: int) -> None:
-        if index == 1 and self._frame_index < 0 and self._project and self._project.frames:
-            self._next_todo_or_first()
-        elif index == 0:
-            self._save_current_frame()
-            self._refresh_videos()
-
-    def _next_todo_or_first(self) -> None:
-        frames = self._project.frames
-        first = next((i for i, f in enumerate(frames) if self._status(f) == "todo"), 0)
-        self._show_frame(first)
 
     def _project_template(self) -> SkeletonTemplate:
         """The open project's keypoints as a template, for the editor.

@@ -92,6 +92,51 @@ QLabel[studioTitle="true"] {{
 QListWidget[compact="true"]::item {{
     padding: 4px 6px;
 }}
+QPushButton[chip="true"] {{
+    background-color: {colors.SURFACE_1};
+    color: {colors.TEXT_SECONDARY};
+    border: 1px solid {colors.BORDER};
+    border-radius: 12px;
+    padding: 3px 11px;
+}}
+QPushButton[chip="true"]:hover, QToolButton[chip="true"]:hover {{
+    color: {colors.TEXT_PRIMARY};
+}}
+QPushButton[chip="true"]:checked {{
+    background-color: rgba(56, 189, 248, 0.10);
+    border-color: {colors.ACCENT};
+    color: {colors.ACCENT};
+}}
+QToolButton[chip="true"] {{
+    background-color: {colors.SURFACE_1};
+    color: {colors.TEXT_SECONDARY};
+    border: 1px solid {colors.BORDER};
+    border-radius: 12px;
+    padding: 3px 11px;
+}}
+QToolButton[chip="true"]::menu-indicator {{
+    image: none;
+    width: 0px;
+}}
+QLabel[notice="true"] {{
+    color: {_AMBER};
+}}
+QLabel[stat="true"] {{
+    font-size: 17px;
+    font-weight: 600;
+    color: {colors.TEXT_PRIMARY};
+}}
+QFrame[studioStrip="true"] {{
+    background-color: {colors.SURFACE_1};
+    border: none;
+    border-top: 1px solid {colors.BORDER};
+    border-bottom: 1px solid {colors.BORDER};
+}}
+QFrame[studioSelection="true"] {{
+    background-color: rgba(56, 189, 248, 0.08);
+    border: none;
+    border-top: 1px solid {colors.BORDER};
+}}
 QFrame[studioPanel="true"] {{
     background-color: {colors.SURFACE_1};
     border: 1px solid {colors.BORDER};

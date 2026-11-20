@@ -72,13 +72,9 @@ def window(qtbot, tmp_path):
     qtbot.waitExposed(w)
     project = StudioProject.create(tmp_path / "proj", "U", MOUSE)
     w.open_project(project.folder)
-    w._pending_videos = [_clip(tmp_path / "a.avi")]
-    w._refresh_videos()
-    w._per_video.setValue(3)
-    w._method.setCurrentIndex(w._method.findData("uniform"))
-    w._extract()
+    w.extract([_clip(tmp_path / "a.avi")], 3, "uniform")
     qtbot.waitUntil(lambda: w._thread is None, timeout=20000)
-    w._label_frame(0)
+    w.show_editor(0)
     return w
 
 
