@@ -631,3 +631,110 @@ def test_tour_points_at_the_table_and_settings(window):
     assert targets["calibration"] is window._calibration_card
     assert targets["filter"] is window._settings_button
     assert targets["run"] is window._run_button
+
+
+# --------------------------------------------------------------------------
+# footer: Track button, progress, folded log
+# --------------------------------------------------------------------------
+
+
+def _running(window, tmp_path, monkeypatch):
+    """Start a real run whose worker never touches inference."""
+    from glider.gui.pose_batch import worker as worker_mod
+
+    class Idle(worker_mod.PoseBatchWorker):
+        def run(self):
+            pass
+
+    monkeypatch.setattr(worker_mod, "PoseBatchWorker", Idle)
+    _ready(window, tmp_path)
+    window._start_worker()
+
+
+def test_track_button_counts_videos(window, tmp_path):
+    assert window._run_button.text() == "Track 0 Videos"
+    _touch(tmp_path / "a.mp4")
+    window._sources.add_paths([tmp_path])
+    assert window._run_button.text() == "Track 1 Video"
+    _touch(tmp_path / "more" / "b.mp4")
+    window._sources.add_paths([tmp_path / "more"])
+    assert window._run_button.text() == "Track 2 Videos"
+
+
+def test_footer_names_gpu_blocker(window):
+    # Fail-if-no-GPU is enforced by the worker, so the footer carries whatever
+    # the existing validation says, unchanged, rather than inventing a message.
+    assert window._blocker_label.text() == "Select a model."
+    assert not window._blocker_label.isHidden()
+
+
+def test_blocker_clears_when_runnable(window, tmp_path):
+    _ready(window, tmp_path)
+    assert window._blocker_label.text() == ""
+
+
+def test_cancel_only_while_running(window, tmp_path, monkeypatch):
+    assert window._cancel_button.isHidden()
+    assert window._progress_panel.isHidden()
+    _running(window, tmp_path, monkeypatch)
+    try:
+        assert not window._cancel_button.isHidden()
+        assert not window._progress_panel.isHidden()
+        assert window._run_button.isHidden()
+    finally:
+        window._teardown_thread()
+    assert window._cancel_button.isHidden()
+    assert not window._run_button.isHidden()
+
+
+def test_strip_shows_tracking_k_of_n(window, tmp_path, monkeypatch):
+    _running(window, tmp_path, monkeypatch)
+    try:
+        window._on_progress(1, 5)
+        assert window._steps.steps_text()[3] == "Tracking 2 of 5"
+    finally:
+        window._teardown_thread()
+    assert window._steps.steps_text()[3] == "Track"
+
+
+def test_remove_is_disabled_while_running(window, tmp_path, monkeypatch):
+    _running(window, tmp_path, monkeypatch)
+    try:
+        assert not window._remove_all_action.isEnabled()
+        assert not window._remove_button.isEnabled()
+    finally:
+        window._teardown_thread()
+    assert window._remove_all_action.isEnabled()
+    assert window._remove_button.isEnabled()
+
+
+def test_log_is_collapsed_by_default(window):
+    assert window._log.isHidden()
+    assert window._log_toggle.text() == "▸ Log (0 lines)"
+
+
+def test_log_toggle_counts_and_opens(window):
+    window._add_log("one")
+    window._add_log("two")
+    assert window._log.isHidden()
+    assert window._log_toggle.text() == "▸ Log (2 lines)"
+    window._log_toggle.click()
+    assert not window._log.isHidden()
+    assert window._log_toggle.text() == "▾ Log (2 lines)"
+
+
+def test_log_opens_on_error(window):
+    window._add_log("[1/2] a.mp4")
+    assert window._log.isHidden()
+    window._add_log("FAILED a.mp4: boom")
+    assert not window._log.isHidden()
+
+
+def test_settings_summary_shows_active_options(window):
+    assert window._settings_summary.text() == ""
+    window._overwrite.setChecked(True)
+    window._filter_group.setChecked(True)
+    assert window._settings_summary.text() == "Smoothing on · Overwrite on"
+    window._overwrite.setChecked(False)
+    window._filter_group.setChecked(False)
+    assert window._settings_summary.text() == ""

@@ -47,7 +47,7 @@ from glider.gui.styles import colors
 from glider.gui.widgets.tool_ui import (
     GUTTER,
     Card,
-    RunRail,
+    StatusPill,
     ToolHeader,
     apply_tool_theme,
     attach_empty_state,
@@ -123,9 +123,16 @@ class _StepStrip(QFrame):
             row.addWidget(chip)
         row.addStretch(1)
         self._current = 0
+        self._tracking: tuple[int, int] | None = None
         self.set_progress(model_ok=False, videos=0, arenas=0)
 
+    def set_tracking(self, tracking: tuple[int, int] | None) -> None:
+        """Show "Tracking k of N" on the last step while a batch runs; None to clear."""
+        self._tracking = tracking
+        self.set_progress(**self._last)
+
     def set_progress(self, *, model_ok: bool, videos: int, arenas: int) -> None:
+        self._last = {"model_ok": model_ok, "videos": videos, "arenas": arenas}
         arenas_ok = videos > 0 and arenas == videos
         done = [model_ok, videos > 0, arenas_ok, False]
         texts = [
@@ -136,9 +143,11 @@ class _StepStrip(QFrame):
                 if videos
                 else "Arenas"
             ),
-            "Track",
+            f"Tracking {self._tracking[0]} of {self._tracking[1]}" if self._tracking else "Track",
         ]
         self._current = next((i for i, d in enumerate(done) if not d), len(done) - 1)
+        if self._tracking:
+            self._current = len(done) - 1
         for i, (chip, text) in enumerate(zip(self._chips, texts, strict=True)):
             chip.setText(text)
             state = "done" if done[i] else ("current" if i == self._current else "todo")
@@ -270,6 +279,11 @@ class PoseBatchWindow(QMainWindow):
         self._tour_btn.clicked.connect(self.start_tour)
         self._header.add_action(self._tour_btn)
 
+        # Non-default settings, shown outside the popup so they are not forgotten.
+        self._settings_summary = QLabel("")
+        set_text_role(self._settings_summary, "muted")
+        self._header.add_action(self._settings_summary)
+
         self._settings_button = QPushButton("⚙ Settings")
         self._settings_button.setToolTip(
             "Device, confidence, smoothing, subfolders, overwrite and the arenas file."
@@ -293,57 +307,148 @@ class PoseBatchWindow(QMainWindow):
         strip.addWidget(self._steps)
         page.addLayout(strip)
 
-        body = QHBoxLayout()
-        body.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
-        body.setSpacing(GUTTER)
-        page.addLayout(body, 1)
-
-        # --- left: configuration ----------------------------------------
+        # --- configuration, full width ------------------------------------
         area, column = scroll_column()
         column.addWidget(self._build_model_group())
         column.addWidget(self._build_pup_group())
         column.addWidget(self._build_videos_group(), 1)
         column.addStretch(0)
+        body = QHBoxLayout()
+        body.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
         body.addWidget(area, 1)
+        page.addLayout(body, 1)
 
-        # --- right: run rail --------------------------------------------
-        rail = RunRail("Track poses")
-        self._rail = rail
-        self._run_button = rail.button
-        self._run_button.clicked.connect(self._start)
-        self._cancel_button = rail.secondary
-        self._cancel_button.setVisible(True)
-        self._cancel_button.setEnabled(False)
-        self._cancel_button.clicked.connect(self._cancel)
-
-        # Hidden until a batch starts: two empty bars sitting at zero read as
-        # a run that has stalled rather than one that has not begun.
-        self._overall_bar = QProgressBar()
-        self._overall_bar.setFormat("%v / %m videos")
-        self._overall_bar.setVisible(False)
-        rail.card.add(self._overall_bar)
-
-        self._video_bar = QProgressBar()
-        self._video_bar.setFormat("%v / %m frames")
-        self._video_bar.setVisible(False)
-        rail.card.add(self._video_bar)
-
-        log_card = Card("Progress log")
-        self._log = QPlainTextEdit()
-        self._log.setObjectName("LogPane")
-        self._log.setReadOnly(True)
-        self._log.setPlaceholderText("Progress will appear here.")
-        log_card.add(self._log, 1)
-        rail.add(log_card, 1)
-
-        rail.setFixedWidth(400)
-        body.addWidget(rail)
+        page.addWidget(self._build_footer())
 
         self._build_settings_popup()
         self.setCentralWidget(central)
         # Opened with parent=None, so nothing hands it the app theme.
         apply_tool_theme(self)
         apply_tool_theme(self._settings_popup)
+        for signal in (
+            self._filter_group.toggled,
+            self._require_gpu.toggled,
+            self._device_combo.currentTextChanged,
+            self._conf_spin.valueChanged,
+        ):
+            signal.connect(self._update_settings_summary)
+
+    def _build_footer(self) -> QFrame:
+        """Next-step message + Track; while a run is in flight, progress + Cancel.
+
+        The progress panel stays up after a run ends so the outcome (Done, n
+        failed) is still readable; only the Track row swaps out while busy.
+        """
+        footer = QFrame()
+        footer.setObjectName("RunFooter")
+        footer.setStyleSheet(f"QFrame#RunFooter {{ border-top: 1px solid {colors.BORDER}; }}")
+        column = QVBoxLayout(footer)
+        column.setContentsMargins(GUTTER, 10, GUTTER, 10)
+        column.setSpacing(8)
+
+        # Hidden until a batch starts: two empty bars sitting at zero read as
+        # a run that has stalled rather than one that has not begun.
+        self._progress_panel = QWidget()
+        panel = QVBoxLayout(self._progress_panel)
+        panel.setContentsMargins(0, 0, 0, 0)
+        panel.setSpacing(6)
+        top = QHBoxLayout()
+        self._status = StatusPill("Idle")
+        top.addWidget(self._status)
+        self._video_label = QLabel("")
+        set_text_role(self._video_label, "muted")
+        top.addWidget(self._video_label, 1)
+        self._cancel_button = QPushButton("Cancel")
+        set_button_role(self._cancel_button, "danger")
+        self._cancel_button.setEnabled(False)
+        self._cancel_button.setVisible(False)
+        self._cancel_button.clicked.connect(self._cancel)
+        top.addWidget(self._cancel_button)
+        panel.addLayout(top)
+        self._video_bar = QProgressBar()
+        self._video_bar.setFormat("%v / %m frames")
+        panel.addWidget(self._video_bar)
+        self._overall_bar = QProgressBar()
+        self._overall_bar.setFormat("%v / %m videos")
+        panel.addWidget(self._overall_bar)
+        self._progress_panel.setVisible(False)
+        column.addWidget(self._progress_panel)
+
+        row = QHBoxLayout()
+        self._blocker_label = hint("")
+        self._blocker_label.setVisible(False)
+        row.addWidget(self._blocker_label, 1)
+        row.addStretch(0)
+        self._run_button = QPushButton("Track 0 Videos")
+        set_button_role(self._run_button, "primary")
+        self._run_button.setMinimumHeight(38)
+        self._run_button.clicked.connect(self._start)
+        row.addWidget(self._run_button)
+        column.addLayout(row)
+
+        self._log = QPlainTextEdit()
+        self._log.setObjectName("LogPane")
+        self._log.setReadOnly(True)
+        self._log.setPlaceholderText("Progress will appear here.")
+        self._log.setMaximumHeight(160)
+        self._log.setVisible(False)
+        self._log_toggle = QPushButton()
+        set_button_role(self._log_toggle, "ghost")
+        self._log_toggle.setCheckable(True)
+        self._log_toggle.toggled.connect(self._log.setVisible)
+        self._log_toggle.toggled.connect(lambda _: self._sync_log_toggle())
+        self._log.textChanged.connect(self._sync_log_toggle)
+        self._sync_log_toggle()
+        toggle_row = QHBoxLayout()
+        toggle_row.addWidget(self._log_toggle)
+        toggle_row.addStretch(1)
+        column.addLayout(toggle_row)
+        column.addWidget(self._log)
+        return footer
+
+    def _update_settings_summary(self, *_args) -> None:
+        active = [
+            text
+            for on, text in (
+                (self._filter_group.isChecked(), "Smoothing on"),
+                (self._overwrite.isChecked(), "Overwrite on"),
+                (self._require_gpu.isChecked(), "GPU required"),
+                (not self._recursive.isChecked(), "Subfolders off"),
+                (self._device_combo.currentText() != "auto", self._device_combo.currentText()),
+                (abs(self._conf_spin.value() - 0.25) > 1e-9, f"Conf {self._conf_spin.value():.2f}"),
+            )
+            if on
+        ]
+        self._settings_summary.setText(" · ".join(active))
+
+    def _sync_log_toggle(self) -> None:
+        lines = self._log.document().blockCount() if self._log.toPlainText() else 0
+        arrow = "▾" if self._log_toggle.isChecked() else "▸"
+        self._log_toggle.setText(f"{arrow} Log ({lines} line{'s' if lines != 1 else ''})")
+
+    def _add_log(self, text: str) -> None:
+        """Append a line; an error opens the folded log so it is not missed."""
+        self._log.appendPlainText(text)
+        lowered = text.lower()
+        if "failed" in lowered or "could not" in lowered or "error" in lowered:
+            self._log_toggle.setChecked(True)
+
+    def _sync_footer(self) -> None:
+        """Swap Track for progress while a pass owns the CSVs; gate removals."""
+        busy = self._busy()
+        self._run_button.setVisible(not busy)
+        self._blocker_label.setVisible(not busy and bool(self._blocker_label.text()))
+        if busy:
+            self._progress_panel.setVisible(True)
+        running = self._thread is not None
+        self._cancel_button.setVisible(running)
+        self._video_bar.setVisible(running)
+        self._video_label.setVisible(running)
+        if not running:
+            self._steps.set_tracking(None)
+        # Removing videos mid-run would pull the rug from the worker's list.
+        self._remove_button.setEnabled(not busy)
+        self._remove_all_action.setEnabled(bool(self._videos) and not busy)
 
     def _build_model_group(self) -> Card:
         """The model as two short rows: the weights (and Animals), the bodyparts."""
@@ -533,7 +638,7 @@ class PoseBatchWindow(QMainWindow):
             "the batch will run."
         )
         copy_arena_btn.clicked.connect(self._copy_arena_to_selected)
-        remove = QPushButton("Remove")
+        remove = self._remove_button = QPushButton("Remove")
         set_button_role(remove, "ghost")
         remove.clicked.connect(self._remove_selected)
 
@@ -723,6 +828,8 @@ class PoseBatchWindow(QMainWindow):
 
     def _remove_selected(self) -> None:
         """Drop the selected videos, and their arenas with them."""
+        if self._busy():
+            return
         selected = self._cal_table.selected_videos()
         for video in selected:
             self._excluded.add(video)
@@ -733,6 +840,8 @@ class PoseBatchWindow(QMainWindow):
 
     def _remove_all(self) -> None:
         """Empty the table, and drop every arena and scale along with it."""
+        if self._busy():
+            return
         if any(self._calibrations.get_arena(v) is not None for v in self._videos):
             answer = QMessageBox.question(
                 self,
@@ -750,7 +859,9 @@ class PoseBatchWindow(QMainWindow):
     def _table_menu(self, pos) -> None:
         menu = QMenu(self._cal_table)
         menu.addAction("Draw Arena…", self._arena_selected)
-        menu.addAction("Clear Arena", self._clear_selected_calibrations)
+        menu.addAction("Clear Arena", self._clear_selected_calibrations).setEnabled(
+            not self._busy()
+        )
         menu.exec(self._cal_table.viewport().mapToGlobal(pos))
 
     # ------------------------------------------------------------------
@@ -794,7 +905,7 @@ class PoseBatchWindow(QMainWindow):
                     # this video's own floor, which residuals() cannot tell them.
                     self._calibrations.set_arena(video, arena, confirmed=True)
                     self._zone_cm = dialog.zone_size_cm()
-                    self._log.appendPlainText(
+                    self._add_log(
                         f"{video.name}: arena drawn, "
                         f"{arena.px_per_cm_centre / 10:.3f} px/mm at the floor centre"
                     )
@@ -848,7 +959,7 @@ class PoseBatchWindow(QMainWindow):
             try:
                 vertices = arena.centre_zone_vertices(self._zone_cm)
             except (DegenerateArenaError, ValueError) as e:
-                self._log.appendPlainText(f"{video.name}: no zone written ({e})")
+                self._add_log(f"{video.name}: no zone written ({e})")
                 continue
             config = ZoneConfiguration()
             config.config_width, config.config_height = arena.frame_size
@@ -900,14 +1011,14 @@ class PoseBatchWindow(QMainWindow):
 
         copied = [v for v in targets if v not in skipped]
         overwritten = sum(1 for v in copied if v in already)
-        self._log.appendPlainText(
+        self._add_log(
             f"Copied {source.name}'s arena: {len(copied) - overwritten} video(s) with no "
             f"arena filled, {overwritten} existing arena(s) overwritten. Each copy is "
             "marked unconfirmed: open it and check the outline sits on that video's floor."
         )
         if skipped:
             names = ", ".join(v.name for v in skipped)
-            self._log.appendPlainText(
+            self._add_log(
                 f"Not copied to {len(skipped)} video(s) that could not be opened to "
                 f"read their resolution: {names}"
             )
@@ -1012,7 +1123,7 @@ class PoseBatchWindow(QMainWindow):
             loaded = CalibrationSet.load(path, known_videos=self._videos)
         except CalibrationSetError as e:
             # Never half-apply: leave the current state alone and say why.
-            self._log.appendPlainText(f"Could not read {path.name}: {e}")
+            self._add_log(f"Could not read {path.name}: {e}")
             QMessageBox.warning(self, "Calibration File", str(e))
             return
 
@@ -1020,7 +1131,7 @@ class PoseBatchWindow(QMainWindow):
         # that has to travel with the arenas, or a copied arena comes back
         # confirmed after one save/reload cycle.
         self._calibrations.merge(loaded)
-        self._log.appendPlainText(
+        self._add_log(
             f"Loaded calibration for {len(loaded.entries)} video(s) "
             f"and {len(loaded.arenas)} arena(s) from {path.name}."
         )
@@ -1062,7 +1173,7 @@ class PoseBatchWindow(QMainWindow):
             return
         if not self._write_master(path):
             return
-        self._log.appendPlainText(f"Wrote {path}")
+        self._add_log(f"Wrote {path}")
 
     def _write_master(self, path: Path) -> bool:
         """Write the master file. Reports and returns False on failure."""
@@ -1071,7 +1182,7 @@ class PoseBatchWindow(QMainWindow):
             # visited earlier this session, which this file does not describe.
             self._calibrations.subset(self._videos).save(path, model=self._model_path)
         except (OSError, ValueError) as e:
-            self._log.appendPlainText(f"Could not write {path}: {e}")
+            self._add_log(f"Could not write {path}: {e}")
             QMessageBox.critical(self, "Master File", f"Could not write the calibration file:\n{e}")
             return False
         self._loaded_master = path
@@ -1204,6 +1315,8 @@ class PoseBatchWindow(QMainWindow):
 
     def _validate(self) -> None:
         """Disable Run — and say why — rather than failing an overnight batch."""
+        self._sync_footer()
+        self._update_settings_summary()
         if self._busy():
             return  # a run or a re-gate is in flight; Run stays disabled
 
@@ -1240,12 +1353,14 @@ class PoseBatchWindow(QMainWindow):
             videos=len(self._videos),
             arenas=len(self._videos) - len(self._calibrations.missing_arenas(self._videos)),
         )
-        self._remove_all_action.setEnabled(bool(self._videos))
         self._run_button.setEnabled(problem is None)
         self._run_button.setToolTip(problem or "")
         # Shown next to the button as well as on hover: a disabled Run with the
         # reason only in a tooltip is a dead end you have to go hunting in.
-        self._rail.set_blocker(problem or "")
+        self._blocker_label.setText(problem or "")
+        self._blocker_label.setVisible(problem is not None)
+        n = len(self._videos)
+        self._run_button.setText(f"Track {n} Video{'s' if n != 1 else ''}")
 
         if self._videos:
             missing = len(self._calibrations.missing_arenas(self._videos))
@@ -1342,7 +1457,7 @@ class PoseBatchWindow(QMainWindow):
         from glider.vision.arena_gate import ArenaGateSettings
 
         self._log.clear()
-        self._log.appendPlainText(f"Starting {len(self._videos)} video(s)…")
+        self._add_log(f"Starting {len(self._videos)} video(s)…")
         self._overall_bar.setRange(0, len(self._videos))
         self._overall_bar.setValue(0)
         self._video_bar.setRange(0, 0)
@@ -1379,7 +1494,7 @@ class PoseBatchWindow(QMainWindow):
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
         self._worker.video_progress.connect(self._on_video_progress)
-        self._worker.log.connect(self._log.appendPlainText)
+        self._worker.log.connect(self._add_log)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
 
@@ -1387,19 +1502,22 @@ class PoseBatchWindow(QMainWindow):
         self._regate_action.setEnabled(False)  # _validate returns early mid-run
         self._export_action.setEnabled(False)
         self._cancel_button.setEnabled(True)
-        self._overall_bar.setVisible(True)
-        self._video_bar.setVisible(True)
-        self._rail.status.set_state("running", "Tracking")
+        self._status.set_state("running", "Tracking")
+        self._sync_footer()
         self._thread.start()
 
     def _cancel(self) -> None:
         if self._worker is not None:
             self._worker.cancel()
             self._cancel_button.setEnabled(False)
-            self._rail.status.set_state("warn", "Cancelling")
-            self._log.appendPlainText("Cancelling after the current frame…")
+            self._status.set_state("warn", "Cancelling")
+            self._add_log("Cancelling after the current frame…")
 
     def _on_progress(self, index: int, total: int) -> None:
+        if self._thread is not None:  # the batch, not a re-gate or export
+            self._steps.set_tracking((index + 1, total))
+            if 0 <= index < len(self._videos):
+                self._video_label.setText(self._videos[index].name)
         self._overall_bar.setRange(0, total)
         self._overall_bar.setValue(index)
 
@@ -1415,18 +1533,18 @@ class PoseBatchWindow(QMainWindow):
         if result.completed:
             self._remember_names(self._current_names())
         if result.failed:
-            self._rail.status.set_state("warn", f"{len(result.failed)} failed")
+            self._status.set_state("warn", f"{len(result.failed)} failed")
         elif result.completed:
-            self._rail.status.set_state("ok", "Done")
+            self._status.set_state("ok", "Done")
         else:
-            self._rail.status.set_state("idle", "Cancelled")
+            self._status.set_state("idle", "Cancelled")
         for video, message in result.failed:
-            self._log.appendPlainText(f"FAILED {video.name}: {message}")
+            self._add_log(f"FAILED {video.name}: {message}")
         self._teardown_thread()
 
     def _on_failed(self, message: str) -> None:
-        self._rail.status.set_state("error", "Failed")
-        self._log.appendPlainText(f"Batch could not start: {message}")
+        self._status.set_state("error", "Failed")
+        self._add_log(f"Batch could not start: {message}")
         QMessageBox.critical(self, "Batch Pose Tracking", message)
         self._teardown_thread()
 
@@ -1466,35 +1584,35 @@ class PoseBatchWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             return
 
-        self._log.appendPlainText(f"Re-gating {len(videos)} tracked CSV(s)…")
+        self._add_log(f"Re-gating {len(videos)} tracked CSV(s)…")
         self._overall_bar.setRange(0, len(videos))
         self._overall_bar.setValue(0)
-        self._overall_bar.setVisible(True)
 
         self._regate_worker = RegateWorker(videos, self._calibrations)
         self._regate_thread = QThread(self)
         self._regate_worker.moveToThread(self._regate_thread)
         self._regate_thread.started.connect(self._regate_worker.run)
         self._regate_worker.progress.connect(self._on_progress)
-        self._regate_worker.log.connect(self._log.appendPlainText)
+        self._regate_worker.log.connect(self._add_log)
         self._regate_worker.finished.connect(self._on_regate_finished)
         self._regate_worker.failed.connect(self._on_regate_failed)
 
         self._run_button.setEnabled(False)
         self._regate_action.setEnabled(False)
         self._export_action.setEnabled(False)
-        self._rail.status.set_state("running", "Re-gating")
+        self._status.set_state("running", "Re-gating")
+        self._sync_footer()
         self._regate_thread.start()
 
     def _on_regate_finished(self, gated: int, skipped: int) -> None:
         self._overall_bar.setValue(self._overall_bar.maximum())
-        self._log.appendPlainText(f"Re-gated {gated}, skipped {skipped}.")
-        self._rail.status.set_state("warn" if skipped else "ok", "Done")
+        self._add_log(f"Re-gated {gated}, skipped {skipped}.")
+        self._status.set_state("warn" if skipped else "ok", "Done")
         self._teardown_regate()
 
     def _on_regate_failed(self, message: str) -> None:
-        self._rail.status.set_state("error", "Failed")
-        self._log.appendPlainText(f"Re-gate could not run: {message}")
+        self._status.set_state("error", "Failed")
+        self._add_log(f"Re-gate could not run: {message}")
         QMessageBox.critical(self, "Re-gate tracked CSVs", message)
         self._teardown_regate()
 
@@ -1522,35 +1640,35 @@ class PoseBatchWindow(QMainWindow):
         # No confirmation prompt: unlike the re-gate, this never touches the
         # per-animal CSVs it reads from -- it only (re)writes the derived
         # four-row file, which is exactly what running it again is for.
-        self._log.appendPlainText(f"Exporting {len(videos)} multi-animal session(s)…")
+        self._add_log(f"Exporting {len(videos)} multi-animal session(s)…")
         self._overall_bar.setRange(0, len(videos))
         self._overall_bar.setValue(0)
-        self._overall_bar.setVisible(True)
 
         self._export_worker = ExportWorker(videos)
         self._export_thread = QThread(self)
         self._export_worker.moveToThread(self._export_thread)
         self._export_thread.started.connect(self._export_worker.run)
         self._export_worker.progress.connect(self._on_progress)
-        self._export_worker.log.connect(self._log.appendPlainText)
+        self._export_worker.log.connect(self._add_log)
         self._export_worker.finished.connect(self._on_export_finished)
         self._export_worker.failed.connect(self._on_export_failed)
 
         self._run_button.setEnabled(False)
         self._regate_action.setEnabled(False)
         self._export_action.setEnabled(False)
-        self._rail.status.set_state("running", "Exporting")
+        self._status.set_state("running", "Exporting")
+        self._sync_footer()
         self._export_thread.start()
 
     def _on_export_finished(self, exported: int, skipped: int) -> None:
         self._overall_bar.setValue(self._overall_bar.maximum())
-        self._log.appendPlainText(f"Exported {exported}, skipped {skipped}.")
-        self._rail.status.set_state("warn" if skipped else "ok", "Done")
+        self._add_log(f"Exported {exported}, skipped {skipped}.")
+        self._status.set_state("warn" if skipped else "ok", "Done")
         self._teardown_export()
 
     def _on_export_failed(self, message: str) -> None:
-        self._rail.status.set_state("error", "Failed")
-        self._log.appendPlainText(f"Export could not run: {message}")
+        self._status.set_state("error", "Failed")
+        self._add_log(f"Export could not run: {message}")
         QMessageBox.critical(self, "Export multi-animal DLC CSV", message)
         self._teardown_export()
 
