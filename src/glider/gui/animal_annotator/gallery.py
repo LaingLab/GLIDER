@@ -316,10 +316,9 @@ class GalleryView(QListView):
 
     def _attach(self, model: GalleryModel) -> None:
         self.setModel(model)
-        model.modelReset.connect(self._apply_filter)
-        model.dataChanged.connect(self._apply_filter)
+        model.modelReset.connect(self.apply_filter)
         self.selectionModel().selectionChanged.connect(lambda *_: self.selection_changed.emit())
-        self._apply_filter()
+        self.apply_filter()
 
     def share_model(self, other: GalleryView) -> None:
         """Show ``other``'s frames; this view's filter and selection stay its own."""
@@ -341,9 +340,10 @@ class GalleryView(QListView):
     def set_filter(self, status: str | None, split: str | None, video: str | None) -> None:
         """Show only rows matching every given criterion; ``None`` is any."""
         self._filter = (status, split, video)
-        self._apply_filter()
+        self.apply_filter()
 
-    def _apply_filter(self, *_) -> None:
+    def apply_filter(self, *_) -> None:
+        """Re-apply the current filter. Label edits do not, so a frame being labelled stays put."""
         model = self.gallery_model
         status, split, video = self._filter
         for row in range(model.rowCount()):

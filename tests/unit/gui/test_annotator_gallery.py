@@ -137,3 +137,12 @@ def test_strip_is_one_row_and_models_share(qtbot, gallery):
     }
     assert len(tops) == 1
     assert strip.gridSize().width() <= 110
+
+
+def test_label_edit_keeps_row_until_filter_reapplied(project, gallery):
+    gallery.set_filter("todo", None, None)
+    assert 0 in gallery.visible_rows()
+    _label(project, gallery, 0)
+    assert 0 in gallery.visible_rows()
+    gallery.apply_filter()
+    assert 0 not in gallery.visible_rows()
