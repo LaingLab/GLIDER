@@ -369,26 +369,54 @@ class ExtractWorker(QObject):
 
     def run(self) -> None:
         added, errors = 0, []
-        for i, video in enumerate(self._videos):
-            self.video_started.emit(i, len(self._videos), video.name)
-            try:
-                added += len(
-                    extract_frames(
-                        self._project,
-                        video,
-                        self._per_video,
-                        self._method,
-                        progress_cb=self.progress.emit,
-                        cancel_cb=self._cancel.is_set,
+        known = set(self._project.videos)
+        # Register every video first, so splits are assigned knowing the real
+        # video count (a lone registered video would get per-frame splits).
+        for video in self._videos:
+            self._project.video_key(video)
+        try:
+            for i, video in enumerate(self._videos):
+                self.video_started.emit(i, len(self._videos), video.name)
+                try:
+                    added += len(
+                        extract_frames(
+                            self._project,
+                            video,
+                            self._per_video,
+                            self._method,
+                            progress_cb=self.progress.emit,
+                            cancel_cb=self._cancel.is_set,
+                        )
                     )
-                )
-            except ExtractionCancelledError:
-                self.cancelled.emit(added)
-                return
-            except Exception as e:  # report and carry on with the next video
-                logger.exception("frame extraction failed for %s", video)
-                errors.append(f"{video.name}: {e}")
+                except ExtractionCancelledError:
+                    self._drop_empty(known)
+                    self.cancelled.emit(added)
+                    return
+                except Exception as e:  # report and carry on with the next video
+                    logger.exception("frame extraction failed for %s", video)
+                    errors.append(f"{video.name}: {e}")
+        except BaseException:
+            self._drop_empty(known)
+            raise
+        self._drop_empty(known)
         self.finished.emit(added, errors)
+
+    def _drop_empty(self, known: set[str]) -> None:
+        """Forget videos registered for this run that ended with no frames; save."""
+        used = {f.video for f in self._project.frames}
+        for key in [k for k in self._project.videos if k not in known and k not in used]:
+            del self._project.videos[key]
+        try:
+            self._project.save()
+        except OSError:
+            logger.exception("could not save the project after extraction")
+
+
+class _NoWheelComboBox(QComboBox):
+    """A combo that only changes on a deliberate pick, never on a stray wheel turn."""
+
+    def wheelEvent(self, event) -> None:
+        event.ignore()
 
 
 class SamWorker(QObject):
@@ -402,7 +430,8 @@ class SamWorker(QObject):
 
     #: request id, polygon in image pixels (list) or None, error text ("" if none)
     result = pyqtSignal(int, object, str)
-    status = pyqtSignal(str)
+    #: request id, status text
+    status = pyqtSignal(int, str)
 
     def __init__(self):
         super().__init__()
@@ -419,17 +448,18 @@ class SamWorker(QObject):
             if self._segmenter is None or self._segmenter.model != model:
                 info = next((m for m in SAM_MODELS if m.file == model), None)
                 self.status.emit(
+                    request,
                     f"Loading {info.label if info else model}… "
-                    f"(first use downloads about {info.size_mb if info else '?'} MB)"
+                    f"(first use downloads about {info.size_mb if info else '?'} MB)",
                 )
                 self._segmenter = SamSegmenter(model)
                 self._segmenter.load()
             if self._segmenter.image_key != key:
-                self.status.emit("Reading the frame…")
+                self.status.emit(request, "Reading the frame…")
                 self._segmenter.set_image(key, image)
             if request < self.latest:
                 return
-            self.status.emit("Segmenting…")
+            self.status.emit(request, "Segmenting…")
             mask = self._segmenter.segment(points, labels, box)
             polygon = mask_to_polygon(mask) if mask is not None else None
             self.result.emit(request, polygon, "")
@@ -473,8 +503,10 @@ class AnimalAnnotatorWindow(QMainWindow):
 
         self.setStyleSheet(studio_stylesheet())
         file_menu = self.menuBar().addMenu("&File")
-        file_menu.addAction("New Project…", self._new_project)
-        file_menu.addAction("Open Project…", self._open_project_dialog)
+        self._file_actions = [
+            file_menu.addAction("New Project…", self._new_project),
+            file_menu.addAction("Open Project…", self._open_project_dialog),
+        ]
 
         self._grid = GridPage()
         self._gallery = self._grid.gallery
@@ -565,6 +597,8 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._project.remove_video(key)
         self._project.save()
         self._frame_index = -1
+        self._history.clear()  # edits index into project.frames, which just shifted
+        self._refresh_undo_buttons()
         self._refresh_all()
 
     def _add_images(self) -> None:
@@ -597,6 +631,7 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._worker.finished.connect(self._on_extract_finished)
         self._worker.cancelled.connect(self._on_extract_cancelled)
         self._grid.set_busy(True, "Starting…")
+        self._set_file_actions(False)
         self._stack.setCurrentIndex(0)
         self._thread.start()
 
@@ -623,8 +658,13 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._thread = self._worker = None
         if thread is not None:
             retire_thread(thread, worker)
+        self._set_file_actions(True)
         self._grid.set_busy(False, text)
         self._refresh_all()
+
+    def _set_file_actions(self, enabled: bool) -> None:
+        for action in self._file_actions:
+            action.setEnabled(enabled)
 
     # ------------------------------------------------------------------
     # label page
@@ -818,10 +858,12 @@ class AnimalAnnotatorWindow(QMainWindow):
         right_layout = right.layout()  # back to the shared panel
         right_layout.addSpacing(4)
         right_layout.addWidget(section("Split"))
-        self._split_combo = QComboBox()
+        self._split_combo = _NoWheelComboBox()
+        self._split_combo.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         for split in SPLITS:
             self._split_combo.addItem(split.capitalize(), split)
         self._split_combo.setToolTip("Which part of the dataset this image goes in")
+        self._split_combo.activated.connect(lambda _i: self._canvas.setFocus())
         self._split_combo.currentIndexChanged.connect(self._on_split_changed)
         right_layout.addWidget(self._split_combo)
         key_line = muted(QLabel("←/→ image · S skip · N animal · ? all shortcuts"), small=True)
@@ -1268,7 +1310,7 @@ class AnimalAnnotatorWindow(QMainWindow):
             self._sam_worker.moveToThread(self._sam_thread)
             self._sam_request.connect(self._sam_worker.run, Qt.ConnectionType.QueuedConnection)
             self._sam_worker.result.connect(self._on_sam_result)
-            self._sam_worker.status.connect(self._hint.setText)
+            self._sam_worker.status.connect(self._on_sam_status)
             self._sam_thread.start()
         return self._sam_worker
 
@@ -1301,6 +1343,10 @@ class AnimalAnnotatorWindow(QMainWindow):
             labels,
             box,
         )
+
+    def _on_sam_status(self, request: int, text: str) -> None:
+        if request == self._sam_request_id:  # a stale request's progress is not news
+            self._hint.setText(text)
 
     def _on_sam_result(self, request: int, polygon, error: str) -> None:
         if request != self._sam_request_id:
@@ -1475,6 +1521,8 @@ class AnimalAnnotatorWindow(QMainWindow):
         return default_data_dir() / "animal_annotator"
 
     def _new_project(self) -> None:
+        if self._thread is not None:
+            return
         dialog = NewProjectDialog(self._default_location(), parent=self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -1503,6 +1551,8 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._set_project(project)
 
     def _open_project_dialog(self) -> None:
+        if self._thread is not None:
+            return
         start = str(self._project.folder.parent) if self._project else str(self._default_location())
         path = QFileDialog.getExistingDirectory(self, "Open Animal Annotator project", start)
         if path:
@@ -1510,6 +1560,8 @@ class AnimalAnnotatorWindow(QMainWindow):
 
     def open_project(self, folder: Path, quiet: bool = False) -> bool:
         """Open the project in ``folder``; says why if it can't, unless ``quiet``."""
+        if self._thread is not None:
+            return False
         try:
             project = StudioProject.load(folder)
         except StudioProjectError as e:

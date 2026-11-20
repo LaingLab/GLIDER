@@ -69,7 +69,7 @@ QPushButton[chip="true"] {{
     background-color: {colors.SURFACE_1};
     color: {colors.TEXT_SECONDARY};
     border: 1px solid {colors.BORDER};
-    border-radius: 12px;
+    border-radius: {radius.LARGE}px;
     padding: 3px 11px;
 }}
 QPushButton[chip="true"]:hover, QToolButton[chip="true"]:hover {{
@@ -84,7 +84,7 @@ QToolButton[chip="true"] {{
     background-color: {colors.SURFACE_1};
     color: {colors.TEXT_SECONDARY};
     border: 1px solid {colors.BORDER};
-    border-radius: 12px;
+    border-radius: {radius.LARGE}px;
     padding: 3px 11px;
 }}
 QToolButton[chip="true"]::menu-indicator {{
@@ -135,13 +135,13 @@ QLabel[studioHint="true"] {{
     background-color: rgba(0, 0, 0, 0.72);
     color: {colors.TEXT_PRIMARY};
     border: 1px solid {colors.BORDER};
-    border-radius: 10px;
+    border-radius: {radius.MEDIUM}px;
     padding: 3px 14px;
     margin-top: 10px;
 }}
 QLabel[splitBadge="true"] {{
     background-color: {colors.SURFACE_2};
-    border-radius: 3px;
+    border-radius: {radius.SMALL}px;
     padding: 1px 7px;
     font-weight: 600;
 }}

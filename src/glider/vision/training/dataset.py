@@ -98,10 +98,11 @@ def export_dataset(project: StudioProject) -> ExportResult:
     groups = {k: [f for f in labelled if f.split == k] for k in ("train", "val", "test")}
     for key, label in (("train", "training"), ("val", "validation")):
         if not groups[key]:
-            raise DatasetError(
-                f"No annotated frames in {label}: label some frames from a "
-                f"{key} video, or move frames to {key}."
-            )
+            if len(project.videos) <= 1:
+                hint = f"label more frames, or move some frames to {key}"
+            else:
+                hint = f"label some frames from a {key} video, or move frames to {key}"
+            raise DatasetError(f"No annotated frames in {label}: {hint}.")
     train, val, test = groups["train"], groups["val"], groups["test"]
     by_video = not leaky_videos(project)
 

@@ -6,9 +6,11 @@ import cv2
 import numpy as np
 import pytest
 from PyQt6.QtCore import QPoint, QPointF, QSettings, Qt
+from PyQt6.QtWidgets import QApplication
 
 from glider.analysis.behavior.keypoint_schema import KeypointSchema
 from glider.gui.animal_annotator.canvas import LabelCanvas
+from glider.gui.animal_annotator.history import SKIP, Edit
 from glider.gui.animal_annotator.window import AnimalAnnotatorWindow
 from glider.vision.training.labels import HIDDEN, MISSING, VISIBLE, PoseInstance
 from glider.vision.training.project import StudioProject
@@ -209,7 +211,7 @@ def test_extract_label_and_export(qtbot, window, tmp_path):
             listed += (project.folder / name).read_text().splitlines()
     assert len(listed) == 7  # eight labelled, one skipped
     assert "validation frame(s)" in shown[0]
-    assert "a.avi has frames in train and in val/test" in shown[0]
+    assert "has frames in train and in val/test" not in shown[0]  # whole videos held out
     assert "one video" not in shown[0]
 
 
@@ -453,3 +455,87 @@ def test_tools_card_and_menu_open_the_studio(main_window_factory, qtbot):
     qtbot.addWidget(studio)
     main._open_animal_annotator()
     assert main._animal_annotator_window is studio
+
+
+def test_several_videos_in_one_extract_do_not_leak(qtbot, window, tmp_path):
+    from glider.vision.training.splits import leaky_videos
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / n) for n in ("a.avi", "b.avi", "c.avi")], 6)
+    assert leaky_videos(window._project) == []
+    assert window._grid.notice.isHidden()
+
+
+def test_videos_that_yield_no_frames_are_not_left_registered(qtbot, window, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    bad = tmp_path / "bad.avi"
+    bad.write_bytes(b"not a video")
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi"), bad], 3)
+    assert list(window._project.videos) == ["a"]
+    assert list(StudioProject.load(project.folder).videos) == ["a"]
+
+
+def test_file_actions_are_disabled_while_extracting(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    window.extract([_clip(tmp_path / "a.avi")], 4, "uniform")
+    assert not any(a.isEnabled() for a in window._file_actions)
+    assert window.open_project(project.folder) is False
+    qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
+    assert all(a.isEnabled() for a in window._file_actions)
+
+
+def test_split_combo_ignores_the_wheel(qtbot, window, tmp_path):
+    from PyQt6.QtCore import QPoint, QPointF
+    from PyQt6.QtGui import QWheelEvent
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], 3)
+    window.show_editor(0)
+    before = window._project.frames[0].split
+    combo = window._split_combo
+    pos = QPointF(5, 5)
+    event = QWheelEvent(
+        pos,
+        combo.mapToGlobal(pos),
+        QPoint(0, 0),
+        QPoint(0, -120),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    QApplication.sendEvent(combo, event)
+    assert window._project.frames[0].split == before
+    assert combo.currentData() == before
+
+
+def test_stale_sam_status_leaves_the_hint_alone(qtbot, window, tmp_path):
+    window._sam_request_id = 5
+    window._hint.setText("kept")
+    window._on_sam_status(4, "Loading…")
+    assert window._hint.text() == "kept"
+    window._on_sam_status(5, "Segmenting…")
+    assert window._hint.text() == "Segmenting…"
+
+
+def test_removing_a_video_clears_undo(qtbot, window, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi"), _clip(tmp_path / "b.avi")], 2)
+    window.show_editor(2)
+    window._history.push(Edit(2, SKIP, False, True))
+    window._refresh_undo_buttons()
+    assert window._undo_btn.isEnabled()
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    window._grid.remove_video_requested.emit("a")
+    assert not window._history.can_undo
+    assert not window._undo_btn.isEnabled()

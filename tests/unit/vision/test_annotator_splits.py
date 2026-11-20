@@ -175,3 +175,17 @@ def test_leak_notice(project):
     for f in project.frames:
         f.split = "train"
     assert leak_notice(project) == ""
+
+
+def test_one_video_empty_val_message_does_not_mention_a_val_video(project, tmp_path):
+    from glider.vision.training.dataset import DatasetError, export_dataset
+
+    project.videos["a"] = "/x/a.mp4"
+    project.frames.extend(_frames("a", 4))
+    for f in project.frames:
+        f.split = "train"
+    _label_all(project, project.frames)
+    with pytest.raises(DatasetError) as e:
+        export_dataset(project)
+    assert "a val video" not in str(e.value)
+    assert "label more frames" in str(e.value)
