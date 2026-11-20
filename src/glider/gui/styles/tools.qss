@@ -803,10 +803,7 @@ QFrame#ReviewTopBar {
     background-color: #0b0f14;
     border-bottom: 1px solid #1e2530;
 }
-QLabel#ReviewTitle {
-    font-weight: 600;
-}
-/* The top bar's menus (Open, Zones, Export): one padding whatever the role,
+/* The top bar's menus (Open, Setup, View, Export): one padding whatever the role,
    so the primary Open is no taller than the rest, and the arrow centred in
    room of its own on the right rather than in the bottom-right corner. Their
    shared width is set in code (AnalysisWindow._even_out_menus), from the

@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMenu,
@@ -143,6 +144,22 @@ class _DropTarget(QWidget):
         if paths:
             event.acceptProposedAction()
             self.dropped.emit(paths)
+
+
+class _ClickablePill(StatusPill):
+    """A pill that does something when clicked (only while it is marked clickable)."""
+
+    clicked = pyqtSignal()
+
+    def set_clickable(self, on: bool, tip: str = "") -> None:
+        self._clickable = on
+        self.setCursor(Qt.CursorShape.PointingHandCursor if on else Qt.CursorShape.ArrowCursor)
+        self.setToolTip(tip)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802 - Qt override
+        super().mouseReleaseEvent(event)
+        if getattr(self, "_clickable", False) and event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
 
 
 def _settings() -> QSettings:
@@ -486,6 +503,8 @@ class AnalysisWindow(QMainWindow):
         self._body.addWidget(self._empty)
         self._body.addWidget(self._split)
         page.addWidget(self._body, 1)
+        self._body.currentChanged.connect(self._on_body_changed)
+        self._on_body_changed(0)
         self.setCentralWidget(central)
         self._build_status_bar()
 
@@ -497,7 +516,6 @@ class AnalysisWindow(QMainWindow):
         self._zone_table = self._inspector.zones
         self._summary = self._inspector.range_text
         self._session_text = self._inspector.summary
-        self._export_btn = self._inspector.export_btn
         self._trail_s = self._inspector.trail_s
         transport = self._transport
         self._play, self._clock, self._bout_label = transport.play, transport.clock, transport.bout
@@ -518,7 +536,6 @@ class AnalysisWindow(QMainWindow):
                 self._timeline_panel.addTab(panel.widget(), panel.title)
         self._build_bout_stepper()
         self._build_fixes()
-        self._export_btn.clicked.connect(self._export_window)
         self._inspector.grid_n.setValue(int(_settings().value(self._GRID_KEY, 3, type=int) or 3))
         self._inspector.grid_n.valueChanged.connect(self._on_grid_changed)
         self._trail_s.valueChanged.connect(self._apply_trail)
@@ -527,7 +544,6 @@ class AnalysisWindow(QMainWindow):
         self._bar.marker_changed.connect(self._marker_dragged)
         self._inspector.marker_picked.connect(self._go_to_marker)
         self._inspector.save_marker_btn.clicked.connect(self._add_range_marker)
-        self._inspector.export_markers_btn.clicked.connect(self._export_markers)
         self._timeline_panel.marker_btn.clicked.connect(lambda: self._add_point_marker())
         self._timeline_panel.range_marker_btn.clicked.connect(self._add_range_marker)
         retrieval = self._inspector.retrieval
@@ -550,7 +566,7 @@ class AnalysisWindow(QMainWindow):
     # construction
 
     def _even_out_menus(self) -> None:
-        """Open, Arena, Zones and Export at one width: the widest's, in this platform's font.
+        """Open, Setup, View and Export at one width: the widest's, in this platform's font.
 
         A fixed min-width in the stylesheet held only while every label fit
         inside it -- true of the macOS font, not of Windows', where three of
@@ -559,8 +575,7 @@ class AnalysisWindow(QMainWindow):
         """
         buttons = (
             self._open_btn,
-            self._arena_btn,
-            self._zones_btn,
+            self._setup_btn,
             self._view_btn,
             self._export_menu_btn,
         )
@@ -617,6 +632,7 @@ class AnalysisWindow(QMainWindow):
         nothing unless the gate's answer or the shown session changed since
         the last sync (_adopt syncs each session it shows).
         """
+        self._type_menu.setTitle(f"Experiment type: {self._type_combo.currentText()}")
         gate = self._has_analysis(ANALYSIS_PUP_RETRIEVAL)
         if (gate, self._shown) == self._retrieval_synced:
             return
@@ -634,32 +650,6 @@ class AnalysisWindow(QMainWindow):
         row = QHBoxLayout(bar)
         row.setContentsMargins(14, 6, 10, 6)
         row.setSpacing(10)
-        title = QLabel("Session Review")
-        title.setObjectName("ReviewTitle")
-        row.addWidget(title)
-        self._path_label = QLabel("No session loaded")
-        set_text_role(self._path_label, "muted")
-        row.addWidget(self._path_label)
-        self._session_state = StatusPill("None loaded")
-        self._hw_pill = StatusPill("")
-        self._hw_pill.setVisible(False)
-        self._scale_pill = StatusPill("")
-        self._scale_pill.setVisible(False)
-        for pill in (self._session_state, self._hw_pill, self._scale_pill):
-            row.addWidget(pill)
-        row.addStretch(1)
-        self._experiment_type = ""
-        self._type_combo = QComboBox()
-        self._type_combo.setToolTip(
-            "The experiment's protocol. Pup Retrieval shows retrieval scoring."
-        )
-        for experiment_type in EXPERIMENT_TYPES:
-            self._type_combo.addItem(type_label(experiment_type), experiment_type)
-        self._type_combo.currentIndexChanged.connect(self._on_type_picked)
-        type_label_widget = QLabel("Protocol")
-        type_label_widget.setBuddy(self._type_combo)
-        row.addWidget(type_label_widget)
-        row.addWidget(self._type_combo)
         self._open_btn, _ = self._menu_button(
             "Open",
             [
@@ -670,41 +660,51 @@ class AnalysisWindow(QMainWindow):
             ],
             role="primary",
         )
-        self._arena_btn, _ = self._menu_button(
-            "Arena",
-            [
-                ("Draw arena…", self._draw_arena),
-                ("Load arena…", self._load_arena),
-            ],
-        )
-        self._zones_btn, _ = self._menu_button(
-            "Zones",
-            [
-                ("Draw zones…", self._draw_zones),
-                ("Load zones…", self._load_zones),
-                ("Clear zones", self._clear_zones),
-            ],
-        )
+        row.addWidget(self._open_btn)
+        # The session's name and pills: shown once one is open (_on_body_changed).
+        self._session_info = QWidget()
+        info = QHBoxLayout(self._session_info)
+        info.setContentsMargins(0, 0, 0, 0)
+        info.setSpacing(10)
+        self._path_label = QLabel("No session loaded")
+        set_text_role(self._path_label, "muted")
+        info.addWidget(self._path_label)
+        self._session_state = StatusPill("None loaded")
+        self._hw_pill = StatusPill("")
+        self._hw_pill.setVisible(False)
+        self._scale_pill = _ClickablePill("")
+        self._scale_pill.setVisible(False)
+        # Looked up when clicked, not bound now: the handler stays replaceable.
+        self._scale_pill.clicked.connect(lambda: self._set_scale())
+        for pill in (self._session_state, self._hw_pill, self._scale_pill):
+            info.addWidget(pill)
+        row.addWidget(self._session_info)
+        row.addStretch(1)
+        self._build_setup_menu()
+        # Filled by _build_view_menu once the panels exist.
+        self._view_btn, _ = self._menu_button("View", [])
+        self._view_btn.setToolTip("Show or hide the window's panels and set the trail")
         self._export_menu_btn, export_actions = self._menu_button(
             "Export",
             [
-                ("Range stats (CSV)…", self._export_window),
+                ("This range (CSV)…", self._export_window),
+                ("Markers (CSV)…", self._export_markers),
                 ("Epoch table, tidy (CSV)…", lambda: self._export_epochs("tidy")),
                 ("Epoch table, wide (CSV)…", lambda: self._export_epochs("wide")),
                 ("Time bins (CSV)…", self._export_bins),
-                ("Markers (CSV)…", self._export_markers),
-                ("Retrieval tables (CSV)…", self._export_retrieval),
-                ("Nest distance per frame (CSV)…", self._export_nest_distance),
                 ("Heatmap (PNG + CSV)…", self._export_heatmap),
                 ("Current frame (PNG)…", self._export_frame),
+                ("Retrieval tables (CSV)…", self._export_retrieval),
+                ("Nest distance per frame (CSV)…", self._export_nest_distance),
             ],
         )
         self._export_window_action = export_actions[0]
-        self._export_retrieval_action, self._export_nest_action = export_actions[-4:-2]
+        self._export_heatmap_btn = export_actions[5]
+        self._export_retrieval_action, self._export_nest_action = export_actions[7:9]
+        self._export_menu_btn.menu().insertSeparator(self._export_retrieval_action)
         # Shown under a pup-retrieval preset only (_apply_experiment_type).
         for action in (self._export_retrieval_action, self._export_nest_action):
             action.setVisible(False)
-        self._export_heatmap_btn = export_actions[-2]
         self._export_window_action.setEnabled(False)
         self._export_heatmap_btn.setEnabled(False)
         self._tour_btn, _ = self._menu_button(
@@ -712,19 +712,59 @@ class AnalysisWindow(QMainWindow):
         )
         set_button_role(self._tour_btn, "ghost")
         self._tour_btn.setObjectName("ReviewHelp")
-        # Filled by _build_view_menu once the panels exist.
-        self._view_btn, _ = self._menu_button("View", [])
-        self._view_btn.setToolTip("Show or hide the window's panels")
-        for button in (
-            self._open_btn,
-            self._arena_btn,
-            self._zones_btn,
-            self._view_btn,
-            self._export_menu_btn,
-            self._tour_btn,
-        ):
+        for button in (self._setup_btn, self._view_btn, self._export_menu_btn, self._tour_btn):
             row.addWidget(button)
         return bar
+
+    def _build_setup_menu(self) -> None:
+        """Setup: what changes the analysis -- experiment type, arena, zones, scale, fixes."""
+        self._setup_btn, _ = self._menu_button("Setup", [])
+        menu = self._setup_btn.menu()
+        self._experiment_type = ""
+        # The type's holder, never shown: set_experiment_type keeps a custom
+        # type's row in it, and the menu below is drawn from it on each open.
+        self._type_combo = QComboBox(self)
+        self._type_combo.setVisible(False)
+        for experiment_type in EXPERIMENT_TYPES:
+            self._type_combo.addItem(type_label(experiment_type), experiment_type)
+        self._type_combo.currentIndexChanged.connect(self._on_type_picked)
+        self._type_menu = menu.addMenu("")
+        self._type_menu.setToolTipsVisible(True)
+        self._type_menu.aboutToShow.connect(self._fill_type_menu)
+        self._fill_type_menu()
+        arena = menu.addMenu("Arena")
+        arena.addAction("Draw arena…", self._draw_arena)
+        arena.addAction("Load arena…", self._load_arena)
+        zones = menu.addMenu("Zones")
+        zones.addAction("Draw zones…", self._draw_zones)
+        zones.addAction("Load zones…", self._load_zones)
+        zones.addAction("Clear zones", self._clear_zones)
+        self._scale_action = menu.addAction("Scale…", lambda: self._set_scale())
+        self._scale_action.setEnabled(False)  # a pup video's (_show_scale)
+        menu.addSeparator()
+        # Shown only when the session needs them (_adopt), like the Session tab's buttons.
+        self._pick_poses_action = menu.addAction("Choose pose CSV…", self._choose_pose_csv)
+        self._fix_resolution_action = menu.addAction(
+            "Set arena size from video…", self._resolution_from_video
+        )
+        for action in (self._pick_poses_action, self._fix_resolution_action):
+            action.setVisible(False)
+
+    def _fill_type_menu(self) -> None:
+        """The experiment types, from the holder, with the current one checked."""
+        menu, combo = self._type_menu, self._type_combo
+        menu.setTitle(f"Experiment type: {combo.currentText()}")
+        menu.clear()
+        for index in range(combo.count()):
+            action = menu.addAction(combo.itemText(index))
+            action.setCheckable(True)
+            action.setChecked(index == combo.currentIndex())
+            action.triggered.connect(lambda _=False, i=index: combo.setCurrentIndex(i))
+
+    def _on_body_changed(self, index: int) -> None:
+        """The controls that need a session show with the editor, not on the empty card."""
+        for widget in (self._session_info, self._setup_btn, self._view_btn, self._export_menu_btn):
+            widget.setVisible(index == 1)
 
     def _build_empty_card(self) -> QWidget:
         page = _DropTarget()
@@ -740,8 +780,7 @@ class AnalysisWindow(QMainWindow):
         title.setFont(font)
         column.addWidget(title)
         hint = QLabel(
-            "A recording folder, a pose or ethogram CSV, or a whole cohort folder. "
-            "Or drop it here."
+            "A recording folder, an ethogram CSV, or a whole cohort folder. " "Or drop it here."
         )
         set_text_role(hint, "muted")
         column.addWidget(hint)
@@ -780,14 +819,7 @@ class AnalysisWindow(QMainWindow):
         bar = self.statusBar()
         bar.setObjectName("ReviewStatus")
         bar.setSizeGripEnabled(False)
-        self._status = QLabel("")
-        self._status.setFont(data_font(9))
-        set_text_role(self._status, "muted")
-        self._status_path = QLabel("")
-        self._status_path.setFont(data_font(9))
-        set_text_role(self._status_path, "muted")
-        bar.addWidget(self._status, 1)
-        bar.addPermanentWidget(self._status_path)
+        # Transient messages only: the session's path is the top bar's tooltip.
 
     def _wire_transport(self) -> None:
         t = self._transport
@@ -830,9 +862,6 @@ class AnalysisWindow(QMainWindow):
             _dress_table(table)
         self._timeline_panel.addTab(self._epoch, "Epoch table")
         self._timeline_panel.currentChanged.connect(self._on_tab_changed)
-        self._inspector.epoch_btn.clicked.connect(
-            lambda: self._tables.setCurrentWidget(self._epoch)
-        )
 
     def _build_bout_stepper(self) -> None:
         # Jumping between bouts, which is what reviewing an ethogram actually
@@ -903,6 +932,8 @@ class AnalysisWindow(QMainWindow):
         self._add_view_action(menu, "sessions", "Sessions list", True, self._sync_pool)
         for key, label, widget in builtins:
             self._add_view_action(menu, key, label, True, lambda on, w=widget: w.setVisible(on))
+        menu.addSeparator()
+        menu.addAction("Trail length…", self._ask_trail_length)
         if self._panels.panels:
             menu.addSeparator()
         for panel in self._panels.panels:
@@ -914,6 +945,20 @@ class AnalysisWindow(QMainWindow):
                 False,
                 lambda on, p=panel: self._show_plugin_panel(p, on),
             )
+
+    def _ask_trail_length(self) -> None:
+        trail = self._trail_s
+        seconds, ok = QInputDialog.getDouble(
+            self,
+            "Trail length",
+            "Seconds of path drawn behind the animal:",
+            trail.value(),
+            trail.minimum(),
+            trail.maximum(),
+            1,
+        )
+        if ok:
+            trail.setValue(seconds)
 
     def _sync_pool(self, wanted: bool | None = None) -> None:
         """The sessions list: shown when wanted (View) and there is a choice to make."""
@@ -977,7 +1022,7 @@ class AnalysisWindow(QMainWindow):
             "canvas": self._canvas,
             "ethogram": self._bar,
             "epoch_table": self._epoch,
-            "zones": self._zones_btn,
+            "zones": self._setup_btn,
             "export": self._export_menu_btn,
         }
 
@@ -1482,10 +1527,15 @@ class AnalysisWindow(QMainWindow):
         # A recording has no pose sidecar to repair -- its poses are what the
         # rig logged live, and its resolution comes from the rig, not a CSV.
         is_recording = Path(path).is_dir()
-        self._pick_poses.setVisible(view.xy is None and not is_recording)
-        self._fix_resolution.setVisible(
-            view.xy is not None and view.resolution is None and not is_recording
-        )
+        needs_poses = view.xy is None and not is_recording
+        needs_size = view.xy is not None and view.resolution is None and not is_recording
+        for fix, needed in (
+            (self._pick_poses, needs_poses),
+            (self._pick_poses_action, needs_poses),
+            (self._fix_resolution, needs_size),
+            (self._fix_resolution_action, needs_size),
+        ):
+            fix.setVisible(needed)
 
         has_video = view.video_path is not None
         self._video_on.setEnabled(has_video)
@@ -1508,7 +1558,6 @@ class AnalysisWindow(QMainWindow):
         self._show_scale()
 
         self._show_session_text(path, view)
-        self._update_status()
         self._publish_markers()
         self._publish_panels(path, view)
 
@@ -1565,11 +1614,19 @@ class AnalysisWindow(QMainWindow):
         )
 
     def _show_scale(self) -> None:
+        # Set scale measures a pup video and keeps it in that video's setup.
+        settable = self._editable_state() is not None
+        self._scale_action.setEnabled(settable)
         self._scale_pill.setVisible(True)
         if self._view.px_per_mm:
             self._scale_pill.set_state("idle", f"{self._view.px_per_mm:.2f} px/mm")
+            self._scale_pill.set_clickable(False)
+        elif settable:
+            self._scale_pill.set_state("warn", "Uncalibrated · Set scale…")
+            self._scale_pill.set_clickable(True, "Measure the scale on this video")
         else:
             self._scale_pill.set_state("warn", "Uncalibrated")
+            self._scale_pill.set_clickable(False, "No calibration found: distances unavailable")
 
     # ------------------------------------------------------------------
     # pup retrieval
@@ -2010,31 +2067,6 @@ class AnalysisWindow(QMainWindow):
         self._refresh_retrieval()
 
     # ------------------------------------------------------------------
-
-    def _update_status(self) -> None:
-        view = self._view
-        if view is None:
-            self._status.setText("")
-            return
-        parts = [f"{view.fps:.2f} fps", f"{view.n_rows:,} rows"]
-        if view.pose_path is not None:
-            parts.append(f"poses {view.pose_path.name}")
-        if view.video_path is not None:
-            parts.append(f"video {view.video_path.name}")
-        timeline = self._bar.timeline()
-        if timeline is not None and timeline.lanes:
-            parts.append(f"{len(timeline.lanes)} hardware lanes")
-        shown = 0 <= self._shown < len(self._recordings_of)
-        recording = self._recordings_of[self._shown] if shown else None
-        if recording is not None:
-            parts.append(f"events {len(recording.events):,} rows")
-            parts.append(f"tracking {len(recording.tracking):,} rows")
-        markers = self._shown_markers()
-        if markers:
-            parts.append(f"{len(markers)} marker{'' if len(markers) == 1 else 's'}")
-        self._status.setText("   ·   ".join(parts))
-        self._status_path.setText(_short_path(self._ethogram_csv, keep=4))
-        self._status_path.setToolTip(str(self._ethogram_csv))
 
     def _hidden_key(self) -> str:
         """Per session on disk: ids repeat across cohorts (sessions/m01/)."""
@@ -2711,7 +2743,6 @@ class AnalysisWindow(QMainWindow):
             problem is None and self._bar.selection() is not None
         )
         self._refresh_inside()
-        self._update_status()
         self._fill_epochs()
 
     def _refresh_inside(self) -> None:
@@ -2958,7 +2989,6 @@ class AnalysisWindow(QMainWindow):
         self._fill_exploration(start, end)
         self._fill_hardware(start, end)
         self._apply_heatmap()
-        self._export_btn.setEnabled(True)
         self._export_window_action.setEnabled(True)
         self._inspector.save_marker_btn.setEnabled(self._marker_problem() is None)
         self._refresh_inside()
@@ -2974,7 +3004,6 @@ class AnalysisWindow(QMainWindow):
         self._epoch.clear()
         self._tables.setTabText(self._tables.indexOf(self._epoch), "Epoch table")
         self._fill_epochs()  # the cohort's ranges stay, less the current one
-        self._export_btn.setEnabled(False)
         self._export_window_action.setEnabled(False)
         self._canvas.set_visited(None)
         self._apply_heatmap()

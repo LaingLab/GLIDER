@@ -606,9 +606,9 @@ class TestACohortOfSessions:
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
-        assert win._export_btn.isEnabled() is False
+        assert win._export_window_action.isEnabled() is False
         win._bar.set_selection(0, 99)
-        assert win._export_btn.isEnabled() is True
+        assert win._export_window_action.isEnabled() is True
 
 
 class TestClearingTheRangeClearsItsNumbers:
@@ -1566,7 +1566,7 @@ class TestEditingKeys:
         win._bar.set_selection(100, 199)
         _key(win, Qt.Key.Key_Escape)
         assert win._bar.selection() is None
-        assert win._export_btn.isEnabled() is False
+        assert win._export_window_action.isEnabled() is False
 
     def test_l_plays_and_doubles(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
@@ -1956,9 +1956,10 @@ class TestTheTopBarMenus:
     def test_the_menu_buttons_are_one_size(self, qtbot):
         win = AnalysisWindow()
         qtbot.addWidget(win)
+        win._body.setCurrentIndex(1)  # the editor's controls, as with a session open
         win.show()
         qtbot.waitExposed(win)
-        buttons = (win._open_btn, win._zones_btn, win._export_menu_btn)
+        buttons = (win._open_btn, win._setup_btn, win._export_menu_btn)
         assert len({(b.width(), b.height()) for b in buttons}) == 1
         assert win._tour_btn.height() == win._open_btn.height()
 
@@ -1972,9 +1973,10 @@ class TestTheTopBarMenus:
         qtbot.addWidget(win)
         win._export_menu_btn.setText("Export everything")
         win._even_out_menus()
+        win._body.setCurrentIndex(1)
         win.show()
         qtbot.waitExposed(win)
-        buttons = (win._open_btn, win._zones_btn, win._export_menu_btn)
+        buttons = (win._open_btn, win._setup_btn, win._export_menu_btn)
         assert len({b.width() for b in buttons}) == 1
 
 
@@ -2273,11 +2275,13 @@ class TestMarkersInTheWindow:
         win._pool.select(1 - win._shown)
         assert [m.name for m in win._bar.markers()] == ["Stim"]
 
-    def test_the_status_bar_counts_markers(self, qtbot, tmp_path):
+    def test_the_markers_tab_counts_markers(self, qtbot, tmp_path):
+        """Once the status bar's count; the status bar now holds messages only."""
         win, _folder = self._win(qtbot, tmp_path)
         _key(win, Qt.Key.Key_M)
         win._editor.close()
-        assert "1 marker" in win._status.text()
+        tabs = win._inspector
+        assert "Markers (1)" in [tabs.tabText(i) for i in range(tabs.count())]
 
 
 class TestTimeBinExport:
@@ -2635,23 +2639,14 @@ class TestTheEpochTableInTheWindow:
 
     def test_the_export_menu(self, qtbot, tmp_path):
         win = self._cohort(qtbot, tmp_path)
-        assert [a.text() for a in win._export_menu_btn.menu().actions()] == [
-            "Range stats (CSV)…",
-            "Epoch table, tidy (CSV)…",
-            "Epoch table, wide (CSV)…",
-            "Time bins (CSV)…",
-            "Markers (CSV)…",
-            "Retrieval tables (CSV)…",
-            "Nest distance per frame (CSV)…",
-            "Heatmap (PNG + CSV)…",
-            "Current frame (PNG)…",
-        ]
+        texts = _menu_texts(win._export_menu_btn.menu())
+        assert "Epoch table, tidy (CSV)…" in texts and "Epoch table, wide (CSV)…" in texts
 
-    def test_the_markers_tab_opens_the_epoch_table(self, qtbot, tmp_path):
+    def test_the_epoch_table_is_a_timeline_tab(self, qtbot, tmp_path):
+        """Reached from its tab under the timeline (the Markers tab's button is gone)."""
         win = self._cohort(qtbot, tmp_path)
-        win._tables.setCurrentIndex(0)
-        win._inspector.epoch_btn.click()
-        assert win._tables.currentWidget() is win._epoch
+        tabs = win._tables
+        assert tabs.tabText(tabs.indexOf(win._epoch)).startswith("Epoch table")
 
     def test_the_current_range_survives_a_switch_to_a_session_it_does_not_reach(
         self, qtbot, tmp_path
@@ -2836,14 +2831,14 @@ class TestReviewFixes:
 
 
 class TestExperimentType:
-    def test_the_selector_is_labelled_protocol(self, qtbot):
-        from PyQt6.QtWidgets import QLabel
-
+    def test_the_selector_is_named_experiment_type(self, qtbot):
+        """Once a "Protocol" box in the bar; now a Setup submenu that names the choice."""
         win = AnalysisWindow()
         qtbot.addWidget(win)
-        [label] = [lab for lab in win.findChildren(QLabel) if lab.buddy() is win._type_combo]
-        assert label.text() == "Protocol"
-        assert "protocol" in win._type_combo.toolTip().lower()
+        assert win._type_menu.menuAction() in win._setup_btn.menu().actions()
+        assert win._type_menu.title() == "Experiment type: None"
+        win.set_experiment_type("Pup Retrieval (P4)")
+        assert win._type_menu.title() == "Experiment type: Pup Retrieval (P4)"
 
     def test_starts_at_none_and_follows_set_experiment_type(self, qtbot):
         win = AnalysisWindow()
@@ -3998,3 +3993,134 @@ class TestTheEmptyState:
         assert 1 in pages
         tour._finish()  # Skip or Esc mid-tour
         assert win._body.currentIndex() == 0
+
+
+def _menu_texts(menu):
+    return [a.text() for a in menu.actions() if not a.isSeparator()]
+
+
+class TestTheTopBar:
+    """Open ▾ · session + pills · Setup ▾ · View ▾ · Export ▾ · ?: one place for each job."""
+
+    def test_setup_menu_holds_analysis_setup(self, qtbot, tmp_path):
+        from PyQt6.QtWidgets import QLabel
+
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        menu = win._setup_btn.menu()
+        assert _menu_texts(menu) == [
+            "Experiment type: None",
+            "Arena",
+            "Zones",
+            "Scale…",
+            "Choose pose CSV…",
+            "Set arena size from video…",
+        ]
+        by_text = {a.text(): a for a in menu.actions()}
+        assert _menu_texts(by_text["Arena"].menu()) == ["Draw arena…", "Load arena…"]
+        assert _menu_texts(by_text["Zones"].menu()) == [
+            "Draw zones…",
+            "Load zones…",
+            "Clear zones",
+        ]
+        types = _menu_texts(by_text["Experiment type: None"].menu())
+        assert types[0] == "None" and "Pup Retrieval" in types
+        # The old Protocol box is gone from the bar.
+        assert win._type_combo.isHidden()
+        assert not [lab for lab in win.findChildren(QLabel) if lab.text() == "Protocol"]
+        # The fixes show only when they apply, as the Session tab's buttons do.
+        win.load(_session(tmp_path / "v", with_resolution=False))
+        assert not win._pick_poses_action.isVisible()
+        assert win._fix_resolution_action.isVisible()
+
+    def test_export_menu_is_the_one_export_place(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        assert _menu_texts(win._export_menu_btn.menu()) == [
+            "This range (CSV)…",
+            "Markers (CSV)…",
+            "Epoch table, tidy (CSV)…",
+            "Epoch table, wide (CSV)…",
+            "Time bins (CSV)…",
+            "Heatmap (PNG + CSV)…",
+            "Current frame (PNG)…",
+            "Retrieval tables (CSV)…",
+            "Nest distance per frame (CSV)…",
+        ]
+        inspector_buttons = [b.text() for b in win._inspector.findChildren(QPushButton)]
+        assert not [t for t in inspector_buttons if "Export" in t or "Epoch" in t]
+
+    def test_experiment_type_reveals_retrieval(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_video(_pup_video(tmp_path))
+        inspector = win._inspector
+        assert not inspector.isTabVisible(inspector.indexOf(inspector.retrieval))
+        types = win._type_menu
+        [pick] = [a for a in types.actions() if a.text() == "Pup Retrieval"]
+        with qtbot.waitSignal(win.experiment_type_chosen) as sig:
+            pick.trigger()
+        assert sig.args == ["Pup Retrieval"]
+        assert inspector.isTabVisible(inspector.indexOf(inspector.retrieval))
+        assert win._export_retrieval_action.isVisible()
+        assert win._export_nest_action.isVisible()
+        assert types.title() == "Experiment type: Pup Retrieval"
+        types.aboutToShow.emit()
+        assert [a.text() for a in types.actions() if a.isChecked()] == ["Pup Retrieval"]
+
+    def test_uncalibrated_pill_opens_scale(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        calls = []
+        monkeypatch.setattr(win, "_set_scale", lambda: calls.append("pill"))
+        [scale] = [a for a in win._setup_btn.menu().actions() if a.text() == "Scale…"]
+        # An ethogram has no setup to keep a scale in: nothing to click.
+        win.load(_session(tmp_path / "etho"))
+        assert win._scale_pill.text() == "Uncalibrated"
+        assert not scale.isEnabled()
+        qtbot.mouseClick(win._scale_pill, Qt.MouseButton.LeftButton)
+        assert calls == []
+        win.load_video(_pup_video(tmp_path / "pups"))
+        assert win._scale_pill.text() == "Uncalibrated · Set scale…"
+        qtbot.mouseClick(win._scale_pill, Qt.MouseButton.LeftButton)
+        scale.trigger()
+        assert calls == ["pill", "pill"]
+
+    def test_session_controls_wait_for_a_session(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        needs_a_session = (
+            win._setup_btn,
+            win._view_btn,
+            win._export_menu_btn,
+            win._session_info,
+        )
+        assert all(w.isHidden() for w in needs_a_session)
+        assert not win._open_btn.isHidden() and not win._tour_btn.isHidden()
+        win.load(_session(tmp_path / "v"))
+        assert not any(w.isHidden() for w in needs_a_session)
+
+    def test_view_menu_sets_trail_length(self, qtbot, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QInputDialog.getDouble",
+            lambda *a, **k: (7.5, True),
+        )
+        [trail] = [a for a in win._view_btn.menu().actions() if a.text() == "Trail length…"]
+        trail.trigger()
+        assert win._trail_s.value() == pytest.approx(7.5)
+
+    def test_the_status_bar_holds_messages_only(self, qtbot):
+        from PyQt6.QtWidgets import QLabel
+
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        assert win.statusBar().findChildren(QLabel) == []
+
+    def test_tour_targets_point_at_the_new_menus(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        targets = win.tour_targets()
+        assert targets["zones"] is win._setup_btn
+        assert targets["export"] is win._export_menu_btn

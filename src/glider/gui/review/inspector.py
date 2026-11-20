@@ -39,7 +39,6 @@ from glider.gui.widgets.tool_ui import (
     hint,
     labelled_row,
     scroll_column,
-    set_button_role,
     set_text_role,
 )
 
@@ -180,13 +179,9 @@ class Inspector(QTabWidget):
         self.save_marker_btn = QPushButton("Save as range marker")
         self.save_marker_btn.setEnabled(False)
         self.save_marker_btn.setToolTip("Keep this range as a named range marker  (⇧M)")
-        self.export_btn = QPushButton("Export…")
-        self.export_btn.setEnabled(False)
-        self.export_btn.setToolTip("Write the selected range's per-session numbers to a CSV")
         buttons = QHBoxLayout()
         buttons.addWidget(self.save_marker_btn)
         buttons.addStretch(1)
-        buttons.addWidget(self.export_btn)
         card.addWidget(self.range_title)
         card.addWidget(self.range_detail)
         card.addWidget(self.inside)
@@ -292,14 +287,6 @@ class Inspector(QTabWidget):
             lambda item: self.marker_picked.emit(item.data(Qt.ItemDataRole.UserRole))
         )
         column.addWidget(self.marker_list, 1)
-        footer = QHBoxLayout()
-        self.epoch_btn = QPushButton("Epoch table ▸")
-        set_button_role(self.epoch_btn, "primary")
-        self.export_markers_btn = QPushButton("Export markers…")
-        footer.addWidget(self.epoch_btn)
-        footer.addWidget(self.export_markers_btn)
-        footer.addStretch(1)
-        column.addLayout(footer)
         return page
 
     # ------------------------------------------------------------------

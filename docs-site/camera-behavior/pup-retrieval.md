@@ -49,7 +49,7 @@ value shared across GLIDER, so set it once, anywhere:
 - the **Run** tab's title dropdown: pick the built-in **Pup Retrieval** preset,
   or one of your own presets named for it (`Pup Retrieval (P4, 5 min)` counts),
   or
-- the **Protocol ▾** selector in Session Review's top bar.
+- **Setup ▾ → Experiment type** in Session Review's top bar.
 
 Change it in one place and the others follow. The Batch Pose window's
 **Pup segmentation** card and Session Review's **Retrieval** tab, **Pups**
@@ -93,7 +93,7 @@ is reported on the video but never costs you its pose.
 
 ## Step 2 — set up each video in Session Review
 
-Open **Tools → Session Review**, make sure its **Protocol** selector reads
+Open **Tools → Session Review**, make sure **Setup ▾ → Experiment type** reads
 Pup Retrieval, and open your footage:
 
 - **Open → Open video…** for one video, or
