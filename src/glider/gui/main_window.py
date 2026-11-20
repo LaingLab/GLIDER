@@ -2436,6 +2436,7 @@ class MainWindow(QMainWindow):
 
         if getattr(self, "_behavior_window", None) is None:
             self._behavior_window = BehaviorAnalysisWindow(parent=None)
+            self._behavior_window.open_in_session_review.connect(self._open_session_review_on)
         self._behavior_window.show()
         self._behavior_window.raise_()
         self._behavior_window.activateWindow()
@@ -2510,6 +2511,15 @@ class MainWindow(QMainWindow):
         self._session_review_window.show()
         self._session_review_window.raise_()
         self._session_review_window.activateWindow()
+
+    def _open_session_review_on(self, folder: str) -> None:
+        """Open Session Review on a folder of sessions (Behavior Apply's output).
+
+        Separate from :meth:`_open_session_review`, which menu ``triggered(bool)``
+        signals call: a folder parameter there would receive their ``False``.
+        """
+        self._open_session_review()
+        self._session_review_window.load_folder(Path(folder))
 
     def _shell(self) -> AppShell | None:
         """The Builder frame, or ``None`` if there is not one yet.

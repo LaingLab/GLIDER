@@ -131,7 +131,8 @@ QPushButton:disabled {
 }
 
 /* The one action the screen exists to perform. */
-QPushButton[role="primary"] {
+QPushButton[role="primary"],
+QToolButton[role="primary"] {
     background-color: #38bdf8;
     color: #0a0e13;
     border: 1px solid #38bdf8;
@@ -139,12 +140,14 @@ QPushButton[role="primary"] {
     padding: 9px 20px;
 }
 
-QPushButton[role="primary"]:hover {
+QPushButton[role="primary"]:hover,
+QToolButton[role="primary"]:hover {
     background-color: #0ea5e9;
     border-color: #0ea5e9;
 }
 
-QPushButton[role="primary"]:pressed {
+QPushButton[role="primary"]:pressed,
+QToolButton[role="primary"]:pressed {
     background-color: #0284c7;
     border-color: #0284c7;
 }
@@ -153,10 +156,18 @@ QPushButton[role="primary"]:pressed {
    override against the shorthand above inconsistently, and a disabled Run
    otherwise kept the accent outline while losing its fill -- reading as an
    enabled button with unreadable text. */
-QPushButton[role="primary"]:disabled {
+QPushButton[role="primary"]:disabled,
+QToolButton[role="primary"]:disabled {
     background-color: #151c25;
     border: 1px solid #232c38;
     color: #5b6779;
+}
+
+/* A primary that carries a menu of the step's other actions. */
+QToolButton[role="primary"]::menu-button {
+    border: none;
+    border-left: 1px solid rgba(10, 14, 19, 0.35);
+    width: 18px;
 }
 
 /* Stop / cancel a run in flight. */
@@ -637,6 +648,44 @@ QTabBar::tab:selected {
 QTabBar::tab:hover:!selected {
     color: #c0c8d4;
     border-bottom: 2px solid #1e2530;
+}
+
+/* Behavior Analysis step strip: the number (or tick) beside each tab title. */
+QTabWidget#StepTabs > QTabBar::tab {
+    padding-left: 8px;
+}
+
+QLabel#StepNumber {
+    margin-left: 10px;
+    border-radius: 9px;  /* geometric */
+    font-size: 11px;
+    font-weight: 600;
+    background-color: #151c25;
+    color: #94a3b8;
+}
+
+QLabel#StepNumber[state="current"] {
+    background-color: #38bdf8;
+    color: #0a0e13;
+}
+
+QLabel#StepNumber[state="done"] {
+    background-color: #4ade80;
+    color: #0a0e13;
+}
+
+/* Apply: "Scored N videos", with Show Files and Open in Session Review. */
+QFrame#ScoredBanner {
+    background-color: rgba(52, 211, 153, 0.10);
+    border: 1px solid rgba(52, 211, 153, 0.45);
+    border-radius: @RADIUS_MEDIUM@;
+}
+
+/* One footer per step: readiness message, Options, the primary action. */
+QFrame#StepFooter {
+    background-color: #0b0f14;
+    border: none;
+    border-top: 1px solid #1e2530;
 }
 
 /* === Scrollbars ====================================================== */
