@@ -10,10 +10,19 @@ from __future__ import annotations
 
 import random
 from collections import Counter
+from pathlib import Path
 
 from glider.vision.training.project import FrameRecord, StudioProject
 
-__all__ = ["SPLITS", "TARGETS", "assign_splits", "ensure_splits", "leaky_videos", "split_counts"]
+__all__ = [
+    "SPLITS",
+    "TARGETS",
+    "assign_splits",
+    "ensure_splits",
+    "leak_notice",
+    "leaky_videos",
+    "split_counts",
+]
 
 SPLITS = ("train", "val", "test")
 TARGETS = {"train": 0.7, "val": 0.2, "test": 0.1}
@@ -99,3 +108,20 @@ def leaky_videos(project: StudioProject) -> list[str]:
 def split_counts(project: StudioProject) -> dict[str, int]:
     counts = Counter(f.split for f in project.frames)
     return {s: counts[s] for s in SPLITS}
+
+
+def leak_notice(project: StudioProject) -> str:
+    """Why validation scores would be optimistic, or "" when no video leaks."""
+    leaky = leaky_videos(project)
+    if not leaky:
+        return ""
+    if len(project.videos) <= 1:
+        return (
+            "All frames come from one video \u2014 validation scores will look better than "
+            "they are. Add a second video for an honest check."
+        )
+    return "\n".join(
+        f"{Path(project.videos[k]).name} has frames in train and in val/test \u2014 "
+        "validation scores will look better than they are. Move its frames to one split."
+        for k in leaky
+    )

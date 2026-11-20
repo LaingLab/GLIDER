@@ -34,6 +34,7 @@ from glider.vision.training.project import (
     StudioProjectError,
     flip_pairs_from_names,
 )
+from glider.vision.training.splits import leaky_videos
 
 MOUSE = KeypointSchema.default_mouse().names
 
@@ -278,6 +279,7 @@ def test_export_writes_lists_and_yaml(project, tmp_path):
     _label_all(project, a + b)
     project.frames[0].skipped = True
     result = export_dataset(project)
+    assert result.split_by_video == (not leaky_videos(project))
     listed = []
     for name in ("train.txt", "val.txt", "test.txt"):
         if (project.folder / name).exists():

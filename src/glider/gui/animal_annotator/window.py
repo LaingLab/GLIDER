@@ -73,6 +73,7 @@ from glider.vision.training.project import (
     StudioProjectError,
 )
 from glider.vision.training.sam import DEFAULT_SAM_MODEL, SAM_MODELS
+from glider.vision.training.splits import leak_notice
 from glider.vision.training.templates import SkeletonTemplate, TemplateKeypoint, palette_colour
 
 logger = logging.getLogger(__name__)
@@ -1829,12 +1830,8 @@ class AnimalAnnotatorWindow(QMainWindow):
             f"{len(result.train)} training frame(s), {len(result.val)} validation frame(s)"
             f"{f', {len(result.test)} test frame(s)' if result.test else ''}."
         )
-        if not result.split_by_video:
-            text += (
-                "\n\nAll frames come from one video, so validation frames are from the "
-                "same session as training ones and the scores will look better than "
-                "they are. Add frames from a second video for an honest check."
-            )
+        if notice := leak_notice(self._project):
+            text += "\n\n" + notice
         QMessageBox.information(self, "Export dataset", text)
 
     # ------------------------------------------------------------------

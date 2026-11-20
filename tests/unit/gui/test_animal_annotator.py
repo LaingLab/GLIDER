@@ -211,6 +211,8 @@ def test_extract_label_and_export(qtbot, window, tmp_path):
             listed += (project.folder / name).read_text().splitlines()
     assert len(listed) == 7  # eight labelled, one skipped
     assert "validation frame(s)" in shown[0]
+    assert "a.avi has frames in train and in val/test" in shown[0]
+    assert "one video" not in shown[0]
 
 
 def test_labels_are_saved_as_you_go(qtbot, window, tmp_path):

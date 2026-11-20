@@ -12,6 +12,7 @@ from glider.vision.training.project import FrameRecord, StudioProject
 from glider.vision.training.splits import (
     assign_splits,
     ensure_splits,
+    leak_notice,
     leaky_videos,
     split_counts,
 )
@@ -147,6 +148,8 @@ def test_extract_migrates_a_legacy_project_first(project, tmp_path):
     val = {f.name for f in expected[1]}
     extract_frames(project, _clip(tmp_path / "c.avi"), 4, "uniform")
     assert all(f.split == ("val" if f.name in val else "train") for f in frames)
+    # migrated first, so a video is already wholly val and the new one trains
+    assert {f.split for f in project.frames if f.video == "c"} == {"train"}
 
 
 def test_deficit_rule_can_pick_test(project):
@@ -158,3 +161,17 @@ def test_deficit_rule_can_pick_test(project):
         f.split = "val"
     project.frames = a + b
     assert {f.split for f in _add(project, "c", 10)} == {"test"}
+
+
+def test_leak_notice(project):
+    assert leak_notice(project) == ""
+    _add(project, "a", 200)
+    assert leak_notice(project) == (
+        "All frames come from one video \u2014 validation scores will look better than "
+        "they are. Add a second video for an honest check."
+    )
+    project.videos["b"] = "/v/b.avi"
+    assert leak_notice(project).startswith("a.avi has frames in train and in val/test \u2014 ")
+    for f in project.frames:
+        f.split = "train"
+    assert leak_notice(project) == ""
