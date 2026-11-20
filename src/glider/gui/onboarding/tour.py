@@ -313,16 +313,17 @@ def session_review_steps() -> list[TourStep]:
         ),
         TourStep(
             "zones",
-            "Zones (optional)",
-            "Load or draw regions of interest and the Range tab reports time in "
-            "zone, entries and latency for the selected range.",
+            "Setup (optional)",
+            "Setup holds what changes the analysis: the experiment type, the arena, "
+            "zones and the scale. Draw or load zones and the Range tab reports time "
+            "in zone, entries and latency for the selected range.",
         ),
         TourStep(
             "export",
             "5 · Export",
-            "Export writes the range stats, the epoch table (tidy or wide) or the "
-            "markers to CSV, so the table on screen and the table in your analysis "
-            "are the same table.",
+            "Every export is here: the range stats, the markers, the epoch table "
+            "(tidy or wide), time bins and the heatmap, so the table on screen and "
+            "the table in your analysis are the same table.",
         ),
         TourStep(
             None,

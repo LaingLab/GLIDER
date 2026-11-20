@@ -19,13 +19,83 @@ def inspector(qtbot):
     return widget
 
 
-def test_it_has_range_session_markers_and_retrieval_tabs(inspector):
+def test_tab_order(inspector):
     assert [inspector.tabText(i) for i in range(inspector.count())] == [
         "Range",
-        "Session",
         "Markers",
+        "Session",
         "Retrieval",
     ]
+
+
+def test_range_tab_leads_with_behavior(inspector):
+    """Range card, then the behavior answer, then movement, exploration, the rest."""
+    column = inspector.range_card.parentWidget().layout()
+    order = [
+        inspector.range_card,
+        inspector.behavior_title,
+        inspector.bouts,
+        inspector.movement_title,
+        inspector.exploration_title,
+        inspector.exploration,
+        inspector.arena_prompt,
+        inspector.hardware_title,
+        inspector.hardware,
+        inspector.zones_title,
+        inspector.zones,
+    ]
+    positions = [column.indexOf(w) for w in order]
+    assert -1 not in positions and positions == sorted(positions)
+
+
+def test_empty_sections_hide(inspector):
+    sections = {
+        "behavior": (inspector.behavior_title, inspector.bouts),
+        "hardware": (inspector.hardware_title, inspector.hardware),
+        "zones": (inspector.zones_title, inspector.zones),
+    }
+    for widgets in sections.values():
+        assert all(w.isHidden() for w in widgets)
+    inspector.bouts.setRowCount(2)
+    inspector.zones.setRowCount(1)
+    inspector.set_hardware([("LED", "1.0 s on", QColor(colors.LANE_OUTPUT))])
+    for widgets in sections.values():
+        assert not any(w.isHidden() for w in widgets)
+    inspector.clear_range()
+    for widgets in sections.values():
+        assert all(w.isHidden() for w in widgets)
+    assert not inspector.movement_title.isHidden()  # movement always answers
+
+
+def test_exploration_prompts_for_arena(inspector):
+    assert not inspector.exploration_title.isHidden()  # the heading stays over the prompt
+    assert inspector.exploration.isHidden()
+    assert not inspector.arena_prompt.isHidden()
+    assert "Draw an arena to see exploration" in inspector.arena_prompt_text.text()
+    asked = []
+    inspector.draw_arena_requested.connect(lambda: asked.append(True))
+    inspector.draw_arena_btn.click()
+    assert asked == [True]
+    inspector.set_has_arena(True)
+    assert not inspector.exploration.isHidden()
+    assert inspector.arena_prompt.isHidden()
+    assert not inspector.exploration_title.isHidden()
+
+
+def test_the_movement_prose_is_the_tiles_tooltip(inspector):
+    inspector.set_movement_note("Frames 0-200\nno calibration")
+    assert all(t.toolTip() == "Frames 0-200\nno calibration" for t in inspector.movement_tiles)
+    inspector.clear_range()
+    assert all(t.toolTip() == "" for t in inspector.movement_tiles)
+
+
+def test_the_session_tab_holds_only_the_summary(inspector):
+    from PyQt6.QtWidgets import QAbstractButton, QAbstractSpinBox
+
+    session = inspector.widget(2)
+    assert inspector.tabText(2) == "Session"
+    assert not session.findChildren(QAbstractButton)
+    assert not session.findChildren(QAbstractSpinBox)
 
 
 def test_the_retrieval_tab_starts_hidden_until_the_window_shows_it(inspector):
@@ -123,11 +193,11 @@ def _rows():
 def test_markers_are_listed_and_counted(inspector):
     inspector.set_markers(_rows())
     assert inspector.marker_list.count() == 2
-    assert inspector.tabText(2) == "Markers (2)"
+    assert inspector.tabText(1) == "Markers (2)"
     assert "Stim" in inspector.marker_list.item(0).text()
     assert "lever jammed" in inspector.marker_list.item(1).text()
     inspector.set_markers([])
-    assert inspector.tabText(2) == "Markers"
+    assert inspector.tabText(1) == "Markers"
 
 
 def test_the_filters_show_one_kind(inspector):

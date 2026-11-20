@@ -40,20 +40,22 @@ the pup disappears into her mouth and comes out buried in the nest.
 
 ## Pick the Pup Retrieval protocol first
 
-Everything on this page appears only when the open experiment's **Protocol** is
-**Pup Retrieval**. Every other experiment sees none of it. The protocol is one
-value shared across GLIDER, so set it once, anywhere:
+Everything on this page except setting the scale appears only when the open
+experiment's **Protocol** is **Pup Retrieval**; every other experiment sees none
+of it. (**Setup ▾ → Scale…** and the top bar's **Uncalibrated** pill are there
+for every protocol, though Scale… stays greyed out until a pup video is open.) The protocol is one value shared across GLIDER, so set it
+once, anywhere:
 
 - the **Protocol** dropdown on the **Experiment** tab (also in **Experiment →
   Experiment Settings…**), or
 - the **Run** tab's title dropdown: pick the built-in **Pup Retrieval** preset,
   or one of your own presets named for it (`Pup Retrieval (P4, 5 min)` counts),
   or
-- the **Protocol ▾** selector in Session Review's top bar.
+- **Setup ▾ → Experiment type** in Session Review's top bar.
 
 Change it in one place and the others follow. The Batch Pose window's
-**Pup segmentation** card and Session Review's **Retrieval** tab, **Pups**
-toggle and retrieval exports all come and go with it. (**Open video…** is
+**Pup segmentation** card and Session Review's **Retrieval** tab, **Overlays ▾ → Pups**
+entry and retrieval exports all come and go with it. (**Open video…** is
 available for every protocol.)
 
 The built-in **Pup Retrieval** preset sets the protocol on whatever experiment
@@ -93,8 +95,8 @@ is reported on the video but never costs you its pose.
 
 ## Step 2 — set up each video in Session Review
 
-Open **Tools → Session Review**, make sure its **Protocol** selector reads
-Pup Retrieval, and open your footage:
+Open **Tools → Session Review** and open your footage (**Open → …**), then check
+that **Setup ▾ → Experiment type** reads Pup Retrieval:
 
 - **Open → Open video…** for one video, or
 - **Open → Open folder as cohort…** for a folder of them, grouped by treatment
@@ -144,7 +146,7 @@ litter.
 
 ## What's drawn
 
-With the **Pups** toggle on, the video shows:
+With **Overlays ▾ → Pups** ticked, the video shows:
 
 - the **nest** in force at that moment, as a dashed outline;
 - every pup's **outline**, numbered with its slot;
