@@ -580,7 +580,7 @@ class AnimalAnnotatorWindow(QMainWindow):
         splitter.addWidget(videos)
 
         self._gallery = GalleryView()
-        self._gallery.setToolTip("Double-click an image to label it")
+        self._gallery.setToolTip("Click an image to label it")
         self._gallery.frame_activated.connect(self._label_frame)
         splitter.addWidget(self._gallery)
         splitter.setStretchFactor(0, 0)

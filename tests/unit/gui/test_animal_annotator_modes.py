@@ -70,9 +70,7 @@ def test_animal_annotator_is_the_first_tool(main_window_factory):
 # ----------------------------------------------------------------------
 
 
-def test_gallery_shows_every_frame_four_across(qtbot, window, tmp_path):
-    from glider.gui.animal_annotator.gallery import COLUMNS
-
+def test_gallery_shows_every_frame_and_wraps(qtbot, window, tmp_path):
     project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
     window.open_project(project.folder)
     gallery = window._gallery
@@ -80,11 +78,10 @@ def test_gallery_shows_every_frame_four_across(qtbot, window, tmp_path):
     assert "No images" in gallery.empty_text
     _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=6)
     assert gallery.gallery_model.rowCount() == 6
-    assert COLUMNS == 4
     _extract(qtbot, window, [_clip(tmp_path / "b.avi")], per_video=20)  # enough to scroll
     gallery.doItemsLayout()
-    rows = [gallery.visualRect(gallery.gallery_model.index(i)).top() for i in range(5)]
-    assert rows[0] == rows[3] < rows[4]  # four on the first row, the fifth wraps
+    tops = [gallery.visualRect(gallery.gallery_model.index(i)).top() for i in range(26)]
+    assert tops[0] == tops[1] < tops[-1]  # tiles share a row, and later ones wrap below
 
 
 def test_no_project_shows_a_blank_gallery(window):
