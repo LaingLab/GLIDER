@@ -121,3 +121,40 @@ def test_leaky_videos(project):
     for f in project.frames:
         f.split = "train"
     assert leaky_videos(project) == []
+
+
+def test_ensure_splits_never_overwrites(project):
+    frames = _migrate_project(project)
+    hand = {
+        f.name: s
+        for f, s in zip(frames[:25], ["test", "val", "train", "val", "train"] * 5, strict=True)
+    }
+    for f in frames[:25]:
+        f.split = hand[f.name]
+    assert ensure_splits(project) is True
+    assert all(f.split == hand[f.name] for f in frames[:25])
+    assert all(f.split in ("train", "val", "test") for f in frames[25:])
+
+
+def test_extract_migrates_a_legacy_project_first(project, tmp_path):
+    frames = []
+    for v in "ab":
+        project.videos[v] = f"/v/{v}.avi"
+        frames += _frames(v, 6)
+    project.frames = list(frames)
+    _label_all(project, frames)
+    expected = split_frames(frames, project.val_fraction, project.seed)
+    val = {f.name for f in expected[1]}
+    extract_frames(project, _clip(tmp_path / "c.avi"), 4, "uniform")
+    assert all(f.split == ("val" if f.name in val else "train") for f in frames)
+
+
+def test_deficit_rule_can_pick_test(project):
+    project.videos.update(a="/v/a.avi", b="/v/b.avi")
+    a, b = _frames("a", 70), _frames("b", 20)
+    for f in a:
+        f.split = "train"
+    for f in b:
+        f.split = "val"
+    project.frames = a + b
+    assert {f.split for f in _add(project, "c", 10)} == {"test"}

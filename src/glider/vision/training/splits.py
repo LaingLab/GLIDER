@@ -63,25 +63,27 @@ def assign_splits(project: StudioProject, frames: list[FrameRecord]) -> None:
 def ensure_splits(project: StudioProject) -> bool:
     """Migration: split frames of a project made before splits were stored.
 
-    Reproduces the old export's split for labelled frames. True if anything
-    changed (the caller saves).
+    A project with no stored split at all gets the old export's split for its
+    labelled frames; otherwise only frames still without a split are filled and
+    existing ones are never touched. True if anything changed (the caller saves).
     """
     from glider.vision.training.dataset import split_frames
 
     if all(f.split for f in project.frames):
         return False
-    labelled = [f for f in project.frames if not f.skipped and project.is_labelled(f)]
-    train, val, by_video = split_frames(labelled, project.val_fraction, project.seed)
-    for f in val:
-        f.split = "val"
-    for f in train:
-        f.split = "train"
-    if by_video:
-        video_split = {f.video: f.split for f in labelled}
-        for f in project.frames:
-            if not f.split and f.video in video_split:
-                f.split = video_split[f.video]
-    assign_splits(project, project.frames)
+    if not any(f.split for f in project.frames):  # legacy project: nothing stored yet
+        labelled = [f for f in project.frames if not f.skipped and project.is_labelled(f)]
+        train, val, by_video = split_frames(labelled, project.val_fraction, project.seed)
+        for f in val:
+            f.split = "val"
+        for f in train:
+            f.split = "train"
+        if by_video:
+            video_split = {f.video: f.split for f in labelled}
+            for f in project.frames:
+                if not f.split and f.video in video_split:
+                    f.split = video_split[f.video]
+    assign_splits(project, project.frames)  # only ever fills frames with no split
     return True
 
 

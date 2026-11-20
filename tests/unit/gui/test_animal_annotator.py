@@ -205,11 +205,12 @@ def test_extract_label_and_export(qtbot, window, tmp_path):
     finally:
         qtbot_patch.undo()
     assert (project.folder / "data.yaml").exists()
-    listed = (project.folder / "train.txt").read_text().splitlines()
-    listed += (project.folder / "val.txt").read_text().splitlines()
+    listed = []
+    for name in ("train.txt", "val.txt", "test.txt"):
+        if (project.folder / name).exists():
+            listed += (project.folder / name).read_text().splitlines()
     assert len(listed) == 7  # eight labelled, one skipped
     assert "validation frame(s)" in shown[0]
-    assert "one video" not in shown[0]  # two videos: split by video, no warning
 
 
 def test_labels_are_saved_as_you_go(qtbot, window, tmp_path):

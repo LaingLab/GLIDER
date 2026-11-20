@@ -18,7 +18,7 @@ import numpy as np
 
 from glider.core.fileio import atomic_write_bytes
 from glider.vision.training.project import FrameRecord, StudioProject
-from glider.vision.training.splits import assign_splits
+from glider.vision.training.splits import assign_splits, ensure_splits
 from glider.vision.video_source import ExactFrameReader
 
 logger = logging.getLogger(__name__)
@@ -121,6 +121,7 @@ def extract_frames(
     if not cap.isOpened():
         raise OSError(f"cannot open video {video}")
     added: list[FrameRecord] = []
+    ensure_splits(project)  # migrate a legacy project before new frames are assigned
     try:
         count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         reader = ExactFrameReader(cap)

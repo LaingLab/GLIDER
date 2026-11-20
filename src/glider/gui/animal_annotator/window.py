@@ -1826,7 +1826,8 @@ class AnimalAnnotatorWindow(QMainWindow):
             return
         text = (
             f"Wrote {result.data_yaml}\n\n"
-            f"{len(result.train)} training frame(s), {len(result.val)} validation frame(s)."
+            f"{len(result.train)} training frame(s), {len(result.val)} validation frame(s)"
+            f"{f', {len(result.test)} test frame(s)' if result.test else ''}."
         )
         if not result.split_by_video:
             text += (
