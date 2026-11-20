@@ -576,21 +576,21 @@ def test_regate_is_disabled_without_pose_csvs(window, tmp_path):
     video = _ready_window(window, tmp_path)
     window._calibrations.set_arena(video, _arena())
     window._validate()
-    assert not window._regate_button.isEnabled()
+    assert not window._regate_action.isEnabled()
 
 
 def test_regate_is_disabled_by_an_unconfirmed_arena(window, tmp_path):
     video = _ready_window(window, tmp_path, with_csv=True)
     window._calibrations.set_arena(video, _arena(), confirmed=False)
     window._validate()
-    assert not window._regate_button.isEnabled()
+    assert not window._regate_action.isEnabled()
 
 
 def test_regate_is_enabled_with_a_confirmed_arena_and_a_csv(window, tmp_path):
     video = _ready_window(window, tmp_path, with_csv=True)
     window._calibrations.set_arena(video, _arena())
     window._validate()
-    assert window._regate_button.isEnabled()
+    assert window._regate_action.isEnabled()
 
 
 def _write_multi_animal(video, model="exp-7"):
@@ -616,20 +616,20 @@ def _write_multi_animal(video, model="exp-7"):
 def test_export_is_disabled_without_a_multi_animal_session(window, tmp_path):
     _ready_window(window, tmp_path, with_csv=True)  # single-animal CSV only
     window._validate()
-    assert not window._export_button.isEnabled()
+    assert not window._export_action.isEnabled()
 
 
 def test_export_is_disabled_with_no_pose_csvs_at_all(window, tmp_path):
     _ready_window(window, tmp_path)
     window._validate()
-    assert not window._export_button.isEnabled()
+    assert not window._export_action.isEnabled()
 
 
 def test_export_is_enabled_with_a_multi_animal_session(window, tmp_path):
     video = _ready_window(window, tmp_path)
     _write_multi_animal(video)
     window._validate()
-    assert window._export_button.isEnabled()
+    assert window._export_action.isEnabled()
 
 
 def test_export_worker_writes_the_four_row_file_and_reports_it(qtbot, tmp_path):

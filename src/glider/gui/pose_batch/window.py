@@ -16,18 +16,21 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QObject, QSettings, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QSettings, Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
@@ -95,6 +98,60 @@ class _Sources:
 
     def paths(self) -> list[Path]:
         return list(self._paths)
+
+
+class _StepStrip(QFrame):
+    """Model -> Videos -> Arenas -> Track, with the first unfinished step lit.
+
+    Display only: the window's validation decides what is done and hands the
+    counts in, so this can never disagree with what the Track button allows.
+    """
+
+    _NAMES = ("Model", "Videos", "Arenas", "Track")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("StepStrip")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        self._chips = []
+        for name in self._NAMES:
+            chip = QLabel(name)
+            chip.setObjectName("StepChip")
+            self._chips.append(chip)
+            row.addWidget(chip)
+        row.addStretch(1)
+        self._current = 0
+        self.set_progress(model_ok=False, videos=0, arenas=0)
+
+    def set_progress(self, *, model_ok: bool, videos: int, arenas: int) -> None:
+        arenas_ok = videos > 0 and arenas == videos
+        done = [model_ok, videos > 0, arenas_ok, False]
+        texts = [
+            "Model ✓" if model_ok else "Model",
+            f"Videos · {videos} ✓" if videos else "Videos",
+            (
+                (f"Arenas · {arenas} of {videos}" + (" ✓" if arenas_ok else ""))
+                if videos
+                else "Arenas"
+            ),
+            "Track",
+        ]
+        self._current = next((i for i, d in enumerate(done) if not d), len(done) - 1)
+        for i, (chip, text) in enumerate(zip(self._chips, texts, strict=True)):
+            chip.setText(text)
+            state = "done" if done[i] else ("current" if i == self._current else "todo")
+            chip.setProperty("state", state)
+            chip.style().unpolish(chip)
+            chip.style().polish(chip)
+
+    def steps_text(self) -> list[str]:
+        return [chip.text() for chip in self._chips]
+
+    def current(self) -> int:
+        """Index of the first step still to do (Track once the rest are done)."""
+        return self._current
 
 
 class _MetaWorker(QObject):
@@ -181,6 +238,25 @@ class PoseBatchWindow(QMainWindow):
         page.setContentsMargins(0, 0, 0, 0)
         page.setSpacing(0)
 
+        # Re-gate and Export live in the header's More menu. Neither is part of a
+        # batch: both read CSVs that are already on disk, and the cohort the
+        # re-gate exists for is already tracked, so it must stay reachable
+        # without a model or a run.
+        self._regate_action = QAction("Re-gate tracked CSVs…", self)
+        self._regate_action.setEnabled(False)
+        self._regate_action.triggered.connect(lambda: self._start_regate())
+
+        # Opt-in: the four-row file is derived fresh from the per-animal CSVs
+        # every time this runs, so it can never drift from them the way a
+        # parallel primary could.
+        self._export_action = QAction("Export multi-animal DLC CSV…", self)
+        self._export_action.setEnabled(False)
+        self._export_action.triggered.connect(lambda: self._start_export())
+
+        self._remove_all_action = QAction("Remove all videos", self)
+        self._remove_all_action.setEnabled(False)
+        self._remove_all_action.triggered.connect(lambda: self._remove_all())
+
         self._header = ToolHeader(
             "Batch Pose Tracking",
             "Run a YOLO-pose model over folders of video and write a DLC CSV beside each one",
@@ -194,6 +270,29 @@ class PoseBatchWindow(QMainWindow):
         self._tour_btn.clicked.connect(self.start_tour)
         self._header.add_action(self._tour_btn)
 
+        self._settings_button = QPushButton("⚙ Settings")
+        self._settings_button.setToolTip(
+            "Device, confidence, smoothing, subfolders, overwrite and the arenas file."
+        )
+        set_button_role(self._settings_button, "ghost")
+        self._settings_button.clicked.connect(self._show_settings)
+        self._header.add_action(self._settings_button)
+
+        self._more_button = QPushButton("More ▾")
+        set_button_role(self._more_button, "ghost")
+        more_menu = QMenu(self._more_button)
+        more_menu.addAction(self._regate_action)
+        more_menu.addAction(self._export_action)
+        more_menu.addAction(self._remove_all_action)
+        self._more_button.setMenu(more_menu)
+        self._header.add_action(self._more_button)
+
+        self._steps = _StepStrip()
+        strip = QHBoxLayout()
+        strip.setContentsMargins(GUTTER, GUTTER, GUTTER, 0)
+        strip.addWidget(self._steps)
+        page.addLayout(strip)
+
         body = QHBoxLayout()
         body.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
         body.setSpacing(GUTTER)
@@ -204,8 +303,6 @@ class PoseBatchWindow(QMainWindow):
         column.addWidget(self._build_model_group())
         column.addWidget(self._build_pup_group())
         column.addWidget(self._build_videos_group(), 1)
-        column.addWidget(self._build_filter_group())
-        column.addWidget(self._build_options_group())
         column.addStretch(0)
         body.addWidget(area, 1)
 
@@ -218,25 +315,6 @@ class PoseBatchWindow(QMainWindow):
         self._cancel_button.setVisible(True)
         self._cancel_button.setEnabled(False)
         self._cancel_button.clicked.connect(self._cancel)
-
-        # Beside Run rather than in a menu: the cohort this exists for is
-        # already tracked, so for those 61 sessions this button *is* the action
-        # the window performs, and re-running inference to apply a gate would
-        # cost hours of GPU time for a result the CSVs already contain.
-        self._regate_button = QPushButton("Re-gate tracked CSVs")
-        set_button_role(self._regate_button, "ghost")
-        self._regate_button.setEnabled(False)
-        self._regate_button.clicked.connect(self._start_regate)
-        rail.card.add(self._regate_button)
-
-        # Opt-in, and never part of a batch: the four-row file is derived
-        # fresh from the per-animal CSVs every time this runs, so it can
-        # never drift from them the way a parallel primary could.
-        self._export_button = QPushButton("Export multi-animal DLC CSV")
-        set_button_role(self._export_button, "ghost")
-        self._export_button.setEnabled(False)
-        self._export_button.clicked.connect(self._start_export)
-        rail.card.add(self._export_button)
 
         # Hidden until a batch starts: two empty bars sitting at zero read as
         # a run that has stalled rather than one that has not begun.
@@ -261,20 +339,41 @@ class PoseBatchWindow(QMainWindow):
         rail.setFixedWidth(400)
         body.addWidget(rail)
 
+        self._build_settings_popup()
         self.setCentralWidget(central)
         # Opened with parent=None, so nothing hands it the app theme.
         apply_tool_theme(self)
+        apply_tool_theme(self._settings_popup)
 
     def _build_model_group(self) -> Card:
+        """The model as two short rows: the weights (and Animals), the bodyparts."""
         card = Card("Model")
         self._model_card = card
 
+        # Shows the file name only; the full path is in the tooltip.
         self._model_field = QLineEdit()
         self._model_field.setReadOnly(True)
         self._model_field.setPlaceholderText("Select a trained YOLO-pose .pt")
-        browse = QPushButton("Browse…")
-        browse.clicked.connect(self._choose_model)
-        card.add_row("Weights", self._model_field, browse)
+        self._model_button = QPushButton("Choose model…")
+        self._model_button.clicked.connect(self._choose_model)
+
+        self._animals_spin = QSpinBox()
+        self._animals_spin.setRange(1, 16)
+        self._animals_spin.setValue(1)
+        self._animals_spin.setToolTip(
+            "How many animals are in each video. This is not detected -- it is "
+            "the constraint that lets tracking stitch a fragmented track back "
+            "into one animal. Too high and one animal is split into two that "
+            "each vanish for half the video; too low and a real animal is "
+            "dropped entirely."
+        )
+        card.add_row(
+            "Weights",
+            self._model_field,
+            self._model_button,
+            set_text_role(QLabel("Animals"), "caption"),
+            self._animals_spin,
+        )
 
         self._names_field = QLineEdit()
         self._names_field.setPlaceholderText("nose, l_ear, r_ear, …")
@@ -290,48 +389,78 @@ class PoseBatchWindow(QMainWindow):
 
         self._names_status = hint("Select a model to load its keypoints.")
         card.add(self._names_status)
-        card.add_separator()
+        return card
+
+    def _build_settings_popup(self) -> None:
+        """The rarely-touched settings, in a window of their own.
+
+        Built once and kept, so every widget in it stays a member of this
+        window: values set while it is closed (the master file defaulting beside
+        the videos) still land, and Run reads them the same way it always did.
+        """
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Batch Pose Settings")
+        dialog.setModal(False)
+        dialog.setMinimumWidth(520)
+        self._settings_popup = dialog
+        column = QVBoxLayout(dialog)
+        column.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
+        column.setSpacing(10)
 
         self._device_combo = QComboBox()
         self._device_combo.addItems(["auto", "cpu", "cuda", "mps"])
         self._device_combo.setMaximumWidth(150)
+        column.addLayout(labelled_row("Device", self._device_combo))
 
         self._conf_spin = QDoubleSpinBox()
         self._conf_spin.setRange(0.01, 1.0)
         self._conf_spin.setSingleStep(0.05)
         self._conf_spin.setValue(0.25)  # matches infer_video's default
-
-        self._animals_spin = QSpinBox()
-        self._animals_spin.setRange(1, 16)
-        self._animals_spin.setValue(1)
-        self._animals_spin.setToolTip(
-            "How many animals are in each video. This is not detected -- it is "
-            "the constraint that lets tracking stitch a fragmented track back "
-            "into one animal. Too high and one animal is split into two that "
-            "each vanish for half the video; too low and a real animal is "
-            "dropped entirely."
-        )
-
-        # Three short numeric settings on one line: each is narrow, and stacking
-        # them cost a full row apiece for a value a few characters wide.
-        inference = QHBoxLayout()
-        inference.setSpacing(8)
-        inference.addWidget(self._device_combo)
-        inference.addSpacing(8)
-        inference.addWidget(set_text_role(QLabel("Confidence"), "caption"))
-        inference.addWidget(self._conf_spin)
-        inference.addSpacing(8)
-        inference.addWidget(set_text_role(QLabel("Animals"), "caption"))
-        inference.addWidget(self._animals_spin)
-        inference.addStretch(1)
-        card.add(labelled_row("Device", inference))
+        column.addLayout(labelled_row("Confidence", self._conf_spin))
 
         self._require_gpu = QCheckBox("Fail if no GPU is available")
         self._require_gpu.setToolTip(
             "Prevents a silent CPU fallback turning an overnight batch into a multi-day one."
         )
-        card.add(self._require_gpu)
-        return card
+        column.addWidget(self._require_gpu)
+
+        column.addWidget(self._build_filter_group())
+
+        self._recursive = QCheckBox("Include subfolders")
+        self._recursive.setChecked(True)
+        self._recursive.toggled.connect(self._refresh_videos)
+        column.addWidget(self._recursive)
+
+        self._overwrite = QCheckBox("Overwrite existing outputs")
+        self._overwrite.setToolTip(
+            "Off by default, so an interrupted batch resumes without redoing finished videos."
+        )
+        self._overwrite.toggled.connect(self._validate)
+        column.addWidget(self._overwrite)
+
+        self._master_field = QLineEdit()
+        self._master_field.setPlaceholderText("Master calibration file")
+        # A typed or pasted path must get the same load-if-exists treatment as
+        # Browse and Load, or Run silently overwrites a master it never read.
+        # editingFinished (not textChanged) so it fires once the path is whole.
+        self._master_field.editingFinished.connect(self._master_path_edited)
+        master_browse = QPushButton("Browse…")
+        master_browse.clicked.connect(self._choose_master_path)
+        load_master = QPushButton("Load")
+        set_button_role(load_master, "ghost")
+        load_master.clicked.connect(self._load_master_clicked)
+        save_master = QPushButton("Save")
+        set_button_role(save_master, "ghost")
+        save_master.clicked.connect(self._save_master_clicked)
+        column.addLayout(
+            labelled_row("Arenas file", self._master_field, master_browse, load_master, save_master)
+        )
+
+    def _show_settings(self) -> None:
+        popup = self._settings_popup
+        popup.show()
+        popup.raise_()
+        popup.activateWindow()
 
     def _build_pup_group(self) -> Card:
         card = Card("Pup segmentation")
@@ -404,15 +533,9 @@ class PoseBatchWindow(QMainWindow):
             "the batch will run."
         )
         copy_arena_btn.clicked.connect(self._copy_arena_to_selected)
-        clear_arena = QPushButton("Clear Arena")
-        set_button_role(clear_arena, "ghost")
-        clear_arena.clicked.connect(self._clear_selected_calibrations)
         remove = QPushButton("Remove")
         set_button_role(remove, "ghost")
         remove.clicked.connect(self._remove_selected)
-        remove_all = QPushButton("Remove All")
-        set_button_role(remove_all, "ghost")
-        remove_all.clicked.connect(self._remove_all)
 
         self._selection_label = QLabel("")
         set_text_role(self._selection_label, "hint")
@@ -423,43 +546,22 @@ class PoseBatchWindow(QMainWindow):
         toolbar.addWidget(add_files)
         toolbar.addStretch(1)
         toolbar.addWidget(self._selection_label)
-        for button in (arena, copy_arena_btn, clear_arena, remove, remove_all):
+        for button in (arena, copy_arena_btn, remove):
             toolbar.addWidget(button)
         card.add(toolbar)
         card.add(self._cal_table, 1)
 
-        self._recursive = QCheckBox("Include subdirectories")
-        self._recursive.setChecked(True)
-        self._recursive.toggled.connect(self._refresh_videos)
-        card.add(self._recursive)
+        # Clear Arena is not worth a button of its own: it is the exception.
+        self._cal_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._cal_table.customContextMenuRequested.connect(self._table_menu)
 
         # Kept as the count of record; the card badge is where it is read now.
         self._count_label = QLabel("No videos found")
         self._count_label.setVisible(False)
         card.add(self._count_label)
-        card.add_separator()
-
-        self._master_field = QLineEdit()
-        self._master_field.setPlaceholderText("Master calibration file")
-        # A typed or pasted path must get the same load-if-exists treatment as
-        # Browse and Load, or Run silently overwrites a master it never read.
-        # editingFinished (not textChanged) so it fires once the path is whole.
-        self._master_field.editingFinished.connect(self._master_path_edited)
-        master_browse = QPushButton("Browse…")
-        master_browse.clicked.connect(self._choose_master_path)
-        load_master = QPushButton("Load")
-        set_button_role(load_master, "ghost")
-        load_master.clicked.connect(self._load_master_clicked)
-        save_master = QPushButton("Save")
-        set_button_role(save_master, "ghost")
-        save_master.clicked.connect(self._save_master_clicked)
-        card.add_row("Master file", self._master_field, master_browse, load_master, save_master)
         return card
 
-    def _build_filter_group(self) -> Card:
-        card = Card("Post-process filtering", "optional")
-        self._filter_card = card
-
+    def _build_filter_group(self) -> QGroupBox:
         # Still a checkable QGroupBox: it is the enable switch the rest of the
         # section hangs off, and _filter_settings reads isChecked().
         group = QGroupBox("Smooth and gap-fill the tracked keypoints")
@@ -469,7 +571,6 @@ class PoseBatchWindow(QMainWindow):
             "Writes the smoothed result as the main CSV and keeps the raw "
             "inference alongside it as *_raw.csv."
         )
-        group.toggled.connect(lambda on: card.set_badge("on" if on else "off"))
         box = QVBoxLayout(group)
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(8)
@@ -494,21 +595,8 @@ class PoseBatchWindow(QMainWindow):
         self._filter_window.valueChanged.connect(self._force_odd_window)
         box.addLayout(labelled_row("Median window", self._filter_window))
 
-        card.add(group)
-        card.set_badge("off")
         self._filter_group = group
-        return card
-
-    def _build_options_group(self) -> Card:
-        card = Card("Options")
-        self._overwrite = QCheckBox("Overwrite existing outputs")
-        self._overwrite.setToolTip(
-            "Off by default, so an interrupted batch resumes without redoing finished videos."
-        )
-        self._overwrite.toggled.connect(self._validate)
-        card.add(self._overwrite)
-        card.add(hint("Leave off to resume an interrupted batch without redoing finished videos."))
-        return card
+        return group
 
     # ------------------------------------------------------------------
     # walkthrough
@@ -526,7 +614,7 @@ class PoseBatchWindow(QMainWindow):
             "bodyparts": self._names_field,
             "videos": self._sources_card,
             "calibration": self._calibration_card,
-            "filter": self._filter_card,
+            "filter": self._settings_button,
             "run": self._run_button,
         }
 
@@ -569,7 +657,9 @@ class PoseBatchWindow(QMainWindow):
         if not path:
             return
         self._model_path = Path(path)
-        self._model_field.setText(str(self._model_path))
+        self._model_field.setText(self._model_path.name)
+        self._model_field.setToolTip(str(self._model_path))
+        self._model_button.setText("Change model…")
         self._names_status.setText("Reading keypoints from the model…")
         self._start_meta_read()
         self._validate()
@@ -642,8 +732,26 @@ class PoseBatchWindow(QMainWindow):
             self._refresh_videos()
 
     def _remove_all(self) -> None:
+        """Empty the table, and drop every arena and scale along with it."""
+        if any(self._calibrations.get_arena(v) is not None for v in self._videos):
+            answer = QMessageBox.question(
+                self,
+                "Remove all videos",
+                "Remove every video and the arenas drawn for them? This cannot be undone.",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        for video in {*self._videos, *self._calibrations.videos()}:
+            self._calibrations.discard(video)
+            self._calibrations.discard_arena(video)
         self._excluded.clear()
         self._sources.clear_all()
+
+    def _table_menu(self, pos) -> None:
+        menu = QMenu(self._cal_table)
+        menu.addAction("Draw Arena…", self._arena_selected)
+        menu.addAction("Clear Arena", self._clear_selected_calibrations)
+        menu.exec(self._cal_table.viewport().mapToGlobal(pos))
 
     # ------------------------------------------------------------------
     # calibration
@@ -1127,6 +1235,12 @@ class PoseBatchWindow(QMainWindow):
                 problem = f"{len(no_arena)} video(s) still need an arena drawn."
 
         self._names_field.setStyleSheet(_INVALID_STYLE if names_bad else "")
+        self._steps.set_progress(
+            model_ok=self._model_path is not None and bool(names) and not names_bad,
+            videos=len(self._videos),
+            arenas=len(self._videos) - len(self._calibrations.missing_arenas(self._videos)),
+        )
+        self._remove_all_action.setEnabled(bool(self._videos))
         self._run_button.setEnabled(problem is None)
         self._run_button.setToolTip(problem or "")
         # Shown next to the button as well as on hover: a disabled Run with the
@@ -1160,8 +1274,8 @@ class PoseBatchWindow(QMainWindow):
             and not self._calibrations.missing_arenas(self._videos)
             and bool(regatable(self._videos))
         )
-        self._regate_button.setEnabled(ready)
-        self._regate_button.setToolTip(
+        self._regate_action.setEnabled(ready)
+        self._regate_action.setToolTip(
             "Apply the drawn arenas to the pose CSVs already beside these "
             "videos. Originals are kept as _ungated.csv."
             if ready
@@ -1180,8 +1294,8 @@ class PoseBatchWindow(QMainWindow):
         from glider.gui.pose_batch.export_actions import exportable
 
         ready = not self._busy() and bool(exportable(self._videos))
-        self._export_button.setEnabled(ready)
-        self._export_button.setToolTip(
+        self._export_action.setEnabled(ready)
+        self._export_action.setToolTip(
             "Rebuild the four-row DLC CSV that SimBA, DeepLabCut and "
             "Keypoint-MoSeq read as a multi-animal session, from the "
             "per-animal CSVs already beside these videos."
@@ -1270,8 +1384,8 @@ class PoseBatchWindow(QMainWindow):
         self._worker.failed.connect(self._on_failed)
 
         self._run_button.setEnabled(False)
-        self._regate_button.setEnabled(False)  # _validate returns early mid-run
-        self._export_button.setEnabled(False)
+        self._regate_action.setEnabled(False)  # _validate returns early mid-run
+        self._export_action.setEnabled(False)
         self._cancel_button.setEnabled(True)
         self._overall_bar.setVisible(True)
         self._video_bar.setVisible(True)
@@ -1367,8 +1481,8 @@ class PoseBatchWindow(QMainWindow):
         self._regate_worker.failed.connect(self._on_regate_failed)
 
         self._run_button.setEnabled(False)
-        self._regate_button.setEnabled(False)
-        self._export_button.setEnabled(False)
+        self._regate_action.setEnabled(False)
+        self._export_action.setEnabled(False)
         self._rail.status.set_state("running", "Re-gating")
         self._regate_thread.start()
 
@@ -1423,8 +1537,8 @@ class PoseBatchWindow(QMainWindow):
         self._export_worker.failed.connect(self._on_export_failed)
 
         self._run_button.setEnabled(False)
-        self._regate_button.setEnabled(False)
-        self._export_button.setEnabled(False)
+        self._regate_action.setEnabled(False)
+        self._export_action.setEnabled(False)
         self._rail.status.set_state("running", "Exporting")
         self._export_thread.start()
 

@@ -499,3 +499,135 @@ def test_experiment_type_is_stored(window):
     assert window._experiment_type == ""
     window.set_experiment_type("Pup Retrieval")
     assert window._experiment_type == "Pup Retrieval"
+
+
+# --------------------------------------------------------------------------
+# header: step strip, Settings popup, More menu
+# --------------------------------------------------------------------------
+
+
+def test_step_strip_tracks_progress(window, tmp_path):
+    assert window._steps.steps_text() == ["Model", "Videos", "Arenas", "Track"]
+    assert window._steps.current() == 0
+
+    for i in range(5):
+        _touch(tmp_path / f"v{i}.mp4")
+    window._model_path = tmp_path / "m.pt"
+    window._names_field.setText("a, b")
+    window._meta = types.SimpleNamespace(n_keypoints=2)
+    window._sources.add_paths([tmp_path])
+    for video in window._videos[:2]:
+        window._calibrations.set_arena(video, _arena_cal())
+    window._validate()
+
+    assert window._steps.steps_text() == ["Model ✓", "Videos · 5 ✓", "Arenas · 2 of 5", "Track"]
+    assert window._steps.current() == 2
+
+
+def _arena_cal():
+    from glider.vision.arena import ArenaCalibration
+
+    return ArenaCalibration(corners=[(0, 0), (100, 0), (100, 100), (0, 100)], frame_size=(640, 480))
+
+
+def test_settings_popup_holds_rare_settings(window):
+    popup = window._settings_popup
+    for widget in (
+        window._device_combo,
+        window._conf_spin,
+        window._require_gpu,
+        window._filter_group,
+        window._recursive,
+        window._overwrite,
+        window._master_field,
+    ):
+        assert widget.window() is popup
+    # ...and the everyday ones are not hiding in there.
+    for widget in (window._cal_table, window._names_field, window._animals_spin):
+        assert widget.window() is window
+
+
+def test_settings_button_opens_the_popup(window, qtbot):
+    window.show()
+    window._settings_button.click()
+    assert window._settings_popup.isVisible()
+    window._settings_popup.hide()
+
+
+def test_more_menu_actions(window):
+    labels = [a.text() for a in window._more_button.menu().actions() if a.text()]
+    assert labels == [
+        "Re-gate tracked CSVs…",
+        "Export multi-animal DLC CSV…",
+        "Remove all videos",
+    ]
+
+
+def test_more_menu_actions_run_the_old_handlers(window, monkeypatch):
+    calls = []
+    monkeypatch.setattr(window, "_start_regate", lambda: calls.append("regate"))
+    monkeypatch.setattr(window, "_start_export", lambda: calls.append("export"))
+    monkeypatch.setattr(window, "_remove_all", lambda: calls.append("remove"))
+    for action in (window._regate_action, window._export_action, window._remove_all_action):
+        action.setEnabled(True)
+        action.trigger()
+    assert calls == ["regate", "export", "remove"]
+
+
+def test_remove_all_drops_arenas(window, tmp_path, monkeypatch):
+    _touch(tmp_path / "a.mp4")
+    _touch(tmp_path / "b.mp4")
+    window._sources.add_paths([tmp_path])
+    videos = list(window._videos)
+    for video in videos:
+        window._calibrations.set_arena(video, _arena_cal())
+    prompts = _answer_overwrite(monkeypatch, _yes())
+    window._remove_all()
+    assert prompts  # arenas existed, so it asked first
+    assert window._videos == []
+    assert window._cal_table.rowCount() == 0
+    for video in videos:
+        assert window._calibrations.get_arena(video) is None
+        assert window._calibrations.get(video) is None
+
+
+def test_remove_all_declined_keeps_everything(window, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    _touch(tmp_path / "a.mp4")
+    window._sources.add_paths([tmp_path])
+    window._calibrations.set_arena(window._videos[0], _arena_cal())
+    _answer_overwrite(monkeypatch, QMessageBox.StandardButton.No)
+    window._remove_all()
+    assert len(window._videos) == 1
+    assert window._calibrations.get_arena(window._videos[0]) is not None
+
+
+def test_remove_all_without_arenas_does_not_ask(window, tmp_path, monkeypatch):
+    _touch(tmp_path / "a.mp4")
+    window._sources.add_paths([tmp_path])
+    prompts = _answer_overwrite(monkeypatch, _yes())
+    window._remove_all()
+    assert not prompts
+    assert window._videos == []
+
+
+def _yes():
+    from PyQt6.QtWidgets import QMessageBox
+
+    return QMessageBox.StandardButton.Yes
+
+
+def test_master_file_defaults_with_popup_closed(window, tmp_path):
+    _touch(tmp_path / "a.mp4")
+    assert not window._settings_popup.isVisible()
+    window._sources.add_paths([tmp_path])
+    assert window._master_field.text() == str(tmp_path / "pose_calibration.json")
+
+
+def test_tour_points_at_the_table_and_settings(window):
+    targets = window.tour_targets()
+    assert targets["videos"] is window._calibration_card
+    assert targets["calibration"] is window._calibration_card
+    assert targets["filter"] is window._settings_button
+    assert targets["run"] is window._run_button

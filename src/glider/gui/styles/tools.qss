@@ -292,6 +292,27 @@ QLabel#StatusPill[state="error"] {
     border-color: rgba(248, 113, 113, 0.45);
 }
 
+QLabel#StepChip {
+    border-radius: @RADIUS_SMALL@;
+    padding: 3px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    background-color: #151c25;
+    color: #718096;
+    border: 1px solid #1e2530;
+}
+
+QLabel#StepChip[state="current"] {
+    background-color: rgba(56, 189, 248, 0.14);
+    color: #38bdf8;
+    border-color: rgba(56, 189, 248, 0.45);
+}
+
+QLabel#StepChip[state="done"] {
+    color: #34d399;
+    border-color: rgba(52, 211, 153, 0.45);
+}
+
 /* === Inputs ========================================================== */
 
 QLineEdit,
