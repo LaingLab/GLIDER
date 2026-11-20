@@ -13,6 +13,7 @@ import logging
 import threading
 from typing import Any, Optional
 
+from glider.core.flow_loop import post_to_loop
 from glider.hal.base_board import (
     BaseBoard,
     BoardCapabilities,
@@ -333,29 +334,41 @@ class TelemetrixBoard(BaseBoard):
             return False
 
         if not self._telemetrix_thread.is_running:
-            # Thread or its serial link died but state wasn't updated - fix it now
-            # Only log once by checking if we're transitioning state
-            if self._state == BoardConnectionState.CONNECTED:
-                reason = self._telemetrix_thread.link_error or "worker thread died"
-                logger.warning(f"Telemetrix link lost ({reason}) - marking as disconnected")
-                self._set_state(BoardConnectionState.DISCONNECTED)
-                # The cached pin state is stale the moment the link drops
-                # (the Arduino resets on the next serial open); clear it so
-                # post-reconnect reads don't serve pre-drop values as live.
-                self._clear_pin_caches()
-                if self._auto_reconnect:
-                    # Passive disconnect (cable jostle, serial error): engage
-                    # auto-reconnect. start_reconnect() is a no-op if a
-                    # reconnect task is already running.
-                    try:
-                        self.start_reconnect()
-                    except RuntimeError:
-                        # Property polled from a context with no running event
-                        # loop; a later explicit connect() will still work.
-                        logger.warning("Auto-reconnect not started: no running event loop")
+            # Thread or its serial link died but state wasn't updated. The
+            # repair (state change, cache clear, auto-reconnect task) belongs on
+            # the loop that connected the board: a GUI timer reads this
+            # property from the GUI thread while, with the flow loop thread on,
+            # the board lives on that thread (core/flow_loop.py).
+            if not post_to_loop(self._main_loop, self._mark_link_lost):
+                self._mark_link_lost()
             return False
 
         return True
+
+    def _mark_link_lost(self) -> None:
+        """Mark a dead worker thread as a disconnect, once."""
+        if self._state != BoardConnectionState.CONNECTED:
+            return
+        thread = self._telemetrix_thread
+        if thread is not None and thread.is_running:
+            return
+        reason = (thread.link_error if thread is not None else None) or "worker thread died"
+        logger.warning(f"Telemetrix link lost ({reason}) - marking as disconnected")
+        self._set_state(BoardConnectionState.DISCONNECTED)
+        # The cached pin state is stale the moment the link drops (the Arduino
+        # resets on the next serial open); clear it so post-reconnect reads
+        # don't serve pre-drop values as live.
+        self._clear_pin_caches()
+        if self._auto_reconnect:
+            # Passive disconnect (cable jostle, serial error): engage
+            # auto-reconnect. start_reconnect() is a no-op if a reconnect task
+            # is already running.
+            try:
+                self.start_reconnect()
+            except RuntimeError:
+                # No running event loop here; a later explicit connect() will
+                # still work.
+                logger.warning("Auto-reconnect not started: no running event loop")
 
     @property
     def capabilities(self) -> BoardCapabilities:

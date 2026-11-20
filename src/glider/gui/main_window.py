@@ -423,6 +423,8 @@ class MainWindow(QMainWindow):
     # on this thread's call stack.
     _device_link_changed = pyqtSignal(str, object)
     _session_dirtied = pyqtSignal()
+    # Core session replaced; queued so it is safe from the flow loop thread.
+    _session_replaced = pyqtSignal(object)
 
     def __init__(
         self,
@@ -2725,7 +2727,11 @@ class MainWindow(QMainWindow):
         # reason as the two above -- ``_mark_dirty`` is called from callbacks
         # this window does not own.
         self._session_dirtied.connect(self._refresh_strip_experiment)
-        self._core.on_session_change(self._watch_session)
+        # Through a signal: with the flow loop thread on (core/flow_loop.py) the
+        # core can replace the session from that thread, and _watch_session
+        # touches widgets.
+        self._session_replaced.connect(self._watch_session)
+        self._core.on_session_change(self._session_replaced.emit)
         self._watch_session(self._core.session)
 
         # _runner_device_controls is built in both operator views (shared).
@@ -4329,6 +4335,7 @@ class MainWindow(QMainWindow):
         """
         from glider.core.experiment_session import SessionState
         from glider.core.flow_engine import FlowState
+        from glider.core.flow_loop import post_to_loop
         from glider.core.graph_functions import find_run_param
 
         if self._manual_run_busy:
@@ -4368,9 +4375,15 @@ class MainWindow(QMainWindow):
             self._runner_device_controls.set_function_running(start_node_id, True)
             try:
                 runner = engine.get_function_runner(start_node_id)
+                # execute() may run on the flow loop thread (core/flow_loop.py),
+                # so the timeout callback posts its widget update back here.
+                gui_loop = asyncio.get_running_loop()
                 completed = await runner.execute(
-                    on_timeout=lambda: self._runner_device_controls.show_status(
-                        "Function is unresponsive — cancelled", level="warn"
+                    on_timeout=lambda: post_to_loop(
+                        gui_loop,
+                        lambda: self._runner_device_controls.show_status(
+                            "Function is unresponsive — cancelled", level="warn"
+                        ),
                     )
                 )
                 if completed:

@@ -10,6 +10,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from glider.core.flow_loop import call_on_flow_loop, estop_entry, wrap_public_coroutines
 from glider.hal.base_board import BaseBoard, BoardConnectionState
 from glider.hal.base_device import BaseDevice, create_device_from_dict
 from glider.hal.pin_manager import PinConflictError, PinManager
@@ -708,6 +709,7 @@ class HardwareManager:
                 results[device_id] = False
         return results
 
+    @estop_entry
     async def emergency_stop(self) -> None:
         """
         Trigger emergency stop on all hardware.
@@ -782,6 +784,7 @@ class HardwareManager:
             except Exception as e:  # noqa: BLE001 - one bad device, not a sweep
                 logger.debug("Link poll failed for device %s: %s", device_id, e)
 
+    @call_on_flow_loop
     def start_link_supervisor(self) -> None:
         """Begin polling device links on a timer. Idempotent.
 
@@ -880,3 +883,7 @@ def _register_builtin_drivers():
 
 
 _register_builtin_drivers()
+
+
+# Every public coroutine runs on the flow loop when it is on (core/flow_loop.py).
+wrap_public_coroutines(HardwareManager)
