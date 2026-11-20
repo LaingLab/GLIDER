@@ -165,9 +165,11 @@ def behavior_steps() -> list[TourStep]:
         TourStep(
             "tab_apply",
             "4 · Apply",
-            "Point a trained model at recorded video to write the ethogram. "
-            "Review the run first: a model scored on one lucky split can look "
-            "far better than it is.",
+            "Add videos, pick the model and an output folder, then Score. "
+            "Cadence, smoothing and freeze/dart are under Options. When it "
+            "finishes, Open in Session Review reads the ethograms. Review the "
+            "run first: a model scored on one lucky split can look far better "
+            "than it is.",
         ),
         TourStep(
             None,

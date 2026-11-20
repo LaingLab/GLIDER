@@ -264,17 +264,31 @@ a mirrored arena.
 
 ## Stage 3 — Apply
 
-On the **Apply** tab you score new videos with a trained model:
+On the **Apply** step you score new videos with a trained model. The step
+shows only what scoring needs, in order:
 
-1. Click **Choose model bundle…** and select the `.pkl` you trained.
-2. Click **Choose YOLO weights…** and select the pose model (`.pt`) — the same
-   kind used to produce your training pose data.
-3. Under **Video(s) to classify**, click **Add video(s)…** to add one or more
-   recordings.
-4. In **Keypoint names**, enter the keypoint names in the model's training order,
-   comma-separated (for example `nose, left_ear, right_ear, ...`).
-5. Optionally set **Classify every** — see [Classifier cadence](#classifier-cadence).
-6. Click **Choose output folder…**, then **Run**.
+1. Under **Videos to score**, click **Add Videos…** to add one or more
+   recordings. Each row says whether its poses were found
+   (**✓ poses found**) or will be tracked from scratch.
+2. Next to **Model bundle**, click **Choose…** and select the `.pkl` you
+   trained. Leave it empty to score freezing and darting from speed alone.
+3. Next to **Write results to**, click **Choose…** to pick the output folder.
+4. Click **Score N Videos** in the footer.
+
+Everything else lives under **Options** in the footer: **YOLO weights**
+(needed only for videos with no pose CSV), **Reuse already-tracked pose CSVs**
+and the **Pose CSV folder**, **Keypoint names** (filled in from the bundle;
+**Edit…** arranges them on a figure), **Classify every** (see
+[Classifier cadence](#classifier-cadence)), the **Time window**, the three
+smoothing settings (**Majority vote**, **Centred vote**, **Minimum bout**),
+**Freeze / dart from speed**, and **Also render an annotated video**. The
+line under the output folder names the options in force (for example
+"Every 3 frames · smoothing on · freeze/dart off"), and the footer message
+names anything that blocks the run, including a setting inside Options.
+
+When the run finishes, a banner reports **✓ Scored N videos** with
+**Show Files** (opens the output folder) and **Open in Session Review**
+(opens the Session Review window on that folder, with every ethogram loaded).
 
 GLIDER runs pose inference over each video and classifies it at the chosen
 cadence. Videos are processed one at a time, each writing into its own subfolder
@@ -329,7 +343,7 @@ tools that read an ethogram (Session Review among them) read a flat list of
 rows keyed only by position, and a shared multi-animal file would silently
 double-count every frame rather than error.
 
-To reach this path, check **Reuse already-tracked pose CSVs** (on by default)
+To reach this path, check **Options ▸ Reuse already-tracked pose CSVs** (on by default)
 and add a video that was already run through Batch Pose Tracking with
 **Animals** above 1. This matters because it's the *only* way in: tracking a
 video fresh from inside the Apply tab is always single-animal, so a

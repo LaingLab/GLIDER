@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMenu,
     QPushButton,
+    QScrollArea,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -96,13 +97,29 @@ class OptionsPopup(QDialog):
     dialog opens from inside it, and several options are file pickers.
     """
 
-    def __init__(self, anchor: QWidget, title: str = "Options"):
+    def __init__(self, anchor: QWidget, title: str = "Options", *, scroll: bool = False):
         super().__init__(anchor)
         self._anchor = anchor
         self.setWindowTitle(title)
         self.setModal(False)
         self.setMinimumWidth(460)
-        self._column = QVBoxLayout(self)
+        self._area: QScrollArea | None = None
+        if scroll:
+            # For a step whose options outgrow a laptop screen (Apply's speed
+            # group alone is eight rows): the panel caps at the screen and
+            # scrolls rather than running off its bottom edge.
+            outer = QVBoxLayout(self)
+            outer.setContentsMargins(0, 0, 0, 0)
+            self._area = QScrollArea()
+            self._area.setWidgetResizable(True)
+            self._area.setFrameShape(QFrame.Shape.NoFrame)
+            self._area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            holder = QWidget()
+            self._area.setWidget(holder)
+            outer.addWidget(self._area)
+            self._column = QVBoxLayout(holder)
+        else:
+            self._column = QVBoxLayout(self)
         self._column.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
         self._column.setSpacing(6)
         # Top-level windows get no theme from their parent (see apply_tool_theme).
@@ -125,12 +142,19 @@ class OptionsPopup(QDialog):
             self.hide()
             return
         self.adjustSize()
+        screen = self._anchor.screen()
+        if self._area is not None:
+            want = self._area.widget().sizeHint()
+            bar = self._area.verticalScrollBar().sizeHint().width()
+            height = want.height()
+            if screen is not None:
+                height = min(height, screen.availableGeometry().height() - 40)
+            self.resize(max(self.minimumWidth(), want.width() + bar), height)
         # Right-aligned above the anchor: the button sits in the step's footer.
         corner = self._anchor.mapToGlobal(QPoint(self._anchor.width(), 0))
         x, y = corner.x() - self.width(), corner.y() - self.height() - 8
         # Kept on the anchor's screen: a window near an edge would otherwise
         # push the panel (and its title bar) out of reach.
-        screen = self._anchor.screen()
         if screen is not None:
             area = screen.availableGeometry()
             x = max(area.left(), min(x, area.right() - self.width()))

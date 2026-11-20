@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -306,6 +307,10 @@ class LgbmAdvancedDialog(QDialog):
 class BehaviorAnalysisWindow(QMainWindow):
     """Top-level window for the Behavior Analysis tool."""
 
+    #: An Apply output folder to open in Session Review. The main window owns
+    #: that window, so this one only says which folder.
+    open_in_session_review = pyqtSignal(str)
+
     # What each tab is for, shown in the header so the four stages read as one
     # pipeline rather than four unrelated screens.
     _TAB_BLURBS = (
@@ -340,7 +345,10 @@ class BehaviorAnalysisWindow(QMainWindow):
         # it is trusted to score a cohort.
         self.review_tab = ReviewTab()
         self.tabs.addTab(self.review_tab, "Review")
-        self.tabs.addTab(ApplyTab(), "Apply")
+        self.apply_tab = ApplyTab()
+        self.tabs.addTab(self.apply_tab, "Apply")
+        self.apply_tab.scored.connect(lambda _n: self.set_step_done(3, True))
+        self.apply_tab.open_in_session_review.connect(self.open_in_session_review)
 
         # A finished run opens its own report. The Train tab does not know
         # about the Review tab -- it announces that a run produced one, and
@@ -391,7 +399,7 @@ class BehaviorAnalysisWindow(QMainWindow):
             "tab_train": self.train_tab,
             "train_cv": self.train_tab._fit_btn,
             "tab_review": self.review_tab,
-            "tab_apply": self.tabs.widget(3),
+            "tab_apply": self.apply_tab,
         }
 
     def start_tour(self) -> None:
@@ -1929,6 +1937,11 @@ class TrainTab(QWidget):
 class ApplyTab(QWidget):
     """Classify recorded video(s) with a trained model and write the ethogram."""
 
+    #: The output folder, when "Open in Session Review" is clicked.
+    open_in_session_review = pyqtSignal(str)
+    #: How many videos a finished run scored (only emitted when at least one).
+    scored = pyqtSignal(int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._model_path: Path | None = None
@@ -1946,35 +1959,51 @@ class ApplyTab(QWidget):
         # its own <output_dir>/<video stem>/ subfolder.
         self._queue: list[Path] = []
 
-        # --- run rail ---------------------------------------------------
-        rail = RunRail("Score videos")
-        self._run_btn = rail.button
-        self._run_btn.clicked.connect(self._on_run)
-        self._rail = rail
+        #: Videos that finished in the run in flight. Apply is ticked done, and
+        #: the "Scored N videos" banner shown, only when at least one did.
+        self._scored = 0
+        self._run_total = 0
 
-        self._progress = QProgressBar()
-        self._progress.setVisible(False)
-        rail.card.add(self._progress)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        body = QVBoxLayout()
+        body.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
+        area, column = scroll_column()
+        body.addWidget(area)
+        outer.addLayout(body, 1)
 
-        results_card = Card("Output")
-        self._results = QTextEdit()
-        self._results.setObjectName("LogPane")
-        self._results.setReadOnly(True)
-        self._results.setPlaceholderText("Output paths will appear here.")
-        results_card.add(self._results, 1)
-        rail.add(results_card, 1)
+        # --- footer -----------------------------------------------------
+        self._footer = StepFooter("Score Videos")
+        self._run_btn = self._footer.primary
+        # Late-bound, so a handler replaced on the instance is the one called.
+        self._run_btn.clicked.connect(lambda: self._on_run())
+        outer.addWidget(self._footer)
 
-        column = _workspace(self, rail)
+        # --- videos -----------------------------------------------------
+        videos_group = Card("Videos to score")
+        self._videos_card = videos_group
+        self._videos_list = QListWidget()
+        self._videos_list.setMinimumHeight(96)
+        self._videos_list.setMaximumHeight(160)
+        attach_empty_state(self._videos_list, "No videos yet.\nAdd the recordings you want scored.")
+        videos_group.add(self._videos_list)
+        add_videos_btn = QPushButton("Add Videos…")
+        add_videos_btn.clicked.connect(self._on_add_videos)
+        remove_video_btn = QPushButton("Remove")
+        set_button_role(remove_video_btn, "ghost")
+        remove_video_btn.clicked.connect(self._on_remove_video)
+        videos_group.add(_button_row(add_videos_btn, remove_video_btn))
+        self._pose_match_label = hint("")
+        videos_group.add(self._pose_match_label)
+        column.addWidget(videos_group)
 
-        # --- models -----------------------------------------------------
-        # Both models are optional, and the labels say so where the operator
-        # is deciding: no bundle scores freezing/darting alone, and no weights
-        # is fine as long as the poses already exist. Clearing is offered
-        # because choosing one is otherwise irreversible, and switching to a
-        # speed-only run after picking a bundle is a normal thing to want.
-        # No "both optional" subtitle: each field's own placeholder already says
-        # what happens without it, and more precisely than the card could.
-        models = Card("Models")
+        # --- model and output -------------------------------------------
+        # The bundle is optional -- no bundle scores freezing/darting alone --
+        # and the placeholder says so where the operator is deciding. Clearing
+        # is offered because switching to a speed-only run after picking a
+        # bundle is a normal thing to want.
+        target = Card("Model and output")
         self._model_label = QLabel("Model bundle: (none — scores freezing/darting only)")
         self._model_label.setVisible(False)  # kept as the text of record
         self._model_path_label = path_label("(none — scores freezing/darting only)")
@@ -1987,8 +2016,57 @@ class ApplyTab(QWidget):
             "the speed trace, which needs no classifier."
         )
         model_clear.clicked.connect(self._on_clear_model)
-        models.add_row("Model bundle", self._model_path_label, model_btn, model_clear)
+        target.add_row("Model bundle", self._model_path_label, model_btn, model_clear)
 
+        self._output_label = QLabel("Output folder: (none)")
+        self._output_label.setVisible(False)  # kept as the text of record
+        self._output_value = path_label("(none)")
+        self._output_value.setToolTip("Each video gets its own subfolder here.")
+        output_btn = QPushButton("Choose…")
+        output_btn.clicked.connect(self._on_choose_output_dir)
+        target.add_row("Write results to", self._output_value, output_btn)
+        self._summary = summary_label()
+        target.add(self._summary)
+        column.addWidget(target)
+
+        # --- finished banner: shown once a run scored something ---------
+        self._banner = QFrame()
+        self._banner.setObjectName("ScoredBanner")
+        banner_row = QHBoxLayout(self._banner)
+        banner_row.setContentsMargins(GUTTER, 10, GUTTER, 10)
+        self._banner_text = set_text_role(QLabel(""), "success")
+        self._banner_text.setWordWrap(True)
+        banner_row.addWidget(self._banner_text, 1)
+        self._show_files_btn = QPushButton("Show Files")
+        self._show_files_btn.clicked.connect(self._on_show_files)
+        banner_row.addWidget(self._show_files_btn)
+        self._review_btn = QPushButton("Open in Session Review")
+        set_button_role(self._review_btn, "primary")
+        self._review_btn.clicked.connect(self._on_open_in_review)
+        banner_row.addWidget(self._review_btn)
+        self._banner.setVisible(False)
+        column.addWidget(self._banner)
+
+        # --- results: shown once a run starts, and kept -----------------
+        results_card = Card("Results")
+        self._results_card = results_card
+        self._progress = QProgressBar()
+        self._progress.setVisible(False)
+        results_card.add(self._progress)
+        self._results = QTextEdit()
+        self._results.setObjectName("LogPane")
+        self._results.setReadOnly(True)
+        self._results.setMinimumHeight(160)
+        self._results.setPlaceholderText("Output paths will appear here.")
+        results_card.add(self._results, 1)
+        results_card.setVisible(False)
+        column.addWidget(results_card, 1)
+        column.addStretch(1)
+
+        # --- options ----------------------------------------------------
+        self._options = OptionsPopup(self._footer.options_button, "Scoring options", scroll=True)
+
+        tracking = self._options.add_section("Pose tracking")
         self._yolo_label = QLabel("YOLO weights: (none — needed only to track poses)")
         self._yolo_label.setVisible(False)
         self._yolo_path_label = path_label("(none — needed only to track poses)")
@@ -2001,43 +2079,10 @@ class ApplyTab(QWidget):
             "a pose CSV never needs them."
         )
         yolo_clear.clicked.connect(self._on_clear_yolo)
-        models.add_row("YOLO weights", self._yolo_path_label, yolo_btn, yolo_clear)
-        column.addWidget(models)
+        tracking.addRow(labelled_row("YOLO weights", self._yolo_path_label, yolo_btn, yolo_clear))
 
-        # --- videos -----------------------------------------------------
-        videos_group = Card("Videos to classify")
-        self._videos_card = videos_group
-        self._videos_list = QListWidget()
-        self._videos_list.setMinimumHeight(96)
-        self._videos_list.setMaximumHeight(160)
-        attach_empty_state(self._videos_list, "No videos yet.\nAdd the recordings you want scored.")
-        videos_group.add(self._videos_list)
-        add_videos_btn = QPushButton("Add video(s)…")
-        add_videos_btn.clicked.connect(self._on_add_videos)
-        remove_video_btn = QPushButton("Remove selected")
-        set_button_role(remove_video_btn, "ghost")
-        remove_video_btn.clicked.connect(self._on_remove_video)
-        videos_group.add(_button_row(add_videos_btn, remove_video_btn))
-        column.addWidget(videos_group)
-
-        # --- keypoints --------------------------------------------------
-        keypoints = Card("Keypoints", "must match the model's own order")
-        self._keypoints_edit = QLineEdit()
-        self._keypoints_edit.setPlaceholderText("nose, left_ear, right_ear, ... (comma-separated)")
-        edit_kp = QPushButton("Edit…")
-        edit_kp.setToolTip(
-            "Arrange the keypoints on a figure instead of typing the order, "
-            "and save the layout for reuse."
-        )
-        edit_kp.clicked.connect(self._edit_keypoint_schema)
-        keypoints.add_row("Names", self._keypoints_edit, edit_kp)
-        keypoints.add(hint("Filled in automatically when a model bundle is chosen."))
-        column.addWidget(keypoints)
-
-        # --- pose reuse -------------------------------------------------
         # Checked by default: Batch Pose Tracking has usually already produced
         # these, and re-deriving them is the biggest avoidable cost in a run.
-        poses = Card("Pose data")
         self._reuse_poses = QCheckBox("Reuse already-tracked pose CSVs (skips tracking)")
         self._reuse_poses.setChecked(True)
         self._reuse_poses.setToolTip(
@@ -2046,7 +2091,7 @@ class ApplyTab(QWidget):
             "Falls back to tracking for any video without one."
         )
         self._reuse_poses.toggled.connect(self._on_reuse_toggled)
-        poses.add(self._reuse_poses)
+        tracking.addRow(self._reuse_poses)
 
         # Batch Pose Tracking writes its CSVs wherever it was pointed, which
         # is routinely a poses folder rather than beside the videos. Matching
@@ -2061,36 +2106,35 @@ class ApplyTab(QWidget):
         self._pose_dir_clear = QPushButton("Use video folder")
         set_button_role(self._pose_dir_clear, "ghost")
         self._pose_dir_clear.clicked.connect(self._on_clear_pose_dir)
-        poses.add_row("CSV folder", self._pose_dir_value, self._pose_dir_btn, self._pose_dir_clear)
+        tracking.addRow(
+            labelled_row(
+                "Pose CSV folder", self._pose_dir_value, self._pose_dir_btn, self._pose_dir_clear
+            )
+        )
 
-        self._pose_match_label = hint("")
-        poses.add(self._pose_match_label)
-        column.addWidget(poses)
+        self._keypoints_edit = QLineEdit()
+        self._keypoints_edit.setPlaceholderText("nose, left_ear, right_ear, ... (comma-separated)")
+        self._keypoints_edit.setToolTip(
+            "Must match the model's own order. Filled in automatically when a "
+            "model bundle is chosen."
+        )
+        edit_kp = QPushButton("Edit…")
+        edit_kp.setToolTip(
+            "Arrange the keypoints on a figure instead of typing the order, "
+            "and save the layout for reuse."
+        )
+        edit_kp.clicked.connect(self._edit_keypoint_schema)
+        tracking.addRow(labelled_row("Keypoint names", self._keypoints_edit, edit_kp))
 
-        # --- scoring ----------------------------------------------------
-        scoring = Card("Scoring")
-        scoring.add(self._build_cadence_row())
-        scoring.add(self._build_time_range_row())
-        scoring.add_separator()
-        scoring.add(self._build_stability_group())
-        column.addWidget(scoring)
+        scoring = self._options.add_section("Scoring")
+        scoring.addRow(self._build_cadence_row())
+        scoring.addRow(self._build_time_range_row())
+        scoring.addRow(self._build_stability_group())
 
-        # --- speed axis -------------------------------------------------
-        speed_card = Card("Freeze / dart speed axis", "optional")
-        self._speed_card = speed_card
-        speed_card.add(self._build_speed_group())
-        column.addWidget(speed_card)
+        speed = self._options.add_section("Freeze / dart from speed")
+        speed.addRow(self._build_speed_group())
 
-        # --- output -----------------------------------------------------
-        output = Card("Output")
-        self._output_label = QLabel("Output folder: (none)")
-        self._output_label.setVisible(False)  # kept as the text of record
-        self._output_value = path_label("(none)")
-        output_btn = QPushButton("Choose…")
-        output_btn.clicked.connect(self._on_choose_output_dir)
-        output.add_row("Folder", self._output_value, output_btn)
-        output.add(hint("Each video gets its own subfolder here."))
-
+        output = self._options.add_section("Output")
         # Encoding an annotated MP4 costs more wall-clock than the inference
         # itself on a long recording, and it is a spot-checking aid rather than
         # an analysis artifact -- so it is off unless asked for.
@@ -2100,29 +2144,89 @@ class ApplyTab(QWidget):
             "Writes annotated.mp4 beside the ethogram. Useful for checking a "
             "single video; a large cost per video across a batch."
         )
-        output.add(self._render_video)
-        column.addWidget(output)
+        output.addRow(self._render_video)
 
-        column.addStretch(1)
+        for signal in (
+            self._predict_every.valueChanged,
+            self._range_on.toggled,
+            self._range_start.valueChanged,
+            self._range_end.valueChanged,
+            self._smooth_window.valueChanged,
+            self._offline_smooth.valueChanged,
+            self._min_bout_s.valueChanged,
+            self._speed_group.toggled,
+            self._reuse_poses.toggled,
+            self._render_video.toggled,
+        ):
+            signal.connect(self._update_summary)
+        # A blocker can live in Options (the speed axis, the annotated video),
+        # so the footer is re-read whenever one of them changes.
+        self._render_video.toggled.connect(self._refresh_blocker)
+        self._score_freezing.toggled.connect(self._refresh_blocker)
+        self._score_darting.toggled.connect(self._refresh_blocker)
+        self._speed_mode.currentIndexChanged.connect(self._refresh_blocker)
+        self._keypoints_edit.textChanged.connect(self._refresh_blocker)
+        self._update_summary()
         self._refresh_blocker()
 
-    def _refresh_blocker(self) -> None:
-        """Say why Run is unavailable, in the rail, before it is ever clicked.
+    def _update_summary(self, *_args) -> None:
+        """Name the cadence, smoothing, speed axis and every non-default option."""
+        n = self._predict_every.value()
+        parts = ["Every frame" if n == 1 else f"Every {n} frames"]
+        if self._range_on.isChecked():
+            start, end = self._range_start.value(), self._range_end.value()
+            parts.append(f"{start:g}–{end:g} min" if end else f"from {start:g} min")
+        smoothing_on = self._smooth_window.value() > 1 or self._offline_smooth.value() > 0
+        parts.append("smoothing on" if smoothing_on else "smoothing off")
+        if self._min_bout_s.value():
+            parts.append(f"{self._min_bout_s.value():g} s minimum bout")
+        parts.append("freeze/dart on" if self._speed_group.isChecked() else "freeze/dart off")
+        if not self._reuse_poses.isChecked():
+            parts.append("tracking every video")
+        if self._render_video.isChecked():
+            parts.append("annotated video")
+        self._summary.setText(" · ".join(parts))
+
+    def _refresh_blocker(self, *_args) -> None:
+        """Say why Score is unavailable, in the footer, before it is ever clicked.
 
         ``_run_blocker`` already knew all of this; it was only ever consulted
         after the click, so the operator configured the whole screen and then
-        found out. Shown continuously it becomes a checklist instead.
+        found out. Shown continuously it becomes a checklist instead -- and it
+        names settings that live in Options, so none blocks silently.
         """
         n = len(self._videos)
         self._videos_card.set_badge(f"{n} video{'' if n == 1 else 's'}" if n else "none yet")
-        self._speed_card.set_badge("on" if self._speed_group.isChecked() else "off")
+        self._run_btn.setText(f"Score {n} Video{'' if n == 1 else 's'}" if n else "Score Videos")
+        if not self._run_btn.isEnabled():
+            return  # a run in flight owns the footer message
         if not self._videos:
             message = "Add at least one video."
         elif self._output_dir is None:
             message = "Choose an output folder."
         else:
-            message = self._run_blocker() or ""
-        self._rail.set_blocker(message)
+            message = self._run_blocker()
+            if not message and not self._keypoints_edit.text().strip():
+                message = "Enter the keypoint names (Options ▸ Keypoint names)."
+        if message:
+            self._footer.set_message(message, warning=bool(self._videos))
+            return
+        untracked = len(self._needs_tracking())
+        poses = (
+            "poses found for all" if not untracked else f"{untracked} will be tracked from scratch"
+        )
+        self._footer.set_message(f"Ready: {n} video{'' if n == 1 else 's'}, {poses}.")
+
+    def _on_show_files(self) -> None:
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+
+        if self._output_dir is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._output_dir)))
+
+    def _on_open_in_review(self) -> None:
+        if self._output_dir is not None:
+            self.open_in_session_review.emit(str(self._output_dir))
 
     def _on_choose_model(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -2369,6 +2473,7 @@ class ApplyTab(QWidget):
         silently costs a full tracking pass, which is the single most
         expensive thing an apply run can do.
         """
+        self._label_video_rows()
         if not self._reuse_poses.isChecked():
             set_text_role(self._pose_match_label, "warning")
             self._pose_match_label.setText("Tracking will run for every video.")
@@ -2397,6 +2502,19 @@ class ApplyTab(QWidget):
             f"No pose CSV for: {names}{more} — those would be tracked from scratch."
         )
         self._refresh_blocker()
+
+    def _label_video_rows(self) -> None:
+        """Each row says whether its poses were found, so a miss is seen per video."""
+        if self._reuse_poses.isChecked():
+            _matched, unmatched = self._match_poses()
+        else:
+            unmatched = self._videos
+        for i, video in enumerate(self._videos):
+            item = self._videos_list.item(i)
+            if item is None:
+                continue
+            tail = "no poses — will be tracked" if video in unmatched else "\u2713 poses found"
+            item.setText(f"{video.name}   {tail}")
 
     def _on_choose_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose output folder")
@@ -2494,10 +2612,14 @@ class ApplyTab(QWidget):
             return
 
         self._results.clear()
+        self._results_card.setVisible(True)
+        self._banner.setVisible(False)
+        self._scored = 0
         self._queue = list(self._videos)
+        self._run_total = len(self._queue)
         self._run_btn.setEnabled(False)
         self._progress.setVisible(True)
-        self._rail.status.set_state("running", "Scoring")
+        self._footer.set_message("Scoring…")
         self._keypoint_names = keypoint_names
         self._run_next()
 
@@ -2963,7 +3085,7 @@ class ApplyTab(QWidget):
         return group
 
     def _on_speed_group_toggled(self, _checked: bool) -> None:
-        """Keep the card badge and the Run blocker in step with the axis."""
+        """Keep the footer's blocker in step with the axis."""
         self._refresh_blocker()
 
     def _on_choose_cohort(self) -> None:
@@ -3197,17 +3319,14 @@ class ApplyTab(QWidget):
 
     def _run_next(self) -> None:
         if not self._queue:
-            self._progress.setVisible(False)
-            self._run_btn.setEnabled(True)
-            if self._rail.status.property("state") == "running":
-                self._rail.status.set_state("ok", "Done")
+            self._finish_run()
             return
 
         from glider.gui.behavior.workers import ApplyWorker
 
         video = self._queue.pop(0)
         remaining = len(self._videos) - len(self._queue)
-        self._rail.status.set_state("running", f"{remaining} / {len(self._videos)}")
+        self._footer.set_message(f"Scoring {remaining} of {len(self._videos)}…")
         video_output_dir = self._output_dir / video.stem
         start_s, end_s = self._time_range()
 
@@ -3258,6 +3377,7 @@ class ApplyTab(QWidget):
             for slot in sorted(result):
                 lines.append(f"  animal {slot} ethogram: {result[slot]}")
             self._results.append("\n".join(lines))
+            self._scored += 1
             self._run_next()
             return
         n_frames = getattr(getattr(result, "ethogram", None), "__len__", lambda: None)()
@@ -3274,14 +3394,30 @@ class ApplyTab(QWidget):
             if out_path.exists():
                 lines.append(f"  {label}: {out_path}")
         self._results.append("\n".join(lines))
+        self._scored += 1
         self._run_next()
 
     def _on_apply_failed(self, message: str, video: Path) -> None:
         self._teardown_apply_thread()
-        self._rail.status.set_state("error", "Failed")
         self._results.append(f"{video.name}: FAILED - {message}")
         QMessageBox.critical(self, "Apply failed", f"{video.name}:\n{message}")
         self._run_next()
+
+    def _finish_run(self) -> None:
+        """Banner and tick when the run scored anything; the footer says what failed."""
+        self._progress.setVisible(False)
+        self._run_btn.setEnabled(True)
+        n, total = self._scored, self._run_total
+        if n and self._output_dir is not None:
+            self._banner_text.setText(
+                f"\u2713 Scored {n} video{'' if n == 1 else 's'}. Ethograms, bouts and "
+                f"stats written to {_short_path(self._output_dir)}"
+            )
+            self._banner.setVisible(True)
+            self.scored.emit(n)
+        self._refresh_blocker()
+        if n < total:
+            self._footer.set_message(f"{total - n} of {total} failed.", warning=True)
 
     def _teardown_apply_thread(self) -> None:
         if self._apply_thread is not None:

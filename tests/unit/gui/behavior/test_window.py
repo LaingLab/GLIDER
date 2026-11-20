@@ -169,6 +169,7 @@ def test_switching_mode_hides_the_irrelevant_fields(qtbot):
     qtbot.addWidget(tab)
     tab._speed_group.setChecked(True)
     tab.show()
+    tab._options.show()  # the speed group lives in the Options popup
 
     tab._speed_mode.setCurrentIndex(tab._speed_mode.findData("absolute"))
     assert tab._freeze_cm_s.isVisible() is True

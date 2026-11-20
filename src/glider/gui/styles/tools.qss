@@ -653,6 +653,13 @@ QLabel#StepNumber[state="done"] {
     color: #0a0e13;
 }
 
+/* Apply: "Scored N videos", with Show Files and Open in Session Review. */
+QFrame#ScoredBanner {
+    background-color: rgba(52, 211, 153, 0.10);
+    border: 1px solid rgba(52, 211, 153, 0.45);
+    border-radius: @RADIUS_MEDIUM@;
+}
+
 /* One footer per step: readiness message, Options, the primary action. */
 QFrame#StepFooter {
     background-color: #0b0f14;
