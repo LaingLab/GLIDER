@@ -2157,6 +2157,9 @@ class ApplyTab(QWidget):
             self._speed_group.toggled,
             self._reuse_poses.toggled,
             self._render_video.toggled,
+            self._score_freezing.toggled,
+            self._score_darting.toggled,
+            self._speed_mode.currentIndexChanged,
         ):
             signal.connect(self._update_summary)
         # A blocker can live in Options (the speed axis, the annotated video),
@@ -2176,13 +2179,37 @@ class ApplyTab(QWidget):
         if self._range_on.isChecked():
             start, end = self._range_start.value(), self._range_end.value()
             parts.append(f"{start:g}–{end:g} min" if end else f"from {start:g} min")
-        smoothing_on = self._smooth_window.value() > 1 or self._offline_smooth.value() > 0
-        parts.append("smoothing on" if smoothing_on else "smoothing off")
+        majority, centred = self._smooth_window.value(), self._offline_smooth.value()
+        if majority <= 1 and not centred:
+            parts.append("smoothing off")
+        elif majority == _DEFAULT_SMOOTH_WINDOW and centred == DEFAULT_OFFLINE_WINDOW:
+            parts.append("smoothing on")
+        else:
+            # Either knob off its default is named, with its value.
+            parts.append(f"majority {majority if majority > 1 else 'off'}")
+            parts.append(f"centred {centred or 'off'}")
         if self._min_bout_s.value():
             parts.append(f"{self._min_bout_s.value():g} s minimum bout")
-        parts.append("freeze/dart on" if self._speed_group.isChecked() else "freeze/dart off")
+        if self._speed_group.isChecked():
+            freezing, darting = self._score_freezing.isChecked(), self._score_darting.isChecked()
+            speed = "freeze/dart" if freezing and darting else "freeze" if freezing else "dart"
+            if not (freezing or darting):
+                speed = "freeze/dart (neither ticked)"
+            mode = self._speed_mode_value()
+            if mode == "cohort":
+                name = self._cohort_path.name if self._cohort_path else "no file"
+                speed += f" on (cohort: {name})"
+            elif mode == "percentile":
+                speed += " on (percentile)"
+            else:
+                speed += " on"
+            parts.append(speed)
+        else:
+            parts.append("freeze/dart off")
         if not self._reuse_poses.isChecked():
             parts.append("tracking every video")
+        elif self._pose_dir is not None:
+            parts.append(f"poses from {_short_path(self._pose_dir)}")
         if self._render_video.isChecked():
             parts.append("annotated video")
         self._summary.setText(" · ".join(parts))
@@ -2436,6 +2463,7 @@ class ApplyTab(QWidget):
         set_path_text(self._pose_dir_value, _short_path(self._pose_dir), filled=True)
         self._pose_dir_value.setToolTip(path)
         self._refresh_pose_match()
+        self._update_summary()
 
     def _on_clear_pose_dir(self) -> None:
         self._pose_dir = None
@@ -2444,6 +2472,7 @@ class ApplyTab(QWidget):
         set_path_text(self._pose_dir_value, "beside each video", filled=False)
         self._pose_dir_value.setToolTip("")
         self._refresh_pose_match()
+        self._update_summary()
 
     def _on_reuse_toggled(self, checked: bool) -> None:
         for w in (
@@ -3108,6 +3137,7 @@ class ApplyTab(QWidget):
         from glider.analysis.behavior.cohort_speed import CohortSpeedError, CohortSpeedThresholds
 
         self._cohort_label.setToolTip(str(self._cohort_path))
+        self._update_summary()
         try:
             thresholds = CohortSpeedThresholds.load(self._cohort_path)
         except CohortSpeedError as e:

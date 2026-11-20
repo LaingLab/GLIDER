@@ -114,6 +114,39 @@ def test_summary_names_non_default_options(qtbot):
     assert "annotated video" in lowered
 
 
+def test_summary_names_changed_smoothing_pose_folder_and_speed_mode(qtbot, tmp_path, monkeypatch):
+    from glider.gui.behavior import window as win_mod
+
+    tab = _tab(qtbot)
+    text = tab._summary.text
+    tab._smooth_window.setValue(15)
+    assert "majority 15" in text()
+    assert "centred" in text()
+    assert "smoothing on" not in text()
+    tab._smooth_window.setValue(win_mod._DEFAULT_SMOOTH_WINDOW)
+    tab._offline_smooth.setValue(0)
+    assert "centred off" in text()
+    assert f"majority {win_mod._DEFAULT_SMOOTH_WINDOW}" in text()
+
+    folder = tmp_path / "poses"
+    folder.mkdir()
+    monkeypatch.setattr(win_mod.QFileDialog, "getExistingDirectory", lambda *a, **k: str(folder))
+    tab._on_choose_pose_dir()
+    assert "poses from" in text() and "poses" in text().split("poses from")[1]
+    tab._on_clear_pose_dir()
+    assert "poses from" not in text()
+
+    tab._speed_group.setChecked(True)
+    assert "freeze/dart on" in text()
+    assert "percentile" not in text()
+    tab._speed_mode.setCurrentIndex(tab._speed_mode.findData("percentile"))
+    assert "freeze/dart on (percentile)" in text()
+    tab._speed_mode.setCurrentIndex(tab._speed_mode.findData("cohort"))
+    assert "cohort: no file" in text()
+    tab._score_darting.setChecked(False)
+    assert "freeze on (cohort" in text()
+
+
 def _finish_one(tab, tmp_path) -> Path:
     out = tmp_path / "out"
     (out / "a").mkdir(parents=True)
