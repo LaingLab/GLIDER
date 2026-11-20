@@ -311,15 +311,6 @@ class BehaviorAnalysisWindow(QMainWindow):
     #: that window, so this one only says which folder.
     open_in_session_review = pyqtSignal(str)
 
-    # What each tab is for, shown in the header so the four stages read as one
-    # pipeline rather than four unrelated screens.
-    _TAB_BLURBS = (
-        "Label behavior on sampled clips to build a training set",
-        "Fit a classifier from labeled sessions",
-        "Read how the trained model actually performed",
-        "Score recorded video and write the ethogram",
-    )
-
     def __init__(self, project_dir: Path | None = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Behavior Analysis")
@@ -356,7 +347,7 @@ class BehaviorAnalysisWindow(QMainWindow):
         self.train_tab.run_reported.connect(self._on_run_reported)
         self.train_tab.model_saved.connect(lambda _path: self.set_step_done(1, True))
 
-        self._header = ToolHeader("Behavior Analysis", self._TAB_BLURBS[0])
+        self._header = ToolHeader("Behavior Analysis")
         self._build_step_strip()
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.annotate_tab.labelling_found.connect(lambda found: self.set_step_done(0, found))
@@ -463,8 +454,6 @@ class BehaviorAnalysisWindow(QMainWindow):
         # A step's Options belong to that step; left open they float over the next.
         for popup in self.findChildren(OptionsPopup):
             popup.hide()
-        if 0 <= index < len(self._TAB_BLURBS):
-            self._header.set_subtitle(self._TAB_BLURBS[index])
         self._restyle_steps()
 
     def _on_run_reported(self, report_dir: object, summary: object) -> None:
@@ -2503,6 +2492,9 @@ class ApplyTab(QWidget):
         expensive thing an apply run can do.
         """
         self._label_video_rows()
+        # Shown only when it adds something; the per-row marks already say
+        # "found". The text is still set so the full-coverage state is readable.
+        self._pose_match_label.setVisible(True)
         if not self._reuse_poses.isChecked():
             set_text_role(self._pose_match_label, "warning")
             self._pose_match_label.setText("Tracking will run for every video.")
@@ -2511,6 +2503,7 @@ class ApplyTab(QWidget):
         if not self._videos:
             set_text_role(self._pose_match_label, "hint")
             self._pose_match_label.setText("")
+            self._pose_match_label.setVisible(False)
             self._refresh_blocker()
             return
         matched, unmatched = self._match_poses()
@@ -2521,6 +2514,7 @@ class ApplyTab(QWidget):
             self._pose_match_label.setText(
                 f"✓ Matched a pose CSV for all {len(matched)} video(s) in {where}."
             )
+            self._pose_match_label.setVisible(False)
             self._refresh_blocker()
             return
         names = ", ".join(v.name for v in unmatched[:4])

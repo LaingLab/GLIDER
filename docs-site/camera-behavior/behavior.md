@@ -23,8 +23,10 @@ the item is greyed out and its tooltip tells you what's missing and how to fix i
 
 > Install the behavior extra: pip install glider[behavior] (missing: …)
 
-The Behavior Analysis window opens with three tabs — **Annotate**, **Train**, and
-**Apply** — which correspond to the three stages of the workflow.
+The Behavior Analysis window opens with a step strip — **Annotate**, **Train**, **Review**, and
+**Apply** — which walks the workflow in order. Each step shows what it needs and
+ends in one footer: a readiness message, **Options** for the settings you rarely
+change, and one primary button.
 
 !!! note "This is the supervised, machine-learning tool"
     Don't confuse this with the live **Enable Behavior Analysis** option in the
@@ -145,10 +147,11 @@ On the **Train** tab you fit a classifier from your labeled sessions:
    (measure only; saves nothing) and **Cross-validate, then fit…**; both ask
    how many folds to use.
 
-When training finishes, a summary appears in the results box: how many rows were
-kept versus dropped, the classes learned, training accuracy, the most important
-features, and — if you provided a holdout set — test accuracy, per-class
-precision/recall/F1, and a confusion matrix.
+When training finishes, the window moves to the **Review** step. It leads with
+the verdict — the headline accuracy and how it was measured — then per-behavior
+precision/recall/F1 and a confusion matrix (the latter two need a holdout set).
+Click **Details ▸** for the reference cards: feature space, training rows per
+behavior, top features, and the settings that produced the run.
 
 !!! note "Add a holdout set to see honest test scores"
     Without a holdout set, only training accuracy is reported, which always looks
