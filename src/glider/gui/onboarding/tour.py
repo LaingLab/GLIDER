@@ -194,15 +194,16 @@ def pose_batch_steps() -> list[TourStep]:
             None,
             "Tracking a folder of video",
             "This runs a trained pose model over whole directories and writes a "
-            "DLC-format CSV beside each video. Fill the left column top to "
-            "bottom, then start the run on the right. Skip or Esc leaves anytime.",
+            "DLC-format CSV beside each video. The strip along the top follows "
+            "you through the four steps: model, videos, arenas, then Track. "
+            "Skip or Esc leaves anytime.",
         ),
         TourStep(
             "model",
             "1 · The model",
-            "Point this at your trained YOLO-pose .pt file. GLIDER reads the "
+            "Choose your trained YOLO-pose .pt file. GLIDER reads the "
             "keypoints straight out of the weights, so the bodypart list below "
-            "usually fills itself in.",
+            "usually fills itself in. Set Animals if more than one is in frame.",
         ),
         TourStep(
             "bodyparts",
@@ -214,28 +215,30 @@ def pose_batch_steps() -> list[TourStep]:
         TourStep(
             "videos",
             "2 · The videos",
-            "Drop folders or files here, or use the buttons. 'Include "
-            "subdirectories' is on, so pointing at one cohort folder usually "
-            "picks up everything under it.",
+            "Drop folders or files onto the table, or use Add Folder… and "
+            "Add Files…. Subfolders are included by default (see Settings), so "
+            "pointing at one cohort folder usually picks up everything under it.",
         ),
         TourStep(
             "calibration",
-            "3 · Scale, per video",
-            "Every video needs a pixels-to-centimetres scale before the batch "
-            "will run. Videos shot on the same rig at the same camera height can "
-            "share one — calibrate a video, then 'Copy to Selected'.",
+            "3 · Arena, per video",
+            "Every video needs its arena outlined before the batch will run; "
+            "that also gives the pixels-to-centimetres scale. Double-click a row "
+            "or use Draw Arena…. Videos shot on the same rig can share one: draw "
+            "it once, then 'Copy Arena to Selected' and check each copy.",
         ),
         TourStep(
             "filter",
-            "4 · Smoothing (optional)",
-            "Drops low-confidence points, bridges short gaps and median-filters "
-            "the rest. The smoothed result becomes the main CSV and the raw "
-            "inference is kept beside it as *_raw.csv, so this is reversible.",
+            "4 · Settings (optional)",
+            "Device, confidence, subfolders, overwrite and the arenas file live "
+            "here, along with smoothing: it drops low-confidence points, bridges "
+            "short gaps and median-filters the rest. The raw inference is kept "
+            "beside the result as *_raw.csv, so smoothing is reversible.",
         ),
         TourStep(
             "run",
             "5 · Run it",
-            "Progress and a log appear on this rail. Overwrite is off by "
+            "Progress and a log appear in the footer. Overwrite (in Settings) is off by "
             "default, so if a batch is interrupted you can start it again and it "
             "picks up where it stopped instead of redoing finished videos.",
         ),
