@@ -3960,3 +3960,41 @@ class TestTheEmptyState:
         assert win._pool.isHidden()
         win._view_actions["sessions"].setChecked(True)
         assert not win._pool.isHidden()
+
+    def test_the_tour_gives_the_empty_card_back(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        pages = []
+        win._body.currentChanged.connect(pages.append)
+        win.start_tour()
+        tour = win._tour
+        for _ in range(len(tour._steps)):
+            tour._next()
+        assert 1 in pages  # it brought the editor forward to point at it
+        assert win._body.currentIndex() == 0
+
+    def test_the_first_show_tour_gives_the_empty_card_back(self, qtbot, tmp_path, monkeypatch):
+        from glider.gui.onboarding import tour as tour_module
+
+        offered = []
+
+        def offer(host, steps, complete_key, **_):
+            # A first show, whatever this machine's settings say.
+            settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+            tour = tour_module.Tour(host, steps=steps, settings=settings)
+            tour.start()
+            offered.append(tour)
+            return tour
+
+        monkeypatch.setattr(tour_module, "offer_tour_once", offer)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        pages = []
+        win._body.currentChanged.connect(pages.append)
+        win.show()
+        tour = offered[0]
+        for _ in range(len(tour._steps) - 1):
+            tour._next()
+        assert 1 in pages
+        tour._finish()  # Skip or Esc mid-tour
+        assert win._body.currentIndex() == 0

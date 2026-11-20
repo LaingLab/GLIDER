@@ -996,6 +996,7 @@ class AnalysisWindow(QMainWindow):
             steps=session_review_steps(),
             complete_key=SESSION_REVIEW_TOUR_COMPLETE_KEY,
         )
+        self._tour.finished.connect(self._back_to_empty)
         self._tour.start()
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -1007,7 +1008,14 @@ class AnalysisWindow(QMainWindow):
             session_review_steps,
         )
 
-        offer_tour_once(self, session_review_steps(), SESSION_REVIEW_TOUR_COMPLETE_KEY)
+        tour = offer_tour_once(self, session_review_steps(), SESSION_REVIEW_TOUR_COMPLETE_KEY)
+        if tour is not None:
+            tour.finished.connect(self._back_to_empty)
+
+    def _back_to_empty(self) -> None:
+        """The tour brings the editor forward to point at it; with nothing open, put the card back."""
+        if not self._cohort:
+            self._body.setCurrentIndex(0)
 
     def _refresh_bout_filter(self) -> None:
         """Repopulate the picker for the shown session, keeping the choice."""
