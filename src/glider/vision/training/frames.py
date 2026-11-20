@@ -18,6 +18,7 @@ import numpy as np
 
 from glider.core.fileio import atomic_write_bytes
 from glider.vision.training.project import FrameRecord, StudioProject
+from glider.vision.training.splits import assign_splits
 from glider.vision.video_source import ExactFrameReader
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,7 @@ def extract_frames(
                 progress_cb(pool_steps + step + 1, total)
     finally:
         cap.release()
+        assign_splits(project, added)
         project.save()
     logger.info("added %d frames from %s (%s)", len(added), video.name, method)
     return added
