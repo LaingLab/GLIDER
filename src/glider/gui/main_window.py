@@ -2889,8 +2889,10 @@ class MainWindow(QMainWindow):
           2. If the board dropped *during* a running experiment, pause and
              surface the hardware-disconnection dialog.
         """
-        # (1) Always refresh the readouts.
+        # (1) Always refresh the readouts. Every pin device's link_state is
+        # derived from its board, so a board moving moves all of their rows.
         self._refresh_hardware_readouts()
+        self._refresh_device_link_widgets()
 
         # (2) Pause-on-drop guard only applies to terminal-failure states
         # reached while an experiment is actually running.
@@ -2974,6 +2976,11 @@ class MainWindow(QMainWindow):
                 panel.refresh_link_states()
         if self._device_control_panel:
             self._device_control_panel.refresh_link_state()
+        # The run panel's rows repaint on a timer only while RUNNING; idle,
+        # they kept showing a dead board's devices as connected.
+        self._runner_device_controls.refresh_values()
+        if self._pi_run_page is not None:
+            self._pi_run_page.devices.update_states()
 
     def _refresh_hardware_readouts(self) -> None:
         """Both readouts of the same rig, refreshed together.
@@ -3094,7 +3101,14 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(stop_btn)
 
         layout.addLayout(button_layout)
-        dialog.exec()
+        # open(), never exec(): this is reached synchronously from inside an
+        # asyncio task step (a board write notices the drop -> _set_state ->
+        # same-thread signal -> here, and from retry_connection). A nested
+        # exec() loop there makes asyncio refuse to step every other task
+        # ("Cannot enter into task ... while another task is being executed"),
+        # silently killing the flow, the pause() above and the recorder.
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.open()
 
     def _handle_disconnection_retry(self, dialog: QDialog, board_id: str) -> None:
         dialog.accept()
