@@ -16,7 +16,16 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
+from PyQt6.QtGui import (
+    QAction,
+    QBrush,
+    QColor,
+    QFont,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -1701,6 +1710,15 @@ def _tool(text: str, tip: str, *, checked: bool | None = None) -> QToolButton:
     return button
 
 
+def _action(menu: QMenu, text: str, tip: str, *, checked: bool | None = None) -> QAction:
+    action = menu.addAction(text)
+    action.setToolTip(tip)
+    if checked is not None:
+        action.setCheckable(True)
+        action.setChecked(checked)
+    return action
+
+
 def _rule() -> QFrame:
     line = QFrame()
     line.setFrameShape(QFrame.Shape.VLine)
@@ -1741,20 +1759,8 @@ class TimelinePanel(QTabWidget):
         row = QHBoxLayout(tools)
         row.setContentsMargins(8, 2, 8, 2)
         row.setSpacing(4)
-        self.marker_btn = _tool("Marker", "Add a point marker at the playhead  (M)")
-        self.range_marker_btn = _tool(
-            "Range marker", "Save the In/Out range as a range marker  (⇧M)"
-        )
+        self.marker_btn = _tool("＋ Marker", "Add a point marker at the playhead  (M)")
         row.addWidget(self.marker_btn)
-        row.addWidget(self.range_marker_btn)
-        row.addWidget(_rule())
-        self.snap = _tool(
-            "Snap", "Selections snap to bout edges and hardware switches", checked=True
-        )
-        self.snap.toggled.connect(self.view.set_snap)
-        self.loop = _tool("Loop", "Playback loops inside the selected range", checked=False)
-        row.addWidget(self.snap)
-        row.addWidget(self.loop)
         row.addWidget(_rule())
         self.bout_slot = QHBoxLayout()
         self.bout_slot.setSpacing(4)
@@ -1768,12 +1774,31 @@ class TimelinePanel(QTabWidget):
         for label in (self.in_label, self.out_label, self.dur_label):
             row.addWidget(label)
         row.addWidget(_rule())
-        self.zoom_btn = _tool("Zoom to range", "Fit the selected range to the timeline  (Z)")
         self.fit_btn = _tool("Fit", "Show the whole session  (⇧Z)")
-        self.zoom_btn.clicked.connect(self.view.zoom_to_selection)
         self.fit_btn.clicked.connect(self.view.fit)
-        row.addWidget(self.zoom_btn)
         row.addWidget(self.fit_btn)
+        # The rarer tools, each with a key of its own, under ⋯.
+        self.more_btn = _tool("⋯", "Range marker, Snap, Loop, Zoom to range")
+        self.more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.more_menu = QMenu(self.more_btn)
+        self.more_menu.setToolTipsVisible(True)
+        self.more_btn.setMenu(self.more_menu)
+        row.addWidget(self.more_btn)
+        more = self.more_menu
+        self.range_marker_btn = _action(
+            more, "Range marker", "Save the In/Out range as a range marker  (⇧M)"
+        )
+        more.addSeparator()
+        self.snap = _action(
+            more, "Snap", "Selections snap to bout edges and hardware switches", checked=True
+        )
+        self.snap.toggled.connect(self.view.set_snap)
+        self.loop = _action(more, "Loop", "Playback loops inside the selected range", checked=False)
+        more.addSeparator()
+        self.zoom_btn = _action(
+            more, "Zoom to range", "Fit the selected range to the timeline  (Z)"
+        )
+        self.zoom_btn.triggered.connect(self.view.zoom_to_selection)
         self.setCornerWidget(tools, Qt.Corner.TopRightCorner)
         self.currentChanged.connect(lambda index: tools.setVisible(index == 0))
 

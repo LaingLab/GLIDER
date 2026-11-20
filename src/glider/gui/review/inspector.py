@@ -196,6 +196,10 @@ class Inspector(QTabWidget):
         self.bouts.setHorizontalHeaderLabels(
             ["Behavior", "Bouts", "Total (s)", "Fraction", "Mean (s)", "Median (s)"]
         )
+        # Six columns do not fit the 300 px column: the answer (total and
+        # share) stays in view, mean and median ride in each row's tooltip.
+        for c in (4, 5):
+            self.bouts.setColumnHidden(c, True)
         column.addWidget(self.bouts)
 
         self.movement_title = _section("Movement")
@@ -208,12 +212,14 @@ class Inspector(QTabWidget):
         column.addLayout(kpis)
         self.distance, self.mean_speed, self.peak_speed = (t.value for t in self.movement_tiles)
 
-        # Exploration needs an arena; without one, a line that says how to get it.
+        # Exploration needs an arena; without one, a line under the same
+        # heading that says how to get it.
+        self.exploration_title = _section("Exploration")
+        column.addWidget(self.exploration_title)
         self.exploration = QWidget()
         box = QVBoxLayout(self.exploration)
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(8)
-        box.addWidget(_section("Exploration"))
         self.grid_n = GridSpin()
         box.addLayout(labelled_row("Grid", self.grid_n))
         explore = QHBoxLayout()

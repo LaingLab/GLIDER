@@ -54,8 +54,8 @@ once, anywhere:
 - **Setup ▾ → Experiment type** in Session Review's top bar.
 
 Change it in one place and the others follow. The Batch Pose window's
-**Pup segmentation** card and Session Review's **Retrieval** tab, **Pups**
-toggle and retrieval exports all come and go with it. (**Open video…** is
+**Pup segmentation** card and Session Review's **Retrieval** tab, **Overlays ▾ → Pups**
+entry and retrieval exports all come and go with it. (**Open video…** is
 available for every protocol.)
 
 The built-in **Pup Retrieval** preset sets the protocol on whatever experiment
@@ -146,7 +146,7 @@ litter.
 
 ## What's drawn
 
-With the **Pups** toggle on, the video shows:
+With **Overlays ▾ → Pups** ticked, the video shows:
 
 - the **nest** in force at that moment, as a dashed outline;
 - every pup's **outline**, numbered with its slot;

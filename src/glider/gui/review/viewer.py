@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
 from PyQt6.QtGui import (
+    QAction,
     QBrush,
     QColor,
     QFont,
@@ -29,8 +30,10 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QSizePolicy,
+    QToolButton,
     QWidget,
 )
 
@@ -849,47 +852,50 @@ class Transport(QFrame):
         row.addWidget(self.bout, 1)
         self.video_on = _toggle("Video", "Draw the session's video", checked=True)
         self.poses_on = _toggle("Poses", "Draw the tracked keypoints", checked=True)
-        self.distances_on = _toggle(
-            "Distances",
-            "Label keypoint pairs with their distance in video pixels. "
-            "Right-click to choose the pairs.",
-            checked=False,
-        )
-        self.distances_on.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.pups_on = _toggle(
-            "Pups", "Draw the nest, each pup and the dam's nose line", checked=True
-        )
         self.trail_on = _toggle("Trail", "Draw the recent centroid track", checked=True)
-        self.heatmap_on = _toggle(
-            "Heatmap", "Where the animal spent the selected range", checked=False
-        )
-        self.zones_on = _toggle("Zones", "Outline the loaded zones", checked=True)
-        # Right-click either to choose the keypoints they are measured from.
-        for toggle in (self.heatmap_on, self.zones_on):
-            toggle.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.arena_on = _toggle(
-            "Arena", "Outline the drawn arena floor and its exploration grid", checked=True
-        )
-        self.hud_on = _toggle(
-            "HUD", "Name the behaviour and active outputs on each frame", checked=True
-        )
-        for toggle in (
-            self.video_on,
-            self.poses_on,
-            self.distances_on,
-            self.pups_on,
-            self.trail_on,
-            self.heatmap_on,
-            self.zones_on,
-            self.arena_on,
-            self.hud_on,
-        ):
+        for toggle in (self.video_on, self.poses_on, self.trail_on):
             row.addWidget(toggle)
+        # The rarer overlays are checkable entries under one button. The
+        # attribute names are the old chips': QAction toggles the same way.
+        self.overlays_btn = QToolButton()
+        self.overlays_btn.setObjectName("OverlaysMenu")
+        self.overlays_btn.setText("Overlays ▾")
+        self.overlays_btn.setToolTip("Zones, arena, HUD, distances, pups and the heatmap")
+        self.overlays_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.overlays_menu = QMenu(self.overlays_btn)
+        self.overlays_menu.setToolTipsVisible(True)
+        self.overlays_btn.setMenu(self.overlays_menu)
+        overlay = self._overlay
+        self.zones_on = overlay("Zones", "Outline the loaded zones", True)
+        self.arena_on = overlay(
+            "Arena", "Outline the drawn arena floor and its exploration grid", True
+        )
+        self.hud_on = overlay("HUD", "Name the behaviour and active outputs on each frame", True)
+        self.distances_on = overlay(
+            "Distances", "Label keypoint pairs with their distance in video pixels", False
+        )
+        self.pups_on = overlay("Pups", "Draw the nest, each pup and the dam's nose line", True)
+        self.heatmap_on = overlay("Heatmap", "Where the animal spent the selected range", False)
+        self.overlays_menu.addSeparator()
+        # Filled by the window each time they open: they list the session's keypoints.
+        self.pairs_menu = self.overlays_menu.addMenu("Distance pairs")
+        self.pairs_menu.setToolTipsVisible(True)
+        self.point_menu = self.overlays_menu.addMenu("Measured from")
+        self.point_menu.menuAction().setToolTip("The keypoints the heatmap and zones use")
+        self.point_menu.setToolTipsVisible(True)
+        row.addWidget(self.overlays_btn)
         self.rate = QLabel("1×")
         self.rate.setFont(data_font(9))
         set_text_role(self.rate, "muted")
         row.addSpacing(6)
         row.addWidget(self.rate)
+
+    def _overlay(self, text: str, tip: str, checked: bool) -> QAction:
+        action = self.overlays_menu.addAction(text)
+        action.setCheckable(True)
+        action.setChecked(checked)
+        action.setToolTip(tip)
+        return action
 
     def set_playing(self, playing: bool) -> None:
         """Show Pause while playing and Play otherwise, icon and word together."""

@@ -3609,15 +3609,15 @@ class TestRetrievalOnTheVideo:
 
     def test_the_overlay_and_its_toggle_follow_the_preset(self, qtbot, tmp_path):
         win = self._win(qtbot, _scorable(tmp_path), experiment_type="")
-        assert win._transport.pups_on.isHidden()
+        assert not win._transport.pups_on.isVisible()
         assert win._canvas._pups is None
         win.set_experiment_type("Pup Retrieval")
-        assert not win._transport.pups_on.isHidden()
+        assert win._transport.pups_on.isVisible()
         assert win._canvas._pups is win._view.pups
         assert win._canvas._retrieval is win._retrievals[0]
         assert win._canvas._nest_at(0).name == "nest"
         win.set_experiment_type("Open Field")
-        assert win._transport.pups_on.isHidden()
+        assert not win._transport.pups_on.isVisible()
         assert win._canvas._pups is None
 
     def test_the_nest_nose_line_and_a_hidden_pup_are_drawn(self, qtbot, tmp_path):
@@ -3634,7 +3634,7 @@ class TestRetrievalOnTheVideo:
         qtbot.addWidget(win)
         win.set_experiment_type("Pup Retrieval")
         win.load(_session(tmp_path / "etho"))
-        assert win._transport.pups_on.isHidden()
+        assert not win._transport.pups_on.isVisible()
         assert win._canvas._pups is None
 
     def test_retyping_the_type_does_not_republish(self, qtbot, tmp_path, monkeypatch):
@@ -4160,3 +4160,72 @@ class TestTheTopBar:
         targets = win.tour_targets()
         assert targets["zones"] is win._setup_btn
         assert targets["export"] is win._export_menu_btn
+
+
+class TestRareToolsInMenus:
+    """Overlays ▾ on the viewer, ⋯ on the timeline: the everyday controls stay out."""
+
+    def _win(self, qtbot, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window._settings",
+            lambda: QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat),
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        return win
+
+    def test_overlay_options_in_menu(self, qtbot, tmp_path, monkeypatch):
+        """The pairs and body-point choices that were right-click only."""
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        t = win._transport
+        by_text = {a.text(): a for a in t.overlays_menu.actions()}
+        pairs, point = by_text["Distance pairs"].menu(), by_text["Measured from"].menu()
+        pairs.aboutToShow.emit()
+        n = len(win._view.keypoint_names)
+        assert len([a for a in pairs.actions() if a.isCheckable()]) == n * (n - 1) // 2
+        point.aboutToShow.emit()
+        texts = [a.text() for a in point.actions() if a.isCheckable()]
+        assert texts == ["Centroid (all keypoints)", *win._view.keypoint_names]
+        # Picking from the menu does what the right-click menu did.
+        [all_pairs] = [a for a in pairs.actions() if a.text() == "All pairs"]
+        all_pairs.trigger()
+        assert t.distances_on.isChecked()
+        assert len(win._canvas.pairs()) == n * (n - 1) // 2
+        # Opening it twice does not pile the entries up.
+        point.aboutToShow.emit()
+        assert len([a for a in point.actions() if a.isCheckable()]) == n + 1
+
+    def test_heatmap_from_the_overlays_menu(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        [heatmap] = [a for a in win._transport.overlays_menu.actions() if a.text() == "Heatmap"]
+        heatmap.trigger()
+        assert win._heatmap_on.isChecked()
+
+    def test_range_marker_from_the_more_menu(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        panel = win._timeline_panel
+        assert panel.range_marker_btn in panel.more_menu.actions()
+        panel.range_marker_btn.trigger()  # no In/Out yet: it says how to set one
+        assert "Set In and Out" in win.statusBar().currentMessage()
+
+    def test_the_timeline_toolbar_fits_at_1400(self, qtbot, tmp_path, monkeypatch):
+        from glider.gui.styles import get_desktop_stylesheet
+
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        win.setStyleSheet(get_desktop_stylesheet())  # padding counts: measure it styled
+        win.resize(1400, 900)
+        win.show()
+        qtbot.waitExposed(win)
+        corner = win._timeline_panel.cornerWidget(Qt.Corner.TopRightCorner)
+        assert corner.sizeHint().width() <= 900
+        assert corner.width() >= corner.sizeHint().width(), "the toolbar is clipped"
+
+    def test_behavior_in_range_keeps_the_answer_in_view(self, qtbot, tmp_path, monkeypatch):
+        """Total and share fit the inspector; mean and median ride in the tooltip."""
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        win._bar.set_selection(10, 250)
+        table = win._bouts
+        assert table.rowCount() > 0
+        assert [table.isColumnHidden(c) for c in range(6)] == [False] * 4 + [True] * 2
+        assert table.item(0, 0).toolTip().startswith("Mean bout ")

@@ -551,7 +551,7 @@ class AnalysisWindow(QMainWindow):
         self._inspector.save_marker_btn.clicked.connect(self._add_range_marker)
         self._inspector.draw_arena_requested.connect(lambda: self._draw_arena())
         self._timeline_panel.marker_btn.clicked.connect(lambda: self._add_point_marker())
-        self._timeline_panel.range_marker_btn.clicked.connect(self._add_range_marker)
+        self._timeline_panel.range_marker_btn.triggered.connect(self._add_range_marker)
         retrieval = self._inspector.retrieval
         retrieval.set_trial_start.connect(self._set_trial_start)
         retrieval.remove_nest.connect(self._remove_nest)
@@ -845,18 +845,14 @@ class AnalysisWindow(QMainWindow):
         t.arena_on.toggled.connect(self._canvas.set_show_arena)
         t.poses_on.toggled.connect(self._canvas.set_show_poses)
         t.distances_on.toggled.connect(self._canvas.set_show_distances)
-        t.distances_on.customContextMenuRequested.connect(
-            lambda pos: self._pairs_menu().exec(t.distances_on.mapToGlobal(pos))
-        )
         t.pups_on.setVisible(False)  # shown for a pup session (_publish_retrieval)
         t.pups_on.toggled.connect(self._canvas.set_show_pups)
         t.trail_on.toggled.connect(self._apply_trail)
         t.heatmap_on.toggled.connect(self._apply_heatmap)
         t.zones_on.toggled.connect(self._canvas.set_show_zones)
-        for toggle in (t.heatmap_on, t.zones_on):
-            toggle.customContextMenuRequested.connect(
-                lambda pos, w=toggle: self._body_point_menu().exec(w.mapToGlobal(pos))
-            )
+        # Overlays ▾ ▸ Distance pairs / Measured from: rebuilt per opening.
+        t.pairs_menu.aboutToShow.connect(lambda: self._pairs_menu(t.pairs_menu))
+        t.point_menu.aboutToShow.connect(lambda: self._body_point_menu(t.point_menu))
         t.hud_on.toggled.connect(self._canvas.set_show_hud)
 
     def _build_epoch_table(self) -> None:
@@ -2093,11 +2089,12 @@ class AnalysisWindow(QMainWindow):
         # Choosing pairs is asking to see them.
         self._transport.distances_on.setChecked(True)
 
-    def _pairs_menu(self) -> QMenu:
-        """Which keypoint pairs the Distances overlay measures."""
+    def _pairs_menu(self, menu: QMenu | None = None) -> QMenu:
+        """Which keypoint pairs the Distances overlay measures (fills *menu* afresh)."""
         from glider.gui.review.viewer import all_pairs
 
-        menu = QMenu(self)
+        menu = QMenu(self) if menu is None else menu
+        menu.clear()
         names = list(self._view.keypoint_names) if self._view is not None else []
         if len(names) < 2:
             menu.addAction("Needs two or more keypoints").setEnabled(False)
@@ -2174,17 +2171,18 @@ class AnalysisWindow(QMainWindow):
         t = self._transport
         t.heatmap_on.setToolTip(
             f"Where the animal spent the selected range, by {point}. "
-            "Right-click to choose the keypoints."
+            "Overlays ▸ Measured from chooses the keypoints."
         )
         t.zones_on.setToolTip(
             f"Outline the loaded zones. Time in zone is scored from {point} "
-            f"({rule}). Right-click to choose the keypoints."
+            f"({rule}). Overlays ▸ Measured from chooses the keypoints."
         )
         self._inspector.set_zone_point(point)
 
-    def _body_point_menu(self) -> QMenu:
+    def _body_point_menu(self, menu: QMenu | None = None) -> QMenu:
         """Which keypoints the heatmap and zone occupancy are measured from."""
-        menu = QMenu(self)
+        menu = QMenu(self) if menu is None else menu
+        menu.clear()
         names = list(self._view.keypoint_names) if self._view is not None else []
         current = self._body_point()
         centroid = menu.addAction("Centroid (all keypoints)", lambda: self._set_body_point([]))
@@ -3120,7 +3118,7 @@ class AnalysisWindow(QMainWindow):
             return None, "Pick a grid size to count the cells entered."
         found = self._arena_for(index)
         if found is None:
-            return None, "No arena drawn for this session: Setup ▸ Arena ▸ Draw arena…"
+            return None, ""  # the Range tab's arena prompt says what to do
         view = self._cohort[index][1]
         try:
             result = exploration.explore(view, found[0], n, start_frame=start, end_frame=end)
@@ -3969,8 +3967,10 @@ class AnalysisWindow(QMainWindow):
                 f"{row['mean_s']:.2f}",
                 f"{row['median_s']:.2f}",
             ]
+            tip = f"Mean bout {values[4]} s · median {values[5]} s"
             for c, value in enumerate(values):
                 item = _behavior_item(value, order) if c == 0 else _measure_item(value)
+                item.setToolTip(tip)
                 self._bouts.setItem(r, c, item)
         # The inspector's tables are Fixed-height and must track their rows.
         self._bouts.setMaximumHeight(self._bouts.sizeHint().height())

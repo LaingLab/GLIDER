@@ -36,6 +36,7 @@ def test_range_tab_leads_with_behavior(inspector):
         inspector.behavior_title,
         inspector.bouts,
         inspector.movement_title,
+        inspector.exploration_title,
         inspector.exploration,
         inspector.arena_prompt,
         inspector.hardware_title,
@@ -67,6 +68,7 @@ def test_empty_sections_hide(inspector):
 
 
 def test_exploration_prompts_for_arena(inspector):
+    assert not inspector.exploration_title.isHidden()  # the heading stays over the prompt
     assert inspector.exploration.isHidden()
     assert not inspector.arena_prompt.isHidden()
     assert "Draw an arena to see exploration" in inspector.arena_prompt_text.text()
@@ -77,6 +79,7 @@ def test_exploration_prompts_for_arena(inspector):
     inspector.set_has_arena(True)
     assert not inspector.exploration.isHidden()
     assert inspector.arena_prompt.isHidden()
+    assert not inspector.exploration_title.isHidden()
 
 
 def test_the_movement_prose_is_the_tiles_tooltip(inspector):

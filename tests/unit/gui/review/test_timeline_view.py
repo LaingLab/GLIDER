@@ -945,3 +945,15 @@ def test_setup_flags_are_drawn_but_not_draggable_markers(view):
     x = _x_at(view, 0.0)
     assert view.marker_at(x, RULER_H + 6) is None
     assert _pixel(view, x + 3, RULER_H + 6) == QColor(colors.NOSE)
+
+
+def test_timeline_more_menu_holds_rare_tools(panel):
+    """＋ Marker, bouts, In/Out, Fit stay out; the rest live under ⋯."""
+    texts = [a.text() for a in panel.more_menu.actions() if not a.isSeparator()]
+    assert texts == ["Range marker", "Snap", "Loop", "Zoom to range"]
+    assert panel.snap.isCheckable() and panel.snap.isChecked()
+    assert panel.loop.isCheckable() and not panel.loop.isChecked()
+    panel.view.set_selection(100, 200)
+    panel.zoom_btn.trigger()
+    assert panel.view.viewport.end - panel.view.viewport.start < 10000.0
+    assert panel.more_btn.menu() is panel.more_menu
