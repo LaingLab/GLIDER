@@ -22,6 +22,24 @@ def test_window_tabs_are_in_pipeline_order(qtbot, tmp_path):
     assert titles == ["Annotate", "Train", "Review", "Apply"]
 
 
+def test_step_strip_marks_done(qtbot, tmp_path):
+    """Numbered steps; a finished one shows a tick, and the title never changes."""
+    from glider.gui.behavior.window import BehaviorAnalysisWindow
+
+    win = BehaviorAnalysisWindow(project_dir=tmp_path)
+    qtbot.addWidget(win)
+    assert [win.step_badge(i).text() for i in range(4)] == ["1", "2", "3", "4"]
+
+    win.set_step_done(1, True)
+    assert win.step_badge(1).text() == "\u2713"
+    assert win.step_badge(1).property("state") == "done"
+    assert win.tabs.tabText(1) == "Train"
+
+    win.set_step_done(1, False)
+    assert win.step_badge(1).text() == "2"
+    assert win.step_badge(0).property("state") == "current"
+
+
 def test_window_defaults_project_dir_from_config(qtbot):
     from glider.gui.behavior.window import BehaviorAnalysisWindow
 
@@ -638,7 +656,7 @@ def _saved_zones(tmp_path, stem, spans, behavior="walking"):
     return store
 
 
-def _launch_annotate(qtbot, tmp_path, monkeypatch, configure=None):
+def _launch_annotate(qtbot, tmp_path, monkeypatch, configure=None, review=False):
     """Drive _on_launch with the sampler and annotator stubbed out.
 
     ``configure(tab)`` runs after construction so a test can set the new
@@ -696,7 +714,7 @@ def _launch_annotate(qtbot, tmp_path, monkeypatch, configure=None):
     tab._videos_dir = tmp_path
     if configure is not None:
         configure(tab)
-    tab._on_launch()
+    tab._on_launch(review=review)
     captured["tab"] = tab
     return captured, warnings_shown
 
@@ -742,9 +760,7 @@ def test_review_mode_loads_every_saved_zone(qtbot, tmp_path, monkeypatch):
     _saved_zones(tmp_path, "session01", [(0, 10), (20, 30), (40, 50)])
     _saved_zones(tmp_path, "session02", [(5, 15), (25, 35)])
 
-    captured, warnings_shown = _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    captured, warnings_shown = _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     assert warnings_shown == []
     # Sampling is skipped entirely in review mode.
@@ -764,9 +780,7 @@ def test_review_mode_says_so_when_nothing_is_labelled_yet(qtbot, tmp_path, monke
     """An empty review window looks identical to a broken one. Say which it is."""
     _pose_batch_output(tmp_path, "session01")
 
-    captured, warnings_shown = _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    captured, warnings_shown = _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     assert "annotator_kwargs" not in captured
     assert len(warnings_shown) == 1
@@ -808,9 +822,7 @@ def test_review_mode_also_wires_up_the_render_more_button(qtbot, tmp_path, monke
     _pose_batch_output(tmp_path, "session01")
     _saved_zones(tmp_path, "session01", [(0, 10)])
 
-    captured, _ = _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    captured, _ = _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     assert callable(captured["annotator_kwargs"]["clip_sampler"])
 
@@ -2059,9 +2071,7 @@ def test_review_mode_writes_no_queue(qtbot, tmp_path, monkeypatch):
     _pose_batch_output(tmp_path, "session01")
     _saved_zones(tmp_path, "session01", [(0, 10)])
 
-    _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     assert not _queue_file(tmp_path).exists()
 
@@ -2096,9 +2106,7 @@ def test_the_empty_review_message_does_not_promise_fresh_clips(qtbot, tmp_path, 
     """Unticking Review resumes the cached queue; it does not resample."""
     _pose_batch_output(tmp_path, "session01")
 
-    _captured, warnings_shown = _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    _captured, warnings_shown = _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     assert len(warnings_shown) == 1
     assert "sample fresh clips" not in warnings_shown[0]
@@ -2107,9 +2115,7 @@ def test_the_empty_review_message_does_not_promise_fresh_clips(qtbot, tmp_path, 
 def test_the_empty_review_message_explains_what_unticking_does(qtbot, tmp_path, monkeypatch):
     _pose_batch_output(tmp_path, "session01")
 
-    _captured, warnings_shown = _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    _captured, warnings_shown = _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     lowered = warnings_shown[0].lower()
     assert "resume" in lowered or "resumed" in lowered
@@ -2165,9 +2171,7 @@ def test_review_mode_reports_the_zones_it_loaded(qtbot, tmp_path, monkeypatch):
     _pose_batch_output(tmp_path, "session01")
     _saved_zones(tmp_path, "session01", [(0, 10), (20, 30), (40, 50)])
 
-    captured, _ = _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    captured, _ = _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     assert "3" in captured["tab"]._queue_status
     assert "review" in captured["tab"]._queue_status.lower()
@@ -2642,3 +2646,84 @@ def test_the_cohort_scan_ignores_csvs_that_are_not_poses(tmp_path):
     (tmp_path / "aDLC_exp-7.csv").write_text("scorer\n")
     (tmp_path / "ethogram_raw.csv").write_text("frame,behavior\n")
     assert [p.name for p in _unique_pose_csvs(tmp_path)] == ["aDLC_exp-7.csv"]
+
+
+# --------------------------------------------------------------------------
+# Annotate step: one primary button, rare settings behind Options
+# --------------------------------------------------------------------------
+
+
+def test_primary_button_offers_resume_when_labels_exist(qtbot, tmp_path, monkeypatch):
+    from glider.gui.behavior import window as win_mod
+
+    fresh = tmp_path / "fresh"
+    labelled = tmp_path / "labelled"
+    fresh.mkdir()
+    labelled.mkdir()
+    (labelled / "session01_annotations.csv").write_text("behavior,start_frame,end_frame\n")
+
+    tab = win_mod.AnnotateTab(tmp_path / "project")
+    qtbot.addWidget(tab)
+    footer = tab._footer
+    menu_texts = lambda: [a.text() for a in footer.menu.actions()]  # noqa: E731
+
+    tab._set_videos_dir(fresh)
+    assert footer.primary.text() == "Label Clips"
+    assert menu_texts() == ["Resume Labelling", "Review saved annotations"]
+
+    tab._set_videos_dir(labelled)
+    assert footer.primary.text() == "Resume Labelling"
+    assert menu_texts() == ["Label Clips", "Review saved annotations"]
+
+    # The pose folder is where annotations live, so it decides too.
+    tab._set_videos_dir(fresh)
+    assert footer.primary.text() == "Label Clips"
+    tab._set_poses_dir(labelled)
+    assert footer.primary.text() == "Resume Labelling"
+
+    calls: list[str] = []
+    monkeypatch.setattr(tab, "_on_resume", lambda: calls.append("resume"))
+    monkeypatch.setattr(tab, "_on_launch", lambda review=False: calls.append(f"launch:{review}"))
+    footer.primary.click()
+    footer.menu.actions()[0].trigger()
+    footer.menu.actions()[1].trigger()
+    assert calls == ["resume", "launch:False", "launch:True"]
+
+
+def test_annotate_footer_names_the_missing_folder(qtbot, tmp_path):
+    from glider.gui.behavior import window as win_mod
+
+    tab = win_mod.AnnotateTab(tmp_path)
+    qtbot.addWidget(tab)
+    assert "videos folder" in tab._footer.message.text().lower()
+
+    (tmp_path / "a.mp4").touch()
+    tab._set_videos_dir(tmp_path)
+    assert "1 video" in tab._footer.message.text()
+
+
+def test_annotate_options_hold_rare_settings(qtbot, tmp_path):
+    from glider.gui.behavior import window as win_mod
+
+    tab = win_mod.AnnotateTab(tmp_path)
+    qtbot.addWidget(tab)
+    popup = tab._options
+
+    for rare in (tab._skip_labelled_check, tab._speed_check, tab._cohort_label):
+        assert popup.isAncestorOf(rare)
+    # Clips to sample is what Label Clips uses, so it stays on the step.
+    assert not popup.isAncestorOf(tab._clip_count)
+    assert tab.isAncestorOf(tab._clip_count)
+
+    assert not popup.isVisible()
+    tab._footer.options_button.click()
+    assert popup.isVisible()
+    tab._footer.options_button.click()
+    assert not popup.isVisible()
+
+    # Hidden state is named under the inputs.
+    assert tab._summary.text() == ""
+    tab._skip_labelled_check.setChecked(True)
+    tab._speed_check.setChecked(False)
+    assert "skip labelled" in tab._summary.text().lower()
+    assert "speed trace off" in tab._summary.text().lower()

@@ -42,6 +42,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QTabBar,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -49,7 +50,9 @@ from PyQt6.QtWidgets import (
 )
 
 from glider.analysis.behavior.classify.smoothing import DEFAULT_OFFLINE_WINDOW
+from glider.gui.behavior.step_parts import OptionsPopup, StepFooter, summary_label
 from glider.gui.qthreads import retire_thread
+from glider.gui.styles import restyle
 from glider.gui.widgets.tool_ui import (
     GUTTER,
     Card,
@@ -327,8 +330,10 @@ class BehaviorAnalysisWindow(QMainWindow):
         from glider.gui.behavior.review_tab import ReviewTab
 
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("StepTabs")
         self.tabs.setDocumentMode(True)
-        self.tabs.addTab(AnnotateTab(self.project_dir), "Annotate")
+        self.annotate_tab = AnnotateTab(self.project_dir)
+        self.tabs.addTab(self.annotate_tab, "Annotate")
         self.train_tab = TrainTab()
         self.tabs.addTab(self.train_tab, "Train")
         # Between Train and Apply, in pipeline order: a run is reviewed before
@@ -343,7 +348,9 @@ class BehaviorAnalysisWindow(QMainWindow):
         self.train_tab.run_reported.connect(self._on_run_reported)
 
         self._header = ToolHeader("Behavior Analysis", self._TAB_BLURBS[0])
+        self._build_step_strip()
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.annotate_tab.labelling_found.connect(lambda found: self.set_step_done(0, found))
 
         central = QWidget()
         central.setObjectName("ToolPage")
@@ -376,10 +383,10 @@ class BehaviorAnalysisWindow(QMainWindow):
         widget holding it. Pointing at the tab bar instead would highlight the
         label while leaving the wrong page on screen.
         """
-        annotate = self.tabs.widget(0)
+        annotate = self.annotate_tab
         return {
             "tab_annotate": annotate,
-            "annotate_resume": getattr(annotate, "_resume_btn", None) or annotate,
+            "annotate_resume": annotate._footer.primary,
             "tab_train": self.train_tab,
             "train_cv": getattr(self.train_tab, "_cv_btn", None) or self.train_tab,
             "tab_review": self.review_tab,
@@ -406,9 +413,47 @@ class BehaviorAnalysisWindow(QMainWindow):
 
         offer_tour_once(self, behavior_steps(), BEHAVIOR_TOUR_COMPLETE_KEY)
 
+    # ------------------------------------------------------------------
+    # Step strip
+    # ------------------------------------------------------------------
+    def _build_step_strip(self) -> None:
+        """Number the tabs as steps; a badge beside each title, not in it.
+
+        The titles stay exactly "Annotate", "Train", ... -- tests and the tour
+        read them -- so the number (or tick) is a separate label in the tab.
+        """
+        bar = self.tabs.tabBar()
+        self._step_done = [False] * self.tabs.count()
+        self._step_badges: list[QLabel] = []
+        for i in range(self.tabs.count()):
+            badge = QLabel(str(i + 1))
+            badge.setObjectName("StepNumber")
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setFixedSize(28, 18)  # 10 of it is the margin off the tab's edge
+            bar.setTabButton(i, QTabBar.ButtonPosition.LeftSide, badge)
+            self._step_badges.append(badge)
+        self._restyle_steps()
+
+    def step_badge(self, index: int) -> QLabel:
+        return self._step_badges[index]
+
+    def set_step_done(self, index: int, done: bool) -> None:
+        """Tick a step whose output exists (labels, a model, a report, an ethogram)."""
+        self._step_done[index] = bool(done)
+        self._restyle_steps()
+
+    def _restyle_steps(self) -> None:
+        current = self.tabs.currentIndex()
+        for i, badge in enumerate(self._step_badges):
+            done = self._step_done[i]
+            badge.setText("\u2713" if done else str(i + 1))
+            badge.setProperty("state", "done" if done else "current" if i == current else "")
+            restyle(badge)
+
     def _on_tab_changed(self, index: int) -> None:
         if 0 <= index < len(self._TAB_BLURBS):
             self._header.set_subtitle(self._TAB_BLURBS[index])
+        self._restyle_steps()
 
     def _on_run_reported(self, report_dir: object, summary: object) -> None:
         """Show a just-finished run and bring its tab forward.
@@ -426,6 +471,7 @@ class BehaviorAnalysisWindow(QMainWindow):
             self.review_tab.show_run(TrainingRun.from_summary(summary))
             shown = True
         if shown:
+            self.set_step_done(2, True)
             self.tabs.setCurrentWidget(self.review_tab)
 
 
@@ -455,6 +501,9 @@ class AnnotateTab(QWidget):
     # default so an existing habit produces an unchanged session.
     DEFAULT_CLIP_COUNT = 50
 
+    #: Whether the chosen folders already hold labelling (the step is done).
+    labelling_found = pyqtSignal(bool)
+
     def __init__(self, project_dir: Path, parent=None):
         super().__init__(parent)
         self.project_dir = Path(project_dir)
@@ -463,21 +512,39 @@ class AnnotateTab(QWidget):
         # Keep a reference so the launched AnnotatorWindow survives GC.
         self._annotator_window = None
 
-        rail = RunRail("Launch annotator")
-        self._launch_btn = rail.button
-        self._launch_btn.clicked.connect(self._on_launch)
-        rail.status.setVisible(False)  # nothing runs here; the annotator opens
-        rail.card.add(
-            hint(
-                "Opens the clip annotator in its own window. Labels are saved "
-                "beside each pose CSV as <name>_annotations.csv — the same "
-                "files the Train tab reads."
-            )
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        body = QVBoxLayout()
+        body.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
+        area, column = scroll_column()
+        body.addWidget(area)
+        outer.addLayout(body, 1)
+
+        # One primary button: Resume when this folder already has labelling
+        # on disk, else Label Clips. The other action and Review hang off its
+        # menu, so there is never a question of which of three to press.
+        self._footer = StepFooter("Label Clips")
+        self._footer.primary.setToolTip(
+            "Opens the clip annotator in its own window. Labels are saved\n"
+            "beside each pose CSV as <name>_annotations.csv — the same\n"
+            "files the Train tab reads."
         )
-        column = _workspace(self, rail, rail_width=340)
+        self._resume_mode = False
+        self._footer.primary.clicked.connect(
+            lambda: self._on_resume() if self._resume_mode else self._on_launch()
+        )
+        self._other_action = self._footer.add_menu_action(
+            "Resume Labelling",
+            lambda: self._on_launch() if self._resume_mode else self._on_resume(),
+        )
+        self._footer.add_menu_action(
+            "Review saved annotations", lambda: self._on_launch(review=True)
+        )
+        outer.addWidget(self._footer)
 
         # --- sources ----------------------------------------------------
-        sources = Card("Sources", "where the clips come from")
+        sources = Card("Sources")
         self._videos_label = path_label("(none)")
         videos_btn = QPushButton("Choose…")
         videos_btn.clicked.connect(self._on_choose_videos)
@@ -496,19 +563,7 @@ class AnnotateTab(QWidget):
         column.addWidget(sources)
 
         # --- clips ------------------------------------------------------
-        clips = Card("Clips", "what the annotator will show you")
-        # Reviewing existing work and sampling new material are the two
-        # reasons to open the annotator, and the tab could only do the second.
-        self._review_check = QCheckBox("Review annotations already saved for these videos")
-        self._review_check.setToolTip(
-            "Replay every saved behavior zone instead of sampling new clips.\n"
-            "Zones are read from <pose CSV folder>/<name>_annotations.csv — the\n"
-            "same files training reads."
-        )
-        self._review_check.toggled.connect(self._on_review_toggled)
-        clips.add(self._review_check)
-        clips.add_separator()
-
+        clips = Card("Clips")
         self._clip_count = QSpinBox()
         # A 30-video cohort wants four figures of clips, so the ceiling has to
         # be well clear of anything a labeller would actually ask for.
@@ -516,50 +571,34 @@ class AnnotateTab(QWidget):
         self._clip_count.setValue(self.DEFAULT_CLIP_COUNT)
         self._clip_count.setToolTip(
             "Total clips sampled across ALL videos, not per video.\n"
-            "Raised to the number of videos if you ask for fewer."
+            "Raised to the number of videos if you ask for fewer.\n\n"
+            "Resume ignores this — it only affects drawing a new queue.\n"
+            "Add more from inside the annotator with 'Render more'."
         )
-        self._clip_count_label = QLabel("Clips to sample (across all videos):")
-        self._clip_count_label.setVisible(False)  # the row caption says it now
         clips.add_row("Clips to sample", self._clip_count)
-        clips.add(hint("Across all videos, not per video."))
-
-        self._skip_labelled_check = QCheckBox("Skip regions already labelled")
-        self._skip_labelled_check.setToolTip(
-            "Keep the sampler off frames you have already annotated, so a\n"
-            "second pass over a cohort proposes new material."
-        )
-        clips.add(self._skip_labelled_check)
 
         # Resuming used to be silent: a relaunch looked identical whether it
         # had reused the saved queue or discarded it and sampled a new one.
         self._queue_status = ""
         self._annotate_status = hint("")
+        self._annotate_status.setVisible(False)  # until something has been opened
         clips.add(self._annotate_status)
-
-        # Picking up where you left off is the common case, and it was only
-        # reachable by reproducing the exact settings that first drew the
-        # queue — including a sampling-only checkbox that has no bearing on
-        # an existing one. Its own button, with no settings involved.
-        self._resume_btn = QPushButton("Resume labelling")
-        self._resume_btn.setToolTip(
-            "Open the saved clip queue together with everything you have\n"
-            "already labelled, whatever the settings above say.\n\n"
-            "To add further clips on top, use 'Render more' in the\n"
-            "annotator's sidebar — it avoids the stretches already done."
-        )
-        self._resume_btn.clicked.connect(self._on_resume)
-        clips.add(self._resume_btn)
-        clips.add(
-            hint(
-                "Resume ignores the clip count and the skip setting — those "
-                "only affect drawing a new queue. Add more from inside the "
-                "annotator with 'Render more'."
-            )
-        )
+        self._summary = summary_label()
+        clips.add(self._summary)
         column.addWidget(clips)
+        column.addStretch(1)
 
-        # --- speed trace ------------------------------------------------
-        speed = Card("Speed trace", "optional reference while labelling")
+        # --- options ----------------------------------------------------
+        self._options = OptionsPopup(self._footer.options_button, "Annotate options")
+        sampling = self._options.add_section("Sampling")
+        self._skip_labelled_check = QCheckBox("Skip regions already labelled")
+        self._skip_labelled_check.setToolTip(
+            "Keep the sampler off frames you have already annotated, so a\n"
+            "second pass over a cohort proposes new material."
+        )
+        sampling.addRow(self._skip_labelled_check)
+
+        speed = self._options.add_section("Speed trace")
         # On by default: the labeller is judging speed either way, and doing it
         # against the numbers the scoring run uses is the whole point. Opting
         # out skips reading pose data altogether.
@@ -570,24 +609,24 @@ class AnnotateTab(QWidget):
             "which is why it can be turned off."
         )
         self._speed_check.toggled.connect(self._on_speed_toggled)
-        speed.add(self._speed_check)
+        speed.addRow(self._speed_check)
 
         self._cohort_path: Path | None = None
         self._cohort_label = path_label("(none — trace has no reference lines)")
         cohort_btn = QPushButton("Choose…")
         cohort_btn.clicked.connect(self._on_choose_cohort)
-        self._cohort_row = speed.add_row("Speed thresholds", self._cohort_label, cohort_btn)
+        speed.addRow("Speed thresholds", _row(self._cohort_label, cohort_btn))
 
         self._calibration_master: Path | None = None
         self._calibration_label = path_label("(none — trace in px/frame)")
         calib_btn = QPushButton("Choose…")
         calib_btn.clicked.connect(self._on_choose_calibration)
-        self._calibration_row = speed.add_row("Calibration", self._calibration_label, calib_btn)
+        speed.addRow("Calibration", _row(self._calibration_label, calib_btn))
         self._speed_children = (cohort_btn, calib_btn)
-        column.addWidget(speed)
 
-        column.addStretch(1)
+        self._skip_labelled_check.toggled.connect(self._update_summary)
         self._on_speed_toggled(self._speed_check.isChecked())
+        self._refresh_step()
 
     def _on_speed_toggled(self, enabled: bool) -> None:
         """The trace's inputs mean nothing when the trace itself is off."""
@@ -597,11 +636,58 @@ class AnnotateTab(QWidget):
             *self._speed_children,
         ):
             widget.setEnabled(enabled)
+        self._update_summary()
 
-    def _on_review_toggled(self, reviewing: bool) -> None:
-        """Review mode replays saved zones, so the sampling controls don't apply."""
-        for widget in (self._clip_count, self._clip_count_label, self._skip_labelled_check):
-            widget.setEnabled(not reviewing)
+    def _update_summary(self, *_args) -> None:
+        """Name the non-default options, so a closed popup hides nothing."""
+        parts = []
+        if self._skip_labelled_check.isChecked():
+            parts.append("skip labelled regions")
+        if not self._speed_check.isChecked():
+            parts.append("speed trace off")
+        else:
+            if self._cohort_path is not None:
+                parts.append(f"thresholds {self._cohort_path.name}")
+            if self._calibration_master is not None:
+                parts.append(f"calibration {self._calibration_master.name}")
+        text = " · ".join(parts)
+        self._summary.setText(text[:1].upper() + text[1:])
+        self._summary.setVisible(bool(text))
+
+    def _has_saved_labelling(self) -> bool:
+        """True when the chosen folders already hold a queue or annotations."""
+        if self._videos_dir is None:
+            return False
+        from glider.gui.behavior.annotator.resume_cache import ResumeCache
+
+        if ResumeCache(self._videos_dir).path.exists():
+            return True
+        poses_dir = self._poses_dir or self._videos_dir
+        return poses_dir.is_dir() and any(poses_dir.glob("*_annotations.csv"))
+
+    def _refresh_step(self) -> None:
+        """Pick the primary action and the readiness message for the folders."""
+        self._resume_mode = self._has_saved_labelling()
+        self.labelling_found.emit(self._resume_mode)
+        label, other = ("Label Clips", "Resume Labelling")
+        if self._resume_mode:
+            label, other = other, label
+        self._footer.set_primary_text(label)
+        self._other_action.setText(other)
+
+        if self._videos_dir is None:
+            self._footer.set_message("Choose a videos folder to start.")
+        else:
+            try:
+                n = sum(1 for p in self._videos_dir.iterdir() if p.suffix.lower() in _VIDEO_EXTS)
+            except OSError:
+                n = 0
+            if not n:
+                self._footer.set_message(f"No videos in {self._videos_dir.name}.", warning=True)
+            elif self._resume_mode:
+                self._footer.set_message(f"{n} video(s) · saved labelling found.")
+            else:
+                self._footer.set_message(f"Ready: {n} video(s).")
 
     def _set_queue_status(self, origin: str, clips, videos_meta: dict[Path, Path]) -> None:
         """Report which queue was opened and how much of it is already done.
@@ -618,6 +704,7 @@ class AnnotateTab(QWidget):
         if origin == "review":
             self._queue_status = f"review · {n} labelled clip(s) loaded"
             self._annotate_status.setText(self._queue_status)
+            self._annotate_status.setVisible(True)
             return
 
         # A clip counts as done when a saved zone overlaps it — the same rule
@@ -638,6 +725,7 @@ class AnnotateTab(QWidget):
         word = "resumed" if origin == "resumed" else "sampled"
         self._queue_status = f"{word} · {n} clip(s) · {labelled} already labelled"
         self._annotate_status.setText(self._queue_status)
+        self._annotate_status.setVisible(True)
 
     def _on_choose_cohort(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -648,6 +736,7 @@ class AnnotateTab(QWidget):
         self._cohort_path = Path(path)
         set_path_text(self._cohort_label, Path(path).name, filled=True)
         self._cohort_label.setToolTip(path)
+        self._update_summary()
 
     def _on_choose_calibration(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -658,22 +747,31 @@ class AnnotateTab(QWidget):
         self._calibration_master = Path(path)
         set_path_text(self._calibration_label, Path(path).name, filled=True)
         self._calibration_label.setToolTip(path)
+        self._update_summary()
 
     def _on_choose_videos(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose videos folder")
         if not path:
             return
-        self._videos_dir = Path(path)
-        set_path_text(self._videos_label, _short_path(self._videos_dir), filled=True)
-        self._videos_label.setToolTip(path)
+        self._set_videos_dir(Path(path))
+
+    def _set_videos_dir(self, path: Path) -> None:
+        self._videos_dir = path
+        set_path_text(self._videos_label, _short_path(path), filled=True)
+        self._videos_label.setToolTip(str(path))
+        self._refresh_step()
 
     def _on_choose_poses(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose pose CSV folder")
         if not path:
             return
-        self._poses_dir = Path(path)
-        set_path_text(self._poses_label, _short_path(self._poses_dir), filled=True)
-        self._poses_label.setToolTip(path)
+        self._set_poses_dir(Path(path))
+
+    def _set_poses_dir(self, path: Path) -> None:
+        self._poses_dir = path
+        set_path_text(self._poses_label, _short_path(path), filled=True)
+        self._poses_label.setToolTip(str(path))
+        self._refresh_step()
 
     def _open_annotator(
         self,
@@ -714,6 +812,7 @@ class AnnotateTab(QWidget):
             return
 
         self._set_queue_status(origin, clips, videos_meta)
+        self._refresh_step()  # a queue now exists, so Resume becomes the primary
 
         # The window's "render more" button only exists when it is given a
         # sampler; without one, a review session is a dead end and a sampled
@@ -866,7 +965,7 @@ class AnnotateTab(QWidget):
                 "Annotate",
                 "Nothing to resume: no saved clip queue and no annotations "
                 f"for the videos in {self._videos_dir}.\n\n"
-                "Use 'Launch annotator' to draw a queue first.",
+                "Use Label Clips to draw a queue first.",
             )
             return
 
@@ -874,7 +973,8 @@ class AnnotateTab(QWidget):
             sessions, videos_meta, fps, clips, origin="resumed", pose_tracks=pose_tracks
         )
 
-    def _on_launch(self) -> None:
+    def _on_launch(self, review: bool = False) -> None:
+        """Open the annotator on a sampled queue, or with ``review`` on saved zones."""
         if self._videos_dir is None:
             QMessageBox.warning(self, "Annotate", "Choose a videos folder first.")
             return
@@ -967,7 +1067,7 @@ class AnnotateTab(QWidget):
         # sampled separately below, through propose_clips_for_animal.
         single_pairs = [(p, v) for v, p in sessions if v not in pose_tracks]
         try:
-            if self._review_check.isChecked():
+            if review:
                 # Every saved zone becomes a replayable clip. Nothing is
                 # sampled: the point is to see the work already on disk.
                 clips = build_review_clips(videos_meta, fps)
@@ -980,9 +1080,8 @@ class AnnotateTab(QWidget):
                         f"Looked for <name>_annotations.csv in {poses_dir}.\n\n"
                         "Review replays clips you have already labelled — it is "
                         "not how you get back to a sampled queue.\n\n"
-                        "Untick 'Review annotations already saved' to start "
-                        "labelling. Your clip queue is resumed automatically "
-                        "when the settings match the last run.",
+                        "Use Label Clips to start labelling. Your clip queue is "
+                        "resumed automatically when the settings match the last run.",
                     )
                     return
             else:

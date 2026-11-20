@@ -139,6 +139,15 @@ def test_the_registry_resolves_to_live_widgets(qtbot, tmp_path):
         assert widget is not None, f"{key} resolved to None"
 
 
+def test_annotate_resume_points_at_the_primary_button(qtbot, tmp_path):
+    """Resume is the Annotate step's primary button (or its menu) now."""
+    from glider.gui.behavior.window import BehaviorAnalysisWindow
+
+    win = BehaviorAnalysisWindow(project_dir=tmp_path)
+    qtbot.addWidget(win)
+    assert win.tour_targets()["annotate_resume"] is win.tabs.widget(0)._footer.primary
+
+
 def test_running_the_whole_tour_visits_every_tab(qtbot, tmp_path):
     """End to end on the real window, not a stand-in."""
     from glider.gui.behavior.window import BehaviorAnalysisWindow
