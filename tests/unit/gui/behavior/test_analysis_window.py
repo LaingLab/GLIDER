@@ -13,6 +13,7 @@ pytest.importorskip("PyQt6")
 
 from PyQt6.QtCore import QSettings, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QKeyEvent  # noqa: E402
+from PyQt6.QtWidgets import QPushButton  # noqa: E402
 
 from glider.analysis.behavior.session_view import SessionView  # noqa: E402
 from glider.gui.behavior.analysis_window import (  # noqa: E402
@@ -3894,3 +3895,68 @@ class TestArenaGrid:
         assert green_on_first_line()
         canvas.set_show_arena(False)
         assert not green_on_first_line()
+
+
+class TestTheEmptyState:
+    """Nothing open: one card that says what to do, not the editor's controls."""
+
+    def test_empty_state_until_a_session_opens(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        assert win._body.currentIndex() == 0
+        assert win._body.currentWidget() is win._empty
+        win.load(_session(tmp_path / "v"))
+        assert win._body.currentIndex() == 1
+
+    def test_empty_card_buttons_open(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        buttons = {b.text(): b for b in win._empty.findChildren(QPushButton)}
+        assert list(buttons) == ["Open Recording…", "Open File…", "Open Cohort Folder…"]
+        assert buttons["Open Recording…"].property("role") == "primary"
+        calls = []
+        for name in ("_open_recording", "_open", "_open_folder"):
+            monkeypatch.setattr(win, name, lambda n=name: calls.append(n))
+        for button in buttons.values():
+            button.click()
+        assert calls == ["_open_recording", "_open", "_open_folder"]
+
+    def test_a_drop_on_the_empty_card_opens_it(self, qtbot, tmp_path):
+        from PyQt6.QtCore import QMimeData, QPointF, QUrl
+        from PyQt6.QtGui import QDropEvent
+
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        assert win._empty.acceptDrops()
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(str(_session(tmp_path / "v")))])
+        event = QDropEvent(
+            QPointF(5, 5),
+            Qt.DropAction.CopyAction,
+            mime,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        win._empty.dropEvent(event)
+        assert win._pool.count() == 1
+        assert win._body.currentIndex() == 1
+
+    def test_pool_shows_from_two_sessions(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        one = _session(tmp_path / "a")
+        win.load(one)
+        assert win._pool.isHidden()
+        win.load_many([one, _session(tmp_path / "b")])
+        assert not win._pool.isHidden()
+        win.load(one)
+        assert win._pool.isHidden()
+
+    def test_the_view_menu_still_hides_a_cohorts_pool(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many([_session(tmp_path / "a"), _session(tmp_path / "b")])
+        win._view_actions["sessions"].setChecked(False)
+        assert win._pool.isHidden()
+        win._view_actions["sessions"].setChecked(True)
+        assert not win._pool.isHidden()

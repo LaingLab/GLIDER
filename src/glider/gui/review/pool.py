@@ -193,6 +193,11 @@ class SessionPool(QFrame):
         self.tree.expandAll()
         self._count.setText(str(len(entries)))
         self.tree.blockSignals(False)
+        # A few rows are read at a glance; a hidden filter must not keep hiding rows.
+        many = len(entries) > 8
+        if not many:
+            self.filter.clear()
+        self.filter.setVisible(many)
         self._apply_filter(self.filter.text())
 
     def count(self) -> int:

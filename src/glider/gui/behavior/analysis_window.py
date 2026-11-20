@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -122,6 +123,26 @@ from glider.gui.widgets.tool_ui import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _DropTarget(QWidget):
+    """Takes dropped files and folders, and says which."""
+
+    dropped = pyqtSignal(list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):  # noqa: N802 - Qt override
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):  # noqa: N802 - Qt override
+        paths = [Path(u.toLocalFile()) for u in event.mimeData().urls() if u.toLocalFile()]
+        if paths:
+            event.acceptProposedAction()
+            self.dropped.emit(paths)
 
 
 def _settings() -> QSettings:
@@ -458,7 +479,13 @@ class AnalysisWindow(QMainWindow):
         self._split.setCollapsible(0, False)
         self._split.setCollapsible(1, False)
         self._split.setSizes([520, 380])
-        page.addWidget(self._split, 1)
+        # Nothing open: one card that says what to do (0); the editor once a
+        # session loads (1).
+        self._empty = self._build_empty_card()
+        self._body = QStackedWidget()
+        self._body.addWidget(self._empty)
+        self._body.addWidget(self._split)
+        page.addWidget(self._body, 1)
         self.setCentralWidget(central)
         self._build_status_bar()
 
@@ -699,6 +726,56 @@ class AnalysisWindow(QMainWindow):
             row.addWidget(button)
         return bar
 
+    def _build_empty_card(self) -> QWidget:
+        page = _DropTarget()
+        page.dropped.connect(self._open_dropped)
+        card = QFrame()
+        card.setObjectName("Card")
+        column = QVBoxLayout(card)
+        column.setContentsMargins(28, 24, 28, 24)
+        column.setSpacing(6)
+        title = QLabel("Open a session to review")
+        font = title.font()
+        font.setPointSize(font.pointSize() + 4)
+        title.setFont(font)
+        column.addWidget(title)
+        hint = QLabel(
+            "A recording folder, a pose or ethogram CSV, or a whole cohort folder. "
+            "Or drop it here."
+        )
+        set_text_role(hint, "muted")
+        column.addWidget(hint)
+        column.addSpacing(8)
+        buttons = QHBoxLayout()
+        # Looked up when clicked, not bound now: the handlers stay replaceable.
+        for text, name in (
+            ("Open Recording…", "_open_recording"),
+            ("Open File…", "_open"),
+            ("Open Cohort Folder…", "_open_folder"),
+        ):
+            button = QPushButton(text)
+            button.clicked.connect(lambda _=False, n=name: getattr(self, n)())
+            buttons.addWidget(button)
+            if name == "_open_recording":
+                set_button_role(button, "primary")
+        buttons.addStretch(1)
+        column.addLayout(buttons)
+        outer = QVBoxLayout(page)
+        outer.addStretch(1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(card)
+        row.addStretch(1)
+        outer.addLayout(row)
+        outer.addStretch(2)
+        return page
+
+    def _open_dropped(self, paths: list[Path]) -> None:
+        if len(paths) == 1:
+            self.open_path(paths[0])
+        elif paths:
+            self.load_many(paths)
+
     def _build_status_bar(self) -> None:
         bar = self.statusBar()
         bar.setObjectName("ReviewStatus")
@@ -820,10 +897,10 @@ class AnalysisWindow(QMainWindow):
         menu = self._view_btn.menu()
         self._view_actions: dict = {}
         builtins = [
-            ("sessions", "Sessions list", self._pool),
             ("inspector", "Inspector", self._inspector),
             ("timeline", "Timeline and tables", self._timeline_panel),
         ]
+        self._add_view_action(menu, "sessions", "Sessions list", True, self._sync_pool)
         for key, label, widget in builtins:
             self._add_view_action(menu, key, label, True, lambda on, w=widget: w.setVisible(on))
         if self._panels.panels:
@@ -837,6 +914,15 @@ class AnalysisWindow(QMainWindow):
                 False,
                 lambda on, p=panel: self._show_plugin_panel(p, on),
             )
+
+    def _sync_pool(self, wanted: bool | None = None) -> None:
+        """The sessions list: shown when wanted (View) and there is a choice to make."""
+        if wanted is not None:
+            self._pool_wanted = wanted
+        shown = self._pool_wanted and self._pool.count() > 1
+        self._pool.setVisible(shown)
+        if shown:
+            self._give_room(self._pool, 250)
 
     def _add_view_action(self, menu, key: str, label: str, default: bool, apply) -> None:
         action = menu.addAction(label)
@@ -1186,6 +1272,7 @@ class AnalysisWindow(QMainWindow):
         self._cohort_store = cohort_store
         self._timelines = [timeline for timeline, _ in built]
         self._recordings_of = [recording for _, recording in built]
+        self._body.setCurrentIndex(1)
         self._fill_pool(0)
         self._show_session(0)
 
@@ -1262,6 +1349,7 @@ class AnalysisWindow(QMainWindow):
         self._pool.blockSignals(True)
         self._pool.select(selected)
         self._pool.blockSignals(False)
+        self._sync_pool()
 
     def _reload_shown(self, *, pose_csv: Path | None = None) -> None:
         """Re-read the shown session in place, keeping the rest of the cohort.

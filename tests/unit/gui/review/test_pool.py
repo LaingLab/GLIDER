@@ -141,3 +141,21 @@ class TestGrouping:
         actions = self._actions(pool.group_menu([0]))
         assert not actions["Remove from group"].isEnabled()
         assert not any(t.startswith("Move to") for t in actions)
+
+
+def test_pool_filter_only_for_many(qtbot):
+    pool = SessionPool()
+    qtbot.addWidget(pool)
+
+    def entries(n):
+        return [PoolEntry(f"m{i}", "", 1.0, False, False, False) for i in range(n)]
+
+    pool.set_entries(entries(8))
+    assert pool.filter.isHidden()
+    pool.set_entries(entries(9))
+    assert not pool.filter.isHidden()
+    pool.filter.setText("m1")
+    # Back to a few: a hidden filter must not keep hiding rows.
+    pool.set_entries(entries(3))
+    assert pool.filter.isHidden()
+    assert not any(item.isHidden() for item in pool._items)
