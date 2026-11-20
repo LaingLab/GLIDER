@@ -291,6 +291,7 @@ class GalleryView(QListView):
         #: Segmentation project: chips say "outline" rather than "animal".
         self.outlines = False
         self._filter: tuple[str | None, str | None, str | None] = (None, None, None)
+        self._press_row: int | None = None
         self.gallery_model = GalleryModel(self)
         self.setItemDelegate(_TileDelegate(self))
         self.setViewMode(QListView.ViewMode.IconMode)
@@ -359,17 +360,34 @@ class GalleryView(QListView):
         return [r for r in range(self.gallery_model.rowCount()) if not self.isRowHidden(r)]
 
     def selected_rows(self) -> list[int]:
-        return sorted(i.row() for i in self.selectionModel().selectedIndexes())
+        """Selected rows the filter shows; a hidden selected row is never acted on."""
+        return sorted(
+            i.row()
+            for i in self.selectionModel().selectedIndexes()
+            if not self.isRowHidden(i.row())
+        )
+
+    def mousePressEvent(self, event) -> None:
+        index = self.indexAt(event.position().toPoint())
+        plain = (
+            event.button() == Qt.MouseButton.LeftButton
+            and event.modifiers() == Qt.KeyboardModifier.NoModifier
+        )
+        self._press_row = index.row() if plain and index.isValid() else None
+        super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         super().mouseReleaseEvent(event)
-        if (
-            event.button() == Qt.MouseButton.LeftButton
-            and event.modifiers() == Qt.KeyboardModifier.NoModifier
-        ):
-            index = self.indexAt(event.position().toPoint())
-            if index.isValid():
-                self.frame_activated.emit(index.row())
+        # Only a press and release on the same tile opens it: not the end of a
+        # drag, and not the second half of a double-click (that has no press).
+        row, self._press_row = self._press_row, None
+        if row is None or event.button() != Qt.MouseButton.LeftButton:
+            return
+        if event.modifiers() != Qt.KeyboardModifier.NoModifier:
+            return
+        index = self.indexAt(event.position().toPoint())
+        if index.isValid() and index.row() == row:
+            self.frame_activated.emit(row)
 
     def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.currentIndex().isValid():

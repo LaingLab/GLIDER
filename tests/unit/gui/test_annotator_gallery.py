@@ -146,3 +146,35 @@ def test_label_edit_keeps_row_until_filter_reapplied(project, gallery):
     assert 0 in gallery.visible_rows()
     gallery.apply_filter()
     assert 0 not in gallery.visible_rows()
+
+
+def test_selected_rows_are_only_visible_ones(project, gallery):
+    from PyQt6.QtCore import QItemSelectionModel
+
+    for row in (0, 7):
+        gallery.selectionModel().select(
+            gallery.gallery_model.index(row), QItemSelectionModel.SelectionFlag.Select
+        )
+    gallery.set_filter(None, None, project.frames[0].video)
+    assert gallery.selected_rows() == [0]
+
+
+def test_drag_from_one_tile_to_another_does_not_open(qtbot, gallery):
+    got = []
+    gallery.frame_activated.connect(got.append)
+    vp = gallery.viewport()
+    qtbot.mousePress(vp, Qt.MouseButton.LeftButton, pos=_centre(gallery, 1))
+    qtbot.mouseMove(vp, _centre(gallery, 3))
+    qtbot.mouseRelease(vp, Qt.MouseButton.LeftButton, pos=_centre(gallery, 3))
+    assert got == []
+
+
+def test_double_click_opens_once(qtbot, gallery):
+    got = []
+    gallery.frame_activated.connect(got.append)
+    vp, pos = gallery.viewport(), _centre(gallery, 2)
+    # What a real double-click delivers: press, release, double-click, release.
+    qtbot.mouseClick(vp, Qt.MouseButton.LeftButton, pos=pos)
+    qtbot.mouseDClick(vp, Qt.MouseButton.LeftButton, pos=pos)
+    qtbot.mouseRelease(vp, Qt.MouseButton.LeftButton, pos=pos)
+    assert got == [2]
