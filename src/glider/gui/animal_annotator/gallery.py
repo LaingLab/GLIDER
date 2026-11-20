@@ -343,6 +343,11 @@ class GalleryView(QListView):
         self._filter = (status, split, video)
         self.apply_filter()
 
+    @property
+    def current_filter(self) -> tuple[str | None, str | None, str | None]:
+        """(status, split, video) as last given to :meth:`set_filter`."""
+        return self._filter
+
     def apply_filter(self, *_) -> None:
         """Re-apply the current filter. Label edits do not, so a frame being labelled stays put."""
         model = self.gallery_model

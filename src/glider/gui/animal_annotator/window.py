@@ -24,7 +24,15 @@ import threading
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, QSettings, Qt, QThread, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
+from PyQt6.QtGui import (
+    QActionGroup,
+    QColor,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPixmap,
+    QShortcut,
+)
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -32,16 +40,18 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
-    QSplitter,
     QStackedWidget,
     QToolButton,
     QVBoxLayout,
@@ -51,6 +61,7 @@ from PyQt6.QtWidgets import (
 from glider.core.presets import slugify
 from glider.gui.animal_annotator.add_images import AddImagesDialog
 from glider.gui.animal_annotator.canvas import SEQUENTIAL, SKELETON, LabelCanvas, read_image
+from glider.gui.animal_annotator.gallery import _SPLIT_COLOUR, GalleryView
 from glider.gui.animal_annotator.grid_page import GridPage, short_path
 from glider.gui.animal_annotator.history import LABELS, SKIP, Edit, History
 from glider.gui.animal_annotator.seg_canvas import AUTO, POLYGON, SegmentCanvas, class_colour
@@ -73,7 +84,7 @@ from glider.vision.training.project import (
     StudioProjectError,
 )
 from glider.vision.training.sam import DEFAULT_SAM_MODEL, SAM_MODELS
-from glider.vision.training.splits import ensure_splits, leak_notice
+from glider.vision.training.splits import SPLITS, ensure_splits, leak_notice
 from glider.vision.training.templates import SkeletonTemplate, TemplateKeypoint, palette_colour
 
 logger = logging.getLogger(__name__)
@@ -92,27 +103,29 @@ _SETTINGS_MODE = "animal_annotator/label_mode"
 _SETTINGS_SEG_TOOL = "animal_annotator/seg_tool"
 _SETTINGS_SAM_MODEL = "animal_annotator/sam_model"
 
-#: Frame-list filters: label, and which statuses each shows.
-_FILTERS = (
-    ("All frames", {"todo", "labelled", "skipped"}),
-    ("To do", {"todo"}),
-    ("Labelled", {"labelled"}),
-    ("Skipped", {"skipped"}),
-)
-_STATUS_COLOUR = {"labelled": "#4ade80", "todo": "#64748b", "skipped": "#f59e0b"}
+
+class _Pill(QLabel):
+    """The canvas hint: a pill over the top of the image, hidden when it has nothing to say."""
+
+    def __init__(self):
+        super().__init__()
+        self.setProperty("studioHint", True)
+        self.setTextFormat(Qt.TextFormat.RichText)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setVisible(False)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt's name
+        super().setText(text)
+        self.setVisible(bool(text))
 
 
-def _status_icon(status: str) -> QIcon:
-    """A small coloured dot: green labelled, grey to do, amber skipped."""
-    pixmap = QPixmap(12, 12)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor(_STATUS_COLOUR[status]))
-    painter.drawEllipse(2, 2, 8, 8)
-    painter.end()
-    return QIcon(pixmap)
+def _rail_button(glyph: str, tip: str) -> QToolButton:
+    button = QToolButton()
+    button.setText(glyph)
+    button.setToolTip(tip)
+    button.setCheckable(True)
+    button.setProperty("railTool", True)
+    return button
 
 
 def _swatch(colour: QColor) -> QIcon:
@@ -497,8 +510,9 @@ class AnimalAnnotatorWindow(QMainWindow):
         if not 0 <= index < len(self._project.frames):
             return
         self._frame_index = index
+        # The filmstrip shows what the grid shows; stepping walks the grid's rows.
+        self._filmstrip.set_filter(*self._gallery.current_filter)
         self._stack.setCurrentIndex(1)
-        self._refresh_frame_list()
         self._show_frame(index)
 
     def show_grid(self) -> None:
@@ -617,80 +631,59 @@ class AnimalAnnotatorWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_label_page(self) -> QWidget:
+        """The editor: tool rail, top bar, canvas with its hint, side panel, filmstrip."""
         page = QWidget()
         outer = QHBoxLayout(page)
         outer.setContentsMargins(0, 10, 0, 0)
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(6)
-        outer.addWidget(splitter)
+        outer.setSpacing(10)
 
-        left, left_layout = _panel()
-        left_layout.addWidget(section("Frames"))
-        self._filter = QComboBox()
-        for label, _statuses in _FILTERS:
-            self._filter.addItem(label)
-        self._filter.currentIndexChanged.connect(self._refresh_frame_list)
-        left_layout.addWidget(self._filter)
-        self._frame_list = QListWidget()
-        self._frame_list.setProperty("compact", True)
-        self._frame_list.currentItemChanged.connect(self._on_frame_chosen)
-        left_layout.addWidget(self._frame_list, 1)
-        self._counts_label = muted(QLabel(), small=True)
-        self._counts_label.setWordWrap(True)
-        left_layout.addWidget(self._counts_label)
-        splitter.addWidget(left)
-
-        middle = QWidget()
-        middle_layout = QVBoxLayout(middle)
-        middle_layout.setContentsMargins(0, 0, 0, 0)
-        middle_layout.setSpacing(8)
-        top_row = QHBoxLayout()
-        top_row.setSpacing(0)
-        back = secondary(QPushButton("← Grid"))
-        back.setToolTip("Back to every image (Esc)")
-        back.clicked.connect(self.show_grid)
-        top_row.addWidget(back)
-        top_row.addSpacing(10)
+        # -- tool rail: the project's two tools, undo and redo at the bottom
+        rail = QFrame()
+        rail.setProperty("studioPanel", True)
+        rail_layout = QVBoxLayout(rail)
+        rail_layout.setContentsMargins(6, 8, 6, 8)
+        rail_layout.setSpacing(4)
         self._mode_group = QButtonGroup(self)
-        self._mode_buttons: dict[str, QPushButton] = {}
-        for mode, label, tip, side in (
-            (SEQUENTIAL, "Sequential", "Click each keypoint in turn", "left"),
-            (
-                SKELETON,
-                "Skeleton",
-                "Drop the whole skeleton, then move, tilt and scale it",
-                "right",
-            ),
+        self._mode_buttons: dict[str, QToolButton] = {}
+        for mode, glyph, tip in (
+            (SEQUENTIAL, "•", "Point by point: click each keypoint in turn"),
+            (SKELETON, "⌖", "Drop skeleton: drop the whole skeleton, then move, tilt and scale it"),
         ):
-            button = QPushButton(label)
-            button.setCheckable(True)
-            button.setProperty("segment", side)
-            button.setToolTip(f"{tip} (M switches)")
+            button = _rail_button(glyph, f"{tip} (M switches)")
             button.clicked.connect(lambda _c=False, m=mode: self._set_mode(m))
             self._mode_group.addButton(button)
             self._mode_buttons[mode] = button
-            top_row.addWidget(button)
-        # Segmentation projects: the same two-part switch, with their tools.
+            rail_layout.addWidget(button)
         self._tool_group = QButtonGroup(self)
-        self._tool_buttons: dict[str, QPushButton] = {}
-        for tool, label, tip, side in (
-            (POLYGON, "Polygon", "Click round the animal to outline it", "left"),
+        self._tool_buttons: dict[str, QToolButton] = {}
+        for tool, glyph, tip in (
+            (POLYGON, "⬠", "Polygon: click round the animal to outline it"),
             (
                 AUTO,
-                "Auto",
-                "Segment Anything: click the animal, or drag a box round it",
-                "right",
+                "✦",
+                "Auto: Segment Anything outlines what you click or box. "
+                "The arrow picks the model; each downloads once, on first use.",
             ),
         ):
-            button = QPushButton(label)
-            button.setCheckable(True)
-            button.setProperty("segment", side)
-            button.setToolTip(f"{tip} (M switches)")
+            button = _rail_button(glyph, f"{tip} (M switches)")
             button.clicked.connect(lambda _c=False, t=tool: self._set_tool(t))
             self._tool_group.addButton(button)
             self._tool_buttons[tool] = button
-            top_row.addWidget(button)
-        top_row.addSpacing(10)
+            rail_layout.addWidget(button)
+        saved = self._settings.value(_SETTINGS_SAM_MODEL, DEFAULT_SAM_MODEL, type=str)
+        files = [m.file for m in SAM_MODELS]
+        self._sam_model_file = saved if saved in files else DEFAULT_SAM_MODEL
+        sam_menu = QMenu(self._tool_buttons[AUTO])
+        sam_group = QActionGroup(sam_menu)
+        for model in SAM_MODELS:
+            action = sam_menu.addAction(f"{model.label} · {model.size_mb} MB")
+            action.setCheckable(True)
+            action.setChecked(model.file == self._sam_model_file)
+            action.triggered.connect(lambda _c=False, f=model.file: self._set_sam_model(f))
+            sam_group.addAction(action)
+        self._tool_buttons[AUTO].setMenu(sam_menu)
+        self._tool_buttons[AUTO].setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        rail_layout.addStretch(1)
         undo_key = QKeySequence(QKeySequence.StandardKey.Undo).toString(
             QKeySequence.SequenceFormat.NativeText
         )
@@ -702,55 +695,68 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._undo_btn.setIcon(lucide_icon("undo-2", colors.TEXT_SECONDARY, 16))
         self._undo_btn.setToolTip(f"Undo ({undo_key})")
         self._undo_btn.clicked.connect(self._undo)
-        top_row.addWidget(self._undo_btn)
-        top_row.addSpacing(4)
+        rail_layout.addWidget(self._undo_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         self._redo_btn = QToolButton()
         self._redo_btn.setProperty("stepper", True)
         self._redo_btn.setIcon(lucide_icon("redo-2", colors.TEXT_SECONDARY, 16))
         self._redo_btn.setToolTip(f"Redo ({redo_key})")
         self._redo_btn.clicked.connect(self._redo)
-        top_row.addWidget(self._redo_btn)
-        top_row.addSpacing(14)
-        self._hint = QLabel()
-        self._hint.setTextFormat(Qt.TextFormat.RichText)
-        top_row.addWidget(self._hint, 1)
-        middle_layout.addLayout(top_row)
+        rail_layout.addWidget(self._redo_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        outer.addWidget(rail)
 
-        # The Auto tool's bar: which SAM model, accept, and what SAM is doing.
-        self._auto_bar = QWidget()
-        auto_row = QHBoxLayout(self._auto_bar)
-        auto_row.setContentsMargins(0, 0, 0, 0)
-        auto_row.setSpacing(8)
-        auto_row.addWidget(muted(QLabel("Model")))
-        self._sam_model = QComboBox()
-        for model in SAM_MODELS:
-            self._sam_model.addItem(model.label, model.file)
-        saved = self._settings.value(_SETTINGS_SAM_MODEL, DEFAULT_SAM_MODEL, type=str)
-        self._sam_model.setCurrentIndex(max(0, self._sam_model.findData(saved)))
-        self._sam_model.setToolTip(
-            "The Segment Anything model that proposes outlines. Each downloads once, "
-            "on first use. Bigger is more accurate and slower on a CPU."
+        # -- centre: top bar, canvas with the hint over it, filmstrip
+        middle = QVBoxLayout()
+        middle.setSpacing(8)
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+        back = secondary(QPushButton("← Grid"))
+        back.setToolTip("Back to every image (Esc)")
+        back.clicked.connect(self.show_grid)
+        top_row.addWidget(back)
+        self._frame_title = QLabel()
+        self._frame_title.setTextFormat(Qt.TextFormat.RichText)
+        top_row.addWidget(self._frame_title)
+        self._split_badge = QLabel()
+        self._split_badge.setProperty("splitBadge", True)
+        top_row.addWidget(self._split_badge)
+        top_row.addStretch(1)
+        self._skip_btn = secondary(QPushButton("Skip"))
+        self._skip_btn.setCheckable(True)
+        self._skip_btn.setToolTip(
+            "Leave this image out of the dataset: blurred, no animal visible… (S)"
         )
-        self._sam_model.currentIndexChanged.connect(self._on_sam_model_changed)
-        auto_row.addWidget(self._sam_model)
-        self._accept_btn = QPushButton("Accept")
-        self._accept_btn.setToolTip("Keep the proposed outline (Enter)")
-        self._accept_btn.clicked.connect(self._commit)
-        auto_row.addWidget(self._accept_btn)
-        self._clear_prompts_btn = secondary(QPushButton("Clear"))
-        self._clear_prompts_btn.setToolTip("Drop the clicks and the proposal (Esc)")
-        self._clear_prompts_btn.clicked.connect(self._cancel)
-        auto_row.addWidget(self._clear_prompts_btn)
-        self._sam_status = muted(QLabel(), small=True)
-        auto_row.addWidget(self._sam_status, 1)
-        middle_layout.addWidget(self._auto_bar)
+        self._skip_btn.toggled.connect(self._on_skip_toggled)
+        top_row.addWidget(self._skip_btn)
+        for icon, tip, delta in (
+            ("chevron-left", "Previous image (← or A)", -1),
+            ("chevron-right", "Next image (→ or D)", 1),
+        ):
+            button = QToolButton()
+            button.setProperty("stepper", True)
+            button.setIcon(lucide_icon(icon, colors.TEXT_SECONDARY, 16))
+            button.setToolTip(tip)
+            button.clicked.connect(lambda _c=False, d=delta: self._step_frame(d))
+            top_row.addWidget(button)
+        middle.addLayout(top_row)
 
-        self._canvas_holder = QVBoxLayout()
-        middle_layout.addLayout(self._canvas_holder, 1)
+        stage = QWidget()
+        self._canvas_holder = QGridLayout(stage)
+        self._canvas_holder.setContentsMargins(0, 0, 0, 0)
+        self._hint = _Pill()
+        self._canvas_holder.addWidget(
+            self._hint, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter
+        )
+        middle.addWidget(stage, 1)
         self._canvas: LabelCanvas | SegmentCanvas | None = None
-        self._help_text = muted(QLabel(), small=True)
-        self._help_text.setWordWrap(True)
-        middle_layout.addWidget(self._help_text)
+
+        self._filmstrip = GalleryView(strip=True)
+        self._filmstrip.share_model(self._gallery)
+        self._filmstrip.setSelectionMode(QListView.SelectionMode.SingleSelection)
+        self._filmstrip.setToolTip("The images the grid's filter shows; click one to open it")
+        self._filmstrip.frame_activated.connect(self._show_frame)
+        middle.addWidget(self._filmstrip)
+        outer.addLayout(middle, 1)
+
         self._mode = self._settings.value(_SETTINGS_MODE, SEQUENTIAL, type=str)
         if self._mode not in (SEQUENTIAL, SKELETON):
             self._mode = SEQUENTIAL
@@ -759,9 +765,10 @@ class AnimalAnnotatorWindow(QMainWindow):
         if self._tool not in (POLYGON, AUTO):
             self._tool = AUTO
         self._tool_buttons[self._tool].setChecked(True)
-        splitter.addWidget(middle)
 
+        # -- side panel: keypoints and animals, or classes and outlines; the split
         right, right_layout = _panel()
+        right.setFixedWidth(250)
         # Pose projects: keypoints and animals.
         self._pose_panel = QWidget()
         pose_layout = QVBoxLayout(self._pose_panel)
@@ -810,32 +817,17 @@ class AnimalAnnotatorWindow(QMainWindow):
 
         right_layout = right.layout()  # back to the shared panel
         right_layout.addSpacing(4)
-        right_layout.addWidget(section("Frame"))
-        nav = QHBoxLayout()
-        prev_btn = secondary(QPushButton("← Previous"))
-        prev_btn.clicked.connect(lambda: self._step_frame(-1))
-        nav.addWidget(prev_btn)
-        next_btn = secondary(QPushButton("Next →"))
-        next_btn.clicked.connect(lambda: self._step_frame(1))
-        nav.addWidget(next_btn)
-        right_layout.addLayout(nav)
-        self._skip_btn = secondary(QPushButton("Skip Frame"))
-        self._skip_btn.setCheckable(True)
-        self._skip_btn.setToolTip(
-            "Leave this frame out of the dataset: blurred, no animal visible… (S)"
-        )
-        self._skip_btn.toggled.connect(self._on_skip_toggled)
-        right_layout.addWidget(self._skip_btn)
-        todo_btn = QPushButton("Next To Do")
-        todo_btn.setToolTip("Jump to the next frame that isn't labelled or skipped")
-        todo_btn.clicked.connect(self._next_todo)
-        right_layout.addWidget(todo_btn)
-        splitter.addWidget(right)
-
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 0)
-        splitter.setSizes([220, 820, 230])
+        right_layout.addWidget(section("Split"))
+        self._split_combo = QComboBox()
+        for split in SPLITS:
+            self._split_combo.addItem(split.capitalize(), split)
+        self._split_combo.setToolTip("Which part of the dataset this image goes in")
+        self._split_combo.currentIndexChanged.connect(self._on_split_changed)
+        right_layout.addWidget(self._split_combo)
+        key_line = muted(QLabel("←/→ image · S skip · N animal · ? all shortcuts"), small=True)
+        key_line.setWordWrap(True)
+        right_layout.addWidget(key_line)
+        outer.addWidget(right)
 
         for keys, slot in (
             (("Right", "D"), lambda: self._step_frame(1)),
@@ -850,12 +842,111 @@ class AnimalAnnotatorWindow(QMainWindow):
             (("=", "+"), lambda: self._pose_canvas() and self._pose_canvas().scale_current(1.05)),
             (("Return", "Enter"), self._commit),
             (("Escape",), self._cancel),
+            (("?",), lambda: self._shortcuts_dialog().open()),
         ):
             for key in keys:
                 shortcut = QShortcut(QKeySequence(key), page)
                 shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
                 shortcut.activated.connect(slot)
         return page
+
+    def _shortcuts_dialog(self) -> QDialog:
+        """What ``?`` opens: every key and click the editor understands."""
+        undo = QKeySequence(QKeySequence.StandardKey.Undo).toString(
+            QKeySequence.SequenceFormat.NativeText
+        )
+        redo = QKeySequence(QKeySequence.StandardKey.Redo).toString(
+            QKeySequence.SequenceFormat.NativeText
+        )
+        groups = [
+            (
+                "Images",
+                [
+                    ("← → or A D", "Previous / next image in the grid's filter"),
+                    ("S", "Toggle skip: leave the image out of the dataset"),
+                    ("Esc", "Cancel what you are drawing, else back to the grid"),
+                    (undo, "Undo"),
+                    (redo, "Redo"),
+                    ("M", "Switch tool"),
+                    ("Wheel · Middle-drag", "Zoom · pan"),
+                    ("?", "This list"),
+                ],
+            )
+        ]
+        if self._is_segment():
+            groups += [
+                (
+                    "Polygon",
+                    [
+                        ("Click", "Add a vertex"),
+                        ("Click the first vertex or Enter", "Close the outline"),
+                        ("Esc", "Abandon the outline"),
+                        ("Right-click a vertex", "Remove it"),
+                    ],
+                ),
+                (
+                    "Auto",
+                    [
+                        ("Click · Right-click", "On the animal · not the animal"),
+                        ("Drag", "A box round it"),
+                        ("Enter · Esc", "Accept · clear"),
+                    ],
+                ),
+                (
+                    "Outlines",
+                    [
+                        ("Drag a vertex", "Move it"),
+                        ("Shift-click an edge", "Add a vertex"),
+                        ("Delete", "Remove"),
+                        ("N", "Start a fresh outline"),
+                    ],
+                ),
+            ]
+        else:
+            groups += [
+                (
+                    "Point by point",
+                    [("Click", "Place the next keypoint"), ("N", "Next animal")],
+                ),
+                (
+                    "Drop skeleton",
+                    [
+                        ("Click · Drag a box", "Drop the skeleton · drop it sized"),
+                        ("Inside the box · Corners · Top handle", "Move · scale · tilt"),
+                        ("[ ]", "Tilt 5°"),
+                        ("− =", "Scale"),
+                    ],
+                ),
+                (
+                    "Keypoints",
+                    [
+                        ("Drag a point", "Move it"),
+                        ("Right-click", "Hidden / visible"),
+                        ("Delete", "Remove the point"),
+                    ],
+                ),
+            ]
+        rows = "".join(
+            f"<tr><td colspan=2 style='padding-top:8px'><b>{title}</b></td></tr>"
+            + "".join(
+                f"<tr><td style='padding-right:16px; color:{colors.ACCENT}'>{key}</td>"
+                f"<td>{action}</td></tr>"
+                for key, action in items
+            )
+            for title, items in groups
+        )
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Shortcuts")
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 16, 20, 16)
+        label = QLabel(f"<table>{rows}</table>")
+        label.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(label)
+        close = QPushButton("Close")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
+        return dialog
 
     def _build_seg_panel(self) -> QWidget:
         """Segmentation projects' side panel: classes and the outlines on this frame."""
@@ -914,7 +1005,6 @@ class AnimalAnnotatorWindow(QMainWindow):
             button.setVisible(segment)
         self._pose_panel.setVisible(not segment)
         self._seg_panel.setVisible(segment)
-        self._auto_bar.setVisible(segment and self._tool == AUTO)
 
     def _make_canvas(self) -> None:
         """Build a canvas for the open project, replacing any old one."""
@@ -938,7 +1028,8 @@ class AnimalAnnotatorWindow(QMainWindow):
             canvas.state_changed.connect(self._refresh_label_state)
             canvas.prompt_changed.connect(self._request_sam)
             self._canvas = canvas
-            self._canvas_holder.addWidget(canvas)
+            self._canvas_holder.addWidget(canvas, 0, 0)
+            self._hint.raise_()
             self._refresh_class_list()
             return
         self._canvas = LabelCanvas(
@@ -949,62 +1040,52 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._canvas.set_mode(self._mode)
         self._canvas.changed.connect(self._on_labels_changed)
         self._canvas.state_changed.connect(self._refresh_label_state)
-        self._canvas_holder.addWidget(self._canvas)
+        self._canvas_holder.addWidget(self._canvas, 0, 0)
+        self._hint.raise_()
         for i, name in enumerate(self._project.keypoint_names):
             self._keypoint_list.addItem(QListWidgetItem(_swatch(self._canvas.colour(i)), name))
-
-    def _status(self, frame) -> str:
-        if frame.skipped:
-            return "skipped"
-        return "labelled" if self._project.is_labelled(frame) else "todo"
-
-    def _frame_text(self, frame) -> str:
-        """``Frame 120``, with the video's name when the project has several."""
-        if len(self._project.videos) > 1:
-            return f"Frame {frame.frame}  ·  {frame.video}"
-        return f"Frame {frame.frame}"
-
-    def _refresh_frame_list(self) -> None:
-        self._frame_list.blockSignals(True)
-        self._frame_list.clear()
-        if self._project is not None:
-            shown = _FILTERS[self._filter.currentIndex()][1]
-            for i, frame in enumerate(self._project.frames):
-                status = self._status(frame)
-                if status not in shown and i != self._frame_index:
-                    continue
-                item = QListWidgetItem(_status_icon(status), self._frame_text(frame))
-                item.setToolTip(frame.name)
-                item.setData(Qt.ItemDataRole.UserRole, i)
-                self._frame_list.addItem(item)
-                if i == self._frame_index:
-                    self._frame_list.setCurrentItem(item)
-        self._frame_list.blockSignals(False)
-        self._refresh_counts()
-
-    def _refresh_counts(self) -> None:
-        if self._project is None:
-            self._counts_label.setText("")
-            return
-        c = self._project.counts()
-        self._counts_label.setText(
-            f"{c['labelled']} labelled · {c['skipped']} skipped · {c['todo']} to do"
-        )
 
     def _update_frame_item(self, index: int) -> None:
         self._gallery.gallery_model.invalidate(index)
         self._grid.update_stats()
-        for row in range(self._frame_list.count()):
-            item = self._frame_list.item(row)
-            if item.data(Qt.ItemDataRole.UserRole) == index:
-                frame = self._project.frames[index]
-                item.setIcon(_status_icon(self._status(frame)))
-        self._refresh_counts()
 
-    def _on_frame_chosen(self, item: QListWidgetItem | None, _previous=None) -> None:
-        if item is None:
+    def _refresh_frame_header(self) -> None:
+        """``Frame 120 · video.mp4 · 4 of 30`` (place in the grid's filter) and the split badge."""
+        if self._project is None or not 0 <= self._frame_index < len(self._project.frames):
+            self._frame_title.setText("")
+            self._split_badge.setText("")
             return
-        self._show_frame(item.data(Qt.ItemDataRole.UserRole))
+        frame = self._project.frames[self._frame_index]
+        parts = [
+            f"<b>Frame {frame.frame}</b>",
+            Path(self._project.videos.get(frame.video, frame.video)).name,
+        ]
+        rows = self._gallery.visible_rows()
+        if self._frame_index in rows:
+            parts.append(f"{rows.index(self._frame_index) + 1} of {len(rows)}")
+        self._frame_title.setText(" · ".join(parts))
+        split = frame.split or ""
+        self._split_badge.setText(split.upper())
+        self._split_badge.setStyleSheet(
+            f"color: {_SPLIT_COLOUR.get(split, colors.TEXT_SECONDARY)};"
+        )
+
+    def _on_split_changed(self, _index: int) -> None:
+        """The side panel's Split: saved at once and not undoable, like a bulk move."""
+        if self._project is None or not 0 <= self._frame_index < len(self._project.frames):
+            return
+        frame = self._project.frames[self._frame_index]
+        split = self._split_combo.currentData()
+        if frame.split == split:
+            return
+        frame.split = split
+        try:
+            self._project.save()
+        except OSError as e:
+            QMessageBox.warning(self, "Save project", f"Could not save the project: {e}")
+        # Not grid.refresh(): that re-filters, and the open image must stay in the steps.
+        self._update_frame_item(self._frame_index)
+        self._refresh_frame_header()
 
     def _show_frame(self, index: int) -> None:
         if self._project is None or self._canvas is None:
@@ -1029,19 +1110,18 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._loading_frame = True
         self._skip_btn.setChecked(frame.skipped)
         self._loading_frame = False
+        self._split_combo.blockSignals(True)
+        self._split_combo.setCurrentIndex(max(0, self._split_combo.findData(frame.split)))
+        self._split_combo.blockSignals(False)
+        self._refresh_frame_header()
+        self._filmstrip.select_row(index)
         self._baseline = instances
         # Any SAM answer still on its way is for the previous frame's clicks.
         self._sam_request_id += 1
-        self._sam_status.setText("")
         self._canvas.set_frame(image, instances)
         self._canvas.setFocus()
         if image is None:
             self._hint.setText(f"<b>{frame.name}.jpg</b> is missing from the project folder.")
-        for row in range(self._frame_list.count()):
-            if self._frame_list.item(row).data(Qt.ItemDataRole.UserRole) == index:
-                self._frame_list.blockSignals(True)
-                self._frame_list.setCurrentRow(row)
-                self._frame_list.blockSignals(False)
 
     def _save_current_frame(self) -> None:
         """Write the canvas's labels for the frame on screen."""
@@ -1087,8 +1167,6 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._tool = tool
         self._tool_buttons[tool].setChecked(True)
         self._settings.setValue(_SETTINGS_SEG_TOOL, tool)
-        self._auto_bar.setVisible(self._is_segment() and tool == AUTO)
-        self._sam_status.setText("")
         canvas = self._seg_canvas()
         if canvas is not None:
             canvas.set_tool(tool)
@@ -1107,7 +1185,6 @@ class AnimalAnnotatorWindow(QMainWindow):
         canvas = self._seg_canvas()
         if canvas is not None and (canvas.drafting or canvas.has_prompts or canvas.has_proposal):
             canvas.cancel()
-            self._sam_status.setText("")
             canvas.setFocus()
             return
         self.show_grid()
@@ -1178,8 +1255,10 @@ class AnimalAnnotatorWindow(QMainWindow):
             canvas.delete_shape()
             canvas.setFocus()
 
-    def _on_sam_model_changed(self, _index: int) -> None:
-        self._settings.setValue(_SETTINGS_SAM_MODEL, self._sam_model.currentData())
+    def _set_sam_model(self, file: str) -> None:
+        """The Auto tool's menu: which SAM model proposes outlines, remembered."""
+        self._sam_model_file = file
+        self._settings.setValue(_SETTINGS_SAM_MODEL, file)
         self._request_sam()
 
     def _ensure_sam_worker(self) -> SamWorker:
@@ -1189,7 +1268,7 @@ class AnimalAnnotatorWindow(QMainWindow):
             self._sam_worker.moveToThread(self._sam_thread)
             self._sam_request.connect(self._sam_worker.run, Qt.ConnectionType.QueuedConnection)
             self._sam_worker.result.connect(self._on_sam_result)
-            self._sam_worker.status.connect(self._sam_status.setText)
+            self._sam_worker.status.connect(self._hint.setText)
             self._sam_thread.start()
         return self._sam_worker
 
@@ -1215,7 +1294,7 @@ class AnimalAnnotatorWindow(QMainWindow):
         key = self._project.frames[self._frame_index].name
         self._sam_request.emit(
             self._sam_request_id,
-            self._sam_model.currentData(),
+            self._sam_model_file,
             key,
             image,
             points,
@@ -1231,39 +1310,18 @@ class AnimalAnnotatorWindow(QMainWindow):
             return
         canvas.busy = False
         if error:
-            self._sam_status.setText(f"Auto failed: {error}")
+            self._hint.setText(f"Auto failed: {error}")
             return
         if not polygon:
-            self._sam_status.setText("No outline found here; try another click or a box.")
-            canvas.set_proposal(None)
+            canvas.set_proposal(None)  # refreshes the hint, so the news goes after
+            self._hint.setText("No outline found here; try another click or a box.")
             return
-        self._sam_status.setText(
-            "Enter to accept · click to add · right-click to take away · Esc to clear"
-        )
-        canvas.set_proposal(polygon)
+        canvas.set_proposal(polygon)  # the hint now says Enter keeps it
 
     def _refresh_seg_state(self) -> None:
         canvas = self._seg_canvas()
-        common = (
-            "Drag a vertex: move · Shift-click an edge: add vertex · Delete: remove · "
-            "Wheel: zoom · Middle-drag: pan · ←/→: frame · S: skip · M: switch tool · "
-            + QKeySequence(QKeySequence.StandardKey.Undo).toString(
-                QKeySequence.SequenceFormat.NativeText
-            )
-            + ": undo"
-        )
-        if self._tool == AUTO:
-            self._help_text.setText(
-                "Click: on the animal · Right-click: not the animal · Drag: box round it · "
-                "Enter: accept · Esc: clear · " + common
-            )
-        else:
-            self._help_text.setText(
-                "Click: add vertex · Click the first vertex or Enter: close · Esc: abandon · "
-                "Right-click a vertex: remove it · " + common
-            )
         if canvas is None or not canvas.has_image:
-            self._hint.setText("Pick a frame on the left." if self._project else "")
+            self._hint.setText("")
             self._shape_list.clear()
             return
         names = self._project.class_names
@@ -1286,8 +1344,6 @@ class AnimalAnnotatorWindow(QMainWindow):
                 )
         else:
             self._hint.setText(f"Click round a <b>{cls_name}</b> to outline it.")
-        self._accept_btn.setEnabled(canvas.has_proposal)
-        self._clear_prompts_btn.setEnabled(canvas.has_prompts or canvas.has_proposal)
         self._shape_list.blockSignals(True)
         self._shape_list.clear()
         for i in range(canvas.shape_count):
@@ -1310,24 +1366,9 @@ class AnimalAnnotatorWindow(QMainWindow):
         if self._is_segment():
             self._refresh_seg_state()
             return
-        common = (
-            "Drag a point: move · Right-click: hidden/visible · Delete: remove point · "
-            "Wheel: zoom · Middle-drag: pan · ←/→: frame · S: skip · M: switch mode · "
-            + QKeySequence(QKeySequence.StandardKey.Undo).toString(
-                QKeySequence.SequenceFormat.NativeText
-            )
-            + ": undo"
-        )
-        if self._mode == SKELETON:
-            self._help_text.setText(
-                "Click: drop skeleton · Drag a box: drop it sized · Inside the box: move · "
-                "Corners: scale · Top handle: tilt · [ ]: tilt 5° · − =: scale · " + common
-            )
-        else:
-            self._help_text.setText("Click: place next keypoint · N: next animal · " + common)
         canvas = self._canvas
         if canvas is None or not canvas.has_image:
-            self._hint.setText("Pick a frame on the left." if self._project else "")
+            self._hint.setText("")
             self._animal_label.setText("")
             return
         names = self._project.keypoint_names
@@ -1407,36 +1448,22 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._update_frame_item(self._frame_index)
         self._refresh_undo_buttons()
 
-    def _visible_indices(self) -> list[int]:
-        return [
-            self._frame_list.item(r).data(Qt.ItemDataRole.UserRole)
-            for r in range(self._frame_list.count())
-        ]
-
     def _step_frame(self, delta: int) -> None:
-        indices = self._visible_indices()
-        if not indices:
-            return
-        if self._frame_index in indices:
-            pos = indices.index(self._frame_index) + delta
-        else:
-            pos = 0 if delta > 0 else len(indices) - 1
-        if 0 <= pos < len(indices):
-            self._show_frame(indices[pos])
+        """Previous / next image among the grid's rows, as filtered when the editor opened.
 
-    def _next_todo(self) -> None:
-        if self._project is None:
-            return
-        frames = self._project.frames
-        n = len(frames)
-        for step in range(1, n + 1):
-            i = (self._frame_index + step) % n
-            if self._status(frames[i]) == "todo":
-                if self._filter.currentIndex() not in (0, 1):
-                    self._filter.setCurrentIndex(0)
-                self._show_frame(i)
-                return
-        QMessageBox.information(self, "Labelling", "Every frame is labelled or skipped.")
+        If the open image is no longer among them, step from where it would sit.
+        """
+        rows = self._gallery.visible_rows()
+        here = self._frame_index
+        if here in rows:
+            pos = rows.index(here) + delta
+            target = rows[pos] if 0 <= pos < len(rows) else None
+        elif delta > 0:
+            target = next((r for r in rows if r > here), None)
+        else:
+            target = next((r for r in reversed(rows) if r < here), None)
+        if target is not None:
+            self._show_frame(target)
 
     # ------------------------------------------------------------------
     # projects
@@ -1585,7 +1612,6 @@ class AnimalAnnotatorWindow(QMainWindow):
     def _refresh_all(self) -> None:
         self._gallery.gallery_model.reload()
         self._grid.refresh()
-        self._refresh_frame_list()
         if self._frame_index >= 0:
             self._show_frame(self._frame_index)
         self._refresh_label_state()

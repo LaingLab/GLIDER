@@ -359,6 +359,76 @@ def test_escape_returns_to_grid_when_nothing_to_cancel(qtbot, window, tmp_path):
     assert window._stack.currentIndex() == 0
 
 
+def test_split_combo_moves_the_frame(qtbot, window, tmp_path):
+    from glider.gui.animal_annotator.gallery import GalleryModel
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=2)
+    window.show_editor(1)
+    combo = window._split_combo
+    combo.setCurrentIndex(combo.findData("test"))
+    assert StudioProject.load(project.folder).frames[1].split == "test"
+    assert window._split_badge.text() == "TEST"
+    model = window._grid.gallery.gallery_model
+    assert model.data(model.index(1), GalleryModel.SplitRole) == "test"
+    window.show_editor(0)  # showing another frame never rewrites a split
+    assert window._split_combo.currentData() == window._project.frames[0].split
+    assert StudioProject.load(project.folder).frames[1].split == "test"
+
+
+def test_stepping_follows_the_grid_filter(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=4)
+    window.show_editor(1)
+    window._canvas.place(5, 5)  # frame 1 annotated
+    window.show_grid()
+    window._grid.status_chips["todo"].click()
+    assert window._grid.gallery.visible_rows() == [0, 2, 3]
+    window.show_editor(0)
+    assert "1 of 3" in window._frame_title.text()
+    assert window._filmstrip.visible_rows() == [0, 2, 3]
+    window._step_frame(1)
+    assert window._frame_index == 2
+    assert "2 of 3" in window._frame_title.text()
+
+
+def test_stepping_from_a_frame_the_filter_now_hides(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=4)
+    window._grid.status_chips["todo"].click()
+    window.show_editor(1)
+    window._canvas.place(5, 5)  # frame 1 no longer matches the filter
+    window._grid.gallery.apply_filter()  # even once the grid re-filters
+    assert 1 not in window._grid.gallery.visible_rows()
+    window._step_frame(1)
+    assert window._frame_index == 2
+    window.show_editor(1)
+    window._grid.gallery.apply_filter()
+    window._step_frame(-1)
+    assert window._frame_index == 0
+
+
+def test_question_mark_lists_shortcuts(window):
+    from PyQt6.QtWidgets import QLabel
+
+    dialog = window._shortcuts_dialog()
+    text = " ".join(label.text() for label in dialog.findChildren(QLabel))
+    assert "Undo" in text and "skip" in text
+
+
+def test_filmstrip_click_opens_that_frame(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=3)
+    window.show_editor(0)
+    window._filmstrip.frame_activated.emit(2)
+    assert window._frame_index == 2
+    assert window._filmstrip.currentIndex().row() == 2
+
+
 def test_add_images_dialog_lists_project_videos_unticked(qtbot, tmp_path):
     from glider.gui.animal_annotator.add_images import AddImagesDialog
 

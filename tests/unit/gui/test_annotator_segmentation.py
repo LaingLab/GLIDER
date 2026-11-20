@@ -297,7 +297,8 @@ def test_auto_tool_runs_sam_and_accepts_its_outline(qtbot, window, tmp_path, mon
     window.open_project(project.folder)
     window.show_editor(0)
     window._set_tool(AUTO)
-    assert not window._auto_bar.isHidden()
+    assert window._tool_buttons[AUTO].isChecked()
+    assert "drag a box" in window._hint.text()
     canvas = window._canvas
     window._class_list.setCurrentRow(1)
     window._on_class_clicked(window._class_list.item(1))
@@ -306,7 +307,7 @@ def test_auto_tool_runs_sam_and_accepts_its_outline(qtbot, window, tmp_path, mon
     qtbot.waitUntil(lambda: canvas.has_proposal, timeout=10000)
     xs = [p[0] for p in canvas._proposal]
     assert min(xs) == pytest.approx(40, abs=2) and max(xs) == pytest.approx(120, abs=2)
-    assert window._accept_btn.isEnabled()
+    assert "Enter" in window._hint.text()  # accepting is Enter, no button
 
     window._commit()
     frame = window._project.frames[window._frame_index]
@@ -337,7 +338,7 @@ def test_sam_errors_are_reported_not_raised(qtbot, window, tmp_path):
     window.show_editor(0)
     window._set_tool(AUTO)
     window._on_sam_result(window._sam_request_id, None, "no network")
-    assert "no network" in window._sam_status.text()
+    assert "no network" in window._hint.text()
 
 
 def test_pose_projects_are_unchanged(window, tmp_path):
@@ -348,4 +349,16 @@ def test_pose_projects_are_unchanged(window, tmp_path):
     window.open_project(project.folder)
     assert isinstance(window._canvas, LabelCanvas)
     assert window._seg_panel.isHidden() and not window._pose_panel.isHidden()
-    assert window._auto_bar.isHidden()
+    assert window._tool_buttons[AUTO].isHidden() and window._tool_buttons[POLYGON].isHidden()
+    assert not window._mode_buttons["sequential"].isHidden()
+
+
+def test_sam_model_menu_persists(window):
+    from glider.vision.training.sam import SAM_MODELS
+
+    menu = window._tool_buttons[AUTO].menu()
+    chosen = menu.actions()[2]  # not the default, so the setting must change
+    chosen.trigger()
+    assert chosen.isChecked()
+    assert window._settings.value("animal_annotator/sam_model") == SAM_MODELS[2].file
+    assert window._sam_model_file == SAM_MODELS[2].file
