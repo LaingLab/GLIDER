@@ -127,7 +127,15 @@ class OptionsPopup(QDialog):
         self.adjustSize()
         # Right-aligned above the anchor: the button sits in the step's footer.
         corner = self._anchor.mapToGlobal(QPoint(self._anchor.width(), 0))
-        self.move(corner.x() - self.width(), max(0, corner.y() - self.height() - 8))
+        x, y = corner.x() - self.width(), corner.y() - self.height() - 8
+        # Kept on the anchor's screen: a window near an edge would otherwise
+        # push the panel (and its title bar) out of reach.
+        screen = self._anchor.screen()
+        if screen is not None:
+            area = screen.availableGeometry()
+            x = max(area.left(), min(x, area.right() - self.width()))
+            y = max(area.top(), min(y, area.bottom() - self.height()))
+        self.move(x, y)
         self.show()
         self.raise_()
         self.activateWindow()

@@ -181,3 +181,19 @@ def test_the_tour_is_reachable_from_the_window(qtbot, tmp_path):
     qtbot.addWidget(win)
     assert win._tour_btn is not None
     assert win._tour_btn.isEnabled()
+
+
+def test_train_cv_points_at_the_fit_button(qtbot, tmp_path):
+    """Cross-validate lives in the Fit Model button's menu now."""
+    from glider.gui.behavior.window import BehaviorAnalysisWindow
+
+    win = BehaviorAnalysisWindow(project_dir=tmp_path)
+    qtbot.addWidget(win)
+    assert win.tour_targets()["train_cv"] is win.train_tab._fit_btn
+
+
+def test_tour_copy_names_the_current_buttons():
+    text = {step.target_key: step.body for step in behavior_steps()}
+    assert "Resume Labelling" in text["annotate_resume"]
+    assert "Label Clips" in text["annotate_resume"]
+    assert "Fit Model" in text["train_cv"]

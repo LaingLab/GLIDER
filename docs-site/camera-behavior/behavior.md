@@ -51,7 +51,12 @@ On the **Annotate** tab:
 1. Click **Choose videos folder…** and select the folder of recordings.
 2. Optionally click **Choose pose CSV folder…** if the pose CSVs live elsewhere
    (by default GLIDER looks in the videos folder).
-3. Click **Launch annotator**.
+3. Click **Label Clips**. Once the folder has saved labels the button reads
+   **Resume Labelling** instead; the other action and **Review saved
+   annotations** are in the button's ▾ menu. The footer names anything that
+   blocks labelling, such as videos with no pose CSVs yet. Rarely-used
+   settings (skip regions already labelled, the speed trace) are under
+   **Options**.
 
 GLIDER samples a spread of short clips across your videos — chosen to be varied
 rather than all alike, so your labels cover a representative range of behavior —
@@ -82,7 +87,7 @@ Your labels are saved next to each pose CSV as an annotations file (for example
 
 If a video was tracked with more than one animal (see
 [Multiple animals](tracking.md#multiple-animals) in Tracking), the annotator
-labels **one animal per pass**. Clicking **Launch annotator** asks, once for
+labels **one animal per pass**. Clicking **Label Clips** asks, once for
 each such video, which animal (numbered from 0) you want to label this time:
 
 > Label one animal per pass: every zone you create is stamped with this
@@ -115,22 +120,30 @@ those zones read as animal 0.
 
 On the **Train** tab you fit a classifier from your labeled sessions:
 
-1. Under **Training sessions**, click **Add sessions…** and pick a matching pose
-   CSV and its annotations CSV. Add as many sessions as you have.
-2. Optionally add **Holdout sessions** — recordings kept aside to test how well
-   the model generalizes to data it never trained on.
-3. Choose a **Classifier**:
-    - `rf` — a scikit-learn **Random Forest**.
-    - `lightgbm` — a **LightGBM** gradient-boosted model. (If LightGBM isn't
-      available, GLIDER falls back to Random Forest automatically.)
-4. With `lightgbm` selected, **Advanced…** opens the per-knob hyperparameters —
-   see [Advanced LightGBM settings](#advanced-lightgbm-settings).
-5. Optionally enable **Include background class** (treat unlabeled frames as a
-   catch-all "background" behavior) and **Mirror augment** (add left/right-mirrored
-   copies of your data to make the model robust to direction).
-6. Click **Choose output file…** to pick where to save the trained model. It's
-   saved as a single **model bundle** (`.pkl`).
-7. Click **Fit**.
+1. Under **Labelled sessions**, click **Add Sessions…** and pick the pose
+   CSVs; each one's annotations CSV is found beside it.
+2. Optionally click **Hold some out ▸** and add **Holdout sessions** —
+   recordings kept aside to test how well the model generalizes to data it
+   never trained on. The list stays open whenever it holds sessions.
+3. Under **Save model as**, click **Choose…** to pick where to save the trained
+   model. It's saved as a single **model bundle** (`.pkl`).
+4. Optionally open **Options** to tune the fit:
+    - **Kind**: **Random forest** (scikit-learn) or **LightGBM** (a
+      gradient-boosted model; if LightGBM isn't available, GLIDER falls back
+      to Random Forest automatically).
+    - Window, class weight, **Include background class** (treat unlabeled
+      frames as a catch-all "background" behavior) and **Mirror augment** (add
+      left/right-mirrored copies of your data to make the model robust to
+      direction).
+    - Extra feature families, a 3D embedding, test split, seed and frame rate.
+    - With LightGBM selected, **LightGBM settings…** opens the per-knob
+      hyperparameters — see [Advanced LightGBM settings](#advanced-lightgbm-settings).
+
+   A line under the model path names the kind, window and every option
+   you've changed, so nothing set in a closed Options panel goes unnoticed.
+5. Click **Fit Model**. Its ▾ menu also holds **Cross-validate (k folds)…**
+   (measure only; saves nothing) and **Cross-validate, then fit…**; both ask
+   how many folds to use.
 
 When training finishes, a summary appears in the results box: how many rows were
 kept versus dropped, the classes learned, training accuracy, the most important
@@ -148,7 +161,7 @@ Most users never need this. The defaults are already tuned to be *more*
 regularized than stock LightGBM, which deliberately gives up some training
 accuracy to generalize better to sessions the model has never seen.
 
-Reach for **Advanced…** when the training summary and your holdout scores
+Reach for **LightGBM settings…** when the training summary and your holdout scores
 disagree — near-perfect training accuracy alongside mediocre holdout accuracy
 means the model has memorized your training sessions rather than learned the
 behaviors. Every field has a tooltip explaining what it trades off, and
@@ -167,7 +180,7 @@ behaviors. Every field has a tooltip explaining what it trades off, and
 | **L2 regularization** | Penalty on confident leaf weights | Raise it |
 
 These settings apply to LightGBM only — the Random Forest backend ignores them,
-which is why **Advanced…** is greyed out when `rf` is selected. Values you set
+which is why **LightGBM settings…** is hidden when Random forest is selected. Values you set
 are used for the runs you fit afterward; they aren't saved between sessions, and
 leaving the dialog untouched means the built-in defaults are used.
 

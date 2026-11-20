@@ -346,6 +346,7 @@ class BehaviorAnalysisWindow(QMainWindow):
         # about the Review tab -- it announces that a run produced one, and
         # the window decides what to do with that.
         self.train_tab.run_reported.connect(self._on_run_reported)
+        self.train_tab.model_saved.connect(lambda _path: self.set_step_done(1, True))
 
         self._header = ToolHeader("Behavior Analysis", self._TAB_BLURBS[0])
         self._build_step_strip()
@@ -388,7 +389,7 @@ class BehaviorAnalysisWindow(QMainWindow):
             "tab_annotate": annotate,
             "annotate_resume": annotate._footer.primary,
             "tab_train": self.train_tab,
-            "train_cv": getattr(self.train_tab, "_cv_btn", None) or self.train_tab,
+            "train_cv": self.train_tab._fit_btn,
             "tab_review": self.review_tab,
             "tab_apply": self.tabs.widget(3),
         }
@@ -451,6 +452,9 @@ class BehaviorAnalysisWindow(QMainWindow):
             restyle(badge)
 
     def _on_tab_changed(self, index: int) -> None:
+        # A step's Options belong to that step; left open they float over the next.
+        for popup in self.findChildren(OptionsPopup):
+            popup.hide()
         if 0 <= index < len(self._TAB_BLURBS):
             self._header.set_subtitle(self._TAB_BLURBS[index])
         self._restyle_steps()
@@ -684,10 +688,25 @@ class AnnotateTab(QWidget):
                 n = 0
             if not n:
                 self._footer.set_message(f"No videos in {self._videos_dir.name}.", warning=True)
+            elif not self._any_pose_csv():
+                self._footer.set_message(
+                    "No pose CSVs found for these videos — run Batch Pose Tracking "
+                    "first, or choose the Pose CSV folder.",
+                    warning=True,
+                )
             elif self._resume_mode:
                 self._footer.set_message(f"{n} video(s) · saved labelling found.")
             else:
                 self._footer.set_message(f"Ready: {n} video(s).")
+
+    def _any_pose_csv(self) -> bool:
+        """Whether any chosen video has a pose CSV the annotator could read."""
+        poses_dir = self._poses_dir or self._videos_dir
+        try:
+            videos = [p for p in self._videos_dir.iterdir() if p.suffix.lower() in _VIDEO_EXTS]
+        except OSError:
+            return False
+        return any(find_pose_csv(v, poses_dir) or find_pose_csvs(v, poses_dir) for v in videos)
 
     def _set_queue_status(self, origin: str, clips, videos_meta: dict[Path, Path]) -> None:
         """Report which queue was opened and how much of it is already done.
@@ -1198,6 +1217,11 @@ class TrainTab(QWidget):
     #: Review tab itself: which tab shows it is the window's business, and a
     #: TrainTab built on its own in a test must not need one to exist.
     run_reported = pyqtSignal(object, object)
+    #: The path a finished run saved its model bundle to. Cross-validation
+    #: alone saves none, so it never fires this.
+    model_saved = pyqtSignal(object)
+
+    _DEFAULT_SEED = 42
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1214,73 +1238,61 @@ class TrainTab(QWidget):
         # truth instead of freezing today's values into every trained model.
         self._lgbm_advanced: dict | None = None
 
-        # --- run rail ---------------------------------------------------
-        rail = RunRail("Fit model")
-        self._fit_btn = rail.button
-        self._fit_btn.clicked.connect(self._on_fit)
-        self._rail = rail
+        # How many folds Cross-validate splits into, and whether it then fits
+        # a model on everything. Asked for each time from the Fit menu; kept
+        # so the next prompt opens on the last answer.
+        self._folds = 5
+        self._cv_then_fit = False
+        #: Where the run in flight saves a model bundle, or None (CV only).
+        #: The step is only ticked done when a run actually saved one.
+        self._saving_to: Path | None = None
 
-        # Cross-validation is its own action, not a mode of Fit: it
-        # deliberately produces NO model, only a measurement, and folding it
-        # into the same button would invite saving something that does not
-        # exist. It is the only way to get a number with a spread on it — a
-        # single cross-session holdout on this kind of data varies by ~0.09
-        # macro F1 depending purely on which animals land in it.
-        self._folds_spin = QSpinBox()
-        self._folds_spin.setRange(2, 100)
-        self._folds_spin.setValue(5)
-        self._folds_spin.setToolTip(
-            "Whole sessions are split across folds, never frames within a\n"
-            "session, so every fold is scored on animals the model never saw.\n"
-            "At or above the number of sessions this is leave-one-out."
-        )
-        self._cv_btn = QPushButton("Cross-validate")
-        set_button_role(self._cv_btn, "ghost")
-        self._cv_btn.setToolTip(
-            "Measure generalization across all training sessions.\n"
-            "Produces no model — use Fit for that."
-        )
-        self._cv_btn.clicked.connect(self._on_cross_validate)
-        rail.card.add(_button_row(QLabel("Folds"), self._folds_spin, self._cv_btn))
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        body = QVBoxLayout()
+        body.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
+        area, column = scroll_column()
+        body.addWidget(area)
+        outer.addLayout(body, 1)
 
+        # --- footer: one primary, Cross-validate in its menu -------------
+        # Cross-validation is a menu item rather than a mode of Fit: it
+        # deliberately produces NO model, only a measurement. It is the only
+        # way to get a number with a spread on it — a single cross-session
+        # holdout on this kind of data varies by ~0.09 macro F1 depending
+        # purely on which animals land in it.
+        self._footer = StepFooter("Fit Model")
+        self._fit_btn = self._footer.primary
+        # Late-bound, so a handler replaced on the instance is the one called.
+        self._fit_btn.clicked.connect(lambda: self._on_fit())
+        self._footer.add_menu_action("Fit model", lambda: self._on_fit())
+        cv_only = self._footer.add_menu_action(
+            "Cross-validate (k folds)…", lambda: self._ask_cross_validate(False)
+        )
+        cv_only.setToolTip(
+            "Splits whole TRAINING sessions across folds (the holdout list is\n"
+            "ignored), so every fold is scored on animals the model never saw.\n"
+            "Reports a mean and a spread, and saves nothing."
+        )
         # Refitting on everything after measuring is the standard way to turn a
         # CV estimate into a deployable model. Done as two separate actions it
         # assembles the features twice — and with motion features that means
-        # decoding every source video twice — so it is offered here instead.
-        self._cv_fit_check = QCheckBox("…and fit a model on all sessions")
-        self._cv_fit_check.setToolTip(
-            "Refit on every session after measuring, and save the bundle.\n"
-            "One feature pass for both, and the saved model carries the\n"
-            "cross-validated score instead of a meaningless 1.000 train\n"
-            "accuracy.\n\n"
-            "The CV number understates this model slightly: it saw every\n"
-            "session, while each fold model saw only a fraction."
+        # decoding every source video twice.
+        cv_fit = self._footer.add_menu_action(
+            "Cross-validate, then fit…", lambda: self._ask_cross_validate(True)
         )
-        rail.card.add(self._cv_fit_check)
-        rail.card.add(
-            hint(
-                "Cross-validation splits the TRAINING sessions itself and "
-                "ignores the holdout list. It reports a mean and a spread "
-                "instead of one split's number, and saves nothing."
-            )
+        cv_fit.setToolTip(
+            "Measure, then refit on every session and save the bundle. One\n"
+            "feature pass for both, and the saved model carries the\n"
+            "cross-validated score. The CV number understates this model\n"
+            "slightly: it saw every session, each fold model only a fraction."
         )
+        self._footer.menu.setToolTipsVisible(True)
+        outer.addWidget(self._footer)
 
-        self._progress = QProgressBar()
-        self._progress.setVisible(False)
-        rail.card.add(self._progress)
-
-        results_card = Card("Results")
-        self._results = QTextEdit()
-        self._results.setObjectName("LogPane")
-        self._results.setReadOnly(True)
-        self._results.setPlaceholderText("Training results will appear here.")
-        results_card.add(self._results, 1)
-        rail.add(results_card, 1)
-
-        column = _workspace(self, rail)
-
-        # --- training sessions ------------------------------------------
-        sessions_group = Card("Training sessions", "pose CSV + annotations CSV")
+        # --- labelled sessions ------------------------------------------
+        sessions_group = Card("Labelled sessions", "pose CSV + annotations CSV")
         self._sessions_card = sessions_group
         self._sessions_list = QListWidget()
         self._sessions_list.setMinimumHeight(96)
@@ -1291,20 +1303,27 @@ class TrainTab(QWidget):
             "No sessions yet.\nAdd pose CSVs; annotations are found beside them.",
         )
         sessions_group.add(self._sessions_list)
-        add_btn = QPushButton("Add sessions…")
+        add_btn = QPushButton("Add Sessions…")
         add_btn.setToolTip(
             "Pick any number of pose CSVs. Each session's annotations are\n"
             "taken from <name>_annotations.csv beside it — the same file\n"
             "training reads."
         )
         add_btn.clicked.connect(self._on_add_session)
-        remove_btn = QPushButton("Remove selected")
+        remove_btn = QPushButton("Remove")
         set_button_role(remove_btn, "ghost")
         remove_btn.clicked.connect(self._on_remove_session)
-        sessions_group.add(_button_row(add_btn, remove_btn))
+        self._holdout_toggle = QPushButton()
+        self._holdout_toggle.setCheckable(True)
+        set_button_role(self._holdout_toggle, "ghost")
+        self._holdout_toggle.setToolTip(
+            "Sessions held back from fitting, so the reported accuracy is\n"
+            "measured on animals the model has never seen."
+        )
+        sessions_group.add(_button_row(add_btn, remove_btn, self._holdout_toggle))
         column.addWidget(sessions_group)
 
-        # --- holdout ----------------------------------------------------
+        # --- holdout (behind "Hold some out ▸") -------------------------
         holdout_group = Card("Holdout sessions", "optional cross-session test set")
         self._holdout_card = holdout_group
         self._holdout_list = QListWidget()
@@ -1316,32 +1335,85 @@ class TrainTab(QWidget):
             "No holdout sessions.\nAccuracy will be reported on training data only.",
         )
         holdout_group.add(self._holdout_list)
-        add_holdout_btn = QPushButton("Add holdout sessions…")
+        add_holdout_btn = QPushButton("Add Holdout Sessions…")
         add_holdout_btn.clicked.connect(self._on_add_holdout)
-        remove_holdout_btn = QPushButton("Remove selected")
+        remove_holdout_btn = QPushButton("Remove")
         set_button_role(remove_holdout_btn, "ghost")
         remove_holdout_btn.clicked.connect(self._on_remove_holdout)
         holdout_group.add(_button_row(add_holdout_btn, remove_holdout_btn))
-        holdout_group.add(
-            hint(
-                "Sessions held back from fitting, so the reported accuracy is "
-                "measured on animals the model has never seen."
-            )
-        )
         column.addWidget(holdout_group)
+        self._holdout_toggle.toggled.connect(self._on_holdout_toggled)
+        self._on_holdout_toggled(False)
 
-        # --- classifier -------------------------------------------------
-        options = Card("Classifier")
+        # --- output -----------------------------------------------------
+        output = Card("Save model as")
+        self._output_label = path_label("(none)")
+        self._output_label.setToolTip("A .pkl the Apply tab loads to score new video.")
+        output_btn = QPushButton("Choose…")
+        output_btn.clicked.connect(self._on_choose_output)
+        output.add_row("Model bundle", self._output_label, output_btn)
+        self._summary = summary_label()
+        output.add(self._summary)
+        column.addWidget(output)
+
+        # --- results: shown once a run starts, and kept -----------------
+        results_card = Card("Results")
+        self._results_card = results_card
+        self._progress = QProgressBar()
+        self._progress.setVisible(False)
+        results_card.add(self._progress)
+        self._results = QTextEdit()
+        self._results.setObjectName("LogPane")
+        self._results.setReadOnly(True)
+        self._results.setMinimumHeight(200)
+        self._results.setPlaceholderText("Training results will appear here.")
+        results_card.add(self._results, 1)
+        results_card.setVisible(False)
+        column.addWidget(results_card, 1)
+        column.addStretch(1)
+
+        # --- options ----------------------------------------------------
+        self._options = OptionsPopup(self._footer.options_button, "Training options")
+        model = self._options.add_section("Model")
         self._classifier_combo = QComboBox()
         # train_model(classifier_type=...) accepts exactly "rf"
         # (RandomForestClassifier) or "lightgbm" (LGBMClassifier, and the
         # library-side default) — see
-        # glider.analysis.behavior.pipeline.train_model docstring.
-        self._classifier_combo.addItems(["rf", "lightgbm"])
-        self._classifier_combo.currentTextChanged.connect(self._on_classifier_changed)
-        self._advanced_btn = QPushButton("Advanced…")
-        self._advanced_btn.clicked.connect(self._on_advanced)
-        options.add_row("Backend", self._classifier_combo, self._advanced_btn)
+        # glider.analysis.behavior.pipeline.train_model docstring. Shown by
+        # name; the stored value is the item data.
+        self._classifier_combo.addItem("Random forest", "rf")
+        self._classifier_combo.addItem("LightGBM", "lightgbm")
+        self._classifier_combo.currentIndexChanged.connect(self._on_classifier_changed)
+        model.addRow("Kind", self._classifier_combo)
+
+        # Pipeline knobs, deliberately here rather than in the LightGBM
+        # dialog: that dialog is LightGBM-only, which would leave these
+        # unreachable for a Random forest. They also move the score far more
+        # than the LightGBM knobs do — measured over five cross-session folds
+        # on a real cohort, window + class weight + mirroring together were
+        # worth +0.063 macro F1, winning 5 folds of 5.
+        self._window_spin = QSpinBox()
+        self._window_spin.setRange(1, 600)
+        self._window_spin.setValue(30)
+        self._window_spin.setToolTip(
+            "How many frames of context each prediction sees.\n"
+            "Shorter reacts faster and captures brief bouts; longer is\n"
+            "steadier but smears the boundaries between behaviors."
+        )
+        self._window_spin.valueChanged.connect(self._refresh_window_hint)
+        self._window_hint = hint("")
+        model.addRow("Window (frames)", _button_row(self._window_spin, self._window_hint))
+        self._refresh_window_hint()
+
+        self._class_weight_combo = QComboBox()
+        self._class_weight_combo.addItem("none", None)
+        self._class_weight_combo.addItem("balanced", "balanced")
+        self._class_weight_combo.setToolTip(
+            "'balanced' weights each class by the inverse of how often it\n"
+            "occurs, so a rare behavior is not simply ignored in favour of\n"
+            "the common ones. Worth trying whenever one class is scarce."
+        )
+        model.addRow("Class weight", self._class_weight_combo)
 
         self._background_check = QCheckBox("Include background class")
         self._background_check.setToolTip(
@@ -1353,39 +1425,61 @@ class TrainTab(QWidget):
             "Double the training set by left-right mirroring every pose, so a "
             "behavior is learned independently of which way the animal faced."
         )
-        options.add(self._background_check)
-        options.add(self._mirror_check)
+        model.addRow(self._background_check)
+        model.addRow(self._mirror_check)
 
-        # Pipeline knobs, deliberately here rather than in the Advanced
-        # dialog: that dialog is LightGBM-only and is disabled for the
-        # RandomForest backend, which would leave these unreachable. They also
-        # move the score far more than the LightGBM knobs do — measured over
-        # five cross-session folds on a real cohort, window + class weight +
-        # mirroring together were worth +0.063 macro F1, winning 5 folds of 5.
-        self._window_spin = QSpinBox()
-        self._window_spin.setRange(1, 600)
-        self._window_spin.setValue(30)
-        self._window_spin.setToolTip(
-            "How many frames of context each prediction sees.\n"
-            "Shorter reacts faster and captures brief bouts; longer is\n"
-            "steadier but smears the boundaries between behaviors."
+        features = self._options.add_section("Extra features")
+        # Feature families the pipeline can compute but never did: all three
+        # default to False in train_model and had no way to be switched on.
+        # Off by default, so no existing model used them; turning one on
+        # changes the feature set, and the model is not comparable to one
+        # trained without it.
+        self._traj_check = QCheckBox("Trajectory shape")
+        self._traj_check.setToolTip(
+            "Straightness, path length, net displacement, radius of gyration\n"
+            "and total turning over each window — the shape of the path\n"
+            "rather than the pose. Aimed at telling travelling apart from\n"
+            "milling about in one spot."
         )
-        self._window_spin.valueChanged.connect(self._refresh_window_hint)
-        options.add_row("Window (frames)", self._window_spin)
-        self._window_hint = hint("")
-        options.add(self._window_hint)
-        self._refresh_window_hint()
-
-        self._class_weight_combo = QComboBox()
-        self._class_weight_combo.addItem("none", None)
-        self._class_weight_combo.addItem("balanced", "balanced")
-        self._class_weight_combo.setToolTip(
-            "'balanced' weights each class by the inverse of how often it\n"
-            "occurs, so a rare behavior is not simply ignored in favour of\n"
-            "the common ones. Worth trying whenever one class is scarce."
+        self._motion_check = QCheckBox("Motion")
+        self._motion_check.setToolTip(
+            "Frame-differencing features read from the source video.\n\n"
+            "Cannot be combined with mirror augmentation: the pipeline\n"
+            "mirrors the pose but not the video, so the two would disagree.\n"
+            "train_model refuses the combination outright."
         )
-        options.add_row("Class weight", self._class_weight_combo)
+        self._freq_check = QCheckBox("Frequency")
+        self._freq_check.setToolTip(
+            "Dominant frequency and spectral flatness per kinematic column —\n"
+            "for rhythmic behaviors such as grooming."
+        )
+        features.addRow(_button_row(self._traj_check, self._motion_check, self._freq_check))
+        # train_model raises on motion + mirror together, and the raise lands
+        # minutes into a fit with the model lost. Enforce it here, where the
+        # click happens, rather than letting the run start and fail.
+        self._mirror_check.toggled.connect(self._on_motion_mirror_toggled)
+        self._motion_check.toggled.connect(self._on_motion_mirror_toggled)
+        self._motion_mirror_hint = hint("")
+        features.addRow(self._motion_mirror_hint)
+        self._on_motion_mirror_toggled()
 
+        # A 3D view of the feature space the classifier learned, stored in the
+        # bundle and drawn by the Review tab. Off by default: fitting one costs
+        # real time on a large cohort, and it changes nothing about the model.
+        self._embedding_combo = QComboBox()
+        self._embedding_combo.addItem("none", "none")
+        self._embedding_combo.addItem("UMAP", "umap")
+        self._embedding_combo.addItem("PCA", "pca")
+        self._embedding_combo.setToolTip(
+            "Fit a 3D embedding of the training features and store it in the\n"
+            "model bundle, so the Review tab can show whether the behaviors\n"
+            "occupy distinct regions.\n\n"
+            "UMAP separates clusters better; PCA is faster and always\n"
+            "available. UMAP falls back to PCA when it is not installed."
+        )
+        features.addRow("3D embedding", self._embedding_combo)
+
+        repro = self._options.add_section("Reproducibility")
         self._test_split_spin = QDoubleSpinBox()
         self._test_split_spin.setRange(0.0, 0.5)
         self._test_split_spin.setSingleStep(0.05)
@@ -1398,13 +1492,13 @@ class TrainTab(QWidget):
             "run reports training accuracy only, which is not a\n"
             "generalization estimate."
         )
-        options.add_row("Within-session test split", self._test_split_spin)
+        repro.addRow("Within-session test split", self._test_split_spin)
 
         self._seed_spin = QSpinBox()
         self._seed_spin.setRange(0, 999_999)
-        self._seed_spin.setValue(42)
+        self._seed_spin.setValue(self._DEFAULT_SEED)
         self._seed_spin.setToolTip("Change to check how much of a score is fit noise.")
-        options.add_row("Random seed", self._seed_spin)
+        repro.addRow("Random seed", self._seed_spin)
 
         # The escape hatch the "different frame rates" error tells you to use.
         # Without it that message asks for something the window cannot do.
@@ -1420,77 +1514,31 @@ class TrainTab(QWidget):
             "windowed feature is specified in seconds, so this rescales them\n"
             "all. Only force a rate the recordings actually share."
         )
-        options.add_row("Frame rate", self._fps_spin)
+        repro.addRow("Frame rate", self._fps_spin)
 
-        # Feature families the pipeline can compute but never did: all three
-        # default to False in train_model and had no way to be switched on.
-        self._traj_check = QCheckBox("Trajectory shape features")
-        self._traj_check.setToolTip(
-            "Straightness, path length, net displacement, radius of gyration\n"
-            "and total turning over each window — the shape of the path\n"
-            "rather than the pose. Aimed at telling travelling apart from\n"
-            "milling about in one spot."
-        )
-        self._motion_check = QCheckBox("Motion features")
-        self._motion_check.setToolTip(
-            "Frame-differencing features read from the source video.\n\n"
-            "Cannot be combined with mirror augmentation: the pipeline\n"
-            "mirrors the pose but not the video, so the two would disagree.\n"
-            "train_model refuses the combination outright."
-        )
-        self._freq_check = QCheckBox("Frequency features")
-        self._freq_check.setToolTip(
-            "Dominant frequency and spectral flatness per kinematic column —\n"
-            "for rhythmic behaviors such as grooming."
-        )
-        # A 3D view of the feature space the classifier learned, stored in the
-        # bundle and drawn by the Review tab. Off by default: fitting one costs
-        # real time on a large cohort, and it changes nothing about the model.
-        self._embedding_combo = QComboBox()
-        self._embedding_combo.addItem("none", "none")
-        self._embedding_combo.addItem("UMAP", "umap")
-        self._embedding_combo.addItem("PCA", "pca")
-        self._embedding_combo.setToolTip(
-            "Fit a 3D embedding of the training features and store it in the\n"
-            "model bundle, so the Review tab can show whether the behaviors\n"
-            "occupy distinct regions.\n\n"
-            "UMAP separates clusters better; PCA is faster and always\n"
-            "available. UMAP falls back to PCA when it is not installed."
-        )
-        options.add_row("3D embedding", self._embedding_combo)
-
-        options.add(self._traj_check)
-        options.add(self._motion_check)
-        options.add(self._freq_check)
-        # train_model raises on motion + mirror together, and the raise lands
-        # minutes into a fit with the model lost. Enforce it here, where the
-        # click happens, rather than letting the run start and fail.
-        self._mirror_check.toggled.connect(self._on_motion_mirror_toggled)
-        self._motion_check.toggled.connect(self._on_motion_mirror_toggled)
-        self._motion_mirror_hint = hint("")
-        options.add(self._motion_mirror_hint)
-        self._on_motion_mirror_toggled()
-        options.add(
-            hint(
-                "These three are computed but off by default, so no existing "
-                "model used them. Turning one on changes the feature set, and "
-                "the resulting model is not comparable to one trained without it."
-            )
-        )
-
-        column.addWidget(options)
+        self._advanced_btn = QPushButton("LightGBM settings…")
+        set_button_role(self._advanced_btn, "ghost")
+        self._advanced_btn.setToolTip("Tune LightGBM's capacity and regularization per knob.")
+        self._advanced_btn.clicked.connect(self._on_advanced)
+        repro.addRow(_button_row(self._advanced_btn))
         self._on_classifier_changed()
 
-        # --- output -----------------------------------------------------
-        output = Card("Output")
-        self._output_label = path_label("(none)")
-        output_btn = QPushButton("Choose…")
-        output_btn.clicked.connect(self._on_choose_output)
-        output.add_row("Model bundle", self._output_label, output_btn)
-        output.add(hint("A .pkl the Apply tab loads to score new video."))
-        column.addWidget(output)
-
-        column.addStretch(1)
+        for signal in (
+            self._classifier_combo.currentIndexChanged,
+            self._window_spin.valueChanged,
+            self._class_weight_combo.currentIndexChanged,
+            self._background_check.toggled,
+            self._mirror_check.toggled,
+            self._traj_check.toggled,
+            self._motion_check.toggled,
+            self._freq_check.toggled,
+            self._embedding_combo.currentIndexChanged,
+            self._test_split_spin.valueChanged,
+            self._seed_spin.valueChanged,
+            self._fps_spin.valueChanged,
+        ):
+            signal.connect(self._update_summary)
+        self._update_summary()
         self._refresh_counts()
 
     def _refresh_counts(self) -> None:
@@ -1499,7 +1547,59 @@ class TrainTab(QWidget):
         self._sessions_card.set_badge(f"{n} session{'' if n == 1 else 's'}" if n else "none yet")
         n = len(self._holdout)
         self._holdout_card.set_badge(f"{n} session{'' if n == 1 else 's'}" if n else "none yet")
-        self._rail.set_blocker("" if self._sessions else "Add at least one training session.")
+        # Sessions held out are never tucked away out of sight.
+        if self._holdout and not self._holdout_toggle.isChecked():
+            self._holdout_toggle.setChecked(True)
+        self._refresh_message()
+
+    def _refresh_message(self) -> None:
+        """Name what blocks Fit, or say it is ready."""
+        if not self._sessions:
+            self._footer.set_message("Add at least one labelled session.")
+        elif self._output_path is None:
+            self._footer.set_message("Choose where to save the model.")
+        else:
+            n = len(self._sessions)
+            held = f", {len(self._holdout)} held out" if self._holdout else ""
+            self._footer.set_message(f"Ready: {n} session{'' if n == 1 else 's'}{held}.")
+
+    def _on_holdout_toggled(self, shown: bool) -> None:
+        self._holdout_card.setVisible(shown)
+        self._holdout_toggle.setText("Hold some out \u25be" if shown else "Hold some out \u25b8")
+
+    def _update_summary(self, *_args) -> None:
+        """Name the kind, window and every non-default option in force."""
+        frames = self._window_spin.value()
+        parts = [self._classifier_combo.currentText(), f"{frames / 30.0:g} s window"]
+        if self._class_weight_combo.currentData() is not None:
+            parts.append(f"{self._class_weight_combo.currentText()} class weight")
+        if self._background_check.isChecked():
+            parts.append("background class on")
+        if self._mirror_check.isChecked():
+            parts.append("mirror augment on")
+        extras = [
+            name
+            for name, box in (
+                ("trajectory", self._traj_check),
+                ("motion", self._motion_check),
+                ("frequency", self._freq_check),
+            )
+            if box.isChecked()
+        ]
+        if extras:
+            parts.append(" + ".join(extras) + " features")
+        if self._embedding_combo.currentData() != "none":
+            parts.append(f"{self._embedding_combo.currentText()} embedding")
+        if self._test_split_spin.value():
+            parts.append(f"{self._test_split_spin.value():g} test split")
+        if self._seed_spin.value() != self._DEFAULT_SEED:
+            parts.append(f"seed {self._seed_spin.value()}")
+        if self._fps_spin.value():
+            parts.append(f"{self._fps_spin.value():g} fps")
+        # Mirrors _lgbm_options without its pipeline import.
+        if self._lgbm_advanced and self._classifier_combo.currentData() == "lightgbm":
+            parts.append("custom LightGBM settings")
+        self._summary.setText(" \u00b7 ".join(parts))
 
     def _on_remove_session(self) -> None:
         _remove_selected(self._sessions_list, self._sessions)
@@ -1544,18 +1644,14 @@ class TrainTab(QWidget):
 
     def _on_classifier_changed(self, *_args) -> None:
         """The advanced knobs are LightGBM-only; RandomForest silently ignores them."""
-        lgbm = self._classifier_combo.currentText() == "lightgbm"
-        self._advanced_btn.setEnabled(lgbm)
-        self._advanced_btn.setToolTip(
-            "Tune LightGBM's capacity and regularization per knob."
-            if lgbm
-            else "LightGBM only — the RandomForest backend ignores these knobs."
-        )
+        # Hidden rather than greyed: a disabled button asks to be decoded.
+        self._advanced_btn.setVisible(self._classifier_combo.currentData() == "lightgbm")
 
     def _on_advanced(self) -> None:
         dialog = LgbmAdvancedDialog(self._lgbm_advanced, self)
         if dialog.exec():
             self._lgbm_advanced = dialog.values()
+            self._update_summary()
 
     def _lgbm_options(self) -> dict:
         """``train_model`` kwargs for the advanced knobs, or ``{}`` when untouched.
@@ -1564,7 +1660,7 @@ class TrainTab(QWidget):
         been filled in: ``_make_classifier`` ignores ``lgbm_reg`` there, so
         passing it would imply an effect the run won't have.
         """
-        if not self._lgbm_advanced or self._classifier_combo.currentText() != "lightgbm":
+        if not self._lgbm_advanced or self._classifier_combo.currentData() != "lightgbm":
             return {}
         # Imported here, not at module scope: pipeline pulls in sklearn/pandas
         # and this window must import cleanly under a bare [pc] install.
@@ -1639,6 +1735,24 @@ class TrainTab(QWidget):
         self._output_path = Path(path)
         set_path_text(self._output_label, _short_path(self._output_path), filled=True)
         self._output_label.setToolTip(path)
+        self._refresh_message()
+
+    def _ask_cross_validate(self, then_fit: bool) -> None:
+        """The Fit menu's Cross-validate items: ask the folds, then run CV."""
+        folds, ok = QInputDialog.getInt(
+            self,
+            "Cross-validate",
+            "Folds (whole sessions per fold; at or above the\n"
+            "number of sessions this is leave-one-out):",
+            self._folds,
+            2,
+            100,
+        )
+        if not ok:
+            return
+        self._folds = folds
+        self._cv_then_fit = then_fit
+        self._on_cross_validate()
 
     def _shared_options(self) -> dict:
         """Settings both Fit and Cross-validate accept.
@@ -1649,7 +1763,7 @@ class TrainTab(QWidget):
         takes neither, and it makes its own splits.
         """
         options: dict = {
-            "classifier_type": self._classifier_combo.currentText(),
+            "classifier_type": self._classifier_combo.currentData(),
             "include_background": self._background_check.isChecked(),
             "mirror_augment": self._mirror_check.isChecked(),
             "window": int(self._window_spin.value()),
@@ -1674,13 +1788,13 @@ class TrainTab(QWidget):
         if not self._sessions:
             QMessageBox.warning(self, "Train", "Add at least one training session first.")
             return
-        also_fit = self._cv_fit_check.isChecked()
+        also_fit = self._cv_then_fit
         if also_fit and self._output_path is None:
             QMessageBox.warning(
                 self,
                 "Train",
-                "Choose a model output file first, or untick "
-                "'…and fit a model on all sessions' to measure only.",
+                "Choose a model output file first, or pick "
+                "'Cross-validate (k folds)…' to measure only.",
             )
             return
 
@@ -1690,7 +1804,8 @@ class TrainTab(QWidget):
         from glider.gui.behavior import workers as workers_mod
 
         options = self._shared_options()
-        options["n_folds"] = int(self._folds_spin.value())
+        options["n_folds"] = int(self._folds)
+        self._saving_to = self._output_path if also_fit else None
 
         self._train_thread = QThread()
         self._train_worker = workers_mod.CrossValidateWorker(
@@ -1702,22 +1817,13 @@ class TrainTab(QWidget):
         self._train_worker.finished.connect(self._on_cv_finished)
         self._train_worker.failed.connect(self._on_train_failed)
 
-        self._results.clear()
-        self._progress.setVisible(True)
-        self._progress.setRange(0, 0)
-        self._fit_btn.setEnabled(False)
-        self._cv_btn.setEnabled(False)
-        self._rail.status.set_state("running", f"Cross-validating ({options['n_folds']} folds)")
+        self._start_run(f"Cross-validating ({options['n_folds']} folds)…")
         self._train_thread.start()
 
     def _on_cv_finished(self, result: object) -> None:
         from glider.analysis.behavior.summary_text import format_cv_summary
 
-        self._teardown_train_thread()
-        self._progress.setVisible(False)
-        self._fit_btn.setEnabled(True)
-        self._cv_btn.setEnabled(True)
-        self._rail.status.set_state("ok", "Done")
+        self._end_run()
         self._results.setPlainText(format_cv_summary(result))
         self._announce_run(result)
 
@@ -1754,13 +1860,30 @@ class TrainTab(QWidget):
         self._train_worker.finished.connect(self._on_train_finished)
         self._train_worker.failed.connect(self._on_train_failed)
 
+        self._saving_to = self._output_path
+        self._start_run("Fitting…")
+        self._train_thread.start()
+
+    def _start_run(self, message: str) -> None:
+        # Disabling the Fit button disables its menu, Cross-validate with it:
+        # both share the one thread slot.
+        self._results_card.setVisible(True)
         self._results.clear()
         self._progress.setVisible(True)
-        self._progress.setRange(0, 0)  # indeterminate until fit finishes
+        self._progress.setRange(0, 0)  # indeterminate until the run finishes
         self._fit_btn.setEnabled(False)
-        self._cv_btn.setEnabled(False)
-        self._rail.status.set_state("running", "Fitting")
-        self._train_thread.start()
+        self._footer.set_message(message)
+
+    def _end_run(self) -> None:
+        self._teardown_train_thread()
+        self._progress.setVisible(False)
+        self._fit_btn.setEnabled(True)
+        saved, self._saving_to = self._saving_to, None
+        if saved is not None:
+            self._footer.set_message(f"Done. Model saved to {saved.name}.")
+            self.model_saved.emit(saved)
+        else:
+            self._footer.set_message("Done. Cross-validation saves no model.")
 
     def _on_report_ready(self, report_dir: object) -> None:
         """Remember where this run's report landed, if it landed anywhere."""
@@ -1772,11 +1895,7 @@ class TrainTab(QWidget):
             self._progress.setValue(done)
 
     def _on_train_finished(self, summary: object) -> None:
-        self._teardown_train_thread()
-        self._progress.setVisible(False)
-        self._fit_btn.setEnabled(True)
-        self._cv_btn.setEnabled(True)
-        self._rail.status.set_state("ok", "Done")
+        self._end_run()
         # Deferred like the rest of the analysis imports, though this one is
         # cheap by design — it exists so the results pane never needs pandas.
         from glider.analysis.behavior.summary_text import format_training_summary
@@ -1790,14 +1909,14 @@ class TrainTab(QWidget):
         self.run_reported.emit(report, summary)
 
     def _on_train_failed(self, message: str) -> None:
-        # Shared by Fit and Cross-validate, so both buttons come back —
-        # otherwise a failed cross-validation leaves its own button dead.
-        self._cv_btn.setEnabled(True)
+        # Shared by Fit and Cross-validate: the Fit button (and the
+        # Cross-validate items in its menu) must come back either way.
         self._pending_report = None
+        self._saving_to = None
         self._teardown_train_thread()
         self._progress.setVisible(False)
         self._fit_btn.setEnabled(True)
-        self._rail.status.set_state("error", "Failed")
+        self._footer.set_message("Training failed.", warning=True)
         QMessageBox.critical(self, "Training failed", message)
 
     def _teardown_train_thread(self) -> None:

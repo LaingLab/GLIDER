@@ -134,23 +134,26 @@ def behavior_steps() -> list[TourStep]:
         TourStep(
             "annotate_resume",
             "Picking up again",
-            "Labelling a few hundred clips takes more than one sitting. Resume "
-            "reopens the same queue with your finished clips marked done — and "
-            "'Render more' inside the annotator adds fresh ones on top.",
+            "Labelling a few hundred clips takes more than one sitting. Once a "
+            "folder has saved labels the button reads Resume Labelling and "
+            "reopens the same queue with your finished clips marked done; Label "
+            "Clips (in its menu) draws a new one, and 'Render more' inside the "
+            "annotator adds fresh clips on top.",
         ),
         TourStep(
             "tab_train",
             "2 · Train",
             "Add the same sessions here and fit a classifier. Window length, "
-            "class weight and the feature families all live on this tab — they "
-            "move the score far more than the model settings do.",
+            "class weight and the feature families live under Options — they "
+            "move the score far more than the LightGBM settings do.",
         ),
         TourStep(
             "train_cv",
             "Measure it honestly",
-            "Cross-validate splits whole animals across folds, so every score "
-            "comes from a recording the model never saw. Tick 'and fit a "
-            "model' to get the estimate and the bundle in one pass.",
+            "Cross-validate lives in the Fit Model \u25be menu. It splits whole "
+            "animals across folds, so every score comes from a recording the "
+            "model never saw. 'Cross-validate, then fit…' gets the estimate and "
+            "the bundle in one pass.",
         ),
         TourStep(
             "tab_review",
