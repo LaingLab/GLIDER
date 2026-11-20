@@ -40,9 +40,11 @@ the pup disappears into her mouth and comes out buried in the nest.
 
 ## Pick the Pup Retrieval protocol first
 
-Everything on this page appears only when the open experiment's **Protocol** is
-**Pup Retrieval**. Every other experiment sees none of it. The protocol is one
-value shared across GLIDER, so set it once, anywhere:
+Everything on this page except setting the scale appears only when the open
+experiment's **Protocol** is **Pup Retrieval**; every other experiment sees none
+of it. (**Setup ▾ → Scale…** and the top bar's **Uncalibrated** pill are there
+for every protocol.) The protocol is one value shared across GLIDER, so set it
+once, anywhere:
 
 - the **Protocol** dropdown on the **Experiment** tab (also in **Experiment →
   Experiment Settings…**), or

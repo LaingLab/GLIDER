@@ -151,13 +151,13 @@ class TestAnalysisWindow:
     def test_the_summary_marks_segment_thresholds_as_comparison_only(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._bar.set_selection(0, 200)
-        text = win._summary.text()
+        text = win._inspector.movement_tiles[0].toolTip()
         assert "comparison" in text and "unchanged" in text
 
     def test_an_uncalibrated_session_says_so_rather_than_reporting_pixels(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._bar.set_selection(0, 200)
-        assert "no calibration" in win._summary.text().lower()
+        assert "no calibration" in win._inspector.movement_tiles[0].toolTip().lower()
 
     def test_zones_are_sized_in_pixels_without_a_calibration(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
@@ -200,12 +200,12 @@ class TestAnalysisWindow:
 
     def test_the_repair_button_is_hidden_when_nothing_needs_repairing(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
-        assert win._fix_resolution.isHidden() is True
+        assert win._fix_resolution_action.isVisible() is False
 
     def test_the_repair_button_appears_for_a_sidecar_without_a_resolution(self, qtbot, tmp_path):
         """Runs from before the field existed must still be viewable."""
         win = self._win(qtbot, tmp_path, with_resolution=False)
-        assert win._fix_resolution.isHidden() is False
+        assert win._fix_resolution_action.isVisible() is True
 
     def test_repairing_writes_the_resolution_and_reloads(self, qtbot, tmp_path, monkeypatch):
         win = self._win(qtbot, tmp_path, with_resolution=False)
@@ -218,7 +218,7 @@ class TestAnalysisWindow:
         monkeypatch.setattr("glider.vision.video_source.video_resolution", lambda _p: (800, 600))
         win._resolution_from_video()
         assert win._view.resolution == (800, 600)
-        assert win._fix_resolution.isHidden() is True
+        assert win._fix_resolution_action.isVisible() is False
 
     def test_an_unreadable_video_is_reported_and_changes_nothing(
         self, qtbot, tmp_path, monkeypatch
@@ -276,10 +276,10 @@ class TestWhenPosesAreElsewhere:
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load(self._session_without_poses(tmp_path))
-        assert win._pick_poses.isHidden() is False
+        assert win._pick_poses_action.isVisible() is True
 
         win.load(_session(tmp_path / "with_poses"))
-        assert win._pick_poses.isHidden() is True
+        assert win._pick_poses_action.isVisible() is False
 
     def test_the_blank_canvas_points_at_the_button(self, qtbot, tmp_path):
         win = AnalysisWindow()
@@ -319,7 +319,7 @@ class TestWhenPosesAreElsewhere:
         win._choose_pose_csv()
         assert win._view.xy is not None
         assert win._view.pose_path == chosen
-        assert win._pick_poses.isHidden() is True
+        assert win._pick_poses_action.isVisible() is False
 
     def test_the_summary_names_the_pose_file_that_was_used(self, qtbot, tmp_path):
         win = AnalysisWindow()
@@ -2164,7 +2164,7 @@ class TestMarkersInTheWindow:
         win._editor.name.setText("door stuck")
         win._editor.done_btn.click()
         assert self._saved(folder)["markers"][0]["name"] == "door stuck"
-        assert win._inspector.tabText(2) == "Markers (1)"
+        assert win._inspector.tabText(1) == "Markers (1)"
 
     def test_the_editor_deletes_the_marker(self, qtbot, tmp_path):
         win, folder = self._win(qtbot, tmp_path)
@@ -2964,6 +2964,15 @@ def no_dialogs(monkeypatch):
 
 @pytest.mark.usefixtures("no_dialogs")
 class TestOpenVideo:
+    def test_a_poses_only_range_shows_no_behavior_section(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_pup_video(tmp_path))
+        win._bar.set_selection(0, 10)
+        assert win._bouts.rowCount() == 0
+        assert win._inspector.behavior_title.isHidden()
+        assert not win._inspector.movement_title.isHidden()
+
     def test_open_video_loads_a_bare_video(self, qtbot, tmp_path, monkeypatch):
         video = _pup_video(tmp_path)
         win = AnalysisWindow()
@@ -3831,8 +3840,20 @@ class TestArenaGrid:
     def test_without_an_arena_it_says_how_to_get_one(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path, with_arena=False)
         win._bar.set_selection(0, 299)
-        assert win._inspector.cells_visited.text() == "—"
-        assert "Draw arena" in win._inspector.exploration_text.text()
+        assert win._inspector.exploration.isHidden()
+        assert not win._inspector.arena_prompt.isHidden()
+
+    def test_the_arena_prompt_draws_one(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, with_arena=False)
+        drawn = []
+        monkeypatch.setattr(win, "_draw_arena", lambda: drawn.append(True))
+        win._inspector.draw_arena_btn.click()
+        assert drawn == [True]
+
+    def test_with_an_arena_exploration_shows(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        assert not win._inspector.exploration.isHidden()
+        assert win._inspector.arena_prompt.isHidden()
 
     def test_exploration_reaches_the_cohort_rows_and_epoch_metrics(self, qtbot, tmp_path):
         from glider.analysis.epochs import metric_catalog
@@ -4067,6 +4088,21 @@ class TestTheTopBar:
         assert types.title() == "Experiment type: Pup Retrieval"
         types.aboutToShow.emit()
         assert [a.text() for a in types.actions() if a.isChecked()] == ["Pup Retrieval"]
+
+    def test_the_pup_retrieval_type_says_what_it_shows(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        [pick] = [a for a in win._type_menu.actions() if a.text() == "Pup Retrieval"]
+        assert pick.toolTip() == "Shows retrieval scoring"
+
+    def test_an_unclickable_pill_keeps_a_tooltip_set_elsewhere(self, qtbot):
+        from glider.gui.behavior.analysis_window import _ClickablePill
+
+        pill = _ClickablePill("x")
+        qtbot.addWidget(pill)
+        pill.setToolTip("set elsewhere")
+        pill.set_clickable(False)
+        assert pill.toolTip() == "set elsewhere"
 
     def test_uncalibrated_pill_opens_scale(self, qtbot, tmp_path, monkeypatch):
         win = AnalysisWindow()

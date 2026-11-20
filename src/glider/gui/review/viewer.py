@@ -589,7 +589,7 @@ class KeypointCanvas(QWidget):
                 "Looked at the path recorded in run.json, then beside the "
                 "ethogram, then for a CSV named after this session in the "
                 "folders above.\n\n"
-                "Use “Choose pose CSV…” on the inspector's Session tab to point at it."
+                "Use Setup ▸ “Choose pose CSV…” to point at it."
             )
         if recording:
             return (
@@ -600,7 +600,7 @@ class KeypointCanvas(QWidget):
         return (
             "This session's pose sidecar records no resolution, so the arena "
             "cannot be sized.\n\n"
-            "Use “Set arena size from video…” on the inspector's Session tab to "
+            "Use Setup ▸ “Set arena size from video…” to "
             "read it from the source video — it is stored, so this is a one-off."
         )
 

@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -110,7 +111,7 @@ from glider.gui.review.timeline import (
     lane_colour,
     swatch,
 )
-from glider.gui.review.viewer import KeypointCanvas, Transport
+from glider.gui.review.viewer import TRAIL_DEFAULT_S, KeypointCanvas, Transport
 from glider.gui.review.viewport import format_seconds, format_timecode
 from glider.gui.styles import colors
 from glider.gui.widgets.pastel_glyphs import lucide_icon
@@ -151,10 +152,12 @@ class _ClickablePill(StatusPill):
 
     clicked = pyqtSignal()
 
-    def set_clickable(self, on: bool, tip: str = "") -> None:
+    def set_clickable(self, on: bool, tip: str | None = None) -> None:
+        """*tip* replaces the tooltip; None leaves whatever was set."""
         self._clickable = on
         self.setCursor(Qt.CursorShape.PointingHandCursor if on else Qt.CursorShape.ArrowCursor)
-        self.setToolTip(tip)
+        if tip is not None:
+            self.setToolTip(tip)
 
     def mouseReleaseEvent(self, event):  # noqa: N802 - Qt override
         super().mouseReleaseEvent(event)
@@ -514,9 +517,12 @@ class AnalysisWindow(QMainWindow):
         self._tables = self._timeline_panel
         self._bouts = self._inspector.bouts
         self._zone_table = self._inspector.zones
-        self._summary = self._inspector.range_text
         self._session_text = self._inspector.summary
-        self._trail_s = self._inspector.trail_s
+        # The trail length's holder, never shown: View ▸ Trail length… sets it.
+        self._trail_s = QDoubleSpinBox(self)
+        self._trail_s.setVisible(False)
+        self._trail_s.setRange(0.5, 60.0)
+        self._trail_s.setValue(TRAIL_DEFAULT_S)
         transport = self._transport
         self._play, self._clock, self._bout_label = transport.play, transport.clock, transport.bout
         self._video_on = transport.video_on
@@ -535,7 +541,6 @@ class AnalysisWindow(QMainWindow):
             if panel.placement == "timeline":
                 self._timeline_panel.addTab(panel.widget(), panel.title)
         self._build_bout_stepper()
-        self._build_fixes()
         self._inspector.grid_n.setValue(int(_settings().value(self._GRID_KEY, 3, type=int) or 3))
         self._inspector.grid_n.valueChanged.connect(self._on_grid_changed)
         self._trail_s.valueChanged.connect(self._apply_trail)
@@ -544,6 +549,7 @@ class AnalysisWindow(QMainWindow):
         self._bar.marker_changed.connect(self._marker_dragged)
         self._inspector.marker_picked.connect(self._go_to_marker)
         self._inspector.save_marker_btn.clicked.connect(self._add_range_marker)
+        self._inspector.draw_arena_requested.connect(lambda: self._draw_arena())
         self._timeline_panel.marker_btn.clicked.connect(lambda: self._add_point_marker())
         self._timeline_panel.range_marker_btn.clicked.connect(self._add_range_marker)
         retrieval = self._inspector.retrieval
@@ -742,7 +748,7 @@ class AnalysisWindow(QMainWindow):
         self._scale_action = menu.addAction("Scale…", lambda: self._set_scale())
         self._scale_action.setEnabled(False)  # a pup video's (_show_scale)
         menu.addSeparator()
-        # Shown only when the session needs them (_adopt), like the Session tab's buttons.
+        # Shown only when the session needs them (_adopt).
         self._pick_poses_action = menu.addAction("Choose pose CSV…", self._choose_pose_csv)
         self._fix_resolution_action = menu.addAction(
             "Set arena size from video…", self._resolution_from_video
@@ -759,6 +765,8 @@ class AnalysisWindow(QMainWindow):
             action = menu.addAction(combo.itemText(index))
             action.setCheckable(True)
             action.setChecked(index == combo.currentIndex())
+            if has_analysis(combo.itemData(index), ANALYSIS_PUP_RETRIEVAL):
+                action.setToolTip("Shows retrieval scoring")
             action.triggered.connect(lambda _=False, i=index: combo.setCurrentIndex(i))
 
     def _on_body_changed(self, index: int) -> None:
@@ -780,7 +788,7 @@ class AnalysisWindow(QMainWindow):
         title.setFont(font)
         column.addWidget(title)
         hint = QLabel(
-            "A recording folder, an ethogram CSV, or a whole cohort folder. " "Or drop it here."
+            "A recording folder, an ethogram CSV, or a whole cohort folder. Or drop it here."
         )
         set_text_role(hint, "muted")
         column.addWidget(hint)
@@ -889,17 +897,6 @@ class AnalysisWindow(QMainWindow):
         self._next_bout.clicked.connect(lambda: self._step_bout(+1))
         slot.addWidget(self._prev_bout)
         slot.addWidget(self._next_bout)
-
-    def _build_fixes(self) -> None:
-        self._pick_poses = QPushButton("Choose pose CSV…")
-        self._pick_poses.clicked.connect(self._choose_pose_csv)
-        self._pick_poses.setVisible(False)
-        self._fix_resolution = QPushButton("Set arena size from video…")
-        self._fix_resolution.clicked.connect(self._resolution_from_video)
-        self._fix_resolution.setVisible(False)
-        self._inspector.fixes.addWidget(self._pick_poses)
-        self._inspector.fixes.addWidget(self._fix_resolution)
-        self._inspector.fixes.addStretch(1)
 
     def _restore_layout(self) -> None:
         settings = _settings()
@@ -1514,6 +1511,7 @@ class AnalysisWindow(QMainWindow):
         self._canvas.set_view(view)
         found = self._arena_for(self._shown)
         self._canvas.set_arena(found[0] if found else None)
+        self._inspector.set_has_arena(found is not None)
         self._canvas.set_grid(self._grid_n())
         self._restore_pairs()
         self._show_body_point()
@@ -1529,13 +1527,8 @@ class AnalysisWindow(QMainWindow):
         is_recording = Path(path).is_dir()
         needs_poses = view.xy is None and not is_recording
         needs_size = view.xy is not None and view.resolution is None and not is_recording
-        for fix, needed in (
-            (self._pick_poses, needs_poses),
-            (self._pick_poses_action, needs_poses),
-            (self._fix_resolution, needs_size),
-            (self._fix_resolution_action, needs_size),
-        ):
-            fix.setVisible(needed)
+        self._pick_poses_action.setVisible(needs_poses)
+        self._fix_resolution_action.setVisible(needs_size)
 
         has_video = view.video_path is not None
         self._video_on.setEnabled(has_video)
@@ -1620,7 +1613,7 @@ class AnalysisWindow(QMainWindow):
         self._scale_pill.setVisible(True)
         if self._view.px_per_mm:
             self._scale_pill.set_state("idle", f"{self._view.px_per_mm:.2f} px/mm")
-            self._scale_pill.set_clickable(False)
+            self._scale_pill.set_clickable(False, "")
         elif settable:
             self._scale_pill.set_state("warn", "Uncalibrated · Set scale…")
             self._scale_pill.set_clickable(True, "Measure the scale on this video")
@@ -2983,7 +2976,7 @@ class AnalysisWindow(QMainWindow):
         stats = self._view.segment_stats(start, end)
         self._fill_bouts(stats)
         self._fill_movement(stats)
-        self._summary.setText(self._describe(stats))
+        self._inspector.set_movement_note(self._describe(stats))
         self._fill_epochs()
         self._fill_zones(start, end)
         self._fill_exploration(start, end)
@@ -3127,7 +3120,7 @@ class AnalysisWindow(QMainWindow):
             return None, "Pick a grid size to count the cells entered."
         found = self._arena_for(index)
         if found is None:
-            return None, "No arena drawn for this session: Arena ▸ Draw arena…"
+            return None, "No arena drawn for this session: Setup ▸ Arena ▸ Draw arena…"
         view = self._cohort[index][1]
         try:
             result = exploration.explore(view, found[0], n, start_frame=start, end_frame=end)
@@ -3178,6 +3171,7 @@ class AnalysisWindow(QMainWindow):
             return
         self._arenas[self._shown] = (arena, path)
         self._canvas.set_arena(arena)
+        self._inspector.set_has_arena(True)
         self._canvas.set_grid(self._grid_n())
         self._invalidate_cohort_cache()
         self.statusBar().showMessage(f"Arena saved to {path}", 8000)
