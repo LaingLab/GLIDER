@@ -200,6 +200,7 @@ class PoseBatchWindow(QMainWindow):
         self._model_path: Path | None = None
         self._meta = None
         self._videos: list[Path] = []
+        self._run_videos: list[Path] = []
         self._calibrations = CalibrationSet()
         # Side of the centre zone written for any video with a drawn arena.
         # Follows whatever the operator last chose in the arena dialog.
@@ -292,7 +293,7 @@ class PoseBatchWindow(QMainWindow):
         self._settings_button.clicked.connect(self._show_settings)
         self._header.add_action(self._settings_button)
 
-        self._more_button = QPushButton("More ▾")
+        self._more_button = QPushButton("More")
         set_button_role(self._more_button, "ghost")
         more_menu = QMenu(self._more_button)
         more_menu.addAction(self._regate_action)
@@ -1456,7 +1457,9 @@ class PoseBatchWindow(QMainWindow):
         from glider.gui.pose_batch.worker import PoseBatchWorker
         from glider.vision.arena_gate import ArenaGateSettings
 
+        self._run_videos = list(self._videos)  # the worker's copy; _videos stays live
         self._log.clear()
+        self._log_toggle.setChecked(False)
         self._add_log(f"Starting {len(self._videos)} video(s)…")
         self._overall_bar.setRange(0, len(self._videos))
         self._overall_bar.setValue(0)
@@ -1516,8 +1519,8 @@ class PoseBatchWindow(QMainWindow):
     def _on_progress(self, index: int, total: int) -> None:
         if self._thread is not None:  # the batch, not a re-gate or export
             self._steps.set_tracking((index + 1, total))
-            if 0 <= index < len(self._videos):
-                self._video_label.setText(self._videos[index].name)
+            if 0 <= index < len(self._run_videos):
+                self._video_label.setText(self._run_videos[index].name)
         self._overall_bar.setRange(0, total)
         # The batch counts the video in flight ("2 of 5", as the step strip does).
         self._overall_bar.setValue(index + 1 if self._thread is not None else index)

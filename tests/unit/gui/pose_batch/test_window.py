@@ -661,9 +661,9 @@ def test_track_button_counts_videos(window, tmp_path):
     assert window._run_button.text() == "Track 2 Videos"
 
 
-def test_footer_names_gpu_blocker(window):
-    # Fail-if-no-GPU is enforced by the worker, so the footer carries whatever
-    # the existing validation says, unchanged, rather than inventing a message.
+def test_footer_passes_validation_message_through(window):
+    # Fail-if-no-GPU is enforced by the worker, so the footer passes the existing
+    # validation message through unchanged rather than inventing a GPU one.
     assert window._blocker_label.text() == "Select a model."
     assert not window._blocker_label.isHidden()
 
@@ -685,6 +685,26 @@ def test_cancel_only_while_running(window, tmp_path, monkeypatch):
         window._teardown_thread()
     assert window._cancel_button.isHidden()
     assert not window._run_button.isHidden()
+
+
+def test_progress_label_uses_the_runs_own_video_list(window, tmp_path, monkeypatch):
+    _running(window, tmp_path, monkeypatch)
+    try:
+        started = window._videos[0].name
+        window._videos = []  # Add Folder / drop / master load mid-run
+        window._on_progress(0, 1)
+        assert window._video_label.text() == started
+    finally:
+        window._teardown_thread()
+
+
+def test_new_run_starts_with_log_closed(window, tmp_path, monkeypatch):
+    window._log_toggle.setChecked(True)
+    _running(window, tmp_path, monkeypatch)
+    try:
+        assert not window._log_toggle.isChecked()
+    finally:
+        window._teardown_thread()
 
 
 def test_strip_shows_tracking_k_of_n(window, tmp_path, monkeypatch):

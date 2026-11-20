@@ -238,7 +238,7 @@ def pose_batch_steps() -> list[TourStep]:
         TourStep(
             "run",
             "5 · Run it",
-            "Progress and a log appear on this rail. Overwrite (in Settings) is off by "
+            "Progress and a log appear in the footer. Overwrite (in Settings) is off by "
             "default, so if a batch is interrupted you can start it again and it "
             "picks up where it stopped instead of redoing finished videos.",
         ),
